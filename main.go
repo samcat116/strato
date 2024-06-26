@@ -10,7 +10,7 @@ import (
 func main() {
 	fmt.Println("ehhl")
 
-	handler := func(w http.ResponseWriter, req *http.request) {
+	handler := func(w http.ResponseWriter, req *http.Request) {
 		io.WriteString(w, "ehhl\n")
 	}
 
