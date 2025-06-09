@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Strato Dashboard</title>
+    <link rel="stylesheet" href="/styles/app.generated.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@4.19.0/css/xterm.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xterm@4.19.0/lib/xterm.js"></script>
+    <script src="/js/webauthn.js"></script>
+</head>
+
+<body class="bg-gray-50 min-h-screen">
+    <!-- Top Header with Logo and Toolbar -->
+    <header class="bg-white shadow-sm border-b border-gray-200">
+        <div class="flex items-center justify-between h-16 px-6">
+            <!-- Logo -->
+            <div class="flex items-center">
+                <h1 class="text-2xl font-bold text-indigo-600">Strato</h1>
+            </div>
+            
+            <!-- Top Toolbar -->
+            <div class="flex items-center space-x-4">
+                <button
+                    id="createVMBtn"
+                    class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+                >
+                    + New VM
+                </button>
+                <button
+                    class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-md text-sm font-medium"
+                >
+                    Settings
+                </button>
+                <span id="userInfo" class="text-sm text-gray-600"></span>
+                <button
+                    id="logoutBtn"
+                    class="text-gray-500 hover:text-gray-700 text-sm"
+                >
+                    Logout
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Layout -->
+    <div class="flex h-screen pt-16">
+        <!-- Sidebar Table -->
+        <aside class="w-80 bg-white border-r border-gray-200 overflow-y-auto">
+            <div class="p-4">
+                <h2 class="text-lg font-semibold text-gray-900 mb-4">Virtual Machines</h2>
+                
+                <!-- VM Table -->
+                <div class="overflow-hidden">
+                    <table class="min-w-full">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="vmTableBody" class="divide-y divide-gray-200">
+                            <tr>
+                                <td colspan="3" class="px-3 py-4 text-sm text-gray-500 text-center">Loading VMs...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="flex-1 flex flex-col overflow-hidden">
+            <!-- Content Header -->
+            <div class="bg-white border-b border-gray-200 px-6 py-4">
+                <h1 class="text-lg font-semibold text-gray-900">Dashboard</h1>
+                <p class="text-sm text-gray-600">Manage your virtual machines and infrastructure</p>
+            </div>
+            
+            <!-- Content Area -->
+            <div class="flex-1 p-6 overflow-y-auto">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 h-full">
+                    <!-- VM Details Panel -->
+                    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">VM Details</h3>
+                        <div id="vmDetails" class="text-gray-500">
+                            Select a virtual machine to view details
+                        </div>
+                    </div>
+
+                    <!-- Console Terminal -->
+                    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">Console</h3>
+                        <div id="terminal" class="border border-gray-300 rounded h-96"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // Initialize terminal
+        var term = new Terminal({
+            theme: {
+                background: '#f9fafb',
+                foreground: '#374151'
+            }
+        });
+        term.open(document.getElementById('terminal'));
+        term.write('Strato Console Ready\r\n$ ');
+
+        // Load user session and VMs
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                // Get current session
+                const session = await window.webAuthnClient.getSession();
+                if (session && session.user) {
+                    document.getElementById('userInfo').textContent = `Welcome, ${session.user.displayName}`;
+                } else {
+                    window.location.href = '/login';
+                    return;
+                }
+
+                // Load VMs
+                await loadVMs();
+            } catch (error) {
+                console.error('Failed to load session:', error);
+                window.location.href = '/login';
+            }
+        });
+
+        // Logout functionality
+        document.getElementById('logoutBtn').addEventListener('click', async () => {
+            const success = await window.webAuthnClient.logout();
+            if (success) {
+                window.location.href = '/login';
+            }
+        });
+
+        // Load VMs
+        async function loadVMs() {
+            try {
+                const response = await fetch('/vms');
+                if (response.ok) {
+                    const vms = await response.json();
+                    displayVMs(vms);
+                } else {
+                    document.getElementById('vmTableBody').innerHTML = '<tr><td colspan="3" class="px-3 py-4 text-sm text-red-500 text-center">Failed to load VMs</td></tr>';
+                }
+            } catch (error) {
+                document.getElementById('vmTableBody').innerHTML = '<tr><td colspan="3" class="px-3 py-4 text-sm text-red-500 text-center">Error loading VMs</td></tr>';
+            }
+        }
+
+        // Display VMs in table
+        function displayVMs(vms) {
+            const vmTableBody = document.getElementById('vmTableBody');
+            if (vms.length === 0) {
+                vmTableBody.innerHTML = '<tr><td colspan="3" class="px-3 py-4 text-sm text-gray-500 text-center">No VMs found. Create your first VM!</td></tr>';
+                return;
+            }
+
+            vmTableBody.innerHTML = vms.map(vm => `
+                <tr class="hover:bg-gray-50 cursor-pointer" onclick="selectVM('${vm.id}', ${JSON.stringify(vm).replace(/"/g, '&quot;')})">
+                    <td class="px-3 py-3">
+                        <div class="text-sm font-medium text-gray-900">${vm.name}</div>
+                        <div class="text-xs text-gray-500">${vm.description}</div>
+                    </td>
+                    <td class="px-3 py-3">
+                        <span class="inline-flex px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">Running</span>
+                    </td>
+                    <td class="px-3 py-3">
+                        <div class="flex space-x-1">
+                            <button class="text-green-600 hover:text-green-700 text-xs" onclick="event.stopPropagation(); controlVM('${vm.id}', 'start')">▶</button>
+                            <button class="text-yellow-600 hover:text-yellow-700 text-xs" onclick="event.stopPropagation(); controlVM('${vm.id}', 'stop')">⏸</button>
+                            <button class="text-red-600 hover:text-red-700 text-xs" onclick="event.stopPropagation(); deleteVM('${vm.id}')">🗑</button>
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // Select VM to show details
+        function selectVM(vmId, vm) {
+            const vmDetails = document.getElementById('vmDetails');
+            vmDetails.innerHTML = `
+                <div class="space-y-4">
+                    <div>
+                        <h4 class="text-lg font-semibold text-gray-900">${vm.name}</h4>
+                        <p class="text-sm text-gray-600">${vm.description}</p>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">CPU Cores</label>
+                            <p class="text-sm text-gray-900">${vm.cpu}</p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Memory</label>
+                            <p class="text-sm text-gray-900">${vm.memory} MB</p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Disk</label>
+                            <p class="text-sm text-gray-900">${vm.disk} GB</p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Image</label>
+                            <p class="text-sm text-gray-900">${vm.image}</p>
+                        </div>
+                    </div>
+                    <div class="flex space-x-3 pt-4">
+                        <button onclick="controlVM('${vm.id}', 'start')" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm">Start</button>
+                        <button onclick="controlVM('${vm.id}', 'stop')" class="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-md text-sm">Stop</button>
+                        <button onclick="controlVM('${vm.id}', 'restart')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm">Restart</button>
+                        <button onclick="deleteVM('${vm.id}')" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm">Delete</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // VM control functions
+        async function controlVM(vmId, action) {
+            try {
+                const response = await fetch(`/vms/${vmId}/${action}`, { method: 'POST' });
+                if (response.ok) {
+                    term.write(`\r\nVM ${vmId} ${action} command sent\r\n$ `);
+                } else {
+                    term.write(`\r\nFailed to ${action} VM ${vmId}\r\n$ `);
+                }
+            } catch (error) {
+                term.write(`\r\nError: ${error.message}\r\n$ `);
+            }
+        }
+
+        async function deleteVM(vmId) {
+            if (confirm('Are you sure you want to delete this VM?')) {
+                try {
+                    const response = await fetch(`/vms/${vmId}`, { method: 'DELETE' });
+                    if (response.ok) {
+                        await loadVMs();
+                        term.write(`\r\nVM ${vmId} deleted\r\n$ `);
+                    } else {
+                        term.write(`\r\nFailed to delete VM ${vmId}\r\n$ `);
+                    }
+                } catch (error) {
+                    term.write(`\r\nError: ${error.message}\r\n$ `);
+                }
+            }
+        }
+
+        // Create VM functionality
+        document.getElementById('createVMBtn').addEventListener('click', () => {
+            const name = prompt('VM Name:');
+            const description = prompt('VM Description:');
+            const cpu = parseInt(prompt('CPU cores:') || '1');
+            const memory = parseInt(prompt('Memory (MB):') || '512');
+            const disk = parseInt(prompt('Disk (GB):') || '10');
+            const image = prompt('Image:') || 'ubuntu:latest';
+
+            if (name && description) {
+                createVM({ name, description, cpu, memory, disk, image });
+            }
+        });
+
+        async function createVM(vmData) {
+            try {
+                const response = await fetch('/vms', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(vmData)
+                });
+
+                if (response.ok) {
+                    await loadVMs();
+                    term.write(`\r\nVM "${vmData.name}" created\r\n$ `);
+                } else {
+                    term.write(`\r\nFailed to create VM\r\n$ `);
+                }
+            } catch (error) {
+                term.write(`\r\nError: ${error.message}\r\n$ `);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register - Strato</title>
+    <link rel="stylesheet" href="/styles/app.generated.css" />
+    <script src="/js/webauthn.js"></script>
+</head>
+
+<body class="bg-gray-100 min-h-screen flex items-center justify-center">
+    <div class="max-w-md w-full space-y-8">
+        <div>
+            <h2 class="mt-6 text-center text-3xl font-extrabold text-gray-900">
+                Create your account
+            </h2>
+            <p class="mt-2 text-center text-sm text-gray-600">
+                Register with Passkeys for secure, passwordless authentication
+            </p>
+        </div>
+        
+        <div class="mt-8 space-y-6">
+            <!-- User Registration Form -->
+            <div class="bg-white p-6 rounded-lg shadow">
+                <form id="registerForm" class="space-y-4">
+                    <div>
+                        <label for="username" class="block text-sm font-medium text-gray-700">
+                            Username
+                        </label>
+                        <input
+                            id="username"
+                            name="username"
+                            type="text"
+                            required
+                            class="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                            placeholder="Enter your username"
+                        >
+                    </div>
+                    
+                    <div>
+                        <label for="email" class="block text-sm font-medium text-gray-700">
+                            Email
+                        </label>
+                        <input
+                            id="email"
+                            name="email"
+                            type="email"
+                            required
+                            class="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                            placeholder="Enter your email"
+                        >
+                    </div>
+                    
+                    <div>
+                        <label for="displayName" class="block text-sm font-medium text-gray-700">
+                            Display Name
+                        </label>
+                        <input
+                            id="displayName"
+                            name="displayName"
+                            type="text"
+                            required
+                            class="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                            placeholder="Enter your display name"
+                        >
+                    </div>
+                    
+                    <div>
+                        <button
+                            type="submit"
+                            class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                            Create Account
+                        </button>
+                    </div>
+                </form>
+            </div>
+            
+            <!-- Passkey Registration -->
+            <div class="bg-white p-6 rounded-lg shadow passkey-only">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">
+                    Step 2: Register your Passkey
+                </h3>
+                <p class="text-sm text-gray-600 mb-4">
+                    After creating your account, you'll register a passkey for secure authentication.
+                </p>
+                <button
+                    id="registerPasskeyBtn"
+                    disabled
+                    class="w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                    Register Passkey
+                </button>
+                <div id="passkeyStatus" class="mt-4"></div>
+            </div>
+            
+            <!-- Fallback for non-WebAuthn browsers -->
+            <div class="bg-yellow-50 p-4 rounded-lg passkey-fallback" style="display: none;">
+                <div class="flex">
+                    <div class="flex-shrink-0">
+                        <svg class="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+                        </svg>
+                    </div>
+                    <div class="ml-3">
+                        <h3 class="text-sm font-medium text-yellow-800">
+                            Passkeys not supported
+                        </h3>
+                        <div class="mt-2 text-sm text-yellow-700">
+                            <p>Your browser doesn't support Passkeys. Please use a supported browser for the best security experience.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="text-center">
+                <a href="/login" class="text-indigo-600 hover:text-indigo-500">
+                    Already have an account? Sign in
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let createdUsername = null;
+
+        document.getElementById('registerForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            const userData = {
+                username: formData.get('username'),
+                email: formData.get('email'),
+                displayName: formData.get('displayName')
+            };
+            
+            try {
+                const response = await fetch('/users/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(userData)
+                });
+                
+                if (response.ok) {
+                    const user = await response.json();
+                    createdUsername = userData.username;
+                    
+                    // Enable passkey registration
+                    document.getElementById('registerPasskeyBtn').disabled = false;
+                    document.getElementById('registerForm').style.display = 'none';
+                    
+                    WebAuthnUtils.showSuccess('passkeyStatus', 'Account created! Now register your passkey below.');
+                } else {
+                    const error = await response.json();
+                    alert(`Registration failed: ${error.reason || 'Unknown error'}`);
+                }
+            } catch (error) {
+                alert(`Registration failed: ${error.message}`);
+            }
+        });
+
+        document.getElementById('registerPasskeyBtn').addEventListener('click', async () => {
+            if (!createdUsername) return;
+            
+            const result = await WebAuthnUtils.handleRegistration(createdUsername, 'passkeyStatus');
+            
+            if (result) {
+                setTimeout(() => {
+                    window.location.href = '/login';
+                }, 2000);
+            }
+        });
+    </script>
+</body>
+</html>
