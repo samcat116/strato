@@ -1,0 +1,27 @@
+server:
+  http:
+    enabled: true
+    port: '3476'
+  grpc:
+    enabled: true
+    port: '3478'
+  
+database:
+  engine: postgres
+  uri: postgres://vapor_username:vapor_password@db:5432/vapor_database?sslmode=disable
+  auto_migrate: true
+
+logger:
+  level: info
+
+authn:
+  enabled: false
+
+profiler:
+  enabled: false
+
+meter:
+  enabled: false
+
+tracer:
+  enabled: false

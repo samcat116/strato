@@ -1,0 +1,25 @@
+entity user {}
+
+entity organization {
+    relation admin @user
+    relation member @user
+    
+    permission manage_vms = admin
+    permission view_organization = admin or member
+}
+
+entity vm {
+    relation owner @user
+    relation organization @organization
+    relation viewer @user
+    relation editor @user
+    
+    permission create = organization.admin or organization.member
+    permission read = owner or viewer or editor or organization.admin
+    permission update = owner or editor or organization.admin
+    permission delete = owner or organization.admin
+    permission start = owner or editor or organization.admin
+    permission stop = owner or editor or organization.admin
+    permission restart = owner or editor or organization.admin
+    permission view_console = owner or editor or organization.admin
+}

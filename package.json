@@ -1,0 +1,26 @@
+{
+  "name": "strato",
+  "version": "1.0.0",
+  "description": "Strato is a fast, secure, and easy to deploy private cloud platform based on battle tested technologies and built for modern infrastructure. It enables operators to run efficient, secure, and powerful infrastructure easily.",
+  "main": "tailwind.config.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samcat116/strato.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/samcat116/strato/issues"
+  },
+  "homepage": "https://github.com/samcat116/strato#readme",
+  "devDependencies": {
+    "tailwindcss": "^4.0.6"
+  },
+  "dependencies": {
+    "@xterm/xterm": "^5.5.0"
+  }
+}
