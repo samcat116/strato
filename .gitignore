@@ -11,3 +11,5 @@ db.sqlite
 .env.*
 ! .env.example
 .vscode
+node_modules/
+*.paw
