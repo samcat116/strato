@@ -17,7 +17,6 @@ let package = Package(
         .package(url: "https://github.com/vapor/leaf.git", from: "4.3.0"),
         // 🔵 Non-blocking, event-driven networking for Swift. Used for custom executors
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
-        .package(url: "https://github.com/tuist/SwiftyTailwind.git", .upToNextMinor(from: "0.5.0")),
         // 🔐 WebAuthn/Passkey authentication
         .package(url: "https://github.com/swift-server/webauthn-swift.git", branch: "main"),
     ],
@@ -31,7 +30,6 @@ let package = Package(
                 .product(name: "Vapor", package: "vapor"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
-                .product(name: "SwiftyTailwind", package: "swiftytailwind"),
                 .product(name: "WebAuthn", package: "webauthn-swift"),
             ],
             swiftSettings: swiftSettings
@@ -43,14 +41,12 @@ let package = Package(
                 .product(name: "VaporTesting", package: "vapor"),
             ],
             swiftSettings: swiftSettings
-        ),
+        )
     ],
     swiftLanguageModes: [.v5]
 )
 
 var swiftSettings: [SwiftSetting] {
-    [
-        .enableUpcomingFeature("DisableOutwardActorInference"),
-        .enableExperimentalFeature("StrictConcurrency"),
-    ]
+    // Minimal settings for Swift 6 compatibility
+    []
 }

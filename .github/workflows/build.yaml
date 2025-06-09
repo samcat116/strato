@@ -1,4 +1,4 @@
-name: Build Cloud Hypervisor Docker Image
+name: Build Docker Images
 
 on:
   pull_request:
@@ -17,12 +17,24 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker Image
+      - name: Build Cloud Hypervisor Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile
           push: false
           platforms: ${{ matrix.runner == 'ubuntu-24.04' && 'linux/amd64' || 'linux/arm64' }}
-          tags: strato:pr-${{ github.event.pull_request.number }}-${{ matrix.runner == 'ubuntu-latest' && 'amd64' || 'arm64' }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: strato-hypervisor:pr-${{ github.event.pull_request.number }}-${{ matrix.runner == 'ubuntu-24.04' && 'amd64' || 'arm64' }}
+          cache-from: type=gha,key=hypervisor-${{ matrix.runner }}
+          cache-to: type=gha,mode=max,key=hypervisor-${{ matrix.runner }}
+
+      - name: Build Strato App Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile-app
+          push: false
+          platforms: ${{ matrix.runner == 'ubuntu-24.04' && 'linux/amd64' || 'linux/arm64' }}
+          tags: strato-app:pr-${{ github.event.pull_request.number }}-${{ matrix.runner == 'ubuntu-24.04' && 'amd64' || 'arm64' }}
+          cache-from: type=gha,key=app-${{ matrix.runner }}
+          cache-to: type=gha,mode=max,key=app-${{ matrix.runner }}

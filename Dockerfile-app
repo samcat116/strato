@@ -1,13 +1,15 @@
 # ================================
 # Build image
 # ================================
-FROM swift:6.0-noble AS build
+FROM swift:6.1.2-noble AS build
 
-# Install OS updates
+# Install OS updates and Node.js for TailwindCSS
 RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     && apt-get -q update \
     && apt-get -q dist-upgrade -y \
-    && apt-get install -y libjemalloc-dev
+    && apt-get install -y libjemalloc-dev curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs
 
 # Set up a build area
 WORKDIR /build
@@ -18,17 +20,25 @@ WORKDIR /build
 # files do not change.
 COPY ./Package.* ./
 RUN swift package resolve \
-        $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true)
+    $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true)
+
+# Copy package.json and package-lock.json for npm dependencies
+COPY package*.json ./
+
+# Install npm dependencies (including devDependencies for TailwindCSS)
+RUN npm ci
 
 # Copy entire repo into container
 COPY . .
 
-# Build the application, with optimizations, with static linking, and using jemalloc
-# N.B.: The static version of jemalloc is incompatible with the static Swift runtime.
+# Build TailwindCSS
+RUN npm run build-css-prod
+
+# Build the application, with optimizations and using jemalloc
+# Note: Removed --static-swift-stdlib due to Swift 6 compatibility issues on Linux
 RUN swift build -c release \
-        --product App \
-        --static-swift-stdlib \
-        -Xlinker -ljemalloc
+    --product App \
+    -Xlinker -ljemalloc
 
 # Switch to the staging area
 WORKDIR /staging
@@ -57,13 +67,13 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     && apt-get -q update \
     && apt-get -q dist-upgrade -y \
     && apt-get -q install -y \
-      libjemalloc2 \
-      ca-certificates \
-      tzdata \
-# If your app or its dependencies import FoundationNetworking, also install `libcurl4`.
-      # libcurl4 \
-# If your app or its dependencies import FoundationXML, also install `libxml2`.
-      # libxml2 \
+    libjemalloc2 \
+    ca-certificates \
+    tzdata \
+    # If your app or its dependencies import FoundationNetworking, also install `libcurl4`.
+    # libcurl4 \
+    # If your app or its dependencies import FoundationXML, also install `libxml2`.
+    # libxml2 \
     && rm -r /var/lib/apt/lists/*
 
 # Create a vapor user and group with /app as its home directory
