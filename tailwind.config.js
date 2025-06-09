@@ -1,5 +1,8 @@
 module.exports = {
-  content: ["./web/templates/**/*.html"],
+  content: [
+    "./Resources/Views/**/*.leaf",
+    "./web/templates/**/*.html"
+  ],
   theme: {
     extend: {},
   },
