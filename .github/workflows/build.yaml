@@ -149,8 +149,9 @@ jobs:
           context: .
           file: ./Dockerfile-app
           push: false
+          load: ${{ matrix.platform == 'linux/amd64' }}
           platforms: ${{ matrix.platform }}
-          tags: strato-app:${{ github.sha }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          tags: strato-app:test
           cache-from: type=gha,key=app-${{ matrix.platform }}
           cache-to: type=gha,mode=max,key=app-${{ matrix.platform }}
 
@@ -174,7 +175,7 @@ jobs:
                 retries: 5
 
             app:
-              image: strato-app:${{ github.sha }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+              image: strato-app:test
               environment:
                 DATABASE_URL: postgres://strato:strato_password@db:5432/strato_test
               depends_on:
