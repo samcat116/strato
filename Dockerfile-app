@@ -76,6 +76,9 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     # libxml2 \
     && rm -r /var/lib/apt/lists/*
 
+# Copy Swift runtime libraries from build stage
+COPY --from=build /usr/lib/swift/linux/*.so /usr/lib/
+
 # Create a vapor user and group with /app as its home directory
 RUN useradd --user-group --create-home --system --skel /dev/null --home-dir /app vapor
 
