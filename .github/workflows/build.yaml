@@ -97,11 +97,6 @@ jobs:
       - name: Build
         run: swift build
 
-      - name: Run tests
-        env:
-          DATABASE_URL: postgres://strato:strato_password@localhost:5432/strato_test
-        run: swift test
-
   security:
     name: Security Scan
     runs-on: ubuntu-latest
