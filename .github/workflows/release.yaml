@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+  packages: write
+  actions: read
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME_HYPERVISOR: ${{ github.repository }}-hypervisor

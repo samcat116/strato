@@ -9,6 +9,11 @@ on:
       - main
       - develop
 
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
 jobs:
   test:
     name: Run Tests
