@@ -174,7 +174,7 @@ jobs:
                 retries: 5
 
             app:
-              image: app-${{ matrix.platform }}
+              image: strato-app:${{ github.sha }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
               environment:
                 DATABASE_URL: postgres://strato:strato_password@db:5432/strato_test
               depends_on:
