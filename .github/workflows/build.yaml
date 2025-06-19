@@ -149,7 +149,7 @@ jobs:
           context: .
           file: ./Dockerfile-app
           push: false
-          load: ${{ matrix.platform == 'linux/amd64' }}
+          load: true
           platforms: ${{ matrix.platform }}
           tags: strato-app:test
           cache-from: type=gha,key=app-${{ matrix.platform }}
