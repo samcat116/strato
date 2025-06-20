@@ -120,7 +120,7 @@ jobs:
 
   build:
     name: Build Docker Images
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-latest-arm' || 'ubuntu-latest' }}
     needs: [test]
     strategy:
       matrix:
