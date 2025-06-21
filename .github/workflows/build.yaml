@@ -120,11 +120,16 @@ jobs:
 
   build:
     name: Build Docker Images
-    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-latest-arm' || 'ubuntu-latest' }}
     needs: [test]
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        platform: [linux/amd64, linux/arm64]
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-latest-arm
+            arch: arm64
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -156,7 +161,7 @@ jobs:
           cache-to: type=gha,mode=max,key=app-${{ matrix.platform }}
 
       - name: Test Docker Compose
-        if: matrix.platform == 'linux/amd64'
+        if: matrix.arch == x64
         run: |
           # Create a test docker-compose file
           cat > docker-compose.test.yml << 'EOF'
