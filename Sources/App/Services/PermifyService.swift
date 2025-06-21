@@ -4,10 +4,12 @@ import Vapor
 struct PermifyService {
     private let client: Client
     private let endpoint: String
+    private let tenantId: String
     
-    init(client: Client, endpoint: String) {
+    init(client: Client, endpoint: String, tenantId: String = "t1") {
         self.client = client
         self.endpoint = endpoint
+        self.tenantId = tenantId
     }
     
     // MARK: - Permission Check
@@ -19,7 +21,7 @@ struct PermifyService {
         resourceId: String,
         context: [String: Any] = [:]
     ) async throws -> Bool {
-        let url = URI(string: "\(endpoint)/v1/permissions/check")
+        let url = URI(string: "\(endpoint)/v1/tenants/\(tenantId)/permissions/check")
         
         let payload = PermissionCheckRequest(
             metadata: PermissionMetadata(
@@ -53,13 +55,13 @@ struct PermifyService {
         }
         
         let result = try response.content.decode(PermissionCheckResponse.self)
-        return result.can == .RESULT_ALLOWED
+        return result.can == .CHECK_RESULT_ALLOWED
     }
     
     // MARK: - Schema Management
     
     func writeSchema(_ schema: String) async throws {
-        let url = URI(string: "\(endpoint)/v1/schemas/write")
+        let url = URI(string: "\(endpoint)/v1/tenants/\(tenantId)/schemas/write")
         
         let payload = SchemaWriteRequest(schema: schema)
         
@@ -82,7 +84,7 @@ struct PermifyService {
         subject: String,
         subjectId: String
     ) async throws {
-        let url = URI(string: "\(endpoint)/v1/relationships/write")
+        let url = URI(string: "\(endpoint)/v1/tenants/\(tenantId)/relationships/write")
         
         let payload = RelationshipWriteRequest(
             metadata: RelationshipMetadata(
@@ -214,8 +216,8 @@ struct PermissionCheckResponse: Content {
 }
 
 enum PermissionResult: String, Content {
-    case RESULT_ALLOWED = "RESULT_ALLOWED"
-    case RESULT_DENIED = "RESULT_DENIED"
+    case CHECK_RESULT_ALLOWED = "CHECK_RESULT_ALLOWED"
+    case CHECK_RESULT_DENIED = "CHECK_RESULT_DENIED"
 }
 
 struct SchemaWriteRequest: Content {
