@@ -1,5 +1,5 @@
 {
-  "originHash" : "76731401803f169f02588b07c6e6028b351bde3b01462922ca60d8cdf1cc6b54",
+  "originHash" : "ac99f66cd38562e11cbeccaf21b37cfb3613138053a9447a3ab46b7ef8ea1aab",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -290,29 +290,11 @@
       }
     },
     {
-      "identity" : "swift-tools-support-core",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-tools-support-core.git",
-      "state" : {
-        "revision" : "3b13e439a341bbbfe0f710c7d1be37221745ef1a",
-        "version" : "0.6.1"
-      }
-    },
-    {
       "identity" : "swiftcbor",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/unrelentingtech/SwiftCBOR.git",
       "state" : {
         "revision" : "04ccff117f6549121d5721ec84fdf0162122b90e",
-        "version" : "0.5.0"
-      }
-    },
-    {
-      "identity" : "swiftytailwind",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/tuist/SwiftyTailwind.git",
-      "state" : {
-        "revision" : "d2bc66eb6b993bc2d755d64e1fc7f59359c265f7",
         "version" : "0.5.0"
       }
     },
