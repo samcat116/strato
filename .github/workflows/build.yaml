@@ -1,18 +1,138 @@
-name: Build Docker Images
+name: Build and Test
 
 on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
 jobs:
-  build:
-    strategy:
-      matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
-    runs-on: ${{ matrix.runner }}
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: strato_test
+          POSTGRES_USER: strato
+          POSTGRES_PASSWORD: strato_password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+
+      - name: "Install Swift toolchain"
+        if: inputs.toolchain == 'Swift'
+        shell: bash
+        run: |
+          set -e
+
+          export SWIFTLY_HOME_DIR=${{ github.workspace }}/.swiftly/share
+          export SWIFTLY_BIN_DIR=${{ github.workspace }}/.swiftly/bin
+
+          echo "$SWIFTLY_BIN_DIR" >> $GITHUB_PATH
+          echo "SWIFTLY_HOME_DIR=$SWIFTLY_HOME_DIR" >> $GITHUB_ENV
+          echo "SWIFTLY_BIN_DIR=$SWIFTLY_BIN_DIR" >> $GITHUB_ENV
+
+          export PATH=$SWIFTLY_BIN_DIR:$PATH
+
+          mkdir -p $SWIFTLY_HOME_DIR
+          mkdir -p $SWIFTLY_BIN_DIR
+
+          if ${{ inputs.os == 'Linux' }} ; then
+            curl -O https://download.swift.org/swiftly/linux/swiftly-${{ inputs.arch }}.tar.gz
+            file swiftly-${{ inputs.arch }}.tar.gz
+            tar -xzf swiftly-${{ inputs.arch }}.tar.gz -C $SWIFTLY_BIN_DIR
+            rm swiftly-${{ inputs.arch }}.tar.gz
+          else
+            # FIXME: https://github.com/swiftlang/swiftly/issues/271
+            #    Why does this drop files in $HOME? That's not very CI-friendly
+            curl -O https://download.swift.org/swiftly/darwin/swiftly.pkg
+            installer -pkg swiftly.pkg -target CurrentUserHomeDirectory
+            cp ~/.swiftly/bin/swiftly $SWIFTLY_BIN_DIR
+            rm swiftly.pkg
+          fi
+
+          swiftly init \
+            --no-modify-profile \
+            --quiet-shell-followup \
+            --assume-yes \
+            --skip-install \
+            --verbose
+
+          echo "swiftly version: $(swiftly --version)" >&2
+
+          swiftly install --use main-snapshot-2025-04-12
+          swiftly list
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev zlib1g-dev
+
+      - name: Cache Swift packages
+        uses: actions/cache@v3
+        with:
+          path: .build
+          key: ${{ runner.os }}-swift-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swift-
+
+      - name: Build
+        run: swift build
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-results.sarif"
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
+
+  build:
+    name: Build Docker Images
+    needs: [test]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -23,10 +143,10 @@ jobs:
           context: .
           file: ./Dockerfile
           push: false
-          platforms: ${{ matrix.runner == 'ubuntu-24.04' && 'linux/amd64' || 'linux/arm64' }}
-          tags: strato-hypervisor:pr-${{ github.event.pull_request.number }}-${{ matrix.runner == 'ubuntu-24.04' && 'amd64' || 'arm64' }}
-          cache-from: type=gha,key=hypervisor-${{ matrix.runner }}
-          cache-to: type=gha,mode=max,key=hypervisor-${{ matrix.runner }}
+          platforms: ${{ matrix.platform }}
+          tags: strato-hypervisor:${{ github.sha }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          cache-from: type=gha,key=hypervisor-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,key=hypervisor-${{ matrix.platform }}
 
       - name: Build Strato App Docker Image
         uses: docker/build-push-action@v5
@@ -34,7 +154,41 @@ jobs:
           context: .
           file: ./Dockerfile-app
           push: false
-          platforms: ${{ matrix.runner == 'ubuntu-24.04' && 'linux/amd64' || 'linux/arm64' }}
-          tags: strato-app:pr-${{ github.event.pull_request.number }}-${{ matrix.runner == 'ubuntu-24.04' && 'amd64' || 'arm64' }}
-          cache-from: type=gha,key=app-${{ matrix.runner }}
-          cache-to: type=gha,mode=max,key=app-${{ matrix.runner }}
+          load: true
+          platforms: ${{ matrix.platform }}
+          tags: strato-app:test
+          cache-from: type=gha,key=app-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,key=app-${{ matrix.platform }}
+
+      - name: Test Docker Compose
+        if: matrix.arch == 'x64'
+        run: |
+          # Create a test docker-compose file
+          cat > docker-compose.test.yml << 'EOF'
+          version: '3.8'
+          services:
+            db:
+              image: postgres:15
+              environment:
+                POSTGRES_DB: strato_test
+                POSTGRES_USER: strato
+                POSTGRES_PASSWORD: strato_password
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U strato"]
+                interval: 10s
+                timeout: 5s
+                retries: 5
+
+            app:
+              image: strato-app:test
+              environment:
+                DATABASE_URL: postgres://strato:strato_password@db:5432/strato_test
+              depends_on:
+                db:
+                  condition: service_healthy
+              command: ["sh", "-c", "sleep 10 && echo 'App container started successfully'"]
+          EOF
+
+          # Test that the compose file works
+          docker compose -f docker-compose.test.yml up --wait --timeout 60
+          docker compose -f docker-compose.test.yml down
