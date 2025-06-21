@@ -13,3 +13,4 @@ db.sqlite
 .vscode
 node_modules/
 *.paw
+.claude/
