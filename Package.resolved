@@ -1,5 +1,5 @@
 {
-  "originHash" : "ac99f66cd38562e11cbeccaf21b37cfb3613138053a9447a3ab46b7ef8ea1aab",
+  "originHash" : "560c7d475e305df8db5a53f79eb6a56b29caa9480aed8e311cce045c8fc1caf4",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/vapor/fluent-postgres-driver.git",
       "state" : {
-        "revision" : "fd57101e426d3edf66a32ba63a7d0b8ced4d7499",
-        "version" : "2.10.0"
+        "revision" : "095bc5a17ab3363167f4becb270b6f8eb790481c",
+        "version" : "2.10.1"
       }
     },
     {
