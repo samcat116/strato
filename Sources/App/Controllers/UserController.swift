@@ -186,15 +186,9 @@ struct UserController: RouteCollection {
         req.auth.login(user)
         
         // Store in Permify relationships if needed
-        // Add user to default organization as a member
+        // Ensure user belongs to default organization
         do {
-            try await req.permify.writeRelationship(
-                entity: "organization",
-                entityId: "default-org",
-                relation: "member",
-                subject: "user",
-                subjectId: user.id?.uuidString ?? ""
-            )
+            try await ensureUserInDefaultOrganization(user: user, req: req)
         } catch {
             req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
             // Don't fail the login if Permify relationship creation fails
@@ -317,6 +311,64 @@ struct SessionResponse: Content {
 
 // MARK: - User Extensions
 
+// MARK: - Helper Functions
+
+extension UserController {
+    private func ensureUserInDefaultOrganization(user: User, req: Request) async throws {
+        // Find or create default organization
+        let defaultOrg = try await findOrCreateDefaultOrganization(req: req)
+        
+        // Check if user is already in the organization
+        let existingMembership = try await UserOrganization.query(on: req.db)
+            .filter(\.$user.$id == user.id!)
+            .filter(\.$organization.$id == defaultOrg.id!)
+            .first()
+        
+        if existingMembership == nil {
+            // Add user to default organization as member
+            let membership = UserOrganization(
+                userID: user.id!,
+                organizationID: defaultOrg.id!,
+                role: "member"
+            )
+            try await membership.save(on: req.db)
+            
+            // Create Permify relationship
+            try await req.permify.writeRelationship(
+                entity: "organization",
+                entityId: defaultOrg.id?.uuidString ?? "",
+                relation: "member",
+                subject: "user",
+                subjectId: user.id?.uuidString ?? ""
+            )
+        }
+        
+        // Set as current organization if user doesn't have one
+        if user.currentOrganizationId == nil {
+            user.currentOrganizationId = defaultOrg.id
+            try await user.save(on: req.db)
+        }
+    }
+    
+    private func findOrCreateDefaultOrganization(req: Request) async throws -> Organization {
+        // Try to find existing default organization
+        if let existingOrg = try await Organization.query(on: req.db)
+            .filter(\.$name == "Default Organization")
+            .first() {
+            return existingOrg
+        }
+        
+        // Create default organization if it doesn't exist
+        let defaultOrg = Organization(
+            name: "Default Organization",
+            description: "Default organization for all users"
+        )
+        try await defaultOrg.save(on: req.db)
+        
+        return defaultOrg
+    }
+}
+
 extension User {
     struct Public: Content {
         let id: UUID?
@@ -324,6 +376,7 @@ extension User {
         let email: String
         let displayName: String
         let createdAt: Date?
+        let currentOrganizationId: UUID?
     }
     
     func asPublic() -> Public {
@@ -332,7 +385,8 @@ extension User {
             username: self.username,
             email: self.email,
             displayName: self.displayName,
-            createdAt: self.createdAt
+            createdAt: self.createdAt,
+            currentOrganizationId: self.currentOrganizationId
         )
     }
 }

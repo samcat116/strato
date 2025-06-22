@@ -69,11 +69,15 @@ struct PermifyAuthMiddleware: AsyncMiddleware {
         // Handle collection-level operations that require organization permissions
         if (permission == "read" && resourceId == "*") || (permission == "create" && resourceId == "*") {
             // For VM collection read and VM creation, check organization membership
+            guard let currentOrgId = user.currentOrganizationId else {
+                throw Abort(.forbidden, reason: "No current organization set")
+            }
+            
             let hasPermission = try await request.permify.checkPermission(
                 subject: user.id?.uuidString ?? "",
                 permission: "view_organization",
                 resource: "organization",
-                resourceId: "default-org"
+                resourceId: currentOrgId.uuidString
             )
             
             if !hasPermission {
