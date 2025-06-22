@@ -66,16 +66,31 @@ struct PermifyAuthMiddleware: AsyncMiddleware {
             resourceId = String(pathComponents[2])
         }
         
-        // Check permission with Permify
-        let hasPermission = try await request.permify.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: permission,
-            resource: "vm",
-            resourceId: resourceId
-        )
-        
-        if !hasPermission {
-            throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
+        // Handle collection-level operations that require organization permissions
+        if (permission == "read" && resourceId == "*") || (permission == "create" && resourceId == "*") {
+            // For VM collection read and VM creation, check organization membership
+            let hasPermission = try await request.permify.checkPermission(
+                subject: user.id?.uuidString ?? "",
+                permission: "view_organization",
+                resource: "organization",
+                resourceId: "default-org"
+            )
+            
+            if !hasPermission {
+                throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
+            }
+        } else {
+            // Check permission with Permify for specific VM operations
+            let hasPermission = try await request.permify.checkPermission(
+                subject: user.id?.uuidString ?? "",
+                permission: permission,
+                resource: "vm",
+                resourceId: resourceId
+            )
+            
+            if !hasPermission {
+                throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
+            }
         }
     }
 }

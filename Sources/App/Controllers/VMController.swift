@@ -62,13 +62,26 @@ struct VMController: RouteCollection {
         let vm = try req.content.decode(VM.self)
         try await vm.save(on: req.db)
         
-        // Create ownership relationship in Permify
+        // Create relationships in Permify
+        let vmId = vm.id?.uuidString ?? ""
+        let userId = user.id?.uuidString ?? ""
+        
+        // Create ownership relationship
         try await req.permify.writeRelationship(
             entity: "vm",
-            entityId: vm.id?.uuidString ?? "",
+            entityId: vmId,
             relation: "owner",
             subject: "user",
-            subjectId: user.id?.uuidString ?? ""
+            subjectId: userId
+        )
+        
+        // Link VM to default organization
+        try await req.permify.writeRelationship(
+            entity: "vm",
+            entityId: vmId,
+            relation: "organization",
+            subject: "organization",
+            subjectId: "default-org"
         )
         
         return vm
