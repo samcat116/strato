@@ -57,6 +57,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddCurrentOrganizationToUser())
     app.migrations.add(CreateAPIKey())
     app.migrations.add(SessionRecord.migration)
+    app.migrations.add(EnhanceVM())
+    app.migrations.add(MigrateVMMemoryAndDisk())
+    app.migrations.add(CreateVMTemplate())
+    app.migrations.add(SeedVMTemplates())
 
     try await app.autoMigrate()
     

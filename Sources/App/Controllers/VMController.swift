@@ -13,6 +13,9 @@ struct VMController: RouteCollection {
             vm.post("start", use: start)
             vm.post("stop", use: stop)
             vm.post("restart", use: restart)
+            vm.post("pause", use: pause)
+            vm.post("resume", use: resume)
+            vm.get("status", use: status)
         }
     }
 
@@ -59,7 +62,49 @@ struct VMController: RouteCollection {
             throw Abort(.unauthorized)
         }
         
-        let vm = try req.content.decode(VM.self)
+        struct CreateVMRequest: Content {
+            let name: String
+            let description: String
+            let templateName: String
+            let cpu: Int?
+            let memory: Int64?
+            let disk: Int64?
+            let cmdline: String?
+        }
+        
+        let createRequest = try req.content.decode(CreateVMRequest.self)
+        
+        // Find the template
+        guard let template = try await VMTemplate.query(on: req.db)
+            .filter(\VMTemplate.$imageName, .equal, createRequest.templateName)
+            .filter(\VMTemplate.$isActive, .equal, true)
+            .first() else {
+            throw Abort(.badRequest, reason: "Template '\(createRequest.templateName)' not found or inactive")
+        }
+        
+        // Create VM instance from template
+        let vm = try template.createVMInstance(
+            name: createRequest.name,
+            description: createRequest.description,
+            cpu: createRequest.cpu,
+            memory: createRequest.memory,
+            disk: createRequest.disk,
+            cmdline: createRequest.cmdline
+        )
+        
+        // Generate unique paths and configurations
+        vm.diskPath = template.generateDiskPath(for: vm.id!)
+        vm.macAddress = template.generateMacAddress()
+        vm.kernelPath = template.kernelPath
+        vm.initramfsPath = template.initramfsPath
+        vm.firmwarePath = template.firmwarePath
+        vm.cmdline = vm.cmdline ?? template.defaultCmdline
+        
+        // Set up console sockets
+        vm.consoleSocket = "/tmp/vm-\(vm.id!.uuidString)-console.sock"
+        vm.serialSocket = "/tmp/vm-\(vm.id!.uuidString)-serial.sock"
+        
+        // Save VM to database first
         try await vm.save(on: req.db)
         
         // Create relationships in Permify
@@ -86,6 +131,24 @@ struct VMController: RouteCollection {
             )
         }
         
+        // Create VM in cloud-hypervisor
+        do {
+            let vmConfig = try await req.cloudHypervisor.buildVMConfig(from: vm, template: template)
+            try await req.cloudHypervisor.createVM(config: vmConfig)
+            
+            // Update VM status
+            vm.status = VMStatus.created
+            vm.hypervisorId = vm.id?.uuidString
+            try await vm.save(on: req.db)
+            
+            req.logger.info("VM created successfully in cloud-hypervisor", metadata: ["vm_id": .string(vmId)])
+        } catch {
+            req.logger.error("Failed to create VM in cloud-hypervisor: \(error)", metadata: ["vm_id": .string(vmId)])
+            
+            // Don't fail the entire request - VM is created in DB but not in hypervisor
+            // This allows for manual retry later
+        }
+        
         return vm
     }
     
@@ -98,13 +161,22 @@ struct VMController: RouteCollection {
             throw Abort(.notFound)
         }
         
-        let updatedVM = try req.content.decode(VM.self)
-        existingVM.name = updatedVM.name
-        existingVM.description = updatedVM.description
-        existingVM.image = updatedVM.image
-        existingVM.cpu = updatedVM.cpu
-        existingVM.memory = updatedVM.memory
-        existingVM.disk = updatedVM.disk
+        struct UpdateVMRequest: Content {
+            let name: String?
+            let description: String?
+        }
+        
+        let updateRequest = try req.content.decode(UpdateVMRequest.self)
+        
+        // Only allow updating name and description for now
+        // Resource changes would require VM shutdown and recreation
+        if let name = updateRequest.name {
+            existingVM.name = name
+        }
+        
+        if let description = updateRequest.description {
+            existingVM.description = description
+        }
         
         try await existingVM.save(on: req.db)
         return existingVM
@@ -119,22 +191,222 @@ struct VMController: RouteCollection {
             throw Abort(.notFound)
         }
         
+        // Stop and delete VM from cloud-hypervisor first
+        if vm.hypervisorId != nil {
+            do {
+                try await req.cloudHypervisor.stopAndDeleteVM()
+                req.logger.info("VM deleted from cloud-hypervisor", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            } catch {
+                req.logger.warning("Failed to delete VM from cloud-hypervisor: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+                // Continue with database deletion even if hypervisor deletion fails
+            }
+        }
+        
+        // Delete from database
         try await vm.delete(on: req.db)
         return .ok
     }
     
+    func pause(req: Request) async throws -> HTTPStatus {
+        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid VM ID")
+        }
+        
+        guard let vm = try await VM.find(vmID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+        
+        guard vm.canPause else {
+            throw Abort(.badRequest, reason: "VM cannot be paused in current state: \(vm.status.rawValue)")
+        }
+        
+        do {
+            try await req.cloudHypervisor.pauseVM()
+            
+            vm.status = VMStatus.paused
+            try await vm.save(on: req.db)
+            
+            req.logger.info("VM paused successfully", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            
+        } catch {
+            req.logger.error("Failed to pause VM: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            
+            let actualStatus = try await req.cloudHypervisor.syncVMStatus()
+            vm.status = actualStatus
+            try await vm.save(on: req.db)
+            
+            throw Abort(.internalServerError, reason: "Failed to pause VM: \(error.localizedDescription)")
+        }
+        
+        return .ok
+    }
+    
+    func resume(req: Request) async throws -> HTTPStatus {
+        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid VM ID")
+        }
+        
+        guard let vm = try await VM.find(vmID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+        
+        guard vm.canResume else {
+            throw Abort(.badRequest, reason: "VM cannot be resumed in current state: \(vm.status.rawValue)")
+        }
+        
+        do {
+            try await req.cloudHypervisor.resumeVM()
+            
+            vm.status = VMStatus.running
+            try await vm.save(on: req.db)
+            
+            req.logger.info("VM resumed successfully", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            
+        } catch {
+            req.logger.error("Failed to resume VM: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            
+            let actualStatus = try await req.cloudHypervisor.syncVMStatus()
+            vm.status = actualStatus
+            try await vm.save(on: req.db)
+            
+            throw Abort(.internalServerError, reason: "Failed to resume VM: \(error.localizedDescription)")
+        }
+        
+        return .ok
+    }
+    
+    func status(req: Request) async throws -> VM {
+        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid VM ID")
+        }
+        
+        guard let vm = try await VM.find(vmID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+        
+        // Sync status with hypervisor if VM exists there
+        if vm.hypervisorId != nil {
+            do {
+                let actualStatus = try await req.cloudHypervisor.syncVMStatus()
+                if actualStatus != vm.status {
+                    vm.status = actualStatus
+                    try await vm.save(on: req.db)
+                }
+            } catch {
+                req.logger.warning("Failed to sync VM status with hypervisor: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            }
+        }
+        
+        return vm
+    }
+    
     func start(req: Request) async throws -> HTTPStatus {
-        // TODO: Implement VM start logic with Cloud Hypervisor API
+        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid VM ID")
+        }
+        
+        guard let vm = try await VM.find(vmID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+        
+        guard vm.canStart else {
+            throw Abort(.badRequest, reason: "VM cannot be started in current state: \(vm.status.rawValue)")
+        }
+        
+        do {
+            if vm.status == .created {
+                // Boot the VM
+                try await req.cloudHypervisor.bootVM()
+            } else {
+                // Resume from paused state
+                try await req.cloudHypervisor.resumeVM()
+            }
+            
+            // Update VM status
+            vm.status = VMStatus.running
+            try await vm.save(on: req.db)
+            
+            req.logger.info("VM started successfully", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            
+        } catch {
+            req.logger.error("Failed to start VM: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            
+            // Sync status with hypervisor
+            let actualStatus = try await req.cloudHypervisor.syncVMStatus()
+            vm.status = actualStatus
+            try await vm.save(on: req.db)
+            
+            throw Abort(.internalServerError, reason: "Failed to start VM: \(error.localizedDescription)")
+        }
+        
         return .ok
     }
     
     func stop(req: Request) async throws -> HTTPStatus {
-        // TODO: Implement VM stop logic with Cloud Hypervisor API
+        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid VM ID")
+        }
+        
+        guard let vm = try await VM.find(vmID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+        
+        guard vm.canStop else {
+            throw Abort(.badRequest, reason: "VM cannot be stopped in current state: \(vm.status.rawValue)")
+        }
+        
+        do {
+            try await req.cloudHypervisor.shutdownVM()
+            
+            // Update VM status
+            vm.status = VMStatus.shutdown
+            try await vm.save(on: req.db)
+            
+            req.logger.info("VM stopped successfully", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            
+        } catch {
+            req.logger.error("Failed to stop VM: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            
+            // Sync status with hypervisor
+            let actualStatus = try await req.cloudHypervisor.syncVMStatus()
+            vm.status = actualStatus
+            try await vm.save(on: req.db)
+            
+            throw Abort(.internalServerError, reason: "Failed to stop VM: \(error.localizedDescription)")
+        }
+        
         return .ok
     }
     
     func restart(req: Request) async throws -> HTTPStatus {
-        // TODO: Implement VM restart logic with Cloud Hypervisor API
+        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid VM ID")
+        }
+        
+        guard let vm = try await VM.find(vmID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+        
+        guard vm.isRunning else {
+            throw Abort(.badRequest, reason: "VM must be running to restart. Current state: \(vm.status.rawValue)")
+        }
+        
+        do {
+            try await req.cloudHypervisor.rebootVM()
+            
+            req.logger.info("VM restarted successfully", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            
+        } catch {
+            req.logger.error("Failed to restart VM: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            
+            // Sync status with hypervisor
+            let actualStatus = try await req.cloudHypervisor.syncVMStatus()
+            vm.status = actualStatus
+            try await vm.save(on: req.db)
+            
+            throw Abort(.internalServerError, reason: "Failed to restart VM: \(error.localizedDescription)")
+        }
+        
         return .ok
     }
 }
