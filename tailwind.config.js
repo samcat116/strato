@@ -1,6 +1,6 @@
 module.exports = {
   content: [
-    "./Resources/Views/**/*.leaf",
+    "./Sources/App/**/*.swift",
     "./web/templates/**/*.html"
   ],
   theme: {

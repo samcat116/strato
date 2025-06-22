@@ -1,6 +1,6 @@
 import Fluent
 import FluentPostgresDriver
-import Leaf
+import ElementaryHTMX
 import NIOSSL
 import Vapor
 
@@ -48,7 +48,6 @@ public func configure(_ app: Application) async throws {
                 tls: .disable)
         ), as: .psql)
 
-    app.views.use(.leaf)
     app.migrations.add(CreateUser())
     app.migrations.add(CreateVM())
     app.migrations.add(SessionRecord.migration)

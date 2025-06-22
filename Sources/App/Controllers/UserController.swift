@@ -186,7 +186,19 @@ struct UserController: RouteCollection {
         req.auth.login(user)
         
         // Store in Permify relationships if needed
-        // This would be where you create any default organization relationships
+        // Add user to default organization as a member
+        do {
+            try await req.permify.writeRelationship(
+                entity: "organization",
+                entityId: "default-org",
+                relation: "member",
+                subject: "user",
+                subjectId: user.id?.uuidString ?? ""
+            )
+        } catch {
+            req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
+            // Don't fail the login if Permify relationship creation fails
+        }
         
         return AuthenticationFinishResponse(
             user: user.asPublic(),
