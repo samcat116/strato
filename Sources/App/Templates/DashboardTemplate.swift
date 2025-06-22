@@ -65,11 +65,12 @@ struct DashboardTemplate: HTMLDocument {
                         "+ New VM"
                     }
                     button(
+                        .id("settingsBtn"),
                         .class(
                             "bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-md text-sm font-medium"
                         )
                     ) {
-                        "Settings"
+                        "API Keys"
                     }
                     span(.id("userInfo"), .class("text-sm text-gray-600")) {}
                     button(
@@ -144,6 +145,120 @@ struct DashboardTemplate: HTMLDocument {
             }
         }
 
+        // API Keys Modal
+        div(
+            .id("apiKeysModal"),
+            .class("fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50")
+        ) {
+            div(.class("bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-screen overflow-y-auto")) {
+                div(.class("px-6 py-4 border-b border-gray-200 flex justify-between items-center")) {
+                    h3(.class("text-lg font-medium text-gray-900")) {
+                        "API Keys"
+                    }
+                    button(
+                        .id("closeApiKeysBtn"),
+                        .class("text-gray-400 hover:text-gray-600")
+                    ) {
+                        "✕"
+                    }
+                }
+                div(.class("px-6 py-4")) {
+                    div(.class("mb-4")) {
+                        button(
+                            .id("createApiKeyBtn"),
+                            .class("bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium")
+                        ) {
+                            "+ Create API Key"
+                        }
+                    }
+                    div(.id("apiKeysList"), .class("space-y-4")) {
+                        div(.class("text-center text-gray-500 py-8")) {
+                            "Loading API keys..."
+                        }
+                    }
+                }
+            }
+        }
+
+        // Create API Key Modal
+        div(
+            .id("createApiKeyModal"),
+            .class("fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50")
+        ) {
+            div(.class("bg-white rounded-lg shadow-xl max-w-md w-full mx-4")) {
+                div(.class("px-6 py-4 border-b border-gray-200")) {
+                    h3(.class("text-lg font-medium text-gray-900")) {
+                        "Create API Key"
+                    }
+                }
+                div(.class("px-6 py-4")) {
+                    form(.id("createApiKeyForm")) {
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Key Name"
+                            }
+                            input(
+                                .type(.text),
+                                .id("apiKeyName"),
+                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"),
+                                .required
+                            )
+                        }
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Scopes"
+                            }
+                            div(.class("space-y-2")) {
+                                label(.class("flex items-center")) {
+                                    input(.type(.checkbox), .value("read"), .class("mr-2"), .checked)
+                                    span(.class("text-sm")) { "Read" }
+                                }
+                                label(.class("flex items-center")) {
+                                    input(.type(.checkbox), .value("write"), .class("mr-2"), .checked)
+                                    span(.class("text-sm")) { "Write" }
+                                }
+                                label(.class("flex items-center")) {
+                                    input(.type(.checkbox), .value("admin"), .class("mr-2"))
+                                    span(.class("text-sm")) { "Admin" }
+                                }
+                            }
+                        }
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Expires In (days)"
+                            }
+                            select(
+                                .id("apiKeyExpiry"),
+                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500")
+                            ) {
+                                option(.value(""), .selected) { "Never" }
+                                option(.value("7")) { "7 days" }
+                                option(.value("30")) { "30 days" }
+                                option(.value("90")) { "90 days" }
+                                option(.value("365")) { "1 year" }
+                            }
+                        }
+                    }
+                }
+                div(.class("px-6 py-4 border-t border-gray-200 flex justify-end space-x-3")) {
+                    button(
+                        .id("cancelApiKeyBtn"),
+                        .type(.button),
+                        .class("px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md")
+                    ) {
+                        "Cancel"
+                    }
+                    button(
+                        .id("submitApiKeyBtn"),
+                        .type(.button),
+                        .class("px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md")
+                    ) {
+                        "Create"
+                    }
+                }
+            }
+        }
+
         script(.type("text/javascript")) {
             HTMLRaw("""
             // Initialize terminal
@@ -186,6 +301,13 @@ struct DashboardTemplate: HTMLDocument {
             document.getElementById('createOrgBtn').addEventListener('click', showCreateOrgModal);
             document.getElementById('cancelOrgBtn').addEventListener('click', hideCreateOrgModal);
             document.getElementById('submitOrgBtn').addEventListener('click', createOrganization);
+
+            // API key management event listeners
+            document.getElementById('settingsBtn').addEventListener('click', showApiKeysModal);
+            document.getElementById('closeApiKeysBtn').addEventListener('click', hideApiKeysModal);
+            document.getElementById('createApiKeyBtn').addEventListener('click', showCreateApiKeyModal);
+            document.getElementById('cancelApiKeyBtn').addEventListener('click', hideCreateApiKeyModal);
+            document.getElementById('submitApiKeyBtn').addEventListener('click', createApiKey);
 
             async function loadVMs() {
                 try {
@@ -442,8 +564,162 @@ struct DashboardTemplate: HTMLDocument {
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
                     hideCreateOrgModal();
+                    hideApiKeysModal();
+                    hideCreateApiKeyModal();
                 }
             });
+
+            // API Key Management Functions
+            async function loadApiKeys() {
+                try {
+                    const response = await fetch('/api-keys');
+                    if (response.ok) {
+                        const apiKeys = await response.json();
+                        displayApiKeys(apiKeys);
+                    } else {
+                        document.getElementById('apiKeysList').innerHTML = '<div class="text-center text-red-500 py-8">Failed to load API keys</div>';
+                    }
+                } catch (error) {
+                    document.getElementById('apiKeysList').innerHTML = '<div class="text-center text-red-500 py-8">Error loading API keys</div>';
+                }
+            }
+
+            function displayApiKeys(apiKeys) {
+                const apiKeysList = document.getElementById('apiKeysList');
+                
+                if (apiKeys.length === 0) {
+                    apiKeysList.innerHTML = '<div class="text-center text-gray-500 py-8">No API keys found. Create your first API key!</div>';
+                    return;
+                }
+
+                apiKeysList.innerHTML = apiKeys.map(key => `
+                    <div class="border border-gray-200 rounded-lg p-4">
+                        <div class="flex justify-between items-start">
+                            <div class="flex-1">
+                                <h4 class="font-medium text-gray-900">${key.name}</h4>
+                                <p class="text-sm text-gray-500 font-mono">${key.keyPrefix}</p>
+                                <div class="mt-2 flex flex-wrap gap-1">
+                                    ${key.scopes.map(scope => `<span class="inline-flex px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-800">${scope}</span>`).join('')}
+                                </div>
+                                <div class="mt-1 text-xs text-gray-500">
+                                    Created: ${new Date(key.createdAt).toLocaleDateString()}
+                                    ${key.lastUsedAt ? '• Last used: ' + new Date(key.lastUsedAt).toLocaleDateString() : '• Never used'}
+                                    ${key.expiresAt ? '• Expires: ' + new Date(key.expiresAt).toLocaleDateString() : '• Never expires'}
+                                </div>
+                            </div>
+                            <div class="flex space-x-2">
+                                <button onclick="toggleApiKey('${key.id}', ${!key.isActive})" 
+                                        class="text-sm px-3 py-1 rounded ${key.isActive ? 'bg-red-100 text-red-700 hover:bg-red-200' : 'bg-green-100 text-green-700 hover:bg-green-200'}">
+                                    ${key.isActive ? 'Disable' : 'Enable'}
+                                </button>
+                                <button onclick="deleteApiKey('${key.id}')" 
+                                        class="text-sm px-3 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            function showApiKeysModal() {
+                document.getElementById('apiKeysModal').classList.remove('hidden');
+                loadApiKeys();
+            }
+
+            function hideApiKeysModal() {
+                document.getElementById('apiKeysModal').classList.add('hidden');
+            }
+
+            function showCreateApiKeyModal() {
+                document.getElementById('createApiKeyModal').classList.remove('hidden');
+                document.getElementById('apiKeyName').focus();
+            }
+
+            function hideCreateApiKeyModal() {
+                document.getElementById('createApiKeyModal').classList.add('hidden');
+                document.getElementById('createApiKeyForm').reset();
+            }
+
+            async function createApiKey() {
+                const name = document.getElementById('apiKeyName').value.trim();
+                const scopes = Array.from(document.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
+                const expiresInDays = document.getElementById('apiKeyExpiry').value;
+                
+                if (!name) {
+                    alert('Please enter a name for the API key');
+                    return;
+                }
+
+                if (scopes.length === 0) {
+                    alert('Please select at least one scope');
+                    return;
+                }
+
+                try {
+                    const requestBody = { name, scopes };
+                    if (expiresInDays) {
+                        requestBody.expiresInDays = parseInt(expiresInDays);
+                    }
+
+                    const response = await fetch('/api-keys', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(requestBody)
+                    });
+
+                    if (response.ok) {
+                        const newKey = await response.json();
+                        hideCreateApiKeyModal();
+                        
+                        // Show the new API key in a copy-able format
+                        const keyDisplay = prompt('Your new API key (copy this now - you won\\'t see it again):', newKey.key);
+                        
+                        await loadApiKeys();
+                        term.write(`\\r\\nAPI key "${newKey.name}" created\\r\\n$ `);
+                    } else {
+                        const error = await response.text();
+                        alert(`Failed to create API key: ${error}`);
+                    }
+                } catch (error) {
+                    alert(`Error creating API key: ${error.message}`);
+                }
+            }
+
+            async function toggleApiKey(keyId, isActive) {
+                try {
+                    const response = await fetch(`/api-keys/${keyId}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ isActive })
+                    });
+
+                    if (response.ok) {
+                        await loadApiKeys();
+                        term.write(`\\r\\nAPI key ${isActive ? 'enabled' : 'disabled'}\\r\\n$ `);
+                    } else {
+                        alert('Failed to update API key');
+                    }
+                } catch (error) {
+                    alert(`Error updating API key: ${error.message}`);
+                }
+            }
+
+            async function deleteApiKey(keyId) {
+                if (confirm('Are you sure you want to delete this API key? This action cannot be undone.')) {
+                    try {
+                        const response = await fetch(`/api-keys/${keyId}`, { method: 'DELETE' });
+                        if (response.ok) {
+                            await loadApiKeys();
+                            term.write(`\\r\\nAPI key deleted\\r\\n$ `);
+                        } else {
+                            alert('Failed to delete API key');
+                        }
+                    } catch (error) {
+                        alert(`Error deleting API key: ${error.message}`);
+                    }
+                }
+            }
             """)
         }
     }

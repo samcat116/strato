@@ -22,6 +22,9 @@ public func configure(_ app: Application) async throws {
     // Configure user authentication with sessions
     app.middleware.use(User.sessionAuthenticator())
     
+    // Configure API key authentication (for Bearer tokens)
+    app.middleware.use(BearerAuthorizationHeaderAuthenticator())
+    
     // Configure WebAuthn
     let relyingPartyID = Environment.get("WEBAUTHN_RELYING_PARTY_ID") ?? "localhost"
     let relyingPartyName = Environment.get("WEBAUTHN_RELYING_PARTY_NAME") ?? "Strato"
@@ -52,6 +55,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateVM())
     app.migrations.add(CreateOrganization())
     app.migrations.add(AddCurrentOrganizationToUser())
+    app.migrations.add(CreateAPIKey())
     app.migrations.add(SessionRecord.migration)
 
     try await app.autoMigrate()
