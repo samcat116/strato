@@ -6,6 +6,10 @@ entity organization {
     
     permission manage_vms = admin
     permission view_organization = admin or member
+    permission create_organization = admin
+    permission update_organization = admin
+    permission delete_organization = admin
+    permission manage_members = admin
 }
 
 entity vm {

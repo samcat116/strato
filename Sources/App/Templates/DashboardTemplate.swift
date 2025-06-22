@@ -23,6 +23,39 @@ struct DashboardTemplate: HTMLDocument {
                     h1(.class("text-2xl font-bold text-indigo-600")) { "Strato" }
                 }
                 div(.class("flex items-center space-x-4")) {
+                    // Organization Switcher
+                    div(.class("relative")) {
+                        button(
+                            .id("orgSwitcherBtn"),
+                            .class(
+                                "bg-gray-50 hover:bg-gray-100 text-gray-700 px-3 py-2 rounded-md text-sm font-medium border border-gray-300 flex items-center space-x-2"
+                            )
+                        ) {
+                            span(.id("currentOrgName")) { "Loading..." }
+                            span(.class("text-gray-400")) { "▼" }
+                        }
+                        div(
+                            .id("orgDropdown"),
+                            .class("hidden absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-md shadow-lg z-10")
+                        ) {
+                            div(.class("py-1")) {
+                                div(.class("px-4 py-2 text-xs font-medium text-gray-500 uppercase")) {
+                                    "Switch Organization"
+                                }
+                                div(.id("orgList"), .class("max-h-48 overflow-y-auto")) {
+                                    // Organizations will be loaded here
+                                }
+                                hr(.class("my-1"))
+                                button(
+                                    .id("createOrgBtn"),
+                                    .class("w-full text-left px-4 py-2 text-sm text-indigo-600 hover:bg-gray-50")
+                                ) {
+                                    "+ Create Organization"
+                                }
+                            }
+                        }
+                    }
+                    
                     button(
                         .id("createVMBtn"),
                         .class(
@@ -56,6 +89,61 @@ struct DashboardTemplate: HTMLDocument {
             }
         }
 
+        // Create Organization Modal
+        div(
+            .id("createOrgModal"),
+            .class("fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50")
+        ) {
+            div(.class("bg-white rounded-lg shadow-xl max-w-md w-full mx-4")) {
+                div(.class("px-6 py-4 border-b border-gray-200")) {
+                    h3(.class("text-lg font-medium text-gray-900")) {
+                        "Create Organization"
+                    }
+                }
+                div(.class("px-6 py-4")) {
+                    form(.id("createOrgForm")) {
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Organization Name"
+                            }
+                            input(
+                                .type(.text),
+                                .id("orgName"),
+                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"),
+                                .required
+                            )
+                        }
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Description"
+                            }
+                            textarea(
+                                .id("orgDescription"),
+                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 h-20"),
+                                .required
+                            ) {}
+                        }
+                    }
+                }
+                div(.class("px-6 py-4 border-t border-gray-200 flex justify-end space-x-3")) {
+                    button(
+                        .id("cancelOrgBtn"),
+                        .type(.button),
+                        .class("px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md")
+                    ) {
+                        "Cancel"
+                    }
+                    button(
+                        .id("submitOrgBtn"),
+                        .type(.button),
+                        .class("px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md")
+                    ) {
+                        "Create"
+                    }
+                }
+            }
+        }
+
         script(.type("text/javascript")) {
             HTMLRaw("""
             // Initialize terminal
@@ -78,6 +166,7 @@ struct DashboardTemplate: HTMLDocument {
                         window.location.href = '/login';
                         return;
                     }
+                    await loadOrganizations();
                     await loadVMs();
                 } catch (error) {
                     console.error('Failed to load session:', error);
@@ -91,6 +180,12 @@ struct DashboardTemplate: HTMLDocument {
                     window.location.href = '/login';
                 }
             });
+
+            // Organization management event listeners
+            document.getElementById('orgSwitcherBtn').addEventListener('click', toggleOrgDropdown);
+            document.getElementById('createOrgBtn').addEventListener('click', showCreateOrgModal);
+            document.getElementById('cancelOrgBtn').addEventListener('click', hideCreateOrgModal);
+            document.getElementById('submitOrgBtn').addEventListener('click', createOrganization);
 
             async function loadVMs() {
                 try {
@@ -113,19 +208,19 @@ struct DashboardTemplate: HTMLDocument {
                     return;
                 }
                 vmTableBody.innerHTML = vms.map(vm => `
-                    <tr class="hover:bg-gray-50 cursor-pointer" onclick="selectVM('\\${vm.id}', \\${JSON.stringify(vm).replace(/"/g, '&quot;')})">
+                    <tr class="hover:bg-gray-50 cursor-pointer" onclick="selectVM('${vm.id}', ${JSON.stringify(vm).replace(/"/g, '&quot;')})">
                         <td class="px-3 py-3">
-                            <div class="text-sm font-medium text-gray-900">\\${vm.name}</div>
-                            <div class="text-xs text-gray-500">\\${vm.description}</div>
+                            <div class="text-sm font-medium text-gray-900">${vm.name}</div>
+                            <div class="text-xs text-gray-500">${vm.description}</div>
                         </td>
                         <td class="px-3 py-3">
                             <span class="inline-flex px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">Running</span>
                         </td>
                         <td class="px-3 py-3">
                             <div class="flex space-x-1">
-                                <button class="text-green-600 hover:text-green-700 text-xs" onclick="event.stopPropagation(); controlVM('\\${vm.id}', 'start')">▶</button>
-                                <button class="text-yellow-600 hover:text-yellow-700 text-xs" onclick="event.stopPropagation(); controlVM('\\${vm.id}', 'stop')">⏸</button>
-                                <button class="text-red-600 hover:text-red-700 text-xs" onclick="event.stopPropagation(); deleteVM('\\${vm.id}')">🗑</button>
+                                <button class="text-green-600 hover:text-green-700 text-xs" onclick="event.stopPropagation(); controlVM('${vm.id}', 'start')">▶</button>
+                                <button class="text-yellow-600 hover:text-yellow-700 text-xs" onclick="event.stopPropagation(); controlVM('${vm.id}', 'stop')">⏸</button>
+                                <button class="text-red-600 hover:text-red-700 text-xs" onclick="event.stopPropagation(); deleteVM('${vm.id}')">🗑</button>
                             </div>
                         </td>
                     </tr>
@@ -137,32 +232,32 @@ struct DashboardTemplate: HTMLDocument {
                 vmDetails.innerHTML = `
                     <div class="space-y-4">
                         <div>
-                            <h4 class="text-lg font-semibold text-gray-900">\\${vm.name}</h4>
-                            <p class="text-sm text-gray-600">\\${vm.description}</p>
+                            <h4 class="text-lg font-semibold text-gray-900">${vm.name}</h4>
+                            <p class="text-sm text-gray-600">${vm.description}</p>
                         </div>
                         <div class="grid grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">CPU Cores</label>
-                                <p class="text-sm text-gray-900">\\${vm.cpu}</p>
+                                <p class="text-sm text-gray-900">${vm.cpu}</p>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Memory</label>
-                                <p class="text-sm text-gray-900">\\${vm.memory} MB</p>
+                                <p class="text-sm text-gray-900">${vm.memory} MB</p>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Disk</label>
-                                <p class="text-sm text-gray-900">\\${vm.disk} GB</p>
+                                <p class="text-sm text-gray-900">${vm.disk} GB</p>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Image</label>
-                                <p class="text-sm text-gray-900">\\${vm.image}</p>
+                                <p class="text-sm text-gray-900">${vm.image}</p>
                             </div>
                         </div>
                         <div class="flex space-x-3 pt-4">
-                            <button onclick="controlVM('\\${vm.id}', 'start')" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm">Start</button>
-                            <button onclick="controlVM('\\${vm.id}', 'stop')" class="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-md text-sm">Stop</button>
-                            <button onclick="controlVM('\\${vm.id}', 'restart')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm">Restart</button>
-                            <button onclick="deleteVM('\\${vm.id}')" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm">Delete</button>
+                            <button onclick="controlVM('${vm.id}', 'start')" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm">Start</button>
+                            <button onclick="controlVM('${vm.id}', 'stop')" class="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-md text-sm">Stop</button>
+                            <button onclick="controlVM('${vm.id}', 'restart')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm">Restart</button>
+                            <button onclick="deleteVM('${vm.id}')" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm">Delete</button>
                         </div>
                     </div>
                 `;
@@ -170,29 +265,29 @@ struct DashboardTemplate: HTMLDocument {
 
             async function controlVM(vmId, action) {
                 try {
-                    const response = await fetch(`/vms/\\${vmId}/\\${action}`, { method: 'POST' });
+                    const response = await fetch(`/vms/${vmId}/${action}`, { method: 'POST' });
                     if (response.ok) {
-                        term.write(`\\r\\nVM \\${vmId} \\${action} command sent\\r\\n$ `);
+                        term.write(`\\r\\nVM ${vmId} ${action} command sent\\r\\n$ `);
                     } else {
-                        term.write(`\\r\\nFailed to \\${action} VM \\${vmId}\\r\\n$ `);
+                        term.write(`\\r\\nFailed to ${action} VM ${vmId}\\r\\n$ `);
                     }
                 } catch (error) {
-                    term.write(`\\r\\nError: \\${error.message}\\r\\n$ `);
+                    term.write(`\\r\\nError: ${error.message}\\r\\n$ `);
                 }
             }
 
             async function deleteVM(vmId) {
                 if (confirm('Are you sure you want to delete this VM?')) {
                     try {
-                        const response = await fetch(`/vms/\\${vmId}`, { method: 'DELETE' });
+                        const response = await fetch(`/vms/${vmId}`, { method: 'DELETE' });
                         if (response.ok) {
                             await loadVMs();
-                            term.write(`\\r\\nVM \\${vmId} deleted\\r\\n$ `);
+                            term.write(`\\r\\nVM ${vmId} deleted\\r\\n$ `);
                         } else {
-                            term.write(`\\r\\nFailed to delete VM \\${vmId}\\r\\n$ `);
+                            term.write(`\\r\\nFailed to delete VM ${vmId}\\r\\n$ `);
                         }
                     } catch (error) {
-                        term.write(`\\r\\nError: \\${error.message}\\r\\n$ `);
+                        term.write(`\\r\\nError: ${error.message}\\r\\n$ `);
                     }
                 }
             }
@@ -220,14 +315,135 @@ struct DashboardTemplate: HTMLDocument {
 
                     if (response.ok) {
                         await loadVMs();
-                        term.write(`\\r\\nVM "\\${vmData.name}" created\\r\\n$ `);
+                        term.write(`\\r\\nVM "${vmData.name}" created\\r\\n$ `);
                     } else {
                         term.write(`\\r\\nFailed to create VM\\r\\n$ `);
                     }
                 } catch (error) {
-                    term.write(`\\r\\nError: \\${error.message}\\r\\n$ `);
+                    term.write(`\\r\\nError: ${error.message}\\r\\n$ `);
                 }
             }
+
+            // Organization Management Functions
+            let currentOrganizations = [];
+
+            async function loadOrganizations() {
+                try {
+                    const response = await fetch('/organizations');
+                    if (response.ok) {
+                        const organizations = await response.json();
+                        currentOrganizations = organizations;
+                        displayOrganizations(organizations);
+                    } else {
+                        document.getElementById('currentOrgName').textContent = 'No Organizations';
+                    }
+                } catch (error) {
+                    console.error('Failed to load organizations:', error);
+                    document.getElementById('currentOrgName').textContent = 'Error Loading';
+                }
+            }
+
+            function displayOrganizations(organizations) {
+                const orgList = document.getElementById('orgList');
+                const currentOrgName = document.getElementById('currentOrgName');
+                
+                if (organizations.length === 0) {
+                    currentOrgName.textContent = 'No Organizations';
+                    orgList.innerHTML = '<div class="px-4 py-2 text-sm text-gray-500">No organizations found</div>';
+                    return;
+                }
+
+                // Find current organization (this will need to be enhanced with actual user current org)
+                const currentOrg = organizations[0]; // For now, use first org
+                currentOrgName.textContent = currentOrg.name;
+
+                orgList.innerHTML = organizations.map(org => `
+                    <button class="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex justify-between items-center" onclick="switchOrganization('${org.id}', '${org.name}')">
+                        <div>
+                            <div class="font-medium">${org.name}</div>
+                            <div class="text-xs text-gray-500">${org.description}</div>
+                        </div>
+                        <span class="text-xs text-gray-400">${org.userRole}</span>
+                    </button>
+                `).join('');
+            }
+
+            function toggleOrgDropdown() {
+                const dropdown = document.getElementById('orgDropdown');
+                dropdown.classList.toggle('hidden');
+                
+                // Close dropdown when clicking outside
+                document.addEventListener('click', function closeDropdown(e) {
+                    if (!e.target.closest('#orgSwitcherBtn') && !e.target.closest('#orgDropdown')) {
+                        dropdown.classList.add('hidden');
+                        document.removeEventListener('click', closeDropdown);
+                    }
+                });
+            }
+
+            async function switchOrganization(orgId, orgName) {
+                try {
+                    const response = await fetch(`/organizations/${orgId}/switch`, { method: 'POST' });
+                    if (response.ok) {
+                        document.getElementById('currentOrgName').textContent = orgName;
+                        document.getElementById('orgDropdown').classList.add('hidden');
+                        await loadVMs(); // Reload VMs for new organization
+                        term.write(`\\r\\nSwitched to organization: ${orgName}\\r\\n$ `);
+                    } else {
+                        term.write(`\\r\\nFailed to switch organization\\r\\n$ `);
+                    }
+                } catch (error) {
+                    term.write(`\\r\\nError switching organization: ${error.message}\\r\\n$ `);
+                }
+            }
+
+            function showCreateOrgModal() {
+                document.getElementById('createOrgModal').classList.remove('hidden');
+                document.getElementById('orgDropdown').classList.add('hidden');
+                document.getElementById('orgName').focus();
+            }
+
+            function hideCreateOrgModal() {
+                document.getElementById('createOrgModal').classList.add('hidden');
+                document.getElementById('createOrgForm').reset();
+            }
+
+            async function createOrganization() {
+                const name = document.getElementById('orgName').value.trim();
+                const description = document.getElementById('orgDescription').value.trim();
+                
+                if (!name || !description) {
+                    alert('Please fill in all fields');
+                    return;
+                }
+
+                try {
+                    const response = await fetch('/organizations', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name, description })
+                    });
+
+                    if (response.ok) {
+                        const newOrg = await response.json();
+                        hideCreateOrgModal();
+                        await loadOrganizations();
+                        term.write(`\\r\\nOrganization "${newOrg.name}" created\\r\\n$ `);
+                    } else {
+                        const error = await response.text();
+                        alert(`Failed to create organization: ${error}`);
+                    }
+                } catch (error) {
+                    alert(`Error creating organization: ${error.message}`);
+                }
+            }
+
+            // Close modal on escape key
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    hideCreateOrgModal();
+                }
+            });
             """)
         }
     }

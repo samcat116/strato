@@ -17,6 +17,9 @@ final class User: Model {
     @Field(key: "display_name")
     var displayName: String
 
+    @OptionalField(key: "current_organization_id")
+    var currentOrganizationId: UUID?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -25,6 +28,10 @@ final class User: Model {
 
     @Children(for: \.$user)
     var credentials: [UserCredential]
+
+    // Organization relationships
+    @Siblings(through: UserOrganization.self, from: \.$user, to: \.$organization)
+    var organizations: [Organization]
 
     init() {}
 

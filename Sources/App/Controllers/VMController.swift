@@ -75,14 +75,16 @@ struct VMController: RouteCollection {
             subjectId: userId
         )
         
-        // Link VM to default organization
-        try await req.permify.writeRelationship(
-            entity: "vm",
-            entityId: vmId,
-            relation: "organization",
-            subject: "organization",
-            subjectId: "default-org"
-        )
+        // Link VM to user's current organization
+        if let currentOrgId = user.currentOrganizationId {
+            try await req.permify.writeRelationship(
+                entity: "vm",
+                entityId: vmId,
+                relation: "organization",
+                subject: "organization",
+                subjectId: currentOrgId.uuidString
+            )
+        }
         
         return vm
     }

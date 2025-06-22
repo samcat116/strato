@@ -50,6 +50,8 @@ public func configure(_ app: Application) async throws {
 
     app.migrations.add(CreateUser())
     app.migrations.add(CreateVM())
+    app.migrations.add(CreateOrganization())
+    app.migrations.add(AddCurrentOrganizationToUser())
     app.migrations.add(SessionRecord.migration)
 
     try await app.autoMigrate()
