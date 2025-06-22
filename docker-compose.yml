@@ -28,6 +28,10 @@ x-shared_environment: &shared_environment
   DATABASE_PASSWORD: vapor_password
   PERMIFY_ENDPOINT: http://permify:3476
   CLOUD_HYPERVISOR_SOCKET: /var/run/cloud-hypervisor/cloud-hypervisor.sock
+  # WebAuthn Configuration - Override these for remote deployment
+  WEBAUTHN_RELYING_PARTY_ID: ${WEBAUTHN_RELYING_PARTY_ID:-localhost}
+  WEBAUTHN_RELYING_PARTY_NAME: ${WEBAUTHN_RELYING_PARTY_NAME:-Strato}
+  WEBAUTHN_RELYING_PARTY_ORIGIN: ${WEBAUTHN_RELYING_PARTY_ORIGIN:-http://localhost:8080}
 
 services:
   app:
@@ -40,7 +44,7 @@ services:
     depends_on:
       - db
       - permify
-      - cloud-hypervisor
+      # - cloud-hypervisor
     ports:
       - "8080:8080"
     volumes:
@@ -103,16 +107,16 @@ services:
       - db
     environment:
       - PERMIFY_DATABASE_URI=postgres://vapor_username:vapor_password@db:5432/vapor_database?sslmode=disable
-  cloud-hypervisor:
-    image: ghcr.io/cloud-hypervisor/cloud-hypervisor:latest
-    privileged: true
-    volumes:
-      - cloud_hypervisor_socket:/var/run/cloud-hypervisor
-      - vm_images:/images
-      - /dev:/dev
-    command: [
-      "--api-socket", "/var/run/cloud-hypervisor/cloud-hypervisor.sock",
-      "--log-file", "/var/log/cloud-hypervisor.log"
-    ]
-    environment:
-      - RUST_LOG=info
+  # cloud-hypervisor:
+  #   image: ghcr.io/cloud-hypervisor/cloud-hypervisor:latest
+  #   privileged: true
+  #   volumes:
+  #     - cloud_hypervisor_socket:/var/run/cloud-hypervisor
+  #     - vm_images:/images
+  #     - /dev:/dev
+  #   command: [
+  #     "--api-socket", "/var/run/cloud-hypervisor/cloud-hypervisor.sock",
+  #     "--log-file", "/var/log/cloud-hypervisor.log"
+  #   ]
+  #   environment:
+  #     - RUST_LOG=info

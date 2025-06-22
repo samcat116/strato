@@ -216,7 +216,26 @@ class WebAuthnClient {
 
     // Check if WebAuthn is supported
     static isSupported() {
-        return !!(navigator.credentials && navigator.credentials.create && navigator.credentials.get);
+        // Basic API check
+        if (!(navigator.credentials && navigator.credentials.create && navigator.credentials.get)) {
+            return false;
+        }
+        
+        // Check for PublicKeyCredential support
+        if (!window.PublicKeyCredential) {
+            return false;
+        }
+        
+        // Additional check for HTTPS requirement (except localhost)
+        const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+        const isHttps = location.protocol === 'https:';
+        
+        if (!isLocalhost && !isHttps) {
+            console.warn('WebAuthn requires HTTPS for non-localhost origins');
+            return false;
+        }
+        
+        return true;
     }
 }
 
@@ -319,9 +338,22 @@ window.WebAuthnUtils = {
 };
 
 // Initialize on page load
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // Check if WebAuthn is supported and show/hide relevant UI elements
-    if (!WebAuthnClient.isSupported()) {
+    let isSupported = WebAuthnClient.isSupported();
+    
+    // Additional runtime check for conditional UI availability
+    if (isSupported && window.PublicKeyCredential) {
+        try {
+            // Check if conditional UI is available (for better UX)
+            isSupported = await PublicKeyCredential.isConditionalMediationAvailable?.() ?? true;
+        } catch (error) {
+            console.warn('Conditional UI check failed:', error);
+            // Still consider supported if the basic API works
+        }
+    }
+    
+    if (!isSupported) {
         const passkeyElements = document.querySelectorAll('.passkey-only');
         passkeyElements.forEach(el => {
             el.style.display = 'none';
@@ -331,5 +363,16 @@ document.addEventListener('DOMContentLoaded', () => {
         fallbackElements.forEach(el => {
             el.style.display = 'block';
         });
+        
+        // Log helpful debug information
+        console.log('WebAuthn Support Debug:', {
+            hasCredentials: !!(navigator.credentials),
+            hasCreate: !!(navigator.credentials?.create),
+            hasGet: !!(navigator.credentials?.get),
+            hasPublicKeyCredential: !!(window.PublicKeyCredential),
+            origin: location.origin,
+            protocol: location.protocol,
+            hostname: location.hostname
+        });
     }
-});
+});}
