@@ -1,5 +1,6 @@
 import Fluent
 import Vapor
+import SQLKit
 
 struct EnhanceVM: AsyncMigration {
     func prepare(on database: Database) async throws {
@@ -75,20 +76,15 @@ struct EnhanceVM: AsyncMigration {
 
 struct MigrateVMMemoryAndDisk: AsyncMigration {
     func prepare(on database: Database) async throws {
-        // For now, just use simple migration without raw SQL
-        // The data migration can be done manually if needed
+        // Use SQL database to execute raw SQL for column operations
+        guard let sql = database as? SQLDatabase else {
+            fatalError("Database must support SQL for this migration")
+        }
         
-        // Drop old fields
-        try await database.schema("vms")
-            .deleteField("memory")
-            .deleteField("disk")
-            .update()
-        
-        // Rename new fields to old names
-        try await database.schema("vms")
-            .updateField("memory_new", .int64)
-            .updateField("disk_new", .int64)
-            .update()
+        try await sql.raw("ALTER TABLE vms DROP COLUMN IF EXISTS memory").run()
+        try await sql.raw("ALTER TABLE vms DROP COLUMN IF EXISTS disk").run()
+        try await sql.raw("ALTER TABLE vms RENAME COLUMN memory_new TO memory").run()
+        try await sql.raw("ALTER TABLE vms RENAME COLUMN disk_new TO disk").run()
     }
     
     func revert(on database: Database) async throws {

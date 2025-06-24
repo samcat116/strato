@@ -59,6 +59,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(SessionRecord.migration)
     app.migrations.add(EnhanceVM())
     app.migrations.add(MigrateVMMemoryAndDisk())
+    app.migrations.add(FixVMColumnNames())
     app.migrations.add(CreateVMTemplate())
     app.migrations.add(SeedVMTemplates())
 

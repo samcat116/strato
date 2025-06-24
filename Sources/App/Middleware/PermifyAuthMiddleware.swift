@@ -73,8 +73,14 @@ struct PermifyAuthMiddleware: AsyncMiddleware {
                 throw Abort(.forbidden, reason: "No current organization set")
             }
             
+            guard let userId = user.id?.uuidString, !userId.isEmpty else {
+                throw Abort(.forbidden, reason: "Invalid user session")
+            }
+            
+            request.logger.info("Checking permission for user: \(userId) on organization: \(currentOrgId.uuidString)")
+            
             let hasPermission = try await request.permify.checkPermission(
-                subject: user.id?.uuidString ?? "",
+                subject: userId,
                 permission: "view_organization",
                 resource: "organization",
                 resourceId: currentOrgId.uuidString
@@ -85,8 +91,12 @@ struct PermifyAuthMiddleware: AsyncMiddleware {
             }
         } else {
             // Check permission with Permify for specific VM operations
+            guard let userId = user.id?.uuidString, !userId.isEmpty else {
+                throw Abort(.forbidden, reason: "Invalid user session")
+            }
+            
             let hasPermission = try await request.permify.checkPermission(
-                subject: user.id?.uuidString ?? "",
+                subject: userId,
                 permission: permission,
                 resource: "vm",
                 resourceId: resourceId

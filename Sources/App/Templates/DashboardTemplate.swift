@@ -364,11 +364,11 @@ struct DashboardTemplate: HTMLDocument {
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Memory</label>
-                                <p class="text-sm text-gray-900">${vm.memory} MB</p>
+                                <p class="text-sm text-gray-900">${(vm.memory / (1024 * 1024 * 1024)).toFixed(1)} GB</p>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Disk</label>
-                                <p class="text-sm text-gray-900">${vm.disk} GB</p>
+                                <p class="text-sm text-gray-900">${Math.round(vm.disk / (1024 * 1024 * 1024))} GB</p>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Image</label>
@@ -418,21 +418,28 @@ struct DashboardTemplate: HTMLDocument {
                 const name = prompt('VM Name:');
                 const description = prompt('VM Description:');
                 const cpu = parseInt(prompt('CPU cores:') || '1');
-                const memory = parseInt(prompt('Memory (MB):') || '512');
+                const memory = parseInt(prompt('Memory (GB):') || '2');
                 const disk = parseInt(prompt('Disk (GB):') || '10');
-                const image = prompt('Image:') || 'ubuntu:latest';
+                const templateName = prompt('Template (ubuntu-22.04 or alpine-3.18):') || 'ubuntu-22.04';
 
                 if (name && description) {
-                    createVM({ name, description, cpu, memory, disk, image });
+                    createVM({ name, description, cpu, memory, disk, templateName });
                 }
             });
 
             async function createVM(vmData) {
                 try {
+                    // Convert memory and disk from GB to bytes
+                    const vmDataWithBytes = {
+                        ...vmData,
+                        memory: vmData.memory * 1024 * 1024 * 1024,
+                        disk: vmData.disk * 1024 * 1024 * 1024
+                    };
+                    
                     const response = await fetch('/vms', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(vmData)
+                        body: JSON.stringify(vmDataWithBytes)
                     });
 
                     if (response.ok) {
