@@ -23,6 +23,7 @@
     "tailwindcss": "^3.4.17"
   },
   "dependencies": {
+    "@anthropic-ai/claude-code": "^1.0.31",
     "@xterm/xterm": "^5.5.0"
   }
 }

@@ -92,7 +92,10 @@ struct VMController: RouteCollection {
             cmdline: createRequest.cmdline
         )
         
-        // Generate unique paths and configurations
+        // Save VM to database first to generate ID
+        try await vm.save(on: req.db)
+        
+        // Generate unique paths and configurations using the generated ID
         vm.diskPath = template.generateDiskPath(for: vm.id!)
         vm.macAddress = template.generateMacAddress()
         vm.kernelPath = template.kernelPath
@@ -104,8 +107,8 @@ struct VMController: RouteCollection {
         vm.consoleSocket = "/tmp/vm-\(vm.id!.uuidString)-console.sock"
         vm.serialSocket = "/tmp/vm-\(vm.id!.uuidString)-serial.sock"
         
-        // Save VM to database first
-        try await vm.save(on: req.db)
+        // Update VM with generated paths
+        try await vm.update(on: req.db)
         
         // Create relationships in Permify
         let vmId = vm.id?.uuidString ?? ""
