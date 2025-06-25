@@ -10,6 +10,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `swift run` - Run the application locally
 - `vapor serve` - Start the Vapor development server (if Vapor CLI is installed)
 
+### JavaScript/Linting Commands
+- `npm run lint` - Check JavaScript files for syntax errors and style issues
+- `npm run lint:fix` - Automatically fix JavaScript style issues where possible
+- `npm test` - Run JavaScript linting (alias for lint command)
+
 ### Docker Development
 - `docker compose build` - Build Docker images
 - `docker compose up app` - Start the application with database and Permify

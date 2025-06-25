@@ -94,6 +94,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-swift-
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Run JavaScript linting
+        run: npm run lint
+
       - name: Build
         run: swift build
 

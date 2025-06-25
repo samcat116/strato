@@ -6,12 +6,15 @@
   "scripts": {
     "build-css": "npx tailwindcss -i ./Resources/styles/app.css -o ./Public/styles/app.generated.css --watch",
     "build-css-prod": "npx tailwindcss -i ./Resources/styles/app.css -o ./Public/styles/app.generated.css --minify",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "lint": "eslint Public/js/**/*.js",
+    "lint:fix": "eslint Public/js/**/*.js --fix",
+    "test": "npm run lint"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/samcat116/strato.git"
   },
+  "type": "module",
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -20,7 +23,8 @@
   },
   "homepage": "https://github.com/samcat116/strato#readme",
   "devDependencies": {
-    "tailwindcss": "^3.4.17"
+    "tailwindcss": "^3.4.17",
+    "eslint": "^9.0.0"
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^1.0.31",
