@@ -20,6 +20,9 @@ final class User: Model, @unchecked Sendable {
     @OptionalField(key: "current_organization_id")
     var currentOrganizationId: UUID?
 
+    @Field(key: "is_system_admin")
+    var isSystemAdmin: Bool
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -39,12 +42,14 @@ final class User: Model, @unchecked Sendable {
         id: UUID? = nil,
         username: String,
         email: String,
-        displayName: String
+        displayName: String,
+        isSystemAdmin: Bool = false
     ) {
         self.id = id
         self.username = username
         self.email = email
         self.displayName = displayName
+        self.isSystemAdmin = isSystemAdmin
     }
 }
 
@@ -53,6 +58,31 @@ extension User: Content {}
 extension User: SessionAuthenticatable {
     var sessionID: UUID {
         return self.id ?? UUID()
+    }
+}
+
+// MARK: - System Admin Helper Functions
+
+extension User {
+    /// Check if this is the first user being registered (no users exist in the database)
+    static func isFirstUser(on database: Database) async throws -> Bool {
+        let userCount = try await User.query(on: database).count()
+        return userCount == 0
+    }
+    
+    /// Check if any system admin exists in the database
+    static func hasSystemAdmin(on database: Database) async throws -> Bool {
+        let adminCount = try await User.query(on: database)
+            .filter(\.$isSystemAdmin == true)
+            .count()
+        return adminCount > 0
+    }
+    
+    /// Get the first system admin user
+    static func getFirstSystemAdmin(on database: Database) async throws -> User? {
+        return try await User.query(on: database)
+            .filter(\.$isSystemAdmin == true)
+            .first()
     }
 }
 

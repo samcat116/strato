@@ -11,6 +11,7 @@ struct PermifyAuthMiddleware: AsyncMiddleware {
            request.url.path == "/register" ||
            request.url.path.hasPrefix("/auth") ||
            request.url.path.hasPrefix("/users/register") ||
+           request.url.path.hasPrefix("/onboarding") ||
            request.url.path.hasPrefix("/js/") ||
            request.url.path.hasPrefix("/styles/") ||
            request.url.path == "/favicon.ico" {
@@ -20,6 +21,12 @@ struct PermifyAuthMiddleware: AsyncMiddleware {
         // Extract user from session
         guard let user = request.auth.get(User.self) else {
             throw Abort(.unauthorized, reason: "User not authenticated")
+        }
+        
+        // System admins bypass all permission checks
+        if user.isSystemAdmin {
+            request.logger.info("System admin access - bypassing permission checks")
+            return try await next.respond(to: request)
         }
         
         // For VM routes, check permissions

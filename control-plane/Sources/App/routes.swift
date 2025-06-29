@@ -9,15 +9,33 @@ func routes(_ app: Application) throws {
         req.logger.info("Root route accessed - checking authentication")
 
         // Check if user is authenticated
-        if req.auth.has(User.self) {
-            req.logger.info("User is authenticated, rendering dashboard")
+        if let user = req.auth.get(User.self) {
+            req.logger.info("User is authenticated, checking onboarding status")
+            
+            // If user is system admin and has no organizations, redirect to onboarding
+            if user.isSystemAdmin {
+                try await user.$organizations.load(on: req.db)
+                if user.organizations.isEmpty {
+                    req.logger.info("System admin needs to complete onboarding")
+                    throw Abort.redirect(to: "/onboarding")
+                }
+            }
+            
+            req.logger.info("Rendering dashboard")
             let html = DashboardTemplate().render()
             return Response(
                 status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]),
                 body: .init(string: html))
         } else {
-            req.logger.info("User not authenticated, redirecting to login")
-            throw Abort.redirect(to: "/login")
+            // Check if this is a fresh instance (no users exist)
+            let isFirstInstance = try await User.isFirstUser(on: req.db)
+            if isFirstInstance {
+                req.logger.info("Fresh instance - redirecting to register")
+                throw Abort.redirect(to: "/register")
+            } else {
+                req.logger.info("User not authenticated, redirecting to login")
+                throw Abort.redirect(to: "/login")
+            }
         }
     }
 
@@ -43,4 +61,5 @@ func routes(_ app: Application) throws {
     try app.register(collection: APIKeyController())
     try app.register(collection: APIDocumentationController())
     try app.register(collection: AgentWebSocketController())
+    try app.register(collection: OnboardingController())
 }

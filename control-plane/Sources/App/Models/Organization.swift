@@ -39,6 +39,24 @@ final class Organization: Model, @unchecked Sendable {
 
 extension Organization: Content {}
 
+extension Organization {
+    struct Public: Content {
+        let id: UUID?
+        let name: String
+        let description: String
+        let createdAt: Date?
+    }
+    
+    func asPublic() -> Public {
+        return Public(
+            id: self.id,
+            name: self.name,
+            description: self.description,
+            createdAt: self.createdAt
+        )
+    }
+}
+
 // MARK: - User-Organization Relationship (Many-to-Many)
 
 final class UserOrganization: Model, @unchecked Sendable {
