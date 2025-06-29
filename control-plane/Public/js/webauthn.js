@@ -191,18 +191,29 @@ class WebAuthnClient {
             }
 
             const { options } = await beginResponse.json();
+            console.log('Authentication options received:', options);
             const challenge = options.challenge;
 
             // Step 2: Get credential
+            const preparedOptions = this.prepareRequestOptions(options);
+            console.log('Prepared authentication options:', preparedOptions);
+            
             const credential = await navigator.credentials.get({
-                publicKey: this.prepareRequestOptions(options)
+                publicKey: preparedOptions
             });
 
             if (!credential) {
                 throw new Error('Failed to get credential');
             }
+            console.log('Credential obtained:', credential);
 
             // Step 3: Finish authentication
+            const authResponse = this.prepareAuthenticationResponse(
+                credential,
+                challenge
+            );
+            console.log('Prepared authentication response:', authResponse);
+            
             const finishResponse = await fetch(
                 `${this.baseURL}/auth/login/finish`,
                 {
@@ -210,12 +221,7 @@ class WebAuthnClient {
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify(
-                        this.prepareAuthenticationResponse(
-                            credential,
-                            challenge
-                        )
-                    )
+                    body: JSON.stringify(authResponse)
                 }
             );
 
