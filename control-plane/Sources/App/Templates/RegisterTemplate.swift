@@ -86,10 +86,17 @@ struct RegisterTemplate: HTMLDocument {
 
                 const result = await WebAuthnUtils.handleRegistration(createdUsername, 'passkeyStatus');
 
-                if (result) {
+                if (result && result.success && result.user) {
+                    // User is now logged in automatically
+                    WebAuthnUtils.showSuccess('passkeyStatus', 'Registration successful! Redirecting to dashboard...');
                     setTimeout(() => {
-                        window.location.href = '/login';
-                    }, 2000);
+                        window.location.href = '/';
+                    }, 1500);
+                } else if (result && result.success) {
+                    // Fallback in case user data is missing
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 1500);
                 }
             });
             """)
