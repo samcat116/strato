@@ -116,9 +116,9 @@ jobs:
         working-directory: control-plane
         run: swift build
 
-      - name: Build Agent
-        working-directory: agent
-        run: swift build
+      # - name: Build Agent
+      #   working-directory: agent
+      #   run: swift build
 
       - name: Build Shared Package
         working-directory: shared
