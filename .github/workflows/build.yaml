@@ -176,16 +176,16 @@ jobs:
           cache-from: type=gha,key=control-plane-${{ matrix.arch }}
           cache-to: type=gha,mode=max,key=control-plane-${{ matrix.arch }}
 
-      - name: Build Agent Docker Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./agent/Dockerfile
-          push: false
-          platforms: ${{ matrix.arch == 'x64' && 'linux/amd64' || 'linux/arm64' }}
-          tags: strato-agent:${{ github.sha }}-${{ matrix.arch }}
-          cache-from: type=gha,key=agent-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,key=agent-${{ matrix.arch }}
+      # - name: Build Agent Docker Image
+      #   uses: docker/build-push-action@v5
+      #   with:
+      #     context: .
+      #     file: ./agent/Dockerfile
+      #     push: false
+      #     platforms: ${{ matrix.arch == 'x64' && 'linux/amd64' || 'linux/arm64' }}
+      #     tags: strato-agent:${{ github.sha }}-${{ matrix.arch }}
+      #     cache-from: type=gha,key=agent-${{ matrix.arch }}
+      #     cache-to: type=gha,mode=max,key=agent-${{ matrix.arch }}
 
       - name: Test Docker Compose
         if: matrix.arch == 'x64'
