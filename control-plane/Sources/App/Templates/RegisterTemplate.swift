@@ -87,11 +87,19 @@ struct RegisterTemplate: HTMLDocument {
                 const result = await WebAuthnUtils.handleRegistration(createdUsername, 'passkeyStatus');
 
                 if (result && result.success && result.user) {
-                    // User is now logged in automatically
-                    WebAuthnUtils.showSuccess('passkeyStatus', 'Registration successful! Redirecting to dashboard...');
-                    setTimeout(() => {
-                        window.location.href = '/';
-                    }, 1500);
+                    // Check if user is system admin (first user)
+                    if (result.user.isSystemAdmin) {
+                        WebAuthnUtils.showSuccess('passkeyStatus', 'Registration successful! Setting up your organization...');
+                        setTimeout(() => {
+                            window.location.href = '/onboarding';
+                        }, 1500);
+                    } else {
+                        // Regular user - redirect to dashboard
+                        WebAuthnUtils.showSuccess('passkeyStatus', 'Registration successful! Redirecting to dashboard...');
+                        setTimeout(() => {
+                            window.location.href = '/';
+                        }, 1500);
+                    }
                 } else if (result && result.success) {
                     // Fallback in case user data is missing
                     setTimeout(() => {

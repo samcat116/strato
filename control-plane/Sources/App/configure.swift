@@ -62,6 +62,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(FixVMColumnNames())
     app.migrations.add(CreateVMTemplate())
     app.migrations.add(SeedVMTemplates())
+    app.migrations.add(AddSystemAdminToUser())
 
     try await app.autoMigrate()
     

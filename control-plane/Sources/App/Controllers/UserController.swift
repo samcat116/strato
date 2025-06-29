@@ -58,10 +58,14 @@ struct UserController: RouteCollection {
             throw Abort(.conflict, reason: "Username or email already exists")
         }
         
+        // Check if this is the first user (should be system admin)
+        let isFirstUser = try await User.isFirstUser(on: req.db)
+        
         let user = User(
             username: createUser.username,
             email: createUser.email,
-            displayName: createUser.displayName
+            displayName: createUser.displayName,
+            isSystemAdmin: isFirstUser
         )
         
         try await user.save(on: req.db)
@@ -154,12 +158,16 @@ struct UserController: RouteCollection {
         // Create session - log the user in automatically
         req.auth.login(user)
         
-        // Ensure user belongs to default organization
-        do {
-            try await ensureUserInDefaultOrganization(user: user, req: req)
-        } catch {
-            req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
-            // Don't fail the registration if Permify relationship creation fails
+        // If this is a system admin (first user), skip default organization setup
+        // They'll create their organization through the onboarding flow
+        if !user.isSystemAdmin {
+            // Ensure user belongs to default organization
+            do {
+                try await ensureUserInDefaultOrganization(user: user, req: req)
+            } catch {
+                req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
+                // Don't fail the registration if Permify relationship creation fails
+            }
         }
         
         return RegistrationFinishResponse(
@@ -202,12 +210,14 @@ struct UserController: RouteCollection {
         req.auth.login(user)
         
         // Store in Permify relationships if needed
-        // Ensure user belongs to default organization
-        do {
-            try await ensureUserInDefaultOrganization(user: user, req: req)
-        } catch {
-            req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
-            // Don't fail the login if Permify relationship creation fails
+        // Ensure user belongs to default organization (skip for system admins)
+        if !user.isSystemAdmin {
+            do {
+                try await ensureUserInDefaultOrganization(user: user, req: req)
+            } catch {
+                req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
+                // Don't fail the login if Permify relationship creation fails
+            }
         }
         
         return AuthenticationFinishResponse(
@@ -394,6 +404,7 @@ extension User {
         let displayName: String
         let createdAt: Date?
         let currentOrganizationId: UUID?
+        let isSystemAdmin: Bool
     }
     
     func asPublic() -> Public {
@@ -403,7 +414,8 @@ extension User {
             email: self.email,
             displayName: self.displayName,
             createdAt: self.createdAt,
-            currentOrganizationId: self.currentOrganizationId
+            currentOrganizationId: self.currentOrganizationId,
+            isSystemAdmin: self.isSystemAdmin
         )
     }
 }
