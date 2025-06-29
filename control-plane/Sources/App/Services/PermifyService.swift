@@ -23,6 +23,18 @@ struct PermifyService {
     ) async throws -> Bool {
         let url = URI(string: "\(endpoint)/v1/tenants/\(tenantId)/permissions/check")
         
+        // Convert context dictionary to PermissionDataValue
+        var convertedContext: [String: PermissionDataValue] = [:]
+        for (key, value) in context {
+            if let stringValue = value as? String {
+                convertedContext[key] = .string(stringValue)
+            } else if let intValue = value as? Int {
+                convertedContext[key] = .int(intValue)
+            } else if let boolValue = value as? Bool {
+                convertedContext[key] = .bool(boolValue)
+            }
+        }
+        
         let payload = PermissionCheckRequest(
             metadata: PermissionMetadata(
                 snapToken: "",
@@ -41,7 +53,7 @@ struct PermifyService {
             context: PermissionContext(
                 tuples: [],
                 attributes: [],
-                data: context
+                data: convertedContext
             )
         )
         
@@ -142,12 +154,43 @@ struct PermissionSubject: Content {
     let id: String
 }
 
+enum PermissionDataValue: Codable, Sendable {
+    case string(String)
+    case int(Int)
+    case bool(Bool)
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let stringValue = try? container.decode(String.self) {
+            self = .string(stringValue)
+        } else if let intValue = try? container.decode(Int.self) {
+            self = .int(intValue)
+        } else if let boolValue = try? container.decode(Bool.self) {
+            self = .bool(boolValue)
+        } else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Value cannot be decoded as String, Int, or Bool")
+        }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value):
+            try container.encode(value)
+        case .int(let value):
+            try container.encode(value)
+        case .bool(let value):
+            try container.encode(value)
+        }
+    }
+}
+
 struct PermissionContext: Content {
     let tuples: [String]
     let attributes: [String]
-    let data: [String: Any]
+    let data: [String: PermissionDataValue]
     
-    init(tuples: [String], attributes: [String], data: [String: Any]) {
+    init(tuples: [String], attributes: [String], data: [String: PermissionDataValue]) {
         self.tuples = tuples
         self.attributes = attributes
         self.data = data
@@ -160,15 +203,11 @@ struct PermissionContext: Content {
         
         // Handle dynamic data decoding
         let dataContainer = try container.nestedContainer(keyedBy: DynamicKey.self, forKey: .data)
-        var decodedData: [String: Any] = [:]
+        var decodedData: [String: PermissionDataValue] = [:]
         
         for key in dataContainer.allKeys {
-            if let stringValue = try? dataContainer.decode(String.self, forKey: key) {
-                decodedData[key.stringValue] = stringValue
-            } else if let intValue = try? dataContainer.decode(Int.self, forKey: key) {
-                decodedData[key.stringValue] = intValue
-            } else if let boolValue = try? dataContainer.decode(Bool.self, forKey: key) {
-                decodedData[key.stringValue] = boolValue
+            if let value = try? dataContainer.decode(PermissionDataValue.self, forKey: key) {
+                decodedData[key.stringValue] = value
             }
         }
         self.data = decodedData
@@ -183,13 +222,7 @@ struct PermissionContext: Content {
         var dataContainer = container.nestedContainer(keyedBy: DynamicKey.self, forKey: .data)
         for (key, value) in data {
             let dynamicKey = DynamicKey(stringValue: key)!
-            if let stringValue = value as? String {
-                try dataContainer.encode(stringValue, forKey: dynamicKey)
-            } else if let intValue = value as? Int {
-                try dataContainer.encode(intValue, forKey: dynamicKey)
-            } else if let boolValue = value as? Bool {
-                try dataContainer.encode(boolValue, forKey: dynamicKey)
-            }
+            try dataContainer.encode(value, forKey: dynamicKey)
         }
     }
     

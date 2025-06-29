@@ -2,7 +2,7 @@ import Fluent
 import Vapor
 import Foundation
 
-final class User: Model {
+final class User: Model, @unchecked Sendable {
     static let schema = "users"
 
     @ID(key: .id)
@@ -58,7 +58,7 @@ extension User: SessionAuthenticatable {
 
 // MARK: - UserCredential Model for Passkeys
 
-final class UserCredential: Model {
+final class UserCredential: Model, @unchecked Sendable {
     static let schema = "user_credentials"
 
     @ID(key: .id)
@@ -128,7 +128,7 @@ extension UserCredential: Content {}
 
 // MARK: - Challenge Storage
 
-final class AuthenticationChallenge: Model {
+final class AuthenticationChallenge: Model, @unchecked Sendable {
     static let schema = "authentication_challenges"
 
     @ID(key: .id)
