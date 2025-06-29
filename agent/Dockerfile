@@ -13,18 +13,23 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
 WORKDIR /build
 
 # Copy shared package first
-COPY ../shared ./shared
+COPY ./shared ./shared
+
+# Copy agent package files
+COPY ./agent/Package.* ./agent/
 
 # First just resolve dependencies.
 # This creates a cached layer that can be reused
 # as long as your Package.swift/Package.resolved
 # files do not change.
-COPY ./Package.* ./
+WORKDIR /build/agent
+# Update Package.swift to use absolute path for shared package in Docker
+RUN sed -i 's|.package(path: "../shared")|.package(path: "/build/shared")|' Package.swift
 RUN swift package resolve \
     $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true)
 
 # Copy entire agent repo into container
-COPY . .
+COPY ./agent .
 
 # Build the application, with optimizations and using jemalloc
 RUN swift build -c release \
@@ -35,13 +40,13 @@ RUN swift build -c release \
 WORKDIR /staging
 
 # Copy main executable to staging area
-RUN cp "$(swift build --package-path /build -c release --show-bin-path)/StratoAgent" ./
+RUN cp "$(swift build --package-path /build/agent -c release --show-bin-path)/StratoAgent" ./
 
 # Copy static swift backtracer binary to staging area
 RUN cp "/usr/libexec/swift/linux/swift-backtrace-static" ./
 
 # Copy resources bundled by SPM to staging area
-RUN find -L "$(swift build --package-path /build -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \;
+RUN find -L "$(swift build --package-path /build/agent -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \;
 
 # ================================
 # Run image

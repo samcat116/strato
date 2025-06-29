@@ -15,24 +15,29 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
 WORKDIR /build
 
 # Copy shared package first
-COPY ../shared ./shared
+COPY ./shared ./shared
+
+# Copy control plane package files
+COPY ./control-plane/Package.* ./control-plane/
 
 # First just resolve dependencies.
 # This creates a cached layer that can be reused
 # as long as your Package.swift/Package.resolved
 # files do not change.
-COPY ./Package.* ./
+WORKDIR /build/control-plane
+# Update Package.swift to use absolute path for shared package in Docker
+RUN sed -i 's|.package(path: "../shared")|.package(path: "/build/shared")|' Package.swift
 RUN swift package resolve \
     $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true)
 
 # Copy package.json and package-lock.json for npm dependencies
-COPY package*.json ./
+COPY ./control-plane/package*.json ./
 
 # Install npm dependencies (including devDependencies for TailwindCSS)
 RUN npm ci
 
 # Copy entire control-plane repo into container
-COPY . .
+COPY ./control-plane .
 
 # Build TailwindCSS
 RUN npm run build-css-prod
@@ -47,18 +52,18 @@ RUN swift build -c release \
 WORKDIR /staging
 
 # Copy main executable to staging area
-RUN cp "$(swift build --package-path /build -c release --show-bin-path)/App" ./
+RUN cp "$(swift build --package-path /build/control-plane -c release --show-bin-path)/App" ./
 
 # Copy static swift backtracer binary to staging area
 RUN cp "/usr/libexec/swift/linux/swift-backtrace-static" ./
 
 # Copy resources bundled by SPM to staging area
-RUN find -L "$(swift build --package-path /build -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \;
+RUN find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \;
 
 # Copy any resources from the public directory and views directory if the directories exist
 # Ensure that by default, neither the directory nor any of its contents are writable.
-RUN [ -d /build/Public ] && { mv /build/Public ./Public && chmod -R a-w ./Public; } || true
-RUN [ -d /build/Resources ] && { mv /build/Resources ./Resources && chmod -R a-w ./Resources; } || true
+RUN [ -d /build/control-plane/Public ] && { mv /build/control-plane/Public ./Public && chmod -R a-w ./Public; } || true
+RUN [ -d /build/control-plane/Resources ] && { mv /build/control-plane/Resources ./Resources && chmod -R a-w ./Resources; } || true
 
 # ================================
 # Run image
