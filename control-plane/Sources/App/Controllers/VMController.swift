@@ -1,5 +1,6 @@
 import Foundation
 import Vapor
+import StratoShared
 
 struct VMController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
@@ -134,19 +135,19 @@ struct VMController: RouteCollection {
             )
         }
         
-        // Create VM in cloud-hypervisor
+        // Create VM via agent
         do {
-            let vmConfig = try await req.cloudHypervisor.buildVMConfig(from: vm, template: template)
-            try await req.cloudHypervisor.createVM(config: vmConfig)
+            let vmConfig = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
+            try await req.agentService.createVM(vm: vm, vmConfig: vmConfig)
             
             // Update VM status
             vm.status = VMStatus.created
             vm.hypervisorId = vm.id?.uuidString
             try await vm.save(on: req.db)
             
-            req.logger.info("VM created successfully in cloud-hypervisor", metadata: ["vm_id": .string(vmId)])
+            req.logger.info("VM created successfully via agent", metadata: ["vm_id": .string(vmId)])
         } catch {
-            req.logger.error("Failed to create VM in cloud-hypervisor: \(error)", metadata: ["vm_id": .string(vmId)])
+            req.logger.error("Failed to create VM via agent: \(error)", metadata: ["vm_id": .string(vmId)])
             
             // Don't fail the entire request - VM is created in DB but not in hypervisor
             // This allows for manual retry later
@@ -194,14 +195,15 @@ struct VMController: RouteCollection {
             throw Abort(.notFound)
         }
         
-        // Stop and delete VM from cloud-hypervisor first
+        // Stop and delete VM via agent first
         if vm.hypervisorId != nil {
             do {
-                try await req.cloudHypervisor.stopAndDeleteVM()
-                req.logger.info("VM deleted from cloud-hypervisor", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+                try await req.agentService.performVMOperation(.vmShutdown, vmId: vm.id?.uuidString ?? "")
+                try await req.agentService.performVMOperation(.vmDelete, vmId: vm.id?.uuidString ?? "")
+                req.logger.info("VM deleted via agent", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
             } catch {
-                req.logger.warning("Failed to delete VM from cloud-hypervisor: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
-                // Continue with database deletion even if hypervisor deletion fails
+                req.logger.warning("Failed to delete VM via agent: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+                // Continue with database deletion even if agent deletion fails
             }
         }
         
@@ -224,7 +226,7 @@ struct VMController: RouteCollection {
         }
         
         do {
-            try await req.cloudHypervisor.pauseVM()
+            try await req.agentService.performVMOperation(.vmPause, vmId: vm.id?.uuidString ?? "")
             
             vm.status = VMStatus.paused
             try await vm.save(on: req.db)
@@ -234,7 +236,7 @@ struct VMController: RouteCollection {
         } catch {
             req.logger.error("Failed to pause VM: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
             
-            let actualStatus = try await req.cloudHypervisor.syncVMStatus()
+            let actualStatus = try await req.agentService.getVMStatus(vmId: vm.id?.uuidString ?? "")
             vm.status = actualStatus
             try await vm.save(on: req.db)
             
@@ -258,7 +260,7 @@ struct VMController: RouteCollection {
         }
         
         do {
-            try await req.cloudHypervisor.resumeVM()
+            try await req.agentService.performVMOperation(.vmResume, vmId: vm.id?.uuidString ?? "")
             
             vm.status = VMStatus.running
             try await vm.save(on: req.db)
@@ -268,7 +270,7 @@ struct VMController: RouteCollection {
         } catch {
             req.logger.error("Failed to resume VM: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
             
-            let actualStatus = try await req.cloudHypervisor.syncVMStatus()
+            let actualStatus = try await req.agentService.getVMStatus(vmId: vm.id?.uuidString ?? "")
             vm.status = actualStatus
             try await vm.save(on: req.db)
             
@@ -287,16 +289,16 @@ struct VMController: RouteCollection {
             throw Abort(.notFound)
         }
         
-        // Sync status with hypervisor if VM exists there
+        // Sync status with agent if VM exists there
         if vm.hypervisorId != nil {
             do {
-                let actualStatus = try await req.cloudHypervisor.syncVMStatus()
+                let actualStatus = try await req.agentService.getVMStatus(vmId: vm.id?.uuidString ?? "")
                 if actualStatus != vm.status {
                     vm.status = actualStatus
                     try await vm.save(on: req.db)
                 }
             } catch {
-                req.logger.warning("Failed to sync VM status with hypervisor: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+                req.logger.warning("Failed to sync VM status with agent: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
             }
         }
         
@@ -319,10 +321,10 @@ struct VMController: RouteCollection {
         do {
             if vm.status == .created {
                 // Boot the VM
-                try await req.cloudHypervisor.bootVM()
+                try await req.agentService.performVMOperation(.vmBoot, vmId: vm.id?.uuidString ?? "")
             } else {
                 // Resume from paused state
-                try await req.cloudHypervisor.resumeVM()
+                try await req.agentService.performVMOperation(.vmResume, vmId: vm.id?.uuidString ?? "")
             }
             
             // Update VM status
@@ -334,8 +336,8 @@ struct VMController: RouteCollection {
         } catch {
             req.logger.error("Failed to start VM: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
             
-            // Sync status with hypervisor
-            let actualStatus = try await req.cloudHypervisor.syncVMStatus()
+            // Sync status with agent
+            let actualStatus = try await req.agentService.getVMStatus(vmId: vm.id?.uuidString ?? "")
             vm.status = actualStatus
             try await vm.save(on: req.db)
             
@@ -359,7 +361,7 @@ struct VMController: RouteCollection {
         }
         
         do {
-            try await req.cloudHypervisor.shutdownVM()
+            try await req.agentService.performVMOperation(.vmShutdown, vmId: vm.id?.uuidString ?? "")
             
             // Update VM status
             vm.status = VMStatus.shutdown
@@ -370,8 +372,8 @@ struct VMController: RouteCollection {
         } catch {
             req.logger.error("Failed to stop VM: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
             
-            // Sync status with hypervisor
-            let actualStatus = try await req.cloudHypervisor.syncVMStatus()
+            // Sync status with agent
+            let actualStatus = try await req.agentService.getVMStatus(vmId: vm.id?.uuidString ?? "")
             vm.status = actualStatus
             try await vm.save(on: req.db)
             
@@ -395,15 +397,15 @@ struct VMController: RouteCollection {
         }
         
         do {
-            try await req.cloudHypervisor.rebootVM()
+            try await req.agentService.performVMOperation(.vmReboot, vmId: vm.id?.uuidString ?? "")
             
             req.logger.info("VM restarted successfully", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
             
         } catch {
             req.logger.error("Failed to restart VM: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
             
-            // Sync status with hypervisor
-            let actualStatus = try await req.cloudHypervisor.syncVMStatus()
+            // Sync status with agent
+            let actualStatus = try await req.agentService.getVMStatus(vmId: vm.id?.uuidString ?? "")
             vm.status = actualStatus
             try await vm.save(on: req.db)
             

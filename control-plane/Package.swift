@@ -7,6 +7,8 @@ let package = Package(
         .macOS(.v14)
     ],
     dependencies: [
+        // StratoShared for common models and protocols
+        .package(path: "../shared"),
         // 💧 A server-side Swift web framework.
         .package(url: "https://github.com/vapor/vapor.git", from: "4.110.1"),
         // 🗄 An ORM for SQL and NoSQL databases.
@@ -26,6 +28,7 @@ let package = Package(
         .executableTarget(
             name: "App",
             dependencies: [
+                .product(name: "StratoShared", package: "shared"),
                 .product(name: "Fluent", package: "fluent"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
                 .product(name: "Elementary", package: "elementary"),
@@ -33,6 +36,7 @@ let package = Package(
                 .product(name: "Vapor", package: "vapor"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOWebSocket", package: "swift-nio"),
                 .product(name: "WebAuthn", package: "webauthn-swift"),
             ],
             swiftSettings: swiftSettings
