@@ -2,7 +2,7 @@ import Fluent
 import Vapor
 import StratoShared
 
-final class VM: Model {
+final class VM: Model, @unchecked Sendable {
     static let schema = "vms"
 
     @ID(key: .id)
@@ -174,31 +174,31 @@ extension VM {
     var memoryMB: Int {
         return Int(memory / 1024 / 1024)
     }
-    
+
     var memoryGB: Double {
         return Double(memory) / 1024.0 / 1024.0 / 1024.0
     }
-    
+
     var diskGB: Double {
         return Double(disk) / 1024.0 / 1024.0 / 1024.0
     }
-    
+
     var isRunning: Bool {
         return status == .running
     }
-    
+
     var canStart: Bool {
         return status == .created || status == .shutdown
     }
-    
+
     var canStop: Bool {
         return status == .running || status == .paused
     }
-    
+
     var canPause: Bool {
         return status == .running
     }
-    
+
     var canResume: Bool {
         return status == .paused
     }

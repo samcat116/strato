@@ -1,7 +1,7 @@
 import Fluent
 import Vapor
 
-final class VMTemplate: Model {
+final class VMTemplate: Model, @unchecked Sendable {
     static let schema = "vm_templates"
 
     @ID(key: .id)
@@ -145,16 +145,16 @@ extension VMTemplate {
         if cpu < minCpu || cpu > maxCpu {
             throw VMTemplateError.cpuOutOfRange(min: minCpu, max: maxCpu, requested: cpu)
         }
-        
+
         if memory < minMemory || memory > maxMemory {
             throw VMTemplateError.memoryOutOfRange(min: minMemory, max: maxMemory, requested: memory)
         }
-        
+
         if disk < minDisk || disk > maxDisk {
             throw VMTemplateError.diskOutOfRange(min: minDisk, max: maxDisk, requested: disk)
         }
     }
-    
+
     func createVMInstance(
         name: String,
         description: String,
@@ -167,9 +167,9 @@ extension VMTemplate {
         let finalMemory = memory ?? defaultMemory
         let finalDisk = disk ?? defaultDisk
         let finalCmdline = cmdline ?? defaultCmdline
-        
+
         try validateResourceLimits(cpu: finalCpu, memory: finalMemory, disk: finalDisk)
-        
+
         return VM(
             name: name,
             description: description,
@@ -180,14 +180,14 @@ extension VMTemplate {
             maxCpu: finalCpu
         )
     }
-    
+
     func generateDiskPath(for vmId: UUID) -> String {
         let fileExtension = (baseDiskPath as NSString).pathExtension
         let fileName = "\(vmId.uuidString).\(fileExtension)"
         let baseDir = (baseDiskPath as NSString).deletingLastPathComponent
         return "\(baseDir)/\(fileName)"
     }
-    
+
     func generateMacAddress() -> String {
         if let prefix = defaultMacPrefix {
             let randomBytes = (0..<3).map { _ in String(format: "%02x", Int.random(in: 0...255)) }
@@ -208,7 +208,7 @@ enum VMTemplateError: Error, LocalizedError {
     case diskOutOfRange(min: Int64, max: Int64, requested: Int64)
     case templateNotFound(String)
     case templateInactive(String)
-    
+
     var errorDescription: String? {
         switch self {
         case .cpuOutOfRange(let min, let max, let requested):

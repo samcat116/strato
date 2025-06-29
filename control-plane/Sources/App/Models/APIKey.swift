@@ -3,47 +3,47 @@ import Vapor
 import Foundation
 import Crypto
 
-final class APIKey: Model {
+final class APIKey: Model, @unchecked Sendable {
     static let schema = "api_keys"
-    
+
     @ID(key: .id)
     var id: UUID?
-    
+
     @Parent(key: "user_id")
     var user: User
-    
+
     @Field(key: "name")
     var name: String
-    
+
     @Field(key: "key_hash")
     var keyHash: String
-    
+
     @Field(key: "key_prefix")
     var keyPrefix: String // First 8 characters for identification
-    
+
     @Field(key: "scopes")
     var scopes: [String] // Permissions/scopes for this key
-    
+
     @Field(key: "is_active")
     var isActive: Bool
-    
+
     @OptionalField(key: "expires_at")
     var expiresAt: Date?
-    
+
     @OptionalField(key: "last_used_at")
     var lastUsedAt: Date?
-    
+
     @OptionalField(key: "last_used_ip")
     var lastUsedIP: String?
-    
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
-    
+
     @Timestamp(key: "updated_at", on: .update)
     var updatedAt: Date?
-    
+
     init() {}
-    
+
     init(
         id: UUID? = nil,
         userID: UUID,
@@ -63,9 +63,9 @@ final class APIKey: Model {
         self.isActive = isActive
         self.expiresAt = expiresAt
     }
-    
+
     // MARK: - Static Helper Methods
-    
+
     static func generateAPIKey() -> String {
         // Generate a secure random API key: sk_[16 random chars]_[32 random chars]
         let randomBytes = SymmetricKey(size: .bits256)
@@ -75,27 +75,27 @@ final class APIKey: Model {
             .replacingOccurrences(of: "/", with: "")
             .replacingOccurrences(of: "=", with: "")
             .prefix(32)
-        
+
         let prefix = String.randomAlphanumeric(length: 16)
         return "sk_\(prefix)_\(keyString)"
     }
-    
+
     static func hashAPIKey(_ key: String) -> String {
         let data = Data(key.utf8)
         let hashed = SHA256.hash(data: data)
         return hashed.compactMap { String(format: "%02x", $0) }.joined()
     }
-    
+
     func updateLastUsed(ip: String?) async throws {
         self.lastUsedAt = Date()
         self.lastUsedIP = ip
     }
-    
+
     var isExpired: Bool {
         guard let expiresAt = expiresAt else { return false }
         return Date() > expiresAt
     }
-    
+
     var isValid: Bool {
         return isActive && !isExpired
     }
@@ -128,7 +128,7 @@ struct CreateAPIKeyResponse: Content {
     let scopes: [String]
     let expiresAt: Date?
     let createdAt: Date?
-    
+
     init(apiKey: APIKey, fullKey: String) {
         self.id = apiKey.id
         self.name = apiKey.name
@@ -149,7 +149,7 @@ struct APIKeyResponse: Content {
     let expiresAt: Date?
     let lastUsedAt: Date?
     let createdAt: Date?
-    
+
     init(from apiKey: APIKey) {
         self.id = apiKey.id
         self.name = apiKey.name
