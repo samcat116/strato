@@ -1,21 +1,6 @@
 import Fluent
 import Vapor
-
-enum VMStatus: String, Codable, CaseIterable {
-    case created = "Created"
-    case running = "Running"
-    case shutdown = "Shutdown"
-    case paused = "Paused"
-}
-
-enum ConsoleMode: String, Codable, CaseIterable {
-    case off = "Off"
-    case pty = "Pty"
-    case tty = "Tty"
-    case file = "File"
-    case socket = "Socket"
-    case null = "Null"
-}
+import StratoShared
 
 final class VM: Model {
     static let schema = "vms"
@@ -146,6 +131,42 @@ final class VM: Model {
 }
 
 extension VM: Content {}
+
+// MARK: - Shared Model Conversion
+
+extension VM {
+    func toVMData() -> VMData {
+        return VMData(
+            id: id ?? UUID(),
+            name: name,
+            description: description,
+            image: image,
+            status: status,
+            hypervisorId: hypervisorId,
+            cpu: cpu,
+            maxCpu: maxCpu,
+            memory: memory,
+            hugepages: hugepages,
+            sharedMemory: sharedMemory,
+            disk: disk,
+            diskPath: diskPath,
+            readonlyDisk: readonlyDisk,
+            kernelPath: kernelPath,
+            initramfsPath: initramfsPath,
+            cmdline: cmdline,
+            firmwarePath: firmwarePath,
+            macAddress: macAddress,
+            ipAddress: ipAddress,
+            networkMask: networkMask,
+            consoleMode: consoleMode,
+            serialMode: serialMode,
+            consoleSocket: consoleSocket,
+            serialSocket: serialSocket,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+}
 
 // MARK: - Computed Properties
 

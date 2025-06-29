@@ -12,8 +12,8 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME_HYPERVISOR: ${{ github.repository }}-hypervisor
-  IMAGE_NAME_APP: ${{ github.repository }}-app
+  IMAGE_NAME_CONTROL_PLANE: ${{ github.repository }}-control-plane
+  IMAGE_NAME_AGENT: ${{ github.repository }}-agent
 
 jobs:
   create-release:
@@ -51,8 +51,8 @@ jobs:
           
           ## Docker Images
           
-          - \`ghcr.io/${{ github.repository }}-hypervisor:${GITHUB_REF#refs/tags/}\`
-          - \`ghcr.io/${{ github.repository }}-app:${GITHUB_REF#refs/tags/}\`
+          - \`ghcr.io/${{ github.repository }}-control-plane:${GITHUB_REF#refs/tags/}\`
+          - \`ghcr.io/${{ github.repository }}-agent:${GITHUB_REF#refs/tags/}\`
           
           ## Installation
           
@@ -68,8 +68,8 @@ jobs:
           
           \`\`\`bash
           # Pull the images
-          docker pull ghcr.io/${{ github.repository }}-hypervisor:${GITHUB_REF#refs/tags/}
-          docker pull ghcr.io/${{ github.repository }}-app:${GITHUB_REF#refs/tags/}
+          docker pull ghcr.io/${{ github.repository }}-control-plane:${GITHUB_REF#refs/tags/}
+          docker pull ghcr.io/${{ github.repository }}-agent:${GITHUB_REF#refs/tags/}
           \`\`\`
           EOF
 
@@ -105,51 +105,51 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata for hypervisor image
-        id: meta-hypervisor
+      - name: Extract metadata for control plane image
+        id: meta-control-plane
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_HYPERVISOR }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_CONTROL_PLANE }}
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
 
-      - name: Extract metadata for app image
-        id: meta-app
+      - name: Extract metadata for agent image
+        id: meta-agent
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_APP }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_AGENT }}
           tags: |
             type=ref,event=tag  
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
 
-      - name: Build and push hypervisor image
+      - name: Build and push control plane image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
+          file: ./control-plane/Dockerfile
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ steps.meta-hypervisor.outputs.tags }}
-          labels: ${{ steps.meta-hypervisor.outputs.labels }}
-          cache-from: type=gha,key=hypervisor-${{ matrix.platform }}
-          cache-to: type=gha,mode=max,key=hypervisor-${{ matrix.platform }}
+          tags: ${{ steps.meta-control-plane.outputs.tags }}
+          labels: ${{ steps.meta-control-plane.outputs.labels }}
+          cache-from: type=gha,key=control-plane-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,key=control-plane-${{ matrix.platform }}
 
-      - name: Build and push app image
+      - name: Build and push agent image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile-app
+          file: ./agent/Dockerfile
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ steps.meta-app.outputs.tags }}
-          labels: ${{ steps.meta-app.outputs.labels }}
-          cache-from: type=gha,key=app-${{ matrix.platform }}
-          cache-to: type=gha,mode=max,key=app-${{ matrix.platform }}
+          tags: ${{ steps.meta-agent.outputs.tags }}
+          labels: ${{ steps.meta-agent.outputs.labels }}
+          cache-from: type=gha,key=agent-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,key=agent-${{ matrix.platform }}
 
   build-swift-binaries:
     runs-on: ${{ matrix.os }}
@@ -178,19 +178,29 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libssl-dev zlib1g-dev
 
-      - name: Build Swift binary
+      - name: Build Swift binaries
         run: |
+          # Build control plane
+          cd control-plane
           swift build -c release
+          cd ..
+          
+          # Build agent
+          cd agent
+          swift build -c release
+          cd ..
 
-      - name: Package binary
+      - name: Package binaries
         run: |
           mkdir -p release
           if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            cp .build/release/App release/strato
-            tar czf ${{ matrix.asset_name }}.tar.gz -C release strato
+            cp control-plane/.build/release/App release/strato-control-plane
+            cp agent/.build/release/StratoAgent release/strato-agent
+            tar czf ${{ matrix.asset_name }}.tar.gz -C release strato-control-plane strato-agent
           else
-            cp .build/release/App release/strato
-            tar czf ${{ matrix.asset_name }}.tar.gz -C release strato
+            cp control-plane/.build/release/App release/strato-control-plane
+            cp agent/.build/release/StratoAgent release/strato-agent
+            tar czf ${{ matrix.asset_name }}.tar.gz -C release strato-control-plane strato-agent
           fi
 
       - name: Upload Release Asset
@@ -240,60 +250,92 @@ jobs:
           cat > docker-compose.release.yml << 'EOF'
           version: '3.8'
           
+          volumes:
+            db_data:
+            cloud_hypervisor_socket:
+            vm_images:
+          
+          networks:
+            strato-network:
+              driver: bridge
+          
           services:
-            db:
-              image: postgres:15
+            control-plane:
+              image: ghcr.io/${{ github.repository }}-control-plane:${{ github.ref_name }}
               environment:
-                POSTGRES_DB: strato
-                POSTGRES_USER: strato
-                POSTGRES_PASSWORD: strato_password
-              volumes:
-                - postgres_data:/var/lib/postgresql/data
-              ports:
-                - "5432:5432"
-              healthcheck:
-                test: ["CMD-SHELL", "pg_isready -U strato"]
-                interval: 10s
-                timeout: 5s
-                retries: 5
-          
-            permify:
-              image: ghcr.io/permify/permify:latest
-              command: serve --config=/config/config.yaml
-              volumes:
-                - ./permify:/config
-              ports:
-                - "3476:3476"
-                - "3478:3478"
-              depends_on:
-                db:
-                  condition: service_healthy
-          
-            app:
-              image: ghcr.io/${{ github.repository }}-app:${{ github.ref_name }}
-              environment:
-                DATABASE_URL: postgres://strato:strato_password@db:5432/strato
+                DATABASE_HOST: db
+                DATABASE_NAME: vapor_database
+                DATABASE_USERNAME: vapor_username
+                DATABASE_PASSWORD: vapor_password
                 PERMIFY_ENDPOINT: http://permify:3476
                 WEBAUTHN_RELYING_PARTY_ID: localhost
                 WEBAUTHN_RELYING_PARTY_NAME: Strato
                 WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost:8080
-              ports:
-                - "8080:8080"
               depends_on:
                 - db
                 - permify
+              ports:
+                - "8080:8080"
+              networks:
+                - strato-network
+              command: ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]
+          
+            agent:
+              image: ghcr.io/${{ github.repository }}-agent:${{ github.ref_name }}
+              depends_on:
+                - control-plane
+              volumes:
+                - cloud_hypervisor_socket:/var/run/cloud-hypervisor
+                - vm_images:/images
+              networks:
+                - strato-network
+              privileged: true
+              command: ["--control-plane-url", "ws://control-plane:8080/agent/ws", "--hypervisor-socket", "/var/run/cloud-hypervisor/cloud-hypervisor.sock", "--log-level", "info"]
           
             migrate:
-              image: ghcr.io/${{ github.repository }}-app:${{ github.ref_name }}
-              command: migrate
+              image: ghcr.io/${{ github.repository }}-control-plane:${{ github.ref_name }}
               environment:
-                DATABASE_URL: postgres://strato:strato_password@db:5432/strato
+                DATABASE_HOST: db
+                DATABASE_NAME: vapor_database
+                DATABASE_USERNAME: vapor_username
+                DATABASE_PASSWORD: vapor_password
+                PERMIFY_ENDPOINT: http://permify:3476
               depends_on:
-                db:
-                  condition: service_healthy
+                - db
+              networks:
+                - strato-network
+              command: ["migrate", "--yes"]
+              deploy:
+                replicas: 0
           
-          volumes:
-            postgres_data:
+            db:
+              image: postgres:16-alpine
+              volumes:
+                - db_data:/var/lib/postgresql/data/pgdata
+              environment:
+                POSTGRES_USER: vapor_username
+                POSTGRES_PASSWORD: vapor_password
+                POSTGRES_DB: vapor_database
+                PGDATA: /var/lib/postgresql/data/strato
+              ports:
+                - "5432:5432"
+              networks:
+                - strato-network
+          
+            permify:
+              image: ghcr.io/permify/permify:latest
+              ports:
+                - "3476:3476"
+                - "3478:3478"
+              command: ["serve", "--config=/config/config.yaml"]
+              volumes:
+                - ./permify:/config
+              depends_on:
+                - db
+              environment:
+                - PERMIFY_DATABASE_URI=postgres://vapor_username:vapor_password@db:5432/vapor_database?sslmode=disable
+              networks:
+                - strato-network
           EOF
 
       - name: Upload docker-compose release file

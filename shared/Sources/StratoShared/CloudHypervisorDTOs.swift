@@ -1,22 +1,21 @@
 import Foundation
-import Vapor
 
 // MARK: - Main VM Configuration
 
-struct VmConfig: Content {
-    let cpus: CpusConfig?
-    let memory: MemoryConfig?
-    let payload: PayloadConfig
-    let disks: [DiskConfig]?
-    let net: [NetConfig]?
-    let rng: RngConfig?
-    let serial: ConsoleConfig?
-    let console: ConsoleConfig?
-    let iommu: Bool?
-    let watchdog: Bool?
-    let pvpanic: Bool?
+public struct VmConfig: Codable, Sendable {
+    public let cpus: CpusConfig?
+    public let memory: MemoryConfig?
+    public let payload: PayloadConfig
+    public let disks: [DiskConfig]?
+    public let net: [NetConfig]?
+    public let rng: RngConfig?
+    public let serial: ConsoleConfig?
+    public let console: ConsoleConfig?
+    public let iommu: Bool?
+    public let watchdog: Bool?
+    public let pvpanic: Bool?
     
-    init(
+    public init(
         cpus: CpusConfig? = nil,
         memory: MemoryConfig? = nil,
         payload: PayloadConfig,
@@ -45,13 +44,13 @@ struct VmConfig: Content {
 
 // MARK: - CPU Configuration
 
-struct CpusConfig: Content {
-    let bootVcpus: Int
-    let maxVcpus: Int
-    let topology: CpuTopology?
-    let kvmHyperv: Bool?
-    let maxPhysBits: Int?
-    let features: CpuFeatures?
+public struct CpusConfig: Codable, Sendable {
+    public let bootVcpus: Int
+    public let maxVcpus: Int
+    public let topology: CpuTopology?
+    public let kvmHyperv: Bool?
+    public let maxPhysBits: Int?
+    public let features: CpuFeatures?
     
     enum CodingKeys: String, CodingKey {
         case bootVcpus = "boot_vcpus"
@@ -62,7 +61,7 @@ struct CpusConfig: Content {
         case features
     }
     
-    init(
+    public init(
         bootVcpus: Int,
         maxVcpus: Int,
         topology: CpuTopology? = nil,
@@ -79,11 +78,11 @@ struct CpusConfig: Content {
     }
 }
 
-struct CpuTopology: Content {
-    let threadsPerCore: Int?
-    let coresPerDie: Int?
-    let diesPerPackage: Int?
-    let packages: Int?
+public struct CpuTopology: Codable, Sendable {
+    public let threadsPerCore: Int?
+    public let coresPerDie: Int?
+    public let diesPerPackage: Int?
+    public let packages: Int?
     
     enum CodingKeys: String, CodingKey {
         case threadsPerCore = "threads_per_core"
@@ -91,26 +90,42 @@ struct CpuTopology: Content {
         case diesPerPackage = "dies_per_package"
         case packages
     }
+    
+    public init(
+        threadsPerCore: Int? = nil,
+        coresPerDie: Int? = nil,
+        diesPerPackage: Int? = nil,
+        packages: Int? = nil
+    ) {
+        self.threadsPerCore = threadsPerCore
+        self.coresPerDie = coresPerDie
+        self.diesPerPackage = diesPerPackage
+        self.packages = packages
+    }
 }
 
-struct CpuFeatures: Content {
-    let amx: Bool?
+public struct CpuFeatures: Codable, Sendable {
+    public let amx: Bool?
+    
+    public init(amx: Bool? = nil) {
+        self.amx = amx
+    }
 }
 
 // MARK: - Memory Configuration
 
-struct MemoryConfig: Content {
-    let size: Int64
-    let hotplugSize: Int64?
-    let hotpluggedSize: Int64?
-    let mergeable: Bool?
-    let hotplugMethod: String?
-    let shared: Bool?
-    let hugepages: Bool?
-    let hugepageSize: Int64?
-    let prefault: Bool?
-    let thp: Bool?
-    let zones: [MemoryZoneConfig]?
+public struct MemoryConfig: Codable, Sendable {
+    public let size: Int64
+    public let hotplugSize: Int64?
+    public let hotpluggedSize: Int64?
+    public let mergeable: Bool?
+    public let hotplugMethod: String?
+    public let shared: Bool?
+    public let hugepages: Bool?
+    public let hugepageSize: Int64?
+    public let prefault: Bool?
+    public let thp: Bool?
+    public let zones: [MemoryZoneConfig]?
     
     enum CodingKeys: String, CodingKey {
         case size
@@ -126,7 +141,7 @@ struct MemoryConfig: Content {
         case zones
     }
     
-    init(
+    public init(
         size: Int64,
         hotplugSize: Int64? = nil,
         hotpluggedSize: Int64? = nil,
@@ -153,18 +168,18 @@ struct MemoryConfig: Content {
     }
 }
 
-struct MemoryZoneConfig: Content {
-    let id: String
-    let size: Int64
-    let file: String?
-    let mergeable: Bool?
-    let shared: Bool?
-    let hugepages: Bool?
-    let hugepageSize: Int64?
-    let hostNumaNode: Int?
-    let hotplugSize: Int64?
-    let hotpluggedSize: Int64?
-    let prefault: Bool?
+public struct MemoryZoneConfig: Codable, Sendable {
+    public let id: String
+    public let size: Int64
+    public let file: String?
+    public let mergeable: Bool?
+    public let shared: Bool?
+    public let hugepages: Bool?
+    public let hugepageSize: Int64?
+    public let hostNumaNode: Int?
+    public let hotplugSize: Int64?
+    public let hotpluggedSize: Int64?
+    public let prefault: Bool?
     
     enum CodingKeys: String, CodingKey {
         case id, size, file, mergeable, shared, hugepages
@@ -174,17 +189,43 @@ struct MemoryZoneConfig: Content {
         case hotpluggedSize = "hotplugged_size"
         case prefault
     }
+    
+    public init(
+        id: String,
+        size: Int64,
+        file: String? = nil,
+        mergeable: Bool? = nil,
+        shared: Bool? = nil,
+        hugepages: Bool? = nil,
+        hugepageSize: Int64? = nil,
+        hostNumaNode: Int? = nil,
+        hotplugSize: Int64? = nil,
+        hotpluggedSize: Int64? = nil,
+        prefault: Bool? = nil
+    ) {
+        self.id = id
+        self.size = size
+        self.file = file
+        self.mergeable = mergeable
+        self.shared = shared
+        self.hugepages = hugepages
+        self.hugepageSize = hugepageSize
+        self.hostNumaNode = hostNumaNode
+        self.hotplugSize = hotplugSize
+        self.hotpluggedSize = hotpluggedSize
+        self.prefault = prefault
+    }
 }
 
 // MARK: - Payload Configuration
 
-struct PayloadConfig: Content {
-    let firmware: String?
-    let kernel: String?
-    let cmdline: String?
-    let initramfs: String?
+public struct PayloadConfig: Codable, Sendable {
+    public let firmware: String?
+    public let kernel: String?
+    public let cmdline: String?
+    public let initramfs: String?
     
-    init(
+    public init(
         firmware: String? = nil,
         kernel: String? = nil,
         cmdline: String? = nil,
@@ -199,19 +240,19 @@ struct PayloadConfig: Content {
 
 // MARK: - Disk Configuration
 
-struct DiskConfig: Content {
-    let path: String
-    let readonly: Bool?
-    let direct: Bool?
-    let iommu: Bool?
-    let numQueues: Int?
-    let queueSize: Int?
-    let vhostUser: Bool?
-    let vhostSocket: String?
-    let pciSegment: Int?
-    let id: String?
-    let serial: String?
-    let rateLimitGroup: String?
+public struct DiskConfig: Codable, Sendable {
+    public let path: String
+    public let readonly: Bool?
+    public let direct: Bool?
+    public let iommu: Bool?
+    public let numQueues: Int?
+    public let queueSize: Int?
+    public let vhostUser: Bool?
+    public let vhostSocket: String?
+    public let pciSegment: Int?
+    public let id: String?
+    public let serial: String?
+    public let rateLimitGroup: String?
     
     enum CodingKeys: String, CodingKey {
         case path, readonly, direct, iommu
@@ -224,7 +265,7 @@ struct DiskConfig: Content {
         case rateLimitGroup = "rate_limit_group"
     }
     
-    init(
+    public init(
         path: String,
         readonly: Bool? = nil,
         direct: Bool? = nil,
@@ -255,21 +296,21 @@ struct DiskConfig: Content {
 
 // MARK: - Network Configuration
 
-struct NetConfig: Content {
-    let tap: String?
-    let ip: String?
-    let mask: String?
-    let mac: String?
-    let hostMac: String?
-    let mtu: Int?
-    let iommu: Bool?
-    let numQueues: Int?
-    let queueSize: Int?
-    let vhostUser: Bool?
-    let vhostSocket: String?
-    let vhostMode: String?
-    let id: String?
-    let pciSegment: Int?
+public struct NetConfig: Codable, Sendable {
+    public let tap: String?
+    public let ip: String?
+    public let mask: String?
+    public let mac: String?
+    public let hostMac: String?
+    public let mtu: Int?
+    public let iommu: Bool?
+    public let numQueues: Int?
+    public let queueSize: Int?
+    public let vhostUser: Bool?
+    public let vhostSocket: String?
+    public let vhostMode: String?
+    public let id: String?
+    public let pciSegment: Int?
     
     enum CodingKeys: String, CodingKey {
         case tap, ip, mask, mac
@@ -284,7 +325,7 @@ struct NetConfig: Content {
         case pciSegment = "pci_segment"
     }
     
-    init(
+    public init(
         tap: String? = nil,
         ip: String? = nil,
         mask: String? = nil,
@@ -319,13 +360,13 @@ struct NetConfig: Content {
 
 // MARK: - Console Configuration
 
-struct ConsoleConfig: Content {
-    let file: String?
-    let socket: String?
-    let mode: String
-    let iommu: Bool?
+public struct ConsoleConfig: Codable, Sendable {
+    public let file: String?
+    public let socket: String?
+    public let mode: String
+    public let iommu: Bool?
     
-    init(
+    public init(
         file: String? = nil,
         socket: String? = nil,
         mode: String,
@@ -340,11 +381,11 @@ struct ConsoleConfig: Content {
 
 // MARK: - RNG Configuration
 
-struct RngConfig: Content {
-    let src: String
-    let iommu: Bool?
+public struct RngConfig: Codable, Sendable {
+    public let src: String
+    public let iommu: Bool?
     
-    init(src: String, iommu: Bool? = nil) {
+    public init(src: String, iommu: Bool? = nil) {
         self.src = src
         self.iommu = iommu
     }
@@ -352,165 +393,72 @@ struct RngConfig: Content {
 
 // MARK: - Response DTOs
 
-struct VmInfo: Content {
-    let config: VmConfig
-    let state: String
-    let memoryActualSize: Int64?
-    let deviceTree: [String: DeviceNode]?
+public struct VmInfo: Codable, Sendable {
+    public let config: VmConfig
+    public let state: String
+    public let memoryActualSize: Int64?
     
     enum CodingKeys: String, CodingKey {
         case config, state
         case memoryActualSize = "memory_actual_size"
-        case deviceTree = "device_tree"
+    }
+    
+    public init(
+        config: VmConfig,
+        state: String,
+        memoryActualSize: Int64? = nil
+    ) {
+        self.config = config
+        self.state = state
+        self.memoryActualSize = memoryActualSize
     }
 }
 
-struct DeviceNode: Content {
-    let id: String?
-    let resources: [Resource]?
-    let children: [String]?
-    let pciBdf: String?
-    
-    enum CodingKeys: String, CodingKey {
-        case id, resources, children
-        case pciBdf = "pci_bdf"
-    }
-}
-
-struct Resource: Content {
-    // This would be a complex enum in Rust, simplified here
-    let type: String?
-    let data: [String: AnyCodable]?
-}
-
-struct AnyCodable: Content {
-    let value: Any
-    
-    init(_ value: Any) {
-        self.value = value
-    }
-    
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        
-        if let intValue = try? container.decode(Int.self) {
-            value = intValue
-        } else if let stringValue = try? container.decode(String.self) {
-            value = stringValue
-        } else if let boolValue = try? container.decode(Bool.self) {
-            value = boolValue
-        } else if let doubleValue = try? container.decode(Double.self) {
-            value = doubleValue
-        } else {
-            throw DecodingError.typeMismatch(AnyCodable.self, .init(codingPath: decoder.codingPath, debugDescription: "Unsupported type"))
-        }
-    }
-    
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        
-        if let intValue = value as? Int {
-            try container.encode(intValue)
-        } else if let stringValue = value as? String {
-            try container.encode(stringValue)
-        } else if let boolValue = value as? Bool {
-            try container.encode(boolValue)
-        } else if let doubleValue = value as? Double {
-            try container.encode(doubleValue)
-        } else {
-            throw EncodingError.invalidValue(value, .init(codingPath: encoder.codingPath, debugDescription: "Unsupported type"))
-        }
-    }
-}
-
-struct VmmPingResponse: Content {
-    let buildVersion: String?
-    let version: String
-    let pid: Int64?
-    let features: [String]?
+public struct VmmPingResponse: Codable, Sendable {
+    public let buildVersion: String?
+    public let version: String
+    public let pid: Int64?
+    public let features: [String]?
     
     enum CodingKeys: String, CodingKey {
         case buildVersion = "build_version"
         case version, pid, features
     }
+    
+    public init(
+        buildVersion: String? = nil,
+        version: String,
+        pid: Int64? = nil,
+        features: [String]? = nil
+    ) {
+        self.buildVersion = buildVersion
+        self.version = version
+        self.pid = pid
+        self.features = features
+    }
 }
 
-struct VmCounters: Content {
-    let counters: [String: [String: Int64]]
+public struct VmCounters: Codable, Sendable {
+    public let counters: [String: [String: Int64]]
     
-    init(from decoder: Decoder) throws {
+    public init(counters: [String: [String: Int64]]) {
+        self.counters = counters
+    }
+    
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         self.counters = try container.decode([String: [String: Int64]].self)
     }
     
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(counters)
     }
 }
 
-struct PciDeviceInfo: Content {
-    let id: String
-    let bdf: String
-}
-
-// MARK: - VM Operation DTOs
-
-struct VmResize: Content {
-    let desiredVcpus: Int?
-    let desiredRam: Int64?
-    let desiredBalloon: Int64?
-    
-    enum CodingKeys: String, CodingKey {
-        case desiredVcpus = "desired_vcpus"
-        case desiredRam = "desired_ram"
-        case desiredBalloon = "desired_balloon"
-    }
-}
-
-struct VmResizeZone: Content {
-    let id: String?
-    let desiredRam: Int64?
-    
-    enum CodingKeys: String, CodingKey {
-        case id
-        case desiredRam = "desired_ram"
-    }
-}
-
-struct VmRemoveDevice: Content {
-    let id: String?
-}
-
-struct VmSnapshotConfig: Content {
-    let destinationUrl: String?
-    
-    enum CodingKeys: String, CodingKey {
-        case destinationUrl = "destination_url"
-    }
-}
-
-struct VmCoredumpData: Content {
-    let destinationUrl: String?
-    
-    enum CodingKeys: String, CodingKey {
-        case destinationUrl = "destination_url"
-    }
-}
-
-struct RestoreConfig: Content {
-    let sourceUrl: String
-    let prefault: Bool?
-    
-    enum CodingKeys: String, CodingKey {
-        case sourceUrl = "source_url"
-        case prefault
-    }
-}
-
 // MARK: - Error Types
 
-enum CloudHypervisorError: Error, LocalizedError {
+public enum CloudHypervisorError: Error, LocalizedError, Sendable {
     case connectionFailed(String)
     case vmNotFound(String)
     case vmAlreadyExists(String)
@@ -518,9 +466,9 @@ enum CloudHypervisorError: Error, LocalizedError {
     case vmNotStarted(String)
     case vmNotPaused(String)
     case invalidConfiguration(String)
-    case hypervisorError(HTTPResponseStatus, String)
+    case hypervisorError(Int, String)
     
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .connectionFailed(let message):
             return "Failed to connect to cloud-hypervisor: \(message)"

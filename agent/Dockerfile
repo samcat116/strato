@@ -3,59 +3,50 @@
 # ================================
 FROM swift:6.1.2-noble AS build
 
-# Install OS updates and Node.js for TailwindCSS
+# Install OS updates
 RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     && apt-get -q update \
     && apt-get -q dist-upgrade -y \
-    && apt-get install -y libjemalloc-dev curl \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs
+    && apt-get install -y libjemalloc-dev
 
 # Set up a build area
 WORKDIR /build
+
+# Copy shared package first
+COPY ./shared ./shared
+
+# Copy agent package files
+COPY ./agent/Package.* ./agent/
 
 # First just resolve dependencies.
 # This creates a cached layer that can be reused
 # as long as your Package.swift/Package.resolved
 # files do not change.
-COPY ./Package.* ./
+WORKDIR /build/agent
+# Update Package.swift to use absolute path for shared package in Docker
+RUN sed -i 's|.package(path: "../shared")|.package(path: "/build/shared")|' Package.swift
 RUN swift package resolve \
     $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true)
 
-# Copy package.json and package-lock.json for npm dependencies
-COPY package*.json ./
-
-# Install npm dependencies (including devDependencies for TailwindCSS)
-RUN npm ci
-
-# Copy entire repo into container
-COPY . .
-
-# Build TailwindCSS
-RUN npm run build-css-prod
+# Copy entire agent repo into container
+COPY ./agent .
 
 # Build the application, with optimizations and using jemalloc
-# Note: Removed --static-swift-stdlib due to Swift 6 compatibility issues on Linux
 RUN swift build -c release \
-    --product App \
+    --product StratoAgent \
     -Xlinker -ljemalloc
 
 # Switch to the staging area
 WORKDIR /staging
 
 # Copy main executable to staging area
-RUN cp "$(swift build --package-path /build -c release --show-bin-path)/App" ./
+RUN cp "$(swift build --package-path /build/agent -c release --show-bin-path)/StratoAgent" ./
 
 # Copy static swift backtracer binary to staging area
 RUN cp "/usr/libexec/swift/linux/swift-backtrace-static" ./
 
 # Copy resources bundled by SPM to staging area
-RUN find -L "$(swift build --package-path /build -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \;
-
-# Copy any resources from the public directory and views directory if the directories exist
-# Ensure that by default, neither the directory nor any of its contents are writable.
-RUN [ -d /build/Public ] && { mv /build/Public ./Public && chmod -R a-w ./Public; } || true
-RUN [ -d /build/Resources ] && { mv /build/Resources ./Resources && chmod -R a-w ./Resources; } || true
+RUN find -L "$(swift build --package-path /build/agent -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \;
 
 # ================================
 # Run image
@@ -70,6 +61,7 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     libjemalloc2 \
     ca-certificates \
     tzdata \
+    socat \
     # If your app or its dependencies import FoundationNetworking, also install `libcurl4`.
     # libcurl4 \
     # If your app or its dependencies import FoundationXML, also install `libxml2`.
@@ -79,24 +71,21 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
 # Copy Swift runtime libraries from build stage
 COPY --from=build /usr/lib/swift/linux/*.so /usr/lib/
 
-# Create a vapor user and group with /app as its home directory
-RUN useradd --user-group --create-home --system --skel /dev/null --home-dir /app vapor
+# Create a strato user and group with /app as its home directory
+RUN useradd --user-group --create-home --system --skel /dev/null --home-dir /app strato
 
 # Switch to the new home directory
 WORKDIR /app
 
 # Copy built executable and any staged resources from builder
-COPY --from=build --chown=vapor:vapor /staging /app
+COPY --from=build --chown=strato:strato /staging /app
 
 # Provide configuration needed by the built-in crash reporter and some sensible default behaviors.
 ENV SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=./swift-backtrace-static
 
-# Ensure all further commands run as the vapor user
-USER vapor:vapor
+# Ensure all further commands run as the strato user
+USER strato:strato
 
-# Let Docker bind to port 8080
-EXPOSE 8080
-
-# Start the Vapor service when the image is run, default to listening on 8080 in production environment
-ENTRYPOINT ["./App"]
-CMD ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]
+# Start the Strato Agent when the image is run
+ENTRYPOINT ["./StratoAgent"]
+CMD ["--control-plane-url", "ws://control-plane:8080/agent/ws", "--hypervisor-socket", "/var/run/cloud-hypervisor/cloud-hypervisor.sock"]
