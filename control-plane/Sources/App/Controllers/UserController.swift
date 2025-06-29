@@ -147,9 +147,25 @@ struct UserController: RouteCollection {
             on: req.db
         )
         
+        // Load the user for this credential
+        try await credential.$user.load(on: req.db)
+        let user = credential.user
+        
+        // Create session - log the user in automatically
+        req.auth.login(user)
+        
+        // Ensure user belongs to default organization
+        do {
+            try await ensureUserInDefaultOrganization(user: user, req: req)
+        } catch {
+            req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
+            // Don't fail the registration if Permify relationship creation fails
+        }
+        
         return RegistrationFinishResponse(
             credentialID: credential.credentialID.base64EncodedString(),
-            success: true
+            success: true,
+            user: user.asPublic()
         )
     }
     
@@ -265,6 +281,7 @@ struct RegistrationFinishRequest: Content {
 struct RegistrationFinishResponse: Content {
     let credentialID: String
     let success: Bool
+    let user: User.Public?
 }
 
 struct AuthenticationBeginRequest: Content {

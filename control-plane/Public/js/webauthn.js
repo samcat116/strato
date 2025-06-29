@@ -13,10 +13,7 @@ class WebAuthnClient {
         for (const byte of bytes) {
             str += String.fromCharCode(byte);
         }
-        return btoa(str)
-            .replace(/\+/g, '-')
-            .replace(/\//g, '_')
-            .replace(/=/g, '');
+        return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
     }
 
     // Helper function to convert base64url to ArrayBuffer
@@ -43,10 +40,10 @@ class WebAuthnClient {
                 id: this.base64urlToBuffer(options.user.id)
             },
             excludeCredentials:
-                options.excludeCredentials?.map((cred) => ({
-                    ...cred,
-                    id: this.base64urlToBuffer(cred.id)
-                })) || []
+        options.excludeCredentials?.map((cred) => ({
+            ...cred,
+            id: this.base64urlToBuffer(cred.id)
+        })) || []
         };
     }
 
@@ -56,10 +53,10 @@ class WebAuthnClient {
             ...options,
             challenge: this.base64urlToBuffer(options.challenge),
             allowCredentials:
-                options.allowCredentials?.map((cred) => ({
-                    ...cred,
-                    id: this.base64urlToBuffer(cred.id)
-                })) || []
+        options.allowCredentials?.map((cred) => ({
+            ...cred,
+            id: this.base64urlToBuffer(cred.id)
+        })) || []
         };
     }
 
@@ -98,9 +95,7 @@ class WebAuthnClient {
                     authenticatorData: this.bufferToBase64url(
                         credential.response.authenticatorData
                     ),
-                    signature: this.bufferToBase64url(
-                        credential.response.signature
-                    ),
+                    signature: this.bufferToBase64url(credential.response.signature),
                     userHandle: credential.response.userHandle
                         ? this.bufferToBase64url(credential.response.userHandle)
                         : null
@@ -113,16 +108,13 @@ class WebAuthnClient {
     async register(username) {
         try {
             // Step 1: Begin registration
-            const beginResponse = await fetch(
-                `${this.baseURL}/auth/register/begin`,
-                {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ username })
-                }
-            );
+            const beginResponse = await fetch(`${this.baseURL}/auth/register/begin`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ username })
+            });
 
             if (!beginResponse.ok) {
                 throw new Error(
@@ -157,9 +149,22 @@ class WebAuthnClient {
             );
 
             if (!finishResponse.ok) {
-                throw new Error(
-                    `Registration finish failed: ${finishResponse.statusText}`
-                );
+                // Try to get error message from response body
+                let errorMessage = 'Registration finish failed';
+                try {
+                    const errorData = await finishResponse.json();
+                    if (errorData.reason) {
+                        errorMessage = errorData.reason;
+                    } else if (errorData.error && errorData.error.reason) {
+                        errorMessage = errorData.error.reason;
+                    } else if (errorData.error) {
+                        errorMessage = errorData.error;
+                    }
+                } catch (e) {
+                    // If we can't parse JSON, use status text
+                    errorMessage = `Registration finish failed: ${finishResponse.statusText}. Error: ${e}`;
+                }
+                throw new Error(errorMessage);
             }
 
             return await finishResponse.json();
@@ -173,16 +178,13 @@ class WebAuthnClient {
     async authenticate(username = null) {
         try {
             // Step 1: Begin authentication
-            const beginResponse = await fetch(
-                `${this.baseURL}/auth/login/begin`,
-                {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ username })
-                }
-            );
+            const beginResponse = await fetch(`${this.baseURL}/auth/login/begin`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ username })
+            });
 
             if (!beginResponse.ok) {
                 throw new Error(
@@ -191,38 +193,54 @@ class WebAuthnClient {
             }
 
             const { options } = await beginResponse.json();
+            console.log('Authentication options received:', options);
             const challenge = options.challenge;
 
             // Step 2: Get credential
+            const preparedOptions = this.prepareRequestOptions(options);
+            console.log('Prepared authentication options:', preparedOptions);
+
             const credential = await navigator.credentials.get({
-                publicKey: this.prepareRequestOptions(options)
+                publicKey: preparedOptions
             });
 
             if (!credential) {
                 throw new Error('Failed to get credential');
             }
+            console.log('Credential obtained:', credential);
 
             // Step 3: Finish authentication
-            const finishResponse = await fetch(
-                `${this.baseURL}/auth/login/finish`,
-                {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(
-                        this.prepareAuthenticationResponse(
-                            credential,
-                            challenge
-                        )
-                    )
-                }
+            const authResponse = this.prepareAuthenticationResponse(
+                credential,
+                challenge
             );
+            console.log('Prepared authentication response:', authResponse);
+
+            const finishResponse = await fetch(`${this.baseURL}/auth/login/finish`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(authResponse)
+            });
 
             if (!finishResponse.ok) {
-                throw new Error(
-                    `Authentication finish failed: ${finishResponse.statusText}`
-                );
+                // Try to get error message from response body
+                let errorMessage = 'Authentication finish failed';
+                try {
+                    const errorData = await finishResponse.json();
+                    if (errorData.reason) {
+                        errorMessage = errorData.reason;
+                    } else if (errorData.error && errorData.error.reason) {
+                        errorMessage = errorData.error.reason;
+                    } else if (errorData.error) {
+                        errorMessage = errorData.error;
+                    }
+                } catch (e) {
+                    // If we can't parse JSON, use status text
+                    errorMessage = `Authentication finish failed: ${finishResponse.statusText}. Error: ${e}`;
+                }
+                throw new Error(errorMessage);
             }
 
             return await finishResponse.json();
@@ -261,12 +279,12 @@ class WebAuthnClient {
 
     // Check if WebAuthn is supported
     static isSupported() {
-        // Basic API check
+    // Basic API check
         if (
             !(
                 navigator.credentials &&
-                navigator.credentials.create &&
-                navigator.credentials.get
+        navigator.credentials.create &&
+        navigator.credentials.get
             )
         ) {
             return false;
@@ -334,10 +352,7 @@ window.WebAuthnUtils = {
 
         try {
             if (statusElementId) {
-                WebAuthnUtils.showLoading(
-                    statusElementId,
-                    'Creating passkey...'
-                );
+                WebAuthnUtils.showLoading(statusElementId, 'Creating passkey...');
             }
 
             const result = await window.webAuthnClient.register(username);
@@ -410,8 +425,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             // Check if conditional UI is available (for better UX)
             isSupported =
-                (await PublicKeyCredential.isConditionalMediationAvailable?.()) ??
-                true;
+        (await PublicKeyCredential.isConditionalMediationAvailable?.()) ?? true;
         } catch (error) {
             console.warn('Conditional UI check failed:', error);
             // Still consider supported if the basic API works
