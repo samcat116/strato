@@ -186,13 +186,41 @@ struct WebAuthnService {
 
 // MARK: - Errors
 
-enum WebAuthnError: Error {
+enum WebAuthnError: Error, AbortError {
     case registrationFailed
     case authenticationFailed
     case challengeNotFound
     case credentialNotFound
     case userNotFound
     case invalidConfiguration
+    
+    var status: HTTPResponseStatus {
+        switch self {
+        case .credentialNotFound, .userNotFound:
+            return .notFound
+        case .challengeNotFound:
+            return .badRequest
+        default:
+            return .internalServerError
+        }
+    }
+    
+    var reason: String {
+        switch self {
+        case .registrationFailed:
+            return "Registration failed"
+        case .authenticationFailed:
+            return "Authentication failed"
+        case .challengeNotFound:
+            return "Authentication challenge not found or expired"
+        case .credentialNotFound:
+            return "User/Passkey not found"
+        case .userNotFound:
+            return "User not found"
+        case .invalidConfiguration:
+            return "WebAuthn configuration error"
+        }
+    }
 }
 
 // MARK: - Application Extension

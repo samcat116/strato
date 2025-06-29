@@ -157,9 +157,22 @@ class WebAuthnClient {
             );
 
             if (!finishResponse.ok) {
-                throw new Error(
-                    `Registration finish failed: ${finishResponse.statusText}`
-                );
+                // Try to get error message from response body
+                let errorMessage = 'Registration finish failed';
+                try {
+                    const errorData = await finishResponse.json();
+                    if (errorData.reason) {
+                        errorMessage = errorData.reason;
+                    } else if (errorData.error && errorData.error.reason) {
+                        errorMessage = errorData.error.reason;
+                    } else if (errorData.error) {
+                        errorMessage = errorData.error;
+                    }
+                } catch (e) {
+                    // If we can't parse JSON, use status text
+                    errorMessage = `Registration finish failed: ${finishResponse.statusText}`;
+                }
+                throw new Error(errorMessage);
             }
 
             return await finishResponse.json();
@@ -226,9 +239,22 @@ class WebAuthnClient {
             );
 
             if (!finishResponse.ok) {
-                throw new Error(
-                    `Authentication finish failed: ${finishResponse.statusText}`
-                );
+                // Try to get error message from response body
+                let errorMessage = 'Authentication finish failed';
+                try {
+                    const errorData = await finishResponse.json();
+                    if (errorData.reason) {
+                        errorMessage = errorData.reason;
+                    } else if (errorData.error && errorData.error.reason) {
+                        errorMessage = errorData.error.reason;
+                    } else if (errorData.error) {
+                        errorMessage = errorData.error;
+                    }
+                } catch (e) {
+                    // If we can't parse JSON, use status text
+                    errorMessage = `Authentication finish failed: ${finishResponse.statusText}`;
+                }
+                throw new Error(errorMessage);
             }
 
             return await finishResponse.json();
