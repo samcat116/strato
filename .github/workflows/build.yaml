@@ -38,7 +38,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: "Install Swift toolchain"
-        if: inputs.toolchain == 'Swift'
         shell: bash
         run: |
           set -e
@@ -55,11 +54,11 @@ jobs:
           mkdir -p $SWIFTLY_HOME_DIR
           mkdir -p $SWIFTLY_BIN_DIR
 
-          if ${{ inputs.os == 'Linux' }} ; then
-            curl -O https://download.swift.org/swiftly/linux/swiftly-${{ inputs.arch }}.tar.gz
-            file swiftly-${{ inputs.arch }}.tar.gz
-            tar -xzf swiftly-${{ inputs.arch }}.tar.gz -C $SWIFTLY_BIN_DIR
-            rm swiftly-${{ inputs.arch }}.tar.gz
+          if [ "$(uname)" = "Linux" ]; then
+            curl -O https://download.swift.org/swiftly/linux/swiftly-x86_64.tar.gz
+            file swiftly-x86_64.tar.gz
+            tar -xzf swiftly-x86_64.tar.gz -C $SWIFTLY_BIN_DIR
+            rm swiftly-x86_64.tar.gz
           else
             # FIXME: https://github.com/swiftlang/swiftly/issues/271
             #    Why does this drop files in $HOME? That's not very CI-friendly
@@ -89,8 +88,11 @@ jobs:
       - name: Cache Swift packages
         uses: actions/cache@v3
         with:
-          path: .build
-          key: ${{ runner.os }}-swift-${{ hashFiles('Package.resolved') }}
+          path: |
+            control-plane/.build
+            agent/.build
+            shared/.build
+          key: ${{ runner.os }}-swift-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-swift-
 
@@ -99,14 +101,26 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
+          cache-dependency-path: 'control-plane/package-lock.json'
 
       - name: Install JavaScript dependencies
+        working-directory: control-plane
         run: npm ci
 
       - name: Run JavaScript linting
+        working-directory: control-plane
         run: npm run lint
 
-      - name: Build
+      - name: Build Control Plane
+        working-directory: control-plane
+        run: swift build
+
+      - name: Build Agent
+        working-directory: agent
+        run: swift build
+
+      - name: Build Shared Package
+        working-directory: shared
         run: swift build
 
   security:
@@ -149,28 +163,28 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Cloud Hypervisor Docker Image
+      - name: Build Control Plane Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
-          push: false
-          platforms: ${{ matrix.platform }}
-          tags: strato-hypervisor:${{ github.sha }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
-          cache-from: type=gha,key=hypervisor-${{ matrix.platform }}
-          cache-to: type=gha,mode=max,key=hypervisor-${{ matrix.platform }}
-
-      - name: Build Strato App Docker Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile-app
+          file: ./control-plane/Dockerfile
           push: false
           load: true
-          platforms: ${{ matrix.platform }}
-          tags: strato-app:test
-          cache-from: type=gha,key=app-${{ matrix.platform }}
-          cache-to: type=gha,mode=max,key=app-${{ matrix.platform }}
+          platforms: ${{ matrix.arch == 'x64' && 'linux/amd64' || 'linux/arm64' }}
+          tags: strato-control-plane:test
+          cache-from: type=gha,key=control-plane-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,key=control-plane-${{ matrix.arch }}
+
+      - name: Build Agent Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./agent/Dockerfile
+          push: false
+          platforms: ${{ matrix.arch == 'x64' && 'linux/amd64' || 'linux/arm64' }}
+          tags: strato-agent:${{ github.sha }}-${{ matrix.arch }}
+          cache-from: type=gha,key=agent-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,key=agent-${{ matrix.arch }}
 
       - name: Test Docker Compose
         if: matrix.arch == 'x64'
@@ -180,27 +194,46 @@ jobs:
           version: '3.8'
           services:
             db:
-              image: postgres:15
+              image: postgres:16-alpine
               environment:
-                POSTGRES_DB: strato_test
-                POSTGRES_USER: strato
-                POSTGRES_PASSWORD: strato_password
+                POSTGRES_DB: vapor_database
+                POSTGRES_USER: vapor_username
+                POSTGRES_PASSWORD: vapor_password
+                PGDATA: /var/lib/postgresql/data/strato
               healthcheck:
-                test: ["CMD-SHELL", "pg_isready -U strato"]
+                test: ["CMD-SHELL", "pg_isready -U vapor_username"]
                 interval: 10s
                 timeout: 5s
                 retries: 5
 
-            app:
-              image: strato-app:test
+            permify:
+              image: ghcr.io/permify/permify:latest
+              command: ["serve", "--config=/config/config.yaml"]
+              volumes:
+                - ./permify:/config
               environment:
-                DATABASE_URL: postgres://strato:strato_password@db:5432/strato_test
+                - PERMIFY_DATABASE_URI=postgres://vapor_username:vapor_password@db:5432/vapor_database?sslmode=disable
               depends_on:
                 db:
                   condition: service_healthy
-              command: ["sh", "-c", "sleep 10 && echo 'App container started successfully'"]
+
+            control-plane:
+              image: strato-control-plane:test
+              environment:
+                DATABASE_HOST: db
+                DATABASE_NAME: vapor_database
+                DATABASE_USERNAME: vapor_username
+                DATABASE_PASSWORD: vapor_password
+                PERMIFY_ENDPOINT: http://permify:3476
+                WEBAUTHN_RELYING_PARTY_ID: localhost
+                WEBAUTHN_RELYING_PARTY_NAME: Strato
+                WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost:8080
+              depends_on:
+                - db
+                - permify
+              command: ["sh", "-c", "sleep 10 && echo 'Control plane container started successfully'"]
           EOF
 
           # Test that the compose file works
-          docker compose -f docker-compose.test.yml up --wait --timeout 60
+          docker compose -f docker-compose.test.yml up --wait --timeout 120
           docker compose -f docker-compose.test.yml down
