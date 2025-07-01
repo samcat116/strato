@@ -112,8 +112,8 @@ struct OrganizationController: RouteCollection {
             try await user.save(on: req.db)
         }
         
-        // Create organization in Permify
-        try await req.permify.writeRelationship(
+        // Create organization in SpiceDB
+        try await req.spicedb.writeRelationship(
             entity: "organization",
             entityId: organization.id?.uuidString ?? "",
             relation: "admin",
@@ -332,8 +332,8 @@ struct OrganizationController: RouteCollection {
         )
         try await membership.save(on: req.db)
         
-        // Create Permify relationship
-        try await req.permify.writeRelationship(
+        // Create SpiceDB relationship
+        try await req.spicedb.writeRelationship(
             entity: "organization",
             entityId: organizationID.uuidString,
             relation: addRequest.role,
@@ -444,8 +444,8 @@ struct OrganizationController: RouteCollection {
         membership.role = updateRequest.role
         try await membership.save(on: req.db)
         
-        // Update Permify relationship
-        try await req.permify.writeRelationship(
+        // Update SpiceDB relationship
+        try await req.spicedb.writeRelationship(
             entity: "organization",
             entityId: organizationID.uuidString,
             relation: updateRequest.role,

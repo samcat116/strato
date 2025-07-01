@@ -166,7 +166,7 @@ struct UserController: RouteCollection {
                 try await ensureUserInDefaultOrganization(user: user, req: req)
             } catch {
                 req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
-                // Don't fail the registration if Permify relationship creation fails
+                // Don't fail the registration if SpiceDB relationship creation fails
             }
         }
         
@@ -209,14 +209,14 @@ struct UserController: RouteCollection {
         // Create session
         req.auth.login(user)
         
-        // Store in Permify relationships if needed
+        // Store in SpiceDB relationships if needed
         // Ensure user belongs to default organization (skip for system admins)
         if !user.isSystemAdmin {
             do {
                 try await ensureUserInDefaultOrganization(user: user, req: req)
             } catch {
                 req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
-                // Don't fail the login if Permify relationship creation fails
+                // Don't fail the login if SpiceDB relationship creation fails
             }
         }
         
@@ -360,8 +360,8 @@ extension UserController {
             )
             try await membership.save(on: req.db)
             
-            // Create Permify relationship
-            try await req.permify.writeRelationship(
+            // Create SpiceDB relationship
+            try await req.spicedb.writeRelationship(
                 entity: "organization",
                 entityId: defaultOrg.id?.uuidString ?? "",
                 relation: "member",

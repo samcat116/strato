@@ -71,13 +71,13 @@ struct OnboardingController: RouteCollection {
         // Remove system admin from default organization if they were added there
         try await removeUserFromDefaultOrganization(user: user, req: req)
         
-        // Create Permify relationships
+        // Create SpiceDB relationships
         do {
             let userID = user.id!.uuidString
             let orgID = organization.id!.uuidString
             
             // Create admin relationship
-            try await req.permify.writeRelationship(
+            try await req.spicedb.writeRelationship(
                 entity: "organization",
                 entityId: orgID,
                 relation: "admin",
@@ -86,7 +86,7 @@ struct OnboardingController: RouteCollection {
             )
             
             // Create member relationship
-            try await req.permify.writeRelationship(
+            try await req.spicedb.writeRelationship(
                 entity: "organization",
                 entityId: orgID,
                 relation: "member",
@@ -94,8 +94,8 @@ struct OnboardingController: RouteCollection {
                 subjectId: userID
             )
         } catch {
-            req.logger.warning("Failed to create Permify relationships: \(error)")
-            // Don't fail the setup if Permify fails
+            req.logger.warning("Failed to create SpiceDB relationships: \(error)")
+            // Don't fail the setup if SpiceDB fails
         }
         
         return OrganizationSetupResponse(
@@ -123,8 +123,8 @@ struct OnboardingController: RouteCollection {
             try await membership.delete(on: req.db)
             req.logger.info("Removed system admin \(user.username) from default organization")
             
-            // Note: Permify relationships for default org are not deleted since system admins bypass permissions anyway
-            req.logger.info("System admin \(user.username) removed from default org, Permify bypass in effect")
+            // Note: SpiceDB relationships for default org are not deleted since system admins bypass permissions anyway
+            req.logger.info("System admin \(user.username) removed from default org, SpiceDB bypass in effect")
         }
     }
 }
