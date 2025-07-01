@@ -31,7 +31,7 @@ struct VMController: RouteCollection {
         var authorizedVMs: [VM] = []
         
         for vm in allVMs {
-            let hasPermission = try await req.permify.checkPermission(
+            let hasPermission = try await req.spicedb.checkPermission(
                 subject: user.id?.uuidString ?? "",
                 permission: "read",
                 resource: "vm",
@@ -111,12 +111,12 @@ struct VMController: RouteCollection {
         // Update VM with generated paths
         try await vm.update(on: req.db)
         
-        // Create relationships in Permify
+        // Create relationships in SpiceDB
         let vmId = vm.id?.uuidString ?? ""
         let userId = user.id?.uuidString ?? ""
         
         // Create ownership relationship
-        try await req.permify.writeRelationship(
+        try await req.spicedb.writeRelationship(
             entity: "vm",
             entityId: vmId,
             relation: "owner",
@@ -126,7 +126,7 @@ struct VMController: RouteCollection {
         
         // Link VM to user's current organization
         if let currentOrgId = user.currentOrganizationId {
-            try await req.permify.writeRelationship(
+            try await req.spicedb.writeRelationship(
                 entity: "vm",
                 entityId: vmId,
                 relation: "organization",

@@ -36,8 +36,8 @@ public func configure(_ app: Application) async throws {
         relyingPartyOrigin: relyingPartyOrigin
     )
     
-    // Add Permify authorization middleware AFTER session middleware
-    app.middleware.use(PermifyAuthMiddleware())
+    // Add SpiceDB authorization middleware AFTER session middleware
+    app.middleware.use(SpiceDBAuthMiddleware())
 
     app.databases.use(
         DatabaseConfigurationFactory.postgres(

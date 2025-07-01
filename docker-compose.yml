@@ -16,152 +16,170 @@
 #
 
 volumes:
-    db_data:
-    cloud_hypervisor_socket:
-    vm_images:
+  db_data:
+  cloud_hypervisor_socket:
+  vm_images:
 
 x-shared_environment: &shared_environment
-    LOG_LEVEL: ${LOG_LEVEL:-debug}
-    DATABASE_HOST: db
-    DATABASE_NAME: vapor_database
-    DATABASE_USERNAME: vapor_username
-    DATABASE_PASSWORD: vapor_password
-    PERMIFY_ENDPOINT: http://permify:3476
-    # WebAuthn Configuration - Override these for remote deployment
-    WEBAUTHN_RELYING_PARTY_ID: ${WEBAUTHN_RELYING_PARTY_ID:-localhost}
-    WEBAUTHN_RELYING_PARTY_NAME: ${WEBAUTHN_RELYING_PARTY_NAME:-Strato}
-    WEBAUTHN_RELYING_PARTY_ORIGIN: ${WEBAUTHN_RELYING_PARTY_ORIGIN:-http://localhost:8080}
+  LOG_LEVEL: ${LOG_LEVEL:-debug}
+  DATABASE_HOST: db
+  DATABASE_NAME: vapor_database
+  DATABASE_USERNAME: vapor_username
+  DATABASE_PASSWORD: vapor_password
+  SPICEDB_ENDPOINT: http://spicedb:8080
+  SPICEDB_PRESHARED_KEY: "strato-dev-key"
+  # WebAuthn Configuration - Override these for remote deployment
+  WEBAUTHN_RELYING_PARTY_ID: ${WEBAUTHN_RELYING_PARTY_ID:-localhost}
+  WEBAUTHN_RELYING_PARTY_NAME: ${WEBAUTHN_RELYING_PARTY_NAME:-Strato}
+  WEBAUTHN_RELYING_PARTY_ORIGIN: ${WEBAUTHN_RELYING_PARTY_ORIGIN:-http://localhost:8080}
 
 services:
-    control-plane:
-        image: strato-control-plane:latest
-        build:
-            context: .
-            dockerfile: control-plane/Dockerfile
-        environment:
-            <<: *shared_environment
-        depends_on:
-            - db
-            - permify
-        ports:
-            - "8080:8080"
-        networks:
-            - strato-network
-        command:
-            [
-                "serve",
-                "--env",
-                "production",
-                "--hostname",
-                "0.0.0.0",
-                "--port",
-                "8080",
-            ]
+  control-plane:
+    image: strato-control-plane:latest
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile
+    environment:
+      <<: *shared_environment
+    depends_on:
+      - db
+      - spicedb
+    ports:
+      - "8080:8080"
+    networks:
+      - strato-network
+    command:
+      [
+        "serve",
+        "--env",
+        "production",
+        "--hostname",
+        "0.0.0.0",
+        "--port",
+        "8080",
+      ]
 
-    agent:
-        image: strato-agent:latest
-        build:
-            context: .
-            dockerfile: agent/Dockerfile
-        environment:
-            LOG_LEVEL: ${LOG_LEVEL:-debug}
-        depends_on:
-            - control-plane
-        volumes:
-            - cloud_hypervisor_socket:/var/run/cloud-hypervisor
-            - vm_images:/images
-        networks:
-            - strato-network
-        privileged: true
-        command:
-            [
-                "--control-plane-url",
-                "ws://control-plane:8080/agent/ws",
-                "--hypervisor-socket",
-                "/var/run/cloud-hypervisor/cloud-hypervisor.sock",
-                "--log-level",
-                "debug"
-            ]
+  agent:
+    image: strato-agent:latest
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+    depends_on:
+      - control-plane
+    volumes:
+      - cloud_hypervisor_socket:/var/run/cloud-hypervisor
+      - vm_images:/images
+    networks:
+      - strato-network
+    privileged: true
+    command:
+      [
+        "--control-plane-url",
+        "ws://control-plane:8080/agent/ws",
+        "--hypervisor-socket",
+        "/var/run/cloud-hypervisor/cloud-hypervisor.sock",
+        "--log-level",
+        "debug",
+      ]
 
-    migrate:
-        image: strato-control-plane:latest
-        build:
-            context: .
-            dockerfile: control-plane/Dockerfile
-        environment:
-            <<: *shared_environment
-        depends_on:
-            - db
-        networks:
-            - strato-network
-        command: ["migrate", "--yes"]
-        deploy:
-            replicas: 0
+  migrate:
+    image: strato-control-plane:latest
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile
+    environment:
+      <<: *shared_environment
+    depends_on:
+      - db
+    networks:
+      - strato-network
+    command: ["migrate", "--yes"]
+    deploy:
+      replicas: 0
 
-    revert:
-        image: strato-control-plane:latest
-        build:
-            context: .
-            dockerfile: control-plane/Dockerfile
-        environment:
-            <<: *shared_environment
-        depends_on:
-            - db
-        networks:
-            - strato-network
-        command: ["migrate", "--revert", "--yes"]
-        deploy:
-            replicas: 0
+  revert:
+    image: strato-control-plane:latest
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile
+    environment:
+      <<: *shared_environment
+    depends_on:
+      - db
+    networks:
+      - strato-network
+    command: ["migrate", "--revert", "--yes"]
+    deploy:
+      replicas: 0
 
-    db:
-        image: postgres:16-alpine
-        volumes:
-            - db_data:/var/lib/postgresql/data/pgdata
-        environment:
-            POSTGRES_USER: vapor_username
-            POSTGRES_PASSWORD: vapor_password
-            POSTGRES_DB: vapor_database
-            PGDATA: /var/lib/postgresql/data/strato
-        ports:
-            - "5432:5432"
-        networks:
-            - strato-network
+  db:
+    image: postgres:16-alpine
+    volumes:
+      - db_data:/var/lib/postgresql/data/pgdata
+    environment:
+      POSTGRES_USER: vapor_username
+      POSTGRES_PASSWORD: vapor_password
+      POSTGRES_DB: vapor_database
+      PGDATA: /var/lib/postgresql/data/strato
+    ports:
+      - "5432:5432"
+    networks:
+      - strato-network
 
-    permify:
-        image: ghcr.io/permify/permify:latest
-        ports:
-            - "3476:3476"
-            - "3478:3478"
-        command: ["serve", "--config=/config/config.yaml"]
-        volumes:
-            - ./permify:/config
-        depends_on:
-            - db
-        environment:
-            - PERMIFY_DATABASE_URI=postgres://vapor_username:vapor_password@db:5432/vapor_database?sslmode=disable
-        networks:
-            - strato-network
+  spicedb:
+    image: authzed/spicedb:v1.35.3
+    ports:
+      - "50051:50051" # gRPC port
+      - "8081:8080" # HTTP port for dashboard (mapped to avoid conflict)
+      - "9090:9090" # Metrics port
+    depends_on:
+      spicedb-migrate:
+        condition: service_completed_successfully
+    environment:
+      SPICEDB_GRPC_PRESHARED_KEY: "strato-dev-key"
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: "postgres://vapor_username:vapor_password@db:5432/vapor_database?sslmode=disable"
+      SPICEDB_HTTP_ENABLED: "true"
+      SPICEDB_DISPATCH_UPSTREAM_ADDR: "spicedb:50051"
+    command: ["serve"]
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - strato-network
 
-    # Mock cloud-hypervisor for testing
-    # In production, this would run on the hypervisor nodes managed by the agent
-    cloud-hypervisor:
-        image: ghcr.io/cloud-hypervisor/cloud-hypervisor:latest
-        privileged: true
-        volumes:
-            - cloud_hypervisor_socket:/var/run/cloud-hypervisor
-            - vm_images:/images
-            - /dev:/dev
-        command: [
-            "--api-socket", "/var/run/cloud-hypervisor/cloud-hypervisor.sock",
-            "--log-file", "/var/log/cloud-hypervisor.log"
-        ]
-        environment:
-            - RUST_LOG=info
-        networks:
-            - strato-network
-        deploy:
-            replicas: 0  # Disabled by default - enable for testing
+  spicedb-migrate:
+    image: authzed/spicedb:v1.35.3
+    depends_on:
+      - db
+    environment:
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: "postgres://vapor_username:vapor_password@db:5432/vapor_database?sslmode=disable"
+    command: ["migrate", "head"]
+    networks:
+      - strato-network
+
+  spicedb-schema:
+    image: curlimages/curl:latest
+    depends_on:
+      spicedb:
+        condition: service_healthy
+    volumes:
+      - ./spicedb:/schema
+    environment:
+      SPICEDB_ENDPOINT: http://spicedb:8080
+      SPICEDB_TOKEN: "strato-dev-key"
+    command: ["sh", "/schema/init-schema.sh"]
+    networks:
+      - strato-network
+    deploy:
+      replicas: 0
 
 networks:
-    strato-network:
-        driver: bridge
+  strato-network:
+    driver: bridge
