@@ -243,13 +243,14 @@ jobs:
                 DATABASE_NAME: vapor_database
                 DATABASE_USERNAME: vapor_username
                 DATABASE_PASSWORD: vapor_password
-                PERMIFY_ENDPOINT: http://permify:3476
+                SPICEDB_ENDPOINT: http://spicedb:8080
+                SPICEDB_PRESHARED_KEY: "strato-dev-key"
                 WEBAUTHN_RELYING_PARTY_ID: localhost
                 WEBAUTHN_RELYING_PARTY_NAME: Strato
                 WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost:8080
               depends_on:
                 - db
-                - permify
+                - spicedb
               command: ["sh", "-c", "sleep 10 && echo 'Control plane container started successfully'"]
           EOF
 
