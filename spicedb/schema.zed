@@ -1,0 +1,49 @@
+// SpiceDB schema for Strato authorization
+// Based on Google Zanzibar model
+
+/** user represents a registered user account in the system */
+definition user {}
+
+/** organization represents a company or team that contains resources */
+definition organization {
+    /** admin users have full control over the organization */
+    relation admin: user
+    
+    /** member users can access organization resources */
+    relation member: user
+    
+    // Permissions
+    permission manage_vms = admin + member
+    permission view_organization = admin + member
+    permission create_organization = admin
+    permission update_organization = admin
+    permission delete_organization = admin
+    permission manage_members = admin
+}
+
+/** vm represents a virtual machine instance */
+definition vm {
+    /** owner is the user who created the VM */
+    relation owner: user
+    
+    /** organization that owns this VM */
+    relation organization: organization
+    
+    /** viewer can see VM details but not modify */
+    relation viewer: user
+    
+    /** editor can modify VM settings and control state */
+    relation editor: user
+    
+    // Permissions - combining direct relations and organization permissions
+    permission create = organization->manage_vms
+    permission read = owner + viewer + editor + organization->admin
+    permission update = owner + editor + organization->admin
+    permission delete = owner + organization->admin
+    permission start = owner + editor + organization->admin
+    permission stop = owner + editor + organization->admin
+    permission restart = owner + editor + organization->admin
+    permission pause = owner + editor + organization->admin
+    permission resume = owner + editor + organization->admin
+    permission view_console = owner + editor + organization->admin
+}

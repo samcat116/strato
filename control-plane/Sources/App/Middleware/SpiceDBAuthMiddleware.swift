@@ -1,7 +1,7 @@
 import Vapor
 import Fluent
 
-struct PermifyAuthMiddleware: AsyncMiddleware {
+struct SpiceDBAuthMiddleware: AsyncMiddleware {
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
         // Skip auth for health checks, public routes, and auth endpoints
         if request.url.path.hasPrefix("/health") || 
@@ -51,7 +51,7 @@ struct PermifyAuthMiddleware: AsyncMiddleware {
             if pathComponents.count >= 4 {
                 let action = String(pathComponents[3])
                 switch action {
-                case "start", "stop", "restart":
+                case "start", "stop", "restart", "pause", "resume":
                     permission = action
                 default:
                     permission = "update"
@@ -86,7 +86,7 @@ struct PermifyAuthMiddleware: AsyncMiddleware {
             
             request.logger.info("Checking permission for user: \(userId) on organization: \(currentOrgId.uuidString)")
             
-            let hasPermission = try await request.permify.checkPermission(
+            let hasPermission = try await request.spicedb.checkPermission(
                 subject: userId,
                 permission: "view_organization",
                 resource: "organization",
@@ -97,12 +97,12 @@ struct PermifyAuthMiddleware: AsyncMiddleware {
                 throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
             }
         } else {
-            // Check permission with Permify for specific VM operations
+            // Check permission with SpiceDB for specific VM operations
             guard let userId = user.id?.uuidString, !userId.isEmpty else {
                 throw Abort(.forbidden, reason: "Invalid user session")
             }
             
-            let hasPermission = try await request.permify.checkPermission(
+            let hasPermission = try await request.spicedb.checkPermission(
                 subject: userId,
                 permission: permission,
                 resource: "vm",
@@ -115,4 +115,3 @@ struct PermifyAuthMiddleware: AsyncMiddleware {
         }
     }
 }
-
