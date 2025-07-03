@@ -1,0 +1,125 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "strato-control-plane.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "strato-control-plane.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "strato-control-plane.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- if .Values.initContainers.waitForDB.enabled }}
+        - name: wait-for-db
+          image: {{ .Values.initContainers.waitForDB.image }}
+          command: ['sh', '-c', 'until nc -z {{ include "strato-control-plane.databaseHost" . }} {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done']
+        {{- end }}
+        {{- if and .Values.spicedb.enabled .Values.initContainers.waitForSpiceDB.enabled }}
+        - name: wait-for-spicedb
+          image: {{ .Values.initContainers.waitForSpiceDB.image }}
+          command: ['sh', '-c', 'until nc -z {{ include "strato-control-plane.fullname" . }}-spicedb {{ .Values.spicedb.service.httpPort }}; do echo waiting for SpiceDB; sleep 2; done']
+        {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - "./App"
+            - "serve"
+            - "--env"
+            - "production"
+            - "--hostname"
+            - "0.0.0.0"
+            - "--port"
+            - "{{ .Values.service.port }}"
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: "{{ .Values.strato.logLevel }}"
+            - name: DATABASE_HOST
+              value: "{{ include "strato-control-plane.databaseHost" . }}"
+            - name: DATABASE_PORT
+              value: "{{ .Values.strato.database.port }}"
+            - name: DATABASE_NAME
+              value: "{{ .Values.strato.database.name }}"
+            - name: DATABASE_USERNAME
+              value: "{{ .Values.strato.database.username }}"
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ include "strato-control-plane.databaseSecretName" . }}"
+                  key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
+            {{- if .Values.spicedb.enabled }}
+            - name: SPICEDB_ENDPOINT
+              value: "http://{{ include "strato-control-plane.fullname" . }}-spicedb:{{ .Values.spicedb.service.httpPort }}"
+            - name: SPICEDB_PRESHARED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ include "strato-control-plane.fullname" . }}-spicedb"
+                  key: "preshared-key"
+            {{- end }}
+            - name: WEBAUTHN_RELYING_PARTY_ID
+              value: "{{ .Values.strato.webauthn.relyingPartyId }}"
+            - name: WEBAUTHN_RELYING_PARTY_NAME
+              value: "{{ .Values.strato.webauthn.relyingPartyName }}"
+            - name: WEBAUTHN_RELYING_PARTY_ORIGIN
+              value: "{{ include "strato-control-plane.webauthnOrigin" . }}"
+            {{- if .Values.strato.externalHostname }}
+            - name: EXTERNAL_HOSTNAME
+              value: "{{ .Values.strato.externalHostname }}"
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,25 @@
+{{- if .Values.spicedb.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spicedb
+  labels:
+    {{- include "strato-control-plane.spicedb.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.spicedb.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+    - port: {{ .Values.spicedb.service.httpPort }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.spicedb.service.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "strato-control-plane.spicedb.selectorLabels" . | nindent 4 }}
+{{- end }}

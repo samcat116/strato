@@ -1,0 +1,57 @@
+{{- if and .Values.spicedb.enabled .Values.spicedb.schema.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spicedb-schema
+  labels:
+    {{- include "strato-control-plane.spicedb.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "strato-control-plane.spicedb.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: spicedb-schema
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-spicedb
+          image: busybox:1.35
+          command: ['sh', '-c', 'until nc -z {{ include "strato-control-plane.fullname" . }}-spicedb {{ .Values.spicedb.service.httpPort }}; do echo waiting for SpiceDB; sleep 2; done']
+      containers:
+        - name: schema-loader
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              echo "Loading SpiceDB schema..."
+              curl -X POST \
+                -H "Authorization: Bearer ${SPICEDB_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "{\"schema\": \"$(cat /schema/spicedb-schema.zed | sed 's/"/\\"/g' | tr '\n' ' ')\"}" \
+                ${SPICEDB_ENDPOINT}/v1/schema/write
+          env:
+            - name: SPICEDB_ENDPOINT
+              value: "http://{{ include "strato-control-plane.fullname" . }}-spicedb:{{ .Values.spicedb.service.httpPort }}"
+            - name: SPICEDB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "strato-control-plane.fullname" . }}-spicedb
+                  key: preshared-key
+          volumeMounts:
+            - name: schema
+              mountPath: /schema
+      volumes:
+        - name: schema
+          configMap:
+            name: {{ include "strato-control-plane.fullname" . }}
+{{- end }}

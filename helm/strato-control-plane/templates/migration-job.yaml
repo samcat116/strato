@@ -1,0 +1,52 @@
+{{- if .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-migrate
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "strato-control-plane.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- if .Values.initContainers.waitForDB.enabled }}
+        - name: wait-for-db
+          image: {{ .Values.initContainers.waitForDB.image }}
+          command: ['sh', '-c', 'until nc -z {{ include "strato-control-plane.databaseHost" . }} {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done']
+        {{- end }}
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["./App", "migrate", "--yes"]
+          env:
+            - name: LOG_LEVEL
+              value: "{{ .Values.strato.logLevel }}"
+            - name: DATABASE_HOST
+              value: "{{ include "strato-control-plane.databaseHost" . }}"
+            - name: DATABASE_PORT
+              value: "{{ .Values.strato.database.port }}"
+            - name: DATABASE_NAME
+              value: "{{ .Values.strato.database.name }}"
+            - name: DATABASE_USERNAME
+              value: "{{ .Values.strato.database.username }}"
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ include "strato-control-plane.databaseSecretName" . }}"
+                  key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
+{{- end }}

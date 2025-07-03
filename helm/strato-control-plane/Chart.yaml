@@ -1,0 +1,22 @@
+apiVersion: v2
+name: strato-control-plane
+description: A Helm chart for Strato Control Plane - Private cloud platform control plane
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - strato
+  - control-plane
+  - private-cloud
+  - vm-management
+home: https://github.com/samcat116/strato
+sources:
+  - https://github.com/samcat116/strato
+maintainers:
+  - name: samcat116
+    email: sam@example.com
+dependencies:
+  - name: postgresql
+    version: "~15.5.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
