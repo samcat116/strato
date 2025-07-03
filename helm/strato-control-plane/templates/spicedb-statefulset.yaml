@@ -1,0 +1,117 @@
+{{- if .Values.spicedb.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spicedb
+  labels:
+    {{- include "strato-control-plane.spicedb.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "strato-control-plane.fullname" . }}-spicedb
+  replicas: {{ .Values.spicedb.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "strato-control-plane.spicedb.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "strato-control-plane.spicedb.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.35
+          command: ['sh', '-c', 'until nc -z {{ include "strato-control-plane.databaseHost" . }} {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done']
+        - name: spicedb-migrate
+          image: "{{ .Values.spicedb.image.repository }}:{{ .Values.spicedb.image.tag }}"
+          imagePullPolicy: {{ .Values.spicedb.image.pullPolicy }}
+          command: ["spicedb", "migrate", "head"]
+          env:
+            - name: SPICEDB_DATASTORE_ENGINE
+              value: postgres
+            - name: SPICEDB_DATASTORE_CONN_URI
+              {{- if .Values.postgresql.enabled }}
+              value: "postgres://{{ .Values.strato.database.username }}:{{ .Values.postgresql.auth.password }}@{{ include "strato-control-plane.databaseHost" . }}:{{ .Values.strato.database.port }}/{{ .Values.strato.database.name }}?sslmode=disable"
+              {{- else }}
+              value: "postgres://{{ .Values.strato.database.username }}:{{ .Values.externalDatabase.password }}@{{ include "strato-control-plane.databaseHost" . }}:{{ .Values.strato.database.port }}/{{ .Values.strato.database.name }}?sslmode=disable"
+              {{- end }}
+      containers:
+        - name: spicedb
+          image: "{{ .Values.spicedb.image.repository }}:{{ .Values.spicedb.image.tag }}"
+          imagePullPolicy: {{ .Values.spicedb.image.pullPolicy }}
+          command: ["spicedb", "serve"]
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.spicedb.service.grpcPort }}
+              protocol: TCP
+            - name: http
+              containerPort: {{ .Values.spicedb.service.httpPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.spicedb.service.metricsPort }}
+              protocol: TCP
+          env:
+            - name: SPICEDB_GRPC_PRESHARED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "strato-control-plane.fullname" . }}-spicedb
+                  key: preshared-key
+            - name: SPICEDB_DATASTORE_ENGINE
+              value: postgres
+            - name: SPICEDB_DATASTORE_CONN_URI
+              {{- if .Values.postgresql.enabled }}
+              value: "postgres://{{ .Values.strato.database.username }}:{{ .Values.postgresql.auth.password }}@{{ include "strato-control-plane.databaseHost" . }}:{{ .Values.strato.database.port }}/{{ .Values.strato.database.name }}?sslmode=disable"
+              {{- else }}
+              value: "postgres://{{ .Values.strato.database.username }}:{{ .Values.externalDatabase.password }}@{{ include "strato-control-plane.databaseHost" . }}:{{ .Values.strato.database.port }}/{{ .Values.strato.database.name }}?sslmode=disable"
+              {{- end }}
+            - name: SPICEDB_HTTP_ENABLED
+              value: "true"
+            - name: SPICEDB_DISPATCH_UPSTREAM_ADDR
+              value: "localhost:{{ .Values.spicedb.service.grpcPort }}"
+          livenessProbe:
+            exec:
+              command: ["grpc_health_probe", "-addr=localhost:{{ .Values.spicedb.service.grpcPort }}"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["grpc_health_probe", "-addr=localhost:{{ .Values.spicedb.service.grpcPort }}"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          {{- if .Values.spicedb.resources }}
+          resources:
+            {{- toYaml .Values.spicedb.resources | nindent 12 }}
+          {{- end }}
+          {{- if .Values.spicedb.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.spicedb.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        {{- if .Values.spicedb.persistence.storageClass }}
+        storageClassName: {{ .Values.spicedb.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.spicedb.persistence.size }}
+  {{- end }}
+{{- end }}

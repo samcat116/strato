@@ -1,0 +1,170 @@
+# Default values for strato-control-plane.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: strato-control-plane
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: strato.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+  #  - secretName: strato-tls
+  #    hosts:
+  #      - strato.local
+
+resources: {}
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Strato Control Plane configuration
+strato:
+  logLevel: debug
+  
+  database:
+    host: ""  # Will be set from PostgreSQL subchart if enabled
+    port: 5432
+    name: vapor_database
+    username: vapor_username
+    # password is stored in secret
+    
+  webauthn:
+    relyingPartyId: "localhost"
+    relyingPartyName: "Strato"
+    relyingPartyOrigin: "http://localhost:8080"
+    
+  # External hostname for the control plane (used for WebSocket connections from agents)
+  externalHostname: ""  # If empty, will use service name
+
+# SpiceDB configuration
+spicedb:
+  enabled: true
+  image:
+    repository: authzed/spicedb
+    tag: v1.35.3
+    pullPolicy: IfNotPresent
+  
+  replicaCount: 1
+  
+  service:
+    grpcPort: 50051
+    httpPort: 8443
+    metricsPort: 9090
+    
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+    
+  resources: {}
+    # limits:
+    #   cpu: 500m
+    #   memory: 512Mi
+    # requests:
+    #   cpu: 250m
+    #   memory: 256Mi
+    
+  # Pre-shared key for authentication
+  presharedKey: "strato-dev-key"  # Change this in production!
+  
+  # Schema initialization
+  schema:
+    enabled: true
+    # Schema content will be loaded from ConfigMap
+
+# PostgreSQL configuration
+postgresql:
+  enabled: true
+  auth:
+    database: vapor_database
+    username: vapor_username
+    password: vapor_password  # Change this in production!
+    postgresPassword: postgres_password  # Change this in production!
+    # Create the database if it doesn't exist
+    createDatabase: true
+  
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+      
+  metrics:
+    enabled: false
+    
+# External PostgreSQL configuration (if postgresql.enabled is false)
+externalDatabase:
+  host: ""
+  port: 5432
+  database: vapor_database
+  username: vapor_username
+  # password is stored in secret
+  
+# Migration job configuration
+migration:
+  enabled: true
+  backoffLimit: 3
+  
+# Init containers
+initContainers:
+  waitForDB:
+    enabled: true
+    image: busybox:1.35
+    
+  waitForSpiceDB:
+    enabled: true
+    image: busybox:1.35
