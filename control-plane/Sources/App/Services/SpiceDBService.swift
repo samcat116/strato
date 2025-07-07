@@ -1,7 +1,18 @@
 import Foundation
 import Vapor
 
-struct SpiceDBService {
+protocol SpiceDBServiceProtocol {
+    func checkPermission(subject: String, permission: String, resource: String, resourceId: String) async throws -> Bool
+    func writeRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String) async throws
+    func deleteRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String) async throws
+    func addUserToGroup(userID: String, groupID: String) async throws
+    func removeUserFromGroup(userID: String, groupID: String) async throws
+    func addGroupToProject(groupID: String, projectID: String, role: GroupProjectRole) async throws
+    func removeGroupFromProject(groupID: String, projectID: String, role: GroupProjectRole) async throws
+    func checkGroupBasedPermission(userID: String, permission: String, resource: String, resourceId: String) async throws -> Bool
+}
+
+struct SpiceDBService: SpiceDBServiceProtocol {
     private let client: Client
     private let endpoint: String
     private let presharedKey: String
@@ -231,6 +242,77 @@ struct Relationship: Content {
     let subject: SubjectReference
 }
 
+// MARK: - Group Helper Methods
+
+extension SpiceDBService {
+    /// Add a user to a group
+    func addUserToGroup(userID: String, groupID: String) async throws {
+        try await writeRelationship(
+            entity: "group",
+            entityId: groupID,
+            relation: "member",
+            subject: "user",
+            subjectId: userID
+        )
+    }
+    
+    /// Remove a user from a group
+    func removeUserFromGroup(userID: String, groupID: String) async throws {
+        try await deleteRelationship(
+            entity: "group",
+            entityId: groupID,
+            relation: "member",
+            subject: "user",
+            subjectId: userID
+        )
+    }
+    
+    /// Add a group to a project with specific role
+    func addGroupToProject(groupID: String, projectID: String, role: GroupProjectRole) async throws {
+        try await writeRelationship(
+            entity: "project",
+            entityId: projectID,
+            relation: role.rawValue,
+            subject: "group",
+            subjectId: groupID
+        )
+    }
+    
+    /// Remove a group from a project
+    func removeGroupFromProject(groupID: String, projectID: String, role: GroupProjectRole) async throws {
+        try await deleteRelationship(
+            entity: "project",
+            entityId: projectID,
+            relation: role.rawValue,
+            subject: "group",
+            subjectId: groupID
+        )
+    }
+    
+    /// Check if a user has permission through group membership
+    func checkGroupBasedPermission(
+        userID: String,
+        permission: String,
+        resource: String,
+        resourceId: String
+    ) async throws -> Bool {
+        // SpiceDB will automatically check group-based permissions
+        // through the schema definitions we created
+        return try await checkPermission(
+            subject: userID,
+            permission: permission,
+            resource: resource,
+            resourceId: resourceId
+        )
+    }
+}
+
+enum GroupProjectRole: String, Content {
+    case admin = "group_admin"
+    case member = "group_member"
+    case viewer = "group_viewer"
+}
+
 // MARK: - Errors
 
 enum SpiceDBError: Error {
@@ -243,8 +325,51 @@ enum SpiceDBError: Error {
 
 // MARK: - Application Extension
 
+// MARK: - Mock Implementation for Testing
+
+struct MockSpiceDBService: SpiceDBServiceProtocol {
+    var checkPermissionResult: Bool = true
+    
+    func checkPermission(subject: String, permission: String, resource: String, resourceId: String) async throws -> Bool {
+        return checkPermissionResult
+    }
+    
+    func writeRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String) async throws {
+        // Mock implementation - do nothing
+    }
+    
+    func deleteRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String) async throws {
+        // Mock implementation - do nothing
+    }
+    
+    func addUserToGroup(userID: String, groupID: String) async throws {
+        // Mock implementation - do nothing
+    }
+    
+    func removeUserFromGroup(userID: String, groupID: String) async throws {
+        // Mock implementation - do nothing
+    }
+    
+    func addGroupToProject(groupID: String, projectID: String, role: GroupProjectRole) async throws {
+        // Mock implementation - do nothing
+    }
+    
+    func removeGroupFromProject(groupID: String, projectID: String, role: GroupProjectRole) async throws {
+        // Mock implementation - do nothing
+    }
+    
+    func checkGroupBasedPermission(userID: String, permission: String, resource: String, resourceId: String) async throws -> Bool {
+        return checkPermissionResult
+    }
+}
+
 extension Application {
-    var spicedb: SpiceDBService {
+    var spicedb: SpiceDBServiceProtocol {
+        // In testing mode, use a mock implementation
+        if self.environment == .testing {
+            return MockSpiceDBService()
+        }
+        
         guard let endpoint = Environment.get("SPICEDB_ENDPOINT") else {
             fatalError("SPICEDB_ENDPOINT environment variable is required")
         }
@@ -254,7 +379,7 @@ extension Application {
 }
 
 extension Request {
-    var spicedb: SpiceDBService {
+    var spicedb: SpiceDBServiceProtocol {
         return self.application.spicedb
     }
 }

@@ -63,4 +63,13 @@ func routes(_ app: Application) throws {
     try app.register(collection: APIDocumentationController())
     try app.register(collection: AgentWebSocketController())
     try app.register(collection: OnboardingController())
+    
+    // Hierarchical IAM controllers
+    try app.register(collection: OrganizationalUnitController())
+    try app.register(collection: ProjectController())
+    try app.register(collection: ResourceQuotaController())
+    try app.register(collection: HierarchyController())
+    
+    // Groups controller
+    try app.register(collection: GroupController())
 }

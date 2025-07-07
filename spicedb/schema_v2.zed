@@ -1,0 +1,180 @@
+// SpiceDB schema for Strato authorization with hierarchical IAM
+// Based on Google Zanzibar model
+
+/** user represents a registered user account in the system */
+definition user {}
+
+/** group represents a collection of users within an organization */
+definition group {
+    /** organization that owns this group */
+    relation organization: organization
+    
+    /** member users belong to this group */
+    relation member: user
+    
+    // Inherited permissions from organization
+    permission view = organization->view_organization
+    permission manage = organization->manage_members
+}
+
+/** organization represents a company or team - the root of the hierarchy */
+definition organization {
+    /** admin users have full control over the organization */
+    relation admin: user
+    
+    /** member users can access organization resources */
+    relation member: user
+    
+    // Computed permissions
+    permission manage_organization = admin
+    permission view_organization = admin + member
+    permission create_ou = admin
+    permission create_project = admin + member
+    permission manage_members = admin
+    permission manage_quotas = admin
+}
+
+/** organizational_unit represents a sub-division within an organization */
+definition organizational_unit {
+    /** parent can be either an organization or another OU */
+    relation parent: organization | organizational_unit
+    
+    /** admin users have full control over this OU and its descendants */
+    relation admin: user
+    
+    /** member users can access resources in this OU */
+    relation member: user
+    
+    // Inherited permissions from parent
+    permission inherited_admin = parent->manage_organization + parent->inherited_admin
+    permission inherited_member = parent->view_organization + parent->inherited_member
+    
+    // Computed permissions (local + inherited)
+    permission manage_ou = admin + inherited_admin
+    permission view_ou = admin + member + inherited_admin + inherited_member
+    permission create_sub_ou = admin + inherited_admin
+    permission create_project = admin + member + inherited_admin
+    permission manage_members = admin + inherited_admin
+    permission manage_quotas = admin + inherited_admin
+}
+
+/** project represents a container for resources like VMs */
+definition project {
+    /** parent can be either an organization or an OU */
+    relation parent: organization | organizational_unit
+    
+    /** admin users have full control over the project */
+    relation admin: user
+    
+    /** member users can manage resources in the project */
+    relation member: user
+    
+    /** viewer users can only view resources */
+    relation viewer: user
+    
+    /** environment_manager can manage environment-specific settings */
+    relation environment_manager: user
+    
+    /** group_admin groups have admin access to the project */
+    relation group_admin: group
+    
+    /** group_member groups have member access to the project */
+    relation group_member: group
+    
+    /** group_viewer groups have viewer access to the project */
+    relation group_viewer: group
+    
+    // Inherited permissions from parent
+    permission inherited_admin = parent->manage_organization + parent->manage_ou
+    permission inherited_member = parent->view_organization + parent->view_ou
+    
+    // Computed permissions (including group-based access)
+    permission manage_project = admin + group_admin->member + inherited_admin
+    permission create_resources = admin + member + group_admin->member + group_member->member + inherited_admin
+    permission view_project = admin + member + viewer + environment_manager + group_admin->member + group_member->member + group_viewer->member + inherited_admin + inherited_member
+    permission manage_environments = admin + environment_manager + group_admin->member + inherited_admin
+    permission manage_quotas = admin + group_admin->member + inherited_admin
+}
+
+/** environment represents a deployment environment within a project */
+definition environment {
+    /** project that contains this environment */
+    relation project: project
+    
+    /** deployer can deploy to this environment */
+    relation deployer: user
+    
+    /** viewer can view resources in this environment */
+    relation viewer: user
+    
+    /** approver can approve deployments to this environment */
+    relation approver: user
+    
+    // Inherited permissions from project
+    permission manage_environment = project->manage_project
+    permission deploy = deployer + project->manage_project
+    permission view = viewer + deployer + approver + project->view_project
+    permission approve_deployment = approver + project->manage_project
+}
+
+/** vm represents a virtual machine instance */
+definition vm {
+    /** owner is the user who created the VM */
+    relation owner: user
+    
+    /** project that owns this VM */
+    relation project: project
+    
+    /** environment this VM belongs to (e.g., dev, staging, prod) */
+    relation environment: environment
+    
+    /** viewer can see VM details but not modify */
+    relation viewer: user
+    
+    /** editor can modify VM settings and control state */
+    relation editor: user
+    
+    // Permissions - combining direct relations and inherited from project/environment
+    permission create = project->create_resources
+    permission read = owner + viewer + editor + project->view_project + environment->view
+    permission update = owner + editor + project->manage_project + environment->manage_environment
+    permission delete = owner + project->manage_project
+    permission start = owner + editor + project->create_resources + environment->deploy
+    permission stop = owner + editor + project->create_resources + environment->deploy
+    permission restart = owner + editor + project->create_resources + environment->deploy
+    permission pause = owner + editor + project->create_resources
+    permission resume = owner + editor + project->create_resources
+    permission view_console = owner + editor + project->manage_project
+    permission promote_environment = environment->approve_deployment
+}
+
+/** resource_quota represents resource limits at various levels */
+definition resource_quota {
+    /** parent can be organization, OU, or project */
+    relation parent: organization | organizational_unit | project
+    
+    /** admin can manage the quota */
+    relation admin: user
+    
+    // Permissions
+    permission manage = admin + parent->manage_organization + parent->manage_ou + parent->manage_project
+    permission view = parent->view_organization + parent->view_ou + parent->view_project
+}
+
+/** api_key represents an API key for programmatic access */
+definition api_key {
+    /** owner is the user who created the key */
+    relation owner: user
+    
+    /** project scope - if set, key is limited to this project */
+    relation project: project
+    
+    /** organization scope - if set, key is limited to this org */
+    relation organization: organization
+    
+    // Permissions based on scope
+    permission use = owner
+    permission manage = owner
+    permission access_project = project->view_project
+    permission access_organization = organization->view_organization
+}

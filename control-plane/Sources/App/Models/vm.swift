@@ -25,6 +25,13 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "hypervisor_id")
     var hypervisorId: String?
 
+    // Project and environment tracking
+    @Parent(key: "project_id")
+    var project: Project
+
+    @Field(key: "environment")
+    var environment: String
+
     // CPU configuration
     @Field(key: "cpu")
     var cpu: Int // boot_vcpus
@@ -102,6 +109,8 @@ final class VM: Model, @unchecked Sendable {
         name: String,
         description: String,
         image: String,
+        projectID: UUID,
+        environment: String,
         cpu: Int,
         memory: Int64,
         disk: Int64,
@@ -117,6 +126,8 @@ final class VM: Model, @unchecked Sendable {
         self.name = name
         self.description = description
         self.image = image
+        self.$project.id = projectID
+        self.environment = environment
         self.cpu = cpu
         self.maxCpu = maxCpu ?? cpu
         self.memory = memory

@@ -36,6 +36,10 @@ final class User: Model, @unchecked Sendable {
     @Siblings(through: UserOrganization.self, from: \.$user, to: \.$organization)
     var organizations: [Organization]
 
+    // Group relationships
+    @Siblings(through: UserGroup.self, from: \.$user, to: \.$group)
+    var groups: [Group]
+
     init() {}
 
     init(
@@ -84,6 +88,23 @@ extension User {
             .filter(\.$isSystemAdmin == true)
             .first()
     }
+    
+    /// Get all groups this user belongs to within a specific organization
+    func getGroupsInOrganization(_ organizationID: UUID, on db: Database) async throws -> [Group] {
+        return try await self.$groups.query(on: db)
+            .filter(\.$organization.$id, .equal, organizationID)
+            .all()
+    }
+    
+    /// Check if user belongs to a specific group
+    func belongsToGroup(_ groupID: UUID, on db: Database) async throws -> Bool {
+        let membership = try await UserGroup.query(on: db)
+            .filter(\.$user.$id, .equal, self.id!)
+            .filter(\.$group.$id, .equal, groupID)
+            .first()
+        
+        return membership != nil
+    }
 }
 
 // MARK: - UserCredential Model for Passkeys
@@ -107,7 +128,26 @@ final class UserCredential: Model, @unchecked Sendable {
     var signCount: Int32
 
     @Field(key: "transports")
-    var transports: [String]
+    var transportsJSON: String
+    
+    // Computed property for array access
+    var transports: [String] {
+        get {
+            guard let data = transportsJSON.data(using: .utf8),
+                  let array = try? JSONDecoder().decode([String].self, from: data) else {
+                return []
+            }
+            return array
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue),
+                  let string = String(data: data, encoding: .utf8) else {
+                transportsJSON = "[]"
+                return
+            }
+            transportsJSON = string
+        }
+    }
 
     @Field(key: "backup_eligible")
     var backupEligible: Bool

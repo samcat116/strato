@@ -158,6 +158,8 @@ extension VMTemplate {
     func createVMInstance(
         name: String,
         description: String,
+        projectID: UUID,
+        environment: String = "development",
         cpu: Int? = nil,
         memory: Int64? = nil,
         disk: Int64? = nil,
@@ -174,6 +176,8 @@ extension VMTemplate {
             name: name,
             description: description,
             image: imageName,
+            projectID: projectID,
+            environment: environment,
             cpu: finalCpu,
             memory: finalMemory,
             disk: finalDisk,
