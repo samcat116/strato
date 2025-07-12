@@ -37,19 +37,28 @@ public func configure(_ app: Application) async throws {
     )
     
     // Add SpiceDB authorization middleware AFTER session middleware
-    app.middleware.use(SpiceDBAuthMiddleware())
+    // Skip SpiceDB in testing environment
+    if app.environment != .testing {
+        app.middleware.use(SpiceDBAuthMiddleware())
+    }
 
-    app.databases.use(
-        DatabaseConfigurationFactory.postgres(
-            configuration: .init(
-                hostname: Environment.get("DATABASE_HOST") ?? "localhost",
-                port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
-                    ?? SQLPostgresConfiguration.ianaPortNumber,
-                username: Environment.get("DATABASE_USERNAME") ?? "vapor_username",
-                password: Environment.get("DATABASE_PASSWORD") ?? "vapor_password",
-                database: Environment.get("DATABASE_NAME") ?? "vapor_database",
+    // Configure database based on environment
+    if app.environment == .testing {
+        // Testing environment already configured with in-memory SQLite in test setup
+        // Skip database configuration here
+    } else {
+        app.databases.use(
+            DatabaseConfigurationFactory.postgres(
+                configuration: .init(
+                    hostname: Environment.get("DATABASE_HOST") ?? "localhost",
+                    port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
+                        ?? SQLPostgresConfiguration.ianaPortNumber,
+                    username: Environment.get("DATABASE_USERNAME") ?? "vapor_username",
+                    password: Environment.get("DATABASE_PASSWORD") ?? "vapor_password",
+                    database: Environment.get("DATABASE_NAME") ?? "vapor_database",
                 tls: .disable)
         ), as: .psql)
+    }
 
     app.migrations.add(CreateUser())
     app.migrations.add(CreateVM())
@@ -58,11 +67,21 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateAPIKey())
     app.migrations.add(SessionRecord.migration)
     app.migrations.add(EnhanceVM())
-    app.migrations.add(MigrateVMMemoryAndDisk())
     app.migrations.add(FixVMColumnNames())
     app.migrations.add(CreateVMTemplate())
-    app.migrations.add(SeedVMTemplates())
     app.migrations.add(AddSystemAdminToUser())
+    
+    // Hierarchical IAM migrations
+    app.migrations.add(CreateOrganizationalUnit())
+    app.migrations.add(CreateProject())
+    app.migrations.add(CreateResourceQuota())
+    app.migrations.add(AddProjectToVM())
+    app.migrations.add(MigrateExistingDataToProjects())
+    app.migrations.add(MakeProjectRequiredOnVM())
+    
+    // Groups migrations
+    app.migrations.add(CreateGroup())
+    app.migrations.add(CreateUserGroup())
 
     try await app.autoMigrate()
     
@@ -76,6 +95,9 @@ public func configure(_ app: Application) async throws {
     // }
     
     // Static files middleware after routes
-    try await tailwind(app)
+    // Skip TailwindCSS setup during testing
+    if app.environment != .testing {
+        try await tailwind(app)
+    }
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
 }

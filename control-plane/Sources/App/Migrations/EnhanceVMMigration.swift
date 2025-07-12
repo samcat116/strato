@@ -1,76 +1,124 @@
 import Fluent
 import Vapor
 import SQLKit
+import FluentSQLiteDriver
 
 struct EnhanceVM: AsyncMigration {
     func prepare(on database: Database) async throws {
+        // For SQLite compatibility, add fields one at a time
+        
+        // VM status and hypervisor tracking
         try await database.schema("vms")
-            // VM status and hypervisor tracking
             .field("status", .string, .required, .sql(.default("'created'")))
+            .update()
+        
+        try await database.schema("vms")
             .field("hypervisor_id", .string)
+            .update()
             
-            // Enhanced CPU configuration
+        // Enhanced CPU configuration
+        try await database.schema("vms")
             .field("max_cpu", .int, .required, .sql(.default("1")))
+            .update()
             
-            // Enhanced memory configuration (change memory to int64)
+        // Enhanced memory configuration (change memory to int64)
+        try await database.schema("vms")
             .field("memory_new", .int64, .required, .sql(.default("536870912"))) // 512MB default
+            .update()
+        
+        try await database.schema("vms")
             .field("hugepages", .bool, .required, .sql(.default("false")))
+            .update()
+        
+        try await database.schema("vms")
             .field("shared_memory", .bool, .required, .sql(.default("false")))
+            .update()
             
-            // Enhanced disk configuration (change disk to int64)
+        // Enhanced disk configuration (change disk to int64)
+        try await database.schema("vms")
             .field("disk_new", .int64, .required, .sql(.default("1073741824"))) // 1GB default
+            .update()
+        
+        try await database.schema("vms")
             .field("disk_path", .string)
+            .update()
+        
+        try await database.schema("vms")
             .field("readonly_disk", .bool, .required, .sql(.default("false")))
+            .update()
             
-            // Payload configuration
+        // Payload configuration
+        try await database.schema("vms")
             .field("kernel_path", .string)
+            .update()
+        
+        try await database.schema("vms")
             .field("initramfs_path", .string)
+            .update()
+        
+        try await database.schema("vms")
             .field("cmdline", .string)
+            .update()
+        
+        try await database.schema("vms")
             .field("firmware_path", .string)
+            .update()
             
-            // Network configuration
+        // Network configuration
+        try await database.schema("vms")
             .field("mac_address", .string)
+            .update()
+        
+        try await database.schema("vms")
             .field("ip_address", .string)
+            .update()
+        
+        try await database.schema("vms")
             .field("network_mask", .string)
+            .update()
             
-            // Console configuration
+        // Console configuration
+        try await database.schema("vms")
             .field("console_mode", .string, .required, .sql(.default("'Pty'")))
+            .update()
+        
+        try await database.schema("vms")
             .field("serial_mode", .string, .required, .sql(.default("'Pty'")))
+            .update()
+        
+        try await database.schema("vms")
             .field("console_socket", .string)
+            .update()
+        
+        try await database.schema("vms")
             .field("serial_socket", .string)
+            .update()
             
-            // Timestamps
+        // Timestamps
+        try await database.schema("vms")
             .field("created_at", .datetime)
+            .update()
+        
+        try await database.schema("vms")
             .field("updated_at", .datetime)
-            
             .update()
     }
     
     func revert(on database: Database) async throws {
-        try await database.schema("vms")
-            .deleteField("status")
-            .deleteField("hypervisor_id")
-            .deleteField("max_cpu")
-            .deleteField("memory_new")
-            .deleteField("hugepages")
-            .deleteField("shared_memory")
-            .deleteField("disk_new")
-            .deleteField("disk_path")
-            .deleteField("readonly_disk")
-            .deleteField("kernel_path")
-            .deleteField("initramfs_path")
-            .deleteField("cmdline")
-            .deleteField("firmware_path")
-            .deleteField("mac_address")
-            .deleteField("ip_address")
-            .deleteField("network_mask")
-            .deleteField("console_mode")
-            .deleteField("serial_mode")
-            .deleteField("console_socket")
-            .deleteField("serial_socket")
-            .deleteField("created_at")
-            .deleteField("updated_at")
-            .update()
+        // Delete fields one at a time for SQLite compatibility
+        let fieldsToDelete = [
+            "status", "hypervisor_id", "max_cpu", "memory_new", "hugepages", "shared_memory",
+            "disk_new", "disk_path", "readonly_disk", "kernel_path", "initramfs_path", 
+            "cmdline", "firmware_path", "mac_address", "ip_address", "network_mask",
+            "console_mode", "serial_mode", "console_socket", "serial_socket", 
+            "created_at", "updated_at"
+        ]
+        
+        for field in fieldsToDelete {
+            try await database.schema("vms")
+                .deleteField(.string(field))
+                .update()
+        }
     }
 }
 
@@ -81,6 +129,11 @@ struct MigrateVMMemoryAndDisk: AsyncMigration {
             fatalError("Database must support SQL for this migration")
         }
         
+        // Skip for SQLite - it doesn't support column renaming
+        if database is SQLiteDatabase {
+            return
+        }
+        
         try await sql.raw("ALTER TABLE vms DROP COLUMN IF EXISTS memory").run()
         try await sql.raw("ALTER TABLE vms DROP COLUMN IF EXISTS disk").run()
         try await sql.raw("ALTER TABLE vms RENAME COLUMN memory_new TO memory").run()
@@ -88,6 +141,11 @@ struct MigrateVMMemoryAndDisk: AsyncMigration {
     }
     
     func revert(on database: Database) async throws {
+        // Skip for SQLite
+        if database is SQLiteDatabase {
+            return
+        }
+        
         // Add old fields back
         try await database.schema("vms")
             .field("memory", .int, .required, .sql(.default("512")))
@@ -96,8 +154,8 @@ struct MigrateVMMemoryAndDisk: AsyncMigration {
         
         // Drop new fields
         try await database.schema("vms")
-            .deleteField("memory_new")
-            .deleteField("disk_new")
+            .deleteField(.string("memory_new"))
+            .deleteField(.string("disk_new"))
             .update()
     }
 }
