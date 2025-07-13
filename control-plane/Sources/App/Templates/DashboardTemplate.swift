@@ -17,247 +17,9 @@ struct DashboardTemplate: HTMLDocument {
     }
 
     var body: some HTML {
-        header(.class("bg-white shadow-sm border-b border-gray-200")) {
-            div(.class("flex items-center justify-between h-16 px-6")) {
-                div(.class("flex items-center")) {
-                    h1(.class("text-2xl font-bold text-indigo-600")) { "Strato" }
-                }
-                div(.class("flex items-center space-x-4")) {
-                    // Organization Switcher
-                    div(.class("relative")) {
-                        button(
-                            .id("orgSwitcherBtn"),
-                            .class(
-                                "bg-gray-50 hover:bg-gray-100 text-gray-700 px-3 py-2 rounded-md text-sm font-medium border border-gray-300 flex items-center space-x-2"
-                            )
-                        ) {
-                            span(.id("currentOrgName")) { "Loading..." }
-                            span(.class("text-gray-400")) { "▼" }
-                        }
-                        div(
-                            .id("orgDropdown"),
-                            .class("hidden absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-md shadow-lg z-10")
-                        ) {
-                            div(.class("py-1")) {
-                                div(.class("px-4 py-2 text-xs font-medium text-gray-500 uppercase")) {
-                                    "Switch Organization"
-                                }
-                                div(.id("orgList"), .class("max-h-48 overflow-y-auto")) {
-                                    // Organizations will be loaded here
-                                }
-                                hr(.class("my-1"))
-                                button(
-                                    .id("createOrgBtn"),
-                                    .class("w-full text-left px-4 py-2 text-sm text-indigo-600 hover:bg-gray-50")
-                                ) {
-                                    "+ Create Organization"
-                                }
-                            }
-                        }
-                    }
-                    
-                    button(
-                        .id("createVMBtn"),
-                        .class(
-                            "bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium"
-                        )
-                    ) {
-                        "+ New VM"
-                    }
-                    button(
-                        .id("settingsBtn"),
-                        .class(
-                            "bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-md text-sm font-medium"
-                        )
-                    ) {
-                        "API Keys"
-                    }
-                    span(.id("userInfo"), .class("text-sm text-gray-600")) {}
-                    button(
-                        .id("logoutBtn"),
-                        .class("text-gray-500 hover:text-gray-700 text-sm")
-                    ) {
-                        "Logout"
-                    }
-                }
-            }
-        }
-
-        main {
-            div(.class("flex h-screen pt-16")) {
-                DashboardSidebarSection()
-                DashboardContentSection()
-            }
-        }
-
-        // Create Organization Modal
-        div(
-            .id("createOrgModal"),
-            .class("fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50")
-        ) {
-            div(.class("bg-white rounded-lg shadow-xl max-w-md w-full mx-4")) {
-                div(.class("px-6 py-4 border-b border-gray-200")) {
-                    h3(.class("text-lg font-medium text-gray-900")) {
-                        "Create Organization"
-                    }
-                }
-                div(.class("px-6 py-4")) {
-                    form(.id("createOrgForm")) {
-                        div(.class("mb-4")) {
-                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
-                                "Organization Name"
-                            }
-                            input(
-                                .type(.text),
-                                .id("orgName"),
-                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"),
-                                .required
-                            )
-                        }
-                        div(.class("mb-4")) {
-                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
-                                "Description"
-                            }
-                            textarea(
-                                .id("orgDescription"),
-                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 h-20"),
-                                .required
-                            ) {}
-                        }
-                    }
-                }
-                div(.class("px-6 py-4 border-t border-gray-200 flex justify-end space-x-3")) {
-                    button(
-                        .id("cancelOrgBtn"),
-                        .type(.button),
-                        .class("px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md")
-                    ) {
-                        "Cancel"
-                    }
-                    button(
-                        .id("submitOrgBtn"),
-                        .type(.button),
-                        .class("px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md")
-                    ) {
-                        "Create"
-                    }
-                }
-            }
-        }
-
-        // API Keys Modal
-        div(
-            .id("apiKeysModal"),
-            .class("fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50")
-        ) {
-            div(.class("bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-screen overflow-y-auto")) {
-                div(.class("px-6 py-4 border-b border-gray-200 flex justify-between items-center")) {
-                    h3(.class("text-lg font-medium text-gray-900")) {
-                        "API Keys"
-                    }
-                    button(
-                        .id("closeApiKeysBtn"),
-                        .class("text-gray-400 hover:text-gray-600")
-                    ) {
-                        "✕"
-                    }
-                }
-                div(.class("px-6 py-4")) {
-                    div(.class("mb-4")) {
-                        button(
-                            .id("createApiKeyBtn"),
-                            .class("bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium")
-                        ) {
-                            "+ Create API Key"
-                        }
-                    }
-                    div(.id("apiKeysList"), .class("space-y-4")) {
-                        div(.class("text-center text-gray-500 py-8")) {
-                            "Loading API keys..."
-                        }
-                    }
-                }
-            }
-        }
-
-        // Create API Key Modal
-        div(
-            .id("createApiKeyModal"),
-            .class("fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50")
-        ) {
-            div(.class("bg-white rounded-lg shadow-xl max-w-md w-full mx-4")) {
-                div(.class("px-6 py-4 border-b border-gray-200")) {
-                    h3(.class("text-lg font-medium text-gray-900")) {
-                        "Create API Key"
-                    }
-                }
-                div(.class("px-6 py-4")) {
-                    form(.id("createApiKeyForm")) {
-                        div(.class("mb-4")) {
-                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
-                                "Key Name"
-                            }
-                            input(
-                                .type(.text),
-                                .id("apiKeyName"),
-                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"),
-                                .required
-                            )
-                        }
-                        div(.class("mb-4")) {
-                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
-                                "Scopes"
-                            }
-                            div(.class("space-y-2")) {
-                                label(.class("flex items-center")) {
-                                    input(.type(.checkbox), .value("read"), .class("mr-2"), .checked)
-                                    span(.class("text-sm")) { "Read" }
-                                }
-                                label(.class("flex items-center")) {
-                                    input(.type(.checkbox), .value("write"), .class("mr-2"), .checked)
-                                    span(.class("text-sm")) { "Write" }
-                                }
-                                label(.class("flex items-center")) {
-                                    input(.type(.checkbox), .value("admin"), .class("mr-2"))
-                                    span(.class("text-sm")) { "Admin" }
-                                }
-                            }
-                        }
-                        div(.class("mb-4")) {
-                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
-                                "Expires In (days)"
-                            }
-                            select(
-                                .id("apiKeyExpiry"),
-                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500")
-                            ) {
-                                option(.value(""), .selected) { "Never" }
-                                option(.value("7")) { "7 days" }
-                                option(.value("30")) { "30 days" }
-                                option(.value("90")) { "90 days" }
-                                option(.value("365")) { "1 year" }
-                            }
-                        }
-                    }
-                }
-                div(.class("px-6 py-4 border-t border-gray-200 flex justify-end space-x-3")) {
-                    button(
-                        .id("cancelApiKeyBtn"),
-                        .type(.button),
-                        .class("px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md")
-                    ) {
-                        "Cancel"
-                    }
-                    button(
-                        .id("submitApiKeyBtn"),
-                        .type(.button),
-                        .class("px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md")
-                    ) {
-                        "Create"
-                    }
-                }
-            }
-        }
+        DashboardHeader()
+        DashboardMain()
+        AllModals()
 
         script(.type("text/javascript")) {
             HTMLRaw("""
@@ -308,6 +70,11 @@ struct DashboardTemplate: HTMLDocument {
             document.getElementById('createApiKeyBtn').addEventListener('click', showCreateApiKeyModal);
             document.getElementById('cancelApiKeyBtn').addEventListener('click', hideCreateApiKeyModal);
             document.getElementById('submitApiKeyBtn').addEventListener('click', createApiKey);
+
+            // VM creation event listeners
+            document.getElementById('createVMBtn').addEventListener('click', showCreateVMModal);
+            document.getElementById('cancelVMBtn').addEventListener('click', hideCreateVMModal);
+            document.getElementById('submitVMBtn').addEventListener('click', submitCreateVMForm);
 
             async function loadVMs() {
                 try {
@@ -414,18 +181,6 @@ struct DashboardTemplate: HTMLDocument {
                 }
             }
 
-            document.getElementById('createVMBtn').addEventListener('click', () => {
-                const name = prompt('VM Name:');
-                const description = prompt('VM Description:');
-                const cpu = parseInt(prompt('CPU cores:') || '1');
-                const memory = parseInt(prompt('Memory (GB):') || '2');
-                const disk = parseInt(prompt('Disk (GB):') || '10');
-                const templateName = prompt('Template (ubuntu-22.04 or alpine-3.18):') || 'ubuntu-22.04';
-
-                if (name && description) {
-                    createVM({ name, description, cpu, memory, disk, templateName });
-                }
-            });
 
             async function createVM(vmData) {
                 try {
@@ -573,8 +328,46 @@ struct DashboardTemplate: HTMLDocument {
                     hideCreateOrgModal();
                     hideApiKeysModal();
                     hideCreateApiKeyModal();
+                    hideCreateVMModal();
                 }
             });
+
+            // VM Creation Modal Functions
+            function showCreateVMModal() {
+                document.getElementById('createVMModal').classList.remove('hidden');
+                document.getElementById('vmName').focus();
+            }
+
+            function hideCreateVMModal() {
+                document.getElementById('createVMModal').classList.add('hidden');
+                document.getElementById('createVMForm').reset();
+            }
+
+            async function submitCreateVMForm() {
+                const name = document.getElementById('vmName').value.trim();
+                const description = document.getElementById('vmDescription').value.trim();
+                const cpu = parseInt(document.getElementById('vmCpu').value);
+                const memory = parseInt(document.getElementById('vmMemory').value);
+                const disk = parseInt(document.getElementById('vmDisk').value);
+                const templateName = document.getElementById('vmTemplate').value;
+                
+                if (!name || !description) {
+                    alert('Please fill in all required fields');
+                    return;
+                }
+
+                if (cpu < 1 || memory < 1 || disk < 1) {
+                    alert('CPU, Memory, and Disk must be at least 1');
+                    return;
+                }
+
+                try {
+                    await createVM({ name, description, cpu, memory, disk, templateName });
+                    hideCreateVMModal();
+                } catch (error) {
+                    alert(`Error creating VM: ${error.message}`);
+                }
+            }
 
             // API Key Management Functions
             async function loadApiKeys() {
@@ -728,6 +521,417 @@ struct DashboardTemplate: HTMLDocument {
                 }
             }
             """)
+        }
+    }
+}
+
+struct DashboardHeader: HTML {
+    var content: some HTML {
+        header(.class("bg-white shadow-sm border-b border-gray-200")) {
+            div(.class("flex items-center justify-between h-16 px-6")) {
+                div(.class("flex items-center")) {
+                    h1(.class("text-2xl font-bold text-indigo-600")) { "Strato" }
+                }
+                div(.class("flex items-center space-x-4")) {
+                    // Organization Switcher
+                    div(.class("relative")) {
+                        button(
+                            .id("orgSwitcherBtn"),
+                            .class(
+                                "bg-gray-50 hover:bg-gray-100 text-gray-700 px-3 py-2 rounded-md text-sm font-medium border border-gray-300 flex items-center space-x-2"
+                            )
+                        ) {
+                            span(.id("currentOrgName")) { "Loading..." }
+                            span(.class("text-gray-400")) { "▼" }
+                        }
+                        div(
+                            .id("orgDropdown"),
+                            .class("hidden absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-md shadow-lg z-10")
+                        ) {
+                            div(.class("py-1")) {
+                                div(.class("px-4 py-2 text-xs font-medium text-gray-500 uppercase")) {
+                                    "Switch Organization"
+                                }
+                                div(.id("orgList"), .class("max-h-48 overflow-y-auto")) {
+                                    // Organizations will be loaded here
+                                }
+                                hr(.class("my-1"))
+                                button(
+                                    .id("createOrgBtn"),
+                                    .class("w-full text-left px-4 py-2 text-sm text-indigo-600 hover:bg-gray-50")
+                                ) {
+                                    "+ Create Organization"
+                                }
+                            }
+                        }
+                    }
+                    
+                    button(
+                        .id("createVMBtn"),
+                        .class(
+                            "bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+                        )
+                    ) {
+                        "+ New VM"
+                    }
+                    button(
+                        .id("settingsBtn"),
+                        .class(
+                            "bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-md text-sm font-medium"
+                        )
+                    ) {
+                        "API Keys"
+                    }
+                    span(.id("userInfo"), .class("text-sm text-gray-600")) {}
+                    button(
+                        .id("logoutBtn"),
+                        .class("text-gray-500 hover:text-gray-700 text-sm")
+                    ) {
+                        "Logout"
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct DashboardMain: HTML {
+    var content: some HTML {
+        main {
+            div(.class("flex h-screen pt-16")) {
+                DashboardSidebarSection()
+                DashboardContentSection()
+            }
+        }
+    }
+}
+
+struct AllModals: HTML {
+    var content: some HTML {
+        CreateOrgModal()
+        APIKeysModal()
+        CreateAPIKeyModal()
+        CreateVMModal()
+    }
+}
+
+struct CreateOrgModal: HTML {
+    var content: some HTML {
+        div(
+            .id("createOrgModal"),
+            .class("fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50")
+        ) {
+            div(.class("bg-white rounded-lg shadow-xl max-w-md w-full mx-4")) {
+                div(.class("px-6 py-4 border-b border-gray-200")) {
+                    h3(.class("text-lg font-medium text-gray-900")) {
+                        "Create Organization"
+                    }
+                }
+                div(.class("px-6 py-4")) {
+                    form(.id("createOrgForm")) {
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Organization Name"
+                            }
+                            input(
+                                .type(.text),
+                                .id("orgName"),
+                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"),
+                                .required
+                            )
+                        }
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Description"
+                            }
+                            textarea(
+                                .id("orgDescription"),
+                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 h-20"),
+                                .required
+                            ) {}
+                        }
+                    }
+                }
+                div(.class("px-6 py-4 border-t border-gray-200 flex justify-end space-x-3")) {
+                    button(
+                        .id("cancelOrgBtn"),
+                        .type(.button),
+                        .class("px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md")
+                    ) {
+                        "Cancel"
+                    }
+                    button(
+                        .id("submitOrgBtn"),
+                        .type(.button),
+                        .class("px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md")
+                    ) {
+                        "Create"
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct APIKeysModal: HTML {
+    var content: some HTML {
+        div(
+            .id("apiKeysModal"),
+            .class("fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50")
+        ) {
+            div(.class("bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-screen overflow-y-auto")) {
+                div(.class("px-6 py-4 border-b border-gray-200 flex justify-between items-center")) {
+                    h3(.class("text-lg font-medium text-gray-900")) {
+                        "API Keys"
+                    }
+                    button(
+                        .id("closeApiKeysBtn"),
+                        .class("text-gray-400 hover:text-gray-600")
+                    ) {
+                        "✕"
+                    }
+                }
+                div(.class("px-6 py-4")) {
+                    div(.class("mb-4")) {
+                        button(
+                            .id("createApiKeyBtn"),
+                            .class("bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium")
+                        ) {
+                            "+ Create API Key"
+                        }
+                    }
+                    div(.id("apiKeysList"), .class("space-y-4")) {
+                        div(.class("text-center text-gray-500 py-8")) {
+                            "Loading API keys..."
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct CreateAPIKeyModal: HTML {
+    var content: some HTML {
+        div(
+            .id("createApiKeyModal"),
+            .class("fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50")
+        ) {
+            div(.class("bg-white rounded-lg shadow-xl max-w-md w-full mx-4")) {
+                div(.class("px-6 py-4 border-b border-gray-200")) {
+                    h3(.class("text-lg font-medium text-gray-900")) {
+                        "Create API Key"
+                    }
+                }
+                div(.class("px-6 py-4")) {
+                    form(.id("createApiKeyForm")) {
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Key Name"
+                            }
+                            input(
+                                .type(.text),
+                                .id("apiKeyName"),
+                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"),
+                                .required
+                            )
+                        }
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Scopes"
+                            }
+                            div(.class("space-y-2")) {
+                                label(.class("flex items-center")) {
+                                    input(.type(.checkbox), .value("read"), .class("mr-2"), .checked)
+                                    span(.class("text-sm")) { "Read" }
+                                }
+                                label(.class("flex items-center")) {
+                                    input(.type(.checkbox), .value("write"), .class("mr-2"), .checked)
+                                    span(.class("text-sm")) { "Write" }
+                                }
+                                label(.class("flex items-center")) {
+                                    input(.type(.checkbox), .value("admin"), .class("mr-2"))
+                                    span(.class("text-sm")) { "Admin" }
+                                }
+                            }
+                        }
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Expires In (days)"
+                            }
+                            select(
+                                .id("apiKeyExpiry"),
+                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500")
+                            ) {
+                                option(.value(""), .selected) { "Never" }
+                                option(.value("7")) { "7 days" }
+                                option(.value("30")) { "30 days" }
+                                option(.value("90")) { "90 days" }
+                                option(.value("365")) { "1 year" }
+                            }
+                        }
+                    }
+                }
+                div(.class("px-6 py-4 border-t border-gray-200 flex justify-end space-x-3")) {
+                    button(
+                        .id("cancelApiKeyBtn"),
+                        .type(.button),
+                        .class("px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md")
+                    ) {
+                        "Cancel"
+                    }
+                    button(
+                        .id("submitApiKeyBtn"),
+                        .type(.button),
+                        .class("px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md")
+                    ) {
+                        "Create"
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct CreateVMModal: HTML {
+    var content: some HTML {
+        div(
+            .id("createVMModal"),
+            .class("fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50")
+        ) {
+            div(.class("bg-white rounded-lg shadow-xl max-w-lg w-full mx-4")) {
+                CreateVMModalHeader()
+                CreateVMModalContent()
+                CreateVMModalFooter()
+            }
+        }
+    }
+}
+
+struct CreateVMModalHeader: HTML {
+    var content: some HTML {
+        div(.class("px-6 py-4 border-b border-gray-200")) {
+            h3(.class("text-lg font-medium text-gray-900")) {
+                "Create Virtual Machine"
+            }
+        }
+    }
+}
+
+struct CreateVMModalContent: HTML {
+    var content: some HTML {
+        div(.class("px-6 py-4")) {
+            form(.id("createVMForm")) {
+                div(.class("grid grid-cols-1 gap-4")) {
+                    CreateVMFormNameDescription()
+                    CreateVMFormResourcesTemplate()
+                }
+            }
+        }
+    }
+}
+
+struct CreateVMFormNameDescription: HTML {
+    var content: some HTML {
+        div {
+            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                "VM Name"
+            }
+            input(
+                .type(.text),
+                .id("vmName"),
+                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"),
+                .required
+            )
+        }
+        div {
+            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                "Description"
+            }
+            textarea(
+                .id("vmDescription"),
+                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 h-20"),
+                .required
+            ) {}
+        }
+    }
+}
+
+struct CreateVMFormResourcesTemplate: HTML {
+    var content: some HTML {
+        div(.class("grid grid-cols-2 gap-4")) {
+            div {
+                label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                    "CPU Cores"
+                }
+                input(
+                    .type(.number),
+                    .id("vmCpu"),
+                    .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"),
+                    .value("1"),
+                    .required
+                )
+            }
+            div {
+                label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                    "Memory (GB)"
+                }
+                input(
+                    .type(.number),
+                    .id("vmMemory"),
+                    .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"),
+                    .value("2"),
+                    .required
+                )
+            }
+        }
+        div(.class("grid grid-cols-2 gap-4")) {
+            div {
+                label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                    "Disk (GB)"
+                }
+                input(
+                    .type(.number),
+                    .id("vmDisk"),
+                    .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"),
+                    .value("10"),
+                    .required
+                )
+            }
+            div {
+                label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                    "Template"
+                }
+                select(
+                    .id("vmTemplate"),
+                    .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"),
+                    .required
+                ) {
+                    option(.value("ubuntu-22.04"), .selected) { "Ubuntu 22.04" }
+                    option(.value("alpine-3.18")) { "Alpine 3.18" }
+                }
+            }
+        }
+    }
+}
+
+struct CreateVMModalFooter: HTML {
+    var content: some HTML {
+        div(.class("px-6 py-4 border-t border-gray-200 flex justify-end space-x-3")) {
+            button(
+                .id("cancelVMBtn"),
+                .type(.button),
+                .class("px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md")
+            ) {
+                "Cancel"
+            }
+            button(
+                .id("submitVMBtn"),
+                .type(.button),
+                .class("px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md")
+            ) {
+                "Create VM"
+            }
         }
     }
 }
