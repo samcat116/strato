@@ -34,7 +34,7 @@ struct VMController: RouteCollection {
             let hasPermission = try await req.spicedb.checkPermission(
                 subject: user.id?.uuidString ?? "",
                 permission: "read",
-                resource: "vm",
+                resource: "virtual_machine",
                 resourceId: vm.id?.uuidString ?? ""
             )
             
@@ -117,7 +117,7 @@ struct VMController: RouteCollection {
         
         // Create ownership relationship
         try await req.spicedb.writeRelationship(
-            entity: "vm",
+            entity: "virtual_machine",
             entityId: vmId,
             relation: "owner",
             subject: "user",
@@ -127,7 +127,7 @@ struct VMController: RouteCollection {
         // Link VM to user's current organization
         if let currentOrgId = user.currentOrganizationId {
             try await req.spicedb.writeRelationship(
-                entity: "vm",
+                entity: "virtual_machine",
                 entityId: vmId,
                 relation: "organization",
                 subject: "organization",
