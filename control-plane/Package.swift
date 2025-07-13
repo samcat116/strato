@@ -15,6 +15,8 @@ let package = Package(
         .package(url: "https://github.com/vapor/fluent.git", from: "4.9.0"),
         // 🐘 Fluent driver for Postgres.
         .package(url: "https://github.com/vapor/fluent-postgres-driver.git", from: "2.8.0"),
+        // 🪶 Fluent driver for SQLite (for testing).
+        .package(url: "https://github.com/vapor/fluent-sqlite-driver.git", from: "4.6.0"),
         // 🎯 Type-safe HTML DSL for Swift
         .package(url: "https://github.com/sliemeobn/elementary.git", from: "0.5.0"),
         // 🎯 HTMX integration for Swift with type-safe HTML DSL
@@ -31,6 +33,7 @@ let package = Package(
                 .product(name: "StratoShared", package: "shared"),
                 .product(name: "Fluent", package: "fluent"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
+                .product(name: "FluentSQLiteDriver", package: "fluent-sqlite-driver"),
                 .product(name: "Elementary", package: "elementary"),
                 .product(name: "ElementaryHTMX", package: "elementary-htmx"),
                 .product(name: "Vapor", package: "vapor"),
@@ -38,6 +41,15 @@ let package = Package(
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOWebSocket", package: "swift-nio"),
                 .product(name: "WebAuthn", package: "webauthn-swift"),
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "AppTests",
+            dependencies: [
+                .target(name: "App"),
+                .product(name: "VaporTesting", package: "vapor"),
+                .product(name: "FluentSQLiteDriver", package: "fluent-sqlite-driver"),
             ],
             swiftSettings: swiftSettings
         )

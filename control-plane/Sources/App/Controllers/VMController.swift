@@ -67,6 +67,8 @@ struct VMController: RouteCollection {
             let name: String
             let description: String
             let templateName: String
+            let projectId: UUID?
+            let environment: String?
             let cpu: Int?
             let memory: Int64?
             let disk: Int64?
@@ -83,10 +85,59 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "Template '\(createRequest.templateName)' not found or inactive")
         }
         
+        // Determine project context
+        let projectId: UUID
+        if let requestedProjectId = createRequest.projectId {
+            // Verify user has access to the requested project
+            guard let project = try await Project.find(requestedProjectId, on: req.db) else {
+                throw Abort(.badRequest, reason: "Project not found")
+            }
+            
+            // Verify user belongs to the project's organization
+            let rootOrgId = try await project.getRootOrganizationId(on: req.db)
+            guard let orgId = rootOrgId, user.currentOrganizationId == orgId else {
+                throw Abort(.forbidden, reason: "Access denied to project")
+            }
+            
+            projectId = requestedProjectId
+        } else {
+            // Use default project for user's current organization
+            guard let currentOrgId = user.currentOrganizationId else {
+                throw Abort(.badRequest, reason: "No current organization set. Please specify a project.")
+            }
+            
+            // Find or create default project for organization
+            let defaultProject = try await Project.query(on: req.db)
+                .filter(\Project.$organization.$id, .equal, currentOrgId)
+                .filter(\Project.$name, .equal, "Default Project")
+                .first()
+            
+            guard let project = defaultProject else {
+                throw Abort(.badRequest, reason: "No default project found. Please specify a project.")
+            }
+            
+            projectId = project.id!
+        }
+        
+        // Get project to validate environment
+        guard let project = try await Project.find(projectId, on: req.db) else {
+            throw Abort(.internalServerError, reason: "Project not found")
+        }
+        
+        // Determine environment
+        let environment = createRequest.environment ?? project.defaultEnvironment
+        
+        // Validate environment exists in project
+        if !project.hasEnvironment(environment) {
+            throw Abort(.badRequest, reason: "Environment '\(environment)' not available in project. Available: \(project.environments.joined(separator: ", "))")
+        }
+        
         // Create VM instance from template
         let vm = try template.createVMInstance(
             name: createRequest.name,
             description: createRequest.description,
+            projectID: projectId,
+            environment: environment,
             cpu: createRequest.cpu,
             memory: createRequest.memory,
             disk: createRequest.disk,
@@ -124,7 +175,15 @@ struct VMController: RouteCollection {
             subjectId: userId
         )
         
-        // Link VM to user's current organization
+        // Link VM to project
+        try await req.spicedb.writeRelationship(
+            entity: "vm",
+            entityId: vmId,
+            relation: "project",
+            subject: "project",
+            subjectId: projectId.uuidString
+        )
+        
         if let currentOrgId = user.currentOrganizationId {
             try await req.spicedb.writeRelationship(
                 entity: "virtual_machine",
@@ -132,8 +191,7 @@ struct VMController: RouteCollection {
                 relation: "organization",
                 subject: "organization",
                 subjectId: currentOrgId.uuidString
-            )
-        }
+        )
         
         // Create VM via agent
         do {

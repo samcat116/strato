@@ -124,6 +124,10 @@ jobs:
         working-directory: shared
         run: swift build
 
+      - name: Test Control Plane
+        working-directory: control-plane
+        run: swift test
+
   security:
     name: Security Scan
     runs-on: ubuntu-latest

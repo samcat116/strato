@@ -19,7 +19,8 @@ struct CreateUser: AsyncMigration {
             .field("credential_id", .data, .required)
             .field("public_key", .data, .required)
             .field("sign_count", .int32, .required)
-            .field("transports", .array(of: .string), .required)
+            // Store transports as JSON string for compatibility
+            .field("transports", .string, .required)
             .field("backup_eligible", .bool, .required)
             .field("backup_state", .bool, .required)
             .field("device_type", .string, .required)
