@@ -21,8 +21,8 @@ definition organization {
     permission manage_members = admin
 }
 
-/** vm represents a virtual machine instance */
-definition vm {
+/** virtual_machine represents a virtual machine instance */
+definition virtual_machine {
     /** owner is the user who created the VM */
     relation owner: user
     
