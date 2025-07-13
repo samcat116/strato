@@ -23,7 +23,7 @@ struct SpiceDBService {
         let url = URI(string: "\(endpoint)/v1/permissions/check")
         
         let payload = CheckPermissionRequest(
-            consistency: Consistency(requirement: .fullyConsistent),
+            consistency: Consistency(fullyConsistent: true),
             resource: ObjectReference(
                 objectType: resource,
                 objectId: resourceId
@@ -164,12 +164,14 @@ struct CheckPermissionRequest: Content {
 }
 
 struct Consistency: Content {
-    let requirement: ConsistencyRequirement
+    let fullyConsistent: Bool?
     
-    enum ConsistencyRequirement: String, Content {
+    init(fullyConsistent: Bool = true) {
+        self.fullyConsistent = fullyConsistent
+    }
+    
+    private enum CodingKeys: String, CodingKey {
         case fullyConsistent = "fully_consistent"
-        case atLeastAsFresh = "at_least_as_fresh"
-        case atExactSnapshot = "at_exact_snapshot"
     }
 }
 
