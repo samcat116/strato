@@ -1,8 +1,15 @@
 import Fluent
 import SQLKit
+import SQLiteKit
 
 struct FixUserCredentialsTransports: AsyncMigration {
     func prepare(on database: Database) async throws {
+        // For SQLite (used in tests), skip this migration entirely
+        // as SQLite doesn't have array types and this migration is PostgreSQL-specific
+        if database is SQLiteDatabase {
+            return
+        }
+        
         // Convert the PostgreSQL array column to a JSON string column
         let sqlDatabase = database as! SQLDatabase
         
@@ -57,6 +64,11 @@ struct FixUserCredentialsTransports: AsyncMigration {
     }
     
     func revert(on database: Database) async throws {
+        // For SQLite (used in tests), skip this migration entirely
+        if database is SQLiteDatabase {
+            return
+        }
+        
         // Convert back to PostgreSQL array
         let sqlDatabase = database as! SQLDatabase
         

@@ -14,28 +14,28 @@ public func configure(_ app: Application) async throws {
     //     }
     // }
     // app.middleware.use(DebugMiddleware())
-    
+
     // Configure sessions
     app.middleware.use(app.sessions.middleware)
     app.sessions.use(.fluent)
-    
+
     // Configure user authentication with sessions
     app.middleware.use(User.sessionAuthenticator())
-    
+
     // Configure API key authentication (for Bearer tokens)
     app.middleware.use(BearerAuthorizationHeaderAuthenticator())
-    
+
     // Configure WebAuthn
     let relyingPartyID = Environment.get("WEBAUTHN_RELYING_PARTY_ID") ?? "localhost"
     let relyingPartyName = Environment.get("WEBAUTHN_RELYING_PARTY_NAME") ?? "Strato"
     let relyingPartyOrigin = Environment.get("WEBAUTHN_RELYING_PARTY_ORIGIN") ?? "http://localhost:8080"
-    
+
     app.configureWebAuthn(
         relyingPartyID: relyingPartyID,
         relyingPartyName: relyingPartyName,
         relyingPartyOrigin: relyingPartyOrigin
     )
-    
+
     // Add SpiceDB authorization middleware AFTER session middleware
     // Skip SpiceDB in testing environment
     if app.environment != .testing {
@@ -71,7 +71,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateVMTemplate())
     app.migrations.add(SeedVMTemplates())
     app.migrations.add(AddSystemAdminToUser())
-    
+
     // Hierarchical IAM migrations
     app.migrations.add(CreateOrganizationalUnit())
     app.migrations.add(CreateProject())
@@ -79,25 +79,23 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddProjectToVM())
     app.migrations.add(MigrateExistingDataToProjects())
     app.migrations.add(MakeProjectRequiredOnVM())
-    
+
     // Groups migrations
     app.migrations.add(CreateGroup())
     app.migrations.add(CreateUserGroup())
-    
-    // Fix WebAuthn field type
-    app.migrations.add(FixUserCredentialsTransports())
+
 
     try await app.autoMigrate()
-    
+
     // register routes
     try routes(app)
-    
+
     // Debug: Print all registered routes (commented out for production)
     // print("🔍 DEBUG: Registered routes:")
     // for route in app.routes.all {
     //     print("🔍   \(route.method) \(route.path)")
     // }
-    
+
     // Static files middleware after routes
     // Skip TailwindCSS setup during testing
     if app.environment != .testing {
