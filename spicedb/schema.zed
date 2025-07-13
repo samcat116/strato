@@ -21,6 +21,25 @@ definition organization {
     permission manage_members = admin
 }
 
+/** project represents a logical grouping of resources within an organization */
+definition project {
+    /** organization that owns this project */
+    relation organization: organization
+    
+    /** admin users have full control over the project */
+    relation admin: user
+    
+    /** member users can access project resources */
+    relation member: user
+    
+    // Permissions
+    permission manage_vms = admin + member + organization->admin
+    permission view_project = admin + member + organization->admin + organization->member
+    permission create_project = organization->admin
+    permission update_project = admin + organization->admin
+    permission delete_project = organization->admin
+}
+
 /** virtual_machine represents a virtual machine instance */
 definition virtual_machine {
     /** owner is the user who created the VM */
@@ -28,6 +47,9 @@ definition virtual_machine {
     
     /** organization that owns this VM */
     relation organization: organization
+    
+    /** project that contains this VM */
+    relation project: project
     
     /** viewer can see VM details but not modify */
     relation viewer: user

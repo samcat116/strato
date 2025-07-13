@@ -69,6 +69,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(EnhanceVM())
     app.migrations.add(FixVMColumnNames())
     app.migrations.add(CreateVMTemplate())
+    app.migrations.add(SeedVMTemplates())
     app.migrations.add(AddSystemAdminToUser())
     
     // Hierarchical IAM migrations
@@ -82,6 +83,9 @@ public func configure(_ app: Application) async throws {
     // Groups migrations
     app.migrations.add(CreateGroup())
     app.migrations.add(CreateUserGroup())
+    
+    // Fix WebAuthn field type
+    app.migrations.add(FixUserCredentialsTransports())
 
     try await app.autoMigrate()
     
