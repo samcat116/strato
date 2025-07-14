@@ -12,6 +12,7 @@
 # Start control plane: docker compose up control-plane
 #    Start agent: docker compose up agent
 # Run migrations: docker compose run migrate
+#  Load schema: docker compose run spicedb-schema
 #       Stop all: docker compose down (add -v to wipe db)
 #
 
@@ -46,6 +47,8 @@ services:
         condition: service_healthy
       spicedb:
         condition: service_healthy
+      spicedb-schema:
+        condition: service_completed_successfully
     ports:
       - "8080:8080"
     networks:
@@ -177,6 +180,29 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  spicedb-schema:
+    image: quay.io/authzed/zed:latest
+    depends_on:
+      spicedb:
+        condition: service_healthy
+    volumes:
+      - ./spicedb:/schemas:ro
+    networks:
+      - strato-network
+    command:
+      [
+        "schema",
+        "write",
+        "/schemas/schema.zed",
+        "--endpoint",
+        "spicedb:50051",
+        "--token",
+        "strato-dev-key",
+        "--insecure"
+      ]
+    deploy:
+      replicas: 0
 
 networks:
   strato-network:

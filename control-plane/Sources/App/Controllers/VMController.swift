@@ -177,7 +177,7 @@ struct VMController: RouteCollection {
 
         // Link VM to project
         try await req.spicedb.writeRelationship(
-            entity: "vm",
+            entity: "virtual_machine",
             entityId: vmId,
             relation: "project",
             subject: "project",
