@@ -37,64 +37,26 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: "Install Swift toolchain"
-        if: inputs.toolchain == 'Swift'
-        shell: bash
-        run: |
-          set -e
-
-          export SWIFTLY_HOME_DIR=${{ github.workspace }}/.swiftly/share
-          export SWIFTLY_BIN_DIR=${{ github.workspace }}/.swiftly/bin
-
-          echo "$SWIFTLY_BIN_DIR" >> $GITHUB_PATH
-          echo "SWIFTLY_HOME_DIR=$SWIFTLY_HOME_DIR" >> $GITHUB_ENV
-          echo "SWIFTLY_BIN_DIR=$SWIFTLY_BIN_DIR" >> $GITHUB_ENV
-
-          export PATH=$SWIFTLY_BIN_DIR:$PATH
-
-          mkdir -p $SWIFTLY_HOME_DIR
-          mkdir -p $SWIFTLY_BIN_DIR
-
-          if ${{ inputs.os == 'Linux' }} ; then
-            curl -O https://download.swift.org/swiftly/linux/swiftly-${{ inputs.arch }}.tar.gz
-            file swiftly-${{ inputs.arch }}.tar.gz
-            tar -xzf swiftly-${{ inputs.arch }}.tar.gz -C $SWIFTLY_BIN_DIR
-            rm swiftly-${{ inputs.arch }}.tar.gz
-          else
-            # FIXME: https://github.com/swiftlang/swiftly/issues/271
-            #    Why does this drop files in $HOME? That's not very CI-friendly
-            curl -O https://download.swift.org/swiftly/darwin/swiftly.pkg
-            installer -pkg swiftly.pkg -target CurrentUserHomeDirectory
-            cp ~/.swiftly/bin/swiftly $SWIFTLY_BIN_DIR
-            rm swiftly.pkg
-          fi
-
-          swiftly init \
-            --no-modify-profile \
-            --quiet-shell-followup \
-            --assume-yes \
-            --skip-install \
-            --verbose
-
-          echo "swiftly version: $(swiftly --version)" >&2
-
-          swiftly install --use main-snapshot-2025-04-12
-          swiftly list
+      - name: Set up Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.0'
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev zlib1g-dev
+          sudo apt-get install -y libssl-dev zlib1g-dev zstd
 
       - name: Cache Swift packages
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             control-plane/.build
             agent/.build
             shared/.build
-          key: ${{ runner.os }}-swift-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}
+          key: ${{ runner.os }}-swift-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}-${{ github.sha }}
           restore-keys: |
+            ${{ runner.os }}-swift-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}-
             ${{ runner.os }}-swift-
 
       - name: Setup Node.js
@@ -114,19 +76,23 @@ jobs:
 
       - name: Build Control Plane
         working-directory: control-plane
-        run: swift build
+        run: swift build --build-tests
 
       # - name: Build Agent
       #   working-directory: agent
-      #   run: swift build
+      #   run: swift build --build-tests
 
       - name: Build Shared Package
         working-directory: shared
-        run: swift build
+        run: swift build --build-tests
 
       - name: Test Control Plane
         working-directory: control-plane
-        run: swift test
+        run: swift test --skip-build --parallel
+
+      - name: Test Shared Package
+        working-directory: shared
+        run: swift test --skip-build --parallel
 
   security:
     name: Security Scan
