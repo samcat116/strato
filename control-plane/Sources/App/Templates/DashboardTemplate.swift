@@ -44,6 +44,7 @@ struct DashboardTemplate: HTMLDocument {
                         return;
                     }
                     await loadOrganizations();
+                    await loadProjects();
                     await loadVMs();
                 } catch (error) {
                     console.error('Failed to load session:', error);
@@ -63,7 +64,13 @@ struct DashboardTemplate: HTMLDocument {
             document.getElementById('createOrgBtn').addEventListener('click', showCreateOrgModal);
             document.getElementById('cancelOrgBtn').addEventListener('click', hideCreateOrgModal);
             document.getElementById('submitOrgBtn').addEventListener('click', createOrganization);
+            document.getElementById('cancelProjectBtn').addEventListener('click', hideCreateProjectModal);
+            document.getElementById('submitProjectBtn').addEventListener('click', createProject);
 
+            // Project management event listeners
+            document.getElementById('projectSwitcherBtn').addEventListener('click', toggleProjectDropdown);
+            document.getElementById('createProjectBtn').addEventListener('click', showCreateProjectModal);
+            
             // API key management event listeners
             document.getElementById('settingsBtn').addEventListener('click', showApiKeysModal);
             document.getElementById('closeApiKeysBtn').addEventListener('click', hideApiKeysModal);
@@ -83,46 +90,71 @@ struct DashboardTemplate: HTMLDocument {
                         const vms = await response.json();
                         displayVMs(vms);
                     } else {
-                        document.getElementById('vmTableBody').innerHTML = '<tr><td colspan="3" class="px-3 py-4 text-sm text-red-500 text-center">Failed to load VMs</td></tr>';
+                        document.getElementById('vmTableBody').innerHTML = '<tr><td colspan="4" class="px-3 py-4 text-sm text-red-500 text-center">Failed to load VMs</td></tr>';
                     }
                 } catch (error) {
-                    document.getElementById('vmTableBody').innerHTML = '<tr><td colspan="3" class="px-3 py-4 text-sm text-red-500 text-center">Error loading VMs</td></tr>';
+                    document.getElementById('vmTableBody').innerHTML = '<tr><td colspan="4" class="px-3 py-4 text-sm text-red-500 text-center">Error loading VMs</td></tr>';
                 }
             }
 
             function displayVMs(vms) {
                 const vmTableBody = document.getElementById('vmTableBody');
                 if (vms.length === 0) {
-                    vmTableBody.innerHTML = '<tr><td colspan="3" class="px-3 py-4 text-sm text-gray-500 text-center">No VMs found. Create your first VM!</td></tr>';
+                    vmTableBody.innerHTML = '<tr><td colspan="4" class="px-3 py-4 text-sm text-gray-500 text-center">No VMs found. Create your first VM!</td></tr>';
                     return;
                 }
-                vmTableBody.innerHTML = vms.map(vm => `
-                    <tr class="hover:bg-gray-50 cursor-pointer" onclick="selectVM('${vm.id}', ${JSON.stringify(vm).replace(/"/g, '&quot;')})">
-                        <td class="px-3 py-3">
-                            <div class="text-sm font-medium text-gray-900">${vm.name}</div>
-                            <div class="text-xs text-gray-500">${vm.description}</div>
-                        </td>
-                        <td class="px-3 py-3">
-                            <span class="inline-flex px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">Running</span>
-                        </td>
-                        <td class="px-3 py-3">
-                            <div class="flex space-x-1">
-                                <button class="text-green-600 hover:text-green-700 text-xs" onclick="event.stopPropagation(); controlVM('${vm.id}', 'start')">▶</button>
-                                <button class="text-yellow-600 hover:text-yellow-700 text-xs" onclick="event.stopPropagation(); controlVM('${vm.id}', 'stop')">⏸</button>
-                                <button class="text-red-600 hover:text-red-700 text-xs" onclick="event.stopPropagation(); deleteVM('${vm.id}')">🗑</button>
-                            </div>
-                        </td>
-                    </tr>
-                `).join('');
+                vmTableBody.innerHTML = vms.map(vm => {
+                    // Find project name for this VM
+                    const project = currentProjects.find(p => p.id === vm.projectId);
+                    const projectName = project ? project.name : 'Unknown Project';
+                    const environment = vm.environment || 'N/A';
+                    
+                    return `
+                        <tr class="hover:bg-gray-50 cursor-pointer" onclick="selectVM('${vm.id}', ${JSON.stringify(vm).replace(/"/g, '&quot;')})">
+                            <td class="px-3 py-3">
+                                <div class="text-sm font-medium text-gray-900">${vm.name}</div>
+                                <div class="text-xs text-gray-500">${vm.description}</div>
+                            </td>
+                            <td class="px-3 py-3">
+                                <div class="text-sm text-gray-900">${projectName}</div>
+                                <div class="text-xs text-gray-500">${environment}</div>
+                            </td>
+                            <td class="px-3 py-3">
+                                <span class="inline-flex px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">Running</span>
+                            </td>
+                            <td class="px-3 py-3">
+                                <div class="flex space-x-1">
+                                    <button class="text-green-600 hover:text-green-700 text-xs" onclick="event.stopPropagation(); controlVM('${vm.id}', 'start')">▶</button>
+                                    <button class="text-yellow-600 hover:text-yellow-700 text-xs" onclick="event.stopPropagation(); controlVM('${vm.id}', 'stop')">⏸</button>
+                                    <button class="text-red-600 hover:text-red-700 text-xs" onclick="event.stopPropagation(); deleteVM('${vm.id}')">🗑</button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
             }
 
             function selectVM(vmId, vm) {
                 const vmDetails = document.getElementById('vmDetails');
+                
+                // Find project information
+                const project = currentProjects.find(p => p.id === vm.projectId);
+                const projectName = project ? project.name : 'Unknown Project';
+                const environment = vm.environment || 'N/A';
+                
                 vmDetails.innerHTML = `
                     <div class="space-y-4">
                         <div>
                             <h4 class="text-lg font-semibold text-gray-900">${vm.name}</h4>
                             <p class="text-sm text-gray-600">${vm.description}</p>
+                            <div class="mt-2 flex items-center space-x-4">
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                    ${projectName}
+                                </span>
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                    ${environment}
+                                </span>
+                            </div>
                         </div>
                         <div class="grid grid-cols-2 gap-4">
                             <div>
@@ -271,6 +303,12 @@ struct DashboardTemplate: HTMLDocument {
                     if (response.ok) {
                         document.getElementById('currentOrgName').textContent = orgName;
                         document.getElementById('orgDropdown').classList.add('hidden');
+                        // Update current org in the list
+                        currentOrganizations.forEach(org => org.isCurrent = org.id === orgId);
+                        // Reset current project
+                        currentProjectId = null;
+                        // Reload projects for new organization
+                        await loadProjects();
                         await loadVMs(); // Reload VMs for new organization
                         term.write(`\\r\\nSwitched to organization: ${orgName}\\r\\n$ `);
                     } else {
@@ -322,10 +360,197 @@ struct DashboardTemplate: HTMLDocument {
                 }
             }
 
+            // Project Management Functions
+            var currentProjects = [];
+            var currentProjectId = null;
+
+            async function loadProjects() {
+                try {
+                    // Get current organization ID from session
+                    const session = await window.webAuthnClient.getSession();
+                    let currentOrgId = session?.user?.currentOrganizationId;
+                    
+                    // Fallback to first org if no current org in session
+                    if (!currentOrgId && currentOrganizations.length > 0) {
+                        currentOrgId = currentOrganizations[0].id;
+                    }
+                    
+                    if (!currentOrgId) {
+                        document.getElementById('currentProjectName').textContent = 'No Organization';
+                        return;
+                    }
+                    
+                    const response = await fetch(`/organizations/${currentOrgId}/projects`);
+                    console.log('Loading projects for org:', currentOrgId, 'Status:', response.status);
+                    if (response.ok) {
+                        const projects = await response.json();
+                        console.log('Loaded projects:', projects);
+                        currentProjects.length = 0; // Clear array
+                        currentProjects.push(...projects); // Add all projects
+                        displayProjects(projects);
+                        
+                        // Get current project from session or use first available
+                        const sessionProjectId = session?.user?.currentProjectId;
+                        if (sessionProjectId && projects.find(p => p.id === sessionProjectId)) {
+                            currentProjectId = sessionProjectId;
+                        } else if (projects.length > 0) {
+                            currentProjectId = projects[0].id;
+                        } else {
+                            currentProjectId = null;
+                        }
+                        
+                        if (currentProjectId && projects.length > 0) {
+                            const currentProject = projects.find(p => p.id === currentProjectId);
+                            if (currentProject) {
+                                document.getElementById('currentProjectName').textContent = currentProject.name;
+                            }
+                        } else {
+                            document.getElementById('currentProjectName').textContent = 'No Projects';
+                        }
+                    } else {
+                        document.getElementById('currentProjectName').textContent = 'No Projects';
+                    }
+                } catch (error) {
+                    console.error('Failed to load projects:', error);
+                    document.getElementById('currentProjectName').textContent = 'Error Loading';
+                }
+            }
+
+            function displayProjects(projects) {
+                const projectList = document.getElementById('projectList');
+                const currentProjectName = document.getElementById('currentProjectName');
+                
+                console.log('Displaying projects:', projects.length);
+                
+                if (projects.length === 0) {
+                    currentProjectName.textContent = 'No Projects';
+                    projectList.innerHTML = '<div class="px-4 py-2 text-sm text-gray-500">No projects found</div>';
+                    return;
+                }
+
+                // Update current project display
+                const currentProject = projects.find(p => p.id === currentProjectId) || projects[0];
+                currentProjectName.textContent = currentProject.name;
+                currentProjectId = currentProject.id;
+
+                projectList.innerHTML = projects.map(project => `
+                    <button class="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex justify-between items-center" onclick="switchProject('${project.id}', '${project.name}')">
+                        <div>
+                            <div class="font-medium">${project.name}</div>
+                            <div class="text-xs text-gray-500">${project.description}</div>
+                        </div>
+                        <div class="text-xs text-gray-400">
+                            <span>${project.vmCount} VMs</span>
+                            ${project.environments ? `<span class="ml-2">${project.environments.join(', ')}</span>` : ''}
+                        </div>
+                    </button>
+                `).join('');
+            }
+
+            function toggleProjectDropdown() {
+                const dropdown = document.getElementById('projectDropdown');
+                dropdown.classList.toggle('hidden');
+                
+                // Close dropdown when clicking outside
+                document.addEventListener('click', function closeDropdown(e) {
+                    if (!e.target.closest('#projectSwitcherBtn') && !e.target.closest('#projectDropdown')) {
+                        dropdown.classList.add('hidden');
+                        document.removeEventListener('click', closeDropdown);
+                    }
+                });
+            }
+
+            async function switchProject(projectId, projectName) {
+                try {
+                    const response = await fetch(`/projects/${projectId}/switch`, { method: 'POST' });
+                    if (response.ok) {
+                        currentProjectId = projectId;
+                        document.getElementById('currentProjectName').textContent = projectName;
+                        document.getElementById('projectDropdown').classList.add('hidden');
+                        await loadVMs(); // Reload VMs for new project
+                        term.write(`\r\nSwitched to project: ${projectName}\r\n$ `);
+                    } else {
+                        term.write(`\r\nFailed to switch project\r\n$ `);
+                    }
+                } catch (error) {
+                    term.write(`\r\nError switching project: ${error.message}\r\n$ `);
+                }
+            }
+
+            function showCreateProjectModal() {
+                document.getElementById('createProjectModal').classList.remove('hidden');
+                document.getElementById('projectDropdown').classList.add('hidden');
+                document.getElementById('projectName').focus();
+            }
+
+            function hideCreateProjectModal() {
+                document.getElementById('createProjectModal').classList.add('hidden');
+                document.getElementById('createProjectForm').reset();
+            }
+
+            async function createProject() {
+                const name = document.getElementById('projectName').value.trim();
+                const description = document.getElementById('projectDescription').value.trim();
+                const environments = Array.from(document.querySelectorAll('input[name="projectEnvironments"]:checked')).map(cb => cb.value);
+                const defaultEnvironment = document.getElementById('projectDefaultEnvironment').value;
+                
+                if (!name || !description) {
+                    alert('Please fill in all fields');
+                    return;
+                }
+
+                if (environments.length === 0) {
+                    alert('Please select at least one environment');
+                    return;
+                }
+
+                try {
+                    // Get current organization ID from session
+                    const session = await window.webAuthnClient.getSession();
+                    let currentOrgId = session?.user?.currentOrganizationId;
+                    
+                    // Fallback to first org if no current org in session
+                    if (!currentOrgId && currentOrganizations.length > 0) {
+                        currentOrgId = currentOrganizations[0].id;
+                    }
+                    
+                    if (!currentOrgId) {
+                        alert('No organization selected');
+                        return;
+                    }
+                    
+                    console.log('Creating project in organization:', currentOrgId);
+                    console.log('Project data:', { name, description, environments, defaultEnvironment });
+
+                    const response = await fetch(`/organizations/${currentOrgId}/projects`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name, description, environments, defaultEnvironment })
+                    });
+
+                    console.log('Response status:', response.status);
+                    
+                    if (response.ok) {
+                        const newProject = await response.json();
+                        console.log('Created project:', newProject);
+                        hideCreateProjectModal();
+                        await loadProjects();
+                        term.write(`\r\nProject "${newProject.name}" created\r\n$ `);
+                    } else {
+                        const errorText = await response.text();
+                        console.error('Project creation failed:', response.status, errorText);
+                        alert(`Failed to create project: ${errorText}`);
+                    }
+                } catch (error) {
+                    alert(`Error creating project: ${error.message}`);
+                }
+            }
+
             // Close modal on escape key
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
                     hideCreateOrgModal();
+                    hideCreateProjectModal();
                     hideApiKeysModal();
                     hideCreateApiKeyModal();
                     hideCreateVMModal();
@@ -361,8 +586,23 @@ struct DashboardTemplate: HTMLDocument {
                     return;
                 }
 
+                if (!currentProjectId) {
+                    alert('Please select a project before creating a VM');
+                    return;
+                }
+
                 try {
-                    await createVM({ name, description, cpu, memory, disk, templateName });
+                    // Include current project context
+                    const vmData = { name, description, cpu, memory, disk, templateName };
+                    if (currentProjectId) {
+                        vmData.projectId = currentProjectId;
+                        // Add environment if project is selected
+                        const selectedProject = currentProjects.find(p => p.id === currentProjectId);
+                        if (selectedProject && selectedProject.defaultEnvironment) {
+                            vmData.environment = selectedProject.defaultEnvironment;
+                        }
+                    }
+                    await createVM(vmData);
                     hideCreateVMModal();
                 } catch (error) {
                     alert(`Error creating VM: ${error.message}`);
@@ -566,6 +806,39 @@ struct DashboardHeader: HTML {
                         }
                     }
                     
+                    // Project Switcher
+                    div(.class("relative")) {
+                        button(
+                            .id("projectSwitcherBtn"),
+                            .class(
+                                "bg-gray-50 hover:bg-gray-100 text-gray-700 px-3 py-2 rounded-md text-sm font-medium border border-gray-300 flex items-center space-x-2"
+                            )
+                        ) {
+                            span(.id("currentProjectName")) { "Loading..." }
+                            span(.class("text-gray-400")) { "▼" }
+                        }
+                        div(
+                            .id("projectDropdown"),
+                            .class("hidden absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-md shadow-lg z-10")
+                        ) {
+                            div(.class("py-1")) {
+                                div(.class("px-4 py-2 text-xs font-medium text-gray-500 uppercase")) {
+                                    "Switch Project"
+                                }
+                                div(.id("projectList"), .class("max-h-48 overflow-y-auto")) {
+                                    // Projects will be loaded here
+                                }
+                                hr(.class("my-1"))
+                                button(
+                                    .id("createProjectBtn"),
+                                    .class("w-full text-left px-4 py-2 text-sm text-indigo-600 hover:bg-gray-50")
+                                ) {
+                                    "+ Create Project"
+                                }
+                            }
+                        }
+                    }
+                    
                     button(
                         .id("createVMBtn"),
                         .class(
@@ -609,6 +882,7 @@ struct DashboardMain: HTML {
 struct AllModals: HTML {
     var content: some HTML {
         CreateOrgModal()
+        CreateProjectModal()
         APIKeysModal()
         CreateAPIKeyModal()
         CreateVMModal()
@@ -662,6 +936,96 @@ struct CreateOrgModal: HTML {
                     }
                     button(
                         .id("submitOrgBtn"),
+                        .type(.button),
+                        .class("px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md")
+                    ) {
+                        "Create"
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct CreateProjectModal: HTML {
+    var content: some HTML {
+        div(
+            .id("createProjectModal"),
+            .class("fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50")
+        ) {
+            div(.class("bg-white rounded-lg shadow-xl max-w-md w-full mx-4")) {
+                div(.class("px-6 py-4 border-b border-gray-200")) {
+                    h3(.class("text-lg font-medium text-gray-900")) {
+                        "Create Project"
+                    }
+                }
+                div(.class("px-6 py-4")) {
+                    form(.id("createProjectForm")) {
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Project Name"
+                            }
+                            input(
+                                .type(.text),
+                                .id("projectName"),
+                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"),
+                                .required
+                            )
+                        }
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Description"
+                            }
+                            textarea(
+                                .id("projectDescription"),
+                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 h-20"),
+                                .required
+                            ) {}
+                        }
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Environments"
+                            }
+                            div(.class("space-y-2")) {
+                                label(.class("flex items-center")) {
+                                    input(.type(.checkbox), .name("projectEnvironments"), .value("development"), .class("mr-2"), .checked)
+                                    span(.class("text-sm")) { "Development" }
+                                }
+                                label(.class("flex items-center")) {
+                                    input(.type(.checkbox), .name("projectEnvironments"), .value("staging"), .class("mr-2"))
+                                    span(.class("text-sm")) { "Staging" }
+                                }
+                                label(.class("flex items-center")) {
+                                    input(.type(.checkbox), .name("projectEnvironments"), .value("production"), .class("mr-2"))
+                                    span(.class("text-sm")) { "Production" }
+                                }
+                            }
+                        }
+                        div(.class("mb-4")) {
+                            label(.class("block text-sm font-medium text-gray-700 mb-2")) {
+                                "Default Environment"
+                            }
+                            select(
+                                .id("projectDefaultEnvironment"),
+                                .class("w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500")
+                            ) {
+                                option(.value("development"), .selected) { "Development" }
+                                option(.value("staging")) { "Staging" }
+                                option(.value("production")) { "Production" }
+                            }
+                        }
+                    }
+                }
+                div(.class("px-6 py-4 border-t border-gray-200 flex justify-end space-x-3")) {
+                    button(
+                        .id("cancelProjectBtn"),
+                        .type(.button),
+                        .class("px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md")
+                    ) {
+                        "Cancel"
+                    }
+                    button(
+                        .id("submitProjectBtn"),
                         .type(.button),
                         .class("px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md")
                     ) {
@@ -975,6 +1339,9 @@ struct VMTableHeader: HTML {
             tr {
                 th(.class("px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase")) {
                     "Name"
+                }
+                th(.class("px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase")) {
+                    "Project"
                 }
                 th(.class("px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase")) {
                     "Status"
