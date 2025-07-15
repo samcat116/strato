@@ -64,7 +64,6 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateVM())
     app.migrations.add(CreateOrganization())
     app.migrations.add(AddCurrentOrganizationToUser())
-    app.migrations.add(AddCurrentProjectToUser())
     app.migrations.add(CreateAPIKey())
     app.migrations.add(SessionRecord.migration)
     app.migrations.add(EnhanceVM())

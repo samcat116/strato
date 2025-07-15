@@ -404,7 +404,6 @@ extension User {
         let displayName: String
         let createdAt: Date?
         let currentOrganizationId: UUID?
-        let currentProjectId: UUID?
         let isSystemAdmin: Bool
     }
     
@@ -416,7 +415,6 @@ extension User {
             displayName: self.displayName,
             createdAt: self.createdAt,
             currentOrganizationId: self.currentOrganizationId,
-            currentProjectId: self.currentProjectId,
             isSystemAdmin: self.isSystemAdmin
         )
     }

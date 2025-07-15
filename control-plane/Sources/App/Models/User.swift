@@ -20,9 +20,6 @@ final class User: Model, @unchecked Sendable {
     @OptionalField(key: "current_organization_id")
     var currentOrganizationId: UUID?
 
-    @OptionalField(key: "current_project_id")
-    var currentProjectId: UUID?
-
     @Field(key: "is_system_admin")
     var isSystemAdmin: Bool
 

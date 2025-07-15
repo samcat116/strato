@@ -121,15 +121,6 @@ struct OrganizationController: RouteCollection {
             subjectId: user.id?.uuidString ?? ""
         )
         
-        // Create default project for the organization
-        let defaultProject = try await organization.createDefaultProject(on: req.db)
-        
-        // Set as current project if user doesn't have one
-        if user.currentProjectId == nil {
-            user.currentProjectId = defaultProject.id
-            try await user.save(on: req.db)
-        }
-        
         return OrganizationResponse(from: organization, userRole: "admin")
     }
     
