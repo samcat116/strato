@@ -812,14 +812,18 @@ struct DashboardHeader: HTML {
                             .id("projectSwitcherBtn"),
                             .class(
                                 "bg-gray-50 hover:bg-gray-100 text-gray-700 px-3 py-2 rounded-md text-sm font-medium border border-gray-300 flex items-center space-x-2"
-                            )
+                            ),
+                            .aria("expanded", "false"),
+                            .aria("controls", "projectDropdown"),
+                            .on("keydown", "if (event.key === 'Enter' || event.key === ' ') { toggleDropdown('projectSwitcherBtn', 'projectDropdown'); }")
                         ) {
                             span(.id("currentProjectName")) { "Loading..." }
                             span(.class("text-gray-400")) { "▼" }
                         }
                         div(
                             .id("projectDropdown"),
-                            .class("hidden absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-md shadow-lg z-10")
+                            .class("hidden absolute top-full left-0 mt-1 w-64 bg-white border border-gray-200 rounded-md shadow-lg z-10"),
+                            .aria("hidden", "true")
                         ) {
                             div(.class("py-1")) {
                                 div(.class("px-4 py-2 text-xs font-medium text-gray-500 uppercase")) {
