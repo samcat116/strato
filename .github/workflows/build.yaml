@@ -45,7 +45,7 @@ jobs:
             control-plane/.build
             agent/.build
             shared/.build
-          key: ${{ runner.os }}-swift-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}-${{ github.sha }}
+          key: ${{ runner.os }}-swift-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-swift-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}-
             ${{ runner.os }}-swift-
