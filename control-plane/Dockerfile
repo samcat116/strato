@@ -1,7 +1,10 @@
 # ================================
-# Build image
+# Build image - only for local builds
 # ================================
 FROM swift:6.1.2-noble AS build
+
+# Check if we're using prebuilt artifacts
+ARG PREBUILT_ARTIFACTS=""
 
 # Install OS updates and Node.js for TailwindCSS
 RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
@@ -21,9 +24,6 @@ COPY ./shared ./shared
 COPY ./control-plane/Package.* ./control-plane/
 
 # First just resolve dependencies.
-# This creates a cached layer that can be reused
-# as long as your Package.swift/Package.resolved
-# files do not change.
 WORKDIR /build/control-plane
 # Update Package.swift to use absolute path for shared package in Docker
 RUN sed -i 's|.package(path: "../shared")|.package(path: "/build/shared")|' Package.swift
@@ -42,28 +42,28 @@ COPY ./control-plane .
 # Build TailwindCSS
 RUN npm run build-css-prod
 
-# Build the application, with optimizations and using jemalloc
-# Note: Removed --static-swift-stdlib due to Swift 6 compatibility issues on Linux
-RUN swift build -c release \
-    --product App \
-    -Xlinker -ljemalloc
+# Build the application only if not using prebuilt artifacts
+RUN if [ -z "$PREBUILT_ARTIFACTS" ]; then \
+        swift build -c release --product App -Xlinker -ljemalloc; \
+    fi
 
 # Switch to the staging area
 WORKDIR /staging
 
-# Copy main executable to staging area
-RUN cp "$(swift build --package-path /build/control-plane -c release --show-bin-path)/App" ./
+# If using prebuilt artifacts, copy them, otherwise copy from build
+RUN if [ -n "$PREBUILT_ARTIFACTS" ]; then \
+        cp -R /build/$PREBUILT_ARTIFACTS/* ./; \
+    else \
+        cp "$(swift build --package-path /build/control-plane -c release --show-bin-path)/App" ./ && \
+        cp "/usr/libexec/swift/linux/swift-backtrace-static" ./ && \
+        find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \; && \
+        ([ -d /build/control-plane/Public ] && cp -R /build/control-plane/Public ./ || true) && \
+        ([ -d /build/control-plane/Resources ] && cp -R /build/control-plane/Resources ./ || true); \
+    fi
 
-# Copy static swift backtracer binary to staging area
-RUN cp "/usr/libexec/swift/linux/swift-backtrace-static" ./
-
-# Copy resources bundled by SPM to staging area
-RUN find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \;
-
-# Copy any resources from the public directory and views directory if the directories exist
-# Ensure that by default, neither the directory nor any of its contents are writable.
-RUN [ -d /build/control-plane/Public ] && { mv /build/control-plane/Public ./Public && chmod -R a-w ./Public; } || true
-RUN [ -d /build/control-plane/Resources ] && { mv /build/control-plane/Resources ./Resources && chmod -R a-w ./Resources; } || true
+# Ensure proper permissions
+RUN chmod -R a-w ./Public 2>/dev/null || true && \
+    chmod -R a-w ./Resources 2>/dev/null || true
 
 # ================================
 # Run image
