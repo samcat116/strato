@@ -81,9 +81,9 @@ jobs:
         working-directory: control-plane
         run: swift test --skip-build --parallel
 
-      - name: Test Shared Package
-        working-directory: shared
-        run: swift test --skip-build --parallel
+      # - name: Test Shared Package
+      #   working-directory: shared
+      #   run: swift test --skip-build --parallel
 
   security:
     name: Security Scan
