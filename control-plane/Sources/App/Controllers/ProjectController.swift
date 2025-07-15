@@ -17,7 +17,6 @@ struct ProjectController: RouteCollection {
             project.get("stats", use: getStats)
             project.get("path", use: getPath)
             project.post("transfer", use: transfer)
-            project.post("switch", use: switchToProject)
             
             // Environment management
             project.post("environments", use: addEnvironment)
@@ -646,28 +645,6 @@ struct ProjectController: RouteCollection {
             .count()
         
         return ProjectResponse(from: project, vmCount: Int(vmCount))
-    }
-    
-    func switchToProject(req: Request) async throws -> HTTPStatus {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
-        
-        guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid project ID")
-        }
-        
-        guard let project = try await Project.find(projectID, on: req.db) else {
-            throw Abort(.notFound, reason: "Project not found")
-        }
-        
-        // Verify user has access to this project
-        try await verifyProjectAccess(user: user, project: project, on: req.db)
-        
-        user.currentProjectId = projectID
-        try await user.save(on: req.db)
-        
-        return .ok
     }
     
     // MARK: - Helper Methods
