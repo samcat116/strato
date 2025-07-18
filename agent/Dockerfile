@@ -43,7 +43,7 @@ WORKDIR /staging
 RUN cp "$(swift build --package-path /build/agent -c release --show-bin-path)/StratoAgent" ./
 
 # Copy static swift backtracer binary to staging area
-RUN cp "/usr/libexec/swift/linux/swift-backtrace-static" ./
+RUN cp "/usr/lib/swift/linux/swift-backtrace-static" ./
 
 # Copy resources bundled by SPM to staging area
 RUN find -L "$(swift build --package-path /build/agent -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \;

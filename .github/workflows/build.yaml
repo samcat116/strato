@@ -163,7 +163,7 @@ jobs:
           # Copy binary
           cp "$(swift build -c release --show-bin-path)/App" ../artifacts/control-plane/bin/
           # Copy swift-backtrace
-          cp "/usr/libexec/swift/linux/swift-backtrace-static" ../artifacts/control-plane/bin/
+          cp "/usr/lib/swift/linux/swift-backtrace-static" ../artifacts/control-plane/bin/
           # Copy resources
           find -L "$(swift build -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/control-plane/resources/ \; || true
           # Copy Public and Resources directories
