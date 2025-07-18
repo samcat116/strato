@@ -162,8 +162,14 @@ jobs:
           mkdir -p ../artifacts/control-plane/resources
           # Copy binary
           cp "$(swift build -c release --show-bin-path)/App" ../artifacts/control-plane/bin/
-          # Copy swift-backtrace
-          cp "/usr/lib/swift/linux/swift-backtrace-static" ../artifacts/control-plane/bin/
+          # Copy swift-backtrace (try multiple possible locations)
+          if [ -f "/usr/lib/swift/linux/swift-backtrace-static" ]; then
+            cp "/usr/lib/swift/linux/swift-backtrace-static" ../artifacts/control-plane/bin/
+          elif [ -f "/usr/libexec/swift/linux/swift-backtrace-static" ]; then
+            cp "/usr/libexec/swift/linux/swift-backtrace-static" ../artifacts/control-plane/bin/
+          else
+            echo "Warning: swift-backtrace-static not found, skipping"
+          fi
           # Copy resources
           find -L "$(swift build -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/control-plane/resources/ \; || true
           # Copy Public and Resources directories
