@@ -3,8 +3,6 @@
 # ================================
 FROM swift:6.1.2-noble AS build
 
-# Check if we're using prebuilt artifacts
-ARG PREBUILT_ARTIFACTS=""
 
 # Install OS updates and Node.js for TailwindCSS
 RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
@@ -42,27 +40,18 @@ COPY ./control-plane .
 # Build TailwindCSS
 RUN npm run build-css-prod
 
-# Build the application only if not using prebuilt artifacts
-RUN if [ -z "$PREBUILT_ARTIFACTS" ]; then \
-        swift build -c release --product App -Xlinker -ljemalloc; \
-    fi
+# Build the application
+RUN swift build -c release --product App -Xlinker -ljemalloc
 
 # Switch to the staging area
 WORKDIR /staging
 
-# Copy prebuilt artifacts if provided
-COPY ./artifacts/control-plane* /tmp/artifacts/ 
-
-# If using prebuilt artifacts, copy them, otherwise copy from build
-RUN if [ -n "$PREBUILT_ARTIFACTS" ] && [ -d "/tmp/artifacts/control-plane" ]; then \
-        cp -R /tmp/artifacts/control-plane/* ./; \
-    else \
-        cp "$(swift build --package-path /build/control-plane -c release --show-bin-path)/App" ./ && \
-        (cp "/usr/lib/swift/linux/swift-backtrace-static" ./ 2>/dev/null || cp "/usr/libexec/swift/linux/swift-backtrace-static" ./ 2>/dev/null || echo "Warning: swift-backtrace-static not found") && \
-        find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \; && \
-        ([ -d /build/control-plane/Public ] && cp -R /build/control-plane/Public ./ || true) && \
-        ([ -d /build/control-plane/Resources ] && cp -R /build/control-plane/Resources ./ || true); \
-    fi
+# Copy binaries and resources
+RUN cp "$(swift build --package-path /build/control-plane -c release --show-bin-path)/App" ./ && \
+    (cp "/usr/lib/swift/linux/swift-backtrace-static" ./ 2>/dev/null || cp "/usr/libexec/swift/linux/swift-backtrace-static" ./ 2>/dev/null || echo "Warning: swift-backtrace-static not found") && \
+    find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \; && \
+    ([ -d /build/control-plane/Public ] && cp -R /build/control-plane/Public ./ || true) && \
+    ([ -d /build/control-plane/Resources ] && cp -R /build/control-plane/Resources ./ || true)
 
 # Ensure proper permissions
 RUN chmod -R a-w ./Public 2>/dev/null || true && \

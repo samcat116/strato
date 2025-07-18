@@ -228,8 +228,6 @@ jobs:
           tags: strato-control-plane:test
           cache-from: type=gha,key=control-plane-${{ matrix.arch }}
           cache-to: type=gha,mode=max,key=control-plane-${{ matrix.arch }}
-          build-args: |
-            PREBUILT_ARTIFACTS=artifacts/control-plane
 
       # - name: Build Agent Docker Image
       #   uses: docker/build-push-action@v5
