@@ -50,9 +50,12 @@ RUN if [ -z "$PREBUILT_ARTIFACTS" ]; then \
 # Switch to the staging area
 WORKDIR /staging
 
+# Copy prebuilt artifacts if provided
+COPY ./artifacts/control-plane* /tmp/artifacts/ 
+
 # If using prebuilt artifacts, copy them, otherwise copy from build
-RUN if [ -n "$PREBUILT_ARTIFACTS" ]; then \
-        cp -R /build/$PREBUILT_ARTIFACTS/* ./; \
+RUN if [ -n "$PREBUILT_ARTIFACTS" ] && [ -d "/tmp/artifacts/control-plane" ]; then \
+        cp -R /tmp/artifacts/control-plane/* ./; \
     else \
         cp "$(swift build --package-path /build/control-plane -c release --show-bin-path)/App" ./ && \
         (cp "/usr/lib/swift/linux/swift-backtrace-static" ./ 2>/dev/null || cp "/usr/libexec/swift/linux/swift-backtrace-static" ./ 2>/dev/null || echo "Warning: swift-backtrace-static not found") && \
