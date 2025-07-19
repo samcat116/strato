@@ -213,6 +213,18 @@ jobs:
         with:
           name: swift-binaries-${{ matrix.arch }}
           path: artifacts/
+        continue-on-error: true
+
+      - name: Prepare build context
+        run: |
+          # Create empty artifacts directory if it doesn't exist
+          mkdir -p ./artifacts
+          if [ -d "artifacts/control-plane" ]; then
+            echo "Artifacts found, copying to build context"
+            cp -R artifacts/* ./artifacts/
+          else
+            echo "No artifacts found, will build from source"
+          fi
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -228,6 +240,8 @@ jobs:
           tags: strato-control-plane:test
           cache-from: type=gha,key=control-plane-${{ matrix.arch }}
           cache-to: type=gha,mode=max,key=control-plane-${{ matrix.arch }}
+          build-args: |
+            PREBUILT_ARTIFACTS=artifacts/control-plane
 
       # - name: Build Agent Docker Image
       #   uses: docker/build-push-action@v5
