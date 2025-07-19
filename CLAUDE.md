@@ -25,6 +25,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `cd control-plane && npm test` - Run JavaScript linting (alias for lint command)
 
 ### Docker Development
+- `./scripts/prepare-build.sh` - Prepare build context (run before first Docker build)
 - `docker compose build` - Build Docker images for both control plane and agent
 - `docker compose up control-plane` - Start the control plane with database and Permify
 - `docker compose up agent` - Start the agent (requires control plane to be running)
