@@ -58,7 +58,16 @@ RUN if [ -n "$PREBUILT_ARTIFACTS" ]; then \
         echo "Using prebuilt artifacts mode"; \
         if [ -d "/build/artifacts/control-plane" ]; then \
             echo "Found prebuilt artifacts"; \
-            cp -R /build/artifacts/control-plane/* ./; \
+            # Copy binaries from bin/ subdirectory
+            if [ -d "/build/artifacts/control-plane/bin" ]; then \
+                cp /build/artifacts/control-plane/bin/* ./; \
+            else \
+                cp /build/artifacts/control-plane/App ./ 2>/dev/null || (echo "Error: App executable not found in artifacts"; exit 1); \
+            fi; \
+            # Copy resources if they exist
+            ([ -d "/build/artifacts/control-plane/resources" ] && cp -R /build/artifacts/control-plane/resources/* ./ || true) && \
+            ([ -d "/build/artifacts/control-plane/Public" ] && cp -R /build/artifacts/control-plane/Public ./ || true) && \
+            ([ -d "/build/artifacts/control-plane/Resources" ] && cp -R /build/artifacts/control-plane/Resources ./ || true); \
         else \
             echo "Error: PREBUILT_ARTIFACTS specified but no artifacts found"; \
             exit 1; \
