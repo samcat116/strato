@@ -176,15 +176,6 @@ jobs:
           [ -d Public ] && cp -R Public ../artifacts/control-plane/ || true
           [ -d Resources ] && cp -R Resources ../artifacts/control-plane/ || true
 
-      # - name: Build Agent Release Binary
-      #   working-directory: agent
-      #   run: |
-      #     swift build -c release --product StratoAgent
-      #     # Create artifact directory
-      #     mkdir -p ../artifacts/agent/bin
-      #     # Copy binary
-      #     cp "$(swift build -c release --show-bin-path)/StratoAgent" ../artifacts/agent/bin/
-
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -220,8 +211,7 @@ jobs:
           # Create empty artifacts directory if it doesn't exist
           mkdir -p ./artifacts
           if [ -d "artifacts/control-plane" ]; then
-            echo "Artifacts found, copying to build context"
-            cp -R artifacts/* ./artifacts/
+            echo "Artifacts found, ready for Docker build"
           else
             echo "No artifacts found, will build from source"
           fi
@@ -242,17 +232,6 @@ jobs:
           cache-to: type=gha,mode=max,key=control-plane-${{ matrix.arch }}
           build-args: |
             PREBUILT_ARTIFACTS=artifacts/control-plane
-
-      # - name: Build Agent Docker Image
-      #   uses: docker/build-push-action@v5
-      #   with:
-      #     context: .
-      #     file: ./agent/Dockerfile
-      #     push: false
-      #     platforms: ${{ matrix.arch == 'x64' && 'linux/amd64' || 'linux/arm64' }}
-      #     tags: strato-agent:${{ github.sha }}-${{ matrix.arch }}
-      #     cache-from: type=gha,key=agent-${{ matrix.arch }}
-      #     cache-to: type=gha,mode=max,key=agent-${{ matrix.arch }}
 
       - name: Test Docker Compose
         if: matrix.arch == 'x64'
