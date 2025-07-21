@@ -1,7 +1,10 @@
 # ================================
-# Build image
+# Build image - only for local builds
 # ================================
 FROM swift:6.1.2-noble AS build
+
+# Check if we're using prebuilt artifacts
+ARG PREBUILT_ARTIFACTS=""
 
 # Install OS updates and Node.js for TailwindCSS
 RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
@@ -21,9 +24,6 @@ COPY ./shared ./shared
 COPY ./control-plane/Package.* ./control-plane/
 
 # First just resolve dependencies.
-# This creates a cached layer that can be reused
-# as long as your Package.swift/Package.resolved
-# files do not change.
 WORKDIR /build/control-plane
 # Update Package.swift to use absolute path for shared package in Docker
 RUN sed -i 's|.package(path: "../shared")|.package(path: "/build/shared")|' Package.swift
@@ -39,31 +39,52 @@ RUN npm ci
 # Copy entire control-plane repo into container
 COPY ./control-plane .
 
+# Copy artifacts directory (always exists due to workflow preparation)
+COPY ./artifacts /build/artifacts
+
 # Build TailwindCSS
 RUN npm run build-css-prod
 
-# Build the application, with optimizations and using jemalloc
-# Note: Removed --static-swift-stdlib due to Swift 6 compatibility issues on Linux
-RUN swift build -c release \
-    --product App \
-    -Xlinker -ljemalloc
+# Build the application only if not using prebuilt artifacts
+RUN if [ -z "$PREBUILT_ARTIFACTS" ]; then \
+        swift build -c release --product App -Xlinker -ljemalloc; \
+    fi
 
 # Switch to the staging area
 WORKDIR /staging
 
-# Copy main executable to staging area
-RUN cp "$(swift build --package-path /build/control-plane -c release --show-bin-path)/App" ./
+# If using prebuilt artifacts, copy them, otherwise copy from build
+RUN if [ -n "$PREBUILT_ARTIFACTS" ]; then \
+        echo "Using prebuilt artifacts mode"; \
+        if [ -d "/build/artifacts/control-plane" ]; then \
+            echo "Found prebuilt artifacts"; \
+            # Copy binaries from bin/ subdirectory
+            if [ -d "/build/artifacts/control-plane/bin" ]; then \
+                cp /build/artifacts/control-plane/bin/* ./; \
+            else \
+                cp /build/artifacts/control-plane/App ./ 2>/dev/null || (echo "Error: App executable not found in artifacts"; exit 1); \
+            fi; \
+            # Copy resources if they exist
+            ([ -d "/build/artifacts/control-plane/resources" ] && cp -R /build/artifacts/control-plane/resources/* ./ || true) && \
+            ([ -d "/build/artifacts/control-plane/Public" ] && cp -R /build/artifacts/control-plane/Public ./ || true) && \
+            ([ -d "/build/artifacts/control-plane/Resources" ] && cp -R /build/artifacts/control-plane/Resources ./ || true); \
+        else \
+            echo "Error: PREBUILT_ARTIFACTS specified but no artifacts found"; \
+            exit 1; \
+        fi; \
+    else \
+        echo "Building from source"; \
+        cp "$(swift build --package-path /build/control-plane -c release --show-bin-path)/App" ./ && \
+        (cp "/usr/lib/swift/linux/swift-backtrace-static" ./ 2>/dev/null || cp "/usr/libexec/swift/linux/swift-backtrace-static" ./ 2>/dev/null || echo "Warning: swift-backtrace-static not found") && \
+        find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \; && \
+        ([ -d /build/control-plane/Public ] && cp -R /build/control-plane/Public ./ || true) && \
+        ([ -d /build/control-plane/Resources ] && cp -R /build/control-plane/Resources ./ || true); \
+    fi
 
-# Copy static swift backtracer binary to staging area
-RUN cp "/usr/libexec/swift/linux/swift-backtrace-static" ./
-
-# Copy resources bundled by SPM to staging area
-RUN find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \;
-
-# Copy any resources from the public directory and views directory if the directories exist
-# Ensure that by default, neither the directory nor any of its contents are writable.
-RUN [ -d /build/control-plane/Public ] && { mv /build/control-plane/Public ./Public && chmod -R a-w ./Public; } || true
-RUN [ -d /build/control-plane/Resources ] && { mv /build/control-plane/Resources ./Resources && chmod -R a-w ./Resources; } || true
+# Ensure proper permissions
+RUN chmod +x ./App && \
+    chmod -R a-w ./Public 2>/dev/null || true && \
+    chmod -R a-w ./Resources 2>/dev/null || true
 
 # ================================
 # Run image
