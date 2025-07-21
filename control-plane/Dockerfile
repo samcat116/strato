@@ -82,7 +82,8 @@ RUN if [ -n "$PREBUILT_ARTIFACTS" ]; then \
     fi
 
 # Ensure proper permissions
-RUN chmod -R a-w ./Public 2>/dev/null || true && \
+RUN chmod +x ./App && \
+    chmod -R a-w ./Public 2>/dev/null || true && \
     chmod -R a-w ./Resources 2>/dev/null || true
 
 # ================================
