@@ -57,7 +57,6 @@ struct OrganizationSettingsTemplate: HTMLDocument {
 
                 console.log('Sending data:', data);
                 const orgId = '\(organization.id?.uuidString ?? "")';
-                console.log('URL:', '/organizations/' + orgId);
 
                 fetch('/organizations/' + orgId, {
                     method: 'PUT',
