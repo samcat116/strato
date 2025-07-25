@@ -60,6 +60,7 @@ struct DashboardTemplate: HTMLDocument {
 
             // Organization management event listeners
             document.getElementById('orgSwitcherBtn').addEventListener('click', toggleOrgDropdown);
+            document.getElementById('orgSettingsBtn').addEventListener('click', openOrgSettings);
             document.getElementById('createOrgBtn').addEventListener('click', showCreateOrgModal);
             document.getElementById('cancelOrgBtn').addEventListener('click', hideCreateOrgModal);
             document.getElementById('submitOrgBtn').addEventListener('click', createOrganization);
@@ -241,6 +242,14 @@ struct DashboardTemplate: HTMLDocument {
                 const currentOrg = organizations[0]; // For now, use first org
                 currentOrgName.textContent = currentOrg.name;
 
+                // Show/hide settings button based on current org admin status
+                const orgSettingsBtn = document.getElementById('orgSettingsBtn');
+                if (currentOrg.userRole === 'admin') {
+                    orgSettingsBtn.style.display = 'flex';
+                } else {
+                    orgSettingsBtn.style.display = 'none';
+                }
+
                 orgList.innerHTML = organizations.map(org => `
                     <button class="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex justify-between items-center" onclick="switchOrganization('${org.id}', '${org.name}')">
                         <div>
@@ -271,6 +280,16 @@ struct DashboardTemplate: HTMLDocument {
                     if (response.ok) {
                         document.getElementById('currentOrgName').textContent = orgName;
                         document.getElementById('orgDropdown').classList.add('hidden');
+                        
+                        // Update settings button visibility for new organization
+                        const newCurrentOrg = currentOrganizations.find(org => org.id === orgId);
+                        const orgSettingsBtn = document.getElementById('orgSettingsBtn');
+                        if (newCurrentOrg && newCurrentOrg.userRole === 'admin') {
+                            orgSettingsBtn.style.display = 'flex';
+                        } else {
+                            orgSettingsBtn.style.display = 'none';
+                        }
+                        
                         await loadVMs(); // Reload VMs for new organization
                         term.write(`\\r\\nSwitched to organization: ${orgName}\\r\\n$ `);
                     } else {
@@ -320,6 +339,21 @@ struct DashboardTemplate: HTMLDocument {
                 } catch (error) {
                     alert(`Error creating organization: ${error.message}`);
                 }
+            }
+
+            function openOrgSettings() {
+                // Get current organization ID from the currentOrganizations array
+                const currentOrgName = document.getElementById('currentOrgName').textContent;
+                const currentOrg = currentOrganizations.find(org => org.name === currentOrgName);
+                
+                if (currentOrg && currentOrg.userRole === 'admin') {
+                    window.location.href = `/organizations/${currentOrg.id}/settings`;
+                } else {
+                    alert('Only organization administrators can access organization settings.');
+                }
+                
+                // Close the dropdown
+                document.getElementById('orgDropdown').classList.add('hidden');
             }
 
             // Close modal on escape key
@@ -556,6 +590,13 @@ struct DashboardHeader: HTML {
                                     // Organizations will be loaded here
                                 }
                                 hr(.class("my-1"))
+                                button(
+                                    .id("orgSettingsBtn"),
+                                    .class("w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center space-x-2")
+                                ) {
+                                    "⚙️"
+                                    span { "Organization Settings" }
+                                }
                                 button(
                                     .id("createOrgBtn"),
                                     .class("w-full text-left px-4 py-2 text-sm text-indigo-600 hover:bg-gray-50")
