@@ -3,33 +3,33 @@ import Elementary
 struct OrganizationSettingsTemplate: HTMLDocument {
     let organization: OrganizationResponse
     let user: User
-    
+
     var title: String { "Organization Settings - \(organization.name) - Strato" }
-    
+
     var head: some HTML {
         meta(.charset("utf-8"))
         meta(.name("viewport"), .content("width=device-width, initial-scale=1"))
-        
+
         link(.rel("stylesheet"), .href("/styles/app.generated.css"))
         link(.rel("icon"), .href("/favicon.ico"))
-        
+
         script(.src("https://unpkg.com/htmx.org@1.9.10")) {}
         script(.src("https://unpkg.com/hyperscript.org@0.9.12")) {}
     }
-    
+
     var body: some HTML {
         div(.class("min-h-screen bg-gray-50")) {
             OrganizationSettingsHeader(organization: organization, user: user)
             OrganizationSettingsMain(organization: organization)
         }
-        
+
         HTMLRaw("""
         <script type="text/javascript">
             // Organization settings JavaScript
             document.addEventListener('DOMContentLoaded', function() {
                 document.getElementById('saveButton').addEventListener('click', updateOrganizationInfo);
             });
-            
+
             function showSuccess(message) {
                 const notification = document.createElement('div');
                 notification.className = 'fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50';
@@ -37,7 +37,7 @@ struct OrganizationSettingsTemplate: HTMLDocument {
                 document.body.appendChild(notification);
                 setTimeout(() => notification.remove(), 3000);
             }
-            
+
             function showError(message) {
                 const notification = document.createElement('div');
                 notification.className = 'fixed top-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg z-50';
@@ -45,20 +45,20 @@ struct OrganizationSettingsTemplate: HTMLDocument {
                 document.body.appendChild(notification);
                 setTimeout(() => notification.remove(), 5000);
             }
-            
+
             function updateOrganizationInfo() {
                 const form = document.getElementById('organization-info-form');
                 const formData = new FormData(form);
-                
+
                 const data = {
                     name: formData.get('name'),
                     description: formData.get('description')
                 };
-                
+
                 console.log('Sending data:', data);
-                const orgId = '\(orgId)';
+                const orgId = '\(organization.id?.uuidString ?? "")';
                 console.log('URL:', '/organizations/' + orgId);
-                
+
                 fetch('/organizations/' + orgId, {
                     method: 'PUT',
                     headers: {
@@ -98,7 +98,7 @@ struct OrganizationSettingsTemplate: HTMLDocument {
 struct OrganizationSettingsHeader: HTML {
     let organization: OrganizationResponse
     let user: User
-    
+
     var content: some HTML {
         header(.class("bg-white shadow-sm border-b border-gray-200")) {
             div(.class("max-w-7xl mx-auto px-4 sm:px-6 lg:px-8")) {
@@ -112,10 +112,10 @@ struct OrganizationSettingsHeader: HTML {
                             " Settings"
                         }
                     }
-                    
+
                     div(.class("flex items-center space-x-4")) {
                         span(.class("text-sm text-gray-600")) {
-                            "Logged in as \(user.displayName)"  
+                            "Logged in as \(user.displayName)"
                         }
                     }
                 }
@@ -126,7 +126,7 @@ struct OrganizationSettingsHeader: HTML {
 
 struct OrganizationSettingsMain: HTML {
     let organization: OrganizationResponse
-    
+
     var content: some HTML {
         main(.class("max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8")) {
             div(.class("lg:grid lg:grid-cols-12 lg:gap-8")) {
@@ -136,14 +136,14 @@ struct OrganizationSettingsMain: HTML {
                         div(.class("bg-gray-100 text-gray-900 group flex items-center px-3 py-2 text-sm font-medium rounded-md")) {
                             "📋 Organization Info"
                         }
-                        
+
                         // Placeholder for future settings sections
                         div(.class("text-gray-400 px-3 py-2 text-sm")) {
                             "More settings coming soon..."
                         }
                     }
                 }
-                
+
                 // Main content
                 div(.class("lg:col-span-9")) {
                     OrganizationInfoSection(organization: organization)
@@ -155,7 +155,7 @@ struct OrganizationSettingsMain: HTML {
 
 struct OrganizationInfoSection: HTML {
     let organization: OrganizationResponse
-    
+
     var content: some HTML {
         div(.class("bg-white shadow rounded-lg"), .id("organization-info")) {
             div(.class("px-6 py-4 border-b border-gray-200")) {
@@ -166,7 +166,7 @@ struct OrganizationInfoSection: HTML {
                     "Update your organization's basic information and settings."
                 }
             }
-            
+
             div(.class("px-6 py-6")) {
                 form(.id("organization-info-form")) {
                     div(.class("grid grid-cols-1 gap-6")) {
@@ -188,7 +188,7 @@ struct OrganizationInfoSection: HTML {
                                 "This name will be visible to all members of your organization."
                             }
                         }
-                        
+
                         // Organization Description
                         div {
                             label(.for("description"), .class("block text-sm font-medium text-gray-700")) {
@@ -205,7 +205,7 @@ struct OrganizationInfoSection: HTML {
                             }
                         }
                     }
-                    
+
                     div(.class("mt-6 flex justify-end")) {
                         button(
                             .type(.button),
