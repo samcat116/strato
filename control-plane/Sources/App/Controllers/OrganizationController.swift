@@ -1,6 +1,7 @@
 import Foundation
 import Vapor
 import Fluent
+import Elementary
 
 struct OrganizationController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
@@ -13,6 +14,7 @@ struct OrganizationController: RouteCollection {
             org.put(use: update)
             org.delete(use: delete)
             org.post("switch", use: switchToOrganization)
+            org.get("settings", use: settings)
             org.get("members", use: getMembers)
             org.post("members", use: addMember)
             org.delete("members", ":userID", use: removeMember)
@@ -242,6 +244,42 @@ struct OrganizationController: RouteCollection {
         try await user.save(on: req.db)
         
         return .ok
+    }
+    
+    // MARK: - Organization Settings
+    
+    func settings(req: Request) async throws -> Response {
+        guard let user = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+        
+        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid organization ID")
+        }
+        
+        guard let organization = try await Organization.find(organizationID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+        
+        // Check if user is admin of this organization
+        let userOrg = try await UserOrganization.query(on: req.db)
+            .filter(\.$user.$id == user.id!)
+            .filter(\.$organization.$id == organizationID)
+            .filter(\.$role == "admin")
+            .first()
+        
+        guard userOrg != nil else {
+            throw Abort(.forbidden, reason: "Only organization admins can access organization settings")
+        }
+        
+        let organizationResponse = OrganizationResponse(from: organization, userRole: "admin")
+        let html = OrganizationSettingsTemplate(organization: organizationResponse, user: user).render()
+        
+        return Response(
+            status: .ok,
+            headers: HTTPHeaders([("Content-Type", "text/html")]),
+            body: .init(string: html)
+        )
     }
     
     // MARK: - Member Management
