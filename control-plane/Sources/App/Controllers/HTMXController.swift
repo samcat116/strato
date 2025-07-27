@@ -530,8 +530,9 @@ struct OrganizationListPartial: HTML {
         } else {
             ForEach(organizations) { org in
                 let isCurrent = org.id == currentOrgId
+                let buttonClass = "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex justify-between items-center" + (isCurrent ? " bg-indigo-50" : "")
                 button(
-                    .class("w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex justify-between items-center \(isCurrent ? "bg-indigo-50" : "")"),
+                    .class(buttonClass),
                     .custom(name: "hx-post", value: "/htmx/organizations/\(org.id?.uuidString ?? "")/switch"),
                     .custom(name: "hx-target", value: "#orgList"),
                     .custom(name: "hx-swap", value: "innerHTML")
