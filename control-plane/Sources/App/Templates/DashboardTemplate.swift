@@ -93,7 +93,7 @@ struct DashboardTemplate: HTMLDocument {
             // Modal close on escape
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
-                    ['createOrgModal', 'apiKeysModal', 'createApiKeyModal', 'createVMModal'].forEach(hideModal);
+                    ['createOrgModal', 'apiKeysModal', 'createApiKeyModal', 'createVMModal'].forEach(modalId => hideModal(modalId));
                 }
             });
 
