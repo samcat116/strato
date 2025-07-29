@@ -10,18 +10,18 @@ extension Application {
     static func makeForTesting(_ environment: Environment = .testing) async throws -> Application {
         let app = try await Application.make(environment)
         app.logger.logLevel = .debug
-        
+
         // Configure in-memory SQLite for testing
         app.databases.use(.sqlite(.memory), as: .sqlite)
-        
+
         return app
     }
 }
 
 // Helper function to run tests with proper database lifecycle
-func withTestApp(_ test: (Application) async throws -> ()) async throws {
+func withTestApp(_ test: (Application) async throws -> Void) async throws {
     let app = try await Application.makeForTesting()
-    
+
     do {
         try await configure(app)
         try await app.autoMigrate()
@@ -32,7 +32,7 @@ func withTestApp(_ test: (Application) async throws -> ()) async throws {
         try await app.asyncShutdown()
         throw error
     }
-    
+
     try await app.asyncShutdown()
 }
 
@@ -54,13 +54,13 @@ extension User {
         // For testing, we'll use a simple token
         return "test-token-\(self.id?.uuidString ?? UUID().uuidString)"
     }
-    
+
     func generateAPIKey(on db: Database, name: String = "Test API Key") async throws -> String {
         // Generate a proper API key for testing
         let apiKeyString = APIKey.generateAPIKey()
         let keyHash = APIKey.hashAPIKey(apiKeyString)
         let keyPrefix = String(apiKeyString.prefix(16))
-        
+
         let apiKey = APIKey(
             userID: self.id!,
             name: name,
@@ -70,7 +70,7 @@ extension User {
             isActive: true
         )
         try await apiKey.save(on: db)
-        
+
         return apiKeyString
     }
 }
@@ -79,7 +79,7 @@ extension User {
 
 struct TestDataBuilder {
     let db: Database
-    
+
     func createUser(
         username: String = "testuser",
         email: String = "test@example.com",
@@ -95,7 +95,7 @@ struct TestDataBuilder {
         try await user.save(on: db)
         return user
     }
-    
+
     func createOrganization(
         name: String = "Test Organization",
         description: String = "Test organization"
@@ -107,7 +107,7 @@ struct TestDataBuilder {
         try await org.save(on: db)
         return org
     }
-    
+
     func addUserToOrganization(
         user: User,
         organization: Organization,
@@ -120,7 +120,7 @@ struct TestDataBuilder {
         )
         try await userOrg.save(on: db)
     }
-    
+
     func createOU(
         name: String,
         description: String,
@@ -140,7 +140,7 @@ struct TestDataBuilder {
         try await ou.save(on: db)
         return ou
     }
-    
+
     func createProject(
         name: String,
         description: String,
@@ -163,7 +163,7 @@ struct TestDataBuilder {
         try await project.save(on: db)
         return project
     }
-    
+
     func createGroup(
         name: String,
         description: String,
@@ -177,7 +177,7 @@ struct TestDataBuilder {
         try await group.save(on: db)
         return group
     }
-    
+
     func createResourceQuota(
         name: String,
         maxVCPUs: Int = 10,
@@ -203,7 +203,7 @@ struct TestDataBuilder {
         try await quota.save(on: db)
         return quota
     }
-    
+
     func createVM(
         name: String,
         project: Project,
@@ -231,7 +231,7 @@ class MockSpiceDBService {
     var checkPermissionResult: Bool = true
     var writtenRelationships: [(entity: String, entityId: String, relation: String, subject: String, subjectId: String)] = []
     var deletedRelationships: [(entity: String, entityId: String, relation: String, subject: String, subjectId: String)] = []
-    
+
     func checkPermission(
         subject: String,
         permission: String,
@@ -240,7 +240,7 @@ class MockSpiceDBService {
     ) async throws -> Bool {
         return checkPermissionResult
     }
-    
+
     func writeRelationship(
         entity: String,
         entityId: String,
@@ -250,15 +250,14 @@ class MockSpiceDBService {
     ) async throws {
         writtenRelationships.append((entity, entityId, relation, subject, subjectId))
     }
-    
+
     func deleteRelationship(
         entity: String,
         entityId: String,
         relation: String,
-        subject: String, 
+        subject: String,
         subjectId: String
     ) async throws {
         deletedRelationships.append((entity, entityId, relation, subject, subjectId))
     }
 }
-

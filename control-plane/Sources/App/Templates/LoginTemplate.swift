@@ -65,7 +65,7 @@ struct LoginTemplate: HTMLDocument {
                         });
                     }
                 } catch (error) {
-                    document.getElementById('loginStatus').innerHTML = 
+                    document.getElementById('loginStatus').innerHTML =
                         `<div class="text-red-500 text-sm mt-2">Authentication failed: ${error.message}</div>`;
                 }
             }

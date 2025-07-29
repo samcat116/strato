@@ -3,7 +3,7 @@ import Foundation
 
 func tailwind(_ app: Application) async throws {
     app.logger.info("Setting up TailwindCSS processing...")
-    
+
     // In development, we can run TailwindCSS in watch mode
     // In production, CSS should be pre-built during Docker build
     #if DEBUG
@@ -13,11 +13,11 @@ func tailwind(_ app: Application) async throws {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.arguments = ["npm", "run", "build-css"]
-            
+
             // Set working directory to project root
             let workingDirectory = app.directory.workingDirectory
             process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
-            
+
             try process.run()
             app.logger.info("TailwindCSS watch mode started")
         } catch {

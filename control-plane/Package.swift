@@ -24,7 +24,7 @@ let package = Package(
         // 🔵 Non-blocking, event-driven networking for Swift. Used for custom executors
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
         // 🔐 WebAuthn/Passkey authentication
-        .package(url: "https://github.com/swift-server/webauthn-swift.git", branch: "main"),
+        .package(url: "https://github.com/swift-server/webauthn-swift.git", branch: "main")
     ],
     targets: [
         .executableTarget(
@@ -40,7 +40,7 @@ let package = Package(
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOWebSocket", package: "swift-nio"),
-                .product(name: "WebAuthn", package: "webauthn-swift"),
+                .product(name: "WebAuthn", package: "webauthn-swift")
             ],
             swiftSettings: swiftSettings
         ),
@@ -49,7 +49,7 @@ let package = Package(
             dependencies: [
                 .target(name: "App"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentSQLiteDriver", package: "fluent-sqlite-driver"),
+                .product(name: "FluentSQLiteDriver", package: "fluent-sqlite-driver")
             ],
             swiftSettings: swiftSettings
         )

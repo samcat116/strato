@@ -11,14 +11,14 @@ struct VMConfigBuilder {
             cmdline: vm.cmdline ?? template.defaultCmdline,
             initramfs: vm.initramfsPath ?? template.initramfsPath
         )
-        
+
         // CPU configuration
         let cpus = CpusConfig(
             bootVcpus: vm.cpu,
             maxVcpus: vm.maxCpu,
             kvmHyperv: false
         )
-        
+
         // Memory configuration
         let memory = MemoryConfig(
             size: vm.memory,
@@ -27,7 +27,7 @@ struct VMConfigBuilder {
             hugepages: vm.hugepages,
             thp: true
         )
-        
+
         // Disk configuration
         var disks: [DiskConfig] = []
         if let diskPath = vm.diskPath {
@@ -39,7 +39,7 @@ struct VMConfigBuilder {
             )
             disks.append(disk)
         }
-        
+
         // Network configuration
         var networks: [NetConfig] = []
         if let macAddress = vm.macAddress {
@@ -53,21 +53,21 @@ struct VMConfigBuilder {
             )
             networks.append(network)
         }
-        
+
         // Console configuration
         let console = ConsoleConfig(
             socket: vm.consoleSocket,
             mode: vm.consoleMode.rawValue
         )
-        
+
         let serial = ConsoleConfig(
             socket: vm.serialSocket,
             mode: vm.serialMode.rawValue
         )
-        
+
         // RNG configuration
         let rng = RngConfig(src: "/dev/urandom")
-        
+
         return VmConfig(
             cpus: cpus,
             memory: memory,

@@ -32,7 +32,7 @@ struct CreateResourceQuota: AsyncMigration {
             .unique(on: "organizational_unit_id", "name", "environment")
             .unique(on: "project_id", "name", "environment")
             .create()
-        
+
         // Note: Check constraints would be added in a separate step if needed
     }
 

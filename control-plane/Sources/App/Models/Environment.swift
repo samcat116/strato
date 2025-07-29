@@ -14,7 +14,7 @@ struct DeploymentEnvironment: Content {
     let icon: String // For UI display
     let isProduction: Bool
     let requiresApproval: Bool
-    
+
     // Common environment presets
     static let development = DeploymentEnvironment(
         name: "development",
@@ -25,7 +25,7 @@ struct DeploymentEnvironment: Content {
         isProduction: false,
         requiresApproval: false
     )
-    
+
     static let staging = DeploymentEnvironment(
         name: "staging",
         displayName: "Staging",
@@ -35,7 +35,7 @@ struct DeploymentEnvironment: Content {
         isProduction: false,
         requiresApproval: true
     )
-    
+
     static let production = DeploymentEnvironment(
         name: "production",
         displayName: "Production",
@@ -45,7 +45,7 @@ struct DeploymentEnvironment: Content {
         isProduction: true,
         requiresApproval: true
     )
-    
+
     static let testing = DeploymentEnvironment(
         name: "testing",
         displayName: "Testing",
@@ -55,7 +55,7 @@ struct DeploymentEnvironment: Content {
         isProduction: false,
         requiresApproval: false
     )
-    
+
     static let demo = DeploymentEnvironment(
         name: "demo",
         displayName: "Demo",
@@ -65,14 +65,14 @@ struct DeploymentEnvironment: Content {
         isProduction: false,
         requiresApproval: false
     )
-    
+
     // Get all default environments
     static let defaults: [DeploymentEnvironment] = [
         development,
         staging,
         production
     ]
-    
+
     // Get all available preset environments
     static let allPresets: [DeploymentEnvironment] = [
         development,
@@ -81,7 +81,7 @@ struct DeploymentEnvironment: Content {
         testing,
         demo
     ]
-    
+
     // Get environment by name
     static func byName(_ name: String) -> DeploymentEnvironment? {
         return allPresets.first { $0.name == name }
@@ -95,7 +95,7 @@ struct EnvironmentConfig: Content {
     let defaultEnvironment: String
     let productionEnvironments: [String]
     let requiresApprovalEnvironments: [String]
-    
+
     init(for project: Project) {
         // Map project environment strings to DeploymentEnvironment objects
         self.environments = project.environments.compactMap { envName in
@@ -109,13 +109,13 @@ struct EnvironmentConfig: Content {
                 requiresApproval: false
             )
         }
-        
+
         self.defaultEnvironment = project.defaultEnvironment
-        
+
         self.productionEnvironments = environments
             .filter { $0.isProduction }
             .map { $0.name }
-        
+
         self.requiresApprovalEnvironments = environments
             .filter { $0.requiresApproval }
             .map { $0.name }
@@ -134,7 +134,7 @@ struct EnvironmentSettings: Content {
     let monitoringEnabled: Bool
     let alertingEnabled: Bool
     let maintenanceWindow: MaintenanceWindow?
-    
+
     struct MaintenanceWindow: Content {
         let dayOfWeek: Int // 0-6, 0 = Sunday
         let startHour: Int // 0-23
@@ -153,7 +153,7 @@ struct EnvironmentPromotion: Content {
     let notes: String?
     let approvedBy: UUID?
     let approvalRequired: Bool
-    
+
     init(
         from source: String,
         to target: String,

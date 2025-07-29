@@ -255,7 +255,7 @@ extension ResourceQuota {
         }
 
         // Validate reserved doesn't exceed max
-        if reservedVCPUs > maxVCPUs || reservedMemory > maxMemory || 
+        if reservedVCPUs > maxVCPUs || reservedMemory > maxMemory ||
            reservedStorage > maxStorage || vmCount > maxVMs {
             throw Abort(.badRequest, reason: "Reserved resources cannot exceed maximum limits")
         }
@@ -323,7 +323,7 @@ struct ResourceQuotaResponse: Content {
     init(from quota: ResourceQuota) {
         self.id = quota.id
         self.name = quota.name
-        
+
         // Determine entity type and ID
         if let orgId = quota.$organization.id {
             self.entityType = "organization"
@@ -339,10 +339,10 @@ struct ResourceQuotaResponse: Content {
             self.entityType = "unknown"
             self.entityId = UUID()
         }
-        
+
         self.environment = quota.environment
         self.isEnabled = quota.isEnabled
-        
+
         self.limits = ResourceLimits(
             maxVCPUs: quota.maxVCPUs,
             maxMemoryGB: Double(quota.maxMemory) / 1024 / 1024 / 1024,
@@ -350,7 +350,7 @@ struct ResourceQuotaResponse: Content {
             maxVMs: quota.maxVMs,
             maxNetworks: quota.maxNetworks
         )
-        
+
         self.usage = ResourceUsage(
             reservedVCPUs: quota.reservedVCPUs,
             reservedMemoryGB: Double(quota.reservedMemory) / 1024 / 1024 / 1024,
@@ -358,14 +358,14 @@ struct ResourceQuotaResponse: Content {
             vmCount: quota.vmCount,
             networkCount: quota.networkCount
         )
-        
+
         self.utilization = ResourceUtilization(
             cpuPercent: quota.cpuUtilizationPercent,
             memoryPercent: quota.memoryUtilizationPercent,
             storagePercent: quota.storageUtilizationPercent,
             vmPercent: quota.vmUtilizationPercent
         )
-        
+
         self.createdAt = quota.createdAt
     }
 }

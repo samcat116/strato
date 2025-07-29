@@ -13,7 +13,7 @@ final class GroupTests: BaseTestCase {
     func testCreateGroup() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
-            
+
             try await app.test(.POST, "/organizations/\(testOrganization.id!)/groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateGroupRequest(
@@ -36,7 +36,7 @@ final class GroupTests: BaseTestCase {
     func testCreateDuplicateGroup() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
-            
+
             // Create first group
             let firstGroup = Group(
                 name: "Duplicate Group",
@@ -62,7 +62,7 @@ final class GroupTests: BaseTestCase {
     func testCreateGroupWithoutAdminAccess() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
-            
+
             // Create member user
             let memberUser = User(
                 username: "memberuser",
@@ -98,7 +98,7 @@ final class GroupTests: BaseTestCase {
     func testListGroups() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
-            
+
             // Create test groups
             let group1 = Group(
                 name: "Group A",
@@ -133,7 +133,7 @@ final class GroupTests: BaseTestCase {
     func testAddMembersToGroup() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
-            
+
             let group = Group(
                 name: "Member Test Group",
                 description: "Group for membership testing",
@@ -186,7 +186,7 @@ final class GroupTests: BaseTestCase {
     func testRemoveMemberFromGroup() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
-            
+
             let group = Group(
                 name: "Remove Test Group",
                 description: "Group for removal testing",
@@ -231,7 +231,7 @@ final class GroupTests: BaseTestCase {
     func testUpdateGroup() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
-            
+
             let group = Group(
                 name: "Original Name",
                 description: "Original description",
@@ -261,7 +261,7 @@ final class GroupTests: BaseTestCase {
     func testDeleteGroup() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
-            
+
             let group = Group(
                 name: "Delete Test Group",
                 description: "Group to be deleted",
@@ -281,4 +281,3 @@ final class GroupTests: BaseTestCase {
         }
     }
 }
-

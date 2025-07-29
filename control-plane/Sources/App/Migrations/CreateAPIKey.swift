@@ -18,7 +18,7 @@ struct CreateAPIKey: AsyncMigration {
             .unique(on: "key_hash")
             .create()
     }
-    
+
     func revert(on database: Database) async throws {
         try await database.schema("api_keys").delete()
     }

@@ -81,7 +81,7 @@ struct OnboardingTemplate: HTMLDocument {
             HTMLRaw("""
             document.getElementById('setupForm').addEventListener('submit', async (e) => {
                 e.preventDefault();
-                
+
                 const submitBtn = document.getElementById('submitBtn');
                 const originalText = submitBtn.textContent;
                 submitBtn.disabled = true;
@@ -104,7 +104,7 @@ struct OnboardingTemplate: HTMLDocument {
 
                     if (response.ok) {
                         const result = await response.json();
-                        
+
                         // Show success message
                         document.getElementById('setupForm').innerHTML = `
                             <div class="text-center">
@@ -115,7 +115,7 @@ struct OnboardingTemplate: HTMLDocument {
                                 <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
                             </div>
                         `;
-                        
+
                         // Redirect to dashboard after 2 seconds
                         setTimeout(() => {
                             window.location.href = '/';
@@ -189,7 +189,7 @@ struct FeatureItem: HTML {
     let icon: String
     let title: String
     let description: String
-    
+
     var content: some HTML {
         div(.class("text-center")) {
             div(.class("text-2xl mb-2")) { icon }

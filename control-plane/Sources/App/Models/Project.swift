@@ -32,7 +32,7 @@ final class Project: Model, @unchecked Sendable {
     // Available environments stored as JSON string for SQLite compatibility
     @Field(key: "environments")
     var environmentsJSON: String
-    
+
     // Computed property for array access
     var environments: [String] {
         get {
@@ -124,7 +124,7 @@ extension Project {
     /// Builds the path string for this project based on its hierarchy
     func buildPath(on db: Database) async throws -> String {
         var pathComponents: [String] = []
-        
+
         // If project belongs to an OU, get the OU's path
         if let ouId = self.$organizationalUnit.id {
             if let ou = try await OrganizationalUnit.find(ouId, on: db) {
@@ -137,41 +137,41 @@ extension Project {
             // Direct organization child
             pathComponents.append(orgId.uuidString)
         }
-        
+
         // Add project ID if available
         if let projectId = self.id {
             pathComponents.append(projectId.uuidString)
         }
-        
+
         return "/" + pathComponents.joined(separator: "/")
     }
-    
+
     /// Gets the root organization ID for this project
     func getRootOrganizationId(on db: Database) async throws -> UUID? {
         if let orgId = self.$organization.id {
             return orgId
         }
-        
+
         if let ouId = self.$organizationalUnit.id,
            let ou = try await OrganizationalUnit.find(ouId, on: db) {
             return ou.$organization.id
         }
-        
+
         return nil
     }
-    
+
     /// Validates that an environment exists in this project
     func hasEnvironment(_ environment: String) -> Bool {
         return environments.contains(environment)
     }
-    
+
     /// Adds a new environment to the project
     func addEnvironment(_ environment: String) {
         if !environments.contains(environment) {
             environments.append(environment)
         }
     }
-    
+
     /// Removes an environment from the project (if not the default)
     func removeEnvironment(_ environment: String) -> Bool {
         guard environment != defaultEnvironment,
@@ -191,16 +191,16 @@ extension Project {
         if self.$organization.id != nil && self.$organizationalUnit.id != nil {
             throw Abort(.badRequest, reason: "Project cannot belong to both an organization and an organizational unit")
         }
-        
+
         if self.$organization.id == nil && self.$organizationalUnit.id == nil {
             throw Abort(.badRequest, reason: "Project must belong to either an organization or an organizational unit")
         }
-        
+
         // Ensure default environment exists in environments list
         if !environments.contains(defaultEnvironment) {
             throw Abort(.badRequest, reason: "Default environment must be in the environments list")
         }
-        
+
         // Ensure at least one environment exists
         if environments.isEmpty {
             throw Abort(.badRequest, reason: "Project must have at least one environment")

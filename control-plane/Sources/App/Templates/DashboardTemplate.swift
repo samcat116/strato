@@ -72,7 +72,7 @@ struct DashboardTemplate: HTMLDocument {
             function toggleOrgDropdown() {
                 const dropdown = document.getElementById('orgDropdown');
                 dropdown.classList.toggle('hidden');
-                
+
                 // Close dropdown when clicking outside
                 if (!dropdown.classList.contains('hidden')) {
                     document.addEventListener('click', function closeDropdown(e) {
@@ -142,7 +142,7 @@ struct DashboardHeader: HTML {
                                     "Switch Organization"
                                 }
                                 div(
-                                    .id("orgList"), 
+                                    .id("orgList"),
                                     .class("max-h-48 overflow-y-auto"),
                                     .custom(name: "hx-trigger", value: "load"),
                                     .custom(name: "hx-get", value: "/htmx/organizations/list"),
@@ -168,7 +168,7 @@ struct DashboardHeader: HTML {
                             }
                         }
                     }
-                    
+
                     button(
                         .id("createVMBtn"),
                         .class(
@@ -603,7 +603,7 @@ struct VMTableHeader: HTML {
 struct VMTableBody: HTML {
     var content: some HTML {
         tbody(
-            .id("vmTableBody"), 
+            .id("vmTableBody"),
             .class("divide-y divide-gray-200"),
             .custom(name: "hx-trigger", value: "load"),
             .custom(name: "hx-get", value: "/htmx/vms/list"),
