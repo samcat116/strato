@@ -13,21 +13,21 @@ struct ResourceQuotaController: RouteCollection {
             quota.delete(use: delete)
             quota.get("usage", use: getUsage)
         }
-        
+
         // Organization context routes
         let organizations = routes.grouped("organizations")
         organizations.group(":organizationID") { org in
             let orgQuotas = org.grouped("quotas")
             orgQuotas.get(use: indexForOrganization)
             orgQuotas.post(use: createForOrganization)
-            
+
             // OU context routes
             org.group("ous", ":ouID", "quotas") { ouQuotas in
                 ouQuotas.get(use: indexForOU)
                 ouQuotas.post(use: createForOU)
             }
         }
-        
+
         // Project context routes
         let projects = routes.grouped("projects")
         projects.group(":projectID", "quotas") { projQuotas in
@@ -35,26 +35,26 @@ struct ResourceQuotaController: RouteCollection {
             projQuotas.post(use: createForProject)
         }
     }
-    
+
     // MARK: - Resource Quota CRUD Operations
-    
+
     func indexByLevel(req: Request) async throws -> [ResourceQuotaResponse] {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
-        
+
         let level = req.query[String.self, at: "level"]
-        
+
         // Get all organizations the user belongs to
         try await user.$organizations.load(on: req.db)
         let organizationIDs = user.organizations.compactMap { $0.id }
-        
+
         if organizationIDs.isEmpty {
             return []
         }
-        
+
         var query = ResourceQuota.query(on: req.db)
-        
+
         switch level {
         case "organization":
             query = query.filter(\.$organization.$id ~~ organizationIDs)
@@ -65,20 +65,20 @@ struct ResourceQuotaController: RouteCollection {
             let directProjects = try await Project.query(on: req.db)
                 .filter(\.$organization.$id ~~ organizationIDs)
                 .all()
-            
+
             // Get all OUs in user's organizations
             let ous = try await OrganizationalUnit.query(on: req.db)
                 .filter(\.$organization.$id ~~ organizationIDs)
                 .all()
             let ouIDs = ous.compactMap { $0.id }
-            
+
             let ouProjects = !ouIDs.isEmpty ? try await Project.query(on: req.db)
                 .filter(\.$organizationalUnit.$id ~~ ouIDs)
                 .all() : []
-            
+
             let allProjects = directProjects + ouProjects
             let projectIDs = allProjects.compactMap { $0.id }
-            
+
             if projectIDs.isEmpty {
                 return []
             }
@@ -101,53 +101,53 @@ struct ResourceQuotaController: RouteCollection {
                 // TODO: Add project and OU quota filtering for user access
             }
         }
-        
+
         let quotas = try await query.sort(\.$name).all()
         return quotas.map { ResourceQuotaResponse(from: $0) }
     }
-    
+
     func show(req: Request) async throws -> ResourceQuotaResponse {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
-        
+
         guard let quotaID = req.parameters.get("quotaID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid quota ID")
         }
-        
+
         guard let quota = try await ResourceQuota.find(quotaID, on: req.db) else {
             throw Abort(.notFound, reason: "Resource quota not found")
         }
-        
+
         // Verify user has access to quota
         try await verifyQuotaAccess(user: user, quota: quota, on: req.db)
-        
+
         return ResourceQuotaResponse(from: quota)
     }
-    
+
     func update(req: Request) async throws -> ResourceQuotaResponse {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
-        
+
         guard let quotaID = req.parameters.get("quotaID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid quota ID")
         }
-        
+
         let updateRequest = try req.content.decode(UpdateResourceQuotaRequest.self)
-        
+
         guard let quota = try await ResourceQuota.find(quotaID, on: req.db) else {
             throw Abort(.notFound, reason: "Resource quota not found")
         }
-        
+
         // Verify user has admin access to quota
         try await verifyQuotaAdminAccess(user: user, quota: quota, on: req.db)
-        
+
         // Update fields
         if let name = updateRequest.name {
             quota.name = name
         }
-        
+
         if let maxVCPUs = updateRequest.maxVCPUs {
             // Ensure new limit isn't below current reservation
             if maxVCPUs < quota.reservedVCPUs {
@@ -155,7 +155,7 @@ struct ResourceQuotaController: RouteCollection {
             }
             quota.maxVCPUs = maxVCPUs
         }
-        
+
         if let maxMemoryGB = updateRequest.maxMemoryGB {
             let maxMemoryBytes = Int64(maxMemoryGB * 1024 * 1024 * 1024)
             if maxMemoryBytes < quota.reservedMemory {
@@ -164,7 +164,7 @@ struct ResourceQuotaController: RouteCollection {
             }
             quota.maxMemory = maxMemoryBytes
         }
-        
+
         if let maxStorageGB = updateRequest.maxStorageGB {
             let maxStorageBytes = Int64(maxStorageGB * 1024 * 1024 * 1024)
             if maxStorageBytes < quota.reservedStorage {
@@ -173,90 +173,90 @@ struct ResourceQuotaController: RouteCollection {
             }
             quota.maxStorage = maxStorageBytes
         }
-        
+
         if let maxVMs = updateRequest.maxVMs {
             if maxVMs < quota.vmCount {
                 throw Abort(.badRequest, reason: "New VM limit (\(maxVMs)) cannot be below current count (\(quota.vmCount))")
             }
             quota.maxVMs = maxVMs
         }
-        
+
         if let maxNetworks = updateRequest.maxNetworks {
             quota.maxNetworks = maxNetworks
         }
-        
+
         if let isEnabled = updateRequest.isEnabled {
             quota.isEnabled = isEnabled
         }
-        
+
         try quota.validate()
         try await quota.save(on: req.db)
-        
+
         return ResourceQuotaResponse(from: quota)
     }
-    
+
     func delete(req: Request) async throws -> HTTPStatus {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
-        
+
         guard let quotaID = req.parameters.get("quotaID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid quota ID")
         }
-        
+
         guard let quota = try await ResourceQuota.find(quotaID, on: req.db) else {
             throw Abort(.notFound, reason: "Resource quota not found")
         }
-        
+
         // Verify user has admin access to quota
         try await verifyQuotaAdminAccess(user: user, quota: quota, on: req.db)
-        
+
         // Check if quota has any reservations
         if quota.reservedVCPUs > 0 || quota.reservedMemory > 0 || quota.reservedStorage > 0 || quota.vmCount > 0 {
             throw Abort(.conflict, reason: "Cannot delete quota with active resource reservations")
         }
-        
+
         try await quota.delete(on: req.db)
         return .noContent
     }
-    
+
     // MARK: - Organization Context Operations
-    
+
     func indexForOrganization(req: Request) async throws -> [ResourceQuotaResponse] {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
-        
+
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
-        
+
         // Verify user has access to organization
         try await verifyOrganizationAccess(user: user, organizationID: organizationID, on: req.db)
-        
+
         // Get all quotas for the organization
         let quotas = try await ResourceQuota.query(on: req.db)
             .filter(\.$organization.$id == organizationID)
             .sort(\.$name)
             .all()
-        
+
         return quotas.map { ResourceQuotaResponse(from: $0) }
     }
-    
+
     func createForOrganization(req: Request) async throws -> ResourceQuotaResponse {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
-        
+
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
-        
+
         let createRequest = try req.content.decode(CreateResourceQuotaRequest.self)
-        
+
         // Verify user has admin access to organization
         try await verifyOrganizationAdminAccess(user: user, organizationID: organizationID, on: req.db)
-        
+
         // Check for duplicate quota name within organization
         try await validateQuotaNameUniqueness(
             name: createRequest.name,
@@ -267,7 +267,7 @@ struct ResourceQuotaController: RouteCollection {
             excludeQuotaID: nil,
             on: req.db
         )
-        
+
         // Create quota
         let quota = try await createQuota(
             createRequest: createRequest,
@@ -276,56 +276,56 @@ struct ResourceQuotaController: RouteCollection {
             projectID: nil,
             on: req.db
         )
-        
+
         return ResourceQuotaResponse(from: quota)
     }
-    
+
     func indexForOU(req: Request) async throws -> [ResourceQuotaResponse] {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
-        
+
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
               let ouID = req.parameters.get("ouID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid organization or OU ID")
         }
-        
+
         // Verify user has access to organization
         try await verifyOrganizationAccess(user: user, organizationID: organizationID, on: req.db)
-        
+
         // Get all quotas for the OU
         let quotas = try await ResourceQuota.query(on: req.db)
             .filter(\.$organizationalUnit.$id == ouID)
             .sort(\.$name)
             .all()
-        
+
         return quotas.map { ResourceQuotaResponse(from: $0) }
     }
-    
+
     func createForOU(req: Request) async throws -> ResourceQuotaResponse {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
-        
+
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
               let ouID = req.parameters.get("ouID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid organization or OU ID")
         }
-        
+
         let createRequest = try req.content.decode(CreateResourceQuotaRequest.self)
-        
+
         // Verify user has admin access to organization
         try await verifyOrganizationAdminAccess(user: user, organizationID: organizationID, on: req.db)
-        
+
         // Verify OU exists and belongs to organization
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
             throw Abort(.notFound, reason: "Organizational unit not found")
         }
-        
+
         if ou.$organization.id != organizationID {
             throw Abort(.badRequest, reason: "OU does not belong to the specified organization")
         }
-        
+
         // Check for duplicate quota name within OU
         try await validateQuotaNameUniqueness(
             name: createRequest.name,
@@ -336,7 +336,7 @@ struct ResourceQuotaController: RouteCollection {
             excludeQuotaID: nil,
             on: req.db
         )
-        
+
         // Create quota
         let quota = try await createQuota(
             createRequest: createRequest,
@@ -345,60 +345,60 @@ struct ResourceQuotaController: RouteCollection {
             projectID: nil,
             on: req.db
         )
-        
+
         return ResourceQuotaResponse(from: quota)
     }
-    
+
     func indexForProject(req: Request) async throws -> [ResourceQuotaResponse] {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
-        
+
         guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid project ID")
         }
-        
+
         guard let project = try await Project.find(projectID, on: req.db) else {
             throw Abort(.notFound, reason: "Project not found")
         }
-        
+
         // Verify user has access to project
         try await verifyProjectAccess(user: user, project: project, on: req.db)
-        
+
         // Get all quotas for the project
         let quotas = try await ResourceQuota.query(on: req.db)
             .filter(\.$project.$id == projectID)
             .sort(\.$name)
             .all()
-        
+
         return quotas.map { ResourceQuotaResponse(from: $0) }
     }
-    
+
     func createForProject(req: Request) async throws -> ResourceQuotaResponse {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
-        
+
         guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid project ID")
         }
-        
+
         let createRequest = try req.content.decode(CreateResourceQuotaRequest.self)
-        
+
         guard let project = try await Project.find(projectID, on: req.db) else {
             throw Abort(.notFound, reason: "Project not found")
         }
-        
+
         // Verify user has admin access to project
         try await verifyProjectAdminAccess(user: user, project: project, on: req.db)
-        
+
         // Validate environment if specified
         if let environment = createRequest.environment {
             if !project.hasEnvironment(environment) {
                 throw Abort(.badRequest, reason: "Environment '\(environment)' does not exist in this project")
             }
         }
-        
+
         // Check for duplicate quota name within project
         try await validateQuotaNameUniqueness(
             name: createRequest.name,
@@ -409,7 +409,7 @@ struct ResourceQuotaController: RouteCollection {
             excludeQuotaID: nil,
             on: req.db
         )
-        
+
         // Create quota
         let quota = try await createQuota(
             createRequest: createRequest,
@@ -418,40 +418,40 @@ struct ResourceQuotaController: RouteCollection {
             projectID: projectID,
             on: req.db
         )
-        
+
         return ResourceQuotaResponse(from: quota)
     }
-    
+
     // MARK: - Usage Tracking
-    
+
     func getUsage(req: Request) async throws -> QuotaUsageResponse {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
-        
+
         guard let quotaID = req.parameters.get("quotaID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid quota ID")
         }
-        
+
         guard let quota = try await ResourceQuota.find(quotaID, on: req.db) else {
             throw Abort(.notFound, reason: "Resource quota not found")
         }
-        
+
         // Verify user has access to quota
         try await verifyQuotaAccess(user: user, quota: quota, on: req.db)
-        
+
         // Get actual usage based on quota scope
         let (actualUsage, vms) = try await calculateActualUsage(quota: quota, on: req.db)
-        
+
         // Calculate VM breakdown by environment
         var vmsByEnvironment: [String: Int] = [:]
         var vmsByStatus: [String: Int] = [:]
-        
+
         for vm in vms {
             vmsByEnvironment[vm.environment, default: 0] += 1
             vmsByStatus[vm.status.rawValue, default: 0] += 1
         }
-        
+
         return QuotaUsageResponse(
             quotaId: quota.id!,
             quotaName: quota.name,
@@ -482,56 +482,56 @@ struct ResourceQuotaController: RouteCollection {
             environment: quota.environment
         )
     }
-    
+
     // MARK: - Helper Methods
-    
+
     private func verifyOrganizationAccess(user: User, organizationID: UUID, on db: Database) async throws {
         let userOrg = try await UserOrganization.query(on: db)
             .filter(\.$user.$id == user.id!)
             .filter(\.$organization.$id == organizationID)
             .first()
-        
+
         guard userOrg != nil else {
             throw Abort(.forbidden, reason: "Not a member of this organization")
         }
     }
-    
+
     private func verifyOrganizationAdminAccess(user: User, organizationID: UUID, on db: Database) async throws {
         let userOrg = try await UserOrganization.query(on: db)
             .filter(\.$user.$id == user.id!)
             .filter(\.$organization.$id == organizationID)
             .first()
-        
+
         guard let userOrganization = userOrg, userOrganization.role == "admin" else {
             throw Abort(.forbidden, reason: "Admin access required")
         }
     }
-    
+
     private func verifyProjectAccess(user: User, project: Project, on db: Database) async throws {
         let organizationID = try await project.getRootOrganizationId(on: db)
         guard let orgID = organizationID else {
             throw Abort(.internalServerError, reason: "Project has no organization")
         }
-        
+
         try await verifyOrganizationAccess(user: user, organizationID: orgID, on: db)
     }
-    
+
     private func verifyProjectAdminAccess(user: User, project: Project, on db: Database) async throws {
         let organizationID = try await project.getRootOrganizationId(on: db)
         guard let orgID = organizationID else {
             throw Abort(.internalServerError, reason: "Project has no organization")
         }
-        
+
         let userOrg = try await UserOrganization.query(on: db)
             .filter(\.$user.$id == user.id!)
             .filter(\.$organization.$id == orgID)
             .first()
-        
+
         guard let userOrganization = userOrg, userOrganization.role == "admin" else {
             throw Abort(.forbidden, reason: "Admin access required")
         }
     }
-    
+
     private func verifyQuotaAccess(user: User, quota: ResourceQuota, on db: Database) async throws {
         if let orgID = quota.$organization.id {
             try await verifyOrganizationAccess(user: user, organizationID: orgID, on: db)
@@ -543,7 +543,7 @@ struct ResourceQuotaController: RouteCollection {
             try await verifyProjectAccess(user: user, project: project!, on: db)
         }
     }
-    
+
     private func verifyQuotaAdminAccess(user: User, quota: ResourceQuota, on db: Database) async throws {
         if let orgID = quota.$organization.id {
             try await verifyOrganizationAdminAccess(user: user, organizationID: orgID, on: db)
@@ -555,7 +555,7 @@ struct ResourceQuotaController: RouteCollection {
             try await verifyProjectAdminAccess(user: user, project: project!, on: db)
         }
     }
-    
+
     private func validateQuotaNameUniqueness(
         name: String,
         organizationID: UUID?,
@@ -567,11 +567,11 @@ struct ResourceQuotaController: RouteCollection {
     ) async throws {
         let query = ResourceQuota.query(on: db)
             .filter(\.$name == name)
-        
+
         if let excludeID = excludeQuotaID {
             query.filter(\.$id != excludeID)
         }
-        
+
         if let orgID = organizationID {
             query.filter(\.$organization.$id == orgID)
         } else if let ouID = ouID {
@@ -579,20 +579,20 @@ struct ResourceQuotaController: RouteCollection {
         } else if let projID = projectID {
             query.filter(\.$project.$id == projID)
         }
-        
+
         if let env = environment {
             query.filter(\.$environment == env)
         } else {
             query.filter(\.$environment == nil)
         }
-        
+
         let existingQuota = try await query.first()
         if existingQuota != nil {
             let scope = environment.map { " for environment '\($0)'" } ?? ""
             throw Abort(.conflict, reason: "Quota name already exists in this scope\(scope)")
         }
     }
-    
+
     private func createQuota(
         createRequest: CreateResourceQuotaRequest,
         organizationID: UUID?,
@@ -602,7 +602,7 @@ struct ResourceQuotaController: RouteCollection {
     ) async throws -> ResourceQuota {
         let maxMemoryBytes = Int64(createRequest.maxMemoryGB * 1024 * 1024 * 1024)
         let maxStorageBytes = Int64(createRequest.maxStorageGB * 1024 * 1024 * 1024)
-        
+
         let quota = ResourceQuota(
             name: createRequest.name,
             organizationID: organizationID,
@@ -616,16 +616,16 @@ struct ResourceQuotaController: RouteCollection {
             environment: createRequest.environment,
             isEnabled: createRequest.isEnabled ?? true
         )
-        
+
         try quota.validate()
         try await quota.save(on: db)
-        
+
         return quota
     }
-    
+
     private func calculateActualUsage(quota: ResourceQuota, on db: Database) async throws -> (QuotaUsage, [VM]) {
         var vms: [VM] = []
-        
+
         // Get VMs based on quota scope
         if let projectID = quota.$project.id {
             let query = VM.query(on: db).filter(\.$project.$id == projectID)
@@ -638,7 +638,7 @@ struct ResourceQuotaController: RouteCollection {
             let projects = try await Project.query(on: db)
                 .filter(\.$organizationalUnit.$id == ouID)
                 .all()
-            
+
             let projectIDs = projects.compactMap { $0.id }
             if !projectIDs.isEmpty {
                 let query = VM.query(on: db).filter(\.$project.$id ~~ projectIDs)
@@ -651,7 +651,7 @@ struct ResourceQuotaController: RouteCollection {
             // Get all projects in this organization (direct and via OUs)
             let org = try await Organization.find(orgID, on: db)!
             let allProjects = try await org.getAllProjects(on: db)
-            
+
             let projectIDs = allProjects.compactMap { $0.id }
             if !projectIDs.isEmpty {
                 let query = VM.query(on: db).filter(\.$project.$id ~~ projectIDs)
@@ -661,12 +661,12 @@ struct ResourceQuotaController: RouteCollection {
                 vms = try await query.all()
             }
         }
-        
+
         // Calculate actual usage
         let totalVCPUs = vms.reduce(0) { $0 + $1.cpu }
         let totalMemory = vms.reduce(0) { $0 + $1.memory }
         let totalStorage = vms.reduce(0) { $0 + $1.disk }
-        
+
         let actualUsage = QuotaUsage(
             vcpus: totalVCPUs,
             memoryGB: Double(totalMemory) / 1024 / 1024 / 1024,
@@ -674,7 +674,7 @@ struct ResourceQuotaController: RouteCollection {
             vms: vms.count,
             networks: 0 // TODO: Implement network counting when networking is added
         )
-        
+
         return (actualUsage, vms)
     }
 }

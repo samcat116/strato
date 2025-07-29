@@ -97,47 +97,47 @@ extension OrganizationalUnit {
     /// Builds the path string for this OU based on its hierarchy
     func buildPath(on db: Database) async throws -> String {
         var pathComponents: [String] = []
-        
+
         // Add organization ID as root
         pathComponents.append(self.$organization.id.uuidString)
-        
+
         // Walk up the parent chain
         var currentOU: OrganizationalUnit? = self
         var ouChain: [UUID] = []
-        
+
         while let ou = currentOU, let parentId = ou.$parentOU.id {
             ouChain.insert(parentId, at: 0)
             currentOU = try await OrganizationalUnit.find(parentId, on: db)
         }
-        
+
         // Add all parent OUs to path
         pathComponents.append(contentsOf: ouChain.map { $0.uuidString })
-        
+
         // Add self if we have an ID
         if let selfId = self.id {
             pathComponents.append(selfId.uuidString)
         }
-        
+
         return "/" + pathComponents.joined(separator: "/")
     }
-    
+
     /// Calculates the depth of this OU in the hierarchy
     func calculateDepth(on db: Database) async throws -> Int {
         var depth = 0
         var currentOU: OrganizationalUnit? = self
-        
+
         while let ou = currentOU, let parentId = ou.$parentOU.id {
             depth += 1
             currentOU = try await OrganizationalUnit.find(parentId, on: db)
         }
-        
+
         return depth
     }
-    
+
     /// Gets all descendant OUs (children, grandchildren, etc.)
     func descendants(on db: Database) async throws -> [OrganizationalUnit] {
         guard let selfId = self.id else { return [] }
-        
+
         return try await OrganizationalUnit.query(on: db)
             .filter(\.$path ~~ selfId.uuidString)
             .filter(\.$id != selfId)

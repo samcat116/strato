@@ -11,13 +11,13 @@ final class ResourceQuotaTests {
     var testOrganization: Organization!
     var testProject: Project!
     var authToken: String!
-    
+
     init() async throws {
         self.app = try await Application.makeForTesting()
         try await configure(app)
         try await app.autoRevert()
         try await app.autoMigrate()
-        
+
         // Create test user and organization
         testUser = User(
             username: "testuser",
@@ -26,13 +26,13 @@ final class ResourceQuotaTests {
             isSystemAdmin: false
         )
         try await testUser.save(on: app.db)
-        
+
         testOrganization = Organization(
             name: "Test Organization",
             description: "Test organization for unit tests"
         )
         try await testOrganization.save(on: app.db)
-        
+
         // Create test project
         testProject = Project(
             name: "Test Project",
@@ -43,7 +43,7 @@ final class ResourceQuotaTests {
         try await testProject.save(on: app.db)
         testProject.path = try await testProject.buildPath(on: app.db)
         try await testProject.save(on: app.db)
-        
+
         // Add user to organization as admin
         let userOrg = UserOrganization(
             userID: testUser.id!,
@@ -51,19 +51,19 @@ final class ResourceQuotaTests {
             role: "admin"
         )
         try await userOrg.save(on: app.db)
-        
+
         authToken = try await testUser.generateAPIKey(on: app.db)
     }
-    
+
     deinit {
         let application = app
         Task {
             try? await application?.asyncShutdown()
         }
     }
-    
+
     // MARK: - Create Quota Tests
-    
+
     @Test("Create organization-level quota")
     func testCreateOrganizationQuota() async throws {
         try await app.test(.POST, "/organizations/\(testOrganization.id!)/quotas") { req in
@@ -80,7 +80,7 @@ final class ResourceQuotaTests {
             ))
         } afterResponse: { res in
             #expect(res.status == .ok)
-            
+
             let response = try res.content.decode(ResourceQuotaResponse.self)
             #expect(response.name == "Org Quota")
             #expect(response.limits.maxVCPUs == 100)
@@ -91,7 +91,7 @@ final class ResourceQuotaTests {
             #expect(response.entityType == "organization")
         }
     }
-    
+
     @Test("Create project-level quota")
     func testCreateProjectQuota() async throws {
         try await app.test(.POST, "/projects/\(testProject.id!)/quotas") { req in
@@ -108,14 +108,14 @@ final class ResourceQuotaTests {
             ))
         } afterResponse: { res in
             #expect(res.status == .ok)
-            
+
             let response = try res.content.decode(ResourceQuotaResponse.self)
             #expect(response.name == "Project Quota")
             #expect(response.entityId == testProject.id!)
             #expect(response.entityType == "project")
         }
     }
-    
+
     @Test("Create environment-specific quota")
     func testCreateEnvironmentQuota() async throws {
         try await app.test(.POST, "/projects/\(testProject.id!)/quotas") { req in
@@ -132,15 +132,15 @@ final class ResourceQuotaTests {
             ))
         } afterResponse: { res in
             #expect(res.status == .ok)
-            
+
             let response = try res.content.decode(ResourceQuotaResponse.self)
             #expect(response.environment == "production")
             #expect(response.entityType == "project") // Environment quota is still under project
         }
     }
-    
+
     // MARK: - Usage Tracking Tests
-    
+
     @Test("Track quota usage")
     func testQuotaUsageTracking() async throws {
         // Create quota
@@ -155,26 +155,26 @@ final class ResourceQuotaTests {
             maxVMs: 5
         )
         try await quota.save(on: app.db)
-        
+
         // Update usage
         quota.reservedVCPUs = 4
         quota.reservedMemory = Int64(8.0 * 1024 * 1024 * 1024)
         quota.reservedStorage = Int64(40.0 * 1024 * 1024 * 1024)
         quota.vmCount = 2
         try await quota.save(on: app.db)
-        
+
         // Get quota with usage
         try await app.test(.GET, "/quotas/\(quota.id!)") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
         } afterResponse: { res in
             #expect(res.status == .ok)
-            
+
             let response = try res.content.decode(ResourceQuotaResponse.self)
             #expect(response.usage.reservedVCPUs == 4)
             #expect(response.usage.reservedMemoryGB == 8.0)
             #expect(response.usage.reservedStorageGB == 40.0)
             #expect(response.usage.vmCount == 2)
-            
+
             // Check utilization percentages
             #expect(response.utilization.cpuPercent == 40.0) // 4/10 * 100
             #expect(response.utilization.memoryPercent == 40.0) // 8/20 * 100
@@ -182,7 +182,7 @@ final class ResourceQuotaTests {
             #expect(response.utilization.vmPercent == 40.0) // 2/5 * 100
         }
     }
-    
+
     @Test("Quota validation - exceeding limits")
     func testQuotaExceedsLimits() async throws {
         let quota = ResourceQuota(
@@ -196,19 +196,19 @@ final class ResourceQuotaTests {
             maxVMs: 1
         )
         try await quota.save(on: app.db)
-        
+
         // Try to use more than available
         let canUse = quota.canAccommodateVM(
             vcpus: 4,  // Exceeds limit of 2
             memory: Int64(2.0 * 1024 * 1024 * 1024),
             storage: Int64(5.0 * 1024 * 1024 * 1024)
         )
-        
+
         #expect(!canUse.allowed)
     }
-    
+
     // MARK: - Hierarchy Tests
-    
+
     @Test("List quotas by level")
     func testListQuotasByLevel() async throws {
         // Create quotas at different levels
@@ -223,7 +223,7 @@ final class ResourceQuotaTests {
             maxVMs: 50
         )
         try await orgQuota.save(on: app.db)
-        
+
         let projectQuota = ResourceQuota(
             name: "Project Level",
             organizationID: nil,
@@ -235,30 +235,30 @@ final class ResourceQuotaTests {
             maxVMs: 10
         )
         try await projectQuota.save(on: app.db)
-        
+
         // List organization quotas
         try await app.test(.GET, "/quotas?level=organization") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
         } afterResponse: { res in
             #expect(res.status == .ok)
-            
+
             let quotas = try res.content.decode([ResourceQuotaResponse].self)
             #expect(quotas.allSatisfy { $0.entityType == "organization" })
         }
-        
+
         // List project quotas
         try await app.test(.GET, "/quotas?level=project") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
         } afterResponse: { res in
             #expect(res.status == .ok)
-            
+
             let quotas = try res.content.decode([ResourceQuotaResponse].self)
             #expect(quotas.allSatisfy { $0.entityType == "project" })
         }
     }
-    
+
     // MARK: - Update Quota Tests
-    
+
     @Test("Update quota limits")
     func testUpdateQuotaLimits() async throws {
         let quota = ResourceQuota(
@@ -272,7 +272,7 @@ final class ResourceQuotaTests {
             maxVMs: 5
         )
         try await quota.save(on: app.db)
-        
+
         try await app.test(.PUT, "/quotas/\(quota.id!)") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             try req.content.encode(UpdateResourceQuotaRequest(
@@ -286,7 +286,7 @@ final class ResourceQuotaTests {
             ))
         } afterResponse: { res in
             #expect(res.status == .ok)
-            
+
             let response = try res.content.decode(ResourceQuotaResponse.self)
             #expect(response.name == "Updated Name")
             #expect(response.limits.maxVCPUs == 20)
@@ -295,7 +295,7 @@ final class ResourceQuotaTests {
             #expect(response.limits.maxVMs == 10)
         }
     }
-    
+
     @Test("Cannot reduce quota below current usage")
     func testCannotReduceQuotaBelowUsage() async throws {
         let quota = ResourceQuota(
@@ -310,7 +310,7 @@ final class ResourceQuotaTests {
         )
         quota.reservedVCPUs = 8
         try await quota.save(on: app.db)
-        
+
         try await app.test(.PUT, "/quotas/\(quota.id!)") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             try req.content.encode(UpdateResourceQuotaRequest(
@@ -326,9 +326,9 @@ final class ResourceQuotaTests {
             #expect(res.status == .badRequest)
         }
     }
-    
+
     // MARK: - Delete Quota Tests
-    
+
     @Test("Delete unused quota")
     func testDeleteUnusedQuota() async throws {
         let quota = ResourceQuota(
@@ -342,17 +342,17 @@ final class ResourceQuotaTests {
             maxVMs: 5
         )
         try await quota.save(on: app.db)
-        
+
         try await app.test(.DELETE, "/quotas/\(quota.id!)") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
         } afterResponse: { res in
             #expect(res.status == .noContent)
         }
-        
+
         let deletedQuota = try await ResourceQuota.find(quota.id, on: app.db)
         #expect(deletedQuota == nil)
     }
-    
+
     @Test("Cannot delete quota with usage")
     func testCannotDeleteQuotaWithUsage() async throws {
         let quota = ResourceQuota(
@@ -368,7 +368,7 @@ final class ResourceQuotaTests {
         quota.reservedVCPUs = 2
         quota.vmCount = 1
         try await quota.save(on: app.db)
-        
+
         try await app.test(.DELETE, "/quotas/\(quota.id!)") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
         } afterResponse: { res in

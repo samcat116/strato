@@ -11,6 +11,7 @@ struct LoginTemplate: HTMLDocument {
         link(.rel("icon"), .href("/favicon.svg"))
         link(.rel("icon"), .href("/favicon.ico"))
         link(.rel("stylesheet"), .href("/styles/app.generated.css"))
+        script(.src("https://unpkg.com/htmx.org@1.9.10/dist/htmx.min.js")) { "" }
         script(.src("/js/webauthn.js")) { "" }
     }
 
@@ -41,36 +42,33 @@ struct LoginTemplate: HTMLDocument {
 
         script(.type("text/javascript")) {
             HTMLRaw("""
-            document.getElementById('loginBtn').addEventListener('click', async () => {
-                const username = document.getElementById('username').value.trim();
-                const result = await WebAuthnUtils.handleAuthentication(username || null, 'loginStatus');
-
-                if (result && result.success) {
-                    WebAuthnUtils.showSuccess('loginStatus', 'Login successful! Redirecting...');
-                    setTimeout(() => {
-                        window.location.href = '/';
-                    }, 1500);
-                }
-            });
-
-            document.getElementById('loginWithoutUsernameBtn').addEventListener('click', async () => {
-                const result = await WebAuthnUtils.handleAuthentication(null, 'loginStatus');
-
-                if (result && result.success) {
-                    WebAuthnUtils.showSuccess('loginStatus', 'Login successful! Redirecting...');
-                    setTimeout(() => {
-                        window.location.href = '/';
-                    }, 1500);
-                }
-            });
-
-            // Check if user is already logged in
+            // Check if user is already logged in on page load
             document.addEventListener('DOMContentLoaded', async () => {
                 const session = await window.webAuthnClient.getSession();
                 if (session && session.user) {
                     window.location.href = '/';
                 }
             });
+
+            // Handle passkey authentication via HTMX
+            async function authenticateWithPasskey(username) {
+                try {
+                    const result = await window.webAuthnClient.authenticate(username);
+                    if (result && result.success) {
+                        // Trigger an HTMX request to complete login
+                        htmx.ajax('POST', '/auth/login/complete', {
+                            values: { success: true },
+                            target: '#loginStatus',
+                            swap: 'innerHTML'
+                        }).then(() => {
+                            setTimeout(() => window.location.href = '/', 1000);
+                        });
+                    }
+                } catch (error) {
+                    document.getElementById('loginStatus').innerHTML =
+                        `<div class="text-red-500 text-sm mt-2">Authentication failed: ${error.message}</div>`;
+                }
+            }
             """)
         }
     }
@@ -103,7 +101,8 @@ struct LoginFormSection: HTML {
                         .id("loginBtn"),
                         .class(
                             "group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                        )
+                        ),
+                        .custom(name: "onclick", value: "authenticateWithPasskey(document.getElementById('username').value.trim() || null)")
                     ) {
                         "🔑 Sign in with Passkey"
                     }
@@ -112,7 +111,8 @@ struct LoginFormSection: HTML {
                         .id("loginWithoutUsernameBtn"),
                         .class(
                             "group relative w-full flex justify-center py-2 px-4 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                        )
+                        ),
+                        .custom(name: "onclick", value: "authenticateWithPasskey(null)")
                     ) {
                         "🔐 Use any available Passkey"
                     }

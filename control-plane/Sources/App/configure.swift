@@ -84,7 +84,6 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateGroup())
     app.migrations.add(CreateUserGroup())
 
-
     try await app.autoMigrate()
 
     // register routes

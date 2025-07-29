@@ -7,14 +7,14 @@ import NIOHTTP1
 
 @Suite("Project API Tests")
 final class ProjectTests {
-    
-    func withProjectTestApp(_ test: (Application, User, Organization, OrganizationalUnit, String) async throws -> ()) async throws {
+
+    func withProjectTestApp(_ test: (Application, User, Organization, OrganizationalUnit, String) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
-        
+
         do {
             try await configure(app)
             try await app.autoMigrate()
-            
+
             // Create test user and organization
             let testUser = User(
                 username: "testuser",
@@ -23,13 +23,13 @@ final class ProjectTests {
                 isSystemAdmin: false
             )
             try await testUser.save(on: app.db)
-            
+
             let testOrganization = Organization(
                 name: "Test Organization",
                 description: "Test organization for unit tests"
             )
             try await testOrganization.save(on: app.db)
-            
+
             // Create test OU
             let testOU = OrganizationalUnit(
                 name: "Test OU",
@@ -41,7 +41,7 @@ final class ProjectTests {
             try await testOU.save(on: app.db)
             testOU.path = try await testOU.buildPath(on: app.db)
             try await testOU.save(on: app.db)
-            
+
             // Add user to organization as admin
             let userOrg = UserOrganization(
                 userID: testUser.id!,
@@ -49,9 +49,9 @@ final class ProjectTests {
                 role: "admin"
             )
             try await userOrg.save(on: app.db)
-            
+
             let authToken = try await testUser.generateAPIKey(on: app.db)
-            
+
             try await test(app, testUser, testOrganization, testOU, authToken)
             try await app.autoRevert()
         } catch {
@@ -59,13 +59,13 @@ final class ProjectTests {
             try await app.asyncShutdown()
             throw error
         }
-        
+
         try await app.asyncShutdown()
     }
-    
+
     @Test("Create project in organization")
     func testCreateProjectInOrganization() async throws {
-        try await withProjectTestApp { app, testUser, testOrganization, testOU, authToken in
+        try await withProjectTestApp { app, _, testOrganization, _, authToken in
             try await app.test(.POST, "/organizations/\(testOrganization.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateProjectRequest(
@@ -77,7 +77,7 @@ final class ProjectTests {
                 ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                
+
                 let response = try res.content.decode(ProjectResponse.self)
                 #expect(response.name == "Web Application")
                 #expect(response.organizationId == testOrganization.id)
@@ -87,10 +87,10 @@ final class ProjectTests {
             }
         }
     }
-    
+
     @Test("Create project in OU")
     func testCreateProjectInOU() async throws {
-        try await withProjectTestApp { app, testUser, testOrganization, testOU, authToken in
+        try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
             try await app.test(.POST, "/organizations/\(testOrganization.id!)/ous/\(testOU.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateProjectRequest(
@@ -102,7 +102,7 @@ final class ProjectTests {
                 ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                
+
                 let response = try res.content.decode(ProjectResponse.self)
                 #expect(response.name == "Backend API")
                 #expect(response.organizationId == nil)
@@ -111,10 +111,10 @@ final class ProjectTests {
             }
         }
     }
-    
+
     @Test("Create project with invalid parent fails")
     func testCreateProjectWithInvalidParent() async throws {
-        try await withProjectTestApp { app, testUser, testOrganization, testOU, authToken in
+        try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
             try await app.test(.POST, "/organizations/\(testOrganization.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateProjectRequest(
@@ -129,12 +129,12 @@ final class ProjectTests {
             }
         }
     }
-    
+
     // MARK: - Environment Management Tests
-    
+
     @Test("Add environment to project")
     func testAddEnvironment() async throws {
-        try await withProjectTestApp { app, testUser, testOrganization, testOU, authToken in
+        try await withProjectTestApp { app, _, testOrganization, _, authToken in
             let project = Project(
                 name: "Environment Test",
                 description: "Test project",
@@ -144,7 +144,7 @@ final class ProjectTests {
             try await project.save(on: app.db)
             project.path = try await project.buildPath(on: app.db)
             try await project.save(on: app.db)
-            
+
             try await app.test(.POST, "/projects/\(project.id!)/environments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(ProjectEnvironmentRequest(
@@ -152,16 +152,16 @@ final class ProjectTests {
                 ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                
+
                 let response = try res.content.decode(ProjectResponse.self)
                 #expect(response.environments.contains("qa"))
             }
         }
     }
-    
+
     @Test("Remove environment from project")
     func testRemoveEnvironment() async throws {
-        try await withProjectTestApp { app, testUser, testOrganization, testOU, authToken in
+        try await withProjectTestApp { app, _, testOrganization, _, authToken in
             let project = Project(
                 name: "Environment Test",
                 description: "Test project",
@@ -174,22 +174,22 @@ final class ProjectTests {
             try await project.save(on: app.db)
             project.path = try await project.buildPath(on: app.db)
             try await project.save(on: app.db)
-            
+
             try await app.test(.DELETE, "/projects/\(project.id!)/environments/staging") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                
+
                 let response = try res.content.decode(ProjectResponse.self)
                 #expect(!response.environments.contains("staging"))
                 #expect(response.environments.count == 2)
             }
         }
     }
-    
+
     @Test("Cannot remove default environment")
     func testCannotRemoveDefaultEnvironment() async throws {
-        try await withProjectTestApp { app, testUser, testOrganization, testOU, authToken in
+        try await withProjectTestApp { app, _, testOrganization, _, authToken in
             let project = Project(
                 name: "Environment Test",
                 description: "Test project",
@@ -200,7 +200,7 @@ final class ProjectTests {
                 environments: ["dev", "prod"]
             )
             try await project.save(on: app.db)
-            
+
             try await app.test(.DELETE, "/projects/\(project.id!)/environments/dev") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
@@ -208,12 +208,12 @@ final class ProjectTests {
             }
         }
     }
-    
+
     // MARK: - List Projects Tests
-    
+
     @Test("List all projects in organization hierarchy")
     func testListProjects() async throws {
-        try await withProjectTestApp { app, testUser, testOrganization, testOU, authToken in
+        try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
             // Create projects at different levels
             let orgProject = Project(
                 name: "Org Project",
@@ -222,7 +222,7 @@ final class ProjectTests {
                 path: ""
             )
             try await orgProject.save(on: app.db)
-            
+
             let ouProject = Project(
                 name: "OU Project",
                 description: "OU level project",
@@ -230,12 +230,12 @@ final class ProjectTests {
                 path: ""
             )
             try await ouProject.save(on: app.db)
-            
+
             try await app.test(.GET, "/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                
+
                 let projects = try res.content.decode([ProjectResponse].self)
                 #expect(projects.count >= 2)
                 #expect(projects.contains { $0.name == "Org Project" })
@@ -243,12 +243,12 @@ final class ProjectTests {
             }
         }
     }
-    
+
     // MARK: - Transfer Project Tests
-    
+
     @Test("Transfer project between OUs")
     func testTransferProject() async throws {
-        try await withProjectTestApp { app, testUser, testOrganization, testOU, authToken in
+        try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
             // Create another OU
             let targetOU = OrganizationalUnit(
                 name: "Target OU",
@@ -258,7 +258,7 @@ final class ProjectTests {
                 depth: 0
             )
             try await targetOU.save(on: app.db)
-            
+
             let project = Project(
                 name: "Transfer Test",
                 description: "Project to transfer",
@@ -266,7 +266,7 @@ final class ProjectTests {
                 path: ""
             )
             try await project.save(on: app.db)
-            
+
             try await app.test(.POST, "/projects/\(project.id!)/transfer") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(TransferProjectRequest(
@@ -275,18 +275,18 @@ final class ProjectTests {
                 ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                
+
                 let response = try res.content.decode(ProjectResponse.self)
                 #expect(response.organizationalUnitId == targetOU.id)
             }
         }
     }
-    
+
     // MARK: - Update Project Tests
-    
+
     @Test("Update project details")
     func testUpdateProject() async throws {
-        try await withProjectTestApp { app, testUser, testOrganization, testOU, authToken in
+        try await withProjectTestApp { app, _, testOrganization, _, authToken in
             let project = Project(
                 name: "Original Name",
                 description: "Original description",
@@ -294,7 +294,7 @@ final class ProjectTests {
                 path: ""
             )
             try await project.save(on: app.db)
-            
+
             try await app.test(.PUT, "/projects/\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(UpdateProjectRequest(
@@ -305,7 +305,7 @@ final class ProjectTests {
                 ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                
+
                 let response = try res.content.decode(ProjectResponse.self)
                 #expect(response.name == "Updated Name")
                 #expect(response.description == "Updated description")
@@ -313,12 +313,12 @@ final class ProjectTests {
             }
         }
     }
-    
+
     // MARK: - Delete Project Tests
-    
+
     @Test("Delete empty project")
     func testDeleteEmptyProject() async throws {
-        try await withProjectTestApp { app, testUser, testOrganization, testOU, authToken in
+        try await withProjectTestApp { app, _, testOrganization, _, authToken in
             let project = Project(
                 name: "Delete Test",
                 description: "Project to be deleted",
@@ -326,21 +326,21 @@ final class ProjectTests {
                 path: ""
             )
             try await project.save(on: app.db)
-            
+
             try await app.test(.DELETE, "/projects/\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            
+
             let deletedProject = try await Project.find(project.id, on: app.db)
             #expect(deletedProject == nil)
         }
     }
-    
+
     @Test("Delete project with VMs fails")
     func testDeleteProjectWithVMs() async throws {
-        try await withProjectTestApp { app, testUser, testOrganization, testOU, authToken in
+        try await withProjectTestApp { app, _, testOrganization, _, authToken in
             let project = Project(
                 name: "Project with VMs",
                 description: "Has VMs",
@@ -348,7 +348,7 @@ final class ProjectTests {
                 path: ""
             )
             try await project.save(on: app.db)
-            
+
             // Create a VM in the project
             let vm = VM(
                 name: "Test VM",
@@ -361,7 +361,7 @@ final class ProjectTests {
                 disk: 10 * 1024 * 1024 * 1024
             )
             try await vm.save(on: app.db)
-            
+
             try await app.test(.DELETE, "/projects/\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in

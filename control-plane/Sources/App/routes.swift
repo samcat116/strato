@@ -11,7 +11,7 @@ func routes(_ app: Application) throws {
         // Check if user is authenticated
         if let user = req.auth.get(User.self) {
             req.logger.info("User is authenticated, checking onboarding status")
-            
+
             // If user is system admin and has no organizations, redirect to onboarding
             if user.isSystemAdmin {
                 try await user.$organizations.load(on: req.db)
@@ -20,7 +20,7 @@ func routes(_ app: Application) throws {
                     throw Abort.redirect(to: "/onboarding")
                 }
             }
-            
+
             req.logger.info("Rendering dashboard")
             let html = DashboardTemplate().render()
             return Response(
@@ -46,7 +46,7 @@ func routes(_ app: Application) throws {
         // Check if user is authenticated
         if let user = req.auth.get(User.self) {
             req.logger.info("User is authenticated, checking onboarding status")
-            
+
             // If user is system admin and has no organizations, redirect to onboarding
             if user.isSystemAdmin {
                 try await user.$organizations.load(on: req.db)
@@ -55,7 +55,7 @@ func routes(_ app: Application) throws {
                     throw Abort.redirect(to: "/onboarding")
                 }
             }
-            
+
             req.logger.info("Rendering dashboard")
             let html = DashboardTemplate().render()
             return Response(
@@ -74,17 +74,17 @@ func routes(_ app: Application) throws {
         }
     }
 
-    app.get("hello") { req async -> String in
+    app.get("hello") { _ async -> String in
         "Hello, world!"
     }
 
     // Authentication views
-    app.get("login") { req -> Response in
+    app.get("login") { _ -> Response in
         let html = LoginTemplate().render()
         return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
     }
 
-    app.get("register") { req -> Response in
+    app.get("register") { _ -> Response in
         let html = RegisterTemplate().render()
         return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
     }
@@ -98,13 +98,14 @@ func routes(_ app: Application) throws {
     try app.register(collection: APIDocumentationController())
     try app.register(collection: AgentWebSocketController())
     try app.register(collection: OnboardingController())
-    
+    try app.register(collection: HTMXController())
+
     // Hierarchical IAM controllers
     try app.register(collection: OrganizationalUnitController())
     try app.register(collection: ProjectController())
     try app.register(collection: ResourceQuotaController())
     try app.register(collection: HierarchyController())
-    
+
     // Groups controller
     try app.register(collection: GroupController())
 }

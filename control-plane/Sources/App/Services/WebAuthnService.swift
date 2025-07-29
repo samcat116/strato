@@ -5,7 +5,7 @@ import Fluent
 
 struct WebAuthnService {
     private let webAuthnManager: WebAuthnManager
-    
+
     init(relyingPartyID: String, relyingPartyName: String, relyingPartyOrigin: String) {
         let config = WebAuthnManager.Configuration(
             relyingPartyID: relyingPartyID,
@@ -14,15 +14,15 @@ struct WebAuthnService {
         )
         self.webAuthnManager = WebAuthnManager(configuration: config)
     }
-    
+
     // MARK: - Registration
-    
+
     func beginRegistration(
         for user: User,
         excludeCredentials: [PublicKeyCredentialDescriptor] = []
     ) async throws -> PublicKeyCredentialCreationOptions {
         let userIDBytes = Array(user.id!.uuidString.utf8)
-        
+
         let options = webAuthnManager.beginRegistration(
             user: PublicKeyCredentialUserEntity(
                 id: userIDBytes,
@@ -30,10 +30,10 @@ struct WebAuthnService {
                 displayName: user.displayName
             )
         )
-        
+
         return options
     }
-    
+
     func finishRegistration(
         challenge: String,
         credentialCreationData: RegistrationCredential,
@@ -41,7 +41,7 @@ struct WebAuthnService {
     ) async throws -> UserCredential {
         // Decode base64url challenge back to bytes
         let challengeBytes = try challenge.base64URLDecodedBytes()
-        
+
         let credential = try await webAuthnManager.finishRegistration(
             challenge: challengeBytes,
             credentialCreationData: credentialCreationData,
@@ -54,7 +54,7 @@ struct WebAuthnService {
                 return existingCredential == nil
             }
         )
-        
+
         // Find the user by challenge
         guard let authChallenge = try await AuthenticationChallenge.query(on: database)
             .filter(\.$challenge == challenge)
@@ -63,10 +63,10 @@ struct WebAuthnService {
               let userID = authChallenge.userID else {
             throw WebAuthnError.challengeNotFound
         }
-        
+
         // Create user credential - store the actual binary credential ID, not the string
         let credentialIDData = URLEncodedBase64(credential.id).urlDecoded.decoded ?? Data()
-        
+
         let userCredential = UserCredential(
             userID: userID,
             credentialID: credentialIDData,
@@ -77,23 +77,23 @@ struct WebAuthnService {
             backupState: credential.isBackedUp,
             deviceType: "platform"
         )
-        
+
         try await userCredential.save(on: database)
-        
+
         // Clean up challenge
         try await authChallenge.delete(on: database)
-        
+
         return userCredential
     }
-    
+
     // MARK: - Authentication
-    
+
     func beginAuthentication(
         for username: String? = nil,
         on database: Database
     ) async throws -> PublicKeyCredentialRequestOptions {
         var allowCredentials: [PublicKeyCredentialDescriptor] = []
-        
+
         if let username = username {
             // Get user's credentials
             guard let user = try await User.query(on: database)
@@ -101,7 +101,7 @@ struct WebAuthnService {
                 .first() else {
                 throw WebAuthnError.userNotFound
             }
-            
+
             try await user.$credentials.load(on: database)
             allowCredentials = user.credentials.map { credential in
                 PublicKeyCredentialDescriptor(
@@ -113,43 +113,43 @@ struct WebAuthnService {
                 )
             }
         }
-        
+
         let options = webAuthnManager.beginAuthentication(
             allowCredentials: allowCredentials
         )
-        
+
         return options
     }
-    
+
     func finishAuthentication(
         challenge: String,
         authenticationCredential: AuthenticationCredential,
         on database: Database
     ) async throws -> User {
         let credentialID = authenticationCredential.id.urlDecoded.decoded ?? Data()
-        
+
         guard let credential = try await UserCredential.query(on: database)
             .filter(\.$credentialID == credentialID)
             .with(\.$user)
             .first() else {
             throw WebAuthnError.credentialNotFound
         }
-        
+
         // Decode base64url challenge back to bytes
         let challengeBytes = try challenge.base64URLDecodedBytes()
-        
+
         let verification = try webAuthnManager.finishAuthentication(
             credential: authenticationCredential,
             expectedChallenge: challengeBytes,
             credentialPublicKey: Array(credential.publicKey),
             credentialCurrentSignCount: UInt32(credential.signCount)
         )
-        
+
         // Update sign count
         credential.signCount = Int32(verification.newSignCount)
         credential.lastUsedAt = Date()
         try await credential.save(on: database)
-        
+
         // Clean up challenge
         if let authChallenge = try await AuthenticationChallenge.query(on: database)
             .filter(\.$challenge == challenge)
@@ -157,12 +157,12 @@ struct WebAuthnService {
             .first() {
             try await authChallenge.delete(on: database)
         }
-        
+
         return credential.user
     }
-    
+
     // MARK: - Challenge Management
-    
+
     func storeChallenge(
         _ challenge: String,
         for userID: UUID? = nil,
@@ -176,7 +176,7 @@ struct WebAuthnService {
         )
         try await authChallenge.save(on: database)
     }
-    
+
     func cleanupExpiredChallenges(on database: Database) async throws {
         try await AuthenticationChallenge.query(on: database)
             .filter(\.$expiresAt < Date())
@@ -193,7 +193,7 @@ enum WebAuthnError: Error, AbortError {
     case credentialNotFound
     case userNotFound
     case invalidConfiguration
-    
+
     var status: HTTPResponseStatus {
         switch self {
         case .credentialNotFound, .userNotFound:
@@ -204,7 +204,7 @@ enum WebAuthnError: Error, AbortError {
             return .internalServerError
         }
     }
-    
+
     var reason: String {
         switch self {
         case .registrationFailed:
@@ -229,7 +229,7 @@ extension Application {
     private struct WebAuthnServiceKey: StorageKey {
         typealias Value = WebAuthnService
     }
-    
+
     var webAuthn: WebAuthnService {
         get {
             guard let service = self.storage[WebAuthnServiceKey.self] else {
@@ -241,7 +241,7 @@ extension Application {
             self.storage[WebAuthnServiceKey.self] = newValue
         }
     }
-    
+
     func configureWebAuthn(
         relyingPartyID: String,
         relyingPartyName: String,
@@ -268,17 +268,17 @@ extension String {
         // Convert base64url to base64
         var base64 = self.replacingOccurrences(of: "-", with: "+")
                          .replacingOccurrences(of: "_", with: "/")
-        
+
         // Add padding if needed
         let remainder = base64.count % 4
         if remainder > 0 {
             base64 += String(repeating: "=", count: 4 - remainder)
         }
-        
+
         guard let data = Data(base64Encoded: base64) else {
             throw WebAuthnError.invalidConfiguration
         }
-        
+
         return Array(data)
     }
 }

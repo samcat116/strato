@@ -16,7 +16,7 @@ struct CreateProject: AsyncMigration {
             .unique(on: "organization_id", "name")
             .unique(on: "organizational_unit_id", "name")
             .create()
-        
+
         // Note: Check constraints would be added in a separate step if needed
     }
 

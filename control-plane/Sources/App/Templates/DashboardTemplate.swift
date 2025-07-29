@@ -12,6 +12,7 @@ struct DashboardTemplate: HTMLDocument {
         link(.rel("icon"), .href("/favicon.ico"))
         link(.rel("stylesheet"), .href("/styles/app.generated.css"))
         link(.rel("stylesheet"), .href("https://cdn.jsdelivr.net/npm/xterm@4.19.0/css/xterm.css"))
+        script(.src("https://unpkg.com/htmx.org@1.9.10/dist/htmx.min.js")) { "" }
         script(.src("https://cdn.jsdelivr.net/npm/xterm@4.19.0/lib/xterm.js")) { "" }
         script(.src("/js/webauthn.js")) { "" }
     }
@@ -33,527 +34,75 @@ struct DashboardTemplate: HTMLDocument {
             term.open(document.getElementById('terminal'));
             term.write('Strato Console Ready\\r\\n$ ');
 
-            // Load user session and VMs
+            // Session and authentication handling
             document.addEventListener('DOMContentLoaded', async () => {
                 try {
                     const session = await window.webAuthnClient.getSession();
                     if (session && session.user) {
                         document.getElementById('userInfo').textContent = `Welcome, ${session.user.displayName}`;
+                        // HTMX will automatically load data using the 'load' triggers
                     } else {
                         window.location.href = '/login';
-                        return;
                     }
-                    await loadOrganizations();
-                    await loadVMs();
                 } catch (error) {
                     console.error('Failed to load session:', error);
                     window.location.href = '/login';
                 }
             });
 
-            document.getElementById('logoutBtn').addEventListener('click', async () => {
+            // Logout functionality
+            async function logout() {
                 const success = await window.webAuthnClient.logout();
                 if (success) {
                     window.location.href = '/login';
                 }
-            });
-
-            // Organization management event listeners
-            document.getElementById('orgSwitcherBtn').addEventListener('click', toggleOrgDropdown);
-            document.getElementById('orgSettingsBtn').addEventListener('click', openOrgSettings);
-            document.getElementById('createOrgBtn').addEventListener('click', showCreateOrgModal);
-            document.getElementById('cancelOrgBtn').addEventListener('click', hideCreateOrgModal);
-            document.getElementById('submitOrgBtn').addEventListener('click', createOrganization);
-
-            // API key management event listeners
-            document.getElementById('settingsBtn').addEventListener('click', showApiKeysModal);
-            document.getElementById('closeApiKeysBtn').addEventListener('click', hideApiKeysModal);
-            document.getElementById('createApiKeyBtn').addEventListener('click', showCreateApiKeyModal);
-            document.getElementById('cancelApiKeyBtn').addEventListener('click', hideCreateApiKeyModal);
-            document.getElementById('submitApiKeyBtn').addEventListener('click', createApiKey);
-
-            // VM creation event listeners
-            document.getElementById('createVMBtn').addEventListener('click', showCreateVMModal);
-            document.getElementById('cancelVMBtn').addEventListener('click', hideCreateVMModal);
-            document.getElementById('submitVMBtn').addEventListener('click', submitCreateVMForm);
-
-            async function loadVMs() {
-                try {
-                    const response = await fetch('/vms');
-                    if (response.ok) {
-                        const vms = await response.json();
-                        displayVMs(vms);
-                    } else {
-                        document.getElementById('vmTableBody').innerHTML = '<tr><td colspan="3" class="px-3 py-4 text-sm text-red-500 text-center">Failed to load VMs</td></tr>';
-                    }
-                } catch (error) {
-                    document.getElementById('vmTableBody').innerHTML = '<tr><td colspan="3" class="px-3 py-4 text-sm text-red-500 text-center">Error loading VMs</td></tr>';
-                }
             }
 
-            function displayVMs(vms) {
-                const vmTableBody = document.getElementById('vmTableBody');
-                if (vms.length === 0) {
-                    vmTableBody.innerHTML = '<tr><td colspan="3" class="px-3 py-4 text-sm text-gray-500 text-center">No VMs found. Create your first VM!</td></tr>';
-                    return;
-                }
-                vmTableBody.innerHTML = vms.map(vm => `
-                    <tr class="hover:bg-gray-50 cursor-pointer" onclick="selectVM('${vm.id}', ${JSON.stringify(vm).replace(/"/g, '&quot;')})">
-                        <td class="px-3 py-3">
-                            <div class="text-sm font-medium text-gray-900">${vm.name}</div>
-                            <div class="text-xs text-gray-500">${vm.description}</div>
-                        </td>
-                        <td class="px-3 py-3">
-                            <span class="inline-flex px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">Running</span>
-                        </td>
-                        <td class="px-3 py-3">
-                            <div class="flex space-x-1">
-                                <button class="text-green-600 hover:text-green-700 text-xs" onclick="event.stopPropagation(); controlVM('${vm.id}', 'start')">▶</button>
-                                <button class="text-yellow-600 hover:text-yellow-700 text-xs" onclick="event.stopPropagation(); controlVM('${vm.id}', 'stop')">⏸</button>
-                                <button class="text-red-600 hover:text-red-700 text-xs" onclick="event.stopPropagation(); deleteVM('${vm.id}')">🗑</button>
-                            </div>
-                        </td>
-                    </tr>
-                `).join('');
+            // Modal management
+            function showModal(modalId) {
+                document.getElementById(modalId).classList.remove('hidden');
             }
 
-            function selectVM(vmId, vm) {
-                const vmDetails = document.getElementById('vmDetails');
-                vmDetails.innerHTML = `
-                    <div class="space-y-4">
-                        <div>
-                            <h4 class="text-lg font-semibold text-gray-900">${vm.name}</h4>
-                            <p class="text-sm text-gray-600">${vm.description}</p>
-                        </div>
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">CPU Cores</label>
-                                <p class="text-sm text-gray-900">${vm.cpu}</p>
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Memory</label>
-                                <p class="text-sm text-gray-900">${(vm.memory / (1024 * 1024 * 1024)).toFixed(1)} GB</p>
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Disk</label>
-                                <p class="text-sm text-gray-900">${Math.round(vm.disk / (1024 * 1024 * 1024))} GB</p>
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Image</label>
-                                <p class="text-sm text-gray-900">${vm.image}</p>
-                            </div>
-                        </div>
-                        <div class="flex space-x-3 pt-4">
-                            <button onclick="controlVM('${vm.id}', 'start')" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm">Start</button>
-                            <button onclick="controlVM('${vm.id}', 'stop')" class="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-md text-sm">Stop</button>
-                            <button onclick="controlVM('${vm.id}', 'restart')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm">Restart</button>
-                            <button onclick="deleteVM('${vm.id}')" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm">Delete</button>
-                        </div>
-                    </div>
-                `;
-            }
-
-            async function controlVM(vmId, action) {
-                try {
-                    const response = await fetch(`/vms/${vmId}/${action}`, { method: 'POST' });
-                    if (response.ok) {
-                        term.write(`\\r\\nVM ${vmId} ${action} command sent\\r\\n$ `);
-                    } else {
-                        term.write(`\\r\\nFailed to ${action} VM ${vmId}\\r\\n$ `);
-                    }
-                } catch (error) {
-                    term.write(`\\r\\nError: ${error.message}\\r\\n$ `);
-                }
-            }
-
-            async function deleteVM(vmId) {
-                if (confirm('Are you sure you want to delete this VM?')) {
-                    try {
-                        const response = await fetch(`/vms/${vmId}`, { method: 'DELETE' });
-                        if (response.ok) {
-                            await loadVMs();
-                            term.write(`\\r\\nVM ${vmId} deleted\\r\\n$ `);
-                        } else {
-                            term.write(`\\r\\nFailed to delete VM ${vmId}\\r\\n$ `);
-                        }
-                    } catch (error) {
-                        term.write(`\\r\\nError: ${error.message}\\r\\n$ `);
-                    }
-                }
-            }
-
-
-            async function createVM(vmData) {
-                try {
-                    // Convert memory and disk from GB to bytes
-                    const vmDataWithBytes = {
-                        ...vmData,
-                        memory: vmData.memory * 1024 * 1024 * 1024,
-                        disk: vmData.disk * 1024 * 1024 * 1024
-                    };
-                    
-                    const response = await fetch('/vms', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(vmDataWithBytes)
-                    });
-
-                    if (response.ok) {
-                        await loadVMs();
-                        term.write(`\\r\\nVM "${vmData.name}" created\\r\\n$ `);
-                    } else {
-                        term.write(`\\r\\nFailed to create VM\\r\\n$ `);
-                    }
-                } catch (error) {
-                    term.write(`\\r\\nError: ${error.message}\\r\\n$ `);
-                }
-            }
-
-            // Organization Management Functions
-            let currentOrganizations = [];
-
-            async function loadOrganizations() {
-                try {
-                    const response = await fetch('/organizations');
-                    if (response.ok) {
-                        const organizations = await response.json();
-                        currentOrganizations = organizations;
-                        displayOrganizations(organizations);
-                    } else {
-                        document.getElementById('currentOrgName').textContent = 'No Organizations';
-                    }
-                } catch (error) {
-                    console.error('Failed to load organizations:', error);
-                    document.getElementById('currentOrgName').textContent = 'Error Loading';
-                }
-            }
-
-            function displayOrganizations(organizations) {
-                const orgList = document.getElementById('orgList');
-                const currentOrgName = document.getElementById('currentOrgName');
-                
-                if (organizations.length === 0) {
-                    currentOrgName.textContent = 'No Organizations';
-                    orgList.innerHTML = '<div class="px-4 py-2 text-sm text-gray-500">No organizations found</div>';
-                    return;
-                }
-
-                // Find current organization (this will need to be enhanced with actual user current org)
-                const currentOrg = organizations[0]; // For now, use first org
-                currentOrgName.textContent = currentOrg.name;
-
-                // Show/hide settings button based on current org admin status
-                const orgSettingsBtn = document.getElementById('orgSettingsBtn');
-                if (currentOrg.userRole === 'admin') {
-                    orgSettingsBtn.style.display = 'flex';
-                } else {
-                    orgSettingsBtn.style.display = 'none';
-                }
-
-                orgList.innerHTML = organizations.map(org => `
-                    <button class="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex justify-between items-center" onclick="switchOrganization('${org.id}', '${org.name}')">
-                        <div>
-                            <div class="font-medium">${org.name}</div>
-                            <div class="text-xs text-gray-500">${org.description}</div>
-                        </div>
-                        <span class="text-xs text-gray-400">${org.userRole}</span>
-                    </button>
-                `).join('');
+            function hideModal(modalId) {
+                document.getElementById(modalId).classList.add('hidden');
+                const form = document.querySelector(`#${modalId} form`);
+                if (form) form.reset();
             }
 
             function toggleOrgDropdown() {
                 const dropdown = document.getElementById('orgDropdown');
                 dropdown.classList.toggle('hidden');
-                
+
                 // Close dropdown when clicking outside
-                document.addEventListener('click', function closeDropdown(e) {
-                    if (!e.target.closest('#orgSwitcherBtn') && !e.target.closest('#orgDropdown')) {
-                        dropdown.classList.add('hidden');
-                        document.removeEventListener('click', closeDropdown);
-                    }
-                });
-            }
-
-            async function switchOrganization(orgId, orgName) {
-                try {
-                    const response = await fetch(`/organizations/${orgId}/switch`, { method: 'POST' });
-                    if (response.ok) {
-                        document.getElementById('currentOrgName').textContent = orgName;
-                        document.getElementById('orgDropdown').classList.add('hidden');
-                        
-                        // Update settings button visibility for new organization
-                        const newCurrentOrg = currentOrganizations.find(org => org.id === orgId);
-                        const orgSettingsBtn = document.getElementById('orgSettingsBtn');
-                        if (newCurrentOrg && newCurrentOrg.userRole === 'admin') {
-                            orgSettingsBtn.style.display = 'flex';
-                        } else {
-                            orgSettingsBtn.style.display = 'none';
+                if (!dropdown.classList.contains('hidden')) {
+                    document.addEventListener('click', function closeDropdown(e) {
+                        if (!e.target.closest('#orgSwitcherBtn') && !e.target.closest('#orgDropdown')) {
+                            dropdown.classList.add('hidden');
+                            document.removeEventListener('click', closeDropdown);
                         }
-                        
-                        await loadVMs(); // Reload VMs for new organization
-                        term.write(`\\r\\nSwitched to organization: ${orgName}\\r\\n$ `);
-                    } else {
-                        term.write(`\\r\\nFailed to switch organization\\r\\n$ `);
-                    }
-                } catch (error) {
-                    term.write(`\\r\\nError switching organization: ${error.message}\\r\\n$ `);
-                }
-            }
-
-            function showCreateOrgModal() {
-                document.getElementById('createOrgModal').classList.remove('hidden');
-                document.getElementById('orgDropdown').classList.add('hidden');
-                document.getElementById('orgName').focus();
-            }
-
-            function hideCreateOrgModal() {
-                document.getElementById('createOrgModal').classList.add('hidden');
-                document.getElementById('createOrgForm').reset();
-            }
-
-            async function createOrganization() {
-                const name = document.getElementById('orgName').value.trim();
-                const description = document.getElementById('orgDescription').value.trim();
-                
-                if (!name || !description) {
-                    alert('Please fill in all fields');
-                    return;
-                }
-
-                try {
-                    const response = await fetch('/organizations', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name, description })
                     });
-
-                    if (response.ok) {
-                        const newOrg = await response.json();
-                        hideCreateOrgModal();
-                        await loadOrganizations();
-                        term.write(`\\r\\nOrganization "${newOrg.name}" created\\r\\n$ `);
-                    } else {
-                        const error = await response.text();
-                        alert(`Failed to create organization: ${error}`);
-                    }
-                } catch (error) {
-                    alert(`Error creating organization: ${error.message}`);
                 }
             }
 
-            function openOrgSettings() {
-                // Get current organization ID from the currentOrganizations array
-                const currentOrgName = document.getElementById('currentOrgName').textContent;
-                const currentOrg = currentOrganizations.find(org => org.name === currentOrgName);
-                
-                if (currentOrg && currentOrg.userRole === 'admin') {
-                    window.location.href = `/organizations/${currentOrg.id}/settings`;
-                } else {
-                    alert('Only organization administrators can access organization settings.');
-                }
-                
-                // Close the dropdown
-                document.getElementById('orgDropdown').classList.add('hidden');
+            // Console logging function for HTMX responses
+            function logToConsole(message) {
+                term.write(`\\r\\n${message}\\r\\n$ `);
             }
 
-            // Close modal on escape key
+
+            // Modal close on escape
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
-                    hideCreateOrgModal();
-                    hideApiKeysModal();
-                    hideCreateApiKeyModal();
-                    hideCreateVMModal();
+                    ['createOrgModal', 'apiKeysModal', 'createApiKeyModal', 'createVMModal'].forEach(modalId => hideModal(modalId));
                 }
             });
 
-            // VM Creation Modal Functions
-            function showCreateVMModal() {
-                document.getElementById('createVMModal').classList.remove('hidden');
-                document.getElementById('vmName').focus();
-            }
-
-            function hideCreateVMModal() {
-                document.getElementById('createVMModal').classList.add('hidden');
-                document.getElementById('createVMForm').reset();
-            }
-
-            async function submitCreateVMForm() {
-                const name = document.getElementById('vmName').value.trim();
-                const description = document.getElementById('vmDescription').value.trim();
-                const cpu = parseInt(document.getElementById('vmCpu').value);
-                const memory = parseInt(document.getElementById('vmMemory').value);
-                const disk = parseInt(document.getElementById('vmDisk').value);
-                const templateName = document.getElementById('vmTemplate').value;
-                
-                if (!name || !description) {
-                    alert('Please fill in all required fields');
-                    return;
-                }
-
-                if (cpu < 1 || memory < 1 || disk < 1) {
-                    alert('CPU, Memory, and Disk must be at least 1');
-                    return;
-                }
-
-                try {
-                    await createVM({ name, description, cpu, memory, disk, templateName });
-                    hideCreateVMModal();
-                } catch (error) {
-                    alert(`Error creating VM: ${error.message}`);
-                }
-            }
-
-            // API Key Management Functions
-            async function loadApiKeys() {
-                try {
-                    const response = await fetch('/api-keys');
-                    if (response.ok) {
-                        const apiKeys = await response.json();
-                        displayApiKeys(apiKeys);
-                    } else {
-                        document.getElementById('apiKeysList').innerHTML = '<div class="text-center text-red-500 py-8">Failed to load API keys</div>';
-                    }
-                } catch (error) {
-                    document.getElementById('apiKeysList').innerHTML = '<div class="text-center text-red-500 py-8">Error loading API keys</div>';
-                }
-            }
-
-            function displayApiKeys(apiKeys) {
-                const apiKeysList = document.getElementById('apiKeysList');
-                
-                if (apiKeys.length === 0) {
-                    apiKeysList.innerHTML = '<div class="text-center text-gray-500 py-8">No API keys found. Create your first API key!</div>';
-                    return;
-                }
-
-                apiKeysList.innerHTML = apiKeys.map(key => `
-                    <div class="border border-gray-200 rounded-lg p-4">
-                        <div class="flex justify-between items-start">
-                            <div class="flex-1">
-                                <h4 class="font-medium text-gray-900">${key.name}</h4>
-                                <p class="text-sm text-gray-500 font-mono">${key.keyPrefix}</p>
-                                <div class="mt-2 flex flex-wrap gap-1">
-                                    ${key.scopes.map(scope => `<span class="inline-flex px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-800">${scope}</span>`).join('')}
-                                </div>
-                                <div class="mt-1 text-xs text-gray-500">
-                                    Created: ${new Date(key.createdAt).toLocaleDateString()}
-                                    ${key.lastUsedAt ? '• Last used: ' + new Date(key.lastUsedAt).toLocaleDateString() : '• Never used'}
-                                    ${key.expiresAt ? '• Expires: ' + new Date(key.expiresAt).toLocaleDateString() : '• Never expires'}
-                                </div>
-                            </div>
-                            <div class="flex space-x-2">
-                                <button onclick="toggleApiKey('${key.id}', ${!key.isActive})" 
-                                        class="text-sm px-3 py-1 rounded ${key.isActive ? 'bg-red-100 text-red-700 hover:bg-red-200' : 'bg-green-100 text-green-700 hover:bg-green-200'}">
-                                    ${key.isActive ? 'Disable' : 'Enable'}
-                                </button>
-                                <button onclick="deleteApiKey('${key.id}')" 
-                                        class="text-sm px-3 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200">
-                                    Delete
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                `).join('');
-            }
-
-            function showApiKeysModal() {
-                document.getElementById('apiKeysModal').classList.remove('hidden');
-                loadApiKeys();
-            }
-
-            function hideApiKeysModal() {
-                document.getElementById('apiKeysModal').classList.add('hidden');
-            }
-
-            function showCreateApiKeyModal() {
-                document.getElementById('createApiKeyModal').classList.remove('hidden');
-                document.getElementById('apiKeyName').focus();
-            }
-
-            function hideCreateApiKeyModal() {
-                document.getElementById('createApiKeyModal').classList.add('hidden');
-                document.getElementById('createApiKeyForm').reset();
-            }
-
-            async function createApiKey() {
-                const name = document.getElementById('apiKeyName').value.trim();
-                const scopes = Array.from(document.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
-                const expiresInDays = document.getElementById('apiKeyExpiry').value;
-                
-                if (!name) {
-                    alert('Please enter a name for the API key');
-                    return;
-                }
-
-                if (scopes.length === 0) {
-                    alert('Please select at least one scope');
-                    return;
-                }
-
-                try {
-                    const requestBody = { name, scopes };
-                    if (expiresInDays) {
-                        requestBody.expiresInDays = parseInt(expiresInDays);
-                    }
-
-                    const response = await fetch('/api-keys', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(requestBody)
-                    });
-
-                    if (response.ok) {
-                        const newKey = await response.json();
-                        hideCreateApiKeyModal();
-                        
-                        // Show the new API key in a copy-able format
-                        const keyDisplay = prompt('Your new API key (copy this now - you won\\'t see it again):', newKey.key);
-                        
-                        await loadApiKeys();
-                        term.write(`\\r\\nAPI key "${newKey.name}" created\\r\\n$ `);
-                    } else {
-                        const error = await response.text();
-                        alert(`Failed to create API key: ${error}`);
-                    }
-                } catch (error) {
-                    alert(`Error creating API key: ${error.message}`);
-                }
-            }
-
-            async function toggleApiKey(keyId, isActive) {
-                try {
-                    const response = await fetch(`/api-keys/${keyId}`, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ isActive })
-                    });
-
-                    if (response.ok) {
-                        await loadApiKeys();
-                        term.write(`\\r\\nAPI key ${isActive ? 'enabled' : 'disabled'}\\r\\n$ `);
-                    } else {
-                        alert('Failed to update API key');
-                    }
-                } catch (error) {
-                    alert(`Error updating API key: ${error.message}`);
-                }
-            }
-
-            async function deleteApiKey(keyId) {
-                if (confirm('Are you sure you want to delete this API key? This action cannot be undone.')) {
-                    try {
-                        const response = await fetch(`/api-keys/${keyId}`, { method: 'DELETE' });
-                        if (response.ok) {
-                            await loadApiKeys();
-                            term.write(`\\r\\nAPI key deleted\\r\\n$ `);
-                        } else {
-                            alert('Failed to delete API key');
-                        }
-                    } catch (error) {
-                        alert(`Error deleting API key: ${error.message}`);
-                    }
-                }
-            }
+            // Make functions available globally for HTMX
+            window.logout = logout;
+            window.showModal = showModal;
+            window.hideModal = hideModal;
+            window.toggleOrgDropdown = toggleOrgDropdown;
+            window.logToConsole = logToConsole;
             """)
         }
     }
@@ -573,9 +122,15 @@ struct DashboardHeader: HTML {
                             .id("orgSwitcherBtn"),
                             .class(
                                 "bg-gray-50 hover:bg-gray-100 text-gray-700 px-3 py-2 rounded-md text-sm font-medium border border-gray-300 flex items-center space-x-2"
-                            )
+                            ),
+                            .custom(name: "onclick", value: "toggleOrgDropdown()")
                         ) {
-                            span(.id("currentOrgName")) { "Loading..." }
+                            span(
+                                .id("currentOrgName"),
+                                .custom(name: "hx-trigger", value: "load"),
+                                .custom(name: "hx-get", value: "/htmx/organizations/current"),
+                                .custom(name: "hx-swap", value: "innerHTML")
+                            ) { "Loading..." }
                             span(.class("text-gray-400")) { "▼" }
                         }
                         div(
@@ -586,13 +141,20 @@ struct DashboardHeader: HTML {
                                 div(.class("px-4 py-2 text-xs font-medium text-gray-500 uppercase")) {
                                     "Switch Organization"
                                 }
-                                div(.id("orgList"), .class("max-h-48 overflow-y-auto")) {
-                                    // Organizations will be loaded here
+                                div(
+                                    .id("orgList"),
+                                    .class("max-h-48 overflow-y-auto"),
+                                    .custom(name: "hx-trigger", value: "load"),
+                                    .custom(name: "hx-get", value: "/htmx/organizations/list"),
+                                    .custom(name: "hx-swap", value: "innerHTML")
+                                ) {
+                                    div(.class("px-4 py-2 text-sm text-gray-500")) { "Loading organizations..." }
                                 }
                                 hr(.class("my-1"))
-                                button(
+                                a(
                                     .id("orgSettingsBtn"),
-                                    .class("w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center space-x-2")
+                                    .class("w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center space-x-2"),
+                                    .href("/htmx/organizations/settings")
                                 ) {
                                     "⚙️"
                                     span { "Organization Settings" }
@@ -606,12 +168,13 @@ struct DashboardHeader: HTML {
                             }
                         }
                     }
-                    
+
                     button(
                         .id("createVMBtn"),
                         .class(
                             "bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md text-sm font-medium"
-                        )
+                        ),
+                        .custom(name: "onclick", value: "showModal('createVMModal')")
                     ) {
                         "+ New VM"
                     }
@@ -619,14 +182,16 @@ struct DashboardHeader: HTML {
                         .id("settingsBtn"),
                         .class(
                             "bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-md text-sm font-medium"
-                        )
+                        ),
+                        .custom(name: "onclick", value: "showModal('apiKeysModal')")
                     ) {
                         "API Keys"
                     }
                     span(.id("userInfo"), .class("text-sm text-gray-600")) {}
                     button(
                         .id("logoutBtn"),
-                        .class("text-gray-500 hover:text-gray-700 text-sm")
+                        .class("text-gray-500 hover:text-gray-700 text-sm"),
+                        .custom(name: "onclick", value: "logout()")
                     ) {
                         "Logout"
                     }
@@ -862,7 +427,13 @@ struct CreateVMModalHeader: HTML {
 struct CreateVMModalContent: HTML {
     var content: some HTML {
         div(.class("px-6 py-4")) {
-            form(.id("createVMForm")) {
+            form(
+                .id("createVMForm"),
+                .custom(name: "hx-post", value: "/htmx/vms/create"),
+                .custom(name: "hx-target", value: "#vmTableBody"),
+                .custom(name: "hx-swap", value: "innerHTML"),
+                .custom(name: "hx-on::after-request", value: "if(event.detail.successful) hideModal('createVMModal')")
+            ) {
                 div(.class("grid grid-cols-1 gap-4")) {
                     CreateVMFormNameDescription()
                     CreateVMFormResourcesTemplate()
@@ -962,13 +533,14 @@ struct CreateVMModalFooter: HTML {
             button(
                 .id("cancelVMBtn"),
                 .type(.button),
-                .class("px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md")
+                .class("px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"),
+                .custom(name: "onclick", value: "hideModal('createVMModal')")
             ) {
                 "Cancel"
             }
             button(
                 .id("submitVMBtn"),
-                .type(.button),
+                .type(.submit),
                 .class("px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md")
             ) {
                 "Create VM"
@@ -1030,16 +602,16 @@ struct VMTableHeader: HTML {
 
 struct VMTableBody: HTML {
     var content: some HTML {
-        tbody(.id("vmTableBody"), .class("divide-y divide-gray-200")) {
+        tbody(
+            .id("vmTableBody"),
+            .class("divide-y divide-gray-200"),
+            .custom(name: "hx-trigger", value: "load"),
+            .custom(name: "hx-get", value: "/htmx/vms/list"),
+            .custom(name: "hx-swap", value: "innerHTML")
+        ) {
             tr {
-                td(.class("px-3 py-4 text-sm text-gray-500 text-center")) {
+                td(.class("px-3 py-4 text-sm text-gray-500 text-center"), .custom(name: "colspan", value: "3")) {
                     "Loading VMs..."
-                }
-                td(.class("px-3 py-4 text-sm text-gray-500 text-center")) {
-                    ""
-                }
-                td(.class("px-3 py-4 text-sm text-gray-500 text-center")) {
-                    ""
                 }
             }
         }

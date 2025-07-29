@@ -73,7 +73,7 @@ extension User {
         let userCount = try await User.query(on: database).count()
         return userCount == 0
     }
-    
+
     /// Check if any system admin exists in the database
     static func hasSystemAdmin(on database: Database) async throws -> Bool {
         let adminCount = try await User.query(on: database)
@@ -81,28 +81,28 @@ extension User {
             .count()
         return adminCount > 0
     }
-    
+
     /// Get the first system admin user
     static func getFirstSystemAdmin(on database: Database) async throws -> User? {
         return try await User.query(on: database)
             .filter(\.$isSystemAdmin == true)
             .first()
     }
-    
+
     /// Get all groups this user belongs to within a specific organization
     func getGroupsInOrganization(_ organizationID: UUID, on db: Database) async throws -> [Group] {
         return try await self.$groups.query(on: db)
             .filter(\.$organization.$id, .equal, organizationID)
             .all()
     }
-    
+
     /// Check if user belongs to a specific group
     func belongsToGroup(_ groupID: UUID, on db: Database) async throws -> Bool {
         let membership = try await UserGroup.query(on: db)
             .filter(\.$user.$id, .equal, self.id!)
             .filter(\.$group.$id, .equal, groupID)
             .first()
-        
+
         return membership != nil
     }
 }
@@ -129,7 +129,7 @@ final class UserCredential: Model, @unchecked Sendable {
 
     @Field(key: "transports")
     var transportsJSON: String
-    
+
     // Computed property for array access
     var transports: [String] {
         get {

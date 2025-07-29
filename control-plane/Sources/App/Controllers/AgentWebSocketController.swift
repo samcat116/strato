@@ -18,7 +18,7 @@ struct AgentWebSocketController: RouteCollection {
             }
         }
 
-        ws.onBinary { ws, buffer in
+        ws.onBinary { _, _ in
             req.logger.warning("Received unexpected binary data from agent")
         }
 

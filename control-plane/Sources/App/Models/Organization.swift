@@ -58,7 +58,7 @@ extension Organization {
         let description: String
         let createdAt: Date?
     }
-    
+
     func asPublic() -> Public {
         return Public(
             id: self.id,
@@ -150,40 +150,40 @@ extension Organization {
     func getAllProjects(on db: Database) async throws -> [Project] {
         // Get direct projects
         let directProjects = try await self.$projects.query(on: db).all()
-        
+
         // Get all OUs and their projects recursively
         let ous = try await self.$organizationalUnits.query(on: db).all()
         var allProjects = directProjects
-        
+
         for ou in ous {
             let ouProjects = try await ou.getAllProjects(on: db)
             allProjects.append(contentsOf: ouProjects)
         }
-        
+
         return allProjects
     }
-    
+
     /// Get all VMs in this organization (across all projects)
     func getAllVMs(on db: Database) async throws -> [VM] {
         let projects = try await getAllProjects(on: db)
         var allVMs: [VM] = []
-        
+
         for project in projects {
             let vms = try await project.$vms.query(on: db).all()
             allVMs.append(contentsOf: vms)
         }
-        
+
         return allVMs
     }
-    
+
     /// Get resource usage across the organization
     func getResourceUsage(on db: Database) async throws -> ResourceUsageResponse {
         let vms = try await getAllVMs(on: db)
-        
+
         let totalVCPUs = vms.reduce(0) { $0 + $1.cpu }
         let totalMemory = vms.reduce(0) { $0 + $1.memory }
         let totalStorage = vms.reduce(0) { $0 + $1.disk }
-        
+
         return ResourceUsageResponse(
             totalVCPUs: totalVCPUs,
             totalMemoryGB: Double(totalMemory) / 1024 / 1024 / 1024,
@@ -191,7 +191,7 @@ extension Organization {
             totalVMs: vms.count
         )
     }
-    
+
     /// Create a default project for backward compatibility
     func createDefaultProject(on db: Database) async throws -> Project {
         let project = Project(
@@ -200,21 +200,21 @@ extension Organization {
             organizationID: self.id,
             path: "/\(self.id?.uuidString ?? "")/default"
         )
-        
+
         try await project.save(on: db)
-        
+
         // Update path with actual project ID
         project.path = try await project.buildPath(on: db)
         try await project.save(on: db)
-        
+
         return project
     }
-    
+
     /// Get all groups in this organization
     func getAllGroups(on db: Database) async throws -> [Group] {
         return try await self.$groups.query(on: db).all()
     }
-    
+
     /// Get group by name within this organization
     func getGroup(named name: String, on db: Database) async throws -> Group? {
         return try await self.$groups.query(on: db)
@@ -228,16 +228,16 @@ extension OrganizationalUnit {
     func getAllProjects(on db: Database) async throws -> [Project] {
         // Get direct projects
         let directProjects = try await self.$projects.query(on: db).all()
-        
+
         // Get all child OUs and their projects recursively
         let childOUs = try await self.$childOUs.query(on: db).all()
         var allProjects = directProjects
-        
+
         for childOU in childOUs {
             let childProjects = try await childOU.getAllProjects(on: db)
             allProjects.append(contentsOf: childProjects)
         }
-        
+
         return allProjects
     }
 }

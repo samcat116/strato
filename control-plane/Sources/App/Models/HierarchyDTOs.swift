@@ -9,7 +9,7 @@ struct MergeOrganizationsRequest: Content {
     let preserveQuotas: Bool
     let mergeUsers: Bool
     let newName: String?
-    
+
     struct ConflictResolution: Content {
         let ouNameConflicts: String // "rename", "merge", or "abort"
         let projectNameConflicts: String // "rename", "merge", or "abort"
@@ -27,7 +27,7 @@ struct MergeOrganizationsResponse: Content {
     let conflicts: [MergeConflict]
     let warnings: [String]
     let summary: String
-    
+
     struct MergedResourceCounts: Content {
         let organizationalUnits: Int
         let projects: Int
@@ -35,7 +35,7 @@ struct MergeOrganizationsResponse: Content {
         let quotas: Int
         let users: Int
     }
-    
+
     struct MergeConflict: Content {
         let type: String // "ou_name", "project_name", "quota_name"
         let sourceName: String
@@ -48,7 +48,7 @@ struct MergeOrganizationsResponse: Content {
 struct BulkTransferRequest: Content {
     let transfers: [ResourceTransfer]
     let validateOnly: Bool
-    
+
     struct ResourceTransfer: Content {
         let resourceType: String // "ou", "project", "vm"
         let resourceId: UUID
@@ -64,7 +64,7 @@ struct BulkTransferResponse: Content {
     let failedTransfers: [TransferFailure]
     let warnings: [String]
     let summary: String
-    
+
     struct TransferFailure: Content {
         let resourceId: UUID
         let resourceType: String
@@ -104,7 +104,7 @@ struct HierarchyRepairRequest: Content {
     let repairAll: Bool
     let specificIssues: [UUID]?
     let repairOptions: RepairOptions
-    
+
     struct RepairOptions: Content {
         let fixCircularReferences: Bool
         let rebuildPaths: Bool
@@ -119,7 +119,7 @@ struct HierarchyRepairResponse: Content {
     let repairedIssues: [RepairedIssue]
     let remainingIssues: [HierarchyIssue]
     let summary: String
-    
+
     struct RepairedIssue: Content {
         let issueId: UUID
         let issueType: String
@@ -153,7 +153,7 @@ struct EnvironmentPromotionResponse: Content {
 struct EnvironmentConfigurationRequest: Content {
     let projectId: UUID
     let environments: [EnvironmentConfiguration]
-    
+
     struct EnvironmentConfiguration: Content {
         let name: String
         let displayName: String
@@ -162,7 +162,7 @@ struct EnvironmentConfigurationRequest: Content {
         let requiresApproval: Bool
         let settings: EnvironmentSettingsData
     }
-    
+
     struct EnvironmentSettingsData: Content {
         let autoScalingEnabled: Bool
         let maxInstances: Int
@@ -172,7 +172,7 @@ struct EnvironmentConfigurationRequest: Content {
         let monitoringEnabled: Bool
         let alertingEnabled: Bool
         let maintenanceWindow: MaintenanceWindowData?
-        
+
         struct MaintenanceWindowData: Content {
             let dayOfWeek: Int
             let startHour: Int
@@ -187,13 +187,13 @@ struct QuotaInheritanceRequest: Content {
     let parentQuotaId: UUID
     let childEntities: [QuotaChild]
     let inheritanceRules: InheritanceRules
-    
+
     struct QuotaChild: Content {
         let entityType: String // "ou", "project"
         let entityId: UUID
         let percentage: Double? // Percentage of parent quota to inherit
     }
-    
+
     struct InheritanceRules: Content {
         let inheritCPU: Bool
         let inheritMemory: Bool
@@ -209,7 +209,7 @@ struct QuotaInheritanceResponse: Content {
     let createdQuotas: [UUID]
     let updatedQuotas: [UUID]
     let errors: [QuotaInheritanceError]
-    
+
     struct QuotaInheritanceError: Content {
         let entityId: UUID
         let entityType: String
@@ -221,7 +221,7 @@ struct QuotaViolationResponse: Content {
     let hasViolations: Bool
     let violations: [QuotaViolation]
     let warnings: [QuotaWarning]
-    
+
     struct QuotaViolation: Content {
         let quotaId: UUID
         let quotaName: String
@@ -232,7 +232,7 @@ struct QuotaViolationResponse: Content {
         let limit: Double
         let severity: String // "critical", "warning"
     }
-    
+
     struct QuotaWarning: Content {
         let quotaId: UUID
         let quotaName: String
@@ -263,7 +263,7 @@ struct HierarchyChangeRequest: Content {
     let reason: String
     let requestedBy: UUID
     let approvalRequired: Bool
-    
+
     struct HierarchyChange: Content {
         let type: String // "move", "rename", "transfer", "delete"
         let entityType: String
@@ -283,14 +283,14 @@ struct HierarchyChangeResponse: Content {
     let failedChanges: [FailedChange]
     let requiresApproval: Bool
     let approvalRequestId: UUID?
-    
+
     struct AppliedChange: Content {
         let changeId: UUID
         let entityId: UUID
         let appliedAt: Date
         let result: String
     }
-    
+
     struct FailedChange: Content {
         let changeId: UUID
         let entityId: UUID
@@ -308,12 +308,12 @@ struct HierarchyReportRequest: Content {
     let includeSubOUs: Bool
     let dateRange: DateRange?
     let filters: ReportFilters?
-    
+
     struct DateRange: Content {
         let from: Date
         let to: Date
     }
-    
+
     struct ReportFilters: Content {
         let environments: [String]?
         let projectTypes: [String]?
@@ -329,7 +329,7 @@ struct HierarchyReportResponse: Content {
     let generatedAt: Date?
     let expiresAt: Date?
     let metadata: ReportMetadata
-    
+
     struct ReportMetadata: Content {
         let organizationId: UUID
         let organizationName: String

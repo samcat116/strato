@@ -157,17 +157,17 @@ extension Group {
     func getMemberCount(on db: Database) async throws -> Int {
         return try await Int(self.$users.query(on: db).count())
     }
-    
+
     /// Check if a user is a member of this group
     func hasMember(_ userID: UUID, on db: Database) async throws -> Bool {
         let membership = try await UserGroup.query(on: db)
             .filter(\.$group.$id, .equal, self.id!)
             .filter(\.$user.$id, .equal, userID)
             .first()
-        
+
         return membership != nil
     }
-    
+
     /// Add a user to this group
     func addMember(_ userID: UUID, on db: Database) async throws {
         // Check if user is already a member
@@ -175,11 +175,11 @@ extension Group {
         if exists {
             return // Already a member
         }
-        
+
         let membership = UserGroup(userID: userID, groupID: self.id!)
         try await membership.save(on: db)
     }
-    
+
     /// Remove a user from this group
     func removeMember(_ userID: UUID, on db: Database) async throws {
         try await UserGroup.query(on: db)
@@ -187,14 +187,14 @@ extension Group {
             .filter(\.$user.$id, .equal, userID)
             .delete()
     }
-    
+
     /// Get all members of this group with their join dates
     func getMembersWithJoinDates(on db: Database) async throws -> [GroupMemberResponse] {
         let memberships = try await UserGroup.query(on: db)
             .filter(\.$group.$id, .equal, self.id!)
             .with(\.$user)
             .all()
-        
+
         return memberships.map { membership in
             GroupMemberResponse(
                 from: membership.user,

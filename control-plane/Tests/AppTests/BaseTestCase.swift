@@ -12,11 +12,11 @@ class BaseTestCase {
     var testUser: User!
     var testOrganization: Organization!
     var authToken: String!
-    
+
     /// Run a test with a fresh application instance and in-memory database
-    func withApp(_ test: (Application) async throws -> ()) async throws {
+    func withApp(_ test: (Application) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
-        
+
         do {
             try await configure(app)
             try await app.autoMigrate()
@@ -27,10 +27,10 @@ class BaseTestCase {
             try await app.asyncShutdown()
             throw error
         }
-        
+
         try await app.asyncShutdown()
     }
-    
+
     /// Set up common test data
     func setupCommonTestData(on db: Database) async throws {
         // Create test user
@@ -41,14 +41,14 @@ class BaseTestCase {
             isSystemAdmin: false
         )
         try await testUser.save(on: db)
-        
+
         // Create test organization
         testOrganization = Organization(
             name: "Test Organization",
             description: "Test organization for unit tests"
         )
         try await testOrganization.save(on: db)
-        
+
         // Add user to organization as admin
         let userOrg = UserOrganization(
             userID: testUser.id!,
@@ -56,11 +56,11 @@ class BaseTestCase {
             role: "admin"
         )
         try await userOrg.save(on: db)
-        
+
         // Set current organization
         testUser.currentOrganizationId = testOrganization.id
         try await testUser.save(on: db)
-        
+
         // Generate auth token
         authToken = try await testUser.generateAPIKey(on: db)
     }
