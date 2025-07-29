@@ -103,25 +103,7 @@ struct HTMXController: RouteCollection {
         vm.disk = disk
         vm.image = createRequest.vmTemplate
         
-        // Validate project assignment
-        let project = try await Project.find(createRequest.projectId, on: req.db)
-        guard let project = project else {
-            throw Abort(.notFound, reason: "Project not found")
-        }
-        
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: "create",
-            resource: "project",
-            resourceId: project.id?.uuidString ?? ""
-        )
-        
-        guard hasPermission else {
-            throw Abort(.forbidden, reason: "You do not have permission to create VMs in this project")
-        }
-        
-        // Assign project to VM
-        vm.projectId = project.id
+        // You'll need to add project assignment logic here
         
         try await vm.save(on: req.db)
         
