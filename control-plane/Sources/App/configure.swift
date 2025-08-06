@@ -4,17 +4,7 @@ import ElementaryHTMX
 import NIOSSL
 import Vapor
 
-// configures your application
 public func configure(_ app: Application) async throws {
-    // Debug middleware to trace all requests (commented out for production)
-    // struct DebugMiddleware: AsyncMiddleware {
-    //     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
-    //         print("🔍 DEBUG: Incoming request to \(request.url.path)")
-    //         return try await next.respond(to: request)
-    //     }
-    // }
-    // app.middleware.use(DebugMiddleware())
-
     // Configure sessions
     app.middleware.use(app.sessions.middleware)
     app.sessions.use(.fluent)
@@ -86,17 +76,8 @@ public func configure(_ app: Application) async throws {
 
     try await app.autoMigrate()
 
-    // register routes
     try routes(app)
 
-    // Debug: Print all registered routes (commented out for production)
-    // print("🔍 DEBUG: Registered routes:")
-    // for route in app.routes.all {
-    //     print("🔍   \(route.method) \(route.path)")
-    // }
-
-    // Static files middleware after routes
-    // Skip TailwindCSS setup during testing
     if app.environment != .testing {
         try await tailwind(app)
     }
