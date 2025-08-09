@@ -1,5 +1,5 @@
 generate:
   - types
   - server
-accessModifier: internal
+accessModifier: public
 namingStrategy: idiomatic

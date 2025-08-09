@@ -11,7 +11,7 @@ paths:
       summary: Health check
       operationId: health
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
@@ -25,6 +25,6 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: APIKey
+      bearerFormat: JWT
 security:
   - bearerAuth: []
