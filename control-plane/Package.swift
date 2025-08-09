@@ -10,7 +10,7 @@ let package = Package(
         // StratoShared for common models and protocols
         .package(path: "../shared"),
         // 💧 A server-side Swift web framework.
-        .package(url: "https://github.com/vapor/vapor.git", from: "4.110.1"),
+    .package(url: "https://github.com/vapor/vapor.git", from: "4.113.0"),
         // 🗄 An ORM for SQL and NoSQL databases.
         .package(url: "https://github.com/vapor/fluent.git", from: "4.9.0"),
         // 🐘 Fluent driver for Postgres.
@@ -22,9 +22,13 @@ let package = Package(
         // 🎯 HTMX integration for Swift with type-safe HTML DSL
         .package(url: "https://github.com/sliemeobn/elementary-htmx.git", from: "0.4.0"),
         // 🔵 Non-blocking, event-driven networking for Swift. Used for custom executors
-        .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
+    .package(url: "https://github.com/apple/swift-nio.git", from: "2.71.0"),
         // 🔐 WebAuthn/Passkey authentication
-        .package(url: "https://github.com/swift-server/webauthn-swift.git", branch: "main")
+        .package(url: "https://github.com/swift-server/webauthn-swift.git", branch: "main"),
+        // OpenAPI generator and Vapor bindings (spec-first)
+        .package(url: "https://github.com/apple/swift-openapi-generator.git", from: "1.2.0"),
+    .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.0.0"),
+        .package(url: "https://github.com/swift-server/swift-openapi-vapor.git", from: "1.0.0")
     ],
     targets: [
         .executableTarget(
@@ -40,9 +44,14 @@ let package = Package(
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOWebSocket", package: "swift-nio"),
-                .product(name: "WebAuthn", package: "webauthn-swift")
+                .product(name: "WebAuthn", package: "webauthn-swift"),
+                .product(name: "OpenAPIVapor", package: "swift-openapi-vapor"),
+                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime")
             ],
-            swiftSettings: swiftSettings
+            swiftSettings: swiftSettings,
+            plugins: [
+                .plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")
+            ]
         ),
         .testTarget(
             name: "AppTests",

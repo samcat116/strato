@@ -108,4 +108,10 @@ func routes(_ app: Application) throws {
 
     // Groups controller
     try app.register(collection: GroupController())
+
+    // OpenAPI Vapor transport (spec-first). Once the generator produces APIProtocol
+    // from Sources/App/openapi.yaml, register handlers here.
+    // let transport = VaporTransport(routesBuilder: app)
+    // let apiImpl = GeneratedAPIImpl() // conforms to generated protocol
+    // try apiImpl.registerHandlers(on: transport)
 }
