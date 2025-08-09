@@ -1,0 +1,30 @@
+openapi: 3.0.3
+info:
+  title: Strato Control Plane API
+  version: 0.1.0
+  description: Generated with swift-openapi-generator (spec-first). Minimal stub.
+servers:
+  - url: http://localhost:8080
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: health
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: APIKey
+security:
+  - bearerAuth: []

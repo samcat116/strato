@@ -1,20 +1,17 @@
-import Vapor
 import Fluent
+import Vapor
 
 struct SpiceDBAuthMiddleware: AsyncMiddleware {
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
         // Skip auth for health checks, public routes, and auth endpoints
-        if request.url.path.hasPrefix("/health") ||
-           request.url.path == "/" ||
-           request.url.path == "/hello" ||
-           request.url.path == "/login" ||
-           request.url.path == "/register" ||
-           request.url.path.hasPrefix("/auth") ||
-           request.url.path.hasPrefix("/users/register") ||
-           request.url.path.hasPrefix("/onboarding") ||
-           request.url.path.hasPrefix("/js/") ||
-           request.url.path.hasPrefix("/styles/") ||
-           request.url.path == "/favicon.ico" {
+        if request.url.path.hasPrefix("/health") || request.url.path == "/"
+            || request.url.path == "/hello" || request.url.path == "/login"
+            || request.url.path == "/register" || request.url.path == "/api/docs"
+            || request.url.path == "/openapi.json" || request.url.path.hasPrefix("/auth")
+            || request.url.path.hasPrefix("/users/register")
+            || request.url.path.hasPrefix("/onboarding") || request.url.path.hasPrefix("/js/")
+            || request.url.path.hasPrefix("/styles/") || request.url.path == "/favicon.ico"
+        {
             return try await next.respond(to: request)
         }
 
@@ -68,13 +65,15 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         }
 
         // For specific VM operations, extract VM ID
-        var resourceId = "*" // Default for collection operations
+        var resourceId = "*"  // Default for collection operations
         if pathComponents.count >= 3 {
             resourceId = String(pathComponents[2])
         }
 
         // Handle collection-level operations that require organization permissions
-        if (permission == "read" && resourceId == "*") || (permission == "create" && resourceId == "*") {
+        if (permission == "read" && resourceId == "*")
+            || (permission == "create" && resourceId == "*")
+        {
             // For VM collection read and VM creation, check organization membership
             guard let currentOrgId = user.currentOrganizationId else {
                 throw Abort(.forbidden, reason: "No current organization set")
@@ -84,7 +83,9 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
                 throw Abort(.forbidden, reason: "Invalid user session")
             }
 
-            request.logger.info("Checking permission for user: \(userId) on organization: \(currentOrgId.uuidString)")
+            request.logger.info(
+                "Checking permission for user: \(userId) on organization: \(currentOrgId.uuidString)"
+            )
 
             let hasPermission = try await request.spicedb.checkPermission(
                 subject: userId,

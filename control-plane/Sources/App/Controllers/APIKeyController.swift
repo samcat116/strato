@@ -1,6 +1,6 @@
+import Fluent
 import Foundation
 import Vapor
-import Fluent
 
 struct APIKeyController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
@@ -39,10 +39,12 @@ struct APIKeyController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid API key ID")
         }
 
-        guard let apiKey = try await APIKey.query(on: req.db)
-            .filter(\.$id == apiKeyID)
-            .filter(\.$user.$id == user.id!)
-            .first() else {
+        guard
+            let apiKey = try await APIKey.query(on: req.db)
+                .filter(\.$id == apiKeyID)
+                .filter(\.$user.$id == user.id!)
+                .first()
+        else {
             throw Abort(.notFound)
         }
 
@@ -78,7 +80,7 @@ struct APIKeyController: RouteCollection {
         // Generate the API key
         let fullKey = APIKey.generateAPIKey()
         let keyHash = APIKey.hashAPIKey(fullKey)
-        let keyPrefix = String(fullKey.prefix(12)) + "..." // Show first 12 chars
+        let keyPrefix = String(fullKey.prefix(12)) + "..."  // Show first 12 chars
 
         // Calculate expiration date
         var expiresAt: Date?
@@ -113,10 +115,12 @@ struct APIKeyController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid API key ID")
         }
 
-        guard let apiKey = try await APIKey.query(on: req.db)
-            .filter(\.$id == apiKeyID)
-            .filter(\.$user.$id == user.id!)
-            .first() else {
+        guard
+            let apiKey = try await APIKey.query(on: req.db)
+                .filter(\.$id == apiKeyID)
+                .filter(\.$user.$id == user.id!)
+                .first()
+        else {
             throw Abort(.notFound)
         }
 
@@ -155,10 +159,12 @@ struct APIKeyController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid API key ID")
         }
 
-        guard let apiKey = try await APIKey.query(on: req.db)
-            .filter(\.$id == apiKeyID)
-            .filter(\.$user.$id == user.id!)
-            .first() else {
+        guard
+            let apiKey = try await APIKey.query(on: req.db)
+                .filter(\.$id == apiKeyID)
+                .filter(\.$user.$id == user.id!)
+                .first()
+        else {
             throw Abort(.notFound)
         }
 
@@ -177,106 +183,29 @@ struct APIDocumentationController: RouteCollection {
 
     func documentation(req: Request) async throws -> Response {
         let html = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Strato API Documentation</title>
-            <style>
-                body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 40px; }
-                .endpoint { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
-                .method { font-weight: bold; color: #2563eb; }
-                .path { font-family: monospace; background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
-                code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
-                .auth-header { background: #fef3c7; padding: 10px; border-radius: 4px; margin: 20px 0; }
-            </style>
-        </head>
-        <body>
-            <h1>Strato API Documentation</h1>
-
-            <div class="auth-header">
-                <strong>Authentication:</strong> Include your API key in the Authorization header:<br>
-                <code>Authorization: Bearer sk_your_api_key_here</code>
-            </div>
-
-            <h2>API Key Management</h2>
-
-            <div class="endpoint">
-                <div><span class="method">GET</span> <span class="path">/api-keys</span></div>
-                <p>List all API keys for the authenticated user</p>
-            </div>
-
-            <div class="endpoint">
-                <div><span class="method">POST</span> <span class="path">/api-keys</span></div>
-                <p>Create a new API key</p>
-                <p><strong>Body:</strong> <code>{"name": "My API Key", "scopes": ["read", "write"], "expiresInDays": 30}</code></p>
-            </div>
-
-            <div class="endpoint">
-                <div><span class="method">PATCH</span> <span class="path">/api-keys/{id}</span></div>
-                <p>Update an API key</p>
-                <p><strong>Body:</strong> <code>{"name": "Updated Name", "isActive": false}</code></p>
-            </div>
-
-            <div class="endpoint">
-                <div><span class="method">DELETE</span> <span class="path">/api-keys/{id}</span></div>
-                <p>Delete an API key</p>
-            </div>
-
-            <h2>Organizations</h2>
-
-            <div class="endpoint">
-                <div><span class="method">GET</span> <span class="path">/organizations</span></div>
-                <p>List organizations for the authenticated user</p>
-            </div>
-
-            <div class="endpoint">
-                <div><span class="method">POST</span> <span class="path">/organizations</span></div>
-                <p>Create a new organization</p>
-                <p><strong>Body:</strong> <code>{"name": "My Org", "description": "Organization description"}</code></p>
-            </div>
-
-            <h2>Virtual Machines</h2>
-
-            <div class="endpoint">
-                <div><span class="method">GET</span> <span class="path">/vms</span></div>
-                <p>List VMs in the current organization</p>
-            </div>
-
-            <div class="endpoint">
-                <div><span class="method">POST</span> <span class="path">/vms</span></div>
-                <p>Create a new VM</p>
-                <p><strong>Body:</strong> <code>{"name": "my-vm", "description": "My VM", "image": "ubuntu:latest", "cpu": 2, "memory": 1024, "disk": 20}</code></p>
-            </div>
-
-            <div class="endpoint">
-                <div><span class="method">POST</span> <span class="path">/vms/{id}/start</span></div>
-                <p>Start a VM</p>
-            </div>
-
-            <div class="endpoint">
-                <div><span class="method">POST</span> <span class="path">/vms/{id}/stop</span></div>
-                <p>Stop a VM</p>
-            </div>
-
-            <div class="endpoint">
-                <div><span class="method">POST</span> <span class="path">/vms/{id}/restart</span></div>
-                <p>Restart a VM</p>
-            </div>
-
-            <h2>Scopes</h2>
-            <ul>
-                <li><strong>read:</strong> Read access to resources</li>
-                <li><strong>write:</strong> Create, update, and delete resources</li>
-                <li><strong>admin:</strong> Full administrative access</li>
-            </ul>
-        </body>
-        </html>
-        """
-
+            <!DOCTYPE html>
+            <html>
+                <head>
+                    <meta charset="UTF-8" />
+                    <title>Strato API Docs</title>
+                    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+                </head>
+                <body>
+                    <div id="swagger-ui"></div>
+                    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>
+                    <script>
+                        window.ui = SwaggerUIBundle({
+                            url: '/openapi.json',
+                            dom_id: '#swagger-ui',
+                            presets: [SwaggerUIBundle.presets.apis],
+                            layout: 'BaseLayout'
+                        });
+                    </script>
+                </body>
+            </html>
+            """
         return Response(
-            status: .ok,
-            headers: HTTPHeaders([("Content-Type", "text/html")]),
-            body: .init(string: html)
-        )
+            status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]),
+            body: .init(string: html))
     }
 }
