@@ -409,43 +409,43 @@ struct VMListPartial: HTML {
     var content: some HTML {
         if vms.isEmpty {
             tr {
-                td(.class("px-3 py-4 text-sm text-gray-500 text-center"), .custom(name: "colspan", value: "3")) {
+                td(.class("px-3 py-4 text-sm text-gray-400 text-center"), .custom(name: "colspan", value: "3")) {
                     "No VMs found. Create your first VM!"
                 }
             }
         } else {
             ForEach(vms) { vm in
                 tr(
-                    .class("hover:bg-gray-50 cursor-pointer"),
+                    .class("hover:bg-gray-700 cursor-pointer transition-colors"),
                     .custom(name: "hx-get", value: "/htmx/vms/\(vm.id?.uuidString ?? "")/details"),
                     .custom(name: "hx-target", value: "#vmDetails"),
                     .custom(name: "hx-swap", value: "innerHTML")
                 ) {
                     td(.class("px-3 py-3")) {
-                        div(.class("text-sm font-medium text-gray-900")) { vm.name }
-                        div(.class("text-xs text-gray-500")) { vm.description }
+                        div(.class("text-sm font-medium text-gray-200")) { vm.name }
+                        div(.class("text-xs text-gray-400")) { vm.description }
                     }
                     td(.class("px-3 py-3")) {
-                        span(.class("inline-flex px-2 py-1 text-xs rounded-full bg-green-100 text-green-800")) {
+                        span(.class("inline-flex px-2 py-1 text-xs rounded-full bg-green-900 text-green-300 border border-green-700")) {
                             "Running"
                         }
                     }
                     td(.class("px-3 py-3")) {
                         div(.class("flex space-x-1")) {
                             button(
-                                .class("text-green-600 hover:text-green-700 text-xs"),
+                                .class("text-green-400 hover:text-green-300 text-xs transition-colors"),
                                 .custom(name: "hx-post", value: "/htmx/vms/\(vm.id?.uuidString ?? "")/start"),
                                 .custom(name: "hx-target", value: "#terminal"),
                                 .custom(name: "hx-on::after-request", value: "logToConsole('VM start command sent')")
                             ) { "▶" }
                             button(
-                                .class("text-yellow-600 hover:text-yellow-700 text-xs"),
+                                .class("text-yellow-400 hover:text-yellow-300 text-xs transition-colors"),
                                 .custom(name: "hx-post", value: "/htmx/vms/\(vm.id?.uuidString ?? "")/stop"),
                                 .custom(name: "hx-target", value: "#terminal"),
                                 .custom(name: "hx-on::after-request", value: "logToConsole('VM stop command sent')")
                             ) { "⏸" }
                             button(
-                                .class("text-red-600 hover:text-red-700 text-xs"),
+                                .class("text-red-400 hover:text-red-300 text-xs transition-colors"),
                                 .custom(name: "hx-delete", value: "/htmx/vms/\(vm.id?.uuidString ?? "")"),
                                 .custom(name: "hx-target", value: "#vmTableBody"),
                                 .custom(name: "hx-swap", value: "innerHTML"),
@@ -466,42 +466,42 @@ struct VMDetailsPartial: HTML {
     var content: some HTML {
         div(.class("space-y-4")) {
             div {
-                h4(.class("text-lg font-semibold text-gray-900")) { vm.name }
-                p(.class("text-sm text-gray-600")) { vm.description }
+                h4(.class("text-lg font-semibold text-gray-100")) { vm.name }
+                p(.class("text-sm text-gray-300")) { vm.description }
             }
             div(.class("grid grid-cols-2 gap-4")) {
                 div {
-                    label(.class("block text-sm font-medium text-gray-700")) { "CPU Cores" }
-                    p(.class("text-sm text-gray-900")) { String(vm.cpu) }
+                    label(.class("block text-sm font-medium text-gray-400")) { "CPU Cores" }
+                    p(.class("text-sm text-gray-100")) { String(vm.cpu) }
                 }
                 div {
-                    label(.class("block text-sm font-medium text-gray-700")) { "Memory" }
-                    p(.class("text-sm text-gray-900")) { "\(String(format: "%.1f", Double(vm.memory) / (1024 * 1024 * 1024))) GB" }
+                    label(.class("block text-sm font-medium text-gray-400")) { "Memory" }
+                    p(.class("text-sm text-gray-100")) { "\(String(format: "%.1f", Double(vm.memory) / (1024 * 1024 * 1024))) GB" }
                 }
                 div {
-                    label(.class("block text-sm font-medium text-gray-700")) { "Disk" }
-                    p(.class("text-sm text-gray-900")) { "\(vm.disk / (1024 * 1024 * 1024)) GB" }
+                    label(.class("block text-sm font-medium text-gray-400")) { "Disk" }
+                    p(.class("text-sm text-gray-100")) { "\(vm.disk / (1024 * 1024 * 1024)) GB" }
                 }
                 div {
-                    label(.class("block text-sm font-medium text-gray-700")) { "Image" }
-                    p(.class("text-sm text-gray-900")) { vm.image }
+                    label(.class("block text-sm font-medium text-gray-400")) { "Image" }
+                    p(.class("text-sm text-gray-100")) { vm.image }
                 }
             }
             div(.class("flex space-x-3 pt-4")) {
                 button(
-                    .class("bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm"),
+                    .class("bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm transition-colors"),
                     .custom(name: "hx-post", value: "/htmx/vms/\(vm.id?.uuidString ?? "")/start")
                 ) { "Start" }
                 button(
-                    .class("bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-md text-sm"),
+                    .class("bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-md text-sm transition-colors"),
                     .custom(name: "hx-post", value: "/htmx/vms/\(vm.id?.uuidString ?? "")/stop")
                 ) { "Stop" }
                 button(
-                    .class("bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm"),
+                    .class("bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm transition-colors"),
                     .custom(name: "hx-post", value: "/htmx/vms/\(vm.id?.uuidString ?? "")/restart")
                 ) { "Restart" }
                 button(
-                    .class("bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm"),
+                    .class("bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm transition-colors"),
                     .custom(name: "hx-delete", value: "/htmx/vms/\(vm.id?.uuidString ?? "")"),
                     .custom(name: "hx-target", value: "#vmTableBody"),
                     .custom(name: "hx-swap", value: "innerHTML"),
@@ -526,11 +526,11 @@ struct OrganizationListPartial: HTML {
 
     var content: some HTML {
         if organizations.isEmpty {
-            div(.class("px-4 py-2 text-sm text-gray-500")) { "No organizations found" }
+            div(.class("px-4 py-2 text-sm text-gray-400")) { "No organizations found" }
         } else {
             ForEach(organizations) { org in
                 let isCurrent = org.id == currentOrgId
-                let buttonClass = "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex justify-between items-center" + (isCurrent ? " bg-indigo-50" : "")
+                let buttonClass = "w-full text-left px-4 py-2 text-sm hover:bg-gray-700 flex justify-between items-center transition-colors" + (isCurrent ? " bg-gray-700" : "")
                 button(
                     .class(buttonClass),
                     .custom(name: "hx-post", value: "/htmx/organizations/\(org.id?.uuidString ?? "")/switch"),
@@ -538,12 +538,12 @@ struct OrganizationListPartial: HTML {
                     .custom(name: "hx-swap", value: "innerHTML")
                 ) {
                     div {
-                        div(.class("font-medium \(isCurrent ? "text-indigo-600" : "")")) {
+                        div(.class("font-medium \(isCurrent ? "text-blue-400" : "text-gray-300")")) {
                             if isCurrent { "✓ \(org.name)" } else { org.name }
                         }
-                        div(.class("text-xs text-gray-500")) { org.description }
+                        div(.class("text-xs text-gray-400")) { org.description }
                     }
-                    span(.class("text-xs text-gray-400")) { org.userRole ?? "member" }
+                    span(.class("text-xs text-gray-500")) { org.userRole ?? "member" }
                 }
             }
         }
@@ -555,21 +555,21 @@ struct APIKeyListPartial: HTML {
 
     var content: some HTML {
         if apiKeys.isEmpty {
-            div(.class("text-center text-gray-500 py-8")) {
+            div(.class("text-center text-gray-400 py-8")) {
                 "No API keys found. Create your first API key!"
             }
         } else {
             div(.class("space-y-4")) {
                 ForEach(apiKeys) { key in
-                    div(.class("border border-gray-200 rounded-lg p-4")) {
+                    div(.class("border border-gray-600 bg-gray-700 rounded-lg p-4")) {
                         div(.class("flex justify-between items-start")) {
                             div(.class("flex-1")) {
-                                h4(.class("font-medium text-gray-900")) { key.name }
-                                p(.class("text-sm text-gray-500 font-mono")) { key.keyPrefix }
+                                h4(.class("font-medium text-gray-100")) { key.name }
+                                p(.class("text-sm text-gray-400 font-mono")) { key.keyPrefix }
                             }
                             div(.class("flex space-x-2")) {
                                 button(
-                                    .class("text-sm px-3 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200"),
+                                    .class("text-sm px-3 py-1 rounded bg-red-900 text-red-300 hover:bg-red-800 transition-colors border border-red-700"),
                                     .custom(name: "hx-delete", value: "/htmx/api-keys/\(key.id?.uuidString ?? "")"),
                                     .custom(name: "hx-target", value: "#apiKeysList"),
                                     .custom(name: "hx-swap", value: "innerHTML")
