@@ -1,6 +1,15 @@
 {
-  "originHash" : "0c8531f1526b4c290ce2175214c1948a5d8fc16ce3ed3601f97f0f5d859aa4a1",
+  "originHash" : "eeab1ff2523ab75528c0a60ea4f175ccca8a04a8d39166c317edf554764a0128",
   "pins" : [
+    {
+      "identity" : "qemukit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/utmapp/QEMUKit.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "7e6923686a722220917ca1ac9084793e1ae29ae0"
+      }
+    },
     {
       "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",
@@ -47,12 +56,30 @@
       }
     },
     {
+      "identity" : "swift-ovn",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/samcat116/swift-ovn.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "a210c90f2de605103c576cdab78333ad3423d3c6"
+      }
+    },
+    {
       "identity" : "swift-system",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-system.git",
       "state" : {
         "revision" : "61e4ca4b81b9e09e2ec863b00c340eb13497dac6",
         "version" : "1.5.0"
+      }
+    },
+    {
+      "identity" : "swift-toml",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/samcat116/swift-toml.git",
+      "state" : {
+        "branch" : "master",
+        "revision" : "40cf79dae968d1b576a396142290a945e7a7389f"
       }
     }
   ],

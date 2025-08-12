@@ -55,7 +55,7 @@ RUN find -L "$(swift build --package-path /build/agent -c release --show-bin-pat
 # ================================
 FROM ubuntu:noble
 
-# Make sure all system packages are up to date, and install only essential packages.
+# Make sure all system packages are up to date, and install QEMU and essential packages.
 RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     && apt-get -q update \
     && apt-get -q dist-upgrade -y \
@@ -64,6 +64,18 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     ca-certificates \
     tzdata \
     socat \
+    # QEMU and KVM for virtualization
+    qemu-system-x86 \
+    qemu-utils \
+    # glib-2.0 development files for QEMUKit
+    libglib2.0-0 \
+    libglib2.0-dev \
+    # OVN/OVS for software-defined networking
+    ovn-central \
+    ovn-host \
+    ovn-common \
+    openvswitch-switch \
+    openvswitch-common \
     # If your app or its dependencies import FoundationNetworking, also install `libcurl4`.
     # libcurl4 \
     # If your app or its dependencies import FoundationXML, also install `libxml2`.
@@ -90,4 +102,4 @@ USER strato:strato
 
 # Start the Strato Agent when the image is run
 ENTRYPOINT ["./StratoAgent"]
-CMD ["--control-plane-url", "ws://control-plane:8080/agent/ws", "--hypervisor-socket", "/var/run/cloud-hypervisor/cloud-hypervisor.sock"]
+CMD ["--control-plane-url", "ws://control-plane:8080/agent/ws", "--qemu-socket-dir", "/var/run/qemu"]

@@ -13,7 +13,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Agent (Swift Commands)
 - `cd agent && swift build` - Build the agent application
 - `cd agent && swift test` - Run agent tests
-- `cd agent && swift run StratoAgent` - Run the agent locally
+- `cd agent && swift run StratoAgent` - Run the agent locally (development mode on macOS, full QEMU on Linux)
+- `cd agent && swift run StratoAgent --config-file /etc/strato/config.toml` - Run agent with custom config file
+- `cd agent && swift run StratoAgent --control-plane-url ws://remote:8080/agent/ws` - Override control plane URL
+
+### Agent Configuration
+The agent uses TOML configuration files to set connection and operational parameters:
+- **Default config path**: `/etc/strato/config.toml` (production)
+- **Fallback config path**: `./config.toml` (development)
+- **Example config**: `config.toml.example` (copy to create your configuration)
+- **Configuration priority**: Command-line arguments override config file values
+- **Required setting**: `control_plane_url` must be specified in config or command line
+- **Optional settings**: `qemu_socket_dir`, `log_level` have sensible defaults
 
 ### Shared Package
 - `cd shared && swift build` - Build the shared package
@@ -28,11 +39,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `./scripts/prepare-build.sh` - Prepare build context (run before first Docker build)
 - `docker compose build` - Build Docker images for both control plane and agent
 - `docker compose up control-plane` - Start the control plane with database and Permify
-- `docker compose up agent` - Start the agent (requires control plane to be running)
+- `docker compose up agent` - Start the agent (requires control plane and networking services to be running)
 - `docker compose up db` - Start only the PostgreSQL database
 - `docker compose up permify` - Start only the Permify authorization service
+- `docker compose up ovn-northd ovn-nb-db ovn-sb-db openvswitch` - Start OVN/OVS networking services
 - `docker compose run migrate` - Run database migrations
-- `docker compose down` - Stop all services (add `-v` to wipe database)
+- `docker compose down` - Stop all services (add `-v` to wipe database and networking state)
 
 ### Frontend/Styling (Control Plane)
 - TailwindCSS is integrated via SwiftyTailwind and runs automatically during app startup
@@ -42,7 +54,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-Strato is a distributed private cloud platform with a **Control Plane** and **Agent** architecture. The Control Plane manages the web UI, API, database, and user management, while Agents run on hypervisor nodes and manage VMs via Cloud Hypervisor. Communication between Control Plane and Agents happens via WebSocket.
+Strato is a distributed private cloud platform with a **Control Plane** and **Agent** architecture. The Control Plane manages the web UI, API, database, and user management, while Agents run on hypervisor nodes and manage VMs via QEMU with software-defined networking via OVN/OVS. Communication between Control Plane and Agents happens via WebSocket.
 
 ### Core Components
 - **Control Plane**: Vapor 4 web framework with Fluent ORM, web UI, API, user management
@@ -52,7 +64,8 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 - **Authorization**: Permify for fine-grained access control and permissions (Control Plane only)
 - **Frontend**: Leaf templates + HTMX for dynamic interactions (Control Plane only)
 - **Styling**: TailwindCSS integrated via SwiftyTailwind (Control Plane only)
-- **VM Management**: Cloud Hypervisor API integration (Agent only)
+- **VM Management**: QEMU integration via QEMUKit library (Agent only)
+- **Network Management**: SwiftOVN integration for OVN/OVS software-defined networking (Agent only)
 - **Communication**: WebSocket-based messaging between Control Plane and Agents
 
 ### Key Architecture Patterns
@@ -72,7 +85,7 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 
 ### External Integrations
 - **Control Plane**: Permify authorization service, HTMX for frontend interactions, xterm.js for terminal interfaces
-- **Agent**: Cloud Hypervisor API for VM lifecycle management
+- **Agent**: QEMU via QEMUKit library for VM lifecycle management, OVN/OVS via SwiftOVN for networking
 - **Communication**: WebSocket protocol for Control Plane ↔ Agent messaging
 
 ### Authorization System
@@ -117,9 +130,36 @@ strato/
 └── CLAUDE.md               # This file
 ```
 
+### QEMU Integration (Agent)
+- **Development (macOS)**: Agent runs in mock mode for development without QEMU/KVM
+- **Production (Linux)**: Full QEMU integration with hardware virtualization support
+- **QEMUKit Library**: Swift wrapper for QEMU Monitor Protocol (QMP) and guest agent
+- **Platform Detection**: Runtime detection of KVM availability and QEMU installation
+- **VM Management**: Create, start, stop, pause, resume, delete operations via QMP
+- **System Requirements**: 
+  - Linux with KVM kernel module (`/dev/kvm` access)
+  - QEMU system packages (`qemu-system-x86`, `qemu-utils`)
+  - glib-2.0 libraries for QEMUKit integration
+
+### SwiftOVN Networking Integration (Agent)
+- **Development (macOS)**: Network operations are mocked for development without OVN/OVS
+- **Production (Linux)**: Full OVN/OVS integration with software-defined networking
+- **SwiftOVN Library**: Native Swift wrapper for OVN/OVS JSON-RPC APIs over Unix sockets
+- **Network Features**:
+  - Logical switch and port management
+  - VM network attachment/detachment
+  - Security groups and ACLs
+  - DHCP and routing services
+  - Multi-tenant network isolation
+- **System Requirements**:
+  - OVN packages (`ovn-central`, `ovn-host`, `ovn-common`)
+  - OVS packages (`openvswitch-switch`, `openvswitch-common`)
+  - Network capabilities (`NET_ADMIN`, `SYS_ADMIN`)
+  - Access to OVN/OVS Unix domain sockets
+
 ### Project Structure Notes
 - Swift strict concurrency enabled (Swift 6.0)
 - Control Plane: Traditional Vapor web application with database
-- Agent: Command-line Swift application for hypervisor nodes
+- Agent: Command-line Swift application for hypervisor nodes with QEMU integration
 - Shared: Common models and WebSocket protocols
 - Frontend assets in control-plane only: static files (`control-plane/Public/`) and web templates (`control-plane/web/`)
