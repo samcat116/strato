@@ -9,14 +9,14 @@ let package = Package(
     dependencies: [
         // StratoShared for common models and protocols
         .package(path: "../shared"),
+        // SwiftQEMU for QEMU integration
+        .package(url: "https://github.com/samcat116/swift-qemu", branch: "main"),
         // 🔵 Non-blocking, event-driven networking for Swift
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
         // 🗄 ArgumentParser for CLI
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
         // 📝 Logging
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
-        // 🖥️ QEMU integration for virtualization
-        .package(url: "https://github.com/utmapp/QEMUKit.git", branch: "main"),
         // 🌐 OVN/OVS networking integration
         .package(url: "https://github.com/samcat116/swift-ovn.git", branch: "main"),
         // ⚙️ TOML configuration parsing
@@ -50,7 +50,7 @@ var swiftSettings: [SwiftSetting] {
 #if os(Linux)
 var qemuAndNetworkDependencies: [Target.Dependency] {
     [
-        .product(name: "QEMUKit", package: "QEMUKit"),
+        .product(name: "SwiftQEMU", package: "swift-qemu"),
         .product(name: "SwiftOVN", package: "swift-ovn"),
     ]
 }

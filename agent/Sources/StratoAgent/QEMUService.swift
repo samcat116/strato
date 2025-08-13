@@ -3,7 +3,7 @@ import Logging
 import StratoShared
 
 #if os(Linux)
-import QEMUKit
+import SwiftQEMU
 #endif
 
 class QEMUService {
@@ -11,7 +11,7 @@ class QEMUService {
     private weak var networkService: NetworkService?
     
     #if os(Linux)
-    private var activeVMs: [String: QEMUVirtualMachine] = [:]
+    private var activeVMs: [String: QEMUManager] = [:]
     private var vmConfigs: [String: VmConfig] = [:]
     private var vmNetworkInfo: [String: VMNetworkInfo] = [:]
     #else
@@ -24,7 +24,7 @@ class QEMUService {
         self.networkService = networkService
         
         #if os(Linux)
-        logger.info("QEMU service initialized with QEMUKit support")
+        logger.info("QEMU service initialized with SwiftQEMU support")
         #else
         logger.warning("QEMU service running in development mode - operations will be mocked")
         #endif
@@ -38,18 +38,18 @@ class QEMUService {
         #if os(Linux)
         logger.info("Creating QEMU VM", metadata: ["vmId": .string(vmId)])
         
-        let qemuVM = QEMUVirtualMachine()
-        await qemuVM.setDelegate(self)
+        let qemuManager = QEMUManager(logger: logger)
         
         // Set up VM networking first
         if let networks = config.net, !networks.isEmpty {
             try await setupVMNetworking(vmId: vmId, networks: networks)
         }
         
-        // Configure VM with provided config
-        try await configureQEMUVM(qemuVM, with: config)
+        // Configure and create VM
+        let qemuConfig = convertToQEMUConfiguration(config, vmId: vmId)
+        try await qemuManager.createVM(config: qemuConfig)
         
-        activeVMs[vmId] = qemuVM
+        activeVMs[vmId] = qemuManager
         vmConfigs[vmId] = config
         
         logger.info("QEMU VM created successfully", metadata: ["vmId": .string(vmId)])
@@ -63,14 +63,13 @@ class QEMUService {
     func bootVM() async throws {
         #if os(Linux)
         guard let firstVM = activeVMs.values.first else {
-            throw QEMUError.vmNotFound("No VM available to boot")
+            throw QEMUServiceError.vmNotFound("No VM available to boot")
         }
         
         logger.info("Booting QEMU VM")
         
-        // Start QEMU with launcher and interface
-        try await firstVM.start(launcher: QEMULauncher(), interface: QEMUIOService())
-        try await firstVM.monitor?.continueBoot()
+        // Start VM execution
+        try await firstVM.start()
         
         logger.info("QEMU VM booted successfully")
         #else
@@ -83,15 +82,15 @@ class QEMUService {
     func shutdownVM() async throws {
         #if os(Linux)
         guard let firstVM = activeVMs.values.first else {
-            throw QEMUError.vmNotFound("No VM available to shutdown")
+            throw QEMUServiceError.vmNotFound("No VM available to shutdown")
         }
         
         logger.info("Shutting down QEMU VM")
         
-        // Graceful shutdown via QMP
-        try await firstVM.monitor?.systemPowerdown()
+        // Graceful shutdown
+        try await firstVM.shutdown()
         
-        logger.info("QEMU VM shutdown initiated")
+        logger.info("QEMU VM shutdown completed")
         #else
         // Development mode
         logger.info("Shutting down mock QEMU VM (development mode)")
@@ -102,13 +101,13 @@ class QEMUService {
     func rebootVM() async throws {
         #if os(Linux)
         guard let firstVM = activeVMs.values.first else {
-            throw QEMUError.vmNotFound("No VM available to reboot")
+            throw QEMUServiceError.vmNotFound("No VM available to reboot")
         }
         
         logger.info("Rebooting QEMU VM")
         
-        // System reset via QMP
-        try await firstVM.monitor?.systemReset()
+        // System reset
+        try await firstVM.reset()
         
         logger.info("QEMU VM reboot initiated")
         #else
@@ -121,13 +120,13 @@ class QEMUService {
     func pauseVM() async throws {
         #if os(Linux)
         guard let firstVM = activeVMs.values.first else {
-            throw QEMUError.vmNotFound("No VM available to pause")
+            throw QEMUServiceError.vmNotFound("No VM available to pause")
         }
         
         logger.info("Pausing QEMU VM")
         
-        // Pause VM via QMP
-        try await firstVM.monitor?.stop()
+        // Pause VM
+        try await firstVM.pause()
         
         logger.info("QEMU VM paused")
         #else
@@ -139,13 +138,13 @@ class QEMUService {
     func resumeVM() async throws {
         #if os(Linux)
         guard let firstVM = activeVMs.values.first else {
-            throw QEMUError.vmNotFound("No VM available to resume")
+            throw QEMUServiceError.vmNotFound("No VM available to resume")
         }
         
         logger.info("Resuming QEMU VM")
         
-        // Resume VM via QMP
-        try await firstVM.monitor?.cont()
+        // Resume VM
+        try await firstVM.start()
         
         logger.info("QEMU VM resumed")
         #else
@@ -156,19 +155,14 @@ class QEMUService {
     
     func deleteVM() async throws {
         #if os(Linux)
-        guard let (vmId, qemuVM) = activeVMs.first else {
-            throw QEMUError.vmNotFound("No VM available to delete")
+        guard let (vmId, qemuManager) = activeVMs.first else {
+            throw QEMUServiceError.vmNotFound("No VM available to delete")
         }
         
         logger.info("Deleting QEMU VM", metadata: ["vmId": .string(vmId)])
         
-        // Stop VM if running
-        do {
-            try await qemuVM.monitor?.quit()
-        } catch {
-            // VM may already be stopped
-            logger.debug("VM quit command failed, VM may already be stopped")
-        }
+        // Destroy VM
+        try await qemuManager.destroy()
         
         // Clean up VM networking
         try await cleanupVMNetworking(vmId: vmId)
@@ -192,17 +186,17 @@ class QEMUService {
     
     func getVMInfo() async throws -> VmInfo {
         #if os(Linux)
-        guard let (vmId, qemuVM) = activeVMs.first,
+        guard let (vmId, qemuManager) = activeVMs.first,
               let config = vmConfigs[vmId] else {
-            throw QEMUError.vmNotFound("No VM available for info")
+            throw QEMUServiceError.vmNotFound("No VM available for info")
         }
         
-        // Query VM status via QMP
-        let status = try await qemuVM.monitor?.queryStatus() ?? "unknown"
+        // Query VM status
+        let status = try await qemuManager.getStatus()
         
         return VmInfo(
             config: config,
-            state: status,
+            state: status.rawValue,
             memoryActualSize: config.memory?.size
         )
         #else
@@ -221,27 +215,27 @@ class QEMUService {
         #endif
     }
     
-    func syncVMStatus() async throws -> VMStatus {
+    func syncVMStatus() async throws -> StratoShared.VMStatus {
         #if os(Linux)
-        guard let qemuVM = activeVMs.values.first else {
+        guard let qemuManager = activeVMs.values.first else {
             return .shutdown
         }
         
         do {
-            if let statusInfo = try await qemuVM.monitor?.queryStatus() {
-                // Map QEMU status to VMStatus
-                switch statusInfo.lowercased() {
-                case "running":
-                    return .running
-                case "paused":
-                    return .paused
-                case "shutdown", "poweroff":
-                    return .shutdown
-                default:
-                    return .created
-                }
-            } else {
+            let status = try await qemuManager.getStatus()
+            
+            // Map SwiftQEMU QEMUVMStatus to StratoShared VMStatus
+            switch status {
+            case .running:
+                return .running
+            case .paused:
+                return .paused
+            case .stopped, .shuttingDown:
                 return .shutdown
+            case .creating:
+                return .created
+            case .unknown:
+                return .created
             }
         } catch {
             logger.error("Failed to query VM status: \(error)")
@@ -275,41 +269,68 @@ class QEMUService {
     // MARK: - Private Configuration Methods
     
     #if os(Linux)
-    private func configureQEMUVM(_ qemuVM: QEMUVirtualMachine, with config: VmConfig) async throws {
+    private func convertToQEMUConfiguration(_ config: VmConfig, vmId: String) -> QEMUConfiguration {
+        var qemuConfig = QEMUConfiguration()
+        
         // Configure CPU
         if let cpuConfig = config.cpus {
-            // Set CPU configuration
+            qemuConfig.cpuCount = Int(cpuConfig.bootVcpus)
             logger.debug("Configuring CPU: \(cpuConfig.bootVcpus) cores")
         }
         
-        // Configure Memory  
+        // Configure Memory (convert bytes to MB)
         if let memoryConfig = config.memory {
-            // Set memory configuration
-            logger.debug("Configuring memory: \(memoryConfig.size) bytes")
+            qemuConfig.memoryMB = Int(memoryConfig.size / (1024 * 1024))
+            logger.debug("Configuring memory: \(memoryConfig.size) bytes (\(qemuConfig.memoryMB) MB)")
         }
         
         // Configure disks
         if let disks = config.disks {
-            for disk in disks {
-                logger.debug("Configuring disk: \(disk.path)")
+            qemuConfig.disks = disks.map { disk in
+                QEMUDisk(
+                    path: disk.path,
+                    format: "qcow2",
+                    interface: "virtio",
+                    readonly: disk.readonly ?? false
+                )
             }
         }
         
         // Configure networking
         if let networks = config.net {
-            for network in networks {
-                logger.debug("Configuring network interface")
-                
-                // Get network info for this VM
+            qemuConfig.networks = networks.compactMap { network in
+                // Get network info for this VM if available
                 if let networkInfo = vmNetworkInfo[vmId] {
-                    // Configure QEMU to use the TAP interface
-                    logger.debug("Configuring QEMU network device", metadata: [
-                        "tapInterface": .string(networkInfo.tapInterface),
-                        "macAddress": .string(networkInfo.macAddress)
-                    ])
+                    // Use TAP interface for OVN integration
+                    return QEMUNetwork(
+                        backend: "tap",
+                        model: "virtio-net-pci",
+                        macAddress: networkInfo.macAddress,
+                        options: "ifname=\(networkInfo.tapInterface),script=no,downscript=no"
+                    )
+                } else {
+                    // Fallback to user networking
+                    return QEMUNetwork(
+                        backend: "user",
+                        model: "virtio-net-pci",
+                        macAddress: network.mac
+                    )
                 }
             }
         }
+        
+        // Configure kernel if provided
+        let payload = config.payload
+        qemuConfig.kernel = payload.kernel
+        qemuConfig.initrd = payload.initramfs
+        qemuConfig.kernelArgs = payload.cmdline
+        
+        // Enable KVM by default on Linux
+        qemuConfig.enableKVM = true
+        qemuConfig.noGraphic = true
+        qemuConfig.startPaused = true
+        
+        return qemuConfig
     }
     
     // MARK: - VM Network Management
@@ -371,23 +392,6 @@ class QEMUService {
     #endif
 }
 
-// MARK: - QEMU Virtual Machine Delegate
-
-#if os(Linux)
-extension QEMUService: QEMUVirtualMachineDelegate {
-    func virtualMachine(_ vm: QEMUVirtualMachine, didChangeState state: QEMUVMState) {
-        logger.info("QEMU VM state changed", metadata: ["state": .string(String(describing: state))])
-        
-        // Here you could notify the Control Plane of state changes
-        // via the WebSocket connection
-    }
-    
-    func virtualMachine(_ vm: QEMUVirtualMachine, didError error: Error) {
-        logger.error("QEMU VM error: \(error)")
-    }
-}
-#endif
-
 // MARK: - Development Mode Mock VM
 
 #if !os(Linux)
@@ -400,9 +404,9 @@ private class MockQEMUVM {
 }
 #endif
 
-// MARK: - QEMU Error Types
+// MARK: - QEMU Service Error Types
 
-enum QEMUError: Error, LocalizedError {
+enum QEMUServiceError: Error, LocalizedError {
     case vmNotFound(String)
     case vmNotCreated(String)
     case kvmNotAvailable

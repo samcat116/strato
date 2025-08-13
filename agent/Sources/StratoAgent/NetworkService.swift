@@ -12,7 +12,7 @@ class NetworkService {
     private let ovsSocketPath: String
     
     #if os(Linux)
-    private var ovnManager: SwiftOVN?
+    private var ovnManager: OVNManager?
     private var ovsManager: OVSManager?
     private var isConnected = false
     #else
@@ -44,12 +44,12 @@ class NetworkService {
         logger.info("Connecting to OVN/OVS services")
         
         // Initialize OVN manager
-        ovnManager = SwiftOVN(socketPath: ovnSocketPath)
+        ovnManager = OVNManager(socketPath: ovnSocketPath, logger: logger)
         try await ovnManager?.connect()
         logger.info("Connected to OVN database", metadata: ["socket": .string(ovnSocketPath)])
         
         // Initialize OVS manager
-        ovsManager = OVSManager(socketPath: ovsSocketPath)
+        ovsManager = OVSManager(socketPath: ovsSocketPath, logger: logger)
         try await ovsManager?.connect()
         logger.info("Connected to OVS database", metadata: ["socket": .string(ovsSocketPath)])
         
@@ -67,8 +67,12 @@ class NetworkService {
         #if os(Linux)
         logger.info("Disconnecting from OVN/OVS services")
         
-        await ovnManager?.disconnect()
-        await ovsManager?.disconnect()
+        do {
+            try await ovnManager?.disconnect()
+            try await ovsManager?.disconnect()
+        } catch {
+            logger.error("Error disconnecting from OVN/OVS: \(error)")
+        }
         
         ovnManager = nil
         ovsManager = nil
@@ -93,7 +97,12 @@ class NetworkService {
         // Create logical switch port for the VM
         let portName = "vm-\(vmId)"
         let macAddress = config.macAddress ?? generateMACAddress()
-        let ipAddress = config.ipAddress ?? await allocateIPAddress(for: config.networkName)
+        let ipAddress: String
+        if let configIP = config.ipAddress {
+            ipAddress = configIP
+        } else {
+            ipAddress = await allocateIPAddress(for: config.networkName)
+        }
         
         let logicalPort = OVNLogicalSwitchPort(
             name: portName,
@@ -106,10 +115,10 @@ class NetworkService {
         )
         
         // Find or create the logical switch
-        let switchUUID = try await findOrCreateLogicalSwitch(name: config.networkName, subnet: config.subnet)
+        _ = try await findOrCreateLogicalSwitch(name: config.networkName, subnet: config.subnet)
         
         // Create the logical switch port
-        let portUUID = try await ovnManager?.createLogicalSwitchPort(logicalPort, on: switchUUID)
+        let portUUID = try await ovnManager?.createLogicalSwitchPort(logicalPort)
         
         // Create TAP interface and connect to OVS bridge
         let tapInterface = try await createTAPInterface(vmId: vmId)
@@ -119,7 +128,7 @@ class NetworkService {
             vmId: vmId,
             networkName: config.networkName,
             portName: portName,
-            portUUID: portUUID?.uuidString,
+            portUUID: portUUID,
             tapInterface: tapInterface,
             macAddress: macAddress,
             ipAddress: ipAddress
@@ -177,7 +186,7 @@ class NetworkService {
         
         // Remove logical switch port
         if let ovnManager = ovnManager {
-            try await ovnManager.deleteLogicalSwitchPort(name: portName)
+            try await ovnManager.deleteLogicalSwitchPort(named: portName)
         }
         
         // Remove TAP interface
@@ -223,7 +232,7 @@ class NetworkService {
     
     func createLogicalNetwork(name: String, subnet: String, gateway: String? = nil) async throws -> UUID {
         #if os(Linux)
-        guard let ovnManager = ovnManager else {
+        guard ovnManager != nil else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
         
@@ -238,7 +247,11 @@ class NetworkService {
             ]
         )
         
-        let switchUUID = try await ovnManager.createLogicalSwitch(logicalSwitch)
+        let switchUUIDString = try await ovnManager!.createLogicalSwitch(logicalSwitch)
+        
+        guard let switchUUID = UUID(uuidString: switchUUIDString) else {
+            throw NetworkError.invalidConfiguration("Invalid UUID returned from OVN: \(switchUUIDString)")
+        }
         
         // Configure DHCP if needed
         if let gateway = gateway {
@@ -259,13 +272,13 @@ class NetworkService {
     
     func deleteLogicalNetwork(name: String) async throws {
         #if os(Linux)
-        guard let ovnManager = ovnManager else {
+        guard ovnManager != nil else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
         
         logger.info("Deleting logical network", metadata: ["name": .string(name)])
         
-        try await ovnManager.deleteLogicalSwitch(name: name)
+        try await ovnManager!.deleteLogicalSwitch(named: name)
         
         logger.info("Logical network deleted successfully", metadata: ["name": .string(name)])
         #else
@@ -277,7 +290,7 @@ class NetworkService {
     
     func listLogicalNetworks() async throws -> [NetworkInfo] {
         #if os(Linux)
-        guard let ovnManager = ovnManager else {
+        guard ovnManager != nil else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
         
@@ -310,8 +323,8 @@ class NetworkService {
         
         let integrationBridge = OVSBridge(
             name: bridgeName,
-            fail_mode: "secure",
             protocols: ["OpenFlow13"],
+            fail_mode: "secure",
             external_ids: ["description": "OVN integration bridge"]
         )
         
@@ -325,7 +338,7 @@ class NetworkService {
     }
     
     private func findOrCreateLogicalSwitch(name: String, subnet: String) async throws -> UUID {
-        guard let ovnManager = ovnManager else {
+        guard ovnManager != nil else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
         
@@ -339,7 +352,11 @@ class NetworkService {
             ]
         )
         
-        return try await ovnManager.createLogicalSwitch(logicalSwitch)
+        let uuidString = try await ovnManager!.createLogicalSwitch(logicalSwitch)
+        guard let uuid = UUID(uuidString: uuidString) else {
+            throw NetworkError.invalidConfiguration("Invalid UUID returned from OVN: \(uuidString)")
+        }
+        return uuid
     }
     
     private func createTAPInterface(vmId: String) async throws -> String {
@@ -360,13 +377,50 @@ class NetworkService {
         // Add TAP interface to OVS bridge
         let port = OVSPort(
             name: tapInterface,
+            interfaces: [tapInterface],
             external_ids: [
                 "ovn-port-name": portName,
                 "description": "TAP interface for VM"
             ]
         )
         
-        try await ovsManager.addPortToBridge(port: port, bridge: "br-int")
+        // Create the port in OVS
+        let portUUID = try await ovsManager.createPort(port)
+        
+        // Get the bridge and update it to include the new port
+        guard let bridge = try await ovsManager.getBridge(named: "br-int") else {
+            throw NetworkError.bridgeNotFound("br-int")
+        }
+        
+        // Add port UUID to bridge's ports array
+        var updatedPorts = bridge.ports ?? []
+        updatedPorts.append(portUUID)
+        
+        let updatedBridge = OVSBridge(
+            name: bridge.name,
+            ports: updatedPorts,
+            mirrors: bridge.mirrors,
+            netflow: bridge.netflow,
+            sflow: bridge.sflow,
+            ipfix: bridge.ipfix,
+            controller: bridge.controller,
+            protocols: bridge.protocols,
+            fail_mode: bridge.fail_mode,
+            status: bridge.status,
+            other_config: bridge.other_config,
+            external_ids: bridge.external_ids,
+            flood_vlans: bridge.flood_vlans,
+            flow_tables: bridge.flow_tables,
+            mcast_snooping_enable: bridge.mcast_snooping_enable,
+            rstp_enable: bridge.rstp_enable,
+            rstp_status: bridge.rstp_status,
+            stp_enable: bridge.stp_enable
+        )
+        
+        // Update the bridge with the new port
+        if let bridgeUUID = bridge.uuid {
+            try await ovsManager.updateBridge(uuid: bridgeUUID, updatedBridge)
+        }
         logger.debug("Attached TAP interface to bridge", metadata: ["tap": .string(tapInterface), "port": .string(portName)])
     }
     
@@ -418,6 +472,7 @@ private struct MockVMNetworkAttachment {
 enum NetworkError: Error, LocalizedError {
     case notConnected(String)
     case networkNotFound(String)
+    case bridgeNotFound(String)
     case invalidConfiguration(String)
     case ovnError(String)
     case ovsError(String)
@@ -428,6 +483,8 @@ enum NetworkError: Error, LocalizedError {
             return "Network service not connected: \(message)"
         case .networkNotFound(let name):
             return "Network not found: \(name)"
+        case .bridgeNotFound(let name):
+            return "Bridge not found: \(name)"
         case .invalidConfiguration(let message):
             return "Invalid network configuration: \(message)"
         case .ovnError(let message):

@@ -1,15 +1,6 @@
 {
-  "originHash" : "eeab1ff2523ab75528c0a60ea4f175ccca8a04a8d39166c317edf554764a0128",
+  "originHash" : "73493864a44e6fe8d1d8e60469bfc009abcc39c673dac139c271572980d535a2",
   "pins" : [
-    {
-      "identity" : "qemukit",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/utmapp/QEMUKit.git",
-      "state" : {
-        "branch" : "main",
-        "revision" : "7e6923686a722220917ca1ac9084793e1ae29ae0"
-      }
-    },
     {
       "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",
@@ -62,6 +53,15 @@
       "state" : {
         "branch" : "main",
         "revision" : "a210c90f2de605103c576cdab78333ad3423d3c6"
+      }
+    },
+    {
+      "identity" : "swift-qemu",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/samcat116/swift-qemu",
+      "state" : {
+        "branch" : "main",
+        "revision" : "d56af3fa086ad0d65322eacf0b7d0aa4d053b93f"
       }
     },
     {
