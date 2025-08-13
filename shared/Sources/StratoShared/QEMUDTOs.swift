@@ -458,7 +458,7 @@ public struct VmCounters: Codable, Sendable {
 
 // MARK: - Error Types
 
-public enum CloudHypervisorError: Error, LocalizedError, Sendable {
+public enum QEMUError: Error, LocalizedError, Sendable {
     case connectionFailed(String)
     case vmNotFound(String)
     case vmAlreadyExists(String)
@@ -466,16 +466,16 @@ public enum CloudHypervisorError: Error, LocalizedError, Sendable {
     case vmNotStarted(String)
     case vmNotPaused(String)
     case invalidConfiguration(String)
-    case hypervisorError(Int, String)
+    case qemuError(Int, String)
     
     public var errorDescription: String? {
         switch self {
         case .connectionFailed(let message):
-            return "Failed to connect to cloud-hypervisor: \(message)"
+            return "Failed to connect to QEMU: \(message)"
         case .vmNotFound(let id):
-            return "VM with ID \(id) not found in hypervisor"
+            return "VM with ID \(id) not found in QEMU"
         case .vmAlreadyExists(let id):
-            return "VM with ID \(id) already exists in hypervisor"
+            return "VM with ID \(id) already exists in QEMU"
         case .vmNotCreated(let id):
             return "VM with ID \(id) is not created yet"
         case .vmNotStarted(let id):
@@ -484,8 +484,8 @@ public enum CloudHypervisorError: Error, LocalizedError, Sendable {
             return "VM with ID \(id) is not paused"
         case .invalidConfiguration(let message):
             return "Invalid VM configuration: \(message)"
-        case .hypervisorError(let status, let message):
-            return "Hypervisor error (\(status)): \(message)"
+        case .qemuError(let status, let message):
+            return "QEMU error (\(status)): \(message)"
         }
     }
 }

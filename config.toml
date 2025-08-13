@@ -1,0 +1,4 @@
+# Test TOML configuration
+control_plane_url = "ws://test.example.com:8080/agent/ws"
+qemu_socket_dir = "/tmp/test-qemu"
+log_level = "debug"
