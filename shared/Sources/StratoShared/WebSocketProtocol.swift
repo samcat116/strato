@@ -22,6 +22,14 @@ public enum MessageType: String, Codable, Sendable {
     case vmStatus = "vm_status"
     case vmCounters = "vm_counters"
     
+    // Network management operations
+    case networkCreate = "network_create"
+    case networkDelete = "network_delete"
+    case networkList = "network_list"
+    case networkInfo = "network_info"
+    case networkAttach = "network_attach"
+    case networkDetach = "network_detach"
+    
     // Responses
     case success = "success"
     case error = "error"
@@ -336,6 +344,128 @@ public enum CodableValue: Codable, Sendable {
         case .null:
             try container.encodeNil()
         }
+    }
+}
+
+// MARK: - Network Operation Messages
+
+public struct NetworkCreateMessage: WebSocketMessage {
+    public let type: MessageType = .networkCreate
+    public let requestId: String
+    public let timestamp: Date
+    public let networkName: String
+    public let subnet: String
+    public let gateway: String?
+    public let vlanId: Int?
+    public let dhcpEnabled: Bool
+    public let dnsServers: [String]
+    
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        networkName: String,
+        subnet: String,
+        gateway: String? = nil,
+        vlanId: Int? = nil,
+        dhcpEnabled: Bool = true,
+        dnsServers: [String] = []
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.networkName = networkName
+        self.subnet = subnet
+        self.gateway = gateway
+        self.vlanId = vlanId
+        self.dhcpEnabled = dhcpEnabled
+        self.dnsServers = dnsServers
+    }
+}
+
+public struct NetworkDeleteMessage: WebSocketMessage {
+    public let type: MessageType = .networkDelete
+    public let requestId: String
+    public let timestamp: Date
+    public let networkName: String
+    
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        networkName: String
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.networkName = networkName
+    }
+}
+
+public struct NetworkListMessage: WebSocketMessage {
+    public let type: MessageType = .networkList
+    public let requestId: String
+    public let timestamp: Date
+    
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date()
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+    }
+}
+
+public struct NetworkInfoMessage: WebSocketMessage {
+    public let type: MessageType = .networkInfo
+    public let requestId: String
+    public let timestamp: Date
+    public let networkName: String
+    
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        networkName: String
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.networkName = networkName
+    }
+}
+
+public struct NetworkAttachMessage: WebSocketMessage {
+    public let type: MessageType = .networkAttach
+    public let requestId: String
+    public let timestamp: Date
+    public let vmId: String
+    public let networkName: String
+    public let config: VMNetworkConfig?
+    
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        vmId: String,
+        networkName: String,
+        config: VMNetworkConfig? = nil
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.vmId = vmId
+        self.networkName = networkName
+        self.config = config
+    }
+}
+
+public struct NetworkDetachMessage: WebSocketMessage {
+    public let type: MessageType = .networkDetach
+    public let requestId: String
+    public let timestamp: Date
+    public let vmId: String
+    
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        vmId: String
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.vmId = vmId
     }
 }
 

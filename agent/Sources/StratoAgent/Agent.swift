@@ -7,23 +7,24 @@ import StratoShared
 actor Agent {
     private let agentID: String
     private let controlPlaneURL: String
-    private let hypervisorSocket: String
+    private let qemuSocketDir: String
     private let logger: Logger
     
     private var websocketClient: WebSocketClient?
-    private var cloudHypervisorService: CloudHypervisorService?
+    private var qemuService: QEMUService?
+    private var networkService: NetworkService?
     private var heartbeatTask: Task<Void, Error>?
     private var isRunning = false
     
     init(
         agentID: String,
         controlPlaneURL: String,
-        hypervisorSocket: String,
+        qemuSocketDir: String,
         logger: Logger
     ) {
         self.agentID = agentID
         self.controlPlaneURL = controlPlaneURL
-        self.hypervisorSocket = hypervisorSocket
+        self.qemuSocketDir = qemuSocketDir
         self.logger = logger
     }
     
@@ -33,8 +34,19 @@ actor Agent {
             return
         }
         
-        logger.info("Initializing cloud-hypervisor service")
-        cloudHypervisorService = CloudHypervisorService(socketPath: hypervisorSocket, logger: logger)
+        logger.info("Initializing network service")
+        networkService = NetworkService(logger: logger)
+        
+        do {
+            try await networkService?.connect()
+            logger.info("Network service connected successfully")
+        } catch {
+            logger.warning("Failed to connect to network service: \(error.localizedDescription)")
+            logger.warning("VM networking will be limited")
+        }
+        
+        logger.info("Initializing QEMU service")
+        qemuService = QEMUService(logger: logger, networkService: networkService)
         
         logger.info("Connecting to control plane", metadata: ["url": .string(controlPlaneURL)])
         websocketClient = WebSocketClient(url: controlPlaneURL, agent: self, logger: logger)
@@ -70,7 +82,10 @@ actor Agent {
         
         await websocketClient?.disconnect()
         websocketClient = nil
-        cloudHypervisorService = nil
+        qemuService = nil
+        
+        await networkService?.disconnect()
+        networkService = nil
         
         logger.info("Agent stopped")
     }
@@ -81,7 +96,7 @@ actor Agent {
             agentId: agentID,
             hostname: ProcessInfo.processInfo.hostName,
             version: "1.0.0",
-            capabilities: ["vm_management", "cloud_hypervisor"],
+            capabilities: ["vm_management", "qemu", "swift_ovn_networking"],
             resources: resources
         )
         
@@ -141,7 +156,7 @@ actor Agent {
     }
     
     private func getRunningVMList() async -> [String] {
-        // TODO: Get actual running VMs from cloud-hypervisor
+        // TODO: Get actual running VMs from QEMU
         return []
     }
 }
@@ -179,6 +194,24 @@ extension Agent {
             case .vmStatus:
                 let message = try envelope.decode(as: VMOperationMessage.self)
                 await handleVMStatus(message)
+            case .networkCreate:
+                let message = try envelope.decode(as: NetworkCreateMessage.self)
+                await handleNetworkCreate(message)
+            case .networkDelete:
+                let message = try envelope.decode(as: NetworkDeleteMessage.self)
+                await handleNetworkDelete(message)
+            case .networkList:
+                let message = try envelope.decode(as: NetworkListMessage.self)
+                await handleNetworkList(message)
+            case .networkInfo:
+                let message = try envelope.decode(as: NetworkInfoMessage.self)
+                await handleNetworkInfo(message)
+            case .networkAttach:
+                let message = try envelope.decode(as: NetworkAttachMessage.self)
+                await handleNetworkAttach(message)
+            case .networkDetach:
+                let message = try envelope.decode(as: NetworkDetachMessage.self)
+                await handleNetworkDetach(message)
             default:
                 logger.warning("Received unknown message type: \(envelope.type)")
             }
@@ -191,7 +224,7 @@ extension Agent {
         logger.info("Creating VM", metadata: ["vmId": .string(message.vmData.id.uuidString)])
         
         do {
-            try await cloudHypervisorService?.createVM(config: message.vmConfig)
+            try await qemuService?.createVM(config: message.vmConfig)
             await sendSuccess(for: message.requestId, message: "VM created successfully")
             logger.info("VM created successfully", metadata: ["vmId": .string(message.vmData.id.uuidString)])
         } catch {
@@ -204,7 +237,7 @@ extension Agent {
         logger.info("Booting VM", metadata: ["vmId": .string(message.vmId)])
         
         do {
-            try await cloudHypervisorService?.bootVM()
+            try await qemuService?.bootVM()
             await sendSuccess(for: message.requestId, message: "VM booted successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .running)
             logger.info("VM booted successfully", metadata: ["vmId": .string(message.vmId)])
@@ -218,7 +251,7 @@ extension Agent {
         logger.info("Shutting down VM", metadata: ["vmId": .string(message.vmId)])
         
         do {
-            try await cloudHypervisorService?.shutdownVM()
+            try await qemuService?.shutdownVM()
             await sendSuccess(for: message.requestId, message: "VM shut down successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .shutdown)
             logger.info("VM shut down successfully", metadata: ["vmId": .string(message.vmId)])
@@ -232,7 +265,7 @@ extension Agent {
         logger.info("Rebooting VM", metadata: ["vmId": .string(message.vmId)])
         
         do {
-            try await cloudHypervisorService?.rebootVM()
+            try await qemuService?.rebootVM()
             await sendSuccess(for: message.requestId, message: "VM rebooted successfully")
             logger.info("VM rebooted successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
@@ -245,7 +278,7 @@ extension Agent {
         logger.info("Pausing VM", metadata: ["vmId": .string(message.vmId)])
         
         do {
-            try await cloudHypervisorService?.pauseVM()
+            try await qemuService?.pauseVM()
             await sendSuccess(for: message.requestId, message: "VM paused successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .paused)
             logger.info("VM paused successfully", metadata: ["vmId": .string(message.vmId)])
@@ -259,7 +292,7 @@ extension Agent {
         logger.info("Resuming VM", metadata: ["vmId": .string(message.vmId)])
         
         do {
-            try await cloudHypervisorService?.resumeVM()
+            try await qemuService?.resumeVM()
             await sendSuccess(for: message.requestId, message: "VM resumed successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .running)
             logger.info("VM resumed successfully", metadata: ["vmId": .string(message.vmId)])
@@ -273,7 +306,7 @@ extension Agent {
         logger.info("Deleting VM", metadata: ["vmId": .string(message.vmId)])
         
         do {
-            try await cloudHypervisorService?.deleteVM()
+            try await qemuService?.deleteVM()
             await sendSuccess(for: message.requestId, message: "VM deleted successfully")
             logger.info("VM deleted successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
@@ -286,7 +319,7 @@ extension Agent {
         logger.info("Getting VM info", metadata: ["vmId": .string(message.vmId)])
         
         do {
-            let vmInfo = try await cloudHypervisorService?.getVMInfo()
+            let vmInfo = try await qemuService?.getVMInfo()
             let data = try AnyCodableValue(vmInfo)
             await sendSuccess(for: message.requestId, message: "VM info retrieved", data: data)
             logger.info("VM info retrieved successfully", metadata: ["vmId": .string(message.vmId)])
@@ -300,7 +333,7 @@ extension Agent {
         logger.info("Getting VM status", metadata: ["vmId": .string(message.vmId)])
         
         do {
-            let status = try await cloudHypervisorService?.syncVMStatus() ?? .shutdown
+            let status = try await qemuService?.syncVMStatus() ?? .shutdown
             let data = try AnyCodableValue(status)
             await sendSuccess(for: message.requestId, message: "VM status retrieved", data: data)
             logger.info("VM status retrieved successfully", metadata: ["vmId": .string(message.vmId), "status": .string(status.rawValue)])
@@ -334,6 +367,145 @@ extension Agent {
             try await websocketClient?.sendMessage(statusMessage)
         } catch {
             logger.error("Failed to send status update: \(error)")
+        }
+    }
+    
+    // MARK: - Network Message Handlers
+    
+    private func handleNetworkCreate(_ message: NetworkCreateMessage) async {
+        logger.info("Creating network", metadata: ["networkName": .string(message.networkName)])
+        
+        guard let networkService = networkService else {
+            await sendError(for: message.requestId, error: "Network service not available")
+            return
+        }
+        
+        do {
+            let networkUUID = try await networkService.createLogicalNetwork(
+                name: message.networkName,
+                subnet: message.subnet,
+                gateway: message.gateway
+            )
+            
+            let networkInfo = NetworkInfo(
+                name: message.networkName,
+                uuid: networkUUID.uuidString,
+                subnet: message.subnet,
+                gateway: message.gateway,
+                vlanId: message.vlanId,
+                dhcpEnabled: message.dhcpEnabled,
+                dnsServers: message.dnsServers
+            )
+            
+            let data = try AnyCodableValue(networkInfo)
+            await sendSuccess(for: message.requestId, message: "Network created successfully", data: data)
+            logger.info("Network created successfully", metadata: ["networkName": .string(message.networkName)])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to create network: \(error.localizedDescription)")
+            logger.error("Failed to create network", metadata: ["networkName": .string(message.networkName), "error": .string(error.localizedDescription)])
+        }
+    }
+    
+    private func handleNetworkDelete(_ message: NetworkDeleteMessage) async {
+        logger.info("Deleting network", metadata: ["networkName": .string(message.networkName)])
+        
+        guard let networkService = networkService else {
+            await sendError(for: message.requestId, error: "Network service not available")
+            return
+        }
+        
+        do {
+            try await networkService.deleteLogicalNetwork(name: message.networkName)
+            await sendSuccess(for: message.requestId, message: "Network deleted successfully")
+            logger.info("Network deleted successfully", metadata: ["networkName": .string(message.networkName)])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to delete network: \(error.localizedDescription)")
+            logger.error("Failed to delete network", metadata: ["networkName": .string(message.networkName), "error": .string(error.localizedDescription)])
+        }
+    }
+    
+    private func handleNetworkList(_ message: NetworkListMessage) async {
+        logger.info("Listing networks")
+        
+        guard let networkService = networkService else {
+            await sendError(for: message.requestId, error: "Network service not available")
+            return
+        }
+        
+        do {
+            let networks = try await networkService.listLogicalNetworks()
+            let data = try AnyCodableValue(networks)
+            await sendSuccess(for: message.requestId, message: "Networks retrieved successfully", data: data)
+            logger.info("Networks listed successfully", metadata: ["count": .stringConvertible(networks.count)])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to list networks: \(error.localizedDescription)")
+            logger.error("Failed to list networks", metadata: ["error": .string(error.localizedDescription)])
+        }
+    }
+    
+    private func handleNetworkInfo(_ message: NetworkInfoMessage) async {
+        logger.info("Getting network info", metadata: ["networkName": .string(message.networkName)])
+        
+        guard let networkService = networkService else {
+            await sendError(for: message.requestId, error: "Network service not available")
+            return
+        }
+        
+        do {
+            let networks = try await networkService.listLogicalNetworks()
+            if let network = networks.first(where: { $0.name == message.networkName }) {
+                let data = try AnyCodableValue(network)
+                await sendSuccess(for: message.requestId, message: "Network info retrieved successfully", data: data)
+                logger.info("Network info retrieved successfully", metadata: ["networkName": .string(message.networkName)])
+            } else {
+                await sendError(for: message.requestId, error: "Network not found: \(message.networkName)")
+                logger.warning("Network not found", metadata: ["networkName": .string(message.networkName)])
+            }
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to get network info: \(error.localizedDescription)")
+            logger.error("Failed to get network info", metadata: ["networkName": .string(message.networkName), "error": .string(error.localizedDescription)])
+        }
+    }
+    
+    private func handleNetworkAttach(_ message: NetworkAttachMessage) async {
+        logger.info("Attaching VM to network", metadata: ["vmId": .string(message.vmId), "networkName": .string(message.networkName)])
+        
+        guard let networkService = networkService else {
+            await sendError(for: message.requestId, error: "Network service not available")
+            return
+        }
+        
+        do {
+            let networkInfo = try await networkService.attachVMToNetwork(
+                vmId: message.vmId,
+                networkName: message.networkName,
+                macAddress: message.config?.macAddress
+            )
+            
+            let data = try AnyCodableValue(networkInfo)
+            await sendSuccess(for: message.requestId, message: "VM attached to network successfully", data: data)
+            logger.info("VM attached to network successfully", metadata: ["vmId": .string(message.vmId), "networkName": .string(message.networkName)])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to attach VM to network: \(error.localizedDescription)")
+            logger.error("Failed to attach VM to network", metadata: ["vmId": .string(message.vmId), "networkName": .string(message.networkName), "error": .string(error.localizedDescription)])
+        }
+    }
+    
+    private func handleNetworkDetach(_ message: NetworkDetachMessage) async {
+        logger.info("Detaching VM from network", metadata: ["vmId": .string(message.vmId)])
+        
+        guard let networkService = networkService else {
+            await sendError(for: message.requestId, error: "Network service not available")
+            return
+        }
+        
+        do {
+            try await networkService.detachVMFromNetwork(vmId: message.vmId)
+            await sendSuccess(for: message.requestId, message: "VM detached from network successfully")
+            logger.info("VM detached from network successfully", metadata: ["vmId": .string(message.vmId)])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to detach VM from network: \(error.localizedDescription)")
+            logger.error("Failed to detach VM from network", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
 }
