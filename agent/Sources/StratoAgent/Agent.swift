@@ -118,7 +118,7 @@ actor Agent {
         heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
                 do {
-                    try await self?.sendHeartbeat()
+                    try await self?._sendHeartbeat()
                     try await Task.sleep(for: .seconds(30)) // Heartbeat every 30 seconds
                 } catch {
                     self?.logger.error("Heartbeat failed: \(error)")
@@ -128,7 +128,15 @@ actor Agent {
         }
     }
     
-    private func sendHeartbeat() async throws {
+    func sendHeartbeat() async {
+        do {
+            try await _sendHeartbeat()
+        } catch {
+            logger.error("Failed to send heartbeat: \(error)")
+        }
+    }
+    
+    private func _sendHeartbeat() async throws {
         let resources = await getAgentResources()
         let runningVMs = await getRunningVMList()
         

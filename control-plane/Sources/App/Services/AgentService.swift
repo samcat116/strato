@@ -2,22 +2,58 @@ import Foundation
 import Vapor
 import StratoShared
 import NIOWebSocket
+import Fluent
 
 actor AgentService {
     private let app: Application
     private var agents: [String: AgentInfo] = [:]
     private var vmToAgentMapping: [String: String] = [:] // VM ID -> Agent ID
-    private var pendingRequests: [String: CheckedContinuation<AgentResponse, Error>] = [:]
+    private var pendingRequests: [String: CheckedContinuation<AgentServiceResponse, Error>] = [:]
+    private var connectionToAgentName: [ObjectIdentifier: String] = [:] // WebSocket connection -> Agent name
+    private var heartbeatTask: Task<Void, Never>?
 
     init(app: Application) {
         self.app = app
+        // Start heartbeat monitoring after initialization
+        Task {
+            await startHeartbeatMonitoring()
+        }
     }
 
     // MARK: - Agent Registration
 
-    func registerAgent(_ message: AgentRegisterMessage, websocket: WebSocket) {
+    func registerAgent(_ message: AgentRegisterMessage, websocket: WebSocket) async throws {
+        // Get agent name from connection tracking
+        let connectionId = ObjectIdentifier(websocket)
+        guard let agentName = connectionToAgentName[connectionId] else {
+            throw AgentServiceError.invalidResponse("Agent name not found for connection")
+        }
+        
+        let db = app.db
+        
+        // Find existing agent or create new one
+        let agent: Agent
+        if let existingAgent = try await Agent.query(on: db)
+            .filter(\.$name == agentName)
+            .first() {
+            // Update existing agent
+            agent = existingAgent
+            agent.hostname = message.hostname
+            agent.version = message.version
+            agent.capabilities = message.capabilities
+            agent.updateResources(message.resources)
+            agent.status = .online
+        } else {
+            // Create new agent
+            agent = Agent.from(registration: message, name: agentName)
+            agent.status = .online
+        }
+        
+        try await agent.save(on: db)
+        
+        // Update in-memory tracking
         let agentInfo = AgentInfo(
-            id: message.agentId,
+            id: agentName, // Use agent name as ID for consistency
             hostname: message.hostname,
             version: message.version,
             capabilities: message.capabilities,
@@ -26,40 +62,178 @@ actor AgentService {
             lastHeartbeat: Date()
         )
 
-        agents[message.agentId] = agentInfo
+        agents[agentName] = agentInfo
+        
         app.logger.info("Agent registered", metadata: [
-            "agentId": .string(message.agentId),
+            "agentName": .string(agentName),
             "hostname": .string(message.hostname),
             "version": .string(message.version)
         ])
     }
 
-    func unregisterAgent(_ agentId: String) {
-        agents.removeValue(forKey: agentId)
+    func unregisterAgent(_ agentName: String) async throws {
+        let db = app.db
+        
+        // Update database
+        if let agent = try await Agent.query(on: db)
+            .filter(\.$name == agentName)
+            .first() {
+            agent.status = .offline
+            try await agent.save(on: db)
+        }
+        
+        // Remove from in-memory tracking
+        agents.removeValue(forKey: agentName)
 
         // Remove VM mappings for this agent
         let vmIds = vmToAgentMapping.compactMap { (vmId, mappedAgentId) in
-            mappedAgentId == agentId ? vmId : nil
+            mappedAgentId == agentName ? vmId : nil
         }
 
         for vmId in vmIds {
             vmToAgentMapping.removeValue(forKey: vmId)
         }
 
-        app.logger.info("Agent unregistered", metadata: ["agentId": .string(agentId)])
+        app.logger.info("Agent unregistered", metadata: ["agentName": .string(agentName)])
+    }
+    
+    func forceUnregisterAgent(_ agentName: String) async {
+        // Remove from in-memory tracking only (database handled separately)
+        agents.removeValue(forKey: agentName)
+
+        // Remove VM mappings for this agent
+        let vmIds = vmToAgentMapping.compactMap { (vmId, mappedAgentId) in
+            mappedAgentId == agentName ? vmId : nil
+        }
+
+        for vmId in vmIds {
+            vmToAgentMapping.removeValue(forKey: vmId)
+        }
+
+        app.logger.info("Agent force unregistered from memory", metadata: ["agentName": .string(agentName)])
+    }
+    
+    // MARK: - Connection Tracking
+    
+    func setConnectionAgentName(_ websocket: WebSocket, agentName: String) {
+        let connectionId = ObjectIdentifier(websocket)
+        connectionToAgentName[connectionId] = agentName
+    }
+    
+    func getConnectionAgentName(_ websocket: WebSocket) -> String? {
+        let connectionId = ObjectIdentifier(websocket)
+        return connectionToAgentName[connectionId]
+    }
+    
+    func removeConnectionTracking(_ websocket: WebSocket) {
+        let connectionId = ObjectIdentifier(websocket)
+        if let agentName = connectionToAgentName.removeValue(forKey: connectionId) {
+            // Mark agent as offline in memory
+            if agents[agentName] != nil {
+                agents.removeValue(forKey: agentName)
+                
+                // Update database status asynchronously
+                Task {
+                    do {
+                        let db = self.app.db
+                        if let agent = try await Agent.query(on: db)
+                            .filter(\.$name == agentName)
+                            .first() {
+                            agent.status = .offline
+                            try await agent.save(on: db)
+                        }
+                    } catch {
+                        self.app.logger.error("Failed to update agent offline status in database: \(error)")
+                    }
+                }
+            }
+        }
     }
 
-    func updateAgentHeartbeat(_ message: AgentHeartbeatMessage) {
+    func updateAgentHeartbeat(_ message: AgentHeartbeatMessage) async throws {
         guard var agentInfo = agents[message.agentId] else {
             app.logger.warning("Received heartbeat from unknown agent", metadata: ["agentId": .string(message.agentId)])
             return
         }
 
+        // Update in-memory tracking
         agentInfo.resources = message.resources
         agentInfo.lastHeartbeat = Date()
         agents[message.agentId] = agentInfo
 
+        // Update database asynchronously
+        Task {
+            do {
+                let db = self.app.db
+                if let agent = try await Agent.query(on: db)
+                    .filter(\.$name == message.agentId)
+                    .first() {
+                    agent.updateResources(message.resources)
+                    agent.status = .online
+                    try await agent.save(on: db)
+                }
+            } catch {
+                self.app.logger.error("Failed to update agent heartbeat in database: \(error)")
+            }
+        }
+
         app.logger.debug("Agent heartbeat updated", metadata: ["agentId": .string(message.agentId)])
+    }
+    
+    // MARK: - Heartbeat Monitoring
+    
+    private func startHeartbeatMonitoring() {
+        heartbeatTask = Task {
+            while !Task.isCancelled {
+                do {
+                    // Sleep for 30 seconds
+                    try await Task.sleep(for: .seconds(30))
+                    
+                    // Check for stale agents
+                    await checkStaleAgents()
+                } catch {
+                    if !Task.isCancelled {
+                        app.logger.error("Error in heartbeat monitoring task: \(error)")
+                    }
+                }
+            }
+        }
+    }
+    
+    private func checkStaleAgents() async {
+        let now = Date()
+        let staleThreshold: TimeInterval = 60 // 60 seconds
+        
+        let staleAgents = agents.values.compactMap { agentInfo -> String? in
+            if now.timeIntervalSince(agentInfo.lastHeartbeat) > staleThreshold {
+                return agentInfo.id
+            }
+            return nil
+        }
+        
+        if !staleAgents.isEmpty {
+            app.logger.info("Found \(staleAgents.count) stale agents, marking as offline")
+            
+            for agentName in staleAgents {
+                // Remove from memory
+                agents.removeValue(forKey: agentName)
+                
+                // Update database
+                Task {
+                    do {
+                        let db = self.app.db
+                        if let agent = try await Agent.query(on: db)
+                            .filter(\.$name == agentName)
+                            .first() {
+                            agent.status = .offline
+                            try await agent.save(on: db)
+                        }
+                    } catch {
+                        self.app.logger.error("Failed to update stale agent status in database: \(error)")
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - VM Operations
@@ -174,10 +348,10 @@ actor AgentService {
         let envelope = try MessageEnvelope(message: message)
         let data = try JSONEncoder().encode(envelope)
 
-        try await agent.websocket.send(data)
+        agent.websocket.send(data)
     }
 
-    private func sendMessageToAgentWithResponse<T: WebSocketMessage>(_ message: T, agent: AgentInfo) async throws -> AgentResponse {
+    private func sendMessageToAgentWithResponse<T: WebSocketMessage>(_ message: T, agent: AgentInfo) async throws -> AgentServiceResponse {
         return try await withCheckedThrowingContinuation { continuation in
             Task {
                 do {
@@ -200,11 +374,11 @@ actor AgentService {
         }
     }
 
-    private func storePendingRequest(_ requestId: String, continuation: CheckedContinuation<AgentResponse, Error>) {
+    private func storePendingRequest(_ requestId: String, continuation: CheckedContinuation<AgentServiceResponse, Error>) {
         pendingRequests[requestId] = continuation
     }
 
-    private func removePendingRequest(_ requestId: String) -> CheckedContinuation<AgentResponse, Error>? {
+    private func removePendingRequest(_ requestId: String) -> CheckedContinuation<AgentServiceResponse, Error>? {
         return pendingRequests.removeValue(forKey: requestId)
     }
 
@@ -262,7 +436,7 @@ struct AgentInfo {
     var lastHeartbeat: Date
 }
 
-enum AgentResponse {
+enum AgentServiceResponse {
     case success(AnyCodableValue?)
     case error(String, String?)
 }

@@ -12,6 +12,9 @@ struct StratoAgent: AsyncParsableCommand {
     @Option(name: .long, help: "Control plane WebSocket URL (overrides config file)")
     var controlPlaneURL: String?
     
+    @Option(name: .long, help: "Registration URL with token (for initial registration)")
+    var registrationURL: String?
+    
     @Option(name: .long, help: "Agent ID (defaults to hostname)")
     var agentID: String?
     
@@ -47,7 +50,7 @@ struct StratoAgent: AsyncParsableCommand {
         }
         
         // Override config values with command-line arguments if provided
-        let finalControlPlaneURL = controlPlaneURL ?? config.controlPlaneURL
+        let finalControlPlaneURL = registrationURL ?? controlPlaneURL ?? config.controlPlaneURL
         let finalQemuSocketDir = qemuSocketDir ?? config.qemuSocketDir ?? "/var/run/qemu"
         let finalLogLevel = logLevel ?? config.logLevel ?? "info"
         let finalAgentID = agentID ?? ProcessInfo.processInfo.hostName
@@ -55,11 +58,16 @@ struct StratoAgent: AsyncParsableCommand {
         // Update log level based on final configuration
         logger.logLevel = debug ? .debug : Logger.Level(rawValue: finalLogLevel) ?? .info
         
+        if registrationURL != nil {
+            logger.info("Using registration URL for initial agent registration")
+        }
+        
         logger.info("Starting Strato Agent", metadata: [
             "agentID": .string(finalAgentID),
             "controlPlaneURL": .string(finalControlPlaneURL),
             "qemuSocketDir": .string(finalQemuSocketDir),
-            "logLevel": .string(finalLogLevel)
+            "logLevel": .string(finalLogLevel),
+            "usingRegistrationURL": .string(registrationURL != nil ? "yes" : "no")
         ])
         
         let agent = Agent(

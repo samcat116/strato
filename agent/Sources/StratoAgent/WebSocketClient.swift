@@ -14,6 +14,7 @@ class WebSocketClient {
     
     private var channel: Channel?
     private var isConnected = false
+    private var heartbeatTask: Task<Void, Never>?
     
     init(url: String, agent: Agent, logger: Logger) {
         self.url = url
@@ -25,15 +26,41 @@ class WebSocketClient {
     func connect() async throws {
         logger.info("Attempting to connect to WebSocket server", metadata: ["url": .string(url)])
         
-        // For now, create a simplified mock connection until we can properly implement WebSocket
-        // This allows the agent to start without WebSocket connectivity
-        logger.warning("WebSocket client using mock connection - WebSocket functionality disabled")
+        // For now, implement a working mock that simulates the connection
+        // In a production environment, you would implement full WebSocket protocol
+        // This allows development and testing without complex WebSocket client implementation
         
         // Simulate connection delay
-        try await Task.sleep(for: .milliseconds(100))
+        try await Task.sleep(for: .milliseconds(500))
+        
+        // Parse URL to extract registration token for validation
+        guard let parsedURL = URL(string: url) else {
+            throw WebSocketClientError.invalidURL(url)
+        }
+        
+        // Extract query parameters
+        let components = URLComponents(url: parsedURL, resolvingAgainstBaseURL: false)
+        guard let queryItems = components?.queryItems else {
+            throw WebSocketClientError.invalidURL("Missing registration token in URL")
+        }
+        
+        let token = queryItems.first { $0.name == "token" }?.value
+        let agentName = queryItems.first { $0.name == "name" }?.value
+        
+        guard token != nil, agentName != nil else {
+            throw WebSocketClientError.invalidURL("Missing token or agent name in registration URL")
+        }
         
         isConnected = true
-        logger.info("Mock WebSocket connection established")
+        startHeartbeat()
+        
+        logger.info("WebSocket connection established (mock mode)", metadata: [
+            "agentName": .string(agentName ?? "unknown"),
+            "hasToken": .string(token != nil ? "yes" : "no")
+        ])
+        
+        // In mock mode, we simulate successful registration
+        logger.info("Agent registration successful (mock mode)")
     }
     
     func disconnect() async {
@@ -42,6 +69,17 @@ class WebSocketClient {
         }
         
         logger.info("Disconnecting from WebSocket server")
+        
+        // Stop heartbeat
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        
+        // Close channel if exists
+        if let channel = channel {
+            try? await channel.close().get()
+        }
+        
+        channel = nil
         isConnected = false
         logger.info("Disconnected from WebSocket server")
     }
@@ -51,13 +89,52 @@ class WebSocketClient {
             throw WebSocketClientError.notConnected
         }
         
-        logger.debug("Mock sending WebSocket message", metadata: ["type": .string(message.type.rawValue)])
+        logger.debug("Mock sending WebSocket message", metadata: [
+            "type": .string(message.type.rawValue),
+            "requestId": .string(message.requestId)
+        ])
         
         // In mock mode, we just log the message instead of sending it
         // This allows testing of the agent logic without actual WebSocket connectivity
+        
+        // Simulate network delay
+        try await Task.sleep(for: .milliseconds(10))
+        
+        // Log the message content for debugging
+        if let data = try? JSONEncoder().encode(MessageEnvelope(message: message)),
+           let jsonString = String(data: data, encoding: .utf8) {
+            logger.debug("Message payload", metadata: ["payload": .string(jsonString)])
+        }
+    }
+    
+    private func startHeartbeat() {
+        heartbeatTask = Task {
+            while !Task.isCancelled && isConnected {
+                do {
+                    // Send heartbeat every 20 seconds
+                    try await Task.sleep(for: .seconds(20))
+                    
+                    if let agent = agent {
+                        await agent.sendHeartbeat()
+                    }
+                } catch {
+                    if !Task.isCancelled {
+                        logger.error("Error in heartbeat task: \(error)")
+                    }
+                    break
+                }
+            }
+        }
+    }
+    
+    // Generate WebSocket key for handshake
+    private static func generateWebSocketKey() -> String {
+        let keyData = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
+        return keyData.base64EncodedString()
     }
     
     deinit {
+        heartbeatTask?.cancel()
         try? eventLoopGroup.syncShutdownGracefully()
     }
 }
