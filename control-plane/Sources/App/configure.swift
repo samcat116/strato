@@ -74,6 +74,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateGroup())
     app.migrations.add(CreateUserGroup())
 
+    // Agent migrations
+    app.migrations.add(CreateAgent())
+    app.migrations.add(CreateAgentRegistrationToken())
+
     try await app.autoMigrate()
 
     try routes(app)
