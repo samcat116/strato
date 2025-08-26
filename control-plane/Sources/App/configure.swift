@@ -77,6 +77,9 @@ public func configure(_ app: Application) async throws {
     // OIDC migrations
     app.migrations.add(CreateOIDCProvider())
     app.migrations.add(AddOIDCFieldsToUser())
+    // Agent migrations
+    app.migrations.add(CreateAgent())
+    app.migrations.add(CreateAgentRegistrationToken())
 
     try await app.autoMigrate()
 

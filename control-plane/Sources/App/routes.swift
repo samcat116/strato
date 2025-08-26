@@ -111,6 +111,8 @@ func routes(_ app: Application) throws {
 
     // OIDC controller
     try app.register(collection: OIDCController())
+    // Agent management controller
+    try app.register(collection: AgentController())
 
     // OpenAPI Vapor transport (spec-first). Once the generator produces APIProtocol
     // from Sources/App/openapi.yaml, register handlers here.

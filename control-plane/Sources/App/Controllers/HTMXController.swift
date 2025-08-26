@@ -94,7 +94,7 @@ struct HTMXController: RouteCollection {
         let memory = Int64(memoryGB) * 1024 * 1024 * 1024
         let disk = Int64(diskGB) * 1024 * 1024 * 1024
 
-        // Create VM (simplified - you'll need to adapt this to your VM creation logic)
+        // Create VM and assign to user's current organization
         let vm = VM()
         vm.name = createRequest.vmName
         vm.description = createRequest.vmDescription
@@ -103,7 +103,19 @@ struct HTMXController: RouteCollection {
         vm.disk = disk
         vm.image = createRequest.vmTemplate
 
-        // You'll need to add project assignment logic here
+        // Assign to user's current organization if available
+        if let currentOrgId = user.currentOrganizationId {
+            // Find or create default project for organization
+            let defaultProject = try await Project.query(on: req.db)
+                .filter(\Project.$organization.$id, .equal, currentOrgId)
+                .filter(\Project.$name, .equal, "Default Project")
+                .first()
+            
+            if let project = defaultProject,
+               let projectId = project.id {
+                vm.$project.id = projectId
+            }
+        }
 
         try await vm.save(on: req.db)
 
