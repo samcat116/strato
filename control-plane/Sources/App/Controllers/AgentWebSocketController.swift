@@ -2,6 +2,7 @@ import Foundation
 import Vapor
 import StratoShared
 import NIOWebSocket
+import Fluent
 
 struct AgentWebSocketController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
@@ -9,8 +10,19 @@ struct AgentWebSocketController: RouteCollection {
         agentRoutes.webSocket("ws", onUpgrade: websocketHandler)
     }
 
-    private func websocketHandler(req: Request, ws: WebSocket) {
-        req.logger.info("Agent WebSocket connection established")
+    private func websocketHandler(req: Request, ws: WebSocket) async {
+        // Validate registration token on connection
+        guard let validatedAgentName = await validateRegistrationToken(req: req, ws: ws) else {
+            // Validation failed, connection will be closed by validateRegistrationToken
+            return
+        }
+        
+        req.logger.info("Agent WebSocket connection established", metadata: [
+            "agentName": .string(validatedAgentName)
+        ])
+
+        // Store agent name for this connection
+        await req.agentService.setConnectionAgentName(ws, agentName: validatedAgentName)
 
         ws.onText { ws, text in
             Task {
@@ -23,11 +35,21 @@ struct AgentWebSocketController: RouteCollection {
         }
 
         ws.onClose.whenComplete { result in
-            switch result {
-            case .success:
-                req.logger.info("Agent WebSocket connection closed normally")
-            case .failure(let error):
-                req.logger.error("Agent WebSocket connection closed with error: \(error)")
+            Task {
+                let agentName = await req.agentService.getConnectionAgentName(ws)
+                switch result {
+                case .success:
+                    req.logger.info("Agent WebSocket connection closed normally", metadata: [
+                        "agentName": .string(agentName ?? "unknown")
+                    ])
+                case .failure(let error):
+                    req.logger.error("Agent WebSocket connection closed with error: \(error)", metadata: [
+                        "agentName": .string(agentName ?? "unknown")
+                    ])
+                }
+                
+                // Clean up connection tracking
+                await req.agentService.removeConnectionTracking(ws)
             }
         }
     }
@@ -44,17 +66,17 @@ struct AgentWebSocketController: RouteCollection {
             switch envelope.type {
             case .agentRegister:
                 let message = try envelope.decode(as: AgentRegisterMessage.self)
-                await req.agentService.registerAgent(message, websocket: ws)
+                try await req.agentService.registerAgent(message, websocket: ws)
                 await sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Agent registered successfully")
 
             case .agentHeartbeat:
                 let message = try envelope.decode(as: AgentHeartbeatMessage.self)
-                await req.agentService.updateAgentHeartbeat(message)
+                try await req.agentService.updateAgentHeartbeat(message)
                 await sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged")
 
             case .agentUnregister:
                 let message = try envelope.decode(as: AgentUnregisterMessage.self)
-                await req.agentService.unregisterAgent(message.agentId)
+                try await req.agentService.unregisterAgent(message.agentId)
                 await sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Agent unregistered successfully")
 
             case .success, .error, .statusUpdate:
@@ -95,6 +117,57 @@ struct AgentWebSocketController: RouteCollection {
         } catch {
             // Log error but don't throw since we're already in an error handling context
             print("Failed to send error response: \(error)")
+        }
+    }
+    
+    private func validateRegistrationToken(req: Request, ws: WebSocket) async -> String? {
+        do {
+            // Extract token and agent name from query parameters
+            guard let token = req.query[String.self, at: "token"] else {
+                await sendErrorResponse(ws: ws, requestId: "", error: "Registration token is required")
+                try? await ws.close(code: .unacceptableData)
+                return nil
+            }
+            
+            guard let agentName = req.query[String.self, at: "name"] else {
+                await sendErrorResponse(ws: ws, requestId: "", error: "Agent name is required")
+                try? await ws.close(code: .unacceptableData)
+                return nil
+            }
+            
+            // Find and validate the registration token
+            guard let registrationToken = try await AgentRegistrationToken.query(on: req.db)
+                .filter(\.$token == token)
+                .filter(\.$agentName == agentName)
+                .first() else {
+                await sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token")
+                try? await ws.close(code: .unacceptableData)
+                return nil
+            }
+            
+            // Check if token is still valid (not used and not expired)
+            guard registrationToken.isValid else {
+                await sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token")
+                try? await ws.close(code: .unacceptableData)
+                return nil
+            }
+            
+            // Mark token as used
+            registrationToken.markAsUsed()
+            try await registrationToken.save(on: req.db)
+            
+            req.logger.info("Agent registration token validated", metadata: [
+                "agentName": .string(agentName),
+                "token": .string(token)
+            ])
+            
+            return agentName
+            
+        } catch {
+            req.logger.error("Error validating registration token: \(error)")
+            await sendErrorResponse(ws: ws, requestId: "", error: "Internal server error during token validation")
+            try? await ws.close(code: .unexpectedServerError)
+            return nil
         }
     }
 }
