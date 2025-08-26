@@ -187,7 +187,7 @@ struct OIDCController: RouteCollection {
             }
         } else {
             // If no discovery URL, check that required endpoints are configured
-            if provider.authorizationEndpoint != nil && provider.tokenEndpoint != nil {
+            if provider.hasRequiredEndpoints() {
                 return Response(status: .ok, body: .init(string: "Provider endpoints are configured"))
             } else {
                 return Response(status: .badRequest, body: .init(string: "Provider configuration is incomplete: missing required endpoints"))
@@ -212,15 +212,44 @@ struct OIDCController: RouteCollection {
     
     // MARK: - Authentication Flow
     
+    /**
+     * Initiates the OIDC authentication flow for a user.
+     *
+     * Intended implementation:
+     * - Extract the organization and OIDC provider information from the request.
+     * - Generate a state and nonce for CSRF protection and replay attack prevention.
+     * - Construct the OIDC authorization URL with required parameters (client_id, redirect_uri, scope, state, nonce, etc.).
+     * - Store the state and nonce in the user's session or a secure cookie for later verification.
+     * - Redirect the user to the OIDC provider's authorization endpoint.
+     *
+     * Integration plan:
+     * - This method will be implemented when we integrate with Pactum or a custom OIDC implementation.
+     * - The implementation should be compatible with the OIDC providers configured for the organization.
+     * - Proper error handling and logging should be added for failed or invalid requests.
+     */
     func initiateOIDCAuth(req: Request) async throws -> Response {
-        // TODO: Implement OIDC authentication initiation
-        // This will be implemented when we integrate with Pactum or custom OIDC implementation
         throw Abort(.notImplemented, reason: "OIDC authentication not yet implemented")
     }
     
+    /**
+     * Handles the OIDC callback after user authentication.
+     *
+     * Intended implementation:
+     * - Validate the authorization code and state parameters from the callback.
+     * - Verify the state parameter matches what was stored in the session for CSRF protection.
+     * - Exchange the authorization code for an access token and ID token via the token endpoint.
+     * - Validate the ID token signature and claims (issuer, audience, expiration, nonce).
+     * - Extract user information from the ID token or by calling the userinfo endpoint.
+     * - Create or update the user account in the local database.
+     * - Establish an authenticated session for the user.
+     * - Redirect the user to their intended destination or the dashboard.
+     *
+     * Integration plan:
+     * - This method will be implemented when we integrate with Pactum or a custom OIDC implementation.
+     * - The implementation should handle various OIDC providers and their specific requirements.
+     * - Proper error handling for invalid tokens, expired sessions, and authentication failures.
+     */
     func handleOIDCCallback(req: Request) async throws -> Response {
-        // TODO: Implement OIDC callback handling
-        // This will be implemented when we integrate with Pactum or custom OIDC implementation
         throw Abort(.notImplemented, reason: "OIDC callback handling not yet implemented")
     }
     
@@ -297,7 +326,7 @@ struct OIDCController: RouteCollection {
             
             try await provider.save(on: req.db)
         } catch {
-            req.logger.warning("Failed to fetch OIDC discovery document from \(discoveryURL): \(error)")
+            req.logger.warning("Failed to fetch OIDC discovery document from \(discoveryURL).")
             // Don't fail the creation if discovery fails, just log the warning
         }
     }

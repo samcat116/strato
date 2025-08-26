@@ -112,6 +112,11 @@ extension OIDCProvider {
         return string
     }
 
+    /// Check if the provider has the required endpoints configured
+    func hasRequiredEndpoints() -> Bool {
+        return authorizationEndpoint != nil && tokenEndpoint != nil
+    }
+
     /// Get the authorization URL for this provider
     func getAuthorizationURL(
         redirectURI: String,

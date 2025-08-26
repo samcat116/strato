@@ -191,10 +191,12 @@ struct OrganizationSettingsTemplate: HTMLDocument {
             }
 
             function deleteProvider(providerId) {
-                if (!confirm('Are you sure you want to delete this OIDC provider?')) {
-                    return;
-                }
-                
+                showDeleteConfirmationModal(() => {
+                    performDeleteProvider(providerId);
+                });
+            }
+
+            function performDeleteProvider(providerId) {
                 const orgId = '\(organization.id?.uuidString ?? "")';
                 
                 fetch(`/api/organizations/${orgId}/oidc-providers/${providerId}`, {
@@ -212,6 +214,62 @@ struct OrganizationSettingsTemplate: HTMLDocument {
                     console.error('Error deleting provider:', error);
                     showError('Failed to delete OIDC provider');
                 });
+            }
+
+            function showDeleteConfirmationModal(onConfirm) {
+                // Create modal backdrop
+                const backdrop = document.createElement('div');
+                backdrop.className = 'fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center z-50';
+                
+                // Create modal content
+                backdrop.innerHTML = `
+                    <div class="bg-white rounded-lg p-6 max-w-sm mx-4">
+                        <div class="flex items-center">
+                            <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100">
+                                <svg class="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="mt-3 text-center">
+                            <h3 class="text-lg leading-6 font-medium text-gray-900">Delete OIDC Provider</h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500">Are you sure you want to delete this OIDC provider? This action cannot be undone and may affect users who authenticate through this provider.</p>
+                            </div>
+                        </div>
+                        <div class="mt-5 flex justify-center space-x-3">
+                            <button type="button" class="cancel-btn inline-flex justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
+                                Cancel
+                            </button>
+                            <button type="button" class="confirm-btn inline-flex justify-center rounded-md border border-transparent bg-red-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2">
+                                Delete Provider
+                            </button>
+                        </div>
+                    </div>
+                `;
+                
+                // Add event listeners
+                const cancelBtn = backdrop.querySelector('.cancel-btn');
+                const confirmBtn = backdrop.querySelector('.confirm-btn');
+                
+                cancelBtn.addEventListener('click', () => {
+                    document.body.removeChild(backdrop);
+                });
+                
+                confirmBtn.addEventListener('click', () => {
+                    document.body.removeChild(backdrop);
+                    onConfirm();
+                });
+                
+                // Close on backdrop click
+                backdrop.addEventListener('click', (e) => {
+                    if (e.target === backdrop) {
+                        document.body.removeChild(backdrop);
+                    }
+                });
+                
+                // Add to page
+                document.body.appendChild(backdrop);
             }
 
             function saveOIDCProvider() {
