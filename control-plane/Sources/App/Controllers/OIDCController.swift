@@ -376,7 +376,7 @@ struct OIDCController: RouteCollection {
             
             try await provider.save(on: req.db)
         } catch {
-            req.logger.warning("Failed to fetch OIDC discovery document from discovery URL.")
+            req.logger.warning("Failed to fetch OIDC discovery document from discovery URL: \(error)")
             // Don't fail the creation if discovery fails, just log the warning
         }
     }
@@ -389,41 +389,68 @@ struct OIDCController: RouteCollection {
             throw Abort(.badRequest, reason: "Discovery URL must be a valid HTTPS URL")
         }
         
-        // Define allowed hosts for OIDC discovery (common providers)
-        let allowedHosts: Set<String> = [
-            "accounts.google.com",
-            "login.microsoftonline.com",
-            "login.salesforce.com",
-            "auth0.com",
-            "okta.com",
-            "oauth.reddit.com",
-            "github.com",
-            "gitlab.com"
-        ]
+        // Load allowed hosts and suffixes from environment/config, fallback to defaults
+        let allowedHosts = Self.getAllowedOIDCHosts(from: req.application.environment)
+        let allowedDomainSuffixes = Self.getAllowedOIDCDomainSuffixes(from: req.application.environment)
         
-        // Allow subdomains for major OIDC providers
-        let allowedDomainSuffixes = [
-            ".auth0.com",
-            ".okta.com",
-            ".oktapreview.com",
-            ".okta-emea.com",
-            ".salesforce.com",
-            ".force.com",
-            ".herokuapp.com",
-            ".amazonaws.com",
-            ".azure.com",
-            ".azurewebsites.net"
-        ]
-        
-        let isHostAllowed = allowedHosts.contains(host) || 
+        let isHostAllowed = allowedHosts.contains(host) ||
                            allowedDomainSuffixes.contains { host.hasSuffix($0) }
         
         guard isHostAllowed else {
-            throw Abort(.badRequest, reason: "Discovery URL host is not in the allowed list for security reasons")
+            throw Abort(.badRequest, reason: "Discovery URL host is not in the allowed list for security reasons. If you are an administrator, set OIDC_DISCOVERY_ALLOWED_HOSTS or OIDC_DISCOVERY_ALLOWED_SUFFIXES to allow this host.")
         }
         
         let response = try await req.client.get(URI(string: url))
         return try response.content.decode(OIDCDiscoveryDocument.self)
+    }
+    
+    // MARK: - OIDC Allowlist Helpers
+    private static func getAllowedOIDCHosts(from env: Environment) -> Set<String> {
+        if let hostsString = Environment.get("OIDC_DISCOVERY_ALLOWED_HOSTS") {
+            // Comma or semicolon separated
+            let hosts = hostsString
+                .split(whereSeparator: { $0 == "," || $0 == ";" })
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            return Set(hosts)
+        } else {
+            // Default hosts
+            return [
+                "accounts.google.com",
+                "login.microsoftonline.com",
+                "login.salesforce.com",
+                "auth0.com",
+                "okta.com",
+                "oauth.reddit.com",
+                "github.com",
+                "gitlab.com"
+            ]
+        }
+    }
+    
+    private static func getAllowedOIDCDomainSuffixes(from env: Environment) -> [String] {
+        if let suffixesString = Environment.get("OIDC_DISCOVERY_ALLOWED_SUFFIXES") {
+            // Comma or semicolon separated
+            let suffixes = suffixesString
+                .split(whereSeparator: { $0 == "," || $0 == ";" })
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            return suffixes
+        } else {
+            // Default suffixes
+            return [
+                ".auth0.com",
+                ".okta.com",
+                ".oktapreview.com",
+                ".okta-emea.com",
+                ".salesforce.com",
+                ".force.com",
+                ".herokuapp.com",
+                ".amazonaws.com",
+                ".azure.com",
+                ".azurewebsites.net"
+            ]
+        }
     }
 }
 

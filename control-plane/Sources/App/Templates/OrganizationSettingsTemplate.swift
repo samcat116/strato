@@ -161,8 +161,8 @@ struct OrganizationSettingsTemplate: HTMLDocument {
                                             <p class="text-sm text-gray-500">Status: ${provider.enabled ? 'Enabled' : 'Disabled'}</p>
                                         </div>
                                         <div class="space-x-2">
-                                            <button onclick="editProvider('${provider.id}')" class="text-indigo-600 hover:text-indigo-900">Edit</button>
-                                            <button onclick="deleteProvider('${provider.id}')" class="text-red-600 hover:text-red-900">Delete</button>
+                                            <button onclick="editProvider('${provider.id}')" class="text-indigo-600 hover:text-indigo-900" aria-label="Edit ${provider.name} OIDC provider">Edit</button>
+                                            <button onclick="deleteProvider('${provider.id}')" class="text-red-600 hover:text-red-900" aria-label="Delete ${provider.name} OIDC provider">Delete</button>
                                         </div>
                                     </div>
                                 </div>`
@@ -310,11 +310,15 @@ struct OrganizationSettingsTemplate: HTMLDocument {
                                     errorMessage = errorData.reason;
                                 }
                             } catch (parseError) {
-                                // If JSON parsing fails, check if text contains a specific error message
+                                // If JSON parsing fails, use a generic error message
+                                // Optionally, you could log the raw text for debugging:
+                                console.warn('Unstructured error response:', text);
                                 if (text.includes('Discovery URL')) {
                                     errorMessage = 'Invalid discovery URL provided';
                                 } else if (text.includes('endpoint')) {
                                     errorMessage = 'Invalid endpoint URL provided';
+                                } else if (text.includes('not in the allowed list')) {
+                                    errorMessage = 'Discovery URL host is not allowed for security reasons';
                                 }
                             }
                             throw new Error(errorMessage);
