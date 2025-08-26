@@ -147,8 +147,7 @@ struct AgentWebSocketController: RouteCollection {
             
             // Check if token is still valid (not used and not expired)
             guard registrationToken.isValid else {
-                let reason = registrationToken.isUsed ? "Registration token has already been used" : "Registration token has expired"
-                await sendErrorResponse(ws: ws, requestId: "", error: reason)
+                await sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token")
                 try? await ws.close(code: .unacceptableData)
                 return nil
             }

@@ -71,7 +71,10 @@ struct AgentRegistrationTokenResponse: Content {
         self.id = id
         self.token = tokenModel.token
         self.agentName = tokenModel.agentName
-        self.registrationURL = "\(baseURL)/agent/ws?token=\(tokenModel.token)&name=\(tokenModel.agentName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tokenModel.agentName)"
+        guard let encodedName = tokenModel.agentName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+            throw Abort(.internalServerError, reason: "Invalid agent name for URL encoding")
+        }
+        self.registrationURL = "\(baseURL)/agent/ws?token=\(tokenModel.token)&name=\(encodedName)"
         self.expiresAt = tokenModel.expiresAt ?? Date()
         self.isValid = tokenModel.isValid
     }

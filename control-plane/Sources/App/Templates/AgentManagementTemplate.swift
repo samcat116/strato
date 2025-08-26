@@ -299,9 +299,14 @@ struct RegistrationTokenListTemplate: HTML {
                                 if (e.target.classList.contains('copy-button')) {
                                     const text = e.target.getAttribute('data-copy-text');
                                     if (text) {
+                                        if (!navigator.clipboard) {
+                                            alert('Clipboard API not available. Please copy manually.');
+                                            return;
+                                        }
                                         navigator.clipboard.writeText(text).then(() => {
-                                            // You could show a toast notification here
-                                            console.log('Registration URL copied to clipboard');
+                                            alert('Registration URL copied to clipboard!');
+                                        }).catch((err) => {
+                                            alert('Failed to copy to clipboard: ' + (err && err.message ? err.message : err));
                                         });
                                     }
                                 }
