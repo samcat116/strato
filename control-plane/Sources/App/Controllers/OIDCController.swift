@@ -56,6 +56,9 @@ struct OIDCController: RouteCollection {
         // Validate the provider configuration
         try await validateProviderConfiguration(createRequest, on: req.db, organizationID: organizationID)
         
+        // Validate URL fields
+        try validateURLFields(request: createRequest)
+        
         let provider = OIDCProvider(
             organizationID: organizationID,
             name: createRequest.name,
@@ -314,6 +317,53 @@ struct OIDCController: RouteCollection {
         }
     }
     
+    private func validateURLFields(request: CreateOIDCProviderRequest) throws {
+        // Validate discovery URL
+        if let discoveryURL = request.discoveryURL, !discoveryURL.isEmpty {
+            guard isValidHTTPSURL(discoveryURL) else {
+                throw Abort(.badRequest, reason: "Discovery URL must be a valid HTTPS URL")
+            }
+        }
+        
+        // Validate authorization endpoint
+        if let authEndpoint = request.authorizationEndpoint, !authEndpoint.isEmpty {
+            guard isValidHTTPSURL(authEndpoint) else {
+                throw Abort(.badRequest, reason: "Authorization endpoint must be a valid HTTPS URL")
+            }
+        }
+        
+        // Validate token endpoint
+        if let tokenEndpoint = request.tokenEndpoint, !tokenEndpoint.isEmpty {
+            guard isValidHTTPSURL(tokenEndpoint) else {
+                throw Abort(.badRequest, reason: "Token endpoint must be a valid HTTPS URL")
+            }
+        }
+        
+        // Validate userinfo endpoint
+        if let userinfoEndpoint = request.userinfoEndpoint, !userinfoEndpoint.isEmpty {
+            guard isValidHTTPSURL(userinfoEndpoint) else {
+                throw Abort(.badRequest, reason: "Userinfo endpoint must be a valid HTTPS URL")
+            }
+        }
+        
+        // Validate JWKS URI
+        if let jwksURI = request.jwksURI, !jwksURI.isEmpty {
+            guard isValidHTTPSURL(jwksURI) else {
+                throw Abort(.badRequest, reason: "JWKS URI must be a valid HTTPS URL")
+            }
+        }
+    }
+    
+    private func isValidHTTPSURL(_ urlString: String) -> Bool {
+        guard let url = URL(string: urlString),
+              let scheme = url.scheme,
+              scheme == "https",
+              url.host != nil else {
+            return false
+        }
+        return true
+    }
+    
     private func fetchAndUpdateProviderConfiguration(provider: OIDCProvider, discoveryURL: String, on req: Request) async throws {
         do {
             let discovery = try await fetchDiscoveryDocument(url: discoveryURL, on: req)
@@ -326,12 +376,52 @@ struct OIDCController: RouteCollection {
             
             try await provider.save(on: req.db)
         } catch {
-            req.logger.warning("Failed to fetch OIDC discovery document from \(discoveryURL).")
+            req.logger.warning("Failed to fetch OIDC discovery document from discovery URL.")
             // Don't fail the creation if discovery fails, just log the warning
         }
     }
     
     private func fetchDiscoveryDocument(url: String, on req: Request) async throws -> OIDCDiscoveryDocument {
+        // Validate URL to prevent SSRF attacks
+        guard let parsedURL = URL(string: url),
+              let host = parsedURL.host,
+              parsedURL.scheme == "https" else {
+            throw Abort(.badRequest, reason: "Discovery URL must be a valid HTTPS URL")
+        }
+        
+        // Define allowed hosts for OIDC discovery (common providers)
+        let allowedHosts: Set<String> = [
+            "accounts.google.com",
+            "login.microsoftonline.com",
+            "login.salesforce.com",
+            "auth0.com",
+            "okta.com",
+            "oauth.reddit.com",
+            "github.com",
+            "gitlab.com"
+        ]
+        
+        // Allow subdomains for major OIDC providers
+        let allowedDomainSuffixes = [
+            ".auth0.com",
+            ".okta.com",
+            ".oktapreview.com",
+            ".okta-emea.com",
+            ".salesforce.com",
+            ".force.com",
+            ".herokuapp.com",
+            ".amazonaws.com",
+            ".azure.com",
+            ".azurewebsites.net"
+        ]
+        
+        let isHostAllowed = allowedHosts.contains(host) || 
+                           allowedDomainSuffixes.contains { host.hasSuffix($0) }
+        
+        guard isHostAllowed else {
+            throw Abort(.badRequest, reason: "Discovery URL host is not in the allowed list for security reasons")
+        }
+        
         let response = try await req.client.get(URI(string: url))
         return try response.content.decode(OIDCDiscoveryDocument.self)
     }

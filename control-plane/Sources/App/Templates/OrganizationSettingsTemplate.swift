@@ -300,12 +300,30 @@ struct OrganizationSettingsTemplate: HTMLDocument {
                         loadOIDCProviders();
                         form.reset();
                     } else {
-                        throw new Error('Failed to save provider');
+                        return response.text().then(text => {
+                            let errorMessage = 'Failed to save OIDC provider';
+                            try {
+                                const errorData = JSON.parse(text);
+                                if (errorData.error && errorData.error.reason) {
+                                    errorMessage = errorData.error.reason;
+                                } else if (errorData.reason) {
+                                    errorMessage = errorData.reason;
+                                }
+                            } catch (parseError) {
+                                // If JSON parsing fails, check if text contains a specific error message
+                                if (text.includes('Discovery URL')) {
+                                    errorMessage = 'Invalid discovery URL provided';
+                                } else if (text.includes('endpoint')) {
+                                    errorMessage = 'Invalid endpoint URL provided';
+                                }
+                            }
+                            throw new Error(errorMessage);
+                        });
                     }
                 })
                 .catch(error => {
                     console.error('Error saving provider:', error);
-                    showError('Failed to save OIDC provider');
+                    showError(error.message || 'Failed to save OIDC provider');
                 });
             }
         </script>
