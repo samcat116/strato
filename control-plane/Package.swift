@@ -25,6 +25,9 @@ let package = Package(
     .package(url: "https://github.com/apple/swift-nio.git", from: "2.71.0"),
         // 🔐 WebAuthn/Passkey authentication
         .package(url: "https://github.com/swift-server/webauthn-swift.git", branch: "main"),
+        // 🔐 OAuth 2.0 and OIDC client
+        .package(url: "https://github.com/vapor/jwt.git", from: "4.0.0"),
+        .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.9.0"),
         // OpenAPI generator and Vapor bindings (spec-first)
         .package(url: "https://github.com/apple/swift-openapi-generator.git", from: "1.2.0"),
     .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.0.0"),
@@ -45,6 +48,8 @@ let package = Package(
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOWebSocket", package: "swift-nio"),
                 .product(name: "WebAuthn", package: "webauthn-swift"),
+                .product(name: "JWT", package: "jwt"),
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "OpenAPIVapor", package: "swift-openapi-vapor"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime")
             ],

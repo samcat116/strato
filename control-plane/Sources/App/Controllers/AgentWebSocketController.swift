@@ -167,7 +167,7 @@ struct AgentWebSocketController: RouteCollection {
         } catch {
             req.logger.error("Error validating registration token: \(error)")
             await sendErrorResponse(ws: ws, requestId: "", error: "Internal server error during token validation")
-            try? await ws.close(code: .internalServerError)
+            try? await ws.close(code: .unexpectedServerError)
             return nil
         }
     }

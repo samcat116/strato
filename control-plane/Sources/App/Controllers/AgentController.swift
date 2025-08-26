@@ -71,7 +71,7 @@ struct AgentController: RouteCollection {
         req.logger.info("Created agent registration token", metadata: [
             "agentName": .string(createRequest.agentName),
             "tokenId": .string(token.id?.uuidString ?? "unknown"),
-            "expiresAt": .string(token.expiresAt.description)
+            "expiresAt": .string(token.expiresAt?.description ?? "no expiration")
         ])
         
         return try AgentRegistrationTokenResponse(from: token, baseURL: baseURL)
@@ -221,8 +221,8 @@ struct AgentController: RouteCollection {
                     code(.class("block bg-gray-800 p-3 rounded text-xs break-all")) {
                         "strato-agent --registration-url \"\(tokenResponse.registrationURL)\""
                     }
-                    button(.class("mt-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm"),
-                           .onclick("copyToClipboard('\(tokenResponse.registrationURL)')")) {
+                    button(.class("mt-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm copy-button"),
+                           .data("copy-text", value: tokenResponse.registrationURL)) {
                         "Copy Registration URL"
                     }
                 }
@@ -250,7 +250,8 @@ struct AgentController: RouteCollection {
     
     func listAgentsHTMX(req: Request) async throws -> Response {
         let agents = try await listAgents(req: req)
-        let html = AgentListTemplate(agents: agents).render()
+        let template = AgentListTemplate(agents: agents)
+        let html = template.render()
         
         return Response(
             status: .ok,
@@ -261,7 +262,8 @@ struct AgentController: RouteCollection {
     
     func listRegistrationTokensHTMX(req: Request) async throws -> Response {
         let tokens = try await listRegistrationTokens(req: req)
-        let html = RegistrationTokenListTemplate(tokens: tokens).render()
+        let template = RegistrationTokenListTemplate(tokens: tokens)
+        let html = template.render()
         
         return Response(
             status: .ok,
