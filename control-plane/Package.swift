@@ -25,6 +25,8 @@ let package = Package(
     .package(url: "https://github.com/apple/swift-nio.git", from: "2.71.0"),
         // 🔐 WebAuthn/Passkey authentication
         .package(url: "https://github.com/swift-server/webauthn-swift.git", branch: "main"),
+        // 🔐 OIDC authentication via Pactum (commented out due to Swift 6 issues)
+        // .package(url: "https://github.com/ReadVault/Pactum.git", branch: "main"),
         // OpenAPI generator and Vapor bindings (spec-first)
         .package(url: "https://github.com/apple/swift-openapi-generator.git", from: "1.2.0"),
     .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.0.0"),
@@ -45,6 +47,7 @@ let package = Package(
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOWebSocket", package: "swift-nio"),
                 .product(name: "WebAuthn", package: "webauthn-swift"),
+                // .product(name: "Pactum", package: "Pactum"),
                 .product(name: "OpenAPIVapor", package: "swift-openapi-vapor"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime")
             ],

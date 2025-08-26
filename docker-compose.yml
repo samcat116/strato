@@ -20,9 +20,9 @@ volumes:
   db_data:
   qemu_sockets:
   vm_images:
-  ovn_nb_db:
-  ovn_sb_db:
-  ovs_db:
+  # ovn_nb_db:
+  # ovn_sb_db:
+  # ovs_db:
 
 x-shared_environment: &shared_environment
   LOG_LEVEL: ${LOG_LEVEL:-debug}
@@ -67,91 +67,91 @@ services:
         "8080",
       ]
 
-  agent:
-      image: strato-agent:latest
-      build:
-          context: .
-          dockerfile: agent/Dockerfile
-      environment:
-          LOG_LEVEL: ${LOG_LEVEL:-debug}
-      depends_on:
-          - control-plane
-          - ovn-northd
-          - openvswitch
-      volumes:
-          - qemu_sockets:/var/run/qemu
-          - vm_images:/images
-          # Mount KVM device for hardware virtualization
-          - /dev/kvm:/dev/kvm
-          # OVN/OVS database sockets
-          - ovn_nb_db:/var/run/ovn
-          - ovs_db:/var/run/openvswitch
-      networks:
-          - strato-network
-      privileged: true
-      devices:
-          # KVM device access for hardware virtualization
-          - "/dev/kvm:/dev/kvm"
-      cap_add:
-          # Network capabilities for OVS bridge management
-          - NET_ADMIN
-          - SYS_ADMIN
-      command:
-          [
-              "--control-plane-url",
-              "ws://control-plane:8080/agent/ws",
-              "--qemu-socket-dir",
-              "/var/run/qemu",
-              "--log-level",
-              "debug"
-          ]
+  # agent:
+  #   image: strato-agent:latest
+  #   build:
+  #     context: .
+  #     dockerfile: agent/Dockerfile
+  #   environment:
+  #     LOG_LEVEL: ${LOG_LEVEL:-debug}
+  #   depends_on:
+  #     - control-plane
+  #     - ovn-northd
+  #     - openvswitch
+  #   volumes:
+  #     - qemu_sockets:/var/run/qemu
+  #     - vm_images:/images
+  #     # Mount KVM device for hardware virtualization
+  #     - /dev/kvm:/dev/kvm
+  #     # OVN/OVS database sockets
+  #     - ovn_nb_db:/var/run/ovn
+  #     - ovs_db:/var/run/openvswitch
+  #   networks:
+  #     - strato-network
+  #   privileged: true
+  #   devices:
+  #     # KVM device access for hardware virtualization
+  #     - "/dev/kvm:/dev/kvm"
+  #   cap_add:
+  #     # Network capabilities for OVS bridge management
+  #     - NET_ADMIN
+  #     - SYS_ADMIN
+  #   command:
+  #     [
+  #       "--control-plane-url",
+  #       "ws://control-plane:8080/agent/ws",
+  #       "--qemu-socket-dir",
+  #       "/var/run/qemu",
+  #       "--log-level",
+  #       "debug",
+  #     ]
 
-  # OVN Central services
-  ovn-northd:
-    image: ovn/ovn-multi-node:v23.09.0
-    command: ["/ovn-multi-node.sh", "ovn-northd-tcp"]
-    environment:
-      - OVN_NB_DB=tcp:ovn-nb-db:6641
-      - OVN_SB_DB=tcp:ovn-sb-db:6642
-    depends_on:
-      - ovn-nb-db
-      - ovn-sb-db
-    networks:
-      - strato-network
+  # # OVN Central services
+  # ovn-northd:
+  #   image: ovn/ovn-multi-node:v23.09.0
+  #   command: ["/ovn-multi-node.sh", "ovn-northd-tcp"]
+  #   environment:
+  #     - OVN_NB_DB=tcp:ovn-nb-db:6641
+  #     - OVN_SB_DB=tcp:ovn-sb-db:6642
+  #   depends_on:
+  #     - ovn-nb-db
+  #     - ovn-sb-db
+  #   networks:
+  #     - strato-network
 
-  ovn-nb-db:
-    image: ovn/ovn-multi-node:v23.09.0
-    command: ["/ovn-multi-node.sh", "ovn-nb-db"]
-    ports:
-      - "6641:6641"
-    volumes:
-      - ovn_nb_db:/var/lib/ovn
-    networks:
-      - strato-network
+  # ovn-nb-db:
+  #   image: ovn/ovn-multi-node:v23.09.0
+  #   command: ["/ovn-multi-node.sh", "ovn-nb-db"]
+  #   ports:
+  #     - "6641:6641"
+  #   volumes:
+  #     - ovn_nb_db:/var/lib/ovn
+  #   networks:
+  #     - strato-network
 
-  ovn-sb-db:
-    image: ovn/ovn-multi-node:v23.09.0
-    command: ["/ovn-multi-node.sh", "ovn-sb-db"]
-    ports:
-      - "6642:6642"
-    volumes:
-      - ovn_sb_db:/var/lib/ovn
-    networks:
-      - strato-network
+  # ovn-sb-db:
+  #   image: ovn/ovn-multi-node:v23.09.0
+  #   command: ["/ovn-multi-node.sh", "ovn-sb-db"]
+  #   ports:
+  #     - "6642:6642"
+  #   volumes:
+  #     - ovn_sb_db:/var/lib/ovn
+  #   networks:
+  #     - strato-network
 
-  # OVS service
-  openvswitch:
-    image: socketplane/openvswitch:latest
-    privileged: true
-    volumes:
-      - ovs_db:/var/run/openvswitch
-      - /sys/fs/cgroup:/sys/fs/cgroup:ro
-    networks:
-      - strato-network
-    cap_add:
-      - NET_ADMIN
-      - SYS_ADMIN
-    command: ["ovsdb-server", "--remote=punix:/var/run/openvswitch/db.sock", "--detach"]
+  # # OVS service
+  # openvswitch:
+  #   image: socketplane/openvswitch:latest
+  #   privileged: true
+  #   volumes:
+  #     - ovs_db:/var/run/openvswitch
+  #     - /sys/fs/cgroup:/sys/fs/cgroup:ro
+  #   networks:
+  #     - strato-network
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - SYS_ADMIN
+  #   command: ["ovsdb-server", "--remote=punix:/var/run/openvswitch/db.sock", "--detach"]
 
   migrate:
     image: strato-control-plane:latest
@@ -263,7 +263,7 @@ services:
         "spicedb:50051",
         "--token",
         "strato-dev-key",
-        "--insecure"
+        "--insecure",
       ]
     deploy:
       replicas: 0

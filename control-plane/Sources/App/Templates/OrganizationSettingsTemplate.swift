@@ -28,6 +28,31 @@ struct OrganizationSettingsTemplate: HTMLDocument {
             // Organization settings JavaScript
             document.addEventListener('DOMContentLoaded', function() {
                 document.getElementById('saveButton').addEventListener('click', updateOrganizationInfo);
+                showOrganizationInfo(); // Show organization info by default
+                
+                // Add event delegation for data-action clicks
+                document.addEventListener('click', function(e) {
+                    const action = e.target.dataset.action;
+                    if (action) {
+                        switch(action) {
+                            case 'showOrganizationInfo':
+                                showOrganizationInfo();
+                                break;
+                            case 'showOIDCSettings':
+                                showOIDCSettings();
+                                break;
+                            case 'showAddProviderForm':
+                                showAddProviderForm();
+                                break;
+                            case 'hideAddProviderForm':
+                                hideAddProviderForm();
+                                break;
+                            case 'saveOIDCProvider':
+                                saveOIDCProvider();
+                                break;
+                        }
+                    }
+                });
             });
 
             function showSuccess(message) {
@@ -89,6 +114,142 @@ struct OrganizationSettingsTemplate: HTMLDocument {
                     showError(error.message);
                 });
             }
+
+            function showOrganizationInfo() {
+                // Update sidebar
+                document.querySelectorAll('nav div').forEach(div => {
+                    div.className = div.className.replace('bg-gray-100 text-gray-900', 'text-gray-600 hover:bg-gray-50 hover:text-gray-900');
+                });
+                document.querySelector('nav div:first-child').className = 'bg-gray-100 text-gray-900 group flex items-center px-3 py-2 text-sm font-medium rounded-md';
+                
+                // Show/hide content sections
+                document.getElementById('organization-info').style.display = 'block';
+                document.getElementById('oidc-settings').style.display = 'none';
+            }
+
+            function showOIDCSettings() {
+                // Update sidebar
+                document.querySelectorAll('nav div').forEach(div => {
+                    div.className = div.className.replace('bg-gray-100 text-gray-900', 'text-gray-600 hover:bg-gray-50 hover:text-gray-900');
+                });
+                document.querySelector('nav div:nth-child(2)').className = 'bg-gray-100 text-gray-900 group flex items-center px-3 py-2 text-sm font-medium rounded-md cursor-pointer';
+                
+                // Show/hide content sections
+                document.getElementById('organization-info').style.display = 'none';
+                document.getElementById('oidc-settings').style.display = 'block';
+                
+                // Load OIDC providers
+                loadOIDCProviders();
+            }
+
+            function loadOIDCProviders() {
+                const orgId = '\(organization.id?.uuidString ?? "")';
+                
+                fetch('/api/organizations/' + orgId + '/oidc-providers')
+                    .then(response => response.json())
+                    .then(providers => {
+                        const providersList = document.getElementById('oidc-providers-list');
+                        if (providers.length === 0) {
+                            providersList.innerHTML = '<p class="text-gray-500 text-center py-4">No OIDC providers configured</p>';
+                        } else {
+                            providersList.innerHTML = providers.map(provider => 
+                                `<div class="border rounded-lg p-4 mb-4">
+                                    <div class="flex justify-between items-center">
+                                        <div>
+                                            <h4 class="font-medium text-gray-900">${provider.name}</h4>
+                                            <p class="text-sm text-gray-500">Client ID: ${provider.clientID}</p>
+                                            <p class="text-sm text-gray-500">Status: ${provider.enabled ? 'Enabled' : 'Disabled'}</p>
+                                        </div>
+                                        <div class="space-x-2">
+                                            <button onclick="editProvider('${provider.id}')" class="text-indigo-600 hover:text-indigo-900">Edit</button>
+                                            <button onclick="deleteProvider('${provider.id}')" class="text-red-600 hover:text-red-900">Delete</button>
+                                        </div>
+                                    </div>
+                                </div>`
+                            ).join('');
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error loading OIDC providers:', error);
+                        showError('Failed to load OIDC providers');
+                    });
+            }
+
+            function showAddProviderForm() {
+                document.getElementById('provider-form-section').style.display = 'block';
+                document.getElementById('add-provider-button').style.display = 'none';
+            }
+
+            function hideAddProviderForm() {
+                document.getElementById('provider-form-section').style.display = 'none';
+                document.getElementById('add-provider-button').style.display = 'block';
+            }
+
+            function editProvider(providerId) {
+                // TODO: Implement edit provider functionality
+                showSuccess('Edit provider functionality coming soon');
+            }
+
+            function deleteProvider(providerId) {
+                if (!confirm('Are you sure you want to delete this OIDC provider?')) {
+                    return;
+                }
+                
+                const orgId = '\(organization.id?.uuidString ?? "")';
+                
+                fetch(`/api/organizations/${orgId}/oidc-providers/${providerId}`, {
+                    method: 'DELETE'
+                })
+                .then(response => {
+                    if (response.ok) {
+                        showSuccess('OIDC provider deleted successfully');
+                        loadOIDCProviders();
+                    } else {
+                        throw new Error('Failed to delete provider');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error deleting provider:', error);
+                    showError('Failed to delete OIDC provider');
+                });
+            }
+
+            function saveOIDCProvider() {
+                const form = document.getElementById('oidc-provider-form');
+                const formData = new FormData(form);
+                
+                const data = {
+                    name: formData.get('name'),
+                    clientID: formData.get('clientID'),
+                    clientSecret: formData.get('clientSecret'),
+                    discoveryURL: formData.get('discoveryURL'),
+                    enabled: formData.get('enabled') === 'on'
+                };
+
+                const orgId = '\(organization.id?.uuidString ?? "")';
+                
+                fetch(`/api/organizations/${orgId}/oidc-providers`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                })
+                .then(response => {
+                    if (response.ok) {
+                        showSuccess('OIDC provider saved successfully');
+                        hideAddProviderForm();
+                        loadOIDCProviders();
+                        form.reset();
+                    } else {
+                        throw new Error('Failed to save provider');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error saving provider:', error);
+                    showError('Failed to save OIDC provider');
+                });
+            }
         </script>
         """)
     }
@@ -132,8 +293,12 @@ struct OrganizationSettingsMain: HTML {
                 // Sidebar
                 aside(.class("lg:col-span-3")) {
                     nav(.class("space-y-1")) {
-                        div(.class("bg-gray-100 text-gray-900 group flex items-center px-3 py-2 text-sm font-medium rounded-md")) {
+                        div(.class("bg-gray-100 text-gray-900 group flex items-center px-3 py-2 text-sm font-medium rounded-md cursor-pointer"), .data("action", value: "showOrganizationInfo")) {
                             "📋 Organization Info"
+                        }
+
+                        div(.class("text-gray-600 hover:bg-gray-50 hover:text-gray-900 group flex items-center px-3 py-2 text-sm font-medium rounded-md cursor-pointer"), .data("action", value: "showOIDCSettings")) {
+                            "🔐 OIDC Authentication"
                         }
 
                         // Placeholder for future settings sections
@@ -146,6 +311,7 @@ struct OrganizationSettingsMain: HTML {
                 // Main content
                 div(.class("lg:col-span-9")) {
                     OrganizationInfoSection(organization: organization)
+                    OIDCSettingsSection(organization: organization)
                 }
             }
         }
@@ -212,6 +378,147 @@ struct OrganizationInfoSection: HTML {
                             .class("inline-flex justify-center rounded-md border border-transparent bg-indigo-600 py-2 px-4 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2")
                         ) {
                             "Save Changes"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct OIDCSettingsSection: HTML {
+    let organization: OrganizationResponse
+
+    var content: some HTML {
+        div(.class("bg-white shadow rounded-lg mt-6"), .id("oidc-settings"), .style("display: none;")) {
+            div(.class("px-6 py-4 border-b border-gray-200")) {
+                h2(.class("text-lg font-medium text-gray-900")) {
+                    "OIDC Authentication Providers"
+                }
+                p(.class("mt-1 text-sm text-gray-600")) {
+                    "Configure OpenID Connect providers for single sign-on authentication."
+                }
+            }
+
+            div(.class("px-6 py-6")) {
+                // Providers list
+                div(.id("oidc-providers-list")) {
+                    // This will be populated by JavaScript
+                }
+
+                // Add Provider Button
+                div(.class("mt-6"), .id("add-provider-button")) {
+                    button(
+                        .type(.button),
+                        .data("action", value: "showAddProviderForm"),
+                        .class("inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500")
+                    ) {
+                        "➕ Add OIDC Provider"
+                    }
+                }
+
+                // Provider Form (hidden by default)
+                div(.class("mt-6"), .id("provider-form-section"), .style("display: none;")) {
+                    form(.id("oidc-provider-form")) {
+                        div(.class("grid grid-cols-1 gap-6")) {
+                            // Provider Name
+                            div {
+                                label(.for("name"), .class("block text-sm font-medium text-gray-700")) {
+                                    "Provider Name"
+                                }
+                                input(
+                                    .type(.text),
+                                    .name("name"),
+                                    .id("name"),
+                                    .required,
+                                    .class("mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"),
+                                    .placeholder("e.g., Azure AD, Google Workspace, Okta")
+                                )
+                                p(.class("mt-2 text-xs text-gray-500")) {
+                                    "A friendly name for this OIDC provider."
+                                }
+                            }
+
+                            // Client ID
+                            div {
+                                label(.for("clientID"), .class("block text-sm font-medium text-gray-700")) {
+                                    "Client ID"
+                                }
+                                input(
+                                    .type(.text),
+                                    .name("clientID"),
+                                    .id("clientID"),
+                                    .required,
+                                    .class("mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"),
+                                    .placeholder("Client ID from your OIDC provider")
+                                )
+                            }
+
+                            // Client Secret
+                            div {
+                                label(.for("clientSecret"), .class("block text-sm font-medium text-gray-700")) {
+                                    "Client Secret"
+                                }
+                                input(
+                                    .type(.password),
+                                    .name("clientSecret"),
+                                    .id("clientSecret"),
+                                    .required,
+                                    .class("mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"),
+                                    .placeholder("Client Secret from your OIDC provider")
+                                )
+                            }
+
+                            // Discovery URL
+                            div {
+                                label(.for("discoveryURL"), .class("block text-sm font-medium text-gray-700")) {
+                                    "Discovery URL"
+                                }
+                                input(
+                                    .type(.url),
+                                    .name("discoveryURL"),
+                                    .id("discoveryURL"),
+                                    .class("mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"),
+                                    .placeholder("https://provider.com/.well-known/openid-configuration")
+                                )
+                                p(.class("mt-2 text-xs text-gray-500")) {
+                                    "The OpenID Connect discovery endpoint (optional if you configure individual endpoints)."
+                                }
+                            }
+
+                            // Enabled Toggle
+                            div {
+                                div(.class("flex items-center")) {
+                                    input(
+                                        .type(.checkbox),
+                                        .name("enabled"),
+                                        .id("enabled"),
+                                        .checked,
+                                        .class("h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded")
+                                    )
+                                    label(.for("enabled"), .class("ml-2 block text-sm text-gray-900")) {
+                                        "Enable this provider"
+                                    }
+                                }
+                            }
+                        }
+
+                        // Form Actions
+                        div(.class("mt-6 flex justify-end space-x-3")) {
+                            button(
+                                .type(.button),
+                                .data("action", value: "hideAddProviderForm"),
+                                .class("inline-flex justify-center rounded-md border border-gray-300 bg-white py-2 px-4 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2")
+                            ) {
+                                "Cancel"
+                            }
+                            button(
+                                .type(.button),
+                                .data("action", value: "saveOIDCProvider"),
+                                .class("inline-flex justify-center rounded-md border border-transparent bg-indigo-600 py-2 px-4 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2")
+                            ) {
+                                "Save Provider"
+                            }
                         }
                     }
                 }

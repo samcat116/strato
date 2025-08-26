@@ -36,6 +36,9 @@ final class Organization: Model, @unchecked Sendable {
     @Children(for: \.$organization)
     var groups: [Group]
 
+    @Children(for: \.$organization)
+    var oidcProviders: [OIDCProvider]
+
     init() {}
 
     init(
