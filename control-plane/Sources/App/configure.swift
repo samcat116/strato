@@ -74,6 +74,9 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateGroup())
     app.migrations.add(CreateUserGroup())
 
+    // OIDC migrations
+    app.migrations.add(CreateOIDCProvider())
+    app.migrations.add(AddOIDCFieldsToUser())
     // Agent migrations
     app.migrations.add(CreateAgent())
     app.migrations.add(CreateAgentRegistrationToken())

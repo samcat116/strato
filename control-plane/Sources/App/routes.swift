@@ -109,6 +109,8 @@ func routes(_ app: Application) throws {
     // Groups controller
     try app.register(collection: GroupController())
 
+    // OIDC controller
+    try app.register(collection: OIDCController())
     // Agent management controller
     try app.register(collection: AgentController())
 

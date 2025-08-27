@@ -23,6 +23,13 @@ final class User: Model, @unchecked Sendable {
     @Field(key: "is_system_admin")
     var isSystemAdmin: Bool
 
+    // OIDC linking fields
+    @OptionalParent(key: "oidc_provider_id")
+    var oidcProvider: OIDCProvider?
+
+    @OptionalField(key: "oidc_subject")
+    var oidcSubject: String? // The 'sub' claim from the OIDC provider
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -47,13 +54,19 @@ final class User: Model, @unchecked Sendable {
         username: String,
         email: String,
         displayName: String,
-        isSystemAdmin: Bool = false
+        isSystemAdmin: Bool = false,
+        oidcProviderID: UUID? = nil,
+        oidcSubject: String? = nil
     ) {
         self.id = id
         self.username = username
         self.email = email
         self.displayName = displayName
         self.isSystemAdmin = isSystemAdmin
+        if let oidcProviderID = oidcProviderID {
+            self.$oidcProvider.id = oidcProviderID
+        }
+        self.oidcSubject = oidcSubject
     }
 }
 
@@ -104,6 +117,31 @@ extension User {
             .first()
 
         return membership != nil
+    }
+
+    /// Check if user is authenticated via OIDC
+    var isOIDCAuthenticated: Bool {
+        return oidcSubject != nil && $oidcProvider.id != nil
+    }
+
+    /// Check if user is authenticated via Passkey
+    func hasPasskeyCredentials(on db: Database) async throws -> Bool {
+        let credentialCount = try await self.$credentials.query(on: db).count()
+        return credentialCount > 0
+    }
+
+    /// Link user to an OIDC provider
+    func linkToOIDCProvider(_ providerID: UUID, subject: String) {
+        self.$oidcProvider.id = providerID
+        self.oidcSubject = subject
+    }
+
+    /// Find user by OIDC subject and provider
+    static func findByOIDCSubject(_ subject: String, providerID: UUID, on db: Database) async throws -> User? {
+        return try await User.query(on: db)
+            .filter(\.$oidcSubject == subject)
+            .filter(\.$oidcProvider.$id == providerID)
+            .first()
     }
 }
 
