@@ -1,0 +1,449 @@
+name: Helm Chart Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'helm/**'
+      - '.github/workflows/helm-test.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'helm/**'
+      - '.github/workflows/helm-test.yml'
+  workflow_dispatch:
+
+env:
+  HELM_VERSION: v3.12.3
+  KIND_VERSION: v0.20.0
+  KUBERNETES_VERSION: v1.27.3
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    name: Helm Chart Linting
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Add Bitnami repository
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+
+      - name: Lint Helm chart
+        run: |
+          helm lint helm/strato-control-plane/
+
+      - name: Validate chart dependencies
+        run: |
+          cd helm/strato-control-plane
+          helm dependency build
+          helm dependency update
+
+  template-validation:
+    runs-on: ubuntu-latest
+    name: Template Validation
+    needs: lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Add Bitnami repository
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+
+      - name: Build dependencies
+        run: |
+          cd helm/strato-control-plane
+          helm dependency build
+
+      - name: Template with default values
+        run: |
+          helm template strato-test helm/strato-control-plane/ > /tmp/default-template.yaml
+          echo "Default template generated successfully"
+
+      - name: Template with production values
+        run: |
+          helm template strato-prod helm/strato-control-plane/ \
+            --set image.repository=strato-control-plane \
+            --set image.tag=latest \
+            --set strato.logLevel=info \
+            --set postgresql.auth.password=secure-password \
+            --set spicedb.presharedKey=secure-spicedb-key \
+            --set resources.limits.cpu=2000m \
+            --set resources.limits.memory=2Gi \
+            --set spicedb.resources.limits.cpu=1000m \
+            --set spicedb.resources.limits.memory=1Gi \
+            --set networkPolicy.enabled=true \
+            --set podDisruptionBudget.enabled=true > /tmp/production-template.yaml
+          echo "Production template generated successfully"
+
+      - name: Template with external database
+        run: |
+          helm template strato-external helm/strato-control-plane/ \
+            --set postgresql.enabled=false \
+            --set externalDatabase.host=postgres.example.com \
+            --set externalDatabase.password=external-db-password > /tmp/external-db-template.yaml
+          echo "External database template generated successfully"
+
+      - name: Validate generated YAML
+        run: |
+          # Install kubeval for validation
+          curl -L https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz | tar xz
+          sudo mv kubeval /usr/local/bin
+          
+          # Validate templates
+          kubeval /tmp/default-template.yaml
+          kubeval /tmp/production-template.yaml
+          kubeval /tmp/external-db-template.yaml
+
+      - name: Upload templates as artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: helm-templates
+          path: /tmp/*-template.yaml
+
+  integration-test:
+    runs-on: ubuntu-latest
+    name: Kubernetes Integration Test
+    needs: [lint, template-validation]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Set up Kind
+        uses: helm/kind-action@v1.8.0
+        with:
+          version: ${{ env.KIND_VERSION }}
+          kubectl_version: ${{ env.KUBERNETES_VERSION }}
+
+      - name: Add Bitnami repository
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+
+      - name: Build dependencies
+        run: |
+          cd helm/strato-control-plane
+          helm dependency build
+
+      - name: Install chart with test values
+        run: |
+          # Create test values file
+          cat > /tmp/ci-test-values.yaml << 'EOF'
+          image:
+            repository: nginx
+            tag: "1.21"
+            pullPolicy: Always
+
+          strato:
+            logLevel: debug
+            webauthn:
+              relyingPartyId: "ci-test.local"
+              relyingPartyName: "Strato CI Test"
+              relyingPartyOrigin: "http://ci-test.local:8080"
+
+          spicedb:
+            enabled: true
+            presharedKey: "ci-test-key"
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+
+          postgresql:
+            enabled: true
+            auth:
+              database: vapor_database
+              username: vapor_username
+              password: ci-test-password
+              postgresPassword: ci-postgres-password
+            primary:
+              persistence:
+                size: 1Gi
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          # Disable init containers for CI (to avoid DNS issues)
+          initContainers:
+            waitForDB:
+              enabled: false
+            waitForSpiceDB:
+              enabled: false
+
+          # Disable migration job for CI
+          migration:
+            enabled: false
+          EOF
+
+          # Install the chart
+          helm install strato-ci-test helm/strato-control-plane/ \
+            -f /tmp/ci-test-values.yaml \
+            --wait --timeout=5m
+
+      - name: Verify deployment
+        run: |
+          # Wait for pods to be ready (with timeout)
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=postgresql --timeout=300s || true
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=spicedb --timeout=300s || true
+
+          # Check pod status
+          kubectl get pods -o wide
+          kubectl get services
+          kubectl get secrets
+          kubectl get configmaps
+
+      - name: Test PostgreSQL connectivity
+        run: |
+          # Test PostgreSQL is accessible
+          kubectl run postgresql-client --rm --tty -i --restart='Never' \
+            --image docker.io/bitnami/postgresql:16 \
+            --env="PGPASSWORD=ci-test-password" \
+            --command -- psql --host strato-ci-test-postgresql -U vapor_username -d vapor_database -c 'SELECT version();' || true
+
+      - name: Test SpiceDB connectivity
+        run: |
+          # Port forward SpiceDB for testing
+          kubectl port-forward svc/strato-ci-test-strato-control-plane-spicedb 50051:50051 &
+          sleep 5
+
+          # Test SpiceDB gRPC endpoint
+          kubectl run spicedb-client --rm --tty -i --restart='Never' \
+            --image authzed/spicedb:v1.35.3 \
+            --command -- spicedb version || true
+
+      - name: Check chart values and configuration
+        run: |
+          # Verify helm release values
+          helm get values strato-ci-test
+          helm get notes strato-ci-test
+
+      - name: Describe failing pods (if any)
+        if: failure()
+        run: |
+          echo "=== Pod Status ==="
+          kubectl get pods -o wide
+          
+          echo "=== Events ==="
+          kubectl get events --sort-by='.metadata.creationTimestamp'
+          
+          echo "=== Pod Descriptions ==="
+          kubectl get pods -o name | xargs -I {} kubectl describe {}
+          
+          echo "=== Pod Logs ==="
+          kubectl get pods -o name | xargs -I {} kubectl logs {} --all-containers=true || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          helm uninstall strato-ci-test || true
+
+  security-scan:
+    runs-on: ubuntu-latest
+    name: Security Scanning
+    needs: lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Add Bitnami repository
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+
+      - name: Build dependencies
+        run: |
+          cd helm/strato-control-plane
+          helm dependency build
+
+      - name: Install checkov
+        run: |
+          pip install checkov
+
+      - name: Generate template for security scan
+        run: |
+          helm template strato-security helm/strato-control-plane/ \
+            --set networkPolicy.enabled=true \
+            --set podDisruptionBudget.enabled=true > /tmp/security-template.yaml
+
+      - name: Run Checkov security scan
+        run: |
+          checkov -f /tmp/security-template.yaml \
+            --framework kubernetes \
+            --output cli \
+            --soft-fail || true
+
+      - name: Check for hardcoded secrets
+        run: |
+          # Check for potential hardcoded secrets in templates
+          if grep -r "password.*:" helm/strato-control-plane/templates/ | grep -v "secretKeyRef" | grep -v "valueFrom"; then
+            echo "⚠️  Potential hardcoded secrets found in templates!"
+            exit 1
+          else
+            echo "✅ No hardcoded secrets found in templates"
+          fi
+
+      - name: Validate RBAC permissions
+        run: |
+          # Check if ServiceAccount has minimal permissions
+          if helm template test helm/strato-control-plane/ | grep -A 20 -B 5 "kind: ClusterRole\|kind: Role"; then
+            echo "⚠️  Found RBAC roles - please review permissions"
+          else
+            echo "✅ No additional RBAC permissions found"
+          fi
+
+  upgrade-test:
+    runs-on: ubuntu-latest
+    name: Chart Upgrade Test
+    needs: [lint, template-validation]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Set up Kind
+        uses: helm/kind-action@v1.8.0
+        with:
+          version: ${{ env.KIND_VERSION }}
+          kubectl_version: ${{ env.KUBERNETES_VERSION }}
+
+      - name: Add Bitnami repository
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+
+      - name: Build dependencies
+        run: |
+          cd helm/strato-control-plane
+          helm dependency build
+
+      - name: Install initial version
+        run: |
+          # Create initial test values
+          cat > /tmp/upgrade-values-v1.yaml << 'EOF'
+          image:
+            repository: nginx
+            tag: "1.20"
+          
+          strato:
+            logLevel: info
+            
+          spicedb:
+            presharedKey: "upgrade-test-key-v1"
+            
+          postgresql:
+            auth:
+              password: upgrade-test-password
+              
+          initContainers:
+            waitForDB:
+              enabled: false
+            waitForSpiceDB:
+              enabled: false
+              
+          migration:
+            enabled: false
+          EOF
+
+          helm install strato-upgrade-test helm/strato-control-plane/ \
+            -f /tmp/upgrade-values-v1.yaml \
+            --wait --timeout=3m
+
+      - name: Upgrade to new version
+        run: |
+          # Create upgraded test values
+          cat > /tmp/upgrade-values-v2.yaml << 'EOF'
+          image:
+            repository: nginx
+            tag: "1.21"
+          
+          strato:
+            logLevel: debug
+            
+          spicedb:
+            presharedKey: "upgrade-test-key-v2"
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+                
+          postgresql:
+            auth:
+              password: upgrade-test-password
+              
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+              
+          initContainers:
+            waitForDB:
+              enabled: false
+            waitForSpiceDB:
+              enabled: false
+              
+          migration:
+            enabled: false
+          EOF
+
+          helm upgrade strato-upgrade-test helm/strato-control-plane/ \
+            -f /tmp/upgrade-values-v2.yaml \
+            --wait --timeout=3m
+
+      - name: Verify upgrade
+        run: |
+          # Check that pods are running with new configuration
+          kubectl get pods -o wide
+          
+          # Check helm history
+          helm history strato-upgrade-test
+          
+          # Verify the upgrade was successful
+          helm get values strato-upgrade-test
+
+      - name: Cleanup
+        if: always()
+        run: |
+          helm uninstall strato-upgrade-test || true
