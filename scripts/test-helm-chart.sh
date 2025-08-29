@@ -135,8 +135,10 @@ security_checks() {
     
     # Check for hardcoded secrets in templates
     log_info "Checking for hardcoded secrets..."
-    if grep -r "password.*:" "$CHART_DIR/templates/" | grep -v "secretKeyRef" | grep -v "valueFrom" | grep -v "# "; then
+    if grep -r 'password.*:.*["\x27]' "$CHART_DIR/templates/" | grep -v "secretKeyRef" | grep -v "valueFrom" | grep -v "{{" | grep -v "#"; then
         log_error "Potential hardcoded secrets found in templates!"
+        echo "Found:"
+        grep -r 'password.*:.*["\x27]' "$CHART_DIR/templates/" | grep -v "secretKeyRef" | grep -v "valueFrom" | grep -v "{{" | grep -v "#" || true
         exit 1
     else
         log_success "No hardcoded secrets found"

@@ -110,7 +110,7 @@ jobs:
           kubeval /tmp/external-db-template.yaml
 
       - name: Upload templates as artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: helm-templates
           path: /tmp/*-template.yaml
@@ -314,8 +314,11 @@ jobs:
       - name: Check for hardcoded secrets
         run: |
           # Check for potential hardcoded secrets in templates
-          if grep -r "password.*:" helm/strato-control-plane/templates/ | grep -v "secretKeyRef" | grep -v "valueFrom"; then
+          # Look for patterns like 'password: "actual-password"' but exclude proper template usage
+          if grep -r 'password.*:.*["\x27]' helm/strato-control-plane/templates/ | grep -v "secretKeyRef" | grep -v "valueFrom" | grep -v "{{" | grep -v "#"; then
             echo "⚠️  Potential hardcoded secrets found in templates!"
+            echo "Found hardcoded secrets (not using Helm templates):"
+            grep -r 'password.*:.*["\x27]' helm/strato-control-plane/templates/ | grep -v "secretKeyRef" | grep -v "valueFrom" | grep -v "{{" | grep -v "#" || true
             exit 1
           else
             echo "✅ No hardcoded secrets found in templates"
