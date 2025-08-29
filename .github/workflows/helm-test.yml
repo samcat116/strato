@@ -165,11 +165,14 @@ jobs:
             presharedKey: "ci-test-key"
             resources:
               requests:
-                cpu: 50m
-                memory: 64Mi
+                cpu: 25m
+                memory: 32Mi
               limits:
-                cpu: 200m
-                memory: 256Mi
+                cpu: 100m
+                memory: 128Mi
+            # Speed up SpiceDB startup
+            persistence:
+              enabled: false
 
           postgresql:
             enabled: true
@@ -180,22 +183,30 @@ jobs:
               postgresPassword: ci-postgres-password
             primary:
               persistence:
+                enabled: false
                 size: 1Gi
             resources:
               requests:
-                cpu: 50m
-                memory: 64Mi
+                cpu: 25m
+                memory: 32Mi
               limits:
-                cpu: 200m
-                memory: 256Mi
+                cpu: 100m
+                memory: 128Mi
+            # Speed up PostgreSQL startup
+            readinessProbe:
+              initialDelaySeconds: 5
+              periodSeconds: 3
+            livenessProbe:
+              initialDelaySeconds: 10
+              periodSeconds: 10
 
           resources:
             requests:
-              cpu: 50m
-              memory: 64Mi
+              cpu: 25m
+              memory: 32Mi
             limits:
-              cpu: 200m
-              memory: 256Mi
+              cpu: 100m
+              memory: 128Mi
 
           # Disable health checks since we're using nginx instead of actual app
           livenessProbe:
@@ -218,7 +229,7 @@ jobs:
           # Install the chart
           helm install strato-ci-test helm/strato-control-plane/ \
             -f /tmp/ci-test-values.yaml \
-            --wait --timeout=10m
+            --wait --timeout=15m
 
       - name: Verify deployment
         run: |
@@ -400,10 +411,29 @@ jobs:
             
           spicedb:
             presharedKey: "upgrade-test-key-v1"
+            resources:
+              requests:
+                cpu: 25m
+                memory: 32Mi
+              limits:
+                cpu: 100m
+                memory: 128Mi
+            persistence:
+              enabled: false
             
           postgresql:
             auth:
               password: upgrade-test-password
+            primary:
+              persistence:
+                enabled: false
+            resources:
+              requests:
+                cpu: 25m
+                memory: 32Mi
+              limits:
+                cpu: 100m
+                memory: 128Mi
               
           initContainers:
             waitForDB:
@@ -417,7 +447,7 @@ jobs:
 
           helm install strato-upgrade-test helm/strato-control-plane/ \
             -f /tmp/upgrade-values-v1.yaml \
-            --wait --timeout=8m
+            --wait --timeout=12m
 
       - name: Upgrade to new version
         run: |
@@ -440,11 +470,24 @@ jobs:
           postgresql:
             auth:
               password: upgrade-test-password
+            primary:
+              persistence:
+                enabled: false
+            resources:
+              requests:
+                cpu: 25m
+                memory: 32Mi
+              limits:
+                cpu: 100m
+                memory: 128Mi
               
           resources:
             requests:
-              cpu: 50m
-              memory: 64Mi
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
               
           initContainers:
             waitForDB:
@@ -458,7 +501,7 @@ jobs:
 
           helm upgrade strato-upgrade-test helm/strato-control-plane/ \
             -f /tmp/upgrade-values-v2.yaml \
-            --wait --timeout=8m
+            --wait --timeout=12m
 
       - name: Verify upgrade
         run: |
