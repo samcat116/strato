@@ -357,9 +357,9 @@ jobs:
           cd helm/strato-control-plane
           helm dependency build
 
-      - name: Install initial version
+      - name: Install initial version (lightweight)
         run: |
-          # Create initial test values
+          # Create lightweight initial test values
           cat > /tmp/upgrade-values-v1.yaml << 'EOF'
           image:
             repository: nginx
@@ -368,31 +368,29 @@ jobs:
           strato:
             logLevel: info
             
+          # Disable heavy components for faster testing
           spicedb:
-            presharedKey: "upgrade-test-key-v1"
-            resources:
-              requests:
-                cpu: 25m
-                memory: 32Mi
-              limits:
-                cpu: 100m
-                memory: 128Mi
-            persistence:
-              enabled: false
+            enabled: false
             
           postgresql:
-            auth:
-              password: upgrade-test-password
-            primary:
-              persistence:
-                enabled: false
-            resources:
-              requests:
-                cpu: 25m
-                memory: 32Mi
-              limits:
-                cpu: 100m
-                memory: 128Mi
+            enabled: false
+            
+          externalDatabase:
+            host: "fake-db-host-v1"
+            password: "fake-password-v1"
+            
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+              
+          livenessProbe:
+            enabled: false
+          readinessProbe:
+            enabled: false
               
           initContainers:
             waitForDB:
