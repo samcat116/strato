@@ -171,7 +171,7 @@ externalDatabase:
   port: 5432
   database: vapor_database
   username: vapor_username
-  # password is stored in secret
+  password: ""  # Set this when using external database
   
 # Migration job configuration
 migration:
