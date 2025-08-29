@@ -59,6 +59,24 @@ resources:
     cpu: 500m
     memory: 512Mi
 
+# Health check probes configuration
+livenessProbe:
+  enabled: true
+  path: /health/live
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  path: /health/ready
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 5
+  successThreshold: 1
+  failureThreshold: 3
+
 autoscaling:
   enabled: false
   minReplicas: 1

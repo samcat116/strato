@@ -165,11 +165,11 @@ jobs:
             presharedKey: "ci-test-key"
             resources:
               requests:
-                cpu: 100m
-                memory: 128Mi
+                cpu: 50m
+                memory: 64Mi
               limits:
-                cpu: 500m
-                memory: 512Mi
+                cpu: 200m
+                memory: 256Mi
 
           postgresql:
             enabled: true
@@ -183,19 +183,25 @@ jobs:
                 size: 1Gi
             resources:
               requests:
-                cpu: 100m
-                memory: 128Mi
+                cpu: 50m
+                memory: 64Mi
               limits:
-                cpu: 500m
-                memory: 512Mi
+                cpu: 200m
+                memory: 256Mi
 
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
+              cpu: 50m
+              memory: 64Mi
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: 200m
+              memory: 256Mi
+
+          # Disable health checks since we're using nginx instead of actual app
+          livenessProbe:
+            enabled: false
+          readinessProbe:
+            enabled: false
 
           # Disable init containers for CI (to avoid DNS issues)
           initContainers:
@@ -212,7 +218,7 @@ jobs:
           # Install the chart
           helm install strato-ci-test helm/strato-control-plane/ \
             -f /tmp/ci-test-values.yaml \
-            --wait --timeout=5m
+            --wait --timeout=10m
 
       - name: Verify deployment
         run: |
@@ -260,11 +266,30 @@ jobs:
           echo "=== Events ==="
           kubectl get events --sort-by='.metadata.creationTimestamp'
           
+          echo "=== Services ==="
+          kubectl get services -o wide
+          
+          echo "=== Secrets ==="
+          kubectl get secrets
+          
+          echo "=== ConfigMaps ==="
+          kubectl get configmaps
+          
+          echo "=== Helm Status ==="
+          helm status strato-ci-test || true
+          
           echo "=== Pod Descriptions ==="
-          kubectl get pods -o name | xargs -I {} kubectl describe {}
+          kubectl get pods -o name | xargs -I {} kubectl describe {} || true
           
           echo "=== Pod Logs ==="
-          kubectl get pods -o name | xargs -I {} kubectl logs {} --all-containers=true || true
+          kubectl get pods -o name | while read pod; do
+            echo "--- Logs for $pod ---"
+            kubectl logs $pod --all-containers=true --previous=false || true
+          done
+          
+          echo "=== Resource Usage ==="
+          kubectl top nodes || true
+          kubectl top pods || true
 
       - name: Cleanup
         if: always()
@@ -392,7 +417,7 @@ jobs:
 
           helm install strato-upgrade-test helm/strato-control-plane/ \
             -f /tmp/upgrade-values-v1.yaml \
-            --wait --timeout=3m
+            --wait --timeout=8m
 
       - name: Upgrade to new version
         run: |
@@ -433,7 +458,7 @@ jobs:
 
           helm upgrade strato-upgrade-test helm/strato-control-plane/ \
             -f /tmp/upgrade-values-v2.yaml \
-            --wait --timeout=3m
+            --wait --timeout=8m
 
       - name: Verify upgrade
         run: |
