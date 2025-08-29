@@ -24,24 +24,22 @@ spec:
       {{- end }}
       initContainers:
         - name: wait-for-spicedb
-          image: busybox:1.35
-          command: ['sh', '-c', 'until nc -z {{ include "strato-control-plane.fullname" . }}-spicedb {{ .Values.spicedb.service.httpPort }}; do echo waiting for SpiceDB; sleep 2; done']
+          image: alpine:3.17
+          command: ['sh', '-c', 'apk add --no-cache netcat-openbsd && until nc -z {{ include "strato-control-plane.fullname" . }}-spicedb.{{ .Release.Namespace }}.svc.cluster.local 8080; do echo waiting for SpiceDB; sleep 2; done']
       containers:
         - name: schema-loader
-          image: curlimages/curl:latest
+          image: authzed/zed:latest
           command:
-            - sh
-            - -c
-            - |
-              echo "Loading SpiceDB schema..."
-              curl -X POST \
-                -H "Authorization: Bearer ${SPICEDB_TOKEN}" \
-                -H "Content-Type: application/json" \
-                -d "{\"schema\": \"$(cat /schema/spicedb-schema.zed | sed 's/"/\\"/g' | tr '\n' ' ')\"}" \
-                ${SPICEDB_ENDPOINT}/v1/schema/write
+            - zed
+            - schema
+            - write
+            - /schema/spicedb-schema.zed
+            - --endpoint
+            - {{ include "strato-control-plane.fullname" . }}-spicedb:50051
+            - --token
+            - $(SPICEDB_TOKEN)
+            - --insecure
           env:
-            - name: SPICEDB_ENDPOINT
-              value: "http://{{ include "strato-control-plane.fullname" . }}-spicedb:{{ .Values.spicedb.service.httpPort }}"
             - name: SPICEDB_TOKEN
               valueFrom:
                 secretKeyRef:

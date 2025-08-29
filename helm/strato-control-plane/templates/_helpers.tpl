@@ -64,7 +64,7 @@ Get the database host
 */}}
 {{- define "strato-control-plane.databaseHost" -}}
 {{- if .Values.postgresql.enabled }}
-{{- printf "%s-postgresql" (include "strato-control-plane.fullname" .) }}
+{{- printf "%s-postgresql" .Release.Name }}
 {{- else }}
 {{- .Values.externalDatabase.host }}
 {{- end }}
@@ -75,7 +75,7 @@ Get the database password secret name
 */}}
 {{- define "strato-control-plane.databaseSecretName" -}}
 {{- if .Values.postgresql.enabled }}
-{{- printf "%s-postgresql" (include "strato-control-plane.fullname" .) }}
+{{- printf "%s-postgresql" .Release.Name }}
 {{- else }}
 {{- printf "%s-external-db" (include "strato-control-plane.fullname" .) }}
 {{- end }}
@@ -130,4 +130,37 @@ Get the WebAuthn origin URL
 {{- else }}
 {{- printf "http://localhost:%d" (int .Values.service.port) }}
 {{- end }}
+{{- end }}
+
+{{/*
+Get the SpiceDB connection string
+*/}}
+{{- define "strato-control-plane.spicedbConnectionString" -}}
+{{- if .Values.postgresql.enabled }}
+{{- printf "postgres://%s:%s@%s:%v/%s?sslmode=disable" .Values.strato.database.username .Values.postgresql.auth.password (include "strato-control-plane.databaseHost" .) .Values.strato.database.port .Values.strato.database.name }}
+{{- else }}
+{{- printf "postgres://%s:%s@%s:%v/%s?sslmode=disable" .Values.strato.database.username .Values.externalDatabase.password (include "strato-control-plane.databaseHost" .) .Values.strato.database.port .Values.strato.database.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Common security context
+*/}}
+{{- define "strato-control-plane.securityContext" -}}
+runAsNonRoot: true
+runAsUser: 10001
+runAsGroup: 10001
+fsGroup: 10001
+{{- end }}
+
+{{/*
+Common pod security context
+*/}}
+{{- define "strato-control-plane.podSecurityContext" -}}
+runAsNonRoot: true
+runAsUser: 10001
+runAsGroup: 10001
+fsGroup: 10001
+seccompProfile:
+  type: RuntimeDefault
 {{- end }}

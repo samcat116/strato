@@ -30,13 +30,13 @@ spec:
       initContainers:
         {{- if .Values.initContainers.waitForDB.enabled }}
         - name: wait-for-db
-          image: {{ .Values.initContainers.waitForDB.image }}
-          command: ['sh', '-c', 'until nc -z {{ include "strato-control-plane.databaseHost" . }} {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done']
+          image: alpine:3.17
+          command: ['sh', '-c', 'apk add --no-cache netcat-openbsd && until nc -z {{ include "strato-control-plane.databaseHost" . }}.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done']
         {{- end }}
         {{- if and .Values.spicedb.enabled .Values.initContainers.waitForSpiceDB.enabled }}
         - name: wait-for-spicedb
-          image: {{ .Values.initContainers.waitForSpiceDB.image }}
-          command: ['sh', '-c', 'until nc -z {{ include "strato-control-plane.fullname" . }}-spicedb {{ .Values.spicedb.service.httpPort }}; do echo waiting for SpiceDB; sleep 2; done']
+          image: alpine:3.17
+          command: ['sh', '-c', 'apk add --no-cache netcat-openbsd && until nc -z {{ include "strato-control-plane.fullname" . }}-spicedb.{{ .Release.Namespace }}.svc.cluster.local 8080; do echo waiting for SpiceDB; sleep 2; done']
         {{- end }}
       containers:
         - name: {{ .Chart.Name }}

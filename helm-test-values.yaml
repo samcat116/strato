@@ -1,0 +1,41 @@
+image:
+  repository: nginx
+  tag: "1.21"
+  pullPolicy: Always
+
+strato:
+  logLevel: debug
+  webauthn:
+    relyingPartyId: "minikube.local"
+    relyingPartyName: "Strato Test"
+    relyingPartyOrigin: "http://minikube.local:8080"
+
+spicedb:
+  enabled: true
+  presharedKey: "test-key-for-minikube"
+
+postgresql:
+  enabled: true
+  auth:
+    database: vapor_database
+    username: vapor_username
+    password: test-password
+    postgresPassword: test-postgres-password
+
+# Disable resource limits for testing
+resources: {}
+
+spicedb:
+  enabled: true
+  resources: {}
+
+# Disable init containers for testing
+initContainers:
+  waitForDB:
+    enabled: false
+  waitForSpiceDB:
+    enabled: false
+
+# Disable migration job for testing  
+migration:
+  enabled: false
