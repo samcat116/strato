@@ -30,13 +30,13 @@ spec:
       initContainers:
         {{- if .Values.initContainers.waitForDB.enabled }}
         - name: wait-for-db
-          image: {{ .Values.initContainers.waitForDB.image }}
-          command: ['sh', '-c', 'until nc -z {{ include "strato-control-plane.databaseHost" . }} {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done']
+          image: alpine:3.17
+          command: ['sh', '-c', 'apk add --no-cache netcat-openbsd && until nc -z {{ include "strato-control-plane.databaseHost" . }}.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done']
         {{- end }}
         {{- if and .Values.spicedb.enabled .Values.initContainers.waitForSpiceDB.enabled }}
         - name: wait-for-spicedb
-          image: {{ .Values.initContainers.waitForSpiceDB.image }}
-          command: ['sh', '-c', 'until nc -z {{ include "strato-control-plane.fullname" . }}-spicedb {{ .Values.spicedb.service.httpPort }}; do echo waiting for SpiceDB; sleep 2; done']
+          image: alpine:3.17
+          command: ['sh', '-c', 'apk add --no-cache netcat-openbsd && until nc -z {{ include "strato-control-plane.fullname" . }}-spicedb.{{ .Release.Namespace }}.svc.cluster.local 8080; do echo waiting for SpiceDB; sleep 2; done']
         {{- end }}
       containers:
         - name: {{ .Chart.Name }}
@@ -92,23 +92,27 @@ spec:
             - name: EXTERNAL_HOSTNAME
               value: "{{ .Values.strato.externalHostname }}"
             {{- end }}
+          {{- if .Values.livenessProbe.enabled }}
           livenessProbe:
             httpGet:
-              path: /health/live
+              path: {{ .Values.livenessProbe.path | default "/health/live" }}
               port: http
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds | default 30 }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds | default 5 }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold | default 3 }}
+          {{- end }}
+          {{- if .Values.readinessProbe.enabled }}
           readinessProbe:
             httpGet:
-              path: /health/ready
+              path: {{ .Values.readinessProbe.path | default "/health/ready" }}
               port: http
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            timeoutSeconds: 5
-            successThreshold: 1
-            failureThreshold: 3
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds | default 5 }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds | default 5 }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds | default 5 }}
+            successThreshold: {{ .Values.readinessProbe.successThreshold | default 1 }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}

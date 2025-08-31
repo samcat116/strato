@@ -1,0 +1,86 @@
+# CI Test values for minimal configuration
+# This file tests the chart with minimal resources and disabled features
+
+image:
+  repository: nginx  # Using nginx for CI tests
+  tag: "1.21"
+  pullPolicy: Always
+
+strato:
+  logLevel: error  # Minimal logging
+  webauthn:
+    relyingPartyId: "minimal.local"
+    relyingPartyName: "Minimal Strato"
+    relyingPartyOrigin: "http://minimal.local:8080"
+
+spicedb:
+  enabled: true
+  presharedKey: "minimal-test-key"
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  persistence:
+    enabled: false  # Use emptyDir for testing
+
+postgresql:
+  enabled: true
+  auth:
+    database: vapor_database
+    username: vapor_username
+    password: minimal-test-password
+    postgresPassword: minimal-postgres-password
+  primary:
+    persistence:
+      enabled: false  # Use emptyDir for testing
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+# Disable all optional features
+replicaCount: 1
+
+autoscaling:
+  enabled: false
+
+ingress:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+
+monitoring:
+  serviceMonitor:
+    enabled: false
+  metrics:
+    enabled: false
+
+# Disable init containers for CI
+initContainers:
+  waitForDB:
+    enabled: false
+  waitForSpiceDB:
+    enabled: false
+
+# Disable migration job for CI
+migration:
+  enabled: false

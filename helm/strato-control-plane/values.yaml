@@ -51,13 +51,31 @@ ingress:
   #    hosts:
   #      - strato.local
 
-resources: {}
-  # limits:
-  #   cpu: 100m
-  #   memory: 128Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+# Health check probes configuration
+livenessProbe:
+  enabled: true
+  path: /health/live
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  path: /health/ready
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 5
+  successThreshold: 1
+  failureThreshold: 3
 
 autoscaling:
   enabled: false
@@ -74,7 +92,7 @@ affinity: {}
 
 # Strato Control Plane configuration
 strato:
-  logLevel: debug
+  logLevel: info
   
   database:
     host: ""  # Will be set from PostgreSQL subchart if enabled
@@ -103,7 +121,7 @@ spicedb:
   
   service:
     grpcPort: 50051
-    httpPort: 8443
+    httpPort: 8080
     metricsPort: 9090
     
   persistence:
@@ -111,16 +129,27 @@ spicedb:
     size: 10Gi
     storageClass: ""
     
-  resources: {}
-    # limits:
-    #   cpu: 500m
-    #   memory: 512Mi
-    # requests:
-    #   cpu: 250m
-    #   memory: 256Mi
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
     
-  # Pre-shared key for authentication
-  presharedKey: "strato-dev-key"  # Change this in production!
+  # Pre-shared key for authentication - CHANGE THIS IN PRODUCTION!
+  presharedKey: "strato-dev-key"
+  
+  # Network policies
+  networkPolicy:
+    enabled: false
+    ingress: []
+    egress: []
+  
+  # Pod disruption budget
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
   
   # Schema initialization
   schema:
@@ -146,13 +175,21 @@ postgresql:
   metrics:
     enabled: false
     
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    
 # External PostgreSQL configuration (if postgresql.enabled is false)
 externalDatabase:
   host: ""
   port: 5432
   database: vapor_database
   username: vapor_username
-  # password is stored in secret
+  password: ""  # Set this when using external database
   
 # Migration job configuration
 migration:
@@ -168,3 +205,47 @@ initContainers:
   waitForSpiceDB:
     enabled: true
     image: busybox:1.35
+
+# Pod disruption budget for high availability
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 1
+
+# Network policies for security
+networkPolicy:
+  enabled: false
+  # Ingress rules - allow traffic from specific sources
+  ingress:
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 8080
+  # Egress rules - allow traffic to specific destinations  
+  egress:
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 5432  # PostgreSQL
+        - protocol: TCP
+          port: 50051  # SpiceDB gRPC
+        - protocol: TCP
+          port: 8080   # SpiceDB HTTP
+        - protocol: TCP
+          port: 53     # DNS
+        - protocol: UDP
+          port: 53     # DNS
+
+# Monitoring and observability
+monitoring:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+  
+  # Prometheus metrics
+  metrics:
+    enabled: false
+    port: 9090
+    path: /metrics

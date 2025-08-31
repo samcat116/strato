@@ -22,8 +22,8 @@ spec:
       {{- end }}
       initContainers:
         - name: wait-for-db
-          image: busybox:1.35
-          command: ['sh', '-c', 'until nc -z {{ include "strato-control-plane.databaseHost" . }} {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done']
+          image: alpine:3.17
+          command: ['sh', '-c', 'apk add --no-cache netcat-openbsd && until nc -z {{ include "strato-control-plane.databaseHost" . }}.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done']
         - name: spicedb-migrate
           image: "{{ .Values.spicedb.image.repository }}:{{ .Values.spicedb.image.tag }}"
           imagePullPolicy: {{ .Values.spicedb.image.pullPolicy }}
@@ -32,22 +32,30 @@ spec:
             - name: SPICEDB_DATASTORE_ENGINE
               value: postgres
             - name: SPICEDB_DATASTORE_CONN_URI
-              {{- if .Values.postgresql.enabled }}
-              value: "postgres://{{ .Values.strato.database.username }}:{{ .Values.postgresql.auth.password }}@{{ include "strato-control-plane.databaseHost" . }}:{{ .Values.strato.database.port }}/{{ .Values.strato.database.name }}?sslmode=disable"
-              {{- else }}
-              value: "postgres://{{ .Values.strato.database.username }}:{{ .Values.externalDatabase.password }}@{{ include "strato-control-plane.databaseHost" . }}:{{ .Values.strato.database.port }}/{{ .Values.strato.database.name }}?sslmode=disable"
-              {{- end }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "strato-control-plane.fullname" . }}-spicedb
+                  key: datastore-conn-uri
       containers:
         - name: spicedb
           image: "{{ .Values.spicedb.image.repository }}:{{ .Values.spicedb.image.tag }}"
           imagePullPolicy: {{ .Values.spicedb.image.pullPolicy }}
-          command: ["spicedb", "serve"]
+          command: 
+            - "spicedb"
+            - "serve"
+            - "--grpc-preshared-key"
+            - "$(SPICEDB_GRPC_PRESHARED_KEY)"
+            - "--http-enabled"
+            - "--http-addr"
+            - ":8080"
+            - "--grpc-addr"
+            - ":50051"
           ports:
             - name: grpc
               containerPort: {{ .Values.spicedb.service.grpcPort }}
               protocol: TCP
             - name: http
-              containerPort: {{ .Values.spicedb.service.httpPort }}
+              containerPort: 8080
               protocol: TCP
             - name: metrics
               containerPort: {{ .Values.spicedb.service.metricsPort }}
@@ -61,25 +69,24 @@ spec:
             - name: SPICEDB_DATASTORE_ENGINE
               value: postgres
             - name: SPICEDB_DATASTORE_CONN_URI
-              {{- if .Values.postgresql.enabled }}
-              value: "postgres://{{ .Values.strato.database.username }}:{{ .Values.postgresql.auth.password }}@{{ include "strato-control-plane.databaseHost" . }}:{{ .Values.strato.database.port }}/{{ .Values.strato.database.name }}?sslmode=disable"
-              {{- else }}
-              value: "postgres://{{ .Values.strato.database.username }}:{{ .Values.externalDatabase.password }}@{{ include "strato-control-plane.databaseHost" . }}:{{ .Values.strato.database.port }}/{{ .Values.strato.database.name }}?sslmode=disable"
-              {{- end }}
-            - name: SPICEDB_HTTP_ENABLED
-              value: "true"
-            - name: SPICEDB_DISPATCH_UPSTREAM_ADDR
-              value: "localhost:{{ .Values.spicedb.service.grpcPort }}"
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "strato-control-plane.fullname" . }}-spicedb
+                  key: datastore-conn-uri
           livenessProbe:
-            exec:
-              command: ["grpc_health_probe", "-addr=localhost:{{ .Values.spicedb.service.grpcPort }}"]
+            httpGet:
+              path: /healthz
+              port: 8080
             initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
           readinessProbe:
-            exec:
-              command: ["grpc_health_probe", "-addr=localhost:{{ .Values.spicedb.service.grpcPort }}"]
-            initialDelaySeconds: 5
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
             periodSeconds: 5
+            timeoutSeconds: 5
           {{- if .Values.spicedb.resources }}
           resources:
             {{- toYaml .Values.spicedb.resources | nindent 12 }}

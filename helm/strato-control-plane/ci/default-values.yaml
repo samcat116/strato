@@ -1,0 +1,62 @@
+# CI Test values for default configuration
+# This file tests the chart with minimal required changes for CI environment
+
+image:
+  repository: nginx  # Using nginx for CI tests since we don't build the real image
+  tag: "1.21"
+  pullPolicy: Always
+
+strato:
+  logLevel: debug
+  webauthn:
+    relyingPartyId: "ci-test.local"
+    relyingPartyName: "Strato CI Test"
+    relyingPartyOrigin: "http://ci-test.local:8080"
+
+spicedb:
+  enabled: true
+  presharedKey: "ci-test-spicedb-key"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+postgresql:
+  enabled: true
+  auth:
+    database: vapor_database
+    username: vapor_username
+    password: ci-test-db-password
+    postgresPassword: ci-postgres-password
+  primary:
+    persistence:
+      size: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Disable problematic init containers for CI
+initContainers:
+  waitForDB:
+    enabled: false
+  waitForSpiceDB:
+    enabled: false
+
+# Disable migration job for CI
+migration:
+  enabled: false

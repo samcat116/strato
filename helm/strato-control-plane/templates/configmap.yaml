@@ -6,26 +6,74 @@ metadata:
     {{- include "strato-control-plane.labels" . | nindent 4 }}
 data:
   spicedb-schema.zed: |
-    definition user {
-    }
+    // SpiceDB schema for Strato authorization
+    // Based on Google Zanzibar model
 
+    /** user represents a registered user account in the system */
+    definition user {}
+
+    /** organization represents a company or team that contains resources */
     definition organization {
+        /** admin users have full control over the organization */
         relation admin: user
+        
+        /** member users can access organization resources */
         relation member: user
-
-        permission create_vm = admin
+        
+        // Permissions
+        permission manage_vms = admin + member
+        permission view_organization = admin + member
+        permission create_organization = admin
+        permission update_organization = admin
+        permission delete_organization = admin
         permission manage_members = admin
-        permission view = member + admin
     }
 
-    definition vm {
-        relation owner: user
+    /** project represents a logical grouping of resources within an organization */
+    definition project {
+        /** organization that owns this project */
         relation organization: organization
+        
+        /** admin users have full control over the project */
+        relation admin: user
+        
+        /** member users can access project resources */
+        relation member: user
+        
+        // Permissions
+        permission manage_vms = admin + member + organization->admin
+        permission view_project = admin + member + organization->admin + organization->member
+        permission create_project = organization->admin
+        permission update_project = admin + organization->admin
+        permission delete_project = organization->admin
+    }
 
-        permission start = owner + organization->admin
-        permission stop = owner + organization->admin
-        permission restart = owner + organization->admin
+    /** virtual_machine represents a virtual machine instance */
+    definition virtual_machine {
+        /** owner is the user who created the VM */
+        relation owner: user
+        
+        /** organization that owns this VM */
+        relation organization: organization
+        
+        /** project that contains this VM */
+        relation project: project
+        
+        /** viewer can see VM details but not modify */
+        relation viewer: user
+        
+        /** editor can modify VM settings and control state */
+        relation editor: user
+        
+        // Permissions - combining direct relations and organization permissions
+        permission create = organization->manage_vms
+        permission read = owner + viewer + editor + organization->admin
+        permission update = owner + editor + organization->admin
         permission delete = owner + organization->admin
-        permission update = owner + organization->admin
-        permission read = owner + organization->member
+        permission start = owner + editor + organization->admin
+        permission stop = owner + editor + organization->admin
+        permission restart = owner + editor + organization->admin
+        permission pause = owner + editor + organization->admin
+        permission resume = owner + editor + organization->admin
+        permission view_console = owner + editor + organization->admin
     }

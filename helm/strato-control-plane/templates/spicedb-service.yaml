@@ -13,7 +13,7 @@ spec:
       protocol: TCP
       name: grpc
     - port: {{ .Values.spicedb.service.httpPort }}
-      targetPort: http
+      targetPort: 8080
       protocol: TCP
       name: http
     - port: {{ .Values.spicedb.service.metricsPort }}

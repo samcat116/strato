@@ -1,0 +1,55 @@
+# CI Test values for external database configuration
+# This file tests the chart with external PostgreSQL database
+
+image:
+  repository: nginx  # Using nginx for CI tests
+  tag: "1.21"
+  pullPolicy: Always
+
+strato:
+  logLevel: info
+  webauthn:
+    relyingPartyId: "strato-external-db.local"
+    relyingPartyName: "Strato External DB Test"
+    relyingPartyOrigin: "http://strato-external-db.local:8080"
+
+spicedb:
+  enabled: true
+  presharedKey: "external-db-test-spicedb-key"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Use external database instead of embedded PostgreSQL
+postgresql:
+  enabled: false
+
+externalDatabase:
+  host: postgres.example.com
+  port: 5432
+  database: vapor_database_external
+  username: vapor_user_external
+  password: external-db-password-change-me
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Disable init containers for CI
+initContainers:
+  waitForDB:
+    enabled: false
+  waitForSpiceDB:
+    enabled: false
+
+# Disable migration job for CI
+migration:
+  enabled: false

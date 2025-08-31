@@ -1,0 +1,86 @@
+# CI Test values for production-like configuration
+# This file tests the chart with production-ready settings
+
+image:
+  repository: nginx  # Using nginx for CI tests
+  tag: "1.21"
+  pullPolicy: Always
+
+strato:
+  logLevel: info  # Production log level
+  webauthn:
+    relyingPartyId: "strato-prod.example.com"
+    relyingPartyName: "Strato Production"
+    relyingPartyOrigin: "https://strato-prod.example.com"
+
+spicedb:
+  enabled: true
+  presharedKey: "prod-secure-spicedb-key-change-in-production"
+  replicaCount: 1  # Would be 2+ in real production
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  persistence:
+    enabled: true
+    size: 20Gi
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+postgresql:
+  enabled: true
+  auth:
+    database: vapor_database
+    username: vapor_username
+    password: secure-prod-db-password-change-me
+    postgresPassword: secure-postgres-admin-password
+  primary:
+    persistence:
+      enabled: true
+      size: 100Gi
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 2Gi
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+
+# Enable high availability features
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Enable security features
+networkPolicy:
+  enabled: true
+
+# Enable monitoring
+monitoring:
+  serviceMonitor:
+    enabled: false  # Would be true with Prometheus operator
+  metrics:
+    enabled: true
+
+# Disable problematic init containers for CI
+initContainers:
+  waitForDB:
+    enabled: false
+  waitForSpiceDB:
+    enabled: false
+
+# Disable migration job for CI
+migration:
+  enabled: false

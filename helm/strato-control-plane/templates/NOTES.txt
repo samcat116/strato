@@ -58,4 +58,37 @@
    - External WebSocket URL: ws://{{ .Values.strato.externalHostname }}:{{ .Values.service.port }}/agent/ws
    {{- end }}
 
+7. Health Checks:
+   - Control Plane Health: kubectl get pods -l app.kubernetes.io/name={{ include "strato-control-plane.name" . }}
+{{- if .Values.spicedb.enabled }}
+   - SpiceDB Health: kubectl get pods -l app.kubernetes.io/component=spicedb
+{{- end }}
+{{- if .Values.postgresql.enabled }}
+   - PostgreSQL Health: kubectl get pods -l app.kubernetes.io/name=postgresql
+{{- end }}
+
+8. Troubleshooting:
+   - View logs: kubectl logs -l app.kubernetes.io/name={{ include "strato-control-plane.name" . }}
+{{- if .Values.spicedb.enabled }}
+   - SpiceDB logs: kubectl logs -l app.kubernetes.io/component=spicedb
+{{- end }}
+   - Describe pod: kubectl describe pod -l app.kubernetes.io/name={{ include "strato-control-plane.name" . }}
+   - Check events: kubectl get events --sort-by=.metadata.creationTimestamp
+
+9. Configuration:
+   - Log Level: {{ .Values.strato.logLevel }}
+   - WebAuthn Relying Party: {{ .Values.strato.webauthn.relyingPartyId }}
+   - Resources:
+     * Control Plane CPU: {{ .Values.resources.requests.cpu }}/{{ .Values.resources.limits.cpu }}
+     * Control Plane Memory: {{ .Values.resources.requests.memory }}/{{ .Values.resources.limits.memory }}
+{{- if .Values.spicedb.enabled }}
+     * SpiceDB CPU: {{ .Values.spicedb.resources.requests.cpu }}/{{ .Values.spicedb.resources.limits.cpu }}
+     * SpiceDB Memory: {{ .Values.spicedb.resources.requests.memory }}/{{ .Values.spicedb.resources.limits.memory }}
+{{- end }}
+
 For more information about Strato, visit: https://github.com/samcat116/strato
+
+⚠️  SECURITY NOTICE: 
+   - Change default passwords in production
+   - Update SpiceDB preshared key: {{ .Values.spicedb.presharedKey }}
+   - Configure proper ingress/TLS for external access
