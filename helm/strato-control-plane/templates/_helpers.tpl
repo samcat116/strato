@@ -64,7 +64,7 @@ Get the database host
 */}}
 {{- define "strato-control-plane.databaseHost" -}}
 {{- if .Values.postgresql.enabled }}
-{{- printf "%s-postgresql" .Release.Name }}
+{{- printf "%s-postgresql" (include "strato-control-plane.fullname" .) }}
 {{- else }}
 {{- .Values.externalDatabase.host }}
 {{- end }}
@@ -75,7 +75,7 @@ Get the database password secret name
 */}}
 {{- define "strato-control-plane.databaseSecretName" -}}
 {{- if .Values.postgresql.enabled }}
-{{- printf "%s-postgresql" .Release.Name }}
+{{- printf "%s-postgresql" (include "strato-control-plane.fullname" .) }}
 {{- else }}
 {{- printf "%s-external-db" (include "strato-control-plane.fullname" .) }}
 {{- end }}

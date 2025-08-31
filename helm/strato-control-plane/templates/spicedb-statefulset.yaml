@@ -75,21 +75,15 @@ spec:
                   key: datastore-conn-uri
           livenessProbe:
             httpGet:
-              path: /v1/schema/read
+              path: /healthz
               port: 8080
-              httpHeaders:
-                - name: Authorization
-                  value: "Bearer $(SPICEDB_GRPC_PRESHARED_KEY)"
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
           readinessProbe:
             httpGet:
-              path: /v1/schema/read
+              path: /healthz
               port: 8080
-              httpHeaders:
-                - name: Authorization
-                  value: "Bearer $(SPICEDB_GRPC_PRESHARED_KEY)"
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 5

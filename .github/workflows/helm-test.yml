@@ -16,6 +16,9 @@ name: Helm Chart Tests
 # - Manual minikube/kind testing
 # - Dedicated Kubernetes test environments
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ main, develop ]
