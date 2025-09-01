@@ -259,15 +259,15 @@ WantedBy=multi-user.target
                             div(.class("border-b border-green-700")) {
                                 nav(.class("flex space-x-6")) {
                                     button(.class("py-2 px-1 border-b-2 border-transparent text-green-200 hover:text-green-100 font-medium text-sm tab-button active"),
-                                           .data("tab", value: "docker")) {
+                                           .custom(name: "data-tab", value: "docker")) {
                                         "🐳 Docker Compose"
                                     }
                                     button(.class("py-2 px-1 border-b-2 border-transparent text-green-200 hover:text-green-100 font-medium text-sm tab-button"),
-                                           .data("tab", value: "systemd")) {
+                                           .custom(name: "data-tab", value: "systemd")) {
                                         "⚙️ systemd"
                                     }
                                     button(.class("py-2 px-1 border-b-2 border-transparent text-green-200 hover:text-green-100 font-medium text-sm tab-button"),
-                                           .data("tab", value: "manual")) {
+                                           .custom(name: "data-tab", value: "manual")) {
                                         "💻 Manual"
                                     }
                                 }
@@ -281,11 +281,11 @@ WantedBy=multi-user.target
                                 }
                                 div(.class("flex space-x-2")) {
                                     button(.class("bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm copy-button"),
-                                           .data("copy-text", value: dockerComposeContent)) {
+                                           .custom(name: "data-copy-text", value: dockerComposeContent)) {
                                         "📋 Copy docker-compose.yml"
                                     }
                                     button(.class("bg-gray-600 hover:bg-gray-700 text-white px-3 py-1 rounded text-sm copy-button"),
-                                           .data("copy-text", value: "docker-compose up -d")) {
+                                           .custom(name: "data-copy-text", value: "docker-compose up -d")) {
                                         "📋 Copy run command"
                                     }
                                 }
@@ -299,11 +299,11 @@ WantedBy=multi-user.target
                                 }
                                 div(.class("flex space-x-2")) {
                                     button(.class("bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm copy-button"),
-                                           .data("copy-text", value: systemdContent)) {
+                                           .custom(name: "data-copy-text", value: systemdContent)) {
                                         "📋 Copy service file"
                                     }
                                     button(.class("bg-gray-600 hover:bg-gray-700 text-white px-3 py-1 rounded text-sm copy-button"),
-                                           .data("copy-text", value: "sudo systemctl enable --now strato-agent")) {
+                                           .custom(name: "data-copy-text", value: "sudo systemctl enable --now strato-agent")) {
                                         "📋 Copy enable command"
                                     }
                                 }
@@ -316,7 +316,7 @@ WantedBy=multi-user.target
                                     code { "strato-agent --registration-url \"\(tokenResponse.registrationURL)\"" }
                                 }
                                 button(.class("bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm copy-button"),
-                                       .data("copy-text", value: "strato-agent --registration-url \"\(tokenResponse.registrationURL)\"")) {
+                                       .custom(name: "data-copy-text", value: "strato-agent --registration-url \"\(tokenResponse.registrationURL)\"")) {
                                     "📋 Copy command"
                                 }
                             }
