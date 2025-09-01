@@ -33,34 +33,41 @@ class WebSocketClient {
         // Simulate connection delay
         try await Task.sleep(for: .milliseconds(500))
         
-        // Parse URL to extract registration token for validation
+        // Parse URL to validate format
         guard let parsedURL = URL(string: url) else {
             throw WebSocketClientError.invalidURL(url)
         }
         
-        // Extract query parameters
+        // Check if this is a registration URL or regular WebSocket URL
         let components = URLComponents(url: parsedURL, resolvingAgainstBaseURL: false)
-        guard let queryItems = components?.queryItems else {
-            throw WebSocketClientError.invalidURL("Missing registration token in URL")
-        }
+        let isRegistrationURL = components?.queryItems?.contains { $0.name == "token" } ?? false
         
-        let token = queryItems.first { $0.name == "token" }?.value
-        let agentName = queryItems.first { $0.name == "name" }?.value
-        
-        guard token != nil, agentName != nil else {
-            throw WebSocketClientError.invalidURL("Missing token or agent name in registration URL")
+        if isRegistrationURL {
+            // Validate registration URL format
+            guard let queryItems = components?.queryItems else {
+                throw WebSocketClientError.invalidURL("Missing query parameters in registration URL")
+            }
+            
+            let token = queryItems.first { $0.name == "token" }?.value
+            let agentName = queryItems.first { $0.name == "name" }?.value
+            
+            guard let token = token, let agentName = agentName, !token.isEmpty, !agentName.isEmpty else {
+                throw WebSocketClientError.invalidURL("Missing or empty token/name parameters in registration URL")
+            }
+            
+            logger.info("WebSocket connection established (registration mode)", metadata: [
+                "agentName": .string(agentName),
+                "hasToken": .string("yes")
+            ])
+            
+            logger.info("Agent registration successful (mock mode)")
+        } else {
+            // Regular WebSocket connection
+            logger.info("WebSocket connection established (regular mode)")
         }
         
         isConnected = true
         startHeartbeat()
-        
-        logger.info("WebSocket connection established (mock mode)", metadata: [
-            "agentName": .string(agentName ?? "unknown"),
-            "hasToken": .string(token != nil ? "yes" : "no")
-        ])
-        
-        // In mock mode, we simulate successful registration
-        logger.info("Agent registration successful (mock mode)")
     }
     
     func disconnect() async {

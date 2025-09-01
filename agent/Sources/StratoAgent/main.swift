@@ -2,7 +2,56 @@ import ArgumentParser
 import Foundation
 import Logging
 
-struct StratoAgent: AsyncParsableCommand {
+// Custom log handler that formats timestamps without timezone
+struct CustomLogHandler: LogHandler {
+    private let label: String
+    
+    var logLevel: Logger.Level = .info
+    var metadata: Logger.Metadata = [:]
+    
+    init(label: String) {
+        self.label = label
+    }
+    
+    subscript(metadataKey metadataKey: String) -> Logger.Metadata.Value? {
+        get { metadata[metadataKey] }
+        set { metadata[metadataKey] = newValue }
+    }
+    
+    func log(
+        level: Logger.Level,
+        message: Logger.Message,
+        metadata: Logger.Metadata?,
+        source: String,
+        file: String,
+        function: String,
+        line: UInt
+    ) {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        formatter.timeZone = TimeZone(abbreviation: "UTC")
+        let timestamp = formatter.string(from: Date())
+        
+        let logLevel = level.rawValue.uppercased()
+        let mergedMetadata = self.metadata.merging(metadata ?? [:]) { _, new in new }
+        
+        var output = "\(timestamp) \(logLevel) \(label) : "
+        
+        // Add metadata if present
+        if !mergedMetadata.isEmpty {
+            let metadataString = mergedMetadata.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+            output += "\(metadataString) "
+        }
+        
+        output += "[\(source)] \(message)"
+        
+        fputs(output, stderr)
+        fputs("\n", stderr)
+        fflush(stderr)
+    }
+}
+
+struct StratoAgent: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "strato-agent",
         abstract: "Strato hypervisor agent for managing VMs on QEMU",
@@ -30,8 +79,35 @@ struct StratoAgent: AsyncParsableCommand {
     @Flag(name: .long, help: "Enable debug mode")
     var debug: Bool = false
     
-    func run() async throws {
-        // Set up initial logging
+    func run() throws {
+        // Use RunLoop to run async code in sync context
+        let semaphore = DispatchSemaphore(value: 0)
+        var taskError: Error?
+        
+        Task {
+            do {
+                try await runAsync()
+            } catch {
+                taskError = error
+            }
+            semaphore.signal()
+        }
+        
+        semaphore.wait()
+        
+        if let error = taskError {
+            throw error
+        }
+    }
+    
+    func runAsync() async throws {
+        // Set up custom logging with clean timestamps (no timezone suffix)
+        LoggingSystem.bootstrap { label in
+            var handler = CustomLogHandler(label: label)
+            handler.logLevel = debug ? .debug : .info
+            return handler
+        }
+        
         var logger = Logger(label: "strato-agent")
         logger.logLevel = debug ? .debug : .info
         
@@ -49,8 +125,35 @@ struct StratoAgent: AsyncParsableCommand {
             config = AgentConfig.loadDefaultConfig(logger: logger)
         }
         
+        // Determine the WebSocket URL to use
+        let finalWebSocketURL: String
+        let isRegistrationMode: Bool
+        
+        if let regURL = registrationURL {
+            // Validate registration URL format
+            guard let url = URL(string: regURL),
+                  let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  let queryItems = components.queryItems,
+                  queryItems.contains(where: { $0.name == "token" }),
+                  queryItems.contains(where: { $0.name == "name" }) else {
+                logger.error("Invalid registration URL format. Must include 'token' and 'name' query parameters.")
+                logger.error("Expected format: ws://host:port/agent/register?token=TOKEN&name=AGENT_NAME")
+                throw ExitCode.failure
+            }
+            finalWebSocketURL = regURL
+            isRegistrationMode = true
+            logger.info("Using registration URL for initial agent registration")
+        } else {
+            // Use regular control plane URL
+            if let cpURL = controlPlaneURL {
+                finalWebSocketURL = cpURL
+            } else {
+                finalWebSocketURL = config.controlPlaneURL
+            }
+            isRegistrationMode = false
+        }
+        
         // Override config values with command-line arguments if provided
-        let finalControlPlaneURL = registrationURL ?? controlPlaneURL ?? config.controlPlaneURL
         let finalQemuSocketDir = qemuSocketDir ?? config.qemuSocketDir ?? "/var/run/qemu"
         let finalLogLevel = logLevel ?? config.logLevel ?? "info"
         let finalAgentID = agentID ?? ProcessInfo.processInfo.hostName
@@ -58,22 +161,19 @@ struct StratoAgent: AsyncParsableCommand {
         // Update log level based on final configuration
         logger.logLevel = debug ? .debug : Logger.Level(rawValue: finalLogLevel) ?? .info
         
-        if registrationURL != nil {
-            logger.info("Using registration URL for initial agent registration")
-        }
-        
         logger.info("Starting Strato Agent", metadata: [
             "agentID": .string(finalAgentID),
-            "controlPlaneURL": .string(finalControlPlaneURL),
+            "webSocketURL": .string(finalWebSocketURL),
             "qemuSocketDir": .string(finalQemuSocketDir),
             "logLevel": .string(finalLogLevel),
-            "usingRegistrationURL": .string(registrationURL != nil ? "yes" : "no")
+            "registrationMode": .string(isRegistrationMode ? "yes" : "no")
         ])
         
         let agent = Agent(
             agentID: finalAgentID,
-            controlPlaneURL: finalControlPlaneURL,
+            webSocketURL: finalWebSocketURL,
             qemuSocketDir: finalQemuSocketDir,
+            isRegistrationMode: isRegistrationMode,
             logger: logger
         )
         

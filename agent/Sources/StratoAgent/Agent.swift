@@ -6,8 +6,9 @@ import StratoShared
 
 actor Agent {
     private let agentID: String
-    private let controlPlaneURL: String
+    private let webSocketURL: String
     private let qemuSocketDir: String
+    private let isRegistrationMode: Bool
     private let logger: Logger
     
     private var websocketClient: WebSocketClient?
@@ -18,13 +19,15 @@ actor Agent {
     
     init(
         agentID: String,
-        controlPlaneURL: String,
+        webSocketURL: String,
         qemuSocketDir: String,
+        isRegistrationMode: Bool,
         logger: Logger
     ) {
         self.agentID = agentID
-        self.controlPlaneURL = controlPlaneURL
+        self.webSocketURL = webSocketURL
         self.qemuSocketDir = qemuSocketDir
+        self.isRegistrationMode = isRegistrationMode
         self.logger = logger
     }
     
@@ -48,8 +51,12 @@ actor Agent {
         logger.info("Initializing QEMU service")
         qemuService = QEMUService(logger: logger, networkService: networkService)
         
-        logger.info("Connecting to control plane", metadata: ["url": .string(controlPlaneURL)])
-        websocketClient = WebSocketClient(url: controlPlaneURL, agent: self, logger: logger)
+        if isRegistrationMode {
+            logger.info("Connecting for agent registration", metadata: ["url": .string(webSocketURL)])
+        } else {
+            logger.info("Connecting to control plane", metadata: ["url": .string(webSocketURL)])
+        }
+        websocketClient = WebSocketClient(url: webSocketURL, agent: self, logger: logger)
         
         try await websocketClient?.connect()
         
@@ -62,8 +69,10 @@ actor Agent {
         isRunning = true
         logger.info("Agent started successfully")
         
-        // Keep the agent running
-        try await Task.sleep(for: .seconds(Int.max))
+        // Keep the agent running indefinitely
+        while isRunning {
+            try await Task.sleep(for: .seconds(3600)) // Sleep for 1 hour at a time
+        }
     }
     
     func stop() async {
