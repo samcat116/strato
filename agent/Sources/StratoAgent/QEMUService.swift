@@ -6,7 +6,7 @@ import StratoShared
 import SwiftQEMU
 #endif
 
-class QEMUService {
+final class QEMUService: @unchecked Sendable {
     private let logger: Logger
     private weak var networkService: NetworkService?
     

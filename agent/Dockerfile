@@ -31,10 +31,11 @@ RUN swift package resolve \
 # Copy entire agent repo into container
 COPY ./agent .
 
-# Build the application, with optimizations and using jemalloc
+# Build the application statically, with optimizations and using jemalloc
 RUN swift build -c release \
     --product StratoAgent \
-    -Xlinker -ljemalloc
+    -Xlinker -ljemalloc \
+    -Xlinker -static-stdlib
 
 # Switch to the staging area
 WORKDIR /staging
@@ -82,8 +83,7 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     # libxml2 \
     && rm -r /var/lib/apt/lists/*
 
-# Copy Swift runtime libraries from build stage
-COPY --from=build /usr/lib/swift/linux/*.so /usr/lib/
+# No need to copy Swift runtime libraries with static compilation
 
 # Create a strato user and group with /app as its home directory
 RUN useradd --user-group --create-home --system --skel /dev/null --home-dir /app strato

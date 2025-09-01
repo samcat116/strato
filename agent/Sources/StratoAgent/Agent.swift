@@ -41,8 +41,10 @@ actor Agent {
         networkService = NetworkService(logger: logger)
         
         do {
-            try await networkService?.connect()
-            logger.info("Network service connected successfully")
+            if let service = networkService {
+                try await service.connect()
+                logger.info("Network service connected successfully")
+            }
         } catch {
             logger.warning("Failed to connect to network service: \(error.localizedDescription)")
             logger.warning("VM networking will be limited")
@@ -56,9 +58,11 @@ actor Agent {
         } else {
             logger.info("Connecting to control plane", metadata: ["url": .string(webSocketURL)])
         }
-        websocketClient = WebSocketClient(url: webSocketURL, agent: self, logger: logger)
+        websocketClient = await WebSocketClient(url: webSocketURL, agent: self, logger: logger)
         
-        try await websocketClient?.connect()
+        if let client = websocketClient {
+            try await client.connect()
+        }
         
         // Register with control plane
         try await registerWithControlPlane()
@@ -89,11 +93,15 @@ actor Agent {
             logger.error("Failed to unregister from control plane: \(error)")
         }
         
-        await websocketClient?.disconnect()
+        if let client = websocketClient {
+            await client.disconnect()
+        }
         websocketClient = nil
         qemuService = nil
         
-        await networkService?.disconnect()
+        if let service = networkService {
+            await service.disconnect()
+        }
         networkService = nil
         
         logger.info("Agent stopped")
@@ -109,7 +117,9 @@ actor Agent {
             resources: resources
         )
         
-        try await websocketClient?.sendMessage(message)
+        if let client = websocketClient {
+            try await client.sendMessage(message)
+        }
         logger.info("Registration message sent to control plane")
     }
     
@@ -119,7 +129,9 @@ actor Agent {
             reason: "Agent shutdown"
         )
         
-        try await websocketClient?.sendMessage(message)
+        if let client = websocketClient {
+            try await client.sendMessage(message)
+        }
         logger.info("Unregistration message sent to control plane")
     }
     
@@ -155,7 +167,9 @@ actor Agent {
             runningVMs: runningVMs
         )
         
-        try await websocketClient?.sendMessage(message)
+        if let client = websocketClient {
+            try await client.sendMessage(message)
+        }
         logger.debug("Heartbeat sent")
     }
     

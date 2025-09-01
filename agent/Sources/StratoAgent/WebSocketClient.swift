@@ -6,6 +6,7 @@ import NIOHTTP1
 import Logging
 import StratoShared
 
+@MainActor
 class WebSocketClient {
     private let url: String
     weak var agent: Agent?
@@ -115,7 +116,7 @@ class WebSocketClient {
     }
     
     private func startHeartbeat() {
-        heartbeatTask = Task {
+        heartbeatTask = Task { @MainActor in
             while !Task.isCancelled && isConnected {
                 do {
                     // Send heartbeat every 20 seconds

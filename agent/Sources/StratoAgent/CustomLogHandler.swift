@@ -44,6 +44,7 @@ struct CustomLogHandler: LogHandler {
         
         output += "[\(source)] \(message)"
         
-        fputs(output + "\n", stderr)
+        // Use FileHandle.standardError directly for concurrency safety
+        FileHandle.standardError.write(Data((output + "\n").utf8))
     }
 }
