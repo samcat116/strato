@@ -28,6 +28,38 @@ struct AgentManagementTemplate: HTMLDocument {
                     }
                 }
                 
+                // Quick Start Instructions
+                div(.class("bg-blue-900 border border-blue-700 rounded-lg p-6 mb-8")) {
+                    h2(.class("text-xl font-semibold mb-4 text-blue-200")) { "Quick Start: Add Your First Agent" }
+                    div(.class("text-blue-100 space-y-3 text-sm")) {
+                        div(.class("flex items-start space-x-2")) {
+                            span(.class("text-blue-400 font-bold")) { "1." }
+                            span { "Generate a registration token below with a descriptive agent name" }
+                        }
+                        div(.class("flex items-start space-x-2")) {
+                            span(.class("text-blue-400 font-bold")) { "2." }
+                            span { "Copy the registration command and run it on your hypervisor node" }
+                        }
+                        div(.class("flex items-start space-x-2")) {
+                            span(.class("text-blue-400 font-bold")) { "3." }
+                            span { "Monitor the agent status in the \"Registered Agents\" section below" }
+                        }
+                    }
+                    
+                    details(.class("mt-4")) {
+                        summary(.class("cursor-pointer text-blue-300 hover:text-blue-200 font-medium")) {
+                            "📋 Prerequisites & Requirements"
+                        }
+                        div(.class("mt-3 pl-4 space-y-2 text-sm text-blue-200")) {
+                            div { "• Linux system with KVM support (/dev/kvm accessible)" }
+                            div { "• Docker and Docker Compose installed" }
+                            div { "• Network connectivity to this control plane" }
+                            div { "• Minimum 2GB RAM, 2 CPU cores, 20GB disk space" }
+                            div { "• Root or sudo access for system configuration" }
+                        }
+                    }
+                }
+                
                 // Create Registration Token Section
                 div(.class("bg-gray-800 rounded-lg p-6 mb-8")) {
                     h2(.class("text-xl font-semibold mb-4")) { "Generate Registration Token" }
@@ -114,6 +146,95 @@ struct AgentManagementTemplate: HTMLDocument {
                         }
                     }
                 }
+            }
+            
+            script {
+                HTMLRaw("""
+                    document.addEventListener('DOMContentLoaded', function() {
+                        // Tab functionality for deployment options
+                        document.addEventListener('click', function(e) {
+                            if (e.target.classList.contains('tab-button')) {
+                                const targetTab = e.target.getAttribute('data-tab');
+                                const parentContainer = e.target.closest('.bg-green-900') || e.target.closest('.bg-blue-900');
+                                
+                                if (parentContainer) {
+                                    // Remove active class from all tab buttons in this container
+                                    parentContainer.querySelectorAll('.tab-button').forEach(btn => {
+                                        btn.classList.remove('active', 'border-green-400');
+                                        btn.classList.add('border-transparent');
+                                    });
+                                    
+                                    // Add active class to clicked button
+                                    e.target.classList.add('active', 'border-green-400');
+                                    e.target.classList.remove('border-transparent');
+                                    
+                                    // Hide all tab content in this container
+                                    parentContainer.querySelectorAll('.tab-content').forEach(content => {
+                                        content.classList.add('hidden');
+                                    });
+                                    
+                                    // Show target tab content
+                                    const targetContent = parentContainer.querySelector(`#${targetTab}-tab`);
+                                    if (targetContent) {
+                                        targetContent.classList.remove('hidden');
+                                    }
+                                }
+                            }
+                        });
+                        
+                        // Enhanced copy functionality with feedback
+                        document.addEventListener('click', function(e) {
+                            if (e.target.classList.contains('copy-button')) {
+                                const text = e.target.getAttribute('data-copy-text');
+                                if (text) {
+                                    if (navigator.clipboard) {
+                                        navigator.clipboard.writeText(text).then(() => {
+                                            showCopyFeedback(e.target, 'Copied!');
+                                        }).catch((err) => {
+                                            showCopyFeedback(e.target, 'Failed to copy', true);
+                                        });
+                                    } else {
+                                        // Fallback for browsers without clipboard API
+                                        const textArea = document.createElement('textarea');
+                                        textArea.value = text;
+                                        textArea.style.position = 'fixed';
+                                        textArea.style.opacity = '0';
+                                        document.body.appendChild(textArea);
+                                        textArea.select();
+                                        try {
+                                            document.execCommand('copy');
+                                            showCopyFeedback(e.target, 'Copied!');
+                                        } catch (err) {
+                                            showCopyFeedback(e.target, 'Failed to copy', true);
+                                        }
+                                        document.body.removeChild(textArea);
+                                    }
+                                }
+                            }
+                        });
+                        
+                        function showCopyFeedback(button, message, isError = false) {
+                            const originalText = button.textContent;
+                            const originalClasses = button.className;
+                            
+                            // Update button appearance
+                            button.textContent = message;
+                            if (isError) {
+                                button.className = button.className.replace(/bg-blue-\\d+|bg-gray-\\d+/, 'bg-red-600');
+                                button.className = button.className.replace(/hover:bg-blue-\\d+|hover:bg-gray-\\d+/, 'hover:bg-red-700');
+                            } else {
+                                button.className = button.className.replace(/bg-blue-\\d+|bg-gray-\\d+/, 'bg-green-600');
+                                button.className = button.className.replace(/hover:bg-blue-\\d+|hover:bg-gray-\\d+/, 'hover:bg-green-700');
+                            }
+                            
+                            // Reset after 2 seconds
+                            setTimeout(() => {
+                                button.textContent = originalText;
+                                button.className = originalClasses;
+                            }, 2000);
+                        }
+                    });
+                """)
             }
         }
     }
