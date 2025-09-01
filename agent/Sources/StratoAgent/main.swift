@@ -45,9 +45,7 @@ struct CustomLogHandler: LogHandler {
         
         output += "[\(source)] \(message)"
         
-        fputs(output, stderr)
-        fputs("\n", stderr)
-        fflush(stderr)
+        fputs(output + "\n", stderr)
     }
 }
 
