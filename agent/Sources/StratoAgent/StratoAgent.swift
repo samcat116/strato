@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import Logging
 
+@main
 struct StratoAgent: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "strato-agent",
@@ -31,7 +32,13 @@ struct StratoAgent: AsyncParsableCommand {
     var debug: Bool = false
     
     func run() async throws {
-        // Set up initial logging
+        // Set up custom logging with clean timestamps (no timezone suffix)
+        LoggingSystem.bootstrap { label in
+            var handler = CustomLogHandler(label: label)
+            handler.logLevel = debug ? .debug : .info
+            return handler
+        }
+        
         var logger = Logger(label: "strato-agent")
         logger.logLevel = debug ? .debug : .info
         
@@ -49,8 +56,35 @@ struct StratoAgent: AsyncParsableCommand {
             config = AgentConfig.loadDefaultConfig(logger: logger)
         }
         
+        // Determine the WebSocket URL to use
+        let finalWebSocketURL: String
+        let isRegistrationMode: Bool
+        
+        if let regURL = registrationURL {
+            // Validate registration URL format
+            guard let url = URL(string: regURL),
+                  let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  let queryItems = components.queryItems,
+                  queryItems.contains(where: { $0.name == "token" }),
+                  queryItems.contains(where: { $0.name == "name" }) else {
+                logger.error("Invalid registration URL format. Must include 'token' and 'name' query parameters.")
+                logger.error("Expected format: ws://host:port/agent/register?token=TOKEN&name=AGENT_NAME")
+                throw ExitCode.failure
+            }
+            finalWebSocketURL = regURL
+            isRegistrationMode = true
+            logger.info("Using registration URL for initial agent registration")
+        } else {
+            // Use regular control plane URL
+            if let cpURL = controlPlaneURL {
+                finalWebSocketURL = cpURL
+            } else {
+                finalWebSocketURL = config.controlPlaneURL
+            }
+            isRegistrationMode = false
+        }
+        
         // Override config values with command-line arguments if provided
-        let finalControlPlaneURL = registrationURL ?? controlPlaneURL ?? config.controlPlaneURL
         let finalQemuSocketDir = qemuSocketDir ?? config.qemuSocketDir ?? "/var/run/qemu"
         let finalLogLevel = logLevel ?? config.logLevel ?? "info"
         let finalAgentID = agentID ?? ProcessInfo.processInfo.hostName
@@ -58,22 +92,19 @@ struct StratoAgent: AsyncParsableCommand {
         // Update log level based on final configuration
         logger.logLevel = debug ? .debug : Logger.Level(rawValue: finalLogLevel) ?? .info
         
-        if registrationURL != nil {
-            logger.info("Using registration URL for initial agent registration")
-        }
-        
         logger.info("Starting Strato Agent", metadata: [
             "agentID": .string(finalAgentID),
-            "controlPlaneURL": .string(finalControlPlaneURL),
+            "webSocketURL": .string(finalWebSocketURL),
             "qemuSocketDir": .string(finalQemuSocketDir),
             "logLevel": .string(finalLogLevel),
-            "usingRegistrationURL": .string(registrationURL != nil ? "yes" : "no")
+            "registrationMode": .string(isRegistrationMode ? "yes" : "no")
         ])
         
         let agent = Agent(
             agentID: finalAgentID,
-            controlPlaneURL: finalControlPlaneURL,
+            webSocketURL: finalWebSocketURL,
             qemuSocketDir: finalQemuSocketDir,
+            isRegistrationMode: isRegistrationMode,
             logger: logger
         )
         
@@ -85,6 +116,3 @@ struct StratoAgent: AsyncParsableCommand {
         }
     }
 }
-
-// Entry point
-StratoAgent.main()
