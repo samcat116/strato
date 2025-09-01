@@ -97,7 +97,7 @@ struct DashboardTemplate: HTMLDocument {
             // Modal close on escape
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
-                    ['createOrgModal', 'apiKeysModal', 'createApiKeyModal', 'createVMModal'].forEach(modalId => hideModal(modalId));
+                    ['createOrgModal', 'apiKeysModal', 'createApiKeyModal', 'createVMModal', 'addAgentModal'].forEach(modalId => hideModal(modalId));
                 }
             });
 
@@ -266,6 +266,7 @@ struct AllModals: HTML {
         APIKeysModal()
         CreateAPIKeyModal()
         CreateVMModal()
+        AddAgentModal()
     }
 }
 
@@ -678,7 +679,7 @@ struct DashboardSidebarSection: HTML {
                     icon: "🖥️",
                     isExpanded: false
                 ) {
-                    NodesPlaceholder()
+                    NodesSection()
                 }
                 
                 CollapsibleSection(
@@ -781,20 +782,41 @@ struct NetworkingPlaceholder: HTML {
     }
 }
 
-struct NodesPlaceholder: HTML {
+struct NodesSection: HTML {
     var content: some HTML {
         div(.class("ml-6 space-y-2")) {
-            div(.class("text-xs text-gray-500 text-center py-3")) {
-                "Hypervisor nodes..."
-            }
+            // Quick Stats
             div(.class("space-y-1")) {
-                div(.class("flex items-center justify-between p-2 bg-gray-800 rounded text-sm hover:bg-gray-700")) {
-                    span(.class("text-gray-300")) { "Connected Nodes" }
-                    span(.class("text-xs text-green-400")) { "Active" }
+                div(
+                    .id("agent-stats"),
+                    .class("space-y-1"),
+                    .custom(name: "hx-get", value: "/htmx/agents/stats"),
+                    .custom(name: "hx-trigger", value: "load, every 30s"),
+                    .custom(name: "hx-swap", value: "innerHTML")
+                ) {
+                    div(.class("flex items-center justify-between p-2 bg-gray-800 rounded text-sm")) {
+                        span(.class("text-gray-300")) { "Connected Agents" }
+                        span(.class("text-xs text-gray-500")) { "Loading..." }
+                    }
                 }
-                div(.class("flex items-center justify-between p-2 bg-gray-800 rounded text-sm hover:bg-gray-700")) {
-                    span(.class("text-gray-300")) { "Agents Running" }
-                    span(.class("text-xs text-gray-500")) { "1" }
+            }
+            
+            // Action buttons
+            div(.class("space-y-1 mt-3")) {
+                a(
+                    .class("flex items-center space-x-2 p-2 text-sm text-blue-400 hover:bg-gray-800 hover:text-blue-300 rounded transition-colors"),
+                    .href("/agents")
+                ) {
+                    span(.class("text-blue-500")) { "⚙️" }
+                    span { "Manage Agents" }
+                }
+                
+                button(
+                    .class("w-full flex items-center space-x-2 p-2 text-sm text-green-400 hover:bg-gray-800 hover:text-green-300 rounded transition-colors text-left"),
+                    .custom(name: "onclick", value: "showModal('addAgentModal')")
+                ) {
+                    span(.class("text-green-500")) { "+" }
+                    span { "Add New Agent" }
                 }
             }
         }
@@ -859,6 +881,69 @@ struct DashboardContentSection: HTML {
                         div(
                             .id("terminal"), .class("border border-gray-600 rounded h-96 bg-gray-900")
                         ) {}
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct AddAgentModal: HTML {
+    var content: some HTML {
+        div(
+            .id("addAgentModal"),
+            .class("fixed inset-0 bg-black bg-opacity-60 hidden flex items-center justify-center z-50")
+        ) {
+            div(.class("bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full mx-4 border border-gray-600")) {
+                div(.class("px-6 py-4 border-b border-gray-700")) {
+                    div(.class("flex justify-between items-center")) {
+                        h3(.class("text-lg font-medium text-gray-100")) {
+                            "Add New Agent"
+                        }
+                        button(
+                            .class("text-gray-400 hover:text-gray-200 transition-colors"),
+                            .custom(name: "onclick", value: "hideModal('addAgentModal')")
+                        ) {
+                            "✕"
+                        }
+                    }
+                }
+                div(.class("px-6 py-4")) {
+                    div(.class("space-y-4")) {
+                        div(.class("bg-gray-700 border border-gray-600 rounded-lg p-4")) {
+                            h4(.class("text-md font-medium text-gray-200 mb-2")) {
+                                "Quick Setup"
+                            }
+                            p(.class("text-sm text-gray-400 mb-3")) {
+                                "Generate a registration token and get the command to add a new agent to your cluster."
+                            }
+                            a(
+                                .href("/agents"),
+                                .class("inline-block bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium transition-colors")
+                            ) {
+                                "Go to Agent Management →"
+                            }
+                        }
+                        
+                        div(.class("border-t border-gray-600 pt-4")) {
+                            h4(.class("text-md font-medium text-gray-200 mb-3")) {
+                                "Prerequisites"
+                            }
+                            ul(.class("text-sm text-gray-400 space-y-2 list-disc list-inside")) {
+                                li { "Linux system with KVM support (/dev/kvm accessible)" }
+                                li { "Docker and Docker Compose installed" }
+                                li { "Network connectivity to this control plane" }
+                                li { "Sufficient resources (CPU, RAM, disk) for VMs" }
+                            }
+                        }
+                    }
+                }
+                div(.class("px-6 py-4 border-t border-gray-700 flex justify-end")) {
+                    button(
+                        .class("bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded text-sm font-medium transition-colors"),
+                        .custom(name: "onclick", value: "hideModal('addAgentModal')")
+                    ) {
+                        "Close"
                     }
                 }
             }
