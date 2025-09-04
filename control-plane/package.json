@@ -27,7 +27,7 @@
     "eslint": "^9.0.0"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^1.0.31",
+    "@anthropic-ai/claude-code": "^1.0.88",
     "@xterm/xterm": "^5.5.0"
   }
 }
