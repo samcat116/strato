@@ -102,6 +102,14 @@ extension User {
             .first()
     }
 
+    /// Find a user by OIDC subject and provider ID
+    static func findOIDCUser(subject: String, providerID: UUID, on database: Database) async throws -> User? {
+        return try await User.query(on: database)
+            .filter(\.$oidcSubject == subject)
+            .filter(\.$oidcProvider.$id == providerID)
+            .first()
+    }
+
     /// Get all groups this user belongs to within a specific organization
     func getGroupsInOrganization(_ organizationID: UUID, on db: Database) async throws -> [Group] {
         return try await self.$groups.query(on: db)
