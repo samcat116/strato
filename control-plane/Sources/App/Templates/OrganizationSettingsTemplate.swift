@@ -171,7 +171,7 @@ struct OrganizationSettingsTemplate: HTMLDocument {
                                             <p class="text-sm text-gray-500">Status: ${provider.enabled ? 'Enabled' : 'Disabled'}</p>
                                             <div class="mt-2 p-2 bg-gray-50 rounded text-xs">
                                                 <strong>Redirect URI:</strong><br>
-                                                <code class="text-gray-700">${window.location.origin}/auth/oidc/\(organization.id?.uuidString ?? "ORG_ID")/${provider.id}/callback</code>
+                                                <code class="text-gray-700">${window.location.origin}/auth/oidc/${orgId}/${provider.id}/callback</code>
                                             </div>
                                         </div>
                                         <div class="space-x-2 flex-shrink-0">
