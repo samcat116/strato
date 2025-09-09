@@ -50,6 +50,15 @@ struct OrganizationSettingsTemplate: HTMLDocument {
                             case 'saveOIDCProvider':
                                 saveOIDCProvider();
                                 break;
+                            case 'showEditProviderForm':
+                                showEditProviderForm();
+                                break;
+                            case 'hideEditProviderForm':
+                                hideEditProviderForm();
+                                break;
+                            case 'updateOIDCProvider':
+                                updateOIDCProvider();
+                                break;
                         }
                     }
                 });
@@ -155,12 +164,17 @@ struct OrganizationSettingsTemplate: HTMLDocument {
                             providersList.innerHTML = providers.map(provider => 
                                 `<div class="border rounded-lg p-4 mb-4">
                                     <div class="flex justify-between items-center">
-                                        <div>
+                                        <div class="flex-1">
                                             <h4 class="font-medium text-gray-900">${provider.name}</h4>
                                             <p class="text-sm text-gray-500">Client ID: ${provider.clientID}</p>
+                                            <p class="text-sm text-gray-500">Provider ID: ${provider.id}</p>
                                             <p class="text-sm text-gray-500">Status: ${provider.enabled ? 'Enabled' : 'Disabled'}</p>
+                                            <div class="mt-2 p-2 bg-gray-50 rounded text-xs">
+                                                <strong>Redirect URI:</strong><br>
+                                                <code class="text-gray-700">${window.location.origin}/auth/oidc/${orgId}/${provider.id}/callback</code>
+                                            </div>
                                         </div>
-                                        <div class="space-x-2">
+                                        <div class="space-x-2 flex-shrink-0">
                                             <button onclick="editProvider('${provider.id}')" class="text-indigo-600 hover:text-indigo-900" aria-label="Edit ${provider.name} OIDC provider">Edit</button>
                                             <button onclick="deleteProvider('${provider.id}')" class="text-red-600 hover:text-red-900" aria-label="Delete ${provider.name} OIDC provider">Delete</button>
                                         </div>
@@ -186,8 +200,32 @@ struct OrganizationSettingsTemplate: HTMLDocument {
             }
 
             function editProvider(providerId) {
-                // TODO: Implement edit provider functionality
-                showSuccess('Edit provider functionality coming soon');
+                // Load provider details first
+                const orgId = '\(organization.id?.uuidString ?? "")';
+                
+                fetch(`/api/organizations/${orgId}/oidc-providers/${providerId}`)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Failed to load provider details');
+                        }
+                        return response.json();
+                    })
+                    .then(provider => {
+                        // Populate edit form with existing values
+                        document.getElementById('edit-provider-id').value = provider.id;
+                        document.getElementById('edit-name').value = provider.name;
+                        document.getElementById('edit-clientID').value = provider.clientID;
+                        document.getElementById('edit-clientSecret').value = ''; // Always blank for security
+                        document.getElementById('edit-discoveryURL').value = provider.discoveryURL || '';
+                        document.getElementById('edit-enabled').checked = provider.enabled;
+                        
+                        // Show edit form
+                        showEditProviderForm();
+                    })
+                    .catch(error => {
+                        console.error('Error loading provider:', error);
+                        showError('Failed to load provider details');
+                    });
             }
 
             function deleteProvider(providerId) {
@@ -328,6 +366,90 @@ struct OrganizationSettingsTemplate: HTMLDocument {
                 .catch(error => {
                     console.error('Error saving provider:', error);
                     showError(error.message || 'Failed to save OIDC provider');
+                });
+            }
+
+            function showEditProviderForm() {
+                // Hide other sections
+                document.getElementById('provider-form-section').style.display = 'none';
+                document.getElementById('add-provider-button').style.display = 'none';
+                
+                // Show edit form
+                document.getElementById('edit-provider-form-section').style.display = 'block';
+            }
+
+            function hideEditProviderForm() {
+                document.getElementById('edit-provider-form-section').style.display = 'none';
+                document.getElementById('add-provider-button').style.display = 'block';
+                
+                // Clear form
+                document.getElementById('edit-oidc-provider-form').reset();
+            }
+
+            function updateOIDCProvider() {
+                const form = document.getElementById('edit-oidc-provider-form');
+                const formData = new FormData(form);
+                const providerId = document.getElementById('edit-provider-id').value;
+                
+                if (!providerId) {
+                    showError('Provider ID is missing');
+                    return;
+                }
+
+                const data = {
+                    name: formData.get('name'),
+                    clientID: formData.get('clientID'),
+                    discoveryURL: formData.get('discoveryURL'),
+                    enabled: formData.get('enabled') === 'on'
+                };
+
+                // Only include client secret if it's not empty
+                const clientSecret = formData.get('clientSecret');
+                if (clientSecret && clientSecret.trim() !== '') {
+                    data.clientSecret = clientSecret;
+                }
+
+                const orgId = '\(organization.id?.uuidString ?? "")';
+                
+                fetch(`/api/organizations/${orgId}/oidc-providers/${providerId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                })
+                .then(response => {
+                    if (response.ok) {
+                        showSuccess('OIDC provider updated successfully');
+                        hideEditProviderForm();
+                        loadOIDCProviders();
+                    } else {
+                        return response.text().then(text => {
+                            let errorMessage = 'Failed to update OIDC provider';
+                            try {
+                                const errorData = JSON.parse(text);
+                                if (errorData.error && errorData.error.reason) {
+                                    errorMessage = errorData.error.reason;
+                                } else if (errorData.reason) {
+                                    errorMessage = errorData.reason;
+                                }
+                            } catch (parseError) {
+                                console.warn('Unstructured error response:', text);
+                                if (text.includes('Discovery URL')) {
+                                    errorMessage = 'Invalid discovery URL provided';
+                                } else if (text.includes('endpoint')) {
+                                    errorMessage = 'Invalid endpoint URL provided';
+                                } else if (text.includes('not in the allowed list')) {
+                                    errorMessage = 'Discovery URL host is not allowed for security reasons';
+                                }
+                            }
+                            throw new Error(errorMessage);
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error updating provider:', error);
+                    showError(error.message || 'Failed to update OIDC provider');
                 });
             }
         </script>
@@ -598,6 +720,122 @@ struct OIDCSettingsSection: HTML {
                                 .class("inline-flex justify-center rounded-md border border-transparent bg-indigo-600 py-2 px-4 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2")
                             ) {
                                 "Save Provider"
+                            }
+                        }
+                    }
+                }
+
+                // Edit Provider Form (hidden by default)
+                div(.class("mt-6"), .id("edit-provider-form-section"), .style("display: none;")) {
+                    div(.class("border-l-4 border-indigo-400 bg-indigo-50 p-4 mb-4")) {
+                        div(.class("flex")) {
+                            div(.class("ml-3")) {
+                                h3(.class("text-sm font-medium text-indigo-800")) {
+                                    "Edit OIDC Provider"
+                                }
+                                p(.class("mt-2 text-sm text-indigo-700")) {
+                                    "Update the configuration for your OIDC provider."
+                                }
+                            }
+                        }
+                    }
+
+                    form(.id("edit-oidc-provider-form")) {
+                        input(.type(.hidden), .id("edit-provider-id"))
+                        
+                        div(.class("grid grid-cols-1 gap-6")) {
+                            // Provider Name
+                            div {
+                                label(.for("edit-name"), .class("block text-sm font-medium text-gray-700")) {
+                                    "Provider Name"
+                                }
+                                input(
+                                    .type(.text),
+                                    .name("name"),
+                                    .id("edit-name"),
+                                    .required,
+                                    .class("mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"),
+                                    .placeholder("e.g., Azure AD, Google Workspace, Okta")
+                                )
+                            }
+
+                            // Client ID
+                            div {
+                                label(.for("edit-clientID"), .class("block text-sm font-medium text-gray-700")) {
+                                    "Client ID"
+                                }
+                                input(
+                                    .type(.text),
+                                    .name("clientID"),
+                                    .id("edit-clientID"),
+                                    .required,
+                                    .class("mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"),
+                                    .placeholder("Client ID from your OIDC provider")
+                                )
+                            }
+
+                            // Client Secret
+                            div {
+                                label(.for("edit-clientSecret"), .class("block text-sm font-medium text-gray-700")) {
+                                    "Client Secret"
+                                }
+                                input(
+                                    .type(.password),
+                                    .name("clientSecret"),
+                                    .id("edit-clientSecret"),
+                                    .class("mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"),
+                                    .placeholder("Leave blank to keep existing secret")
+                                )
+                                p(.class("mt-2 text-xs text-gray-500")) {
+                                    "Leave blank to keep the current client secret unchanged."
+                                }
+                            }
+
+                            // Discovery URL
+                            div {
+                                label(.for("edit-discoveryURL"), .class("block text-sm font-medium text-gray-700")) {
+                                    "Discovery URL"
+                                }
+                                input(
+                                    .type(.url),
+                                    .name("discoveryURL"),
+                                    .id("edit-discoveryURL"),
+                                    .class("mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"),
+                                    .placeholder("https://provider.com/.well-known/openid-configuration")
+                                )
+                            }
+
+                            // Enabled Toggle
+                            div {
+                                div(.class("flex items-center")) {
+                                    input(
+                                        .type(.checkbox),
+                                        .name("enabled"),
+                                        .id("edit-enabled"),
+                                        .class("h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded")
+                                    )
+                                    label(.for("edit-enabled"), .class("ml-2 block text-sm text-gray-900")) {
+                                        "Enable this provider"
+                                    }
+                                }
+                            }
+                        }
+
+                        // Form Actions
+                        div(.class("mt-6 flex justify-end space-x-3")) {
+                            button(
+                                .type(.button),
+                                .data("action", value: "hideEditProviderForm"),
+                                .class("inline-flex justify-center rounded-md border border-gray-300 bg-white py-2 px-4 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2")
+                            ) {
+                                "Cancel"
+                            }
+                            button(
+                                .type(.button),
+                                .data("action", value: "updateOIDCProvider"),
+                                .class("inline-flex justify-center rounded-md border border-transparent bg-indigo-600 py-2 px-4 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2")
+                            ) {
+                                "Update Provider"
                             }
                         }
                     }

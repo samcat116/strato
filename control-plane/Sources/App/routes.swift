@@ -79,8 +79,27 @@ func routes(_ app: Application) throws {
     }
 
     // Authentication views
-    app.get("login") { _ -> Response in
-        let html = LoginTemplate().render()
+    app.get("login") { req async throws -> Response in
+        // Fetch all enabled OIDC providers from all organizations
+        let oidcProviders = try await OIDCProvider.query(on: req.db)
+            .filter(\.$enabled == true)
+            .with(\.$organization)
+            .all()
+
+        let providerInfos: [OIDCProviderInfo] = oidcProviders.compactMap { provider in
+            guard let providerID = provider.id,
+                  let organizationID = provider.organization.id else {
+                return nil
+            }
+            return OIDCProviderInfo(
+                providerID: providerID,
+                providerName: provider.name,
+                organizationID: organizationID,
+                organizationName: provider.organization.name
+            )
+        }
+
+        let html = LoginTemplate(oidcProviders: providerInfos).render()
         return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
     }
 

@@ -148,7 +148,10 @@ struct VMController: RouteCollection {
         try await vm.save(on: req.db)
 
         // Generate unique paths and configurations using the generated ID
-        vm.diskPath = template.generateDiskPath(for: vm.id!)
+        guard let vmID = vm.id else {
+            throw Abort(.internalServerError, reason: "VM ID is required after saving")
+        }
+        vm.diskPath = template.generateDiskPath(for: vmID)
         vm.macAddress = template.generateMacAddress()
         vm.kernelPath = template.kernelPath
         vm.initramfsPath = template.initramfsPath
@@ -156,8 +159,8 @@ struct VMController: RouteCollection {
         vm.cmdline = vm.cmdline ?? template.defaultCmdline
 
         // Set up console sockets
-        vm.consoleSocket = "/tmp/vm-\(vm.id!.uuidString)-console.sock"
-        vm.serialSocket = "/tmp/vm-\(vm.id!.uuidString)-serial.sock"
+        vm.consoleSocket = "/tmp/vm-\(vmID.uuidString)-console.sock"
+        vm.serialSocket = "/tmp/vm-\(vmID.uuidString)-serial.sock"
 
         // Update VM with generated paths
         try await vm.update(on: req.db)
