@@ -2,7 +2,6 @@ import Fluent
 import Vapor
 @preconcurrency import JWT
 import Crypto
-import _CryptoExtras
 import Foundation
 
 struct OIDCController: RouteCollection {
@@ -868,14 +867,8 @@ struct JWK: Codable {
         let modulusData = try base64URLDecode(n)
         let exponentData = try base64URLDecode(e)
         
-        // Create RSA public key using SwiftCrypto
-        let publicKey = try _RSA.Signing.PublicKey(
-            n: modulusData,
-            e: exponentData
-        )
-        
-        // Convert to PEM format for RSAKey
-        let derData = publicKey.derRepresentation
+        // Create DER representation manually since we can't use internal APIs
+        let derData = try createRSAPublicKeyDER(modulus: modulusData, exponent: exponentData)
         let base64String = derData.base64EncodedString()
         
         // Format as PEM
@@ -888,6 +881,83 @@ struct JWK: Codable {
         
         let pemString = "\(pemHeader)\n\(pemBody)\n\(pemFooter)"
         return try RSAKey.public(pem: pemString)
+    }
+    
+    private func createRSAPublicKeyDER(modulus: Data, exponent: Data) throws -> Data {
+        // RSA Public Key DER format:
+        // SEQUENCE {
+        //   SEQUENCE {
+        //     OBJECT IDENTIFIER rsaEncryption
+        //     NULL
+        //   }
+        //   BIT STRING {
+        //     SEQUENCE {
+        //       INTEGER modulus
+        //       INTEGER exponent  
+        //     }
+        //   }
+        // }
+        
+        // RSA encryption OID: 1.2.840.113549.1.1.1
+        let rsaOID = Data([0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00])
+        
+        // Build inner SEQUENCE with modulus and exponent
+        var innerSequence = Data()
+        innerSequence.append(encodeASN1Integer(modulus))
+        innerSequence.append(encodeASN1Integer(exponent))
+        let innerSequenceData = encodeASN1Sequence(innerSequence)
+        
+        // Build BIT STRING containing the inner sequence
+        var bitString = Data([0x00]) // unused bits = 0
+        bitString.append(innerSequenceData)
+        let bitStringData = encodeASN1BitString(bitString)
+        
+        // Build outer SEQUENCE
+        var outerSequence = Data()
+        outerSequence.append(rsaOID)
+        outerSequence.append(bitStringData)
+        
+        return encodeASN1Sequence(outerSequence)
+    }
+    
+    private func encodeASN1Integer(_ data: Data) -> Data {
+        var result = Data([0x02]) // INTEGER tag
+        var integerData = data
+        
+        // Add leading zero if first bit is set (to ensure positive number)
+        if let firstByte = integerData.first, firstByte & 0x80 != 0 {
+            integerData.insert(0x00, at: 0)
+        }
+        
+        result.append(encodeASN1Length(integerData.count))
+        result.append(integerData)
+        return result
+    }
+    
+    private func encodeASN1Sequence(_ data: Data) -> Data {
+        var result = Data([0x30]) // SEQUENCE tag
+        result.append(encodeASN1Length(data.count))
+        result.append(data)
+        return result
+    }
+    
+    private func encodeASN1BitString(_ data: Data) -> Data {
+        var result = Data([0x03]) // BIT STRING tag
+        result.append(encodeASN1Length(data.count))
+        result.append(data)
+        return result
+    }
+    
+    private func encodeASN1Length(_ length: Int) -> Data {
+        if length < 0x80 {
+            return Data([UInt8(length)])
+        } else {
+            let lengthBytes = withUnsafeBytes(of: length.bigEndian) { Data($0) }
+                .drop { $0 == 0 }
+            var result = Data([0x80 | UInt8(lengthBytes.count)])
+            result.append(lengthBytes)
+            return result
+        }
     }
     
     private func base64URLDecode(_ string: String) throws -> Data {

@@ -53,7 +53,6 @@ let package = Package(
                 .product(name: "JWT", package: "jwt"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Crypto", package: "swift-crypto"),
-                .product(name: "_CryptoExtras", package: "swift-crypto"),
                 .product(name: "OpenAPIVapor", package: "swift-openapi-vapor"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime")
             ],
