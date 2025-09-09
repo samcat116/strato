@@ -26,7 +26,8 @@ struct LoginTemplate: HTMLDocument {
     }
 }
 
-struct OIDCProviderInfo {
+struct OIDCProviderInfo: Identifiable {
+    var id: UUID { providerID }
     let providerID: UUID
     let providerName: String
     let organizationID: UUID

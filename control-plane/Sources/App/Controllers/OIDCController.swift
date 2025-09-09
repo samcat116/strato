@@ -2,6 +2,7 @@ import Fluent
 import Vapor
 @preconcurrency import JWT
 import Crypto
+import _CryptoExtras
 import Foundation
 
 struct OIDCController: RouteCollection {
@@ -857,14 +858,14 @@ struct JWK: Codable {
         let modulusData = try base64URLDecode(n)
         let exponentData = try base64URLDecode(e)
         
-        // Create the public key using CryptoKit and convert to PEM
-        let pemString = try createPEMFromComponents(modulus: modulusData, exponent: exponentData)
-        return try RSAKey.public(pem: pemString)
-    }
-    
-    private func createPEMFromComponents(modulus: Data, exponent: Data) throws -> String {
-        // Create ASN.1 DER encoding for RSA public key
-        let derData = try createDERFromComponents(modulus: modulus, exponent: exponent)
+        // Create RSA public key using SwiftCrypto
+        let publicKey = try _RSA.Signing.PublicKey(
+            n: modulusData,
+            e: exponentData
+        )
+        
+        // Convert to PEM format for RSAKey
+        let derData = publicKey.derRepresentation
         let base64String = derData.base64EncodedString()
         
         // Format as PEM
@@ -875,57 +876,8 @@ struct JWK: Codable {
         let chunks = base64String.chunked(into: 64)
         let pemBody = chunks.joined(separator: "\n")
         
-        return "\(pemHeader)\n\(pemBody)\n\(pemFooter)"
-    }
-    
-    private func createDERFromComponents(modulus: Data, exponent: Data) throws -> Data {
-        // Create the RSA public key structure in ASN.1 DER format
-        // This is a simplified version - for production, consider using a proper ASN.1 library
-        
-        var result = Data()
-        
-        // SEQUENCE tag and length for the entire structure
-        let modulusInteger = try createDERInteger(modulus)
-        let exponentInteger = try createDERInteger(exponent)
-        let keySequence = modulusInteger + exponentInteger
-        
-        result.append(0x30) // SEQUENCE tag
-        result.append(contentsOf: encodeDERLength(keySequence.count))
-        result.append(keySequence)
-        
-        // Wrap in another SEQUENCE with algorithm identifier
-        let rsaOID = Data([0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00])
-        let bitString = Data([0x03]) + encodeDERLength(result.count + 1) + Data([0x00]) + result
-        
-        let fullSequence = rsaOID + bitString
-        return Data([0x30]) + encodeDERLength(fullSequence.count) + fullSequence
-    }
-    
-    private func createDERInteger(_ data: Data) throws -> Data {
-        var intData = data
-        // Remove leading zeros
-        while intData.first == 0 && intData.count > 1 {
-            intData.removeFirst()
-        }
-        // Add leading zero if high bit is set (to keep it positive)
-        if let first = intData.first, first & 0x80 != 0 {
-            intData.insert(0x00, at: 0)
-        }
-        
-        return Data([0x02]) + encodeDERLength(intData.count) + intData
-    }
-    
-    private func encodeDERLength(_ length: Int) -> Data {
-        if length < 0x80 {
-            return Data([UInt8(length)])
-        } else if length < 0x100 {
-            return Data([0x81, UInt8(length)])
-        } else if length < 0x10000 {
-            return Data([0x82, UInt8(length >> 8), UInt8(length & 0xff)])
-        } else {
-            // For longer lengths, you'd need more bytes
-            fatalError("Length too long for this implementation")
-        }
+        let pemString = "\(pemHeader)\n\(pemBody)\n\(pemFooter)"
+        return try RSAKey.public(pem: pemString)
     }
     
     private func base64URLDecode(_ string: String) throws -> Data {
