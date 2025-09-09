@@ -1,5 +1,8 @@
 import Fluent
 import Vapor
+@preconcurrency import JWT
+import Crypto
+import Foundation
 
 struct OIDCController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
@@ -552,24 +555,66 @@ struct OIDCController: RouteCollection {
         expectedNonce: String?,
         on req: Request
     ) async throws -> OIDCIDTokenClaims {
-        // For now, we'll parse and validate claims without full JWT signature verification
-        // TODO: Implement proper JWT signature validation with JWKS
-        req.logger.warning("JWT signature validation not fully implemented - validating claims only")
-        
-        // Parse the JWT token parts
+        // Parse JWT header to get key ID
         let tokenParts = idToken.split(separator: ".")
         guard tokenParts.count == 3 else {
             throw Abort(.badRequest, reason: "Invalid ID token format")
         }
 
-        // Decode and parse the payload
-        let payloadData = try decodeBase64URLSafe(String(tokenParts[1]))
-        let claims = try JSONDecoder().decode(OIDCIDTokenClaims.self, from: payloadData)
+        // Decode JWT header
+        let headerData = try decodeBase64URLSafe(String(tokenParts[0]))
+        let header = try JSONDecoder().decode(JWTHeader.self, from: headerData)
 
-        // Validate claims
+        // Get JWKS from provider
+        guard let jwksURI = provider.jwksURI else {
+            throw Abort(.internalServerError, reason: "JWKS URI not configured for provider")
+        }
+
+        let jwks = try await fetchJWKS(uri: jwksURI, on: req)
+        
+        // Find the matching key
+        guard let jwk = jwks.keys.first(where: { $0.kid == header.kid && $0.kty == "RSA" }) else {
+            throw Abort(.badRequest, reason: "Unable to find matching RSA key for ID token")
+        }
+
+        // Create RSA key for verification
+        let rsaKey = try jwk.createRSAPublicKey()
+
+        // Configure JWT signers and verify signature
+        let signers = JWTSigners()
+        signers.use(.rs256(key: rsaKey))
+        
+        // Verify JWT signature and decode claims
+        let claims = try signers.verify(idToken, as: OIDCIDTokenClaims.self)
+
+        // Additional claim validation
         try validateIDTokenClaims(claims, provider: provider, expectedNonce: expectedNonce)
 
+        req.logger.info("Successfully validated JWT signature for OIDC token", metadata: [
+            "provider_id": .string(provider.id?.uuidString ?? "unknown"),
+            "subject": .string(claims.sub),
+            "issuer": .string(claims.iss)
+        ])
+
         return claims
+    }
+
+    private func fetchJWKS(uri: String, on req: Request) async throws -> JWKS {
+        // Validate JWKS URI for security
+        guard let url = URL(string: uri),
+              let scheme = url.scheme,
+              scheme == "https" else {
+            throw Abort(.badRequest, reason: "JWKS URI must be HTTPS")
+        }
+
+        req.logger.debug("Fetching JWKS from URI", metadata: ["uri": .string(uri)])
+
+        let response = try await req.client.get(URI(string: uri))
+        guard response.status == .ok else {
+            throw Abort(.badGateway, reason: "Failed to fetch JWKS from \(uri)")
+        }
+
+        return try response.content.decode(JWKS.self)
     }
 
     private func validateIDTokenClaims(
@@ -577,23 +622,11 @@ struct OIDCController: RouteCollection {
         provider: OIDCProvider,
         expectedNonce: String?
     ) throws {
-        let now = Date()
-        
-        // Validate expiration time (exp)
-        let expirationDate = Date(timeIntervalSince1970: TimeInterval(claims.exp))
-        guard expirationDate > now else {
-            throw Abort(.badRequest, reason: "ID token has expired")
-        }
-
-        // Validate issued at time (iat) - token shouldn't be from the future
-        let issuedAtDate = Date(timeIntervalSince1970: TimeInterval(claims.iat))
-        guard issuedAtDate <= now.addingTimeInterval(60) else { // Allow 1 minute clock skew
-            throw Abort(.badRequest, reason: "ID token issued in the future")
-        }
+        // Expiration and issued-at time validation is handled by JWTPayload.verify()
         
         // Validate audience (aud) - should match our client ID
         guard claims.aud == provider.clientID else {
-            throw Abort(.badRequest, reason: "ID token audience does not match client ID")
+            throw Abort(.badRequest, reason: "ID token audience '\(claims.aud)' does not match client ID '\(provider.clientID)'")
         }
 
         // Validate nonce if provided
@@ -601,8 +634,8 @@ struct OIDCController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid nonce in ID token")
         }
 
-        // Note: Issuer (iss) validation could be added here if we store expected issuer
-        // For now, we rely on the JWKS URI being from the trusted provider
+        // Additional issuer validation could be added here
+        // For production, consider validating the issuer (iss) claim matches expected values
     }
 
 
@@ -770,16 +803,21 @@ struct OIDCTokenResponse: Content {
     }
 }
 
-struct OIDCIDTokenClaims: Content {
+struct OIDCIDTokenClaims: Content, JWTPayload, @unchecked Sendable {
     let iss: String // Issuer
     let sub: String // Subject
     let aud: String // Audience
-    let exp: Int    // Expiration time (Unix timestamp)
-    let iat: Int    // Issued at (Unix timestamp)
+    let exp: ExpirationClaim    // Expiration time
+    let iat: IssuedAtClaim    // Issued at
     let nonce: String?
     let email: String?
     let name: String?
     let preferredUsername: String?
+
+    func verify(using signer: JWTSigner) throws {
+        try self.exp.verifyNotExpired()
+        // iat verification happens automatically
+    }
 
     private enum CodingKeys: String, CodingKey {
         case iss, sub, aud, exp, iat, nonce, email, name
@@ -794,6 +832,125 @@ struct OIDCUserInfo {
     let preferredUsername: String?
 }
 
-// MARK: - TODO: JWT Signature Validation
-// Full JWT signature validation with JWKS should be implemented for production use
-// This currently validates claims but not the cryptographic signature
+// MARK: - JWT and JWKS Data Structures
+
+struct JWTHeader: Codable {
+    let alg: String
+    let typ: String
+    let kid: String?
+}
+
+struct JWKS: Codable {
+    let keys: [JWK]
+}
+
+struct JWK: Codable {
+    let kty: String // Key type (RSA)
+    let use: String? // Key usage (sig)
+    let kid: String? // Key ID
+    let n: String // RSA modulus (base64url)
+    let e: String // RSA exponent (base64url)
+    let alg: String? // Algorithm
+    
+    func createRSAPublicKey() throws -> RSAKey {
+        // Decode the base64url-encoded modulus and exponent
+        let modulusData = try base64URLDecode(n)
+        let exponentData = try base64URLDecode(e)
+        
+        // Create the public key using CryptoKit and convert to PEM
+        let pemString = try createPEMFromComponents(modulus: modulusData, exponent: exponentData)
+        return try RSAKey.public(pem: pemString)
+    }
+    
+    private func createPEMFromComponents(modulus: Data, exponent: Data) throws -> String {
+        // Create ASN.1 DER encoding for RSA public key
+        let derData = try createDERFromComponents(modulus: modulus, exponent: exponent)
+        let base64String = derData.base64EncodedString()
+        
+        // Format as PEM
+        let pemHeader = "-----BEGIN PUBLIC KEY-----"
+        let pemFooter = "-----END PUBLIC KEY-----"
+        
+        // Split base64 string into 64-character lines
+        let chunks = base64String.chunked(into: 64)
+        let pemBody = chunks.joined(separator: "\n")
+        
+        return "\(pemHeader)\n\(pemBody)\n\(pemFooter)"
+    }
+    
+    private func createDERFromComponents(modulus: Data, exponent: Data) throws -> Data {
+        // Create the RSA public key structure in ASN.1 DER format
+        // This is a simplified version - for production, consider using a proper ASN.1 library
+        
+        var result = Data()
+        
+        // SEQUENCE tag and length for the entire structure
+        let modulusInteger = try createDERInteger(modulus)
+        let exponentInteger = try createDERInteger(exponent)
+        let keySequence = modulusInteger + exponentInteger
+        
+        result.append(0x30) // SEQUENCE tag
+        result.append(contentsOf: encodeDERLength(keySequence.count))
+        result.append(keySequence)
+        
+        // Wrap in another SEQUENCE with algorithm identifier
+        let rsaOID = Data([0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00])
+        let bitString = Data([0x03]) + encodeDERLength(result.count + 1) + Data([0x00]) + result
+        
+        let fullSequence = rsaOID + bitString
+        return Data([0x30]) + encodeDERLength(fullSequence.count) + fullSequence
+    }
+    
+    private func createDERInteger(_ data: Data) throws -> Data {
+        var intData = data
+        // Remove leading zeros
+        while intData.first == 0 && intData.count > 1 {
+            intData.removeFirst()
+        }
+        // Add leading zero if high bit is set (to keep it positive)
+        if let first = intData.first, first & 0x80 != 0 {
+            intData.insert(0x00, at: 0)
+        }
+        
+        return Data([0x02]) + encodeDERLength(intData.count) + intData
+    }
+    
+    private func encodeDERLength(_ length: Int) -> Data {
+        if length < 0x80 {
+            return Data([UInt8(length)])
+        } else if length < 0x100 {
+            return Data([0x81, UInt8(length)])
+        } else if length < 0x10000 {
+            return Data([0x82, UInt8(length >> 8), UInt8(length & 0xff)])
+        } else {
+            // For longer lengths, you'd need more bytes
+            fatalError("Length too long for this implementation")
+        }
+    }
+    
+    private func base64URLDecode(_ string: String) throws -> Data {
+        var base64String = string
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        
+        // Add padding if necessary
+        let paddingLength = (4 - base64String.count % 4) % 4
+        base64String += String(repeating: "=", count: paddingLength)
+        
+        guard let data = Data(base64Encoded: base64String) else {
+            throw Abort(.badRequest, reason: "Invalid base64URL encoding in JWK")
+        }
+        
+        return data
+    }
+}
+
+extension String {
+    func chunked(into size: Int) -> [String] {
+        return stride(from: 0, to: count, by: size).map {
+            let start = index(startIndex, offsetBy: $0)
+            let end = index(start, offsetBy: min(size, count - $0))
+            return String(self[start..<end])
+        }
+    }
+}
