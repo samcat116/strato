@@ -700,7 +700,9 @@ struct HierarchyController: RouteCollection {
             .filter(\.$organization.$id == organizationID)
             .count()
 
-        let organization = try await Organization.find(organizationID, on: db)!
+        guard let organization = try await Organization.find(organizationID, on: db) else {
+            throw Abort(.notFound, reason: "Organization not found")
+        }
         let allProjects = try await organization.getAllProjects(on: db)
         let allVMs = try await organization.getAllVMs(on: db)
 
@@ -730,7 +732,9 @@ struct HierarchyController: RouteCollection {
     }
 
     private func getOrganizationQuotas(organizationID: UUID, on db: Database) async throws -> [ResourceQuota] {
-        let organization = try await Organization.find(organizationID, on: db)!
+        guard let organization = try await Organization.find(organizationID, on: db) else {
+            throw Abort(.notFound, reason: "Organization not found")
+        }
         let allProjects = try await organization.getAllProjects(on: db)
         let allOUs = try await OrganizationalUnit.query(on: db)
             .filter(\.$organization.$id == organizationID)
@@ -776,7 +780,9 @@ struct HierarchyController: RouteCollection {
             }
         } else if let orgID = quota.$organization.id {
             // Get all projects in this organization (direct and via OUs)
-            let org = try await Organization.find(orgID, on: db)!
+            guard let org = try await Organization.find(orgID, on: db) else {
+                return (QuotaUsage(vcpus: 0, memoryGB: 0, storageGB: 0, vms: 0, networks: 0), []) // Return empty usage if organization not found
+            }
             let allProjects = try await org.getAllProjects(on: db)
 
             let projectIDs = allProjects.compactMap { $0.id }

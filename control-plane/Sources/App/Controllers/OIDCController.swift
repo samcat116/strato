@@ -663,7 +663,10 @@ struct OIDCController: RouteCollection {
         on db: Database
     ) async throws -> User {
         // Try to find existing user by OIDC subject and provider
-        if let existingUser = try await User.findOIDCUser(subject: userInfo.subject, providerID: provider.id!, on: db) {
+        guard let providerID = provider.id else {
+            throw Abort(.internalServerError, reason: "Provider ID is required")
+        }
+        if let existingUser = try await User.findOIDCUser(subject: userInfo.subject, providerID: providerID, on: db) {
             return existingUser
         }
 
@@ -676,9 +679,12 @@ struct OIDCController: RouteCollection {
 
             for user in usersWithEmail {
                 let userOrgIDs = user.organizations.compactMap { $0.id }
-                if userOrgIDs.contains(organization.id!) {
+                guard let organizationID = organization.id else {
+                    continue
+                }
+                if userOrgIDs.contains(organizationID) {
                     // Link existing user to OIDC provider
-                    user.linkToOIDCProvider(provider.id!, subject: userInfo.subject)
+                    user.linkToOIDCProvider(providerID, subject: userInfo.subject)
                     try await user.save(on: db)
                     return user
                 }
@@ -695,16 +701,20 @@ struct OIDCController: RouteCollection {
             email: email,
             displayName: displayName,
             isSystemAdmin: false,
-            oidcProviderID: provider.id!,
+            oidcProviderID: providerID,
             oidcSubject: userInfo.subject
         )
 
         try await user.save(on: db)
 
         // Add user to organization as a member
+        guard let userID = user.id,
+              let organizationID = organization.id else {
+            throw Abort(.internalServerError, reason: "User and organization IDs are required")
+        }
         let membership = UserOrganization(
-            userID: user.id!,
-            organizationID: organization.id!,
+            userID: userID,
+            organizationID: organizationID,
             role: "member"
         )
         try await membership.save(on: db)

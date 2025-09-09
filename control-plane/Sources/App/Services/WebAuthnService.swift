@@ -21,7 +21,10 @@ struct WebAuthnService {
         for user: User,
         excludeCredentials: [PublicKeyCredentialDescriptor] = []
     ) async throws -> PublicKeyCredentialCreationOptions {
-        let userIDBytes = Array(user.id!.uuidString.utf8)
+        guard let userID = user.id else {
+            throw Abort(.internalServerError, reason: "User ID is required for WebAuthn registration")
+        }
+        let userIDBytes = Array(userID.uuidString.utf8)
 
         let options = webAuthnManager.beginRegistration(
             user: PublicKeyCredentialUserEntity(

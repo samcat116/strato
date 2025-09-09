@@ -86,11 +86,15 @@ func routes(_ app: Application) throws {
             .with(\.$organization)
             .all()
 
-        let providerInfos = oidcProviders.map { provider in
-            OIDCProviderInfo(
-                providerID: provider.id!,
+        let providerInfos: [OIDCProviderInfo] = oidcProviders.compactMap { provider in
+            guard let providerID = provider.id,
+                  let organizationID = provider.organization.id else {
+                return nil
+            }
+            return OIDCProviderInfo(
+                providerID: providerID,
                 providerName: provider.name,
-                organizationID: provider.organization.id!,
+                organizationID: organizationID,
                 organizationName: provider.organization.name
             )
         }
