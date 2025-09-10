@@ -3,6 +3,7 @@ import NIOCore
 import NIOPosix
 import NIOWebSocket
 import NIOHTTP1
+import NIOSSL
 import Logging
 import StratoShared
 
@@ -12,20 +13,69 @@ class WebSocketClient {
     weak var agent: Agent?
     private let logger: Logger
     private let eventLoopGroup: MultiThreadedEventLoopGroup
+    private let certificateManager: CertificateManager?
     
     private var channel: Channel?
     private var isConnected = false
     private var heartbeatTask: Task<Void, Never>?
     
-    init(url: String, agent: Agent, logger: Logger) {
+    init(url: String, agent: Agent, logger: Logger, certificateManager: CertificateManager? = nil) {
         self.url = url
         self.agent = agent
         self.logger = logger
+        self.certificateManager = certificateManager
         self.eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
     }
     
     func connect() async throws {
         logger.info("Attempting to connect to WebSocket server", metadata: ["url": .string(url)])
+        
+        // Determine if this is a secure connection and if we have certificates
+        let useSecureConnection = url.hasPrefix("wss://") || url.hasPrefix("https://")
+        let hasCertificates = certificateManager != nil
+        
+        if useSecureConnection && hasCertificates {
+            try await connectWithMTLS()
+        } else {
+            try await connectWithoutMTLS()
+        }
+        
+        isConnected = true
+        startHeartbeat()
+    }
+    
+    private func connectWithMTLS() async throws {
+        guard let certManager = certificateManager else {
+            throw WebSocketClientError.configurationError("Certificate manager not available")
+        }
+        
+        logger.info("Connecting with mutual TLS authentication")
+        
+        // Load client certificate and private key
+        let certificate = try await certManager.loadCertificate()
+        let privateKey = try await certManager.loadPrivateKey()
+        let caBundle = try await certManager.loadCABundle()
+        
+        // Parse URL
+        guard let parsedURL = URL(string: url) else {
+            throw WebSocketClientError.invalidURL(url)
+        }
+        
+        let host = parsedURL.host ?? "localhost"
+        let port = parsedURL.port ?? (url.hasPrefix("wss://") ? 443 : 8080)
+        
+        logger.info("Setting up TLS context with client certificate", metadata: [
+            "host": .string(host),
+            "port": .stringConvertible(port)
+        ])
+        
+        // For Phase 3, implement simplified mTLS setup
+        // In production, this would use full NIOSSL configuration
+        try await connectSimulatedMTLS(host: host, port: port, certificate: certificate)
+    }
+    
+    private func connectWithoutMTLS() async throws {
+        logger.info("Connecting without mTLS (legacy mode)")
         
         // For now, implement a working mock that simulates the connection
         // In a production environment, you would implement full WebSocket protocol
@@ -66,9 +116,30 @@ class WebSocketClient {
             // Regular WebSocket connection
             logger.info("WebSocket connection established (regular mode)")
         }
+    }
+    
+    private func connectSimulatedMTLS(host: String, port: Int, certificate: AgentCertificateInfo) async throws {
+        // For Phase 3, simulate mTLS connection
+        // This would be replaced with actual NIOSSL implementation
         
-        isConnected = true
-        startHeartbeat()
+        logger.info("Simulating mTLS connection", metadata: [
+            "host": .string(host),
+            "port": .stringConvertible(port),
+            "spiffeURI": .string(certificate.spiffeURI)
+        ])
+        
+        // Simulate TLS handshake delay
+        try await Task.sleep(for: .milliseconds(1000))
+        
+        // Simulate certificate verification
+        guard !certificate.isExpired else {
+            throw WebSocketClientError.connectionFailed("Client certificate has expired")
+        }
+        
+        logger.info("Simulated mTLS handshake successful", metadata: [
+            "agentId": .string(certificate.agentId),
+            "expiresAt": .string(certificate.expiresAt.description)
+        ])
     }
     
     func disconnect() async {
@@ -152,6 +223,7 @@ enum WebSocketClientError: Error, LocalizedError {
     case connectionFailed(String)
     case notConnected
     case encodingError(String)
+    case configurationError(String)
     
     var errorDescription: String? {
         switch self {
@@ -163,6 +235,8 @@ enum WebSocketClientError: Error, LocalizedError {
             return "WebSocket client is not connected"
         case .encodingError(let details):
             return "Failed to encode WebSocket message: \(details)"
+        case .configurationError(let details):
+            return "WebSocket client configuration error: \(details)"
         }
     }
 }

@@ -13,6 +13,8 @@ let package = Package(
         .package(url: "https://github.com/samcat116/swift-qemu", branch: "main"),
         // 🔵 Non-blocking, event-driven networking for Swift
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
+        // 🔐 SSL/TLS support for NIO
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.25.0"),
         // 🗄 ArgumentParser for CLI
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
         // 📝 Logging
@@ -33,6 +35,7 @@ let package = Package(
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOWebSocket", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Toml", package: "swift-toml"),

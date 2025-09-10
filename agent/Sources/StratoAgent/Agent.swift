@@ -73,7 +73,12 @@ actor Agent {
         } else {
             logger.info("Connecting to control plane", metadata: ["url": .string(webSocketURL)])
         }
-        websocketClient = await WebSocketClient(url: webSocketURL, agent: self, logger: logger)
+        websocketClient = await WebSocketClient(
+            url: webSocketURL,
+            agent: self,
+            logger: logger,
+            certificateManager: certificateManager
+        )
         
         if let client = websocketClient {
             try await client.connect()

@@ -9,6 +9,7 @@ struct AgentEnrollmentController: RouteCollection {
         agentRoutes.post("enroll", use: enrollAgent)
         agentRoutes.post("renew", use: renewCertificate)
         agentRoutes.get("ca", use: getCACertificate)
+        agentRoutes.get("crl", use: getCertificateRevocationList)
     }
     
     /// Enroll an agent using a join token (JWT) and issue a certificate
@@ -67,28 +68,25 @@ struct AgentEnrollmentController: RouteCollection {
     
     /// Renew an existing certificate using mTLS authentication
     func renewCertificate(req: Request) async throws -> AgentEnrollmentResponse {
-        // This endpoint will be protected by mTLS middleware
-        // Extract agent ID from certificate SAN
-        guard let agentId = req.auth.get(String.self, at: "agentId") else {
-            throw Abort(.unauthorized, reason: "Agent ID not found in certificate")
+        // This endpoint is protected by AgentCertificateAuthMiddleware
+        // Extract agent information from authenticated certificate
+        guard let agentAuth = req.auth.get(AgentAuthInfo.self) else {
+            throw Abort(.unauthorized, reason: "Agent authentication required")
         }
         
         let renewalRequest = try req.content.decode(CertificateRenewalRequest.self)
         
         // Verify agent ID matches certificate
-        guard agentId == renewalRequest.csr.agentId else {
+        guard agentAuth.agentId == renewalRequest.csr.agentId else {
             throw Abort(.forbidden, reason: "Agent ID mismatch")
         }
         
         req.logger.info("Certificate renewal request received", metadata: [
-            "agentId": .string(agentId)
+            "agentId": .string(agentAuth.agentId)
         ])
         
         // Get existing certificate
-        guard let existingCert = try await AgentCertificate.query(on: req.db)
-            .filter(\.$agentId == agentId)
-            .filter(\.$status == .active)
-            .first() else {
+        guard let existingCert = try await AgentCertificate.find(agentAuth.certificateId, on: req.db) else {
             throw Abort(.notFound, reason: "No active certificate found for agent")
         }
         
@@ -98,7 +96,7 @@ struct AgentEnrollmentController: RouteCollection {
         
         // Issue new certificate
         let newCertificate = try await caService.issueCertificate(
-            for: agentId,
+            for: agentAuth.agentId,
             csr: renewalRequest.csr,
             ca: ca,
             validityHours: 24
@@ -117,7 +115,7 @@ struct AgentEnrollmentController: RouteCollection {
         )
         
         req.logger.info("Certificate renewed successfully", metadata: [
-            "agentId": .string(agentId),
+            "agentId": .string(agentAuth.agentId),
             "oldCertificateId": .string(existingCert.id?.uuidString ?? "unknown"),
             "newCertificateId": .string(newCertificate.id?.uuidString ?? "unknown")
         ])
@@ -135,6 +133,22 @@ struct AgentEnrollmentController: RouteCollection {
             trustDomain: ca.trustDomain,
             validFrom: ca.validFrom!,
             validTo: ca.validTo!
+        )
+    }
+    
+    /// Get Certificate Revocation List
+    func getCertificateRevocationList(req: Request) async throws -> Response {
+        let revocationService = CertificateRevocationService(database: req.db, logger: req.logger)
+        let crl = try await revocationService.generateCRL()
+        let crlData = try crl.generateCRLData()
+        
+        return Response(
+            status: .ok,
+            headers: HTTPHeaders([
+                ("Content-Type", "application/pkix-crl"),
+                ("Content-Disposition", "attachment; filename=\"strato-ca.crl\"")
+            ]),
+            body: .init(string: crlData)
         )
     }
     
