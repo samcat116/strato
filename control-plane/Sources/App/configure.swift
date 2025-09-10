@@ -92,6 +92,7 @@ public func configure(_ app: Application) async throws {
     // Certificate management migrations
     app.migrations.add(CreateCertificateAuthority())
     app.migrations.add(CreateAgentCertificate())
+    app.migrations.add(CreateCertificateAuditEvent())
 
     try await app.autoMigrate()
 

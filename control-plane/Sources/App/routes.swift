@@ -117,6 +117,7 @@ func routes(_ app: Application) throws {
     try app.register(collection: APIDocumentationController())
     try app.register(collection: AgentWebSocketController())
     try app.register(collection: AgentEnrollmentController())
+    try app.register(collection: SecurityController())
     try app.register(collection: OnboardingController())
     try app.register(collection: HTMXController())
 

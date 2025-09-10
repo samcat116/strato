@@ -49,6 +49,15 @@ struct AgentEnrollmentController: RouteCollection {
             validityHours: 24
         )
         
+        // Log audit event
+        let auditService = CertificateAuditService(database: req.db, logger: req.logger)
+        await auditService.logEnrollment(
+            agentId: enrollmentRequest.csr.agentId,
+            certificateId: certificate.id!,
+            spiffeURI: certificate.spiffeURI,
+            clientIP: req.remoteAddress?.hostname
+        )
+        
         // Create response
         let response = AgentEnrollmentResponse(
             certificatePEM: certificate.certificatePEM,
@@ -104,6 +113,22 @@ struct AgentEnrollmentController: RouteCollection {
         
         // Revoke old certificate
         try await caService.revokeCertificate(existingCert, reason: "Certificate renewed")
+        
+        // Log audit events
+        let auditService = CertificateAuditService(database: req.db, logger: req.logger)
+        await auditService.logRevocation(
+            agentId: agentAuth.agentId,
+            certificateId: existingCert.id!,
+            reason: "Certificate renewed",
+            clientIP: req.remoteAddress?.hostname
+        )
+        await auditService.logRenewal(
+            agentId: agentAuth.agentId,
+            oldCertificateId: existingCert.id!,
+            newCertificateId: newCertificate.id!,
+            spiffeURI: newCertificate.spiffeURI,
+            clientIP: req.remoteAddress?.hostname
+        )
         
         // Create response
         let response = AgentEnrollmentResponse(
