@@ -15,6 +15,28 @@ qemu_socket_dir = "/var/run/qemu"
 # Optional - defaults to "info" if not specified
 log_level = "info"
 
+# Certificate-based authentication (optional)
+# If not configured, agent will use legacy token-based authentication
+certificate_path = "/etc/strato/certs/agent.crt"
+private_key_path = "/etc/strato/certs/agent.key"
+ca_bundle_path = "/etc/strato/certs/ca-bundle.crt"
+
+# Join token for initial enrollment (optional)
+# Used only during initial certificate enrollment
+# join_token = "your-join-token-here"
+
+# Enrollment URL for certificate-based authentication
+# URL to enroll with the control plane and get certificates
+enrollment_url = "https://localhost:8080/agent/enroll"
+
+# Auto-renewal settings
+# Enable automatic certificate renewal (default: true)
+auto_renewal = true
+
+# Renewal threshold as percentage of certificate lifetime (default: 0.6 = 60%)
+# Certificate will be renewed when 60% of its lifetime has passed
+renewal_threshold = 0.6
+
 # Additional configuration options can be added here as needed
 # Examples:
 # heartbeat_interval = 30

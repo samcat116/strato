@@ -6,6 +6,7 @@ import StratoShared
 
 actor Agent {
     private let agentID: String
+    private let config: AgentConfig
     private let webSocketURL: String
     private let qemuSocketDir: String
     private let isRegistrationMode: Bool
@@ -14,17 +15,21 @@ actor Agent {
     private var websocketClient: WebSocketClient?
     private var qemuService: QEMUService?
     private var networkService: NetworkService?
+    private var certificateManager: CertificateManager?
     private var heartbeatTask: Task<Void, Error>?
+    private var renewalTask: Task<Void, Error>?
     private var isRunning = false
     
     init(
         agentID: String,
+        config: AgentConfig,
         webSocketURL: String,
         qemuSocketDir: String,
         isRegistrationMode: Bool,
         logger: Logger
     ) {
         self.agentID = agentID
+        self.config = config
         self.webSocketURL = webSocketURL
         self.qemuSocketDir = qemuSocketDir
         self.isRegistrationMode = isRegistrationMode
@@ -36,6 +41,16 @@ actor Agent {
             logger.warning("Agent is already running")
             return
         }
+        
+        // Initialize certificate manager
+        certificateManager = await CertificateManager(
+            config: config,
+            agentId: agentID,
+            logger: logger
+        )
+        
+        // Handle certificate enrollment if needed
+        try await handleCertificateBootstrap()
         
         logger.info("Initializing network service")
         networkService = NetworkService(logger: logger)
@@ -70,6 +85,11 @@ actor Agent {
         // Start heartbeat
         startHeartbeat()
         
+        // Start certificate auto-renewal if enabled
+        if config.isAutoRenewalEnabled {
+            startCertificateAutoRenewal()
+        }
+        
         isRunning = true
         logger.info("Agent started successfully")
         
@@ -86,6 +106,9 @@ actor Agent {
         heartbeatTask?.cancel()
         heartbeatTask = nil
         
+        renewalTask?.cancel()
+        renewalTask = nil
+        
         // Unregister from control plane
         do {
             try await unregisterFromControlPlane()
@@ -98,6 +121,7 @@ actor Agent {
         }
         websocketClient = nil
         qemuService = nil
+        certificateManager = nil
         
         if let service = networkService {
             await service.disconnect()
@@ -537,6 +561,60 @@ extension Agent {
         } catch {
             await sendError(for: message.requestId, error: "Failed to detach VM from network: \(error.localizedDescription)")
             logger.error("Failed to detach VM from network", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
+        }
+    }
+    
+    // MARK: - Certificate Management
+    
+    private func handleCertificateBootstrap() async throws {
+        guard let certManager = certificateManager else { return }
+        
+        if await certManager.hasValidCertificate() {
+            logger.info("Agent has valid certificate")
+            return
+        }
+        
+        if config.canEnroll {
+            logger.info("Certificate not found or invalid, attempting enrollment")
+            try await certManager.enrollAgent()
+            logger.info("Certificate enrollment completed successfully")
+        } else {
+            logger.warning("No valid certificate and enrollment not configured")
+        }
+    }
+    
+    private func startCertificateAutoRenewal() {
+        renewalTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await self?.checkAndRenewCertificate()
+                    // Check for renewal every hour
+                    try await Task.sleep(for: .seconds(3600))
+                } catch {
+                    self?.logger.error("Certificate renewal check failed: \(error)")
+                    // Retry after 10 minutes on error
+                    try await Task.sleep(for: .seconds(600))
+                }
+            }
+        }
+    }
+    
+    private func checkAndRenewCertificate() async throws {
+        guard let certManager = certificateManager else { return }
+        
+        do {
+            let cert = try await certManager.loadCertificate()
+            if cert.needsRenewal(threshold: config.effectiveRenewalThreshold) {
+                logger.info("Certificate needs renewal", metadata: [
+                    "expiresAt": .string(cert.expiresAt.description),
+                    "threshold": .stringConvertible(config.effectiveRenewalThreshold)
+                ])
+                
+                try await certManager.renewCertificate()
+                logger.info("Certificate renewed successfully")
+            }
+        } catch {
+            logger.warning("Failed to check certificate renewal status: \(error)")
         }
     }
 }

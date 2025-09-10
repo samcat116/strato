@@ -1,0 +1,397 @@
+#!/bin/bash
+set -e
+
+# Strato Agent Installation Script
+# This script installs and configures the Strato agent with certificate-based authentication
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Default values
+STRATO_USER="strato"
+STRATO_GROUP="strato"
+INSTALL_DIR="/usr/local/bin"
+CONFIG_DIR="/etc/strato"
+CERT_DIR="/etc/strato/certs"
+LOG_DIR="/var/log/strato"
+SERVICE_NAME="strato-agent"
+
+# Configuration variables (can be overridden)
+CONTROL_PLANE_HOST="${CONTROL_PLANE_HOST:-localhost:8080}"
+JOIN_TOKEN="${JOIN_TOKEN:-}"
+AGENT_NAME="${AGENT_NAME:-$(hostname)}"
+LOG_LEVEL="${LOG_LEVEL:-info}"
+
+print_usage() {
+    cat << EOF
+Strato Agent Installation Script
+
+Usage: $0 [OPTIONS]
+
+Options:
+    -h, --help              Show this help message
+    -t, --join-token TOKEN  Join token for certificate enrollment
+    -n, --agent-name NAME   Agent name (default: hostname)
+    -c, --control-plane HOST Control plane host:port (default: localhost:8080)
+    -l, --log-level LEVEL   Log level (default: info)
+    --skip-systemd          Skip systemd service installation
+    --uninstall            Uninstall the agent
+
+Environment Variables:
+    JOIN_TOKEN             Join token for certificate enrollment
+    AGENT_NAME             Agent name
+    CONTROL_PLANE_HOST     Control plane host:port
+    LOG_LEVEL              Log level
+
+Examples:
+    # Install with join token
+    sudo ./install.sh --join-token "eyJ0eXAi..." --control-plane "control-plane.example.com:8080"
+    
+    # Install using environment variables
+    export JOIN_TOKEN="eyJ0eXAi..."
+    export CONTROL_PLANE_HOST="control-plane.example.com:8080"
+    sudo ./install.sh
+
+EOF
+}
+
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        log_error "This script must be run as root (use sudo)"
+        exit 1
+    fi
+}
+
+check_dependencies() {
+    log_info "Checking dependencies..."
+    
+    # Check for required commands
+    local missing_deps=()
+    
+    for cmd in curl systemctl; do
+        if ! command -v "$cmd" &> /dev/null; then
+            missing_deps+=("$cmd")
+        fi
+    done
+    
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        log_error "Missing required dependencies: ${missing_deps[*]}"
+        log_error "Please install them and try again"
+        exit 1
+    fi
+    
+    log_success "All dependencies found"
+}
+
+create_user() {
+    log_info "Creating Strato user and group..."
+    
+    if ! getent group "$STRATO_GROUP" &> /dev/null; then
+        groupadd --system "$STRATO_GROUP"
+        log_success "Created group: $STRATO_GROUP"
+    fi
+    
+    if ! getent passwd "$STRATO_USER" &> /dev/null; then
+        useradd --system --gid "$STRATO_GROUP" --home-dir "$CONFIG_DIR" \
+                --shell /usr/sbin/nologin --comment "Strato Agent" "$STRATO_USER"
+        log_success "Created user: $STRATO_USER"
+    fi
+}
+
+create_directories() {
+    log_info "Creating directories..."
+    
+    mkdir -p "$CONFIG_DIR" "$CERT_DIR" "$LOG_DIR"
+    
+    # Set secure permissions
+    chown root:root "$CONFIG_DIR"
+    chmod 755 "$CONFIG_DIR"
+    
+    chown root:"$STRATO_GROUP" "$CERT_DIR"
+    chmod 750 "$CERT_DIR"
+    
+    chown "$STRATO_USER":"$STRATO_GROUP" "$LOG_DIR"
+    chmod 755 "$LOG_DIR"
+    
+    log_success "Created directories with secure permissions"
+}
+
+download_agent() {
+    log_info "Downloading Strato agent binary..."
+    
+    # For now, this is a placeholder - in production, this would download from releases
+    log_warning "Binary download not implemented - assuming binary is available as 'strato-agent'"
+    
+    if [[ -f "./strato-agent" ]]; then
+        cp "./strato-agent" "$INSTALL_DIR/strato-agent"
+        chmod 755 "$INSTALL_DIR/strato-agent"
+        chown root:root "$INSTALL_DIR/strato-agent"
+        log_success "Installed agent binary to $INSTALL_DIR/strato-agent"
+    else
+        log_error "Agent binary not found. Please ensure 'strato-agent' is in the current directory."
+        exit 1
+    fi
+}
+
+create_config() {
+    log_info "Creating configuration file..."
+    
+    local config_file="$CONFIG_DIR/config.toml"
+    local use_https="false"
+    
+    # Determine if we should use HTTPS
+    if [[ "$CONTROL_PLANE_HOST" =~ ^https:// ]]; then
+        use_https="true"
+        CONTROL_PLANE_HOST="${CONTROL_PLANE_HOST#https://}"
+    elif [[ "$CONTROL_PLANE_HOST" =~ ^http:// ]]; then
+        CONTROL_PLANE_HOST="${CONTROL_PLANE_HOST#http://}"
+    fi
+    
+    # Default to HTTPS for production deployments
+    local ws_scheme="wss"
+    local enrollment_scheme="https"
+    
+    if [[ "$CONTROL_PLANE_HOST" == "localhost"* ]]; then
+        ws_scheme="ws"
+        enrollment_scheme="http"
+    fi
+    
+    cat > "$config_file" << EOF
+# Strato Agent Configuration
+# Generated by install script on $(date)
+
+# Control plane connection
+control_plane_url = "${ws_scheme}://${CONTROL_PLANE_HOST}/agent/ws"
+
+# QEMU settings
+qemu_socket_dir = "/var/run/qemu"
+
+# Logging
+log_level = "$LOG_LEVEL"
+
+# Certificate-based authentication
+certificate_path = "$CERT_DIR/agent.crt"
+private_key_path = "$CERT_DIR/agent.key"
+ca_bundle_path = "$CERT_DIR/ca-bundle.crt"
+
+# Enrollment settings
+enrollment_url = "${enrollment_scheme}://${CONTROL_PLANE_HOST}/agent/enroll"
+
+# Auto-renewal
+auto_renewal = true
+renewal_threshold = 0.6
+EOF
+    
+    # Add join token if provided
+    if [[ -n "$JOIN_TOKEN" ]]; then
+        echo "join_token = \"$JOIN_TOKEN\"" >> "$config_file"
+        log_info "Added join token to configuration"
+    fi
+    
+    chown root:"$STRATO_GROUP" "$config_file"
+    chmod 640 "$config_file"
+    
+    log_success "Created configuration file: $config_file"
+}
+
+create_systemd_service() {
+    if [[ "$SKIP_SYSTEMD" == "true" ]]; then
+        log_info "Skipping systemd service creation"
+        return
+    fi
+    
+    log_info "Creating systemd service..."
+    
+    local service_file="/etc/systemd/system/${SERVICE_NAME}.service"
+    
+    cat > "$service_file" << EOF
+[Unit]
+Description=Strato Agent
+Documentation=https://github.com/samcat116/strato
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=$STRATO_USER
+Group=$STRATO_GROUP
+ExecStart=$INSTALL_DIR/strato-agent --config-file $CONFIG_DIR/config.toml
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=strato-agent
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=$LOG_DIR $CERT_DIR
+
+# Required for VM management
+SupplementaryGroups=kvm
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    systemctl daemon-reload
+    systemctl enable "$SERVICE_NAME"
+    
+    log_success "Created and enabled systemd service: $SERVICE_NAME"
+}
+
+perform_enrollment() {
+    if [[ -z "$JOIN_TOKEN" ]]; then
+        log_warning "No join token provided, skipping automatic enrollment"
+        log_info "To enroll later, add a join_token to $CONFIG_DIR/config.toml and restart the service"
+        return
+    fi
+    
+    log_info "Performing certificate enrollment..."
+    
+    # Start the service temporarily for enrollment
+    systemctl start "$SERVICE_NAME" || true
+    
+    # Wait a moment for enrollment to complete
+    sleep 5
+    
+    # Check if certificates were created
+    if [[ -f "$CERT_DIR/agent.crt" && -f "$CERT_DIR/agent.key" ]]; then
+        log_success "Certificate enrollment completed successfully"
+    else
+        log_warning "Certificate enrollment may have failed - check logs with: journalctl -u $SERVICE_NAME"
+    fi
+    
+    systemctl stop "$SERVICE_NAME"
+}
+
+uninstall_agent() {
+    log_info "Uninstalling Strato agent..."
+    
+    # Stop and disable service
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        systemctl stop "$SERVICE_NAME"
+    fi
+    
+    if systemctl is-enabled --quiet "$SERVICE_NAME"; then
+        systemctl disable "$SERVICE_NAME"
+    fi
+    
+    # Remove files
+    rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+    rm -f "$INSTALL_DIR/strato-agent"
+    rm -rf "$CONFIG_DIR"
+    rm -rf "$LOG_DIR"
+    
+    # Remove user and group
+    if getent passwd "$STRATO_USER" &> /dev/null; then
+        userdel "$STRATO_USER"
+    fi
+    
+    if getent group "$STRATO_GROUP" &> /dev/null; then
+        groupdel "$STRATO_GROUP"
+    fi
+    
+    systemctl daemon-reload
+    
+    log_success "Strato agent uninstalled"
+}
+
+# Parse command line arguments
+SKIP_SYSTEMD="false"
+UNINSTALL="false"
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            print_usage
+            exit 0
+            ;;
+        -t|--join-token)
+            JOIN_TOKEN="$2"
+            shift 2
+            ;;
+        -n|--agent-name)
+            AGENT_NAME="$2"
+            shift 2
+            ;;
+        -c|--control-plane)
+            CONTROL_PLANE_HOST="$2"
+            shift 2
+            ;;
+        -l|--log-level)
+            LOG_LEVEL="$2"
+            shift 2
+            ;;
+        --skip-systemd)
+            SKIP_SYSTEMD="true"
+            shift
+            ;;
+        --uninstall)
+            UNINSTALL="true"
+            shift
+            ;;
+        *)
+            log_error "Unknown option: $1"
+            print_usage
+            exit 1
+            ;;
+    esac
+done
+
+# Main execution
+if [[ "$UNINSTALL" == "true" ]]; then
+    check_root
+    uninstall_agent
+    exit 0
+fi
+
+log_info "Starting Strato agent installation..."
+log_info "Agent name: $AGENT_NAME"
+log_info "Control plane: $CONTROL_PLANE_HOST"
+log_info "Log level: $LOG_LEVEL"
+
+check_root
+check_dependencies
+create_user
+create_directories
+download_agent
+create_config
+create_systemd_service
+perform_enrollment
+
+log_success "Strato agent installation completed!"
+echo
+log_info "Next steps:"
+echo "  1. Start the service: sudo systemctl start $SERVICE_NAME"
+echo "  2. Check status: sudo systemctl status $SERVICE_NAME"
+echo "  3. View logs: sudo journalctl -u $SERVICE_NAME -f"
+echo
+if [[ -z "$JOIN_TOKEN" ]]; then
+    log_info "To enable certificate authentication:"
+    echo "  1. Obtain a join token from the Strato control plane"
+    echo "  2. Add 'join_token = \"your-token\"' to $CONFIG_DIR/config.toml"
+    echo "  3. Restart the service: sudo systemctl restart $SERVICE_NAME"
+fi

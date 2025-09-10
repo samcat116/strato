@@ -21,6 +21,8 @@ let package = Package(
         .package(url: "https://github.com/samcat116/swift-ovn.git", branch: "main"),
         // ⚙️ TOML configuration parsing
         .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
+        // 🔐 Swift Crypto for certificate management
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
     ],
     targets: [
         .executableTarget(
@@ -34,6 +36,7 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Toml", package: "swift-toml"),
+                .product(name: "Crypto", package: "swift-crypto"),
             ] + qemuAndNetworkDependencies,
             swiftSettings: swiftSettings
         )
