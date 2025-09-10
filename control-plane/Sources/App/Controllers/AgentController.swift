@@ -56,7 +56,7 @@ struct AgentController: RouteCollection {
             throw Abort(.conflict, reason: "A valid registration token already exists for agent '\(createRequest.agentName)'")
         }
         
-        // Create new registration token
+        // Create new registration token (legacy token-based approach)
         let token = AgentRegistrationToken(
             agentName: createRequest.agentName,
             expirationHours: createRequest.expirationHours ?? 1
@@ -64,7 +64,14 @@ struct AgentController: RouteCollection {
         
         try await token.save(on: req.db)
         
-        // Get base URL for WebSocket connection
+        // Also generate a JWT join token for certificate-based enrollment
+        let joinTokenService = JoinTokenService(logger: req.logger)
+        let joinToken = try joinTokenService.generateJoinToken(
+            for: createRequest.agentName,
+            validityHours: createRequest.expirationHours ?? 1
+        )
+        
+        // Get base URL for both legacy and certificate-based connection
         let scheme = req.url.scheme == "https" ? "wss" : "ws"
         let host = req.headers["host"].first ?? "localhost:8080"
         let baseURL = "\(scheme)://\(host)"
@@ -72,10 +79,14 @@ struct AgentController: RouteCollection {
         req.logger.info("Created agent registration token", metadata: [
             "agentName": .string(createRequest.agentName),
             "tokenId": .string(token.id?.uuidString ?? "unknown"),
-            "expiresAt": .string(token.expiresAt?.description ?? "no expiration")
+            "expiresAt": .string(token.expiresAt?.description ?? "no expiration"),
+            "joinToken": .string("generated")
         ])
         
-        return try AgentRegistrationTokenResponse(from: token, baseURL: baseURL)
+        var response = try AgentRegistrationTokenResponse(from: token, baseURL: baseURL)
+        response.joinToken = joinToken // Add join token to response
+        
+        return response
     }
     
     func listRegistrationTokens(req: Request) async throws -> [AgentRegistrationTokenResponse] {

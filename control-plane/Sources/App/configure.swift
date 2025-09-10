@@ -80,6 +80,10 @@ public func configure(_ app: Application) async throws {
     // Agent migrations
     app.migrations.add(CreateAgent())
     app.migrations.add(CreateAgentRegistrationToken())
+    
+    // Certificate management migrations
+    app.migrations.add(CreateCertificateAuthority())
+    app.migrations.add(CreateAgentCertificate())
 
     try await app.autoMigrate()
 

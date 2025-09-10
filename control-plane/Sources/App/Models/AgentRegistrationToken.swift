@@ -63,6 +63,10 @@ struct AgentRegistrationTokenResponse: Content {
     let expiresAt: Date
     let isValid: Bool
     
+    // Certificate-based enrollment
+    var joinToken: String?
+    var enrollmentURL: String?
+    
     init(from tokenModel: AgentRegistrationToken, baseURL: String) throws {
         guard let id = tokenModel.id else {
             throw Abort(.internalServerError, reason: "Registration token missing ID")
@@ -74,7 +78,14 @@ struct AgentRegistrationTokenResponse: Content {
         guard let encodedName = tokenModel.agentName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
             throw Abort(.internalServerError, reason: "Invalid agent name for URL encoding")
         }
+        
+        // Legacy WebSocket registration URL
         self.registrationURL = "\(baseURL)/agent/ws?token=\(tokenModel.token)&name=\(encodedName)"
+        
+        // Certificate enrollment URL (HTTPS-based)
+        let httpsBaseURL = baseURL.replacingOccurrences(of: "ws://", with: "https://").replacingOccurrences(of: "wss://", with: "https://")
+        self.enrollmentURL = "\(httpsBaseURL)/agent/enroll"
+        
         self.expiresAt = tokenModel.expiresAt ?? Date()
         self.isValid = tokenModel.isValid
     }
