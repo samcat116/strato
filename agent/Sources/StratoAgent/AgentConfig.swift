@@ -7,16 +7,50 @@ struct AgentConfig: Codable {
     let qemuSocketDir: String?
     let logLevel: String?
     
+    // Certificate-based authentication settings
+    let certificatePath: String?
+    let privateKeyPath: String?
+    let caBundlePath: String?
+    let joinToken: String?
+    let enrollmentURL: String?
+    let autoRenewal: Bool?
+    let renewalThreshold: Double?
+    
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
         case qemuSocketDir = "qemu_socket_dir"
         case logLevel = "log_level"
+        case certificatePath = "certificate_path"
+        case privateKeyPath = "private_key_path"
+        case caBundlePath = "ca_bundle_path"
+        case joinToken = "join_token"
+        case enrollmentURL = "enrollment_url"
+        case autoRenewal = "auto_renewal"
+        case renewalThreshold = "renewal_threshold"
     }
     
-    init(controlPlaneURL: String, qemuSocketDir: String? = nil, logLevel: String? = nil) {
+    init(
+        controlPlaneURL: String,
+        qemuSocketDir: String? = nil,
+        logLevel: String? = nil,
+        certificatePath: String? = nil,
+        privateKeyPath: String? = nil,
+        caBundlePath: String? = nil,
+        joinToken: String? = nil,
+        enrollmentURL: String? = nil,
+        autoRenewal: Bool? = nil,
+        renewalThreshold: Double? = nil
+    ) {
         self.controlPlaneURL = controlPlaneURL
         self.qemuSocketDir = qemuSocketDir
         self.logLevel = logLevel
+        self.certificatePath = certificatePath
+        self.privateKeyPath = privateKeyPath
+        self.caBundlePath = caBundlePath
+        self.joinToken = joinToken
+        self.enrollmentURL = enrollmentURL
+        self.autoRenewal = autoRenewal
+        self.renewalThreshold = renewalThreshold
     }
     
     static func load(from path: String) throws -> AgentConfig {
@@ -37,10 +71,26 @@ struct AgentConfig: Codable {
         let qemuSocketDir = tomlData.string("qemu_socket_dir")
         let logLevel = tomlData.string("log_level")
         
+        // Certificate authentication settings
+        let certificatePath = tomlData.string("certificate_path")
+        let privateKeyPath = tomlData.string("private_key_path")
+        let caBundlePath = tomlData.string("ca_bundle_path")
+        let joinToken = tomlData.string("join_token")
+        let enrollmentURL = tomlData.string("enrollment_url")
+        let autoRenewal = tomlData.bool("auto_renewal")
+        let renewalThreshold = tomlData.double("renewal_threshold")
+        
         return AgentConfig(
             controlPlaneURL: controlPlaneURL,
             qemuSocketDir: qemuSocketDir,
-            logLevel: logLevel
+            logLevel: logLevel,
+            certificatePath: certificatePath,
+            privateKeyPath: privateKeyPath,
+            caBundlePath: caBundlePath,
+            joinToken: joinToken,
+            enrollmentURL: enrollmentURL,
+            autoRenewal: autoRenewal,
+            renewalThreshold: renewalThreshold
         )
     }
     
@@ -69,6 +119,48 @@ struct AgentConfig: Codable {
             qemuSocketDir: "/var/run/qemu",
             logLevel: "info"
         )
+    }
+    
+    // MARK: - Certificate Management Properties
+    
+    /// Check if certificate-based authentication is configured
+    var hasCertificateAuth: Bool {
+        return certificatePath != nil && privateKeyPath != nil && caBundlePath != nil
+    }
+    
+    /// Check if enrollment configuration is available
+    var canEnroll: Bool {
+        return joinToken != nil && enrollmentURL != nil
+    }
+    
+    /// Get the default certificate storage directory
+    var certificateDirectory: String {
+        return "/etc/strato/certs"
+    }
+    
+    /// Get the default certificate file path
+    var defaultCertificatePath: String {
+        return "\(certificateDirectory)/agent.crt"
+    }
+    
+    /// Get the default private key file path
+    var defaultPrivateKeyPath: String {
+        return "\(certificateDirectory)/agent.key"
+    }
+    
+    /// Get the default CA bundle file path
+    var defaultCABundlePath: String {
+        return "\(certificateDirectory)/ca-bundle.crt"
+    }
+    
+    /// Get renewal threshold (default 60% of certificate lifetime)
+    var effectiveRenewalThreshold: Double {
+        return renewalThreshold ?? 0.6
+    }
+    
+    /// Check if auto-renewal is enabled (default true)
+    var isAutoRenewalEnabled: Bool {
+        return autoRenewal ?? true
     }
 }
 

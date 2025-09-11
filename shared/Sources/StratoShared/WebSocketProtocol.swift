@@ -8,6 +8,10 @@ public enum MessageType: String, Codable, Sendable {
     case agentHeartbeat = "agent_heartbeat"
     case agentUnregister = "agent_unregister"
     
+    // Certificate-based authentication
+    case agentEnroll = "agent_enroll"
+    case agentCertificateRenewal = "agent_certificate_renewal"
+    
     // VM lifecycle operations
     case vmCreate = "vm_create"
     case vmBoot = "vm_boot" 
@@ -344,6 +348,42 @@ public enum CodableValue: Codable, Sendable {
         case .null:
             try container.encodeNil()
         }
+    }
+}
+
+// MARK: - Certificate Authentication Messages
+
+public struct AgentEnrollMessage: WebSocketMessage {
+    public let type: MessageType = .agentEnroll
+    public let requestId: String
+    public let timestamp: Date
+    public let enrollmentRequest: AgentEnrollmentRequest
+    
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        enrollmentRequest: AgentEnrollmentRequest
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.enrollmentRequest = enrollmentRequest
+    }
+}
+
+public struct AgentCertificateRenewalMessage: WebSocketMessage {
+    public let type: MessageType = .agentCertificateRenewal
+    public let requestId: String
+    public let timestamp: Date
+    public let renewalRequest: CertificateRenewalRequest
+    
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        renewalRequest: CertificateRenewalRequest
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.renewalRequest = renewalRequest
     }
 }
 

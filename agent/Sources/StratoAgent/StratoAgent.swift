@@ -102,6 +102,7 @@ struct StratoAgent: AsyncParsableCommand {
         
         let agent = Agent(
             agentID: finalAgentID,
+            config: config,
             webSocketURL: finalWebSocketURL,
             qemuSocketDir: finalQemuSocketDir,
             isRegistrationMode: isRegistrationMode,

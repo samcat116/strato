@@ -3,6 +3,12 @@ import FluentPostgresDriver
 import ElementaryHTMX
 import NIOSSL
 import Vapor
+import JWT
+
+// Storage key for certificate maintenance service
+struct CertificateMaintenanceServiceKey: StorageKey {
+    typealias Value = CertificateMaintenanceService
+}
 
 public func configure(_ app: Application) async throws {
     // Configure sessions
@@ -14,6 +20,9 @@ public func configure(_ app: Application) async throws {
 
     // Configure API key authentication (for Bearer tokens)
     app.middleware.use(BearerAuthorizationHeaderAuthenticator())
+    
+    // Configure certificate-based authentication for agents
+    app.middleware.use(AgentCertificateAuthMiddleware())
 
     // Configure WebAuthn
     let relyingPartyID = Environment.get("WEBAUTHN_RELYING_PARTY_ID") ?? "localhost"
@@ -25,6 +34,10 @@ public func configure(_ app: Application) async throws {
         relyingPartyName: relyingPartyName,
         relyingPartyOrigin: relyingPartyOrigin
     )
+
+    // Configure JWT for agent enrollment tokens
+    let jwtSecret = Environment.get("JOIN_TOKEN_SECRET") ?? "default-secret-key"
+    app.jwt.signers.use(.hs256(key: jwtSecret))
 
     // Add SpiceDB authorization middleware AFTER session middleware
     // Skip SpiceDB in testing environment
@@ -80,8 +93,25 @@ public func configure(_ app: Application) async throws {
     // Agent migrations
     app.migrations.add(CreateAgent())
     app.migrations.add(CreateAgentRegistrationToken())
+    
+    // Certificate management migrations
+    app.migrations.add(CreateCertificateAuthority())
+    app.migrations.add(CreateAgentCertificate())
+    app.migrations.add(CreateCertificateAuditEvent())
 
     try await app.autoMigrate()
+
+    // Start certificate maintenance service
+    if app.environment != .testing {
+        let maintenanceService = CertificateMaintenanceService(
+            database: app.db,
+            logger: app.logger
+        )
+        await maintenanceService.startMaintenance()
+        
+        // Store service in application storage for cleanup
+        app.storage[CertificateMaintenanceServiceKey.self] = maintenanceService
+    }
 
     try routes(app)
 
