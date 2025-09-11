@@ -334,10 +334,4 @@ extension String {
         }
         return contentLines.joined()
     }
-    
-    func chunked(into size: Int) -> [String] {
-        return stride(from: 0, to: count, by: size).map {
-            String(self[index(startIndex, offsetBy: $0)..<index(startIndex, offsetBy: min($0 + size, count))])
-        }
-    }
 }

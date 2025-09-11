@@ -141,7 +141,7 @@ actor CertificateMaintenanceService {
     
     /// Start periodic certificate maintenance
     func startMaintenance() {
-        maintenanceTask = Task { [weak self] in
+        maintenanceTask = Task<Void, Never> { [weak self] in
             while !Task.isCancelled {
                 do {
                     try await self?.performMaintenance()
@@ -186,16 +186,6 @@ actor CertificateMaintenanceService {
                 "expiredCertificates": .stringConvertible(expiredCount),
                 "certificatesNeedingRenewal": .stringConvertible(renewalCerts.count)
             ])
-        }
-    }
-}
-
-// MARK: - Helper Extensions
-
-extension String {
-    func chunked(into size: Int) -> [String] {
-        return stride(from: 0, to: count, by: size).map {
-            String(self[index(startIndex, offsetBy: $0)..<index(startIndex, offsetBy: min($0 + size, count))])
         }
     }
 }

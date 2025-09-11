@@ -3,6 +3,7 @@ import FluentPostgresDriver
 import ElementaryHTMX
 import NIOSSL
 import Vapor
+import JWT
 
 // Storage key for certificate maintenance service
 struct CertificateMaintenanceServiceKey: StorageKey {
@@ -33,6 +34,10 @@ public func configure(_ app: Application) async throws {
         relyingPartyName: relyingPartyName,
         relyingPartyOrigin: relyingPartyOrigin
     )
+
+    // Configure JWT for agent enrollment tokens
+    let jwtSecret = Environment.get("JOIN_TOKEN_SECRET") ?? "default-secret-key"
+    app.jwt.signers.use(.hs256(key: jwtSecret))
 
     // Add SpiceDB authorization middleware AFTER session middleware
     // Skip SpiceDB in testing environment

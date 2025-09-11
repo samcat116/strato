@@ -196,13 +196,3 @@ private struct CertificateData: Codable {
     let signature: String
 }
 
-/// Extension to extract base64 content from PEM format
-extension String {
-    func base64EncodedContent() -> String {
-        let lines = self.components(separatedBy: .newlines)
-        let contentLines = lines.filter { line in
-            !line.hasPrefix("-----BEGIN") && !line.hasPrefix("-----END") && !line.isEmpty
-        }
-        return contentLines.joined()
-    }
-}

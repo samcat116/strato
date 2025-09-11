@@ -68,7 +68,8 @@ struct AgentController: RouteCollection {
         let joinTokenService = JoinTokenService(logger: req.logger)
         let joinToken = try joinTokenService.generateJoinToken(
             for: createRequest.agentName,
-            validityHours: createRequest.expirationHours ?? 1
+            validityHours: createRequest.expirationHours ?? 1,
+            req: req
         )
         
         // Get base URL for both legacy and certificate-based connection
