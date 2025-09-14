@@ -52,9 +52,9 @@ class WebSocketClient {
         logger.info("Connecting with mutual TLS authentication")
         
         // Load client certificate and private key
-        let certificate = try await certManager.loadCertificate()
-        let privateKey = try await certManager.loadPrivateKey()
-        let caBundle = try await certManager.loadCABundle()
+        let certificate = try certManager.loadCertificate()
+        let privateKey = try certManager.loadPrivateKey()
+        let caBundle = try certManager.loadCABundle()
         
         // Parse URL
         guard let parsedURL = URL(string: url) else {
@@ -71,7 +71,7 @@ class WebSocketClient {
         
         // For Phase 3, implement simplified mTLS setup
         // In production, this would use full NIOSSL configuration
-        try await connectSimulatedMTLS(host: host, port: port, certificate: certificate)
+        try await connectSimulatedMTLS(host: host, port: port, certificate: certificate, caBundle: caBundle)
     }
     
     private func connectWithoutMTLS() async throws {
@@ -118,14 +118,15 @@ class WebSocketClient {
         }
     }
     
-    private func connectSimulatedMTLS(host: String, port: Int, certificate: AgentCertificateInfo) async throws {
+    private func connectSimulatedMTLS(host: String, port: Int, certificate: AgentCertificateInfo, caBundle: String) async throws {
         // For Phase 3, simulate mTLS connection
         // This would be replaced with actual NIOSSL implementation
         
         logger.info("Simulating mTLS connection", metadata: [
             "host": .string(host),
             "port": .stringConvertible(port),
-            "spiffeURI": .string(certificate.spiffeURI)
+            "spiffeURI": .string(certificate.spiffeURI),
+            "caBundleSize": .stringConvertible(caBundle.count)
         ])
         
         // Simulate TLS handshake delay

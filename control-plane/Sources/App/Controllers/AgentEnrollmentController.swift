@@ -182,7 +182,7 @@ struct AgentEnrollmentController: RouteCollection {
         do {
             // Get signing key from environment or configuration
             let signingKey = Environment.get("JOIN_TOKEN_SECRET") ?? "default-secret-key"
-            let hmacKey = Data(signingKey.utf8)
+            let _ = Data(signingKey.utf8)  // Keep for potential future HMAC validation
             
             // Verify and decode JWT
             let payload = try req.jwt.verify(token, as: JoinTokenPayload.self)
@@ -238,7 +238,7 @@ struct JoinTokenService {
     func generateJoinToken(for agentId: String, validityHours: Int = 1, req: Request) throws -> String {
         let payload = JoinTokenPayload(agentId: agentId, validityHours: validityHours)
         
-        let signingKey = Environment.get("JOIN_TOKEN_SECRET") ?? "default-secret-key"
+        let _ = Environment.get("JOIN_TOKEN_SECRET") ?? "default-secret-key"  // JWT signing handled by req.jwt.sign
         
         let jwt = try req.jwt.sign(payload)
         
@@ -253,5 +253,5 @@ struct JoinTokenService {
 
 // MARK: - Content Conformance Extensions
 
-extension AgentEnrollmentResponse: Content {}
-extension CAInfo: Content {}
+extension AgentEnrollmentResponse: @retroactive Content {}
+extension CAInfo: @retroactive Content {}
