@@ -368,12 +368,19 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
 extension Application {
     var spicedb: SpiceDBServiceProtocol {
         // In testing mode, use a mock implementation
-        if self.environment == .testing {
+        // Check both the environment and if we're in testing context
+        if self.environment == .testing || Environment.get("TESTING") == "1" {
             return MockSpiceDBService()
         }
 
         guard let endpoint = Environment.get("SPICEDB_ENDPOINT") else {
-            fatalError("SPICEDB_ENDPOINT environment variable is required")
+            // In production, this is required, but provide a helpful error
+            if self.environment == .production {
+                fatalError("SPICEDB_ENDPOINT environment variable is required in production")
+            } else {
+                // In development, return mock service if no SpiceDB is configured
+                return MockSpiceDBService()
+            }
         }
         let presharedKey = Environment.get("SPICEDB_PRESHARED_KEY") ?? "strato-dev-key"
         return SpiceDBService(client: self.client, endpoint: endpoint, presharedKey: presharedKey)

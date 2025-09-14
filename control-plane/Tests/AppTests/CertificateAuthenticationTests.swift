@@ -8,6 +8,9 @@ final class CertificateAuthenticationTests: XCTestCase {
     var app: Application!
     
     override func setUp() async throws {
+        // Set testing environment variable to ensure mocks are used
+        setenv("TESTING", "1", 1)
+        
         app = Application(.testing)
         
         // Ensure testing environment is properly detected
@@ -27,6 +30,9 @@ final class CertificateAuthenticationTests: XCTestCase {
     }
     
     override func tearDown() async throws {
+        // Clean up environment variable
+        unsetenv("TESTING")
+        
         try await app.asyncShutdown()
         app = nil
     }
