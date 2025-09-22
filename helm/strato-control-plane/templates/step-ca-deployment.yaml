@@ -1,0 +1,129 @@
+{{- if .Values.stepCA.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-step-ca
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: step-ca
+spec:
+  replicas: {{ .Values.stepCA.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "strato-control-plane.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: step-ca
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/step-ca-configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/step-ca-secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "strato-control-plane.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: step-ca
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "strato-control-plane.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.stepCA.podSecurityContext | nindent 8 }}
+      containers:
+        - name: step-ca
+          image: "{{ .Values.stepCA.image.repository }}:{{ .Values.stepCA.image.tag }}"
+          imagePullPolicy: {{ .Values.stepCA.image.pullPolicy }}
+          ports:
+            - name: https
+              containerPort: 9000
+              protocol: TCP
+          env:
+            - name: DOCKER_STEPCA_INIT_NAME
+              value: {{ .Values.stepCA.init.name | quote }}
+            - name: DOCKER_STEPCA_INIT_DNS_NAMES
+              value: {{ .Values.stepCA.init.dnsNames | quote }}
+            - name: DOCKER_STEPCA_INIT_REMOTE_MANAGEMENT
+              value: "true"
+            - name: DOCKER_STEPCA_INIT_ACME
+              value: "{{ .Values.stepCA.provisioners.acme.enabled }}"
+            - name: DOCKER_STEPCA_INIT_PASSWORD_FILE
+              value: "/tmp/secrets/password.txt"
+            - name: DOCKER_STEPCA_INIT_PROVISIONER_PASSWORD_FILE
+              value: "/tmp/secrets/provisioner-password.txt"
+          {{- if .Values.stepCA.livenessProbe.enabled }}
+          livenessProbe:
+            exec:
+              command:
+                - step
+                - ca
+                - health
+                - --ca-url
+                - https://localhost:9000
+                - --root
+                - /home/step/certs/root_ca.crt
+            initialDelaySeconds: {{ .Values.stepCA.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.stepCA.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.stepCA.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.stepCA.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.stepCA.readinessProbe.enabled }}
+          readinessProbe:
+            exec:
+              command:
+                - step
+                - ca
+                - health
+                - --ca-url
+                - https://localhost:9000
+                - --root
+                - /home/step/certs/root_ca.crt
+            initialDelaySeconds: {{ .Values.stepCA.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.stepCA.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.stepCA.readinessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.stepCA.readinessProbe.successThreshold }}
+            failureThreshold: {{ .Values.stepCA.readinessProbe.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.stepCA.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.stepCA.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: step-ca-data
+              mountPath: /home/step
+            - name: step-ca-config
+              mountPath: /tmp/config
+              readOnly: true
+            - name: step-ca-secrets
+              mountPath: /tmp/secrets
+              readOnly: true
+          command:
+            - step-ca
+            - /home/step/config/ca.json
+            - --password-file
+            - /tmp/secrets/password.txt
+      volumes:
+        - name: step-ca-data
+          {{- if .Values.stepCA.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "strato-control-plane.fullname" . }}-step-ca
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: step-ca-config
+          configMap:
+            name: {{ include "strato-control-plane.fullname" . }}-step-ca
+        - name: step-ca-secrets
+          secret:
+            secretName: {{ include "strato-control-plane.fullname" . }}-step-ca
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

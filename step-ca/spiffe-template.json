@@ -1,0 +1,37 @@
+{
+  "subject": {
+    "commonName": "{{ .Subject.CommonName }}"
+  },
+  "sans": [
+    {{- if .Token.agentId }}
+    {
+      "type": "uri",
+      "value": "spiffe://strato.local/agent/{{ .Token.agentId }}"
+    }
+    {{- end }}
+    {{- if .Insecure.CR.Subject.CommonName }}
+    {{- if .Token.agentId }},{{- end }}
+    {
+      "type": "dns",
+      "value": "{{ .Insecure.CR.Subject.CommonName }}"
+    }
+    {{- end }}
+  ],
+  "keyUsage": ["digitalSignature", "keyEncipherment"],
+  "extKeyUsage": ["clientAuth", "serverAuth"],
+  "basicConstraints": {
+    "isCA": false,
+    "maxPathLen": 0
+  },
+  "nameConstraints": {
+    "critical": false,
+    "permittedDNSDomains": ["strato.local", "*.strato.local"],
+    "excludedDNSDomains": [],
+    "permittedIPRanges": [],
+    "excludedIPRanges": [],
+    "permittedEmailAddresses": [],
+    "excludedEmailAddresses": [],
+    "permittedURIDomains": ["spiffe://strato.local"],
+    "excludedURIDomains": []
+  }
+}

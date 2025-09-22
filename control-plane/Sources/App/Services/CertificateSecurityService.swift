@@ -3,6 +3,11 @@ import Vapor
 import Crypto
 
 /// Service for certificate security validation and recommendations
+///
+/// ⚠️ DEPRECATED: This service has been replaced by step-ca's built-in policy engine.
+/// Use step-ca templates and policies for certificate validation instead.
+/// This service will be removed in a future release.
+@available(*, deprecated, message: "Use step-ca's built-in policy engine and templates")
 struct CertificateSecurityService {
     let logger: Logger
     

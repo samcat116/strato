@@ -105,7 +105,15 @@ strato:
     relyingPartyId: "localhost"
     relyingPartyName: "Strato"
     relyingPartyOrigin: "http://localhost:8080"
-    
+
+  # Step-CA certificate authority configuration
+  stepCA:
+    url: "https://step-ca:9000"
+    fingerprint: ""  # Will be populated after CA initialization
+    provisioner:
+      name: "strato-agents"
+      password: ""  # Will be stored in secret
+
   # External hostname for the control plane (used for WebSocket connections from agents)
   externalHostname: ""  # If empty, will use service name
 
@@ -201,8 +209,12 @@ initContainers:
   waitForDB:
     enabled: true
     image: busybox:1.35
-    
+
   waitForSpiceDB:
+    enabled: true
+    image: busybox:1.35
+
+  waitForStepCA:
     enabled: true
     image: busybox:1.35
 
@@ -249,3 +261,134 @@ monitoring:
     enabled: false
     port: 9090
     path: /metrics
+
+# Step-CA Certificate Authority configuration
+stepCA:
+  enabled: true
+
+  image:
+    repository: smallstep/step-ca
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 9000
+    targetPort: 9000
+
+  # Persistence for CA data
+  persistence:
+    enabled: true
+    size: 10Gi
+    accessMode: ReadWriteOnce
+    storageClass: ""
+
+  # CA initialization configuration
+  init:
+    enabled: true
+    name: "Strato CA"
+    dnsNames: "step-ca,step-ca.default.svc.cluster.local"
+    address: ":9000"
+    provisioner: "strato-admin"
+    # Passwords - CHANGE THESE IN PRODUCTION!
+    password: "strato-ca-password"
+    provisionerPassword: "strato-dev-provisioner-key"
+
+  # Provisioners configuration
+  provisioners:
+    agents:
+      enabled: true
+      name: "strato-agents"
+      type: "JWK"
+      claims:
+        maxTLSCertDuration: "24h"
+        defaultTLSCertDuration: "1h"
+
+    mtls:
+      enabled: true
+      name: "mtls-renewal"
+      type: "X5C"
+      claims:
+        maxTLSCertDuration: "24h"
+        defaultTLSCertDuration: "1h"
+
+    acme:
+      enabled: true
+      name: "acme"
+      type: "ACME"
+
+  # SPIFFE support
+  spiffe:
+    enabled: true
+    trustDomain: "strato.local"
+    templateFile: "/tmp/config/spiffe-template.json"
+
+  # High availability database (optional - uses badger by default)
+  database:
+    enabled: false
+    type: "postgresql"
+    host: ""
+    port: 5432
+    name: "step_ca"
+    username: "step_ca"
+    password: ""
+    sslMode: "require"
+
+  # Security configuration
+  security:
+    # Enable admin API
+    enableAdmin: true
+
+    # TLS configuration
+    tls:
+      minVersion: "1.2"
+      maxVersion: "1.3"
+      cipherSuites:
+        - "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"
+        - "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+
+  # Resource limits
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  # Health checks
+  livenessProbe:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 3
+
+  # Security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+
+  # Network policy
+  networkPolicy:
+    enabled: false
+    ingress: []
+    egress: []

@@ -18,6 +18,7 @@
 
 volumes:
   db_data:
+  step_ca_data:
   qemu_sockets:
   vm_images:
   # ovn_nb_db:
@@ -32,6 +33,11 @@ x-shared_environment: &shared_environment
   DATABASE_PASSWORD: vapor_password
   SPICEDB_ENDPOINT: http://spicedb:8080
   SPICEDB_PRESHARED_KEY: strato-dev-key
+  # Step-CA Configuration
+  STEP_CA_URL: http://step-ca:9000
+  STEP_CA_FINGERPRINT: ${STEP_CA_FINGERPRINT:-}
+  STEP_CA_PROVISIONER_NAME: strato-agents
+  STEP_CA_PROVISIONER_PASSWORD: ${STEP_CA_PROVISIONER_PASSWORD:-strato-dev-provisioner-key}
   # WebAuthn Configuration - Override these for remote deployment
   WEBAUTHN_RELYING_PARTY_ID: ${WEBAUTHN_RELYING_PARTY_ID:-localhost}
   WEBAUTHN_RELYING_PARTY_NAME: ${WEBAUTHN_RELYING_PARTY_NAME:-Strato}
@@ -52,6 +58,8 @@ services:
         condition: service_healthy
       spicedb-schema:
         condition: service_completed_successfully
+      step-ca:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8080:8080"
     networks:
@@ -267,6 +275,30 @@ services:
       ]
     deploy:
       replicas: 0
+
+  step-ca:
+    image: smallstep/step-ca:latest
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - step_ca_data:/home/step
+      - ./step-ca:/tmp/config:ro
+    environment:
+      - DOCKER_STEPCA_INIT_NAME=Strato CA
+      - DOCKER_STEPCA_INIT_DNS_NAMES=step-ca,localhost,127.0.0.1
+      - DOCKER_STEPCA_INIT_REMOTE_MANAGEMENT=true
+      - DOCKER_STEPCA_INIT_ACME=true
+      - DOCKER_STEPCA_INIT_PASSWORD_FILE=/tmp/config/password.txt
+      - DOCKER_STEPCA_INIT_PROVISIONER_PASSWORD_FILE=/tmp/config/provisioner-password.txt
+    networks:
+      - strato-network
+    healthcheck:
+      test: ["CMD", "step", "ca", "health", "--ca-url", "https://localhost:9000", "--root", "/home/step/certs/root_ca.crt"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command: ["step-ca", "/home/step/config/ca.json", "--password-file", "/tmp/config/password.txt"]
 
 networks:
   strato-network:

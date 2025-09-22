@@ -38,6 +38,11 @@ spec:
           image: alpine:3.17
           command: ['sh', '-c', 'apk add --no-cache netcat-openbsd && until nc -z {{ include "strato-control-plane.fullname" . }}-spicedb.{{ .Release.Namespace }}.svc.cluster.local 8080; do echo waiting for SpiceDB; sleep 2; done']
         {{- end }}
+        {{- if and .Values.stepCA.enabled .Values.initContainers.waitForStepCA.enabled }}
+        - name: wait-for-step-ca
+          image: alpine:3.17
+          command: ['sh', '-c', 'apk add --no-cache netcat-openbsd && until nc -z {{ include "strato-control-plane.fullname" . }}-step-ca.{{ .Release.Namespace }}.svc.cluster.local 9000; do echo waiting for Step-CA; sleep 2; done']
+        {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -81,6 +86,19 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.fullname" . }}-spicedb"
                   key: "preshared-key"
+            {{- end }}
+            {{- if .Values.stepCA.enabled }}
+            - name: STEP_CA_URL
+              value: "{{ .Values.strato.stepCA.url }}"
+            - name: STEP_CA_FINGERPRINT
+              value: "{{ .Values.strato.stepCA.fingerprint }}"
+            - name: STEP_CA_PROVISIONER_NAME
+              value: "{{ .Values.strato.stepCA.provisioner.name }}"
+            - name: STEP_CA_PROVISIONER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ include "strato-control-plane.fullname" . }}-step-ca"
+                  key: "provisioner-password.txt"
             {{- end }}
             - name: WEBAUTHN_RELYING_PARTY_ID
               value: "{{ .Values.strato.webauthn.relyingPartyId }}"

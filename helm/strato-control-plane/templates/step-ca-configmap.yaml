@@ -1,0 +1,45 @@
+{{- if .Values.stepCA.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-step-ca
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: step-ca
+data:
+  spiffe-template.json: |
+    {
+      "subject": {
+        "commonName": "{{ "{{ .Subject.CommonName }}" }}"
+      },
+      "sans": [
+        {{- if .Values.stepCA.spiffe.enabled }}
+        {
+          "type": "uri",
+          "value": "spiffe://{{ .Values.stepCA.spiffe.trustDomain }}/agent/{{ "{{ .Token.agentId }}" }}"
+        },
+        {{- end }}
+        {
+          "type": "dns",
+          "value": "{{ "{{ .Insecure.CR.Subject.CommonName }}" }}"
+        }
+      ],
+      "keyUsage": ["digitalSignature", "keyEncipherment"],
+      "extKeyUsage": ["clientAuth", "serverAuth"],
+      "basicConstraints": {
+        "isCA": false,
+        "maxPathLen": 0
+      },
+      "nameConstraints": {
+        "critical": false,
+        "permittedDNSDomains": ["{{ .Values.stepCA.spiffe.trustDomain }}", "*.{{ .Values.stepCA.spiffe.trustDomain }}"],
+        "excludedDNSDomains": [],
+        "permittedIPRanges": [],
+        "excludedIPRanges": [],
+        "permittedEmailAddresses": [],
+        "excludedEmailAddresses": [],
+        "permittedURIDomains": ["spiffe://{{ .Values.stepCA.spiffe.trustDomain }}"],
+        "excludedURIDomains": []
+      }
+    }
+{{- end }}

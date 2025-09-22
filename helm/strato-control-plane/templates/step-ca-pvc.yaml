@@ -1,0 +1,22 @@
+{{- if and .Values.stepCA.enabled .Values.stepCA.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-step-ca
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: step-ca
+spec:
+  accessModes:
+    - {{ .Values.stepCA.persistence.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.stepCA.persistence.size }}
+  {{- if .Values.stepCA.persistence.storageClass }}
+  {{- if (eq "-" .Values.stepCA.persistence.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.stepCA.persistence.storageClass }}
+  {{- end }}
+  {{- end }}
+{{- end }}

@@ -3,6 +3,11 @@ import Fluent
 import Foundation
 
 /// Service for managing certificate revocation and validation
+///
+/// ⚠️ DEPRECATED: This service has been replaced by step-ca's built-in CRL and OCSP support.
+/// Use StepCAClient.getCRL() and StepCAClient.revokeCertificate() instead.
+/// This service will be removed in a future release.
+@available(*, deprecated, message: "Use step-ca's built-in CRL and revocation support via StepCAClient")
 struct CertificateRevocationService {
     let database: Database
     let logger: Logger

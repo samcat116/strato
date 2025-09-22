@@ -5,8 +5,14 @@ import Foundation
 import StratoShared
 
 /// Service for managing Certificate Authority operations
+///
+/// ⚠️ DEPRECATED: This service has been replaced by StepCAClient for step-ca integration.
+/// Use StepCAClient instead for production-ready PKI with SPIFFE support.
+/// This service will be removed in a future release.
+///
 /// Note: This is a simplified implementation for Phase 1
 /// Future versions will use full X.509 certificate parsing and generation
+@available(*, deprecated, message: "Use StepCAClient instead for step-ca integration")
 struct CertificateAuthorityService {
     let database: Database
     let logger: Logger

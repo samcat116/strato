@@ -5,9 +5,9 @@ import NIOSSL
 import Vapor
 import JWT
 
-// Storage key for certificate maintenance service
-struct CertificateMaintenanceServiceKey: StorageKey {
-    typealias Value = CertificateMaintenanceService
+// Storage key for step-ca health service
+struct StepCAHealthServiceKey: StorageKey {
+    typealias Value = StepCAHealthService
 }
 
 public func configure(_ app: Application) async throws {
@@ -35,9 +35,9 @@ public func configure(_ app: Application) async throws {
         relyingPartyOrigin: relyingPartyOrigin
     )
 
-    // Configure JWT for agent enrollment tokens
-    let jwtSecret = Environment.get("JOIN_TOKEN_SECRET") ?? "default-secret-key"
-    app.jwt.signers.use(.hs256(key: jwtSecret))
+    // Configure JWT for agent enrollment tokens using step-ca provisioner password
+    let stepCAProvisionerPassword = Environment.get("STEP_CA_PROVISIONER_PASSWORD") ?? "strato-dev-provisioner-key"
+    app.jwt.signers.use(.hs256(key: stepCAProvisionerPassword))
 
     // Add SpiceDB authorization middleware AFTER session middleware
     // Skip SpiceDB in testing environment
@@ -101,16 +101,17 @@ public func configure(_ app: Application) async throws {
 
     try await app.autoMigrate()
 
-    // Start certificate maintenance service
+    // Start step-ca health monitoring service
     if app.environment != .testing {
-        let maintenanceService = CertificateMaintenanceService(
-            database: app.db,
-            logger: app.logger
+        var healthService = StepCAHealthService(
+            client: app.client,
+            logger: app.logger,
+            database: app.db
         )
-        await maintenanceService.startMaintenance()
-        
+        healthService.startHealthChecks()
+
         // Store service in application storage for cleanup
-        app.storage[CertificateMaintenanceServiceKey.self] = maintenanceService
+        app.storage[StepCAHealthServiceKey.self] = healthService
     }
 
     try routes(app)

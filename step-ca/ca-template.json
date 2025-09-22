@@ -1,0 +1,66 @@
+{
+  "root": "/home/step/certs/root_ca.crt",
+  "federatedRoots": [],
+  "crt": "/home/step/certs/intermediate_ca.crt",
+  "key": "/home/step/secrets/intermediate_ca_key",
+  "address": ":9000",
+  "insecureAddress": "",
+  "dnsNames": ["step-ca", "localhost", "127.0.0.1"],
+  "logger": {
+    "format": "text"
+  },
+  "db": {
+    "type": "badger",
+    "dataSource": "/home/step/db",
+    "badgerFileLoadingMode": ""
+  },
+  "authority": {
+    "enableAdmin": true,
+    "provisioners": [
+      {
+        "type": "JWK",
+        "name": "strato-agents",
+        "key": {
+          "use": "sig",
+          "kty": "EC",
+          "kid": "strato-agents",
+          "crv": "P-256",
+          "alg": "ES256",
+          "x": "__AGENT_JWK_X__",
+          "y": "__AGENT_JWK_Y__",
+          "d": "__AGENT_JWK_D__"
+        },
+        "encryptedKey": "__AGENT_ENCRYPTED_KEY__"
+      },
+      {
+        "type": "X5C",
+        "name": "mtls-renewal",
+        "roots": ["/home/step/certs/root_ca.crt"],
+        "claims": {
+          "maxTLSCertDuration": "24h",
+          "defaultTLSCertDuration": "1h"
+        }
+      },
+      {
+        "type": "ACME",
+        "name": "acme"
+      }
+    ],
+    "template": {
+      "templateFile": "/tmp/config/spiffe-template.json"
+    },
+    "claims": {
+      "maxTLSCertDuration": "8760h",
+      "defaultTLSCertDuration": "1h"
+    }
+  },
+  "tls": {
+    "cipherSuites": [
+      "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+    ],
+    "minVersion": 1.2,
+    "maxVersion": 1.3,
+    "renegotiation": false
+  }
+}

@@ -28,10 +28,13 @@ struct AgentEnrollmentController: RouteCollection {
             throw Abort(.forbidden, reason: "Agent ID mismatch")
         }
         
-        // Get or create default CA
-        let caService = CertificateAuthorityService(database: req.db, logger: req.logger)
-        let ca = try await caService.initializeDefaultCA()
-        
+        // Initialize step-ca client
+        let stepCAClient = try StepCAClient(
+            client: req.client,
+            logger: req.logger,
+            database: req.db
+        )
+
         // Check if agent already has a valid certificate
         if let existingCert = try await AgentCertificate.query(on: req.db)
             .filter(\.$agentId == enrollmentRequest.csr.agentId)
@@ -40,12 +43,20 @@ struct AgentEnrollmentController: RouteCollection {
            existingCert.isValid {
             throw Abort(.conflict, reason: "Agent already has a valid certificate")
         }
-        
-        // Issue new certificate
-        let certificate = try await caService.issueCertificate(
+
+        // Generate join token for step-ca
+        let joinTokenService = JoinTokenService(logger: req.logger)
+        let joinToken = try joinTokenService.generateJoinToken(
+            for: enrollmentRequest.csr.agentId,
+            validityHours: 1,
+            req: req
+        )
+
+        // Issue new certificate via step-ca
+        let certificate = try await stepCAClient.issueCertificate(
             for: enrollmentRequest.csr.agentId,
             csr: enrollmentRequest.csr,
-            ca: ca,
+            joinToken: joinToken,
             validityHours: 24
         )
         
@@ -58,10 +69,13 @@ struct AgentEnrollmentController: RouteCollection {
             clientIP: req.remoteAddress?.hostname
         )
         
+        // Get CA certificate bundle from step-ca
+        let caBundlePEM = try await stepCAClient.getCACertificate()
+
         // Create response
         let response = AgentEnrollmentResponse(
             certificatePEM: certificate.certificatePEM,
-            caBundlePEM: ca.certificatePEM,
+            caBundlePEM: caBundlePEM,
             expiresAt: certificate.expiresAt!,
             spiffeURI: certificate.spiffeURI,
             renewalEndpoint: "/agent/renew"
@@ -99,21 +113,32 @@ struct AgentEnrollmentController: RouteCollection {
             throw Abort(.notFound, reason: "No active certificate found for agent")
         }
         
-        // Get CA
-        let caService = CertificateAuthorityService(database: req.db, logger: req.logger)
-        let ca = try await caService.initializeDefaultCA()
-        
-        // Issue new certificate
-        let newCertificate = try await caService.issueCertificate(
+        // Initialize step-ca client
+        let stepCAClient = try StepCAClient(
+            client: req.client,
+            logger: req.logger,
+            database: req.db
+        )
+
+        // Generate new join token for certificate renewal
+        let joinTokenService = JoinTokenService(logger: req.logger)
+        let renewalToken = try joinTokenService.generateJoinToken(
+            for: agentAuth.agentId,
+            validityHours: 1,
+            req: req
+        )
+
+        // Issue new certificate via step-ca
+        let newCertificate = try await stepCAClient.issueCertificate(
             for: agentAuth.agentId,
             csr: renewalRequest.csr,
-            ca: ca,
+            joinToken: renewalToken,
             validityHours: 24
         )
         
-        // Revoke old certificate
-        try await caService.revokeCertificate(existingCert, reason: "Certificate renewed")
-        
+        // Revoke old certificate via step-ca
+        try await stepCAClient.revokeCertificate(existingCert, reason: "Certificate renewed")
+
         // Log audit events
         let auditService = CertificateAuditService(database: req.db, logger: req.logger)
         await auditService.logRevocation(
@@ -129,11 +154,14 @@ struct AgentEnrollmentController: RouteCollection {
             spiffeURI: newCertificate.spiffeURI,
             clientIP: req.remoteAddress?.hostname
         )
-        
+
+        // Get CA certificate bundle from step-ca
+        let caBundlePEM = try await stepCAClient.getCACertificate()
+
         // Create response
         let response = AgentEnrollmentResponse(
             certificatePEM: newCertificate.certificatePEM,
-            caBundlePEM: ca.certificatePEM,
+            caBundlePEM: caBundlePEM,
             expiresAt: newCertificate.expiresAt!,
             spiffeURI: newCertificate.spiffeURI,
             renewalEndpoint: "/agent/renew"
@@ -150,23 +178,32 @@ struct AgentEnrollmentController: RouteCollection {
     
     /// Get CA certificate bundle for agents
     func getCACertificate(req: Request) async throws -> CAInfo {
-        let caService = CertificateAuthorityService(database: req.db, logger: req.logger)
-        let ca = try await caService.initializeDefaultCA()
-        
+        let stepCAClient = try StepCAClient(
+            client: req.client,
+            logger: req.logger,
+            database: req.db
+        )
+
+        let certificatePEM = try await stepCAClient.getCACertificate()
+
         return CAInfo(
-            certificatePEM: ca.certificatePEM,
-            trustDomain: ca.trustDomain,
-            validFrom: ca.validFrom!,
-            validTo: ca.validTo!
+            certificatePEM: certificatePEM,
+            trustDomain: "strato.local",
+            validFrom: Date(), // Will be extracted from cert in real implementation
+            validTo: Date().addingTimeInterval(10 * 365 * 24 * 60 * 60) // 10 years default
         )
     }
     
     /// Get Certificate Revocation List
     func getCertificateRevocationList(req: Request) async throws -> Response {
-        let revocationService = CertificateRevocationService(database: req.db, logger: req.logger)
-        let crl = try await revocationService.generateCRL()
-        let crlData = try crl.generateCRLData()
-        
+        let stepCAClient = try StepCAClient(
+            client: req.client,
+            logger: req.logger,
+            database: req.db
+        )
+
+        let crlData = try await stepCAClient.getCRL()
+
         return Response(
             status: .ok,
             headers: HTTPHeaders([
@@ -180,27 +217,23 @@ struct AgentEnrollmentController: RouteCollection {
     /// Validate join token (JWT) and extract agent information
     private func validateJoinToken(_ token: String, req: Request) async throws -> JoinTokenPayload {
         do {
-            // Get signing key from environment or configuration
-            let signingKey = Environment.get("JOIN_TOKEN_SECRET") ?? "default-secret-key"
-            let _ = Data(signingKey.utf8)  // Keep for potential future HMAC validation
-            
-            // Verify and decode JWT
+            // Verify and decode JWT using configured signers
             let payload = try req.jwt.verify(token, as: JoinTokenPayload.self)
-            
-            // Check expiration
-            guard payload.expiresAt > Date() else {
+
+            // Check expiration (additional validation beyond JWT verification)
+            guard payload.exp > Date() else {
                 throw Abort(.unauthorized, reason: "Join token has expired")
             }
-            
+
             // TODO: Check if token has been used (implement one-time use)
-            
+
             req.logger.info("Join token validated", metadata: [
                 "agentId": .string(payload.agentId),
-                "expiresAt": .string(payload.expiresAt.description)
+                "expiresAt": .string(payload.exp.description)
             ])
-            
+
             return payload
-            
+
         } catch {
             req.logger.error("Failed to validate join token: \(error)")
             throw Abort(.unauthorized, reason: "Invalid join token")
@@ -208,45 +241,23 @@ struct AgentEnrollmentController: RouteCollection {
     }
 }
 
-/// JWT payload for join tokens
-struct JoinTokenPayload: JWTPayload {
-    let agentId: String
-    let issuedAt: Date
-    let expiresAt: Date
-    let issuer: String
-    
-    init(agentId: String, validityHours: Int = 1) {
-        self.agentId = agentId
-        self.issuedAt = Date()
-        self.expiresAt = Date().addingTimeInterval(TimeInterval(validityHours * 3600))
-        self.issuer = "strato-control-plane"
-    }
-    
-    func verify(using signer: JWTSigner) throws {
-        // Verify expiration
-        guard expiresAt > Date() else {
-            throw JWTError.claimVerificationFailure(name: "exp", reason: "Token has expired")
-        }
-    }
-}
+// JoinTokenPayload is now defined in StepCAClient.swift to avoid duplication
 
 /// Service for generating join tokens
 struct JoinTokenService {
     let logger: Logger
     
-    /// Generate a join token for agent enrollment
+    /// Generate a join token for agent enrollment using configured JWT signers
     func generateJoinToken(for agentId: String, validityHours: Int = 1, req: Request) throws -> String {
         let payload = JoinTokenPayload(agentId: agentId, validityHours: validityHours)
-        
-        let _ = Environment.get("JOIN_TOKEN_SECRET") ?? "default-secret-key"  // JWT signing handled by req.jwt.sign
-        
+
         let jwt = try req.jwt.sign(payload)
-        
+
         logger.info("Generated join token", metadata: [
             "agentId": .string(agentId),
-            "expiresAt": .string(payload.expiresAt.description)
+            "expiresAt": .string(payload.exp.description)
         ])
-        
+
         return jwt
     }
 }
