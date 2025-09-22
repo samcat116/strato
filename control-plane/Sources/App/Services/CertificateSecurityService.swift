@@ -63,56 +63,43 @@ struct CertificateSecurityService {
         var overallScore = 100
         
         // Parse certificate (simplified validation for now)
-        do {
-            // In a real implementation, we would parse the PEM and extract certificate details
-            // For now, we'll simulate basic validations
-            
-            validations.append(SecurityValidation(
-                check: "Certificate Format",
-                passed: certificatePEM.contains("-----BEGIN CERTIFICATE-----"),
-                message: certificatePEM.contains("-----BEGIN CERTIFICATE-----") ? "Valid PEM format" : "Invalid PEM format",
-                severity: .high
-            ))
-            
-            if !certificatePEM.contains("-----BEGIN CERTIFICATE-----") {
-                overallScore -= 50
-            }
-            
-            // Simulate key algorithm check
-            validations.append(SecurityValidation(
-                check: "Key Algorithm",
-                passed: true,
-                message: "Using modern key algorithm",
-                severity: .medium
-            ))
-            
-            // Simulate certificate lifetime check
-            validations.append(SecurityValidation(
-                check: "Certificate Lifetime",
-                passed: true,
-                message: "Certificate lifetime within recommended bounds",
-                severity: .high
-            ))
-            
-            // Simulate extensions check
-            validations.append(SecurityValidation(
-                check: "Required Extensions",
-                passed: true,
-                message: "Certificate contains required extensions",
-                severity: .medium
-            ))
-            
-        } catch {
-            logger.error("Failed to validate certificate: \(error)")
-            overallScore = 0
-            
-            validations.append(SecurityValidation(
-                check: "Certificate Parsing",
-                passed: false,
-                message: "Failed to parse certificate: \(error.localizedDescription)",
-                severity: .high
-            ))
+        // In a real implementation, we would parse the PEM and extract certificate details
+        // For now, we'll simulate basic validations
+
+        validations.append(SecurityValidation(
+            check: "Certificate Format",
+            passed: certificatePEM.contains("-----BEGIN CERTIFICATE-----"),
+            message: certificatePEM.contains("-----BEGIN CERTIFICATE-----") ? "Valid PEM format" : "Invalid PEM format",
+            severity: .high
+        ))
+
+        if !certificatePEM.contains("-----BEGIN CERTIFICATE-----") {
+            overallScore -= 50
         }
+
+        // Simulate key algorithm check
+        validations.append(SecurityValidation(
+            check: "Key Algorithm",
+            passed: true,
+            message: "Using modern key algorithm",
+            severity: .medium
+        ))
+
+        // Simulate certificate lifetime check
+        validations.append(SecurityValidation(
+            check: "Certificate Lifetime",
+            passed: true,
+            message: "Certificate lifetime within recommended bounds",
+            severity: .high
+        ))
+
+        // Simulate extensions check
+        validations.append(SecurityValidation(
+            check: "Required Extensions",
+            passed: true,
+            message: "Certificate contains required extensions",
+            severity: .medium
+        ))
         
         return SecurityValidationResult(
             score: overallScore,

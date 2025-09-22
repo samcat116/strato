@@ -44,7 +44,7 @@ struct CertificateAuthorityService {
             validTo: caValidTo
         )
         
-        let caPrivateKeyPEM = try caPrivateKey.pemRepresentation
+        let caPrivateKeyPEM = caPrivateKey.pemRepresentation
         
         // Create CA model
         let ca = CertificateAuthority(

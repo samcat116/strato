@@ -111,7 +111,15 @@ struct CertificateRevocationList: Codable {
     let thisUpdate: Date
     let nextUpdate: Date
     let revokedCertificates: [RevokedCertificate]
-    let version: Int = 2
+    let version: Int
+
+    init(issuer: String, thisUpdate: Date, nextUpdate: Date, revokedCertificates: [RevokedCertificate]) {
+        self.issuer = issuer
+        self.thisUpdate = thisUpdate
+        self.nextUpdate = nextUpdate
+        self.revokedCertificates = revokedCertificates
+        self.version = 2
+    }
     
     /// Generate CRL in simplified format
     func generateCRLData() throws -> String {
@@ -132,7 +140,7 @@ struct CertificateRevocationList: Codable {
 actor CertificateMaintenanceService {
     private let database: Database
     private let logger: Logger
-    private var maintenanceTask: Task<Void, Never>?
+    private var maintenanceTask: Task<Void, Error>?
     
     init(database: Database, logger: Logger) {
         self.database = database
@@ -141,7 +149,7 @@ actor CertificateMaintenanceService {
     
     /// Start periodic certificate maintenance
     func startMaintenance() {
-        maintenanceTask = Task<Void, Never> { [weak self] in
+        maintenanceTask = Task { [weak self] in
             while !Task.isCancelled {
                 do {
                     try await self?.performMaintenance()

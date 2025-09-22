@@ -11,7 +11,7 @@ final class CertificateAuthenticationTests: XCTestCase {
         // Set testing environment variable to ensure mocks are used
         setenv("TESTING", "1", 1)
         
-        app = Application(.testing)
+        app = try await Application.make(.testing)
         
         // Ensure testing environment is properly detected
         XCTAssertEqual(app.environment, .testing, "App should be in testing environment")
@@ -43,7 +43,10 @@ final class CertificateAuthenticationTests: XCTestCase {
         
         // Create join token service
         let joinTokenService = JoinTokenService(logger: app.logger)
-        let joinToken = try joinTokenService.generateJoinToken(for: "test-agent")
+
+        // Create a mock request for testing
+        let testRequest = Request(application: app, method: .GET, url: URI("/"), on: app.eventLoopGroup.next())
+        let joinToken = try joinTokenService.generateJoinToken(for: "test-agent", req: testRequest)
         
         XCTAssertFalse(joinToken.isEmpty, "Join token should not be empty")
         
@@ -117,14 +120,16 @@ final class CertificateAuthenticationTests: XCTestCase {
         
         // Verify certificate is active
         XCTAssertEqual(certificate.status, .active)
-        XCTAssertFalse(try await revocationService.isCertificateRevoked(serialNumber: certificate.serialNumber))
-        
+        let isRevokedBefore = try await revocationService.isCertificateRevoked(serialNumber: certificate.serialNumber)
+        XCTAssertFalse(isRevokedBefore)
+
         // Revoke the certificate
         try await caService.revokeCertificate(certificate, reason: "Test revocation")
-        
+
         // Verify certificate is revoked
         XCTAssertEqual(certificate.status, .revoked)
-        XCTAssertTrue(try await revocationService.isCertificateRevoked(serialNumber: certificate.serialNumber))
+        let isRevokedAfter = try await revocationService.isCertificateRevoked(serialNumber: certificate.serialNumber)
+        XCTAssertTrue(isRevokedAfter)
         
         // Test CRL generation
         let crl = try await revocationService.generateCRL()
