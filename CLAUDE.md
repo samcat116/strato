@@ -35,7 +35,22 @@ The agent uses TOML configuration files to set connection and operational parame
 - `cd control-plane && npm run lint:fix` - Automatically fix JavaScript style issues where possible
 - `cd control-plane && npm test` - Run JavaScript linting (alias for lint command)
 
-### Docker Development
+### Skaffold + Helm Development (Recommended)
+- `minikube start --memory=4096 --cpus=2` - Start local Kubernetes cluster
+- `cd helm/strato && helm dependency build` - Build Helm chart dependencies (run once)
+- `skaffold dev` - Start full development environment with hot reload
+- `skaffold dev --profile=minimal` - Start minimal environment (Control Plane, PostgreSQL, Permify only)
+- `skaffold dev --profile=debug` - Start with debug logging and Swift debug builds
+- `skaffold build` - Build container images locally
+- `skaffold delete` - Stop and clean up development environment
+- `kubectl logs -f deployment/strato-control-plane` - View Control Plane logs
+- `kubectl logs -f deployment/strato-agent` - View Agent logs
+- `kubectl get pods` - Check status of all services
+- `kubectl port-forward service/strato-control-plane 8080:8080` - Access Control Plane at localhost:8080
+- `minikube service strato-control-plane --url` - Get external URL for Control Plane
+- `minikube stop` - Stop Kubernetes cluster
+
+### Docker Development (Legacy - being phased out)
 - `./scripts/prepare-build.sh` - Prepare build context (run before first Docker build)
 - `docker compose build` - Build Docker images for both control plane and agent
 - `docker compose up control-plane` - Start the control plane with database and Permify

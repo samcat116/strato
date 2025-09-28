@@ -1,0 +1,68 @@
+# Skaffold Configuration Schema Contract
+# This defines the expected structure for skaffold.yaml
+
+apiVersion: skaffold/v4beta11
+kind: Config
+metadata:
+  name: strato-development
+
+build:
+  artifacts:
+    - image: strato-control-plane
+      context: control-plane
+      docker:
+        dockerfile: Dockerfile
+      sync:
+        manual:
+          - src: "Sources/**/*.swift"
+            dest: /app/Sources
+          - src: "Resources/**/*"
+            dest: /app/Resources
+          - src: "web/**/*"
+            dest: /app/web
+
+    - image: strato-agent
+      context: agent
+      docker:
+        dockerfile: Dockerfile
+      sync:
+        manual:
+          - src: "Sources/**/*.swift"
+            dest: /app/Sources
+
+manifests:
+  helm:
+    releases:
+      - name: strato
+        chartPath: helm/strato
+        valuesFiles:
+          - helm/strato/values-dev.yaml
+        setValueTemplates:
+          controlPlane.image.repository: "{{.IMAGE_REPO_strato_control_plane}}"
+          controlPlane.image.tag: "{{.IMAGE_TAG_strato_control_plane}}"
+          agent.image.repository: "{{.IMAGE_REPO_strato_agent}}"
+          agent.image.tag: "{{.IMAGE_TAG_strato_agent}}"
+
+deploy:
+  helm: {}
+
+profiles:
+  - name: debug
+    activation:
+      - env: SKAFFOLD_PROFILE=debug
+    patches:
+      - op: add
+        path: /build/artifacts/0/docker/buildArgs
+        value:
+          SWIFT_BUILD_FLAGS: "--configuration debug"
+      - op: replace
+        path: /manifests/helm/releases/0/setValueTemplates/controlPlane.env.LOG_LEVEL
+        value: debug
+
+  - name: minimal
+    activation:
+      - env: SKAFFOLD_PROFILE=minimal
+    patches:
+      - op: remove
+        path: /manifests/helm/releases/0/setValueTemplates/agent
+      # Deploys only control-plane and its dependencies

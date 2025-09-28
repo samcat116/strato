@@ -34,8 +34,7 @@ COPY ./agent .
 # Build the application statically, with optimizations and using jemalloc
 RUN swift build -c release \
     --product StratoAgent \
-    -Xlinker -ljemalloc \
-    -Xlinker -static-stdlib
+    -Xlinker -ljemalloc
 
 # Switch to the staging area
 WORKDIR /staging

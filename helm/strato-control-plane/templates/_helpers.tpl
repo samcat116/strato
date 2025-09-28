@@ -64,7 +64,7 @@ Get the database host
 */}}
 {{- define "strato-control-plane.databaseHost" -}}
 {{- if .Values.postgresql.enabled }}
-{{- printf "%s-postgresql" (include "strato-control-plane.fullname" .) }}
+{{- printf "%s-postgresql" .Release.Name }}
 {{- else }}
 {{- .Values.externalDatabase.host }}
 {{- end }}
@@ -75,7 +75,7 @@ Get the database password secret name
 */}}
 {{- define "strato-control-plane.databaseSecretName" -}}
 {{- if .Values.postgresql.enabled }}
-{{- printf "%s-postgresql" (include "strato-control-plane.fullname" .) }}
+{{- printf "%s-postgresql" .Release.Name }}
 {{- else }}
 {{- printf "%s-external-db" (include "strato-control-plane.fullname" .) }}
 {{- end }}
@@ -113,6 +113,19 @@ SpiceDB selector labels
 app.kubernetes.io/name: {{ include "strato-control-plane.name" . }}-spicedb
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: spicedb
+{{- end }}
+
+{{/*
+SpiceDB base labels (without component)
+*/}}
+{{- define "strato-control-plane.spicedb.baseLabels" -}}
+helm.sh/chart: {{ include "strato-control-plane.chart" . }}
+app.kubernetes.io/name: {{ include "strato-control-plane.name" . }}-spicedb
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*

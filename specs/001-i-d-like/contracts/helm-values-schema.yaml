@@ -1,0 +1,192 @@
+# Helm Values Schema Contract
+# This defines the expected structure for values.yaml and values-dev.yaml
+
+# Global configuration
+global:
+  namespace: strato
+  imageRegistry: ""
+  imagePullPolicy: IfNotPresent
+
+# Control Plane service configuration
+controlPlane:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: strato-control-plane
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 8080
+    targetPort: 8080
+
+  env:
+    DATABASE_URL: "postgresql://strato:password@postgresql:5432/strato"
+    PERMIFY_URL: "http://permify:3476"
+    WEBAUTHN_RELYING_PARTY_ID: "localhost"
+    WEBAUTHN_RELYING_PARTY_NAME: "Strato"
+    WEBAUTHN_RELYING_PARTY_ORIGIN: "http://localhost:8080"
+    LOG_LEVEL: "info"
+
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+# Agent service configuration
+agent:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: strato-agent
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  env:
+    CONTROL_PLANE_URL: "ws://strato-control-plane:8080/agent/ws"
+    LOG_LEVEL: "info"
+    QEMU_SOCKET_DIR: "/var/run/qemu"
+
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 200m
+
+# PostgreSQL database configuration
+postgresql:
+  enabled: true
+  auth:
+    username: strato
+    password: password
+    database: strato
+
+  primary:
+    persistence:
+      enabled: true
+      size: 1Gi
+      storageClass: ""
+
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 300m
+
+# Permify authorization service
+permify:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: ghcr.io/permify/permify
+    tag: latest
+
+  service:
+    type: ClusterIP
+    port: 3476
+
+  env:
+    PERMIFY_DATABASE_ENGINE: postgres
+    PERMIFY_DATABASE_URI: "postgresql://strato:password@postgresql:5432/strato"
+
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 128Mi
+      cpu: 100m
+
+# OVN Networking services
+ovn:
+  enabled: true
+
+  northd:
+    image:
+      repository: ovn/ovn-daemonset
+      tag: latest
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 50m
+      limits:
+        memory: 128Mi
+        cpu: 100m
+
+  nbdb:
+    image:
+      repository: ovn/ovn-daemonset
+      tag: latest
+    persistence:
+      enabled: true
+      size: 1Gi
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 50m
+      limits:
+        memory: 128Mi
+        cpu: 100m
+
+  sbdb:
+    image:
+      repository: ovn/ovn-daemonset
+      tag: latest
+    persistence:
+      enabled: true
+      size: 1Gi
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 50m
+      limits:
+        memory: 128Mi
+        cpu: 100m
+
+# Open vSwitch configuration
+openvswitch:
+  enabled: true
+  image:
+    repository: openvswitch/ovs
+    tag: latest
+
+  hostNetwork: true
+  privileged: true
+
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 200m
+
+# Development-specific overrides (values-dev.yaml)
+dev:
+  # Enable NodePort services for external access
+  controlPlane:
+    service:
+      type: NodePort
+      nodePort: 30080
+
+  # Enable debug logging
+  global:
+    logLevel: debug
+
+  # Reduced resource limits for development
+  resources:
+    enabled: false  # Disable resource limits
+
+  # Faster image pulls
+  imagePullPolicy: Never  # Use local images only
