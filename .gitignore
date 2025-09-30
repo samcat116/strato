@@ -16,3 +16,4 @@ node_modules/
 .claude/
 charts
 /helm/strato-control-plane/Chart.lock
+.specify

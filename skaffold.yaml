@@ -1,0 +1,81 @@
+apiVersion: skaffold/v4beta11
+kind: Config
+metadata:
+  name: strato-development
+
+build:
+  local:
+    push: false
+  artifacts:
+    - image: strato-control-plane
+      context: .
+      docker:
+        dockerfile: control-plane/Dockerfile
+      sync:
+        manual:
+          - src: "control-plane/Sources/**/*.swift"
+            dest: /app/Sources
+          - src: "control-plane/Resources/**/*"
+            dest: /app/Resources
+          - src: "control-plane/web/**/*"
+            dest: /app/web
+
+manifests:
+  helm:
+    releases:
+      - name: strato
+        chartPath: helm/strato-control-plane
+        valuesFiles:
+          - helm-test-values.yaml
+        setValueTemplates:
+          image.repository: "{{.IMAGE_REPO_strato_control_plane}}"
+          image.tag: "{{.IMAGE_TAG_strato_control_plane}}"
+        namespace: strato-skaffold
+        createNamespace: true
+        wait: true
+
+deploy:
+  helm: {}
+
+profiles:
+  - name: debug
+    activation:
+      - env: SKAFFOLD_PROFILE=debug
+    patches:
+      - op: add
+        path: /build/artifacts/0/docker/buildArgs
+        value:
+          SWIFT_BUILD_FLAGS: "--configuration debug"
+      - op: add
+        path: /build/artifacts/1/docker/buildArgs
+        value:
+          SWIFT_BUILD_FLAGS: "--configuration debug"
+      - op: add
+        path: /manifests/helm/releases/0/setValues
+        value:
+          controlPlane.env.LOG_LEVEL: "debug"
+          agent.env.LOG_LEVEL: "debug"
+
+  - name: minimal
+    activation:
+      - env: SKAFFOLD_PROFILE=minimal
+    patches:
+      - op: add
+        path: /manifests/helm/releases/0/setValues
+        value:
+          agent.enabled: false
+          ovn.enabled: false
+          openvswitch.enabled: false
+      # Deploys only control-plane, PostgreSQL, and Permify
+
+  - name: production
+    activation:
+      - env: SKAFFOLD_PROFILE=production
+    patches:
+      - op: replace
+        path: /manifests/helm/releases/0/valuesFiles
+        value:
+          - helm/strato/values.yaml
+      - op: replace
+        path: /manifests/helm/releases/0/namespace
+        value: strato

@@ -1,7 +1,7 @@
 image:
-  repository: nginx
-  tag: "1.21"
-  pullPolicy: Always
+  repository: strato-control-plane
+  tag: "latest"
+  pullPolicy: IfNotPresent
 
 strato:
   logLevel: debug
@@ -25,17 +25,13 @@ postgresql:
 # Disable resource limits for testing
 resources: {}
 
-spicedb:
-  enabled: true
-  resources: {}
-
-# Disable init containers for testing
+# Enable init containers for proper startup ordering
 initContainers:
   waitForDB:
-    enabled: false
+    enabled: true
   waitForSpiceDB:
-    enabled: false
+    enabled: true
 
-# Disable migration job for testing  
+# Enable migration job
 migration:
-  enabled: false
+  enabled: true

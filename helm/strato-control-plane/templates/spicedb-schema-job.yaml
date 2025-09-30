@@ -14,7 +14,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "strato-control-plane.spicedb.selectorLabels" . | nindent 8 }}
+        {{- include "strato-control-plane.spicedb.baseLabels" . | nindent 8 }}
         app.kubernetes.io/component: spicedb-schema
     spec:
       restartPolicy: OnFailure
