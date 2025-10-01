@@ -17,3 +17,5 @@ node_modules/
 charts
 /helm/strato-control-plane/Chart.lock
 .specify
+/tls.crt
+/tls.key
