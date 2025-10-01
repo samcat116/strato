@@ -83,7 +83,7 @@ spec:
                   key: "preshared-key"
             {{- end }}
             - name: WEBAUTHN_RELYING_PARTY_ID
-              value: "{{ .Values.strato.webauthn.relyingPartyId }}"
+              value: "{{ include "strato-control-plane.webauthnRelyingPartyId" . }}"
             - name: WEBAUTHN_RELYING_PARTY_NAME
               value: "{{ .Values.strato.webauthn.relyingPartyName }}"
             - name: WEBAUTHN_RELYING_PARTY_ORIGIN

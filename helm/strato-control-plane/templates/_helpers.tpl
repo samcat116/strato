@@ -129,7 +129,29 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
-Get the WebAuthn origin URL
+Get the primary hostname
+*/}}
+{{- define "strato-control-plane.hostname" -}}
+{{- if .Values.ingress.enabled }}
+{{- (first .Values.ingress.hosts).host }}
+{{- else }}
+{{- "localhost" }}
+{{- end }}
+{{- end }}
+
+{{/*
+Get the WebAuthn relying party ID (domain without protocol/port)
+*/}}
+{{- define "strato-control-plane.webauthnRelyingPartyId" -}}
+{{- if .Values.strato.webauthn.relyingPartyId }}
+{{- .Values.strato.webauthn.relyingPartyId }}
+{{- else }}
+{{- include "strato-control-plane.hostname" . }}
+{{- end }}
+{{- end }}
+
+{{/*
+Get the WebAuthn origin URL (protocol + domain + port)
 */}}
 {{- define "strato-control-plane.webauthnOrigin" -}}
 {{- if .Values.strato.webauthn.relyingPartyOrigin }}
