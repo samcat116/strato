@@ -134,6 +134,10 @@ strato:
 # SpiceDB configuration
 spicedb:
   enabled: true
+  nameOverride: ""
+  fullnameOverride: ""
+  operator:
+    enabled: true
   image:
     repository: authzed/spicedb
     tag: v1.35.3

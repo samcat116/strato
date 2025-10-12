@@ -19,3 +19,4 @@ charts
 .specify
 /tls.crt
 /tls.key
+/strato-control-plane-0.1.0.tgz

@@ -35,8 +35,8 @@
 3. SpiceDB Authorization:
 {{- if .Values.spicedb.enabled }}
    - SpiceDB is deployed as part of this release
-   - HTTP endpoint: http://{{ include "strato-control-plane.fullname" . }}-spicedb:{{ .Values.spicedb.service.httpPort }}
-   - gRPC endpoint: {{ include "strato-control-plane.fullname" . }}-spicedb:{{ .Values.spicedb.service.grpcPort }}
+   - HTTP endpoint: http://{{ include "strato-control-plane.spicedb.fullname" . }}:{{ .Values.spicedb.service.httpPort }}
+   - gRPC endpoint: {{ include "strato-control-plane.spicedb.fullname" . }}:{{ .Values.spicedb.service.grpcPort }}
 {{- else }}
    - SpiceDB is disabled. Authorization features will not be available.
 {{- end }}

@@ -95,9 +95,23 @@ db-password
 {{/*
 SpiceDB labels
 */}}
+{{- define "strato-control-plane.spicedb.name" -}}
+{{- $suffix := default "spicedb" .Values.spicedb.nameOverride -}}
+{{- printf "%s-%s" (include "strato-control-plane.name" .) $suffix | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "strato-control-plane.spicedb.fullname" -}}
+{{- if .Values.spicedb.fullnameOverride }}
+{{- .Values.spicedb.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- $suffix := default "spicedb" .Values.spicedb.nameOverride -}}
+{{- printf "%s-%s" (include "strato-control-plane.fullname" .) $suffix | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+
 {{- define "strato-control-plane.spicedb.labels" -}}
 helm.sh/chart: {{ include "strato-control-plane.chart" . }}
-app.kubernetes.io/name: {{ include "strato-control-plane.name" . }}-spicedb
+app.kubernetes.io/name: {{ include "strato-control-plane.spicedb.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: spicedb
 {{- if .Chart.AppVersion }}
@@ -110,7 +124,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 SpiceDB selector labels
 */}}
 {{- define "strato-control-plane.spicedb.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "strato-control-plane.name" . }}-spicedb
+app.kubernetes.io/name: {{ include "strato-control-plane.spicedb.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: spicedb
 {{- end }}
@@ -120,7 +134,7 @@ SpiceDB base labels (without component)
 */}}
 {{- define "strato-control-plane.spicedb.baseLabels" -}}
 helm.sh/chart: {{ include "strato-control-plane.chart" . }}
-app.kubernetes.io/name: {{ include "strato-control-plane.name" . }}-spicedb
+app.kubernetes.io/name: {{ include "strato-control-plane.spicedb.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
