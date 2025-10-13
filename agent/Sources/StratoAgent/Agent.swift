@@ -13,7 +13,7 @@ actor Agent {
     
     private var websocketClient: WebSocketClient?
     private var qemuService: QEMUService?
-    private var networkService: NetworkService?
+    private var networkService: (any NetworkServiceProtocol)?
     private var heartbeatTask: Task<Void, Error>?
     private var isRunning = false
     
@@ -38,8 +38,14 @@ actor Agent {
         }
         
         logger.info("Initializing network service")
-        networkService = NetworkService(logger: logger)
-        
+
+        // Initialize platform-specific network service
+        #if os(Linux)
+        networkService = NetworkServiceLinux(logger: logger)
+        #else
+        networkService = NetworkServiceMacOS(logger: logger)
+        #endif
+
         do {
             if let service = networkService {
                 try await service.connect()
@@ -109,18 +115,33 @@ actor Agent {
     
     private func registerWithControlPlane() async throws {
         let resources = await getAgentResources()
+        let capabilities = getAgentCapabilities()
         let message = AgentRegisterMessage(
             agentId: agentID,
             hostname: ProcessInfo.processInfo.hostName,
             version: "1.0.0",
-            capabilities: ["vm_management", "qemu", "swift_ovn_networking"],
+            capabilities: capabilities,
             resources: resources
         )
-        
+
         if let client = websocketClient {
             try await client.sendMessage(message)
         }
         logger.info("Registration message sent to control plane")
+    }
+
+    private func getAgentCapabilities() -> [String] {
+        var capabilities = ["vm_management", "qemu"]
+
+        #if canImport(SwiftQEMU)
+        #if os(Linux)
+        capabilities.append(contentsOf: ["kvm", "ovn_networking"])
+        #elseif os(macOS)
+        capabilities.append(contentsOf: ["hvf", "user_networking"])
+        #endif
+        #endif
+
+        return capabilities
     }
     
     private func unregisterFromControlPlane() async throws {
