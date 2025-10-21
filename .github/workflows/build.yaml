@@ -11,44 +11,12 @@ permissions:
   actions: read
 
 jobs:
-  test:
-    name: Run Tests
+  lint-js:
+    name: JavaScript Linting
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_DB: strato_test
-          POSTGRES_USER: strato
-          POSTGRES_PASSWORD: strato_password
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev zlib1g-dev zstd
-
-      - name: Cache Swift packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            control-plane/.build
-            agent/.build
-            shared/.build
-          key: ${{ runner.os }}-swift-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-swift-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}-
-            ${{ runner.os }}-swift-
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -65,25 +33,80 @@ jobs:
         working-directory: control-plane
         run: npm run lint
 
-      - name: Build Control Plane
-        working-directory: control-plane
+  build-swift:
+    name: Build Swift Packages
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [control-plane, shared]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev zlib1g-dev zstd
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ matrix.package }}/.build
+          key: ${{ runner.os }}-swift-${{ matrix.package }}-${{ hashFiles(format('{0}/Package.resolved', matrix.package)) }}
+          restore-keys: |
+            ${{ runner.os }}-swift-${{ matrix.package }}-
+
+      - name: Build ${{ matrix.package }}
+        working-directory: ${{ matrix.package }}
         run: swift build --build-tests
 
-      # - name: Build Agent
-      #   working-directory: agent
-      #   run: swift build --build-tests
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-build-${{ matrix.package }}
+          path: ${{ matrix.package }}/.build
+          retention-days: 1
 
-      - name: Build Shared Package
-        working-directory: shared
-        run: swift build --build-tests
+  test-swift:
+    name: Test Swift Packages
+    needs: build-swift
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: strato_test
+          POSTGRES_USER: strato
+          POSTGRES_PASSWORD: strato_password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    strategy:
+      matrix:
+        package: [control-plane]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Test Control Plane
-        working-directory: control-plane
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev zlib1g-dev zstd
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: swift-build-${{ matrix.package }}
+          path: ${{ matrix.package }}/.build
+
+      - name: Test ${{ matrix.package }}
+        working-directory: ${{ matrix.package }}
         run: swift test --skip-build --parallel
-
-      # - name: Test Shared Package
-      #   working-directory: shared
-      #   run: swift test --skip-build --parallel
 
   security:
     name: Security Scan
@@ -105,9 +128,9 @@ jobs:
         if: always()
         with:
           sarif_file: "trivy-results.sarif"
-  build-swift:
+  build-swift-release:
     name: Build Swift Release Binaries
-    needs: [test]
+    needs: [test-swift]
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -133,9 +156,8 @@ jobs:
             control-plane/.build
             agent/.build
             shared/.build
-          key: ${{ runner.os }}-${{ matrix.arch }}-swift-release-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}-${{ github.sha }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-swift-release-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-swift-release-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}-
             ${{ runner.os }}-${{ matrix.arch }}-swift-release-
 
       - name: Setup Node.js
@@ -185,7 +207,7 @@ jobs:
 
   build:
     name: Build Docker Images
-    needs: [build-swift]
+    needs: [build-swift-release]
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
