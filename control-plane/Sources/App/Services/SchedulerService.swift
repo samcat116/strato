@@ -1,5 +1,6 @@
 import Vapor
 import Fluent
+import NIOConcurrencyHelpers
 
 /// Scheduling strategy for VM placement
 public enum SchedulingStrategy: String, Codable {
@@ -89,20 +90,17 @@ public enum SchedulerError: Error, CustomStringConvertible {
 }
 
 /// Service responsible for scheduling VM placement decisions
-public final class SchedulerService: Sendable {
+public final class SchedulerService {
     private let logger: Logger
     private let defaultStrategy: SchedulingStrategy
-    private let roundRobinCounter: UnsafeMutablePointer<Int>
+    private let lock: NIOLock
+    private var roundRobinCounter: Int
 
     public init(logger: Logger, defaultStrategy: SchedulingStrategy = .leastLoaded) {
         self.logger = logger
         self.defaultStrategy = defaultStrategy
-        self.roundRobinCounter = UnsafeMutablePointer<Int>.allocate(capacity: 1)
-        self.roundRobinCounter.initialize(to: 0)
-    }
-
-    deinit {
-        roundRobinCounter.deallocate()
+        self.lock = NIOLock()
+        self.roundRobinCounter = 0
     }
 
     /// Select an agent for VM placement using the configured strategy
@@ -199,8 +197,10 @@ public final class SchedulerService: Sendable {
         }
 
         // Thread-safe increment and wrap
-        let index = roundRobinCounter.pointee % agents.count
-        roundRobinCounter.pointee = (roundRobinCounter.pointee + 1) % Int.max
+        lock.lock()
+        let index = roundRobinCounter % agents.count
+        roundRobinCounter = (roundRobinCounter + 1) % Int.max
+        lock.unlock()
 
         let selected = agents[index]
         logger.debug("RoundRobin selected agent '\(selected.name)' (index: \(index)/\(agents.count))")
