@@ -14,9 +14,33 @@ actor AgentService {
 
     init(app: Application) {
         self.app = app
-        // Start heartbeat monitoring after initialization
+        // Start heartbeat monitoring and restore VM mappings after initialization
         Task {
             await startHeartbeatMonitoring()
+            await restoreVMToAgentMappings()
+        }
+    }
+
+    // MARK: - VM-to-Agent Mapping Recovery
+
+    /// Restore VM-to-agent mappings from database on startup
+    /// This ensures that if the control plane restarts, we don't lose track of which VMs are on which agents
+    private func restoreVMToAgentMappings() async {
+        do {
+            let db = app.db
+            let vms = try await VM.query(on: db)
+                .filter(\.$hypervisorId != nil)
+                .all()
+
+            for vm in vms {
+                if let vmId = vm.id?.uuidString, let hypervisorId = vm.hypervisorId {
+                    vmToAgentMapping[vmId] = hypervisorId
+                }
+            }
+
+            app.logger.info("Restored VM-to-agent mappings for \(vms.count) VMs from database")
+        } catch {
+            app.logger.error("Failed to restore VM-to-agent mappings from database: \(error)")
         }
     }
 
@@ -238,9 +262,20 @@ actor AgentService {
 
     // MARK: - VM Operations
 
-    func createVM(vm: VM, vmConfig: VmConfig) async throws {
-        // Select best agent for this VM
-        guard let agentId = selectAgentForVM(vm: vm) else {
+    func createVM(vm: VM, vmConfig: VmConfig, db: Database, strategy: SchedulingStrategy? = nil) async throws {
+        // Convert agents to schedulable format
+        let schedulableAgents = getSchedulableAgents()
+
+        // Use scheduler to select best agent
+        let agentId: String
+        do {
+            agentId = try app.scheduler.selectAgent(
+                for: vm,
+                from: schedulableAgents,
+                strategy: strategy
+            )
+        } catch let error as SchedulerError {
+            app.logger.error("Scheduler failed to find suitable agent: \(error)")
             throw AgentServiceError.noAvailableAgent
         }
 
@@ -255,8 +290,12 @@ actor AgentService {
 
         try await sendMessageToAgent(message, agent: agent)
 
-        // Map VM to agent
+        // Map VM to agent (in-memory)
         vmToAgentMapping[vm.id?.uuidString ?? ""] = agentId
+
+        // Persist hypervisor assignment to database
+        vm.hypervisorId = agentId
+        try await vm.save(on: db)
 
         app.logger.info("VM creation requested", metadata: [
             "vmId": .string(vm.id?.uuidString ?? ""),
@@ -325,21 +364,32 @@ actor AgentService {
 
     // MARK: - Agent Selection
 
-    private func selectAgentForVM(vm: VM) -> String? {
-        // Simple selection based on available resources
-        // TODO: Implement more sophisticated selection logic
-
-        let availableAgents = agents.values.filter { agent in
-            agent.resources.availableCPU >= vm.cpu &&
-            agent.resources.availableMemory >= vm.memory &&
-            agent.resources.availableDisk >= vm.disk
+    /// Convert in-memory agents to schedulable format for the scheduler service
+    private func getSchedulableAgents() -> [SchedulableAgent] {
+        return agents.values.map { agentInfo in
+            SchedulableAgent(
+                id: agentInfo.id,
+                name: agentInfo.id, // Using ID as name for consistency
+                totalCPU: agentInfo.resources.totalCPU,
+                availableCPU: agentInfo.resources.availableCPU,
+                totalMemory: agentInfo.resources.totalMemory,
+                availableMemory: agentInfo.resources.availableMemory,
+                totalDisk: agentInfo.resources.totalDisk,
+                availableDisk: agentInfo.resources.availableDisk,
+                status: .online, // Only online agents are in the agents map
+                runningVMCount: vmToAgentMapping.values.filter { $0 == agentInfo.id }.count
+            )
         }
+    }
 
-        // Select agent with most available resources
-        return availableAgents.max { agent1, agent2 in
-            (agent1.resources.availableCPU + Int(agent1.resources.availableMemory / 1024 / 1024 / 1024)) <
-            (agent2.resources.availableCPU + Int(agent2.resources.availableMemory / 1024 / 1024 / 1024))
-        }?.id
+    /// Get VM-to-agent mapping (for diagnostics and recovery)
+    func getVMToAgentMapping() -> [String: String] {
+        return vmToAgentMapping
+    }
+
+    /// Manually set VM-to-agent mapping (for recovery scenarios)
+    func setVMToAgentMapping(vmId: String, agentId: String) {
+        vmToAgentMapping[vmId] = agentId
     }
 
     // MARK: - Message Sending
