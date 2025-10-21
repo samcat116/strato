@@ -3,12 +3,31 @@ image:
   tag: "latest"
   pullPolicy: IfNotPresent
 
+# Enable ingress for local testing
+ingress:
+  enabled: true
+  className: ""
+  hosts:
+    - host: strato.k8s.orb.local
+      paths:
+        - path: /
+          pathType: Prefix
+  # TLS configuration for HTTPS
+  tls:
+    - secretName: app-tls
+      hosts:
+        - strato.k8s.orb.local
+  # Optional: Add cert-manager annotation for automatic certificate generation
+  # annotations:
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+
 strato:
   logLevel: debug
   webauthn:
-    relyingPartyId: "minikube.local"
+    # These will be auto-configured from ingress hostname:
+    # relyingPartyId: strato.minikube.local
+    # relyingPartyOrigin: http://strato.minikube.local
     relyingPartyName: "Strato Test"
-    relyingPartyOrigin: "http://minikube.local:8080"
 
 spicedb:
   enabled: true

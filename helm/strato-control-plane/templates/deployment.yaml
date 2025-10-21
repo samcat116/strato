@@ -30,13 +30,21 @@ spec:
       initContainers:
         {{- if .Values.initContainers.waitForDB.enabled }}
         - name: wait-for-db
-          image: alpine:3.17
-          command: ['sh', '-c', 'apk add --no-cache netcat-openbsd && until nc -z {{ include "strato-control-plane.databaseHost" . }}.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done']
+          image: {{ default "busybox:1.36.1" .Values.initContainers.waitForDB.image | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              until nc -w 1 -z {{ include "strato-control-plane.databaseHost" . }}.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done
         {{- end }}
         {{- if and .Values.spicedb.enabled .Values.initContainers.waitForSpiceDB.enabled }}
         - name: wait-for-spicedb
-          image: alpine:3.17
-          command: ['sh', '-c', 'apk add --no-cache netcat-openbsd && until nc -z {{ include "strato-control-plane.fullname" . }}-spicedb.{{ .Release.Namespace }}.svc.cluster.local 8080; do echo waiting for SpiceDB; sleep 2; done']
+          image: {{ default "busybox:1.36.1" .Values.initContainers.waitForSpiceDB.image | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              until nc -w 1 -z {{ include "strato-control-plane.spicedb.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.spicedb.service.grpcPort }}; do echo waiting for SpiceDB; sleep 2; done
         {{- end }}
       containers:
         - name: {{ .Chart.Name }}
@@ -75,15 +83,15 @@ spec:
                   key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
             {{- if .Values.spicedb.enabled }}
             - name: SPICEDB_ENDPOINT
-              value: "http://{{ include "strato-control-plane.fullname" . }}-spicedb:{{ .Values.spicedb.service.httpPort }}"
+              value: "http://{{ include "strato-control-plane.spicedb.fullname" . }}:{{ .Values.spicedb.service.httpPort }}"
             - name: SPICEDB_PRESHARED_KEY
               valueFrom:
                 secretKeyRef:
-                  name: "{{ include "strato-control-plane.fullname" . }}-spicedb"
+                  name: "{{ include "strato-control-plane.spicedb.fullname" . }}-config"
                   key: "preshared-key"
             {{- end }}
             - name: WEBAUTHN_RELYING_PARTY_ID
-              value: "{{ .Values.strato.webauthn.relyingPartyId }}"
+              value: "{{ include "strato-control-plane.webauthnRelyingPartyId" . }}"
             - name: WEBAUTHN_RELYING_PARTY_NAME
               value: "{{ .Values.strato.webauthn.relyingPartyName }}"
             - name: WEBAUTHN_RELYING_PARTY_ORIGIN
