@@ -33,9 +33,23 @@ jobs:
         working-directory: control-plane
         run: npm run lint
 
-  build-swift:
-    name: Build Swift Packages
+  test:
+    name: Build and Test Swift Packages
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: strato_test
+          POSTGRES_USER: strato
+          POSTGRES_PASSWORD: strato_password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -63,48 +77,6 @@ jobs:
         working-directory: control-plane
         run: swift build --build-tests
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: swift-build-artifacts
-          path: |
-            control-plane/.build
-            shared/.build
-          retention-days: 1
-
-  test-swift:
-    name: Test Swift Packages
-    needs: build-swift
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_DB: strato_test
-          POSTGRES_USER: strato
-          POSTGRES_PASSWORD: strato_password
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev zlib1g-dev zstd
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: swift-build-artifacts
-          path: .
-
       - name: Test Control Plane
         working-directory: control-plane
         run: swift test --skip-build --parallel
@@ -131,7 +103,7 @@ jobs:
           sarif_file: "trivy-results.sarif"
   build-swift-release:
     name: Build Swift Release Binaries
-    needs: [test-swift]
+    needs: [test]
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
