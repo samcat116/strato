@@ -1,0 +1,138 @@
+name: Main Branch Build
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+  actions: read
+
+jobs:
+  build-swift-release:
+    name: Build Swift Release Binaries
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev zlib1g-dev zstd libjemalloc-dev
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            control-plane/.build
+            agent/.build
+            shared/.build
+          key: ${{ runner.os }}-${{ matrix.arch }}-swift-release-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-swift-release-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "control-plane/package-lock.json"
+
+      - name: Install JavaScript dependencies
+        working-directory: control-plane
+        run: npm ci
+
+      - name: Build TailwindCSS for production
+        working-directory: control-plane
+        run: npm run build-css-prod
+
+      - name: Build Control Plane Release Binary
+        working-directory: control-plane
+        run: |
+          swift build -c release --product App -Xlinker -ljemalloc
+          # Create artifact directory structure
+          mkdir -p ../artifacts/control-plane/bin
+          mkdir -p ../artifacts/control-plane/resources
+          # Copy binary
+          cp "$(swift build -c release --show-bin-path)/App" ../artifacts/control-plane/bin/
+          # Copy swift-backtrace (try multiple possible locations)
+          if [ -f "/usr/lib/swift/linux/swift-backtrace-static" ]; then
+            cp "/usr/lib/swift/linux/swift-backtrace-static" ../artifacts/control-plane/bin/
+          elif [ -f "/usr/libexec/swift/linux/swift-backtrace-static" ]; then
+            cp "/usr/libexec/swift/linux/swift-backtrace-static" ../artifacts/control-plane/bin/
+          else
+            echo "Warning: swift-backtrace-static not found, skipping"
+          fi
+          # Copy resources
+          find -L "$(swift build -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/control-plane/resources/ \; || true
+          # Copy Public and Resources directories
+          [ -d Public ] && cp -R Public ../artifacts/control-plane/ || true
+          [ -d Resources ] && cp -R Resources ../artifacts/control-plane/ || true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-binaries-${{ matrix.arch }}
+          path: artifacts/
+          retention-days: 1
+
+  build:
+    name: Build Docker Images
+    needs: [build-swift-release]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: swift-binaries-${{ matrix.arch }}
+          path: artifacts/
+        continue-on-error: true
+
+      - name: Prepare build context
+        run: |
+          # Create empty artifacts directory if it doesn't exist
+          mkdir -p ./artifacts
+          if [ -d "artifacts/control-plane" ]; then
+            echo "Artifacts found, ready for Docker build"
+          else
+            echo "No artifacts found, will build from source"
+          fi
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Control Plane Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./control-plane/Dockerfile
+          push: false
+          load: true
+          platforms: ${{ matrix.arch == 'x64' && 'linux/amd64' || 'linux/arm64' }}
+          tags: strato-control-plane:latest
+          cache-from: type=gha,key=control-plane-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,key=control-plane-${{ matrix.arch }}
+          build-args: |
+            PREBUILT_ARTIFACTS=artifacts/control-plane
