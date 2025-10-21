@@ -46,7 +46,9 @@ var swiftSettings: [SwiftSetting] {
     []
 }
 
-// Conditional dependencies for Linux only (QEMU/KVM and OVN/OVS require Linux)
+// Conditional dependencies based on platform
+// SwiftQEMU: Available on both Linux (KVM) and macOS (HVF)
+// SwiftOVN: Linux only (OVN/OVS not available on macOS)
 #if os(Linux)
 var qemuAndNetworkDependencies: [Target.Dependency] {
     [
@@ -56,7 +58,9 @@ var qemuAndNetworkDependencies: [Target.Dependency] {
 }
 #else
 var qemuAndNetworkDependencies: [Target.Dependency] {
-    // Empty array for macOS development - mock implementations are used instead
-    []
+    // macOS: SwiftQEMU with HVF support, user-mode networking (no OVN/OVS)
+    [
+        .product(name: "SwiftQEMU", package: "swift-qemu"),
+    ]
 }
 #endif

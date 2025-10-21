@@ -6,17 +6,33 @@ struct AgentConfig: Codable {
     let controlPlaneURL: String
     let qemuSocketDir: String?
     let logLevel: String?
-    
+    let networkMode: String?
+    let enableHVF: Bool?
+    let enableKVM: Bool?
+
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
         case qemuSocketDir = "qemu_socket_dir"
         case logLevel = "log_level"
+        case networkMode = "network_mode"
+        case enableHVF = "enable_hvf"
+        case enableKVM = "enable_kvm"
     }
-    
-    init(controlPlaneURL: String, qemuSocketDir: String? = nil, logLevel: String? = nil) {
+
+    init(
+        controlPlaneURL: String,
+        qemuSocketDir: String? = nil,
+        logLevel: String? = nil,
+        networkMode: String? = nil,
+        enableHVF: Bool? = nil,
+        enableKVM: Bool? = nil
+    ) {
         self.controlPlaneURL = controlPlaneURL
         self.qemuSocketDir = qemuSocketDir
         self.logLevel = logLevel
+        self.networkMode = networkMode
+        self.enableHVF = enableHVF
+        self.enableKVM = enableKVM
     }
     
     static func load(from path: String) throws -> AgentConfig {
@@ -33,14 +49,20 @@ struct AgentConfig: Codable {
         guard let controlPlaneURL = tomlData.string("control_plane_url") else {
             throw AgentConfigError.missingRequiredField("control_plane_url")
         }
-        
+
         let qemuSocketDir = tomlData.string("qemu_socket_dir")
         let logLevel = tomlData.string("log_level")
-        
+        let networkMode = tomlData.string("network_mode")
+        let enableHVF = tomlData.bool("enable_hvf")
+        let enableKVM = tomlData.bool("enable_kvm")
+
         return AgentConfig(
             controlPlaneURL: controlPlaneURL,
             qemuSocketDir: qemuSocketDir,
-            logLevel: logLevel
+            logLevel: logLevel,
+            networkMode: networkMode,
+            enableHVF: enableHVF,
+            enableKVM: enableKVM
         )
     }
     
@@ -64,11 +86,26 @@ struct AgentConfig: Codable {
         
         // Return default configuration if no config file found
         logger?.info("Using default configuration")
+
+        #if os(Linux)
         return AgentConfig(
             controlPlaneURL: "ws://localhost:8080/agent/ws",
             qemuSocketDir: "/var/run/qemu",
-            logLevel: "info"
+            logLevel: "info",
+            networkMode: "ovn",
+            enableHVF: false,
+            enableKVM: true
         )
+        #else
+        return AgentConfig(
+            controlPlaneURL: "ws://localhost:8080/agent/ws",
+            qemuSocketDir: "/var/run/qemu",
+            logLevel: "info",
+            networkMode: "user",
+            enableHVF: true,
+            enableKVM: false
+        )
+        #endif
     }
 }
 
