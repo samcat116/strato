@@ -36,9 +36,6 @@ jobs:
   build-swift:
     name: Build Swift Packages
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        package: [control-plane, shared]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -52,20 +49,27 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ${{ matrix.package }}/.build
-          key: ${{ runner.os }}-swift-${{ matrix.package }}-${{ hashFiles(format('{0}/Package.resolved', matrix.package)) }}
+            control-plane/.build
+            shared/.build
+          key: ${{ runner.os }}-swift-${{ hashFiles('control-plane/Package.resolved', 'shared/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-swift-${{ matrix.package }}-
+            ${{ runner.os }}-swift-
 
-      - name: Build ${{ matrix.package }}
-        working-directory: ${{ matrix.package }}
+      - name: Build Shared Package
+        working-directory: shared
+        run: swift build --build-tests
+
+      - name: Build Control Plane
+        working-directory: control-plane
         run: swift build --build-tests
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: swift-build-${{ matrix.package }}
-          path: ${{ matrix.package }}/.build
+          name: swift-build-artifacts
+          path: |
+            control-plane/.build
+            shared/.build
           retention-days: 1
 
   test-swift:
@@ -86,9 +90,6 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-    strategy:
-      matrix:
-        package: [control-plane]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -101,11 +102,11 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          name: swift-build-${{ matrix.package }}
-          path: ${{ matrix.package }}/.build
+          name: swift-build-artifacts
+          path: .
 
-      - name: Test ${{ matrix.package }}
-        working-directory: ${{ matrix.package }}
+      - name: Test Control Plane
+        working-directory: control-plane
         run: swift test --skip-build --parallel
 
   security:
