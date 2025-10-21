@@ -83,6 +83,13 @@ public func configure(_ app: Application) async throws {
 
     try await app.autoMigrate()
 
+    // Configure scheduler service
+    // Default strategy can be configured via environment variable
+    let schedulingStrategy = Environment.get("SCHEDULING_STRATEGY")
+        .flatMap { SchedulingStrategy(rawValue: $0) } ?? .leastLoaded
+    app.scheduler = SchedulerService(logger: app.logger, defaultStrategy: schedulingStrategy)
+    app.logger.info("Scheduler service initialized with strategy: \(schedulingStrategy.rawValue)")
+
     try routes(app)
 
     if app.environment != .testing {

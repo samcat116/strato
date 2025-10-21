@@ -77,6 +77,7 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 - **Shared Package**: Common models, DTOs, and WebSocket protocols used by both Control Plane and Agent
 - **Database**: PostgreSQL with Fluent migrations (Control Plane only)
 - **Authorization**: Permify for fine-grained access control and permissions (Control Plane only)
+- **Scheduler**: Intelligent VM placement service with multiple strategies (least-loaded, best-fit, round-robin, random) (Control Plane only)
 - **Frontend**: Leaf templates + HTMX for dynamic interactions (Control Plane only)
 - **Styling**: TailwindCSS integrated via SwiftyTailwind (Control Plane only)
 - **VM Management**: QEMU integration via QEMUKit library (Agent only)
@@ -90,6 +91,7 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 - **Database Integration**: Uses Fluent ORM with PostgreSQL driver and automatic migrations (Control Plane)
 - **Authorization**: Permify middleware intercepts all requests, checks permissions via REST API, enforces role-based access control (Control Plane)
 - **Agent Management**: Dynamic agent registration, heartbeat monitoring, and VM-to-agent mapping
+- **VM Scheduling**: Intelligent hypervisor selection using configurable strategies (least-loaded, best-fit, round-robin, random) with automatic mapping persistence and recovery (Control Plane)
 - **Frontend**: Dual templating approach - Leaf templates in `control-plane/Resources/Views/` for server-rendered content, HTML templates in `control-plane/web/templates/` for HTMX components
 - **CSS Processing**: TailwindCSS processes styles from `control-plane/Resources/styles/app.css` and scans both Leaf templates and web templates for classes
 
@@ -123,6 +125,20 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
   - `WEBAUTHN_RELYING_PARTY_ID` (default: localhost)
   - `WEBAUTHN_RELYING_PARTY_NAME` (default: Strato)
   - `WEBAUTHN_RELYING_PARTY_ORIGIN` (default: http://localhost:8080)
+
+### VM Scheduler System
+- **Scheduler Service**: Intelligent VM placement on hypervisor nodes based on resource availability and configurable strategies
+- **Scheduling Strategies**:
+  - `least_loaded` (default): Distributes VMs across agents with lowest utilization (load balancing)
+  - `best_fit`: Packs VMs onto agents with least remaining capacity (bin-packing, resource consolidation)
+  - `round_robin`: Evenly distributes VMs in circular fashion
+  - `random`: Random selection from available agents (testing/development)
+- **Resource Tracking**: Real-time monitoring of CPU, memory, and disk availability on each agent
+- **Persistent Mapping**: VM-to-agent assignments stored in database (`vm.hypervisorId`) and restored on startup
+- **Agent Filtering**: Only online agents with sufficient resources are considered for placement
+- **Environment Configuration**: Default strategy via environment variable:
+  - `SCHEDULING_STRATEGY` (default: least_loaded, options: least_loaded, best_fit, round_robin, random)
+- **Documentation**: See `docs/SCHEDULER.md` for detailed information on algorithms and configuration
 
 ### Project Structure
 ```

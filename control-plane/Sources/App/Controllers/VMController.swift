@@ -197,17 +197,19 @@ struct VMController: RouteCollection {
         )
         }
 
-        // Create VM via agent
+        // Create VM via agent (scheduler will select best hypervisor and set hypervisorId)
         do {
             let vmConfig = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
-            try await req.agentService.createVM(vm: vm, vmConfig: vmConfig)
+            try await req.agentService.createVM(vm: vm, vmConfig: vmConfig, db: req.db)
 
-            // Update VM status
+            // Update VM status (hypervisorId is set by AgentService via scheduler)
             vm.status = VMStatus.created
-            vm.hypervisorId = vm.id?.uuidString
             try await vm.save(on: req.db)
 
-            req.logger.info("VM created successfully via agent", metadata: ["vm_id": .string(vmId)])
+            req.logger.info("VM created successfully via agent", metadata: [
+                "vm_id": .string(vmId),
+                "hypervisor_id": .string(vm.hypervisorId ?? "unknown")
+            ])
         } catch {
             req.logger.error("Failed to create VM via agent: \(error)", metadata: ["vm_id": .string(vmId)])
 
