@@ -6,6 +6,7 @@ import StratoShared
 /// OVN/OVS are not supported on macOS, so we use QEMU's built-in user-mode networking
 actor NetworkServiceMacOS: NetworkServiceProtocol {
     private let logger: Logger
+    private let maxMACGenerationAttempts = 100
 
     // Track VM network configurations for info queries
     private var vmNetworks: [String: VMNetworkInfo] = [:]
@@ -140,7 +141,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
             macAddress = "52:54:00:" + bytes.map { String(format: "%02x", $0) }.joined(separator: ":")
             attempts += 1
             
-            if attempts > 100 {
+            if attempts > maxMACGenerationAttempts {
                 // Fallback to deterministic MAC if we can't find a unique one
                 let timestamp = UInt32(Date().timeIntervalSince1970)
                 macAddress = String(format: "52:54:00:%02x:%02x:%02x", 
