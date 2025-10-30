@@ -6,7 +6,7 @@ import StratoShared
 import SwiftOVN
 #endif
 
-final class NetworkService: @unchecked Sendable {
+actor NetworkServiceLinux: NetworkServiceProtocol {
     private let logger: Logger
     private let ovnSocketPath: String
     private let ovsSocketPath: String
@@ -450,23 +450,6 @@ final class NetworkService: @unchecked Sendable {
     #endif
 }
 
-// MARK: - Development Mode Mock Types
-
-#if !os(Linux)
-private struct MockNetwork {
-    let name: String
-    let subnet: String
-    let gateway: String?
-}
-
-private struct MockVMNetworkAttachment {
-    let vmId: String
-    let networkName: String
-    let macAddress: String
-    let ipAddress: String
-}
-#endif
-
 // MARK: - Network Error Types
 
 enum NetworkError: Error, LocalizedError {
@@ -476,7 +459,8 @@ enum NetworkError: Error, LocalizedError {
     case invalidConfiguration(String)
     case ovnError(String)
     case ovsError(String)
-    
+    case platformNotSupported(String)
+
     var errorDescription: String? {
         switch self {
         case .notConnected(let message):
@@ -491,6 +475,8 @@ enum NetworkError: Error, LocalizedError {
             return "OVN error: \(message)"
         case .ovsError(let message):
             return "OVS error: \(message)"
+        case .platformNotSupported(let message):
+            return "Platform not supported: \(message)"
         }
     }
 }
