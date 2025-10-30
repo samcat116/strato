@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Agent (Swift Commands)
 - `cd agent && swift build` - Build the agent application
 - `cd agent && swift test` - Run agent tests
-- `cd agent && swift run StratoAgent` - Run the agent locally (development mode on macOS, full QEMU on Linux)
+- `cd agent && swift run StratoAgent` - Run the agent locally (uses HVF on macOS, KVM on Linux)
 - `cd agent && swift run StratoAgent --config-file /etc/strato/config.toml` - Run agent with custom config file
 - `cd agent && swift run StratoAgent --control-plane-url ws://remote:8080/agent/ws` - Override control plane URL
 
@@ -24,7 +24,12 @@ The agent uses TOML configuration files to set connection and operational parame
 - **Example config**: `config.toml.example` (copy to create your configuration)
 - **Configuration priority**: Command-line arguments override config file values
 - **Required setting**: `control_plane_url` must be specified in config or command line
-- **Optional settings**: `qemu_socket_dir`, `log_level` have sensible defaults
+- **Optional settings**:
+  - `qemu_socket_dir` - QEMU socket directory (default: `/var/run/qemu`)
+  - `log_level` - Logging level (default: `info`)
+  - `network_mode` - Networking mode: `ovn` (Linux), `user` (macOS) (platform-specific defaults)
+  - `enable_hvf` - Enable Hypervisor.framework on macOS (default: `true` on macOS)
+  - `enable_kvm` - Enable KVM on Linux (default: `true` on Linux)
 
 ### Shared Package
 - `cd shared && swift build` - Build the shared package
@@ -69,19 +74,21 @@ The agent uses TOML configuration files to set connection and operational parame
 
 ## Architecture
 
-Strato is a distributed private cloud platform with a **Control Plane** and **Agent** architecture. The Control Plane manages the web UI, API, database, and user management, while Agents run on hypervisor nodes and manage VMs via QEMU with software-defined networking via OVN/OVS. Communication between Control Plane and Agents happens via WebSocket.
+Strato is a distributed private cloud platform with a **Control Plane** and **Agent** architecture. The Control Plane manages the web UI, API, database, and user management, while Agents run on hypervisor nodes and manage VMs via QEMU with hardware-accelerated virtualization. Communication between Control Plane and Agents happens via WebSocket.
 
 ### Core Components
 - **Control Plane**: Vapor 4 web framework with Fluent ORM, web UI, API, user management
-- **Agent**: Swift command-line application that manages VMs on hypervisor nodes
+- **Agent**: Swift command-line application that manages VMs on hypervisor nodes (supports both Linux and macOS)
 - **Shared Package**: Common models, DTOs, and WebSocket protocols used by both Control Plane and Agent
 - **Database**: PostgreSQL with Fluent migrations (Control Plane only)
 - **Authorization**: Permify for fine-grained access control and permissions (Control Plane only)
 - **Scheduler**: Intelligent VM placement service with multiple strategies (least-loaded, best-fit, round-robin, random) (Control Plane only)
 - **Frontend**: Leaf templates + HTMX for dynamic interactions (Control Plane only)
 - **Styling**: TailwindCSS integrated via SwiftyTailwind (Control Plane only)
-- **VM Management**: QEMU integration via QEMUKit library (Agent only)
-- **Network Management**: SwiftOVN integration for OVN/OVS software-defined networking (Agent only)
+- **VM Management**: QEMU integration via SwiftQEMU library (Agent only)
+- **Network Management**: Platform-specific networking (Agent only)
+  - **Linux**: SwiftOVN integration for OVN/OVS software-defined networking
+  - **macOS**: User-mode (SLIRP) networking via QEMU
 - **Communication**: WebSocket-based messaging between Control Plane and Agents
 
 ### Key Architecture Patterns
@@ -102,7 +109,12 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 
 ### External Integrations
 - **Control Plane**: Permify authorization service, HTMX for frontend interactions, xterm.js for terminal interfaces
-- **Agent**: QEMU via QEMUKit library for VM lifecycle management, OVN/OVS via SwiftOVN for networking
+- **Agent**:
+  - **VM Management**: QEMU via SwiftQEMU library for VM lifecycle management
+  - **Networking (Linux)**: OVN/OVS via SwiftOVN for software-defined networking
+  - **Networking (macOS)**: User-mode (SLIRP) networking built into QEMU
+  - **Acceleration (Linux)**: KVM for hardware-assisted virtualization
+  - **Acceleration (macOS)**: Hypervisor.framework (HVF) for hardware-assisted virtualization
 - **Communication**: WebSocket protocol for Control Plane ↔ Agent messaging
 
 ### Authorization System
@@ -162,23 +174,40 @@ strato/
 ```
 
 ### QEMU Integration (Agent)
-- **Development (macOS)**: Agent runs in mock mode for development without QEMU/KVM
-- **Production (Linux)**: Full QEMU integration with hardware virtualization support
-- **QEMUKit Library**: Swift wrapper for QEMU Monitor Protocol (QMP) and guest agent
-- **Platform Detection**: Runtime detection of KVM availability and QEMU installation
-- **VM Management**: Create, start, stop, pause, resume, delete operations via QMP
-- **System Requirements**: 
-  - Linux with KVM kernel module (`/dev/kvm` access)
-  - QEMU system packages (`qemu-system-x86`, `qemu-utils`)
-  - glib-2.0 libraries for QEMUKit integration
+The agent supports both Linux and macOS platforms with hardware-accelerated virtualization:
 
-### SwiftOVN Networking Integration (Agent)
-- **Development (macOS)**: Network operations are mocked for development without OVN/OVS
-- **Production (Linux)**: Full OVN/OVS integration with software-defined networking
+#### Linux (KVM)
+- **Acceleration**: KVM (Kernel-based Virtual Machine) for near-native performance
+- **Architecture Support**: x86_64 and ARM64 guests (same-arch only with KVM)
+- **SwiftQEMU Library**: Swift wrapper for QEMU Monitor Protocol (QMP) and guest agent
+- **VM Management**: Full lifecycle operations - create, start, stop, pause, resume, delete via QMP
+- **System Requirements**:
+  - Linux with KVM kernel module (`/dev/kvm` access)
+  - QEMU system packages (`qemu-system-x86_64`, `qemu-system-aarch64`, `qemu-utils`)
+  - glib-2.0 libraries for SwiftQEMU integration
+
+#### macOS (Hypervisor.framework)
+- **Acceleration**: Hypervisor.framework (HVF) for near-native performance
+- **Architecture Support**: x86_64 on Intel Macs, ARM64 on Apple Silicon (same-arch only with HVF)
+- **SwiftQEMU Library**: Same Swift wrapper for QEMU, with `-accel hvf` instead of `-accel kvm`
+- **VM Management**: Full lifecycle operations identical to Linux
+- **Limitations**:
+  - Same-architecture VMs only (no cross-arch acceleration)
+  - User-mode networking only (no TAP/OVN support)
+  - Cross-platform VMs run under TCG emulation (slow)
+- **System Requirements**:
+  - macOS 14.0 or later
+  - QEMU installed via Homebrew: `brew install qemu`
+  - Xcode Command Line Tools
+
+### Networking Integration (Agent)
+
+#### Linux - SwiftOVN (OVN/OVS)
+- **Production-Ready**: Full OVN/OVS integration with software-defined networking
 - **SwiftOVN Library**: Native Swift wrapper for OVN/OVS JSON-RPC APIs over Unix sockets
 - **Network Features**:
   - Logical switch and port management
-  - VM network attachment/detachment
+  - VM network attachment/detachment with TAP interfaces
   - Security groups and ACLs
   - DHCP and routing services
   - Multi-tenant network isolation
@@ -188,9 +217,37 @@ strato/
   - Network capabilities (`NET_ADMIN`, `SYS_ADMIN`)
   - Access to OVN/OVS Unix domain sockets
 
+#### macOS - User-Mode Networking (SLIRP)
+- **User-Mode Only**: QEMU's built-in SLIRP networking (no external dependencies)
+- **Automatic Configuration**: VMs get automatic DHCP in the 10.0.2.0/24 range
+- **Outbound Connectivity**: VMs can access the internet and host via NAT
+- **Limitations**:
+  - No VM-to-VM communication
+  - No inbound connections from host/network to VM
+  - No advanced features (VLANs, ACLs, multi-tenancy)
+  - No TAP interface support (macOS kernel restrictions)
+- **Use Case**: Development and testing, single-VM workloads
+- **Future Enhancement**: VMnet.framework integration possible (requires entitlements)
+
+### Platform Support Matrix
+
+| Feature | Linux | macOS |
+|---------|-------|-------|
+| **VM Management** | ✅ Full | ✅ Full |
+| **Hardware Acceleration** | ✅ KVM | ✅ HVF |
+| **Same-arch VMs** | ✅ Near-native speed | ✅ Near-native speed |
+| **Cross-arch VMs** | ⚠️ TCG only (slow) | ⚠️ TCG only (slow) |
+| **Networking** | ✅ OVN/OVS (TAP) | ⚠️ User-mode only |
+| **VM-to-VM Communication** | ✅ Yes | ❌ No |
+| **Network Isolation** | ✅ Yes | ❌ No |
+| **Inbound Connections** | ✅ Yes | ❌ No |
+| **Production Ready** | ✅ Yes | ⚠️ Dev/Test only |
+
 ### Project Structure Notes
 - Swift strict concurrency enabled (Swift 6.0)
 - Control Plane: Traditional Vapor web application with database
-- Agent: Command-line Swift application for hypervisor nodes with QEMU integration
+- Agent: Cross-platform Swift application for hypervisor nodes
+  - Linux: Production-ready with KVM and OVN/OVS
+  - macOS: Development/testing with HVF and user-mode networking
 - Shared: Common models and WebSocket protocols
 - Frontend assets in control-plane only: static files (`control-plane/Public/`) and web templates (`control-plane/web/`)
