@@ -2,11 +2,16 @@ import Foundation
 import Toml
 import Logging
 
+enum NetworkMode: String, Codable {
+    case ovn
+    case user
+}
+
 struct AgentConfig: Codable {
     let controlPlaneURL: String
     let qemuSocketDir: String?
     let logLevel: String?
-    let networkMode: String?
+    let networkMode: NetworkMode?
     let enableHVF: Bool?
     let enableKVM: Bool?
 
@@ -23,7 +28,7 @@ struct AgentConfig: Codable {
         controlPlaneURL: String,
         qemuSocketDir: String? = nil,
         logLevel: String? = nil,
-        networkMode: String? = nil,
+        networkMode: NetworkMode? = nil,
         enableHVF: Bool? = nil,
         enableKVM: Bool? = nil
     ) {
@@ -52,13 +57,19 @@ struct AgentConfig: Codable {
 
         let qemuSocketDir = tomlData.string("qemu_socket_dir")
         let logLevel = tomlData.string("log_level")
-        let networkMode = tomlData.string("network_mode")
+        let networkModeString = tomlData.string("network_mode")
         let enableHVF = tomlData.bool("enable_hvf")
         let enableKVM = tomlData.bool("enable_kvm")
 
-        // Validate network mode
-        if let mode = networkMode, !["ovn", "user"].contains(mode) {
-            throw AgentConfigError.invalidConfiguration("network_mode must be 'ovn' or 'user', got '\(mode)'")
+        // Validate and parse network mode
+        let networkMode: NetworkMode?
+        if let modeString = networkModeString {
+            guard let mode = NetworkMode(rawValue: modeString) else {
+                throw AgentConfigError.invalidConfiguration("network_mode must be 'ovn' or 'user', got '\(modeString)'")
+            }
+            networkMode = mode
+        } else {
+            networkMode = nil
         }
 
         // Validate platform-specific settings
@@ -108,7 +119,7 @@ struct AgentConfig: Codable {
             controlPlaneURL: "ws://localhost:8080/agent/ws",
             qemuSocketDir: "/var/run/qemu",
             logLevel: "info",
-            networkMode: "ovn",
+            networkMode: .ovn,
             enableHVF: false,
             enableKVM: true
         )
@@ -117,7 +128,7 @@ struct AgentConfig: Codable {
             controlPlaneURL: "ws://localhost:8080/agent/ws",
             qemuSocketDir: "/var/run/qemu",
             logLevel: "info",
-            networkMode: "user",
+            networkMode: .user,
             enableHVF: true,
             enableKVM: false
         )
