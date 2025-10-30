@@ -6,9 +6,9 @@ import StratoShared
 import SwiftQEMU
 #endif
 
-final class QEMUService: @unchecked Sendable {
+actor QEMUService {
     private let logger: Logger
-    private var networkService: (any NetworkServiceProtocol)?
+    private let networkService: (any NetworkServiceProtocol)?
 
     #if canImport(SwiftQEMU)
     private var activeVMs: [String: QEMUManager] = [:]

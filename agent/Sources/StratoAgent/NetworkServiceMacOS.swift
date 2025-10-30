@@ -4,12 +4,14 @@ import StratoShared
 
 /// macOS network service implementation using user-mode (SLIRP) networking
 /// OVN/OVS are not supported on macOS, so we use QEMU's built-in user-mode networking
-final class NetworkServiceMacOS: @unchecked Sendable, NetworkServiceProtocol {
+actor NetworkServiceMacOS: NetworkServiceProtocol {
     private let logger: Logger
 
     // Track VM network configurations for info queries
     private var vmNetworks: [String: VMNetworkInfo] = [:]
     private var logicalNetworks: [String: NetworkInfo] = [:]
+    private var nextIPSuffix: UInt8 = 15 // Start from 10.0.2.15 (QEMU default)
+    private var usedMACs: Set<String> = []
 
     init(logger: Logger) {
         self.logger = logger
@@ -37,7 +39,8 @@ final class NetworkServiceMacOS: @unchecked Sendable, NetworkServiceProtocol {
 
         // User-mode networking provides automatic DHCP
         // VMs get IP addresses in the 10.0.2.0/24 range (QEMU default)
-        let ipAddress = config.ipAddress ?? "10.0.2.15" // QEMU's default guest IP
+        // Allocate unique IPs for tracking purposes (actual IPs assigned by QEMU)
+        let ipAddress = config.ipAddress ?? allocateNextIP()
 
         let networkInfo = VMNetworkInfo(
             vmId: vmId,
@@ -114,10 +117,41 @@ final class NetworkServiceMacOS: @unchecked Sendable, NetworkServiceProtocol {
 
     // MARK: - Helper Methods
 
+    private func allocateNextIP() -> String {
+        // Allocate sequential IPs starting from 10.0.2.15
+        // Note: This is for informational/tracking purposes only.
+        // QEMU's SLIRP will assign actual IPs via DHCP
+        let ip = "10.0.2.\(nextIPSuffix)"
+        nextIPSuffix += 1
+        if nextIPSuffix > 254 {
+            nextIPSuffix = 15 // Wrap around, skip network/broadcast
+        }
+        return ip
+    }
+
     private func generateMACAddress() -> String {
-        // Generate a random MAC address with the locally administered bit set
+        // Generate a unique MAC address with collision detection
         // Use QEMU's OUI (52:54:00) for better compatibility
-        let bytes = (0..<3).map { _ in UInt8.random(in: 0...255) }
-        return "52:54:00:" + bytes.map { String(format: "%02x", $0) }.joined(separator: ":")
+        var macAddress: String
+        var attempts = 0
+        
+        repeat {
+            let bytes = (0..<3).map { _ in UInt8.random(in: 0...255) }
+            macAddress = "52:54:00:" + bytes.map { String(format: "%02x", $0) }.joined(separator: ":")
+            attempts += 1
+            
+            if attempts > 100 {
+                // Fallback to deterministic MAC if we can't find a unique one
+                let timestamp = UInt32(Date().timeIntervalSince1970)
+                macAddress = String(format: "52:54:00:%02x:%02x:%02x", 
+                                   UInt8(timestamp >> 16 & 0xFF),
+                                   UInt8(timestamp >> 8 & 0xFF),
+                                   UInt8(timestamp & 0xFF))
+                break
+            }
+        } while usedMACs.contains(macAddress)
+        
+        usedMACs.insert(macAddress)
+        return macAddress
     }
 }

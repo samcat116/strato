@@ -35,7 +35,7 @@ struct AgentConfig: Codable {
         self.enableKVM = enableKVM
     }
     
-    static func load(from path: String) throws -> AgentConfig {
+    static func load(from path: String, logger: Logger? = nil) throws -> AgentConfig {
         let fileURL = URL(fileURLWithPath: path)
         
         guard FileManager.default.fileExists(atPath: path) else {
@@ -56,6 +56,22 @@ struct AgentConfig: Codable {
         let enableHVF = tomlData.bool("enable_hvf")
         let enableKVM = tomlData.bool("enable_kvm")
 
+        // Validate network mode
+        if let mode = networkMode, !["ovn", "user"].contains(mode) {
+            throw AgentConfigError.invalidConfiguration("network_mode must be 'ovn' or 'user', got '\(mode)'")
+        }
+
+        // Validate platform-specific settings
+        #if os(macOS)
+        if enableKVM == true {
+            logger?.warning("enable_kvm is not supported on macOS, will be ignored")
+        }
+        #elseif os(Linux)
+        if enableHVF == true {
+            logger?.warning("enable_hvf is only supported on macOS, will be ignored")
+        }
+        #endif
+
         return AgentConfig(
             controlPlaneURL: controlPlaneURL,
             qemuSocketDir: qemuSocketDir,
@@ -72,14 +88,14 @@ struct AgentConfig: Codable {
     static func loadDefaultConfig(logger: Logger? = nil) -> AgentConfig {
         // Try to load from default path first
         do {
-            return try load(from: defaultConfigPath)
+            return try load(from: defaultConfigPath, logger: logger)
         } catch {
             logger?.warning("Failed to load config from \(defaultConfigPath): \(error)")
         }
         
         // Try fallback path for development
         do {
-            return try load(from: fallbackConfigPath)
+            return try load(from: fallbackConfigPath, logger: logger)
         } catch {
             logger?.warning("Failed to load config from \(fallbackConfigPath): \(error)")
         }
@@ -113,6 +129,7 @@ enum AgentConfigError: Error, LocalizedError {
     case configFileNotFound(String)
     case invalidTOMLFormat(String)
     case missingRequiredField(String)
+    case invalidConfiguration(String)
     
     var errorDescription: String? {
         switch self {
@@ -122,6 +139,8 @@ enum AgentConfigError: Error, LocalizedError {
             return "Invalid TOML format: \(details)"
         case .missingRequiredField(let field):
             return "Missing required configuration field: \(field)"
+        case .invalidConfiguration(let message):
+            return "Invalid configuration: \(message)"
         }
     }
 }

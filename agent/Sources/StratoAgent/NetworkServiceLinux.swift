@@ -6,7 +6,7 @@ import StratoShared
 import SwiftOVN
 #endif
 
-final class NetworkServiceLinux: @unchecked Sendable, NetworkServiceProtocol {
+actor NetworkServiceLinux: NetworkServiceProtocol {
     private let logger: Logger
     private let ovnSocketPath: String
     private let ovsSocketPath: String
