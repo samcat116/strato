@@ -83,7 +83,8 @@ actor AgentService {
             capabilities: message.capabilities,
             resources: message.resources,
             websocket: websocket,
-            lastHeartbeat: Date()
+            lastHeartbeat: Date(),
+            status: .online
         )
 
         agents[agentName] = agentInfo
@@ -183,6 +184,7 @@ actor AgentService {
         // Update in-memory tracking
         agentInfo.resources = message.resources
         agentInfo.lastHeartbeat = Date()
+        agentInfo.status = .online
         agents[message.agentId] = agentInfo
 
         // Update database asynchronously
@@ -376,7 +378,7 @@ actor AgentService {
                 availableMemory: agentInfo.resources.availableMemory,
                 totalDisk: agentInfo.resources.totalDisk,
                 availableDisk: agentInfo.resources.availableDisk,
-                status: .online, // Only online agents are in the agents map
+                status: agentInfo.status,
                 runningVMCount: vmToAgentMapping.values.filter { $0 == agentInfo.id }.count
             )
         }
@@ -484,6 +486,7 @@ struct AgentInfo {
     var resources: AgentResources
     let websocket: WebSocket
     var lastHeartbeat: Date
+    var status: AgentStatus
 }
 
 enum AgentServiceResponse {

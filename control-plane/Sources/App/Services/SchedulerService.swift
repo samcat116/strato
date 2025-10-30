@@ -3,7 +3,7 @@ import Fluent
 import NIOConcurrencyHelpers
 
 /// Scheduling strategy for VM placement
-public enum SchedulingStrategy: String, Codable {
+enum SchedulingStrategy: String, Codable {
     /// Pack VMs onto agents with least remaining capacity (bin-packing)
     case bestFit = "best_fit"
 
@@ -18,7 +18,7 @@ public enum SchedulingStrategy: String, Codable {
 }
 
 /// Represents an agent with its current resource availability
-public struct SchedulableAgent {
+struct SchedulableAgent {
     let id: String
     let name: String
     let totalCPU: Int
@@ -27,7 +27,7 @@ public struct SchedulableAgent {
     let availableMemory: Int64
     let totalDisk: Int64
     let availableDisk: Int64
-    let status: Agent.Status
+    let status: AgentStatus
     let runningVMCount: Int
 
     /// Calculate resource utilization percentage (0.0 to 1.0)
@@ -62,20 +62,20 @@ public struct SchedulableAgent {
 }
 
 /// VM resource requirements for scheduling
-public struct VMResourceRequirements {
+struct VMResourceRequirements {
     let cpu: Int
     let memory: Int64
     let disk: Int64
 }
 
 /// Scheduler service errors
-public enum SchedulerError: Error, CustomStringConvertible {
+enum SchedulerError: Error, CustomStringConvertible {
     case noAvailableAgents
     case insufficientResources(required: VMResourceRequirements, available: [SchedulableAgent])
     case invalidStrategy(String)
     case agentServiceUnavailable
 
-    public var description: String {
+    var description: String {
         switch self {
         case .noAvailableAgents:
             return "No online agents available for VM placement"
@@ -90,13 +90,13 @@ public enum SchedulerError: Error, CustomStringConvertible {
 }
 
 /// Service responsible for scheduling VM placement decisions
-public final class SchedulerService {
+final class SchedulerService: @unchecked Sendable {
     private let logger: Logger
     private let defaultStrategy: SchedulingStrategy
     private let lock: NIOLock
     private var roundRobinCounter: Int
 
-    public init(logger: Logger, defaultStrategy: SchedulingStrategy = .leastLoaded) {
+    init(logger: Logger, defaultStrategy: SchedulingStrategy = .leastLoaded) {
         self.logger = logger
         self.defaultStrategy = defaultStrategy
         self.lock = NIOLock()
@@ -110,7 +110,7 @@ public final class SchedulerService {
     ///   - strategy: Optional strategy override (defaults to service default)
     /// - Returns: The ID of the selected agent
     /// - Throws: SchedulerError if no suitable agent is found
-    public func selectAgent(
+    func selectAgent(
         for vm: VM,
         from agents: [SchedulableAgent],
         strategy: SchedulingStrategy? = nil
@@ -162,7 +162,7 @@ public final class SchedulerService {
         for requirements: VMResourceRequirements
     ) -> [SchedulableAgent] {
         return agents.filter { agent in
-            agent.status == .online &&
+            agent.status == AgentStatus.online &&
             agent.availableCPU >= requirements.cpu &&
             agent.availableMemory >= requirements.memory &&
             agent.availableDisk >= requirements.disk
@@ -199,7 +199,7 @@ public final class SchedulerService {
         // Thread-safe increment and wrap
         lock.lock()
         let index = roundRobinCounter % agents.count
-        roundRobinCounter = (roundRobinCounter + 1) % Int.max
+        roundRobinCounter += 1
         lock.unlock()
 
         let selected = agents[index]
@@ -220,7 +220,7 @@ public final class SchedulerService {
     // MARK: - Utility Methods
 
     /// Get a human-readable description of scheduling decision
-    public func getSchedulingInfo(for agentId: String, in agents: [SchedulableAgent]) -> String? {
+    func getSchedulingInfo(for agentId: String, in agents: [SchedulableAgent]) -> String? {
         guard let agent = agents.first(where: { $0.id == agentId }) else {
             return nil
         }
@@ -244,11 +244,11 @@ public final class SchedulerService {
 // MARK: - Application Extension
 
 extension Application {
-    public struct SchedulerServiceKey: StorageKey {
-        public typealias Value = SchedulerService
+    struct SchedulerServiceKey: StorageKey {
+        typealias Value = SchedulerService
     }
 
-    public var scheduler: SchedulerService {
+    var scheduler: SchedulerService {
         get {
             guard let scheduler = self.storage[SchedulerServiceKey.self] else {
                 fatalError("SchedulerService not configured. Call app.scheduler = SchedulerService(...) in configure.swift")
@@ -262,7 +262,7 @@ extension Application {
 }
 
 extension Request {
-    public var scheduler: SchedulerService {
+    var scheduler: SchedulerService {
         return self.application.scheduler
     }
 }

@@ -202,10 +202,7 @@ struct VMController: RouteCollection {
             let vmConfig = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
             try await req.agentService.createVM(vm: vm, vmConfig: vmConfig, db: req.db)
 
-            // Update VM status (hypervisorId is set by AgentService via scheduler)
-            vm.status = VMStatus.created
-            try await vm.save(on: req.db)
-
+            // hypervisorId is set and saved by AgentService via scheduler
             req.logger.info("VM created successfully via agent", metadata: [
                 "vm_id": .string(vmId),
                 "hypervisor_id": .string(vm.hypervisorId ?? "unknown")
