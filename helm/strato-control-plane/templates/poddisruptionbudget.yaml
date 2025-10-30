@@ -21,7 +21,7 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "strato-control-plane.fullname" . }}-spicedb
+  name: {{ include "strato-control-plane.spicedb.fullname" . }}
   labels:
     {{- include "strato-control-plane.spicedb.labels" . | nindent 4 }}
 spec:

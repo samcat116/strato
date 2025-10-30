@@ -40,16 +40,31 @@ ingress:
   className: ""
   annotations: {}
     # kubernetes.io/ingress.class: nginx
-    # kubernetes.io/tls-acme: "true"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
   hosts:
     - host: strato.local
       paths:
         - path: /
-          pathType: ImplementationSpecific
+          pathType: Prefix
   tls: []
   #  - secretName: strato-tls
   #    hosts:
   #      - strato.local
+  #
+  # Example production configuration:
+  # enabled: true
+  # className: nginx
+  # annotations:
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+  # hosts:
+  #   - host: strato.example.com
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+  # tls:
+  #   - secretName: strato-tls
+  #     hosts:
+  #       - strato.example.com
 
 resources:
   limits:
@@ -102,16 +117,27 @@ strato:
     # password is stored in secret
     
   webauthn:
-    relyingPartyId: "localhost"
+    # Relying Party ID is typically the domain name (without protocol/port)
+    # When empty, will be derived from ingress hostname or default to "localhost"
+    relyingPartyId: ""
     relyingPartyName: "Strato"
-    relyingPartyOrigin: "http://localhost:8080"
-    
+    # Relying Party Origin is the full URL (protocol + domain + port if non-standard)
+    # When empty, will be auto-configured from ingress settings:
+    #   - https://<hostname> if TLS is enabled
+    #   - http://<hostname> otherwise
+    relyingPartyOrigin: ""
+
   # External hostname for the control plane (used for WebSocket connections from agents)
-  externalHostname: ""  # If empty, will use service name
+  # When empty, will use the first ingress hostname or service name
+  externalHostname: ""
 
 # SpiceDB configuration
 spicedb:
   enabled: true
+  nameOverride: ""
+  fullnameOverride: ""
+  operator:
+    enabled: true
   image:
     repository: authzed/spicedb
     tag: v1.35.3

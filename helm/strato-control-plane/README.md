@@ -16,6 +16,7 @@ First, add the required Helm repositories:
 
 ```bash
 helm repo add bitnami https://charts.bitnami.com/bitnami
+helm repo add spicedb-operator-chart https://bushelpowered.github.io/spicedb-operator-chart/
 helm repo update
 ```
 
@@ -156,6 +157,7 @@ spicedb:
 | `postgresql.auth.username` | string | `"vapor_username"` | PostgreSQL username |
 | `postgresql.auth.password` | string | `""` | PostgreSQL password (required) |
 | `spicedb.enabled` | bool | `true` | Enable SpiceDB authorization |
+| `spicedb.operator.enabled` | bool | `true` | Install the SpiceDB Operator dependency |
 | `spicedb.presharedKey` | string | `"strato-dev-key"` | SpiceDB preshared key (change in production) |
 | `spicedb.resources.limits.cpu` | string | `"500m"` | SpiceDB CPU limit |
 | `spicedb.resources.limits.memory` | string | `"512Mi"` | SpiceDB memory limit |

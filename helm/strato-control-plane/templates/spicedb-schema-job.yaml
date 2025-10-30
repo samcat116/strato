@@ -2,7 +2,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "strato-control-plane.fullname" . }}-spicedb-schema
+  name: {{ include "strato-control-plane.spicedb.fullname" . }}-schema
   labels:
     {{- include "strato-control-plane.spicedb.labels" . | nindent 4 }}
   annotations:
@@ -24,8 +24,12 @@ spec:
       {{- end }}
       initContainers:
         - name: wait-for-spicedb
-          image: alpine:3.17
-          command: ['sh', '-c', 'apk add --no-cache netcat-openbsd && until nc -z {{ include "strato-control-plane.fullname" . }}-spicedb.{{ .Release.Namespace }}.svc.cluster.local 8080; do echo waiting for SpiceDB; sleep 2; done']
+          image: {{ default "busybox:1.36.1" .Values.initContainers.waitForSpiceDB.image | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              until nc -w 1 -z {{ include "strato-control-plane.spicedb.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.spicedb.service.grpcPort }}; do echo waiting for SpiceDB; sleep 2; done
       containers:
         - name: schema-loader
           image: authzed/zed:latest
@@ -35,7 +39,7 @@ spec:
             - write
             - /schema/spicedb-schema.zed
             - --endpoint
-            - {{ include "strato-control-plane.fullname" . }}-spicedb:50051
+            - {{ include "strato-control-plane.spicedb.fullname" . }}:50051
             - --token
             - $(SPICEDB_TOKEN)
             - --insecure
@@ -43,7 +47,7 @@ spec:
             - name: SPICEDB_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "strato-control-plane.fullname" . }}-spicedb
+                  name: {{ include "strato-control-plane.spicedb.fullname" . }}-config
                   key: preshared-key
           volumeMounts:
             - name: schema

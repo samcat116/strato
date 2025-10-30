@@ -20,3 +20,8 @@ dependencies:
     version: "~15.5.0"
     repository: https://charts.bitnami.com/bitnami
     condition: postgresql.enabled
+  - name: spicedb-operator
+    version: "2.2.0"
+    repository: https://bushelpowered.github.io/spicedb-operator-chart/
+    alias: spicedb-operator
+    condition: spicedb.operator.enabled
