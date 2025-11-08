@@ -532,6 +532,18 @@ struct HTMXController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
+        // Check if user is an admin of this organization
+        let userOrg = try await UserOrganization.query(on: req.db)
+            .filter(\.$user.$id == user.id!)
+            .filter(\.$organization.$id == organizationID)
+            .filter(\.$role == "admin")
+            .first()
+
+        guard userOrg != nil else {
+            let toastHTML = ToastNotification(message: "You must be an organization admin to create OIDC providers", isError: true).render()
+            return Response(status: .forbidden, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
         struct CreateRequest: Content {
             let name: String
             let clientID: String
@@ -595,9 +607,25 @@ struct HTMXController: RouteCollection {
     }
 
     func updateOIDCProvider(req: Request) async throws -> Response {
+        guard let user = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+
         guard let organizationID = req.parameters.get("orgID", as: UUID.self),
               let providerID = req.parameters.get("providerID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid organization or provider ID")
+        }
+
+        // Check if user is an admin of this organization
+        let userOrg = try await UserOrganization.query(on: req.db)
+            .filter(\.$user.$id == user.id!)
+            .filter(\.$organization.$id == organizationID)
+            .filter(\.$role == "admin")
+            .first()
+
+        guard userOrg != nil else {
+            let toastHTML = ToastNotification(message: "You must be an organization admin to update OIDC providers", isError: true).render()
+            return Response(status: .forbidden, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
         }
 
         guard let provider = try await OIDCProvider.query(on: req.db)
@@ -648,9 +676,25 @@ struct HTMXController: RouteCollection {
     }
 
     func deleteOIDCProvider(req: Request) async throws -> Response {
+        guard let user = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+
         guard let organizationID = req.parameters.get("orgID", as: UUID.self),
               let providerID = req.parameters.get("providerID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid organization or provider ID")
+        }
+
+        // Check if user is an admin of this organization
+        let userOrg = try await UserOrganization.query(on: req.db)
+            .filter(\.$user.$id == user.id!)
+            .filter(\.$organization.$id == organizationID)
+            .filter(\.$role == "admin")
+            .first()
+
+        guard userOrg != nil else {
+            let toastHTML = ToastNotification(message: "You must be an organization admin to delete OIDC providers", isError: true).render()
+            return Response(status: .forbidden, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
         }
 
         guard let provider = try await OIDCProvider.query(on: req.db)

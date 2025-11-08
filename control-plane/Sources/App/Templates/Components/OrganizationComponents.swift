@@ -12,8 +12,7 @@ struct ToastNotification: HTML {
         div(
             .class("fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg z-50 animate-fade-in"),
             .class(isError ? "bg-red-500 text-white" : "bg-green-500 text-white"),
-            .custom(name: "x-data", value: "{ show: true }"),
-            .custom(name: "x-init", value: "setTimeout(() => $el.remove(), 3000)")
+            .custom(name: "_", value: "on load wait 3s then remove me")
         ) {
             message
         }
