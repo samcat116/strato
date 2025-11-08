@@ -51,13 +51,15 @@ struct VMListPartial: HTML {
                                 .class("text-green-400 hover:text-green-300 text-xs transition-colors"),
                                 .custom(name: "hx-post", value: "/htmx/vms/\(vmId)/start"),
                                 .custom(name: "hx-target", value: "#terminal"),
-                                .custom(name: "hx-on::after-request", value: "logToConsole('VM start command sent')")
+                                .custom(name: "hx-on::after-request", value: "logToConsole('VM start command sent')"),
+                                .custom(name: "aria-label", value: "Start VM")
                             ) { "▶" }
                             button(
                                 .class("text-yellow-400 hover:text-yellow-300 text-xs transition-colors"),
                                 .custom(name: "hx-post", value: "/htmx/vms/\(vmId)/stop"),
                                 .custom(name: "hx-target", value: "#terminal"),
-                                .custom(name: "hx-on::after-request", value: "logToConsole('VM stop command sent')")
+                                .custom(name: "hx-on::after-request", value: "logToConsole('VM stop command sent')"),
+                                .custom(name: "aria-label", value: "Stop VM")
                             ) { "⏸" }
                             button(
                                 .class("text-red-400 hover:text-red-300 text-xs transition-colors"),
@@ -65,7 +67,8 @@ struct VMListPartial: HTML {
                                 .custom(name: "hx-target", value: "#vmTableBody"),
                                 .custom(name: "hx-swap", value: "innerHTML"),
                                 .custom(name: "hx-confirm", value: "Are you sure you want to delete this VM?"),
-                                .custom(name: "hx-on::after-request", value: "logToConsole('VM deleted')")
+                                .custom(name: "hx-on::after-request", value: "logToConsole('VM deleted')"),
+                                .custom(name: "aria-label", value: "Delete VM")
                             ) { "🗑" }
                         }
                     }
@@ -108,22 +111,26 @@ struct VMDetailsPartial: HTML {
             div(.class("flex space-x-3 pt-4")) {
                 button(
                     .class("bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm transition-colors"),
-                    .custom(name: "hx-post", value: "/htmx/vms/\(vmId)/start")
+                    .custom(name: "hx-post", value: "/htmx/vms/\(vmId)/start"),
+                    .custom(name: "aria-label", value: "Start virtual machine")
                 ) { "Start" }
                 button(
                     .class("bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-md text-sm transition-colors"),
-                    .custom(name: "hx-post", value: "/htmx/vms/\(vmId)/stop")
+                    .custom(name: "hx-post", value: "/htmx/vms/\(vmId)/stop"),
+                    .custom(name: "aria-label", value: "Stop virtual machine")
                 ) { "Stop" }
                 button(
                     .class("bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm transition-colors"),
-                    .custom(name: "hx-post", value: "/htmx/vms/\(vmId)/restart")
+                    .custom(name: "hx-post", value: "/htmx/vms/\(vmId)/restart"),
+                    .custom(name: "aria-label", value: "Restart virtual machine")
                 ) { "Restart" }
                 button(
                     .class("bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm transition-colors"),
                     .custom(name: "hx-delete", value: "/htmx/vms/\(vmId)"),
                     .custom(name: "hx-target", value: "#vmTableBody"),
                     .custom(name: "hx-swap", value: "innerHTML"),
-                    .custom(name: "hx-confirm", value: "Are you sure you want to delete this VM?")
+                    .custom(name: "hx-confirm", value: "Are you sure you want to delete this VM?"),
+                    .custom(name: "aria-label", value: "Delete virtual machine")
                 ) { "Delete" }
             }
         }

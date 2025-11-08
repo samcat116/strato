@@ -453,6 +453,18 @@ struct HTMXController: RouteCollection {
         }
 
         let updateRequest = try req.content.decode(UpdateRequest.self)
+
+        // Validate input
+        guard updateRequest.name.count >= 3 && updateRequest.name.count <= 100 else {
+            let html = ToastNotification(message: "Organization name must be between 3 and 100 characters", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+        }
+
+        guard updateRequest.description.count <= 500 else {
+            let html = ToastNotification(message: "Description must be 500 characters or less", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+        }
+
         organization.name = updateRequest.name
         organization.description = updateRequest.description
 
@@ -463,7 +475,7 @@ struct HTMXController: RouteCollection {
     }
 
     func getOrganizationInfoTab(req: Request) async throws -> Response {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
@@ -481,7 +493,7 @@ struct HTMXController: RouteCollection {
     }
 
     func getOIDCTab(req: Request) async throws -> Response {
-        guard let user = req.auth.get(User.self) else {
+        guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
 
@@ -553,6 +565,30 @@ struct HTMXController: RouteCollection {
         }
 
         let createRequest = try req.content.decode(CreateRequest.self)
+
+        // Validate input
+        guard createRequest.name.count >= 3 && createRequest.name.count <= 100 else {
+            let toastHTML = ToastNotification(message: "Provider name must be between 3 and 100 characters", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
+        guard !createRequest.clientID.isEmpty && createRequest.clientID.count <= 255 else {
+            let toastHTML = ToastNotification(message: "Client ID is required and must be 255 characters or less", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
+        guard createRequest.clientSecret.count >= 16 else {
+            let toastHTML = ToastNotification(message: "Client secret must be at least 16 characters", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
+        // Validate discoveryURL format if provided
+        if let discoveryURL = createRequest.discoveryURL, !discoveryURL.isEmpty {
+            guard discoveryURL.hasPrefix("https://") || discoveryURL.hasPrefix("http://") else {
+                let toastHTML = ToastNotification(message: "Discovery URL must be a valid HTTP(S) URL", isError: true).render()
+                return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+            }
+        }
 
         let provider = OIDCProvider(
             organizationID: organizationID,
@@ -645,6 +681,33 @@ struct HTMXController: RouteCollection {
 
         let updateRequest = try req.content.decode(UpdateRequest.self)
 
+        // Validate input
+        guard updateRequest.name.count >= 3 && updateRequest.name.count <= 100 else {
+            let toastHTML = ToastNotification(message: "Provider name must be between 3 and 100 characters", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
+        guard !updateRequest.clientID.isEmpty && updateRequest.clientID.count <= 255 else {
+            let toastHTML = ToastNotification(message: "Client ID is required and must be 255 characters or less", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
+        // Validate client secret if provided (for updates it's optional)
+        if let clientSecret = updateRequest.clientSecret, !clientSecret.isEmpty {
+            guard clientSecret.count >= 16 else {
+                let toastHTML = ToastNotification(message: "Client secret must be at least 16 characters", isError: true).render()
+                return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+            }
+        }
+
+        // Validate discoveryURL format if provided
+        if let discoveryURL = updateRequest.discoveryURL, !discoveryURL.isEmpty {
+            guard discoveryURL.hasPrefix("https://") || discoveryURL.hasPrefix("http://") else {
+                let toastHTML = ToastNotification(message: "Discovery URL must be a valid HTTP(S) URL", isError: true).render()
+                return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+            }
+        }
+
         provider.name = updateRequest.name
         provider.clientID = updateRequest.clientID
         if let clientSecret = updateRequest.clientSecret, !clientSecret.isEmpty {
@@ -733,30 +796,38 @@ struct HTMXController: RouteCollection {
 
         let setupRequest = try req.content.decode(SetupRequest.self)
 
-        // Validate that this is truly the first setup (no users exist)
-        let userCount = try await User.query(on: req.db).count()
-        guard userCount == 0 else {
-            throw Abort(.badRequest, reason: "Onboarding already completed")
+        // Validate input
+        guard setupRequest.name.count >= 3 && setupRequest.name.count <= 100 else {
+            throw Abort(.badRequest, reason: "Organization name must be between 3 and 100 characters")
         }
 
-        // Create the organization
-        let organization = Organization(
-            name: setupRequest.name,
-            description: setupRequest.description ?? ""
-        )
-        try await organization.save(on: req.db)
+        // Use database transaction to prevent race condition
+        return try await req.db.transaction { database in
+            // Validate that this is truly the first setup (no users exist)
+            let userCount = try await User.query(on: database).count()
+            guard userCount == 0 else {
+                throw Abort(.badRequest, reason: "Onboarding already completed")
+            }
 
-        // Success message with redirect
-        let html = OnboardingSuccessMessage(organizationName: setupRequest.name).render()
+            // Create the organization
+            let organization = Organization(
+                name: setupRequest.name,
+                description: setupRequest.description ?? ""
+            )
+            try await organization.save(on: database)
 
-        var headers = HTTPHeaders([("Content-Type", "text/html")])
-        headers.add(name: "HX-Redirect", value: "/")
+            // Success message with redirect
+            let html = OnboardingSuccessMessage(organizationName: setupRequest.name).render()
 
-        return Response(
-            status: .ok,
-            headers: headers,
-            body: .init(string: html)
-        )
+            var headers = HTTPHeaders([("Content-Type", "text/html")])
+            headers.add(name: "HX-Redirect", value: "/")
+
+            return Response(
+                status: .ok,
+                headers: headers,
+                body: .init(string: html)
+            )
+        }
     }
 
     // MARK: - Auth Endpoints
