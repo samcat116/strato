@@ -50,6 +50,10 @@ struct HTMXController: RouteCollection {
         // Auth completion endpoints
         let auth = htmx.grouped("auth")
         auth.post("login", "complete", use: loginComplete)
+
+        // Onboarding endpoints
+        let onboarding = htmx.grouped("onboarding")
+        onboarding.post("setup", use: setupOrganization)
     }
 
     // MARK: - VM Endpoints
@@ -675,6 +679,42 @@ struct HTMXController: RouteCollection {
         return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
     }
 
+    // MARK: - Onboarding Endpoints
+
+    func setupOrganization(req: Request) async throws -> Response {
+        struct SetupRequest: Content {
+            let name: String
+            let description: String?
+        }
+
+        let setupRequest = try req.content.decode(SetupRequest.self)
+
+        // Validate that this is truly the first setup (no users exist)
+        let userCount = try await User.query(on: req.db).count()
+        guard userCount == 0 else {
+            throw Abort(.badRequest, reason: "Onboarding already completed")
+        }
+
+        // Create the organization
+        let organization = Organization(
+            name: setupRequest.name,
+            description: setupRequest.description ?? ""
+        )
+        try await organization.save(on: req.db)
+
+        // Success message with redirect
+        let html = OnboardingSuccessMessage(organizationName: setupRequest.name).render()
+
+        var headers = HTTPHeaders([("Content-Type", "text/html")])
+        headers.add(name: "HX-Redirect", value: "/")
+
+        return Response(
+            status: .ok,
+            headers: headers,
+            body: .init(string: html)
+        )
+    }
+
     // MARK: - Auth Endpoints
 
     func loginComplete(req: Request) async throws -> Response {
@@ -1130,6 +1170,23 @@ struct OIDCProviderForm: HTML {
                     isEdit ? "Update Provider" : "Save Provider"
                 }
             }
+        }
+    }
+}
+
+// MARK: - Onboarding Components
+
+struct OnboardingSuccessMessage: HTML {
+    let organizationName: String
+
+    var content: some HTML {
+        div(.class("text-center")) {
+            div(.class("bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4")) {
+                strong { "Success!" }
+                " Your organization \"\(organizationName)\" has been created."
+            }
+            p(.class("text-gray-600 mb-4")) { "Redirecting to your dashboard..." }
+            div(.class("animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto")) {}
         }
     }
 }

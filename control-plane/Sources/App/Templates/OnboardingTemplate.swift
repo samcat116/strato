@@ -11,6 +11,8 @@ struct OnboardingTemplate: HTMLDocument {
         link(.rel("icon"), .href("/favicon.svg"))
         link(.rel("icon"), .href("/favicon.ico"))
         link(.rel("stylesheet"), .href("/styles/app.generated.css"))
+
+        script(.src("https://unpkg.com/htmx.org@1.9.10")) {}
     }
 
     var body: some HTML {
@@ -76,70 +78,19 @@ struct OnboardingTemplate: HTMLDocument {
                 }
             }
         }
-
-        script(.type("text/javascript")) {
-            HTMLRaw("""
-            document.getElementById('setupForm').addEventListener('submit', async (e) => {
-                e.preventDefault();
-
-                const submitBtn = document.getElementById('submitBtn');
-                const originalText = submitBtn.textContent;
-                submitBtn.disabled = true;
-                submitBtn.textContent = 'Setting up...';
-
-                const formData = new FormData(e.target);
-                const orgData = {
-                    name: formData.get('name'),
-                    description: formData.get('description')
-                };
-
-                try {
-                    const response = await fetch('/onboarding/setup', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(orgData)
-                    });
-
-                    if (response.ok) {
-                        const result = await response.json();
-
-                        // Show success message
-                        document.getElementById('setupForm').innerHTML = `
-                            <div class="text-center">
-                                <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4">
-                                    <strong>Success!</strong> Your organization "${result.organization.name}" has been created.
-                                </div>
-                                <p class="text-gray-600 mb-4">Redirecting to your dashboard...</p>
-                                <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
-                            </div>
-                        `;
-
-                        // Redirect to dashboard after 2 seconds
-                        setTimeout(() => {
-                            window.location.href = '/';
-                        }, 2000);
-                    } else {
-                        const error = await response.json();
-                        alert(`Setup failed: ${error.reason || 'Unknown error'}`);
-                        submitBtn.disabled = false;
-                        submitBtn.textContent = originalText;
-                    }
-                } catch (error) {
-                    alert(`Setup failed: ${error.message}`);
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = originalText;
-                }
-            });
-            """)
-        }
     }
 }
 
 struct OrganizationSetupForm: HTML {
     var content: some HTML {
-        form(.id("setupForm"), .class("space-y-6")) {
+        form(
+            .id("setupForm"),
+            .class("space-y-6"),
+            .custom(name: "hx-post", value: "/htmx/onboarding/setup"),
+            .custom(name: "hx-target", value: "#setupForm"),
+            .custom(name: "hx-swap", value: "innerHTML"),
+            .custom(name: "hx-indicator", value: "#submit-indicator")
+        ) {
             div {
                 label(.for("name"), .class("block text-sm font-medium text-gray-700 mb-2")) {
                     "Organization Name"
@@ -178,7 +129,12 @@ struct OrganizationSetupForm: HTML {
                     .type(.submit),
                     .class("w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-gray-400 disabled:cursor-not-allowed")
                 ) {
-                    "Create Organization & Continue"
+                    span(.class("htmx-indicator"), .id("submit-indicator")) {
+                        "Setting up..."
+                    }
+                    span(.class("default-text")) {
+                        "Create Organization & Continue"
+                    }
                 }
             }
         }
