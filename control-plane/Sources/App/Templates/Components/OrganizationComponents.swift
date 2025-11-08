@@ -1,5 +1,6 @@
 import Elementary
 import ElementaryHTMX
+import Foundation
 
 // MARK: - Toast Notification
 
@@ -215,14 +216,24 @@ struct OIDCProviderForm: HTML {
                     label(.for("clientSecret"), .class("block text-sm font-medium text-gray-700")) {
                         isEdit ? "Client Secret (leave blank to keep current)" : "Client Secret"
                     }
-                    input(
-                        .type(.password),
-                        .name("clientSecret"),
-                        .id("clientSecret"),
-                        .required(!isEdit),
-                        .class("mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"),
-                        .placeholder(isEdit ? "Leave blank to keep existing secret" : "Client Secret from your OIDC provider")
-                    )
+                    if isEdit {
+                        input(
+                            .type(.password),
+                            .name("clientSecret"),
+                            .id("clientSecret"),
+                            .class("mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"),
+                            .placeholder("Leave blank to keep existing secret")
+                        )
+                    } else {
+                        input(
+                            .type(.password),
+                            .name("clientSecret"),
+                            .id("clientSecret"),
+                            .required,
+                            .class("mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"),
+                            .placeholder("Client Secret from your OIDC provider")
+                        )
+                    }
                 }
 
                 div {
@@ -241,13 +252,22 @@ struct OIDCProviderForm: HTML {
 
                 div {
                     div(.class("flex items-center")) {
-                        input(
-                            .type(.checkbox),
-                            .name("enabled"),
-                            .id("enabled"),
-                            .checked(provider?.enabled ?? true),
-                            .class("h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded")
-                        )
+                        if provider?.enabled ?? true {
+                            input(
+                                .type(.checkbox),
+                                .name("enabled"),
+                                .id("enabled"),
+                                .checked,
+                                .class("h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded")
+                            )
+                        } else {
+                            input(
+                                .type(.checkbox),
+                                .name("enabled"),
+                                .id("enabled"),
+                                .class("h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded")
+                            )
+                        }
                         label(.for("enabled"), .class("ml-2 block text-sm text-gray-900")) {
                             "Enable this provider"
                         }

@@ -3,10 +3,10 @@ import ElementaryHTMX
 
 // MARK: - Modal
 
-struct Modal: HTML {
+struct Modal<Content: HTML>: HTML {
     let id: String
     let title: String
-    let content: HTML
+    let modalContent: Content
 
     var content: some HTML {
         div(
@@ -23,7 +23,7 @@ struct Modal: HTML {
                     ) { "✕" }
                 }
                 div(.class("px-6 py-4")) {
-                    self.content
+                    modalContent
                 }
             }
         }
@@ -34,30 +34,61 @@ struct Modal: HTML {
 
 struct FormField: HTML {
     let id: String
-    let label: String
-    let type: String
+    let fieldLabel: String
+    let fieldType: String
     let placeholder: String
-    let required: Bool
+    let isRequired: Bool
 
     init(id: String, label: String, type: String, placeholder: String, required: Bool = false) {
         self.id = id
-        self.label = label
-        self.type = type
+        self.fieldLabel = label
+        self.fieldType = type
         self.placeholder = placeholder
-        self.required = required
+        self.isRequired = required
     }
 
     var content: some HTML {
         div {
-            label(.for(id), .class("block text-sm font-medium text-gray-300 mb-1")) { label }
-            input(
-                .type(InputType(rawValue: type) ?? .text),
-                .id(id),
-                .name(id),
-                .class("w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"),
-                .placeholder(placeholder),
-                .required(required)
-            )
+            Elementary.label(.for(id), .class("block text-sm font-medium text-gray-300 mb-1")) { fieldLabel }
+            if fieldType == "number" {
+                if isRequired {
+                    input(
+                        .type(.number),
+                        .id(id),
+                        .name(id),
+                        .class("w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"),
+                        .placeholder(placeholder),
+                        .required
+                    )
+                } else {
+                    input(
+                        .type(.number),
+                        .id(id),
+                        .name(id),
+                        .class("w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"),
+                        .placeholder(placeholder)
+                    )
+                }
+            } else {
+                if isRequired {
+                    input(
+                        .type(.text),
+                        .id(id),
+                        .name(id),
+                        .class("w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"),
+                        .placeholder(placeholder),
+                        .required
+                    )
+                } else {
+                    input(
+                        .type(.text),
+                        .id(id),
+                        .name(id),
+                        .class("w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"),
+                        .placeholder(placeholder)
+                    )
+                }
+            }
         }
     }
 }
@@ -122,63 +153,3 @@ struct SidebarItem: HTML {
     }
 }
 
-// MARK: - Create VM Form
-
-struct CreateVMForm: HTML {
-    var content: some HTML {
-        form(
-            .id("createVMForm"),
-            .custom(name: "hx-post", value: "/htmx/vms/create"),
-            .custom(name: "hx-target", value: "#vmTableBody"),
-            .custom(name: "hx-swap", value: "innerHTML"),
-            .custom(name: "_", value: "on htmx:afterRequest add .hidden to #createVMModal")
-        ) {
-            div(.class("space-y-4")) {
-                FormField(id: "vmName", label: "VM Name", type: "text", placeholder: "my-vm", required: true)
-                FormField(id: "vmDescription", label: "Description", type: "text", placeholder: "Production web server")
-                FormField(id: "vmTemplate", label: "OS Template", type: "text", placeholder: "ubuntu-22.04", required: true)
-                FormField(id: "vmCpu", label: "CPU Cores", type: "number", placeholder: "2", required: true)
-                FormField(id: "vmMemory", label: "Memory (GB)", type: "number", placeholder: "4", required: true)
-                FormField(id: "vmDisk", label: "Disk (GB)", type: "number", placeholder: "50", required: true)
-
-                div(.class("flex justify-end space-x-3")) {
-                    button(
-                        .type(.button),
-                        .class("px-4 py-2 border border-gray-600 rounded-md text-sm font-medium text-gray-300 hover:bg-gray-700"),
-                        .custom(name: "_", value: "on click add .hidden to #createVMModal")
-                    ) { "Cancel" }
-                    button(
-                        .type(.submit),
-                        .class("px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-md text-sm font-medium text-white")
-                    ) { "Create VM" }
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Placeholder Forms
-
-struct CreateOrganizationForm: HTML {
-    var content: some HTML {
-        div { p(.class("text-gray-400")) { "Organization creation form placeholder" } }
-    }
-}
-
-struct APIKeysContent: HTML {
-    var content: some HTML {
-        div { p(.class("text-gray-400")) { "API Keys management placeholder" } }
-    }
-}
-
-struct CreateAPIKeyForm: HTML {
-    var content: some HTML {
-        div { p(.class("text-gray-400")) { "Create API Key form placeholder" } }
-    }
-}
-
-struct AddAgentForm: HTML {
-    var content: some HTML {
-        div { p(.class("text-gray-400")) { "Add Agent form placeholder" } }
-    }
-}
