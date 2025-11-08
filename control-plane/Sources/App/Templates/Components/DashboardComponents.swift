@@ -144,12 +144,8 @@ struct SidebarSection: HTML {
 
 // MARK: - Sidebar Item
 
-struct SidebarItem: HTML {
+struct SidebarItem {
     let label: String
     let action: String
-
-    var content: some HTML {
-        div {}
-    }
 }
 
