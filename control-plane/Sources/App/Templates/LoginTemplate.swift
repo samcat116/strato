@@ -16,7 +16,8 @@ struct LoginTemplate: HTMLDocument {
         link(.rel("icon"), .href("/favicon.svg"))
         link(.rel("icon"), .href("/favicon.ico"))
         link(.rel("stylesheet"), .href("/styles/app.generated.css"))
-        script(.src("https://unpkg.com/htmx.org@1.9.10/dist/htmx.min.js")) { "" }
+        script(.src("https://unpkg.com/htmx.org@1.9.10")) { "" }
+        script(.src("https://unpkg.com/hyperscript.org@0.9.12")) { "" }
         script(.src("/js/webauthn.js")) { "" }
     }
 
@@ -171,7 +172,7 @@ struct PasskeyButtons: HTML {
             button(
                 .id("loginBtn"),
                 .class("group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"),
-                .custom(name: "onclick", value: "authenticateWithPasskey(document.getElementById('username').value.trim() || null)")
+                .custom(name: "_", value: "on click call authenticateWithPasskey(#username.value.trim() or null)")
             ) {
                 "🔑 Sign in with Passkey"
             }
@@ -179,7 +180,7 @@ struct PasskeyButtons: HTML {
             button(
                 .id("loginWithoutUsernameBtn"),
                 .class("group relative w-full flex justify-center py-2 px-4 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"),
-                .custom(name: "onclick", value: "authenticateWithPasskey(null)")
+                .custom(name: "_", value: "on click call authenticateWithPasskey(null)")
             ) {
                 "🔐 Use any available Passkey"
             }

@@ -11,6 +11,8 @@ struct RegisterTemplate: HTMLDocument {
         link(.rel("icon"), .href("/favicon.svg"))
         link(.rel("icon"), .href("/favicon.ico"))
         link(.rel("stylesheet"), .href("/styles/app.generated.css"))
+        script(.src("https://unpkg.com/htmx.org@1.9.10")) { "" }
+        script(.src("https://unpkg.com/hyperscript.org@0.9.12")) { "" }
         script(.src("/js/webauthn.js")) { "" }
     }
 
