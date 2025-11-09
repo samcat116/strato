@@ -10,7 +10,8 @@ struct AgentManagementTemplate: HTMLDocument {
         meta(.charset("utf-8"))
         meta(.name("viewport"), .content("width=device-width, initial-scale=1.0"))
         link(.rel("stylesheet"), .href("/styles/app.generated.css"))
-        script(.src("https://unpkg.com/htmx.org@1.9.8")) { "" }
+        script(.src("https://unpkg.com/htmx.org@1.9.10")) { "" }
+        script(.src("https://unpkg.com/hyperscript.org@0.9.12")) { "" }
         script(.src("/js/webauthn.js")) { "" }
     }
 
@@ -146,95 +147,6 @@ struct AgentManagementTemplate: HTMLDocument {
                         }
                     }
                 }
-            }
-            
-            script {
-                HTMLRaw("""
-                    document.addEventListener('DOMContentLoaded', function() {
-                        // Tab functionality for deployment options
-                        document.addEventListener('click', function(e) {
-                            if (e.target.classList.contains('tab-button')) {
-                                const targetTab = e.target.getAttribute('data-tab');
-                                const parentContainer = e.target.closest('.bg-green-900') || e.target.closest('.bg-blue-900');
-                                
-                                if (parentContainer) {
-                                    // Remove active class from all tab buttons in this container
-                                    parentContainer.querySelectorAll('.tab-button').forEach(btn => {
-                                        btn.classList.remove('active', 'border-green-400');
-                                        btn.classList.add('border-transparent');
-                                    });
-                                    
-                                    // Add active class to clicked button
-                                    e.target.classList.add('active', 'border-green-400');
-                                    e.target.classList.remove('border-transparent');
-                                    
-                                    // Hide all tab content in this container
-                                    parentContainer.querySelectorAll('.tab-content').forEach(content => {
-                                        content.classList.add('hidden');
-                                    });
-                                    
-                                    // Show target tab content
-                                    const targetContent = parentContainer.querySelector(`#${targetTab}-tab`);
-                                    if (targetContent) {
-                                        targetContent.classList.remove('hidden');
-                                    }
-                                }
-                            }
-                        });
-                        
-                        // Enhanced copy functionality with feedback
-                        document.addEventListener('click', function(e) {
-                            if (e.target.classList.contains('copy-button')) {
-                                const text = e.target.getAttribute('data-copy-text');
-                                if (text) {
-                                    if (navigator.clipboard) {
-                                        navigator.clipboard.writeText(text).then(() => {
-                                            showCopyFeedback(e.target, 'Copied!');
-                                        }).catch((err) => {
-                                            showCopyFeedback(e.target, 'Failed to copy', true);
-                                        });
-                                    } else {
-                                        // Fallback for browsers without clipboard API
-                                        const textArea = document.createElement('textarea');
-                                        textArea.value = text;
-                                        textArea.style.position = 'fixed';
-                                        textArea.style.opacity = '0';
-                                        document.body.appendChild(textArea);
-                                        textArea.select();
-                                        try {
-                                            document.execCommand('copy');
-                                            showCopyFeedback(e.target, 'Copied!');
-                                        } catch (err) {
-                                            showCopyFeedback(e.target, 'Failed to copy', true);
-                                        }
-                                        document.body.removeChild(textArea);
-                                    }
-                                }
-                            }
-                        });
-                        
-                        function showCopyFeedback(button, message, isError = false) {
-                            const originalText = button.textContent;
-                            const originalClasses = button.className;
-                            
-                            // Update button appearance
-                            button.textContent = message;
-                            if (isError) {
-                                button.className = button.className.replace(/bg-blue-\\d+|bg-gray-\\d+/, 'bg-red-600');
-                                button.className = button.className.replace(/hover:bg-blue-\\d+|hover:bg-gray-\\d+/, 'hover:bg-red-700');
-                            } else {
-                                button.className = button.className.replace(/bg-blue-\\d+|bg-gray-\\d+/, 'bg-green-600');
-                                button.className = button.className.replace(/hover:bg-blue-\\d+|hover:bg-gray-\\d+/, 'hover:bg-green-700');
-                            }
-                            
-                            // Reset after 2 seconds
-                            setTimeout(() => {
-                                button.textContent = originalText;
-                                button.className = originalClasses;
-                            }, 2000);
-                        }
-                    });
-                """)
             }
         }
     }
@@ -394,8 +306,29 @@ struct RegistrationTokenListTemplate: HTML {
                                 }
                                 td(.class("py-3 px-4 text-right")) {
                                     if token.isValid {
-                                        button(.class("bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm mr-2 copy-button"),
-                                               .custom(name: "data-copy-text", value: token.registrationURL)) {
+                                        button(
+                                            .class("bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm mr-2"),
+                                            .custom(name: "_", value: """
+                                                on click
+                                                  js(me, url)
+                                                    navigator.clipboard.writeText(url)
+                                                      .then(() => {
+                                                        me.textContent = 'Copied!';
+                                                        me.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+                                                        me.classList.add('bg-green-600', 'hover:bg-green-700');
+                                                      })
+                                                      .catch(() => {
+                                                        me.textContent = 'Failed';
+                                                        me.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+                                                        me.classList.add('bg-red-600', 'hover:bg-red-700');
+                                                      });
+                                                  end(me, url='\(token.registrationURL)')
+                                                  wait 2s
+                                                  set my textContent to 'Copy URL'
+                                                  remove .bg-green-600 .bg-red-600 .hover:bg-green-700 .hover:bg-red-700
+                                                  add .bg-blue-600 .hover:bg-blue-700
+                                                """)
+                                        ) {
                                             "Copy URL"
                                         }
                                     }
@@ -410,30 +343,6 @@ struct RegistrationTokenListTemplate: HTML {
                             }
                         }
                     }
-                }
-                
-                script {
-                    HTMLRaw("""
-                        document.addEventListener('DOMContentLoaded', function() {
-                            // Handle copy buttons
-                            document.addEventListener('click', function(e) {
-                                if (e.target.classList.contains('copy-button')) {
-                                    const text = e.target.getAttribute('data-copy-text');
-                                    if (text) {
-                                        if (!navigator.clipboard) {
-                                            alert('Clipboard API not available. Please copy manually.');
-                                            return;
-                                        }
-                                        navigator.clipboard.writeText(text).then(() => {
-                                            alert('Registration URL copied to clipboard!');
-                                        }).catch((err) => {
-                                            alert('Failed to copy to clipboard: ' + (err && err.message ? err.message : err));
-                                        });
-                                    }
-                                }
-                            });
-                        });
-                    """)
                 }
             }
         }

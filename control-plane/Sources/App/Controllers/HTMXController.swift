@@ -25,6 +25,21 @@ struct HTMXController: RouteCollection {
         orgs.post("create", use: createOrganization)
         orgs.post(":orgID", "switch", use: switchOrganization)
 
+        // Organization settings endpoints
+        let orgSettings = orgs.grouped(":orgID", "settings")
+        orgSettings.put("update", use: updateOrganizationInfo)
+        orgSettings.get("info-tab", use: getOrganizationInfoTab)
+        orgSettings.get("oidc-tab", use: getOIDCTab)
+
+        // OIDC provider endpoints (HTMX versions)
+        let oidcEndpoints = orgSettings.grouped("oidc-providers")
+        oidcEndpoints.get("list", use: listOIDCProviders)
+        oidcEndpoints.get("form", "new", use: showNewOIDCProviderForm)
+        oidcEndpoints.post("create", use: createOIDCProvider)
+        oidcEndpoints.get(":providerID", "form", "edit", use: showEditOIDCProviderForm)
+        oidcEndpoints.put(":providerID", "update", use: updateOIDCProvider)
+        oidcEndpoints.delete(":providerID", use: deleteOIDCProvider)
+
         // API Key endpoints
         let apiKeys = htmx.grouped("api-keys")
         apiKeys.get("list", use: listAPIKeys)
@@ -35,6 +50,10 @@ struct HTMXController: RouteCollection {
         // Auth completion endpoints
         let auth = htmx.grouped("auth")
         auth.post("login", "complete", use: loginComplete)
+
+        // Onboarding endpoints
+        let onboarding = htmx.grouped("onboarding")
+        onboarding.post("setup", use: setupOrganization)
     }
 
     // MARK: - VM Endpoints
@@ -110,7 +129,7 @@ struct HTMXController: RouteCollection {
                 .filter(\Project.$organization.$id, .equal, currentOrgId)
                 .filter(\Project.$name, .equal, "Default Project")
                 .first()
-            
+
             if let project = defaultProject,
                let projectId = project.id {
                 vm.$project.id = projectId
@@ -401,6 +420,416 @@ struct HTMXController: RouteCollection {
         )
     }
 
+    // MARK: - Organization Settings Endpoints
+
+    func updateOrganizationInfo(req: Request) async throws -> Response {
+        guard let user = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+
+        guard let organizationID = req.parameters.get("orgID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid organization ID")
+        }
+
+        // Check if user is admin
+        let userOrg = try await UserOrganization.query(on: req.db)
+            .filter(\.$user.$id == user.id!)
+            .filter(\.$organization.$id == organizationID)
+            .filter(\.$role == "admin")
+            .first()
+
+        guard userOrg != nil else {
+            let html = ToastNotification(message: "Only organization admins can update organization", isError: true).render()
+            return Response(status: .forbidden, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+        }
+
+        guard let organization = try await Organization.find(organizationID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+
+        struct UpdateRequest: Content {
+            let name: String
+            let description: String
+        }
+
+        let updateRequest = try req.content.decode(UpdateRequest.self)
+
+        // Validate input
+        guard updateRequest.name.count >= 3 && updateRequest.name.count <= 100 else {
+            let html = ToastNotification(message: "Organization name must be between 3 and 100 characters", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+        }
+
+        guard updateRequest.description.count <= 500 else {
+            let html = ToastNotification(message: "Description must be 500 characters or less", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+        }
+
+        organization.name = updateRequest.name
+        organization.description = updateRequest.description
+
+        try await organization.save(on: req.db)
+
+        let html = ToastNotification(message: "Organization updated successfully", isError: false).render()
+        return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+    }
+
+    func getOrganizationInfoTab(req: Request) async throws -> Response {
+        guard req.auth.has(User.self) else {
+            throw Abort(.unauthorized)
+        }
+
+        guard let organizationID = req.parameters.get("orgID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid organization ID")
+        }
+
+        guard let organization = try await Organization.find(organizationID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+
+        let orgResponse = OrganizationResponse(from: organization, userRole: nil)
+        let html = OrganizationInfoTabContent(organization: orgResponse).render()
+        return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+    }
+
+    func getOIDCTab(req: Request) async throws -> Response {
+        guard req.auth.has(User.self) else {
+            throw Abort(.unauthorized)
+        }
+
+        guard let organizationID = req.parameters.get("orgID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid organization ID")
+        }
+
+        guard let organization = try await Organization.find(organizationID, on: req.db) else {
+            throw Abort(.notFound)
+        }
+
+        let orgResponse = OrganizationResponse(from: organization, userRole: nil)
+        let html = OIDCTabContent(organization: orgResponse).render()
+        return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+    }
+
+    // MARK: - OIDC Provider HTMX Endpoints
+
+    func listOIDCProviders(req: Request) async throws -> Response {
+        guard let organizationID = req.parameters.get("orgID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid organization ID")
+        }
+
+        let providers = try await OIDCProvider.query(on: req.db)
+            .filter(\.$organization.$id == organizationID)
+            .all()
+
+        let providerResponses = providers.map { OIDCProviderResponse(from: $0) }
+        let html = OIDCProvidersList(providers: providerResponses, organizationID: organizationID).render()
+        return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+    }
+
+    func showNewOIDCProviderForm(req: Request) async throws -> Response {
+        guard let organizationID = req.parameters.get("orgID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid organization ID")
+        }
+
+        let html = OIDCProviderForm(organizationID: organizationID, provider: nil, isEdit: false).render()
+        return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+    }
+
+    func createOIDCProvider(req: Request) async throws -> Response {
+        guard let user = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+
+        guard let organizationID = req.parameters.get("orgID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid organization ID")
+        }
+
+        // Check if user is an admin of this organization
+        let userOrg = try await UserOrganization.query(on: req.db)
+            .filter(\.$user.$id == user.id!)
+            .filter(\.$organization.$id == organizationID)
+            .filter(\.$role == "admin")
+            .first()
+
+        guard userOrg != nil else {
+            let toastHTML = ToastNotification(message: "You must be an organization admin to create OIDC providers", isError: true).render()
+            return Response(status: .forbidden, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
+        struct CreateRequest: Content {
+            let name: String
+            let clientID: String
+            let clientSecret: String
+            let discoveryURL: String?
+            let enabled: String?
+        }
+
+        let createRequest = try req.content.decode(CreateRequest.self)
+
+        // Validate input
+        guard createRequest.name.count >= 3 && createRequest.name.count <= 100 else {
+            let toastHTML = ToastNotification(message: "Provider name must be between 3 and 100 characters", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
+        guard !createRequest.clientID.isEmpty && createRequest.clientID.count <= 255 else {
+            let toastHTML = ToastNotification(message: "Client ID is required and must be 255 characters or less", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
+        guard createRequest.clientSecret.count >= 16 else {
+            let toastHTML = ToastNotification(message: "Client secret must be at least 16 characters", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
+        // Validate discoveryURL format if provided
+        if let discoveryURL = createRequest.discoveryURL, !discoveryURL.isEmpty {
+            guard discoveryURL.hasPrefix("https://") || discoveryURL.hasPrefix("http://") else {
+                let toastHTML = ToastNotification(message: "Discovery URL must be a valid HTTP(S) URL", isError: true).render()
+                return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+            }
+        }
+
+        let provider = OIDCProvider(
+            organizationID: organizationID,
+            name: createRequest.name,
+            clientID: createRequest.clientID,
+            clientSecret: createRequest.clientSecret,
+            discoveryURL: createRequest.discoveryURL,
+            authorizationEndpoint: nil,
+            tokenEndpoint: nil,
+            userinfoEndpoint: nil,
+            jwksURI: nil,
+            scopes: ["openid", "profile", "email"],
+            enabled: createRequest.enabled == "on"
+        )
+
+        try await provider.save(on: req.db)
+
+        // Return updated providers list with success toast
+        let providers = try await OIDCProvider.query(on: req.db)
+            .filter(\.$organization.$id == organizationID)
+            .all()
+
+        let providerResponses = providers.map { OIDCProviderResponse(from: $0) }
+        let listHTML = OIDCProvidersList(providers: providerResponses, organizationID: organizationID).render()
+        let toastHTML = ToastNotification(message: "OIDC provider created successfully", isError: false).render()
+
+        let html = """
+        <div id="oidc-providers-list" hx-swap-oob="true">\(listHTML)</div>
+        <div id="provider-form-section" hx-swap-oob="outerHTML" style="display: none;"></div>
+        <div id="notification-area" hx-swap-oob="beforeend">\(toastHTML)</div>
+        """
+
+        return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+    }
+
+    func showEditOIDCProviderForm(req: Request) async throws -> Response {
+        guard let organizationID = req.parameters.get("orgID", as: UUID.self),
+              let providerID = req.parameters.get("providerID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid organization or provider ID")
+        }
+
+        guard let provider = try await OIDCProvider.query(on: req.db)
+            .filter(\.$id == providerID)
+            .filter(\.$organization.$id == organizationID)
+            .first() else {
+            throw Abort(.notFound, reason: "OIDC provider not found")
+        }
+
+        let providerResponse = OIDCProviderResponse(from: provider)
+        let html = OIDCProviderForm(organizationID: organizationID, provider: providerResponse, isEdit: true).render()
+        return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+    }
+
+    func updateOIDCProvider(req: Request) async throws -> Response {
+        guard let user = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+
+        guard let organizationID = req.parameters.get("orgID", as: UUID.self),
+              let providerID = req.parameters.get("providerID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid organization or provider ID")
+        }
+
+        // Check if user is an admin of this organization
+        let userOrg = try await UserOrganization.query(on: req.db)
+            .filter(\.$user.$id == user.id!)
+            .filter(\.$organization.$id == organizationID)
+            .filter(\.$role == "admin")
+            .first()
+
+        guard userOrg != nil else {
+            let toastHTML = ToastNotification(message: "You must be an organization admin to update OIDC providers", isError: true).render()
+            return Response(status: .forbidden, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
+        guard let provider = try await OIDCProvider.query(on: req.db)
+            .filter(\.$id == providerID)
+            .filter(\.$organization.$id == organizationID)
+            .first() else {
+            throw Abort(.notFound, reason: "OIDC provider not found")
+        }
+
+        struct UpdateRequest: Content {
+            let name: String
+            let clientID: String
+            let clientSecret: String?
+            let discoveryURL: String?
+            let enabled: String?
+        }
+
+        let updateRequest = try req.content.decode(UpdateRequest.self)
+
+        // Validate input
+        guard updateRequest.name.count >= 3 && updateRequest.name.count <= 100 else {
+            let toastHTML = ToastNotification(message: "Provider name must be between 3 and 100 characters", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
+        guard !updateRequest.clientID.isEmpty && updateRequest.clientID.count <= 255 else {
+            let toastHTML = ToastNotification(message: "Client ID is required and must be 255 characters or less", isError: true).render()
+            return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
+        // Validate client secret if provided (for updates it's optional)
+        if let clientSecret = updateRequest.clientSecret, !clientSecret.isEmpty {
+            guard clientSecret.count >= 16 else {
+                let toastHTML = ToastNotification(message: "Client secret must be at least 16 characters", isError: true).render()
+                return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+            }
+        }
+
+        // Validate discoveryURL format if provided
+        if let discoveryURL = updateRequest.discoveryURL, !discoveryURL.isEmpty {
+            guard discoveryURL.hasPrefix("https://") || discoveryURL.hasPrefix("http://") else {
+                let toastHTML = ToastNotification(message: "Discovery URL must be a valid HTTP(S) URL", isError: true).render()
+                return Response(status: .badRequest, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+            }
+        }
+
+        provider.name = updateRequest.name
+        provider.clientID = updateRequest.clientID
+        if let clientSecret = updateRequest.clientSecret, !clientSecret.isEmpty {
+            provider.clientSecret = clientSecret
+        }
+        if let discoveryURL = updateRequest.discoveryURL {
+            provider.discoveryURL = discoveryURL
+        }
+        provider.enabled = updateRequest.enabled == "on"
+
+        try await provider.save(on: req.db)
+
+        // Return updated providers list with success toast
+        let providers = try await OIDCProvider.query(on: req.db)
+            .filter(\.$organization.$id == organizationID)
+            .all()
+
+        let providerResponses = providers.map { OIDCProviderResponse(from: $0) }
+        let listHTML = OIDCProvidersList(providers: providerResponses, organizationID: organizationID).render()
+        let toastHTML = ToastNotification(message: "OIDC provider updated successfully", isError: false).render()
+
+        let html = """
+        <div id="oidc-providers-list" hx-swap-oob="true">\(listHTML)</div>
+        <div id="edit-provider-form-section" hx-swap-oob="outerHTML" style="display: none;"></div>
+        <div id="notification-area" hx-swap-oob="beforeend">\(toastHTML)</div>
+        """
+
+        return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+    }
+
+    func deleteOIDCProvider(req: Request) async throws -> Response {
+        guard let user = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+
+        guard let organizationID = req.parameters.get("orgID", as: UUID.self),
+              let providerID = req.parameters.get("providerID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid organization or provider ID")
+        }
+
+        // Check if user is an admin of this organization
+        let userOrg = try await UserOrganization.query(on: req.db)
+            .filter(\.$user.$id == user.id!)
+            .filter(\.$organization.$id == organizationID)
+            .filter(\.$role == "admin")
+            .first()
+
+        guard userOrg != nil else {
+            let toastHTML = ToastNotification(message: "You must be an organization admin to delete OIDC providers", isError: true).render()
+            return Response(status: .forbidden, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: toastHTML))
+        }
+
+        guard let provider = try await OIDCProvider.query(on: req.db)
+            .filter(\.$id == providerID)
+            .filter(\.$organization.$id == organizationID)
+            .first() else {
+            throw Abort(.notFound, reason: "OIDC provider not found")
+        }
+
+        try await provider.delete(on: req.db)
+
+        // Return updated providers list with success toast
+        let providers = try await OIDCProvider.query(on: req.db)
+            .filter(\.$organization.$id == organizationID)
+            .all()
+
+        let providerResponses = providers.map { OIDCProviderResponse(from: $0) }
+        let listHTML = OIDCProvidersList(providers: providerResponses, organizationID: organizationID).render()
+        let toastHTML = ToastNotification(message: "OIDC provider deleted successfully", isError: false).render()
+
+        let html = """
+        <div id="oidc-providers-list" hx-swap-oob="true">\(listHTML)</div>
+        <div id="notification-area" hx-swap-oob="beforeend">\(toastHTML)</div>
+        """
+
+        return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
+    }
+
+    // MARK: - Onboarding Endpoints
+
+    func setupOrganization(req: Request) async throws -> Response {
+        struct SetupRequest: Content {
+            let name: String
+            let description: String?
+        }
+
+        let setupRequest = try req.content.decode(SetupRequest.self)
+
+        // Validate input
+        guard setupRequest.name.count >= 3 && setupRequest.name.count <= 100 else {
+            throw Abort(.badRequest, reason: "Organization name must be between 3 and 100 characters")
+        }
+
+        // Use database transaction to prevent race condition
+        return try await req.db.transaction { database in
+            // Validate that this is truly the first setup (no users exist)
+            let userCount = try await User.query(on: database).count()
+            guard userCount == 0 else {
+                throw Abort(.badRequest, reason: "Onboarding already completed")
+            }
+
+            // Create the organization
+            let organization = Organization(
+                name: setupRequest.name,
+                description: setupRequest.description ?? ""
+            )
+            try await organization.save(on: database)
+
+            // Success message with redirect
+            let html = OnboardingSuccessMessage(organizationName: setupRequest.name).render()
+
+            var headers = HTTPHeaders([("Content-Type", "text/html")])
+            headers.add(name: "HX-Redirect", value: "/")
+
+            return Response(
+                status: .ok,
+                headers: headers,
+                body: .init(string: html)
+            )
+        }
+    }
+
     // MARK: - Auth Endpoints
 
     func loginComplete(req: Request) async throws -> Response {
@@ -410,187 +839,5 @@ struct HTMXController: RouteCollection {
             headers: HTTPHeaders([("Content-Type", "text/html")]),
             body: .init(string: html)
         )
-    }
-}
-
-// MARK: - Partial Templates
-
-struct VMListPartial: HTML {
-    let vms: [VM]
-
-    var content: some HTML {
-        if vms.isEmpty {
-            tr {
-                td(.class("px-3 py-4 text-sm text-gray-400 text-center"), .custom(name: "colspan", value: "3")) {
-                    "No VMs found. Create your first VM!"
-                }
-            }
-        } else {
-            ForEach(vms) { vm in
-                tr(
-                    .class("hover:bg-gray-700 cursor-pointer transition-colors"),
-                    .custom(name: "hx-get", value: "/htmx/vms/\(vm.id?.uuidString ?? "")/details"),
-                    .custom(name: "hx-target", value: "#vmDetails"),
-                    .custom(name: "hx-swap", value: "innerHTML")
-                ) {
-                    td(.class("px-3 py-3")) {
-                        div(.class("text-sm font-medium text-gray-200")) { vm.name }
-                        div(.class("text-xs text-gray-400")) { vm.description }
-                    }
-                    td(.class("px-3 py-3")) {
-                        span(.class("inline-flex px-2 py-1 text-xs rounded-full bg-green-900 text-green-300 border border-green-700")) {
-                            "Running"
-                        }
-                    }
-                    td(.class("px-3 py-3")) {
-                        div(.class("flex space-x-1")) {
-                            button(
-                                .class("text-green-400 hover:text-green-300 text-xs transition-colors"),
-                                .custom(name: "hx-post", value: "/htmx/vms/\(vm.id?.uuidString ?? "")/start"),
-                                .custom(name: "hx-target", value: "#terminal"),
-                                .custom(name: "hx-on::after-request", value: "logToConsole('VM start command sent')")
-                            ) { "▶" }
-                            button(
-                                .class("text-yellow-400 hover:text-yellow-300 text-xs transition-colors"),
-                                .custom(name: "hx-post", value: "/htmx/vms/\(vm.id?.uuidString ?? "")/stop"),
-                                .custom(name: "hx-target", value: "#terminal"),
-                                .custom(name: "hx-on::after-request", value: "logToConsole('VM stop command sent')")
-                            ) { "⏸" }
-                            button(
-                                .class("text-red-400 hover:text-red-300 text-xs transition-colors"),
-                                .custom(name: "hx-delete", value: "/htmx/vms/\(vm.id?.uuidString ?? "")"),
-                                .custom(name: "hx-target", value: "#vmTableBody"),
-                                .custom(name: "hx-swap", value: "innerHTML"),
-                                .custom(name: "hx-confirm", value: "Are you sure you want to delete this VM?"),
-                                .custom(name: "hx-on::after-request", value: "logToConsole('VM deleted')")
-                            ) { "🗑" }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct VMDetailsPartial: HTML {
-    let vm: VM
-
-    var content: some HTML {
-        div(.class("space-y-4")) {
-            div {
-                h4(.class("text-lg font-semibold text-gray-100")) { vm.name }
-                p(.class("text-sm text-gray-300")) { vm.description }
-            }
-            div(.class("grid grid-cols-2 gap-4")) {
-                div {
-                    label(.class("block text-sm font-medium text-gray-400")) { "CPU Cores" }
-                    p(.class("text-sm text-gray-100")) { String(vm.cpu) }
-                }
-                div {
-                    label(.class("block text-sm font-medium text-gray-400")) { "Memory" }
-                    p(.class("text-sm text-gray-100")) { "\(String(format: "%.1f", Double(vm.memory) / (1024 * 1024 * 1024))) GB" }
-                }
-                div {
-                    label(.class("block text-sm font-medium text-gray-400")) { "Disk" }
-                    p(.class("text-sm text-gray-100")) { "\(vm.disk / (1024 * 1024 * 1024)) GB" }
-                }
-                div {
-                    label(.class("block text-sm font-medium text-gray-400")) { "Image" }
-                    p(.class("text-sm text-gray-100")) { vm.image }
-                }
-            }
-            div(.class("flex space-x-3 pt-4")) {
-                button(
-                    .class("bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm transition-colors"),
-                    .custom(name: "hx-post", value: "/htmx/vms/\(vm.id?.uuidString ?? "")/start")
-                ) { "Start" }
-                button(
-                    .class("bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-md text-sm transition-colors"),
-                    .custom(name: "hx-post", value: "/htmx/vms/\(vm.id?.uuidString ?? "")/stop")
-                ) { "Stop" }
-                button(
-                    .class("bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm transition-colors"),
-                    .custom(name: "hx-post", value: "/htmx/vms/\(vm.id?.uuidString ?? "")/restart")
-                ) { "Restart" }
-                button(
-                    .class("bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm transition-colors"),
-                    .custom(name: "hx-delete", value: "/htmx/vms/\(vm.id?.uuidString ?? "")"),
-                    .custom(name: "hx-target", value: "#vmTableBody"),
-                    .custom(name: "hx-swap", value: "innerHTML"),
-                    .custom(name: "hx-confirm", value: "Are you sure you want to delete this VM?")
-                ) { "Delete" }
-            }
-        }
-    }
-}
-
-struct VMActionResponsePartial: HTML {
-    let message: String
-
-    var content: some HTML {
-        div { message }
-    }
-}
-
-struct OrganizationListPartial: HTML {
-    let organizations: [OrganizationResponse]
-    let currentOrgId: UUID?
-
-    var content: some HTML {
-        if organizations.isEmpty {
-            div(.class("px-4 py-2 text-sm text-gray-400")) { "No organizations found" }
-        } else {
-            ForEach(organizations) { org in
-                let isCurrent = org.id == currentOrgId
-                let buttonClass = "w-full text-left px-4 py-2 text-sm hover:bg-gray-700 flex justify-between items-center transition-colors" + (isCurrent ? " bg-gray-700" : "")
-                button(
-                    .class(buttonClass),
-                    .custom(name: "hx-post", value: "/htmx/organizations/\(org.id?.uuidString ?? "")/switch"),
-                    .custom(name: "hx-target", value: "#orgList"),
-                    .custom(name: "hx-swap", value: "innerHTML")
-                ) {
-                    div {
-                        div(.class("font-medium \(isCurrent ? "text-blue-400" : "text-gray-300")")) {
-                            if isCurrent { "✓ \(org.name)" } else { org.name }
-                        }
-                        div(.class("text-xs text-gray-400")) { org.description }
-                    }
-                    span(.class("text-xs text-gray-500")) { org.userRole ?? "member" }
-                }
-            }
-        }
-    }
-}
-
-struct APIKeyListPartial: HTML {
-    let apiKeys: [APIKey]
-
-    var content: some HTML {
-        if apiKeys.isEmpty {
-            div(.class("text-center text-gray-400 py-8")) {
-                "No API keys found. Create your first API key!"
-            }
-        } else {
-            div(.class("space-y-4")) {
-                ForEach(apiKeys) { key in
-                    div(.class("border border-gray-600 bg-gray-700 rounded-lg p-4")) {
-                        div(.class("flex justify-between items-start")) {
-                            div(.class("flex-1")) {
-                                h4(.class("font-medium text-gray-100")) { key.name }
-                                p(.class("text-sm text-gray-400 font-mono")) { key.keyPrefix }
-                            }
-                            div(.class("flex space-x-2")) {
-                                button(
-                                    .class("text-sm px-3 py-1 rounded bg-red-900 text-red-300 hover:bg-red-800 transition-colors border border-red-700"),
-                                    .custom(name: "hx-delete", value: "/htmx/api-keys/\(key.id?.uuidString ?? "")"),
-                                    .custom(name: "hx-target", value: "#apiKeysList"),
-                                    .custom(name: "hx-swap", value: "innerHTML")
-                                ) { "Delete" }
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 }
