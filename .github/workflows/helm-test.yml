@@ -39,8 +39,11 @@ env:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     name: Helm Chart Linting
+    environment:
+      name: pr-approval
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,9 +69,12 @@ jobs:
           helm dependency update
 
   template-validation:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     name: Template Validation
     needs: lint
+    environment:
+      name: pr-approval
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -140,10 +146,13 @@ jobs:
   # - Run integration tests locally with: scripts/test-helm-chart.sh
   # - Test in dedicated Kubernetes environments, not CI
   integration-test:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     name: Kubernetes Integration Test (Experimental)
     needs: [lint, template-validation]
     if: false  # Disabled due to CI resource constraints
+    environment:
+      name: pr-approval
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -292,9 +301,12 @@ jobs:
           helm uninstall strato-ci-test || true
 
   security-scan:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     name: Security Scanning
     needs: lint
+    environment:
+      name: pr-approval
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -354,10 +366,13 @@ jobs:
           fi
 
   upgrade-test:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     name: Chart Upgrade Test (Experimental)
     needs: [lint, template-validation]
     if: false  # Disabled due to CI resource constraints
+    environment:
+      name: pr-approval
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

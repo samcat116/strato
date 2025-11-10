@@ -13,7 +13,10 @@ permissions:
 jobs:
   lint-js:
     name: JavaScript Linting
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+    environment:
+      name: pr-approval
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -35,7 +38,10 @@ jobs:
 
   test:
     name: Build and Test Swift Packages
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+    environment:
+      name: pr-approval
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     services:
       postgres:
         image: postgres:15
@@ -83,7 +89,10 @@ jobs:
 
   security:
     name: Security Scan
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+    environment:
+      name: pr-approval
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
