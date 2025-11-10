@@ -3,13 +3,50 @@ import Vapor
 import StratoShared
 import NIOWebSocket
 import Fluent
+import NIOCore
+import NIOConcurrencyHelpers
+
+/// Thread-safe WebSocket connection manager
+/// This is NOT an actor to avoid event loop conflicts with NIO
+/// WebSocket objects are event-loop-bound and must only be accessed from their event loop
+final class WebSocketManager: @unchecked Sendable {
+    private let lock = NIOLock()
+    private var connections: [String: WebSocket] = [:] // Agent name -> WebSocket
+
+    /// Must be called from the WebSocket's event loop
+    func setConnection(agentName: String, websocket: WebSocket) {
+        lock.withLock {
+            connections[agentName] = websocket
+        }
+    }
+
+    /// Returns the WebSocket for an agent - must be used on WebSocket's event loop
+    func getConnection(agentName: String) -> WebSocket? {
+        lock.withLock {
+            connections[agentName]
+        }
+    }
+
+    /// Remove connection by agent name
+    func removeConnection(agentName: String) {
+        lock.withLock {
+            connections.removeValue(forKey: agentName)
+        }
+    }
+
+    /// Get all agent names (for diagnostics)
+    func getAllAgentNames() -> [String] {
+        lock.withLock {
+            Array(connections.keys)
+        }
+    }
+}
 
 actor AgentService {
     private let app: Application
     private var agents: [String: AgentInfo] = [:]
     private var vmToAgentMapping: [String: String] = [:] // VM ID -> Agent ID
     private var pendingRequests: [String: CheckedContinuation<AgentServiceResponse, Error>] = [:]
-    private var connectionToAgentName: [ObjectIdentifier: String] = [:] // WebSocket connection -> Agent name
     private var heartbeatTask: Task<Void, Never>?
 
     init(app: Application) {
@@ -46,15 +83,9 @@ actor AgentService {
 
     // MARK: - Agent Registration
 
-    func registerAgent(_ message: AgentRegisterMessage, websocket: WebSocket) async throws {
-        // Get agent name from connection tracking
-        let connectionId = ObjectIdentifier(websocket)
-        guard let agentName = connectionToAgentName[connectionId] else {
-            throw AgentServiceError.invalidResponse("Agent name not found for connection")
-        }
-        
+    func registerAgent(_ message: AgentRegisterMessage, agentName: String) async throws {
         let db = app.db
-        
+
         // Find existing agent or create new one
         let agent: Agent
         if let existingAgent = try await Agent.query(on: db)
@@ -72,23 +103,22 @@ actor AgentService {
             agent = Agent.from(registration: message, name: agentName)
             agent.status = .online
         }
-        
+
         try await agent.save(on: db)
-        
-        // Update in-memory tracking
+
+        // Update in-memory tracking (without websocket reference)
         let agentInfo = AgentInfo(
             id: agentName, // Use agent name as ID for consistency
             hostname: message.hostname,
             version: message.version,
             capabilities: message.capabilities,
             resources: message.resources,
-            websocket: websocket,
             lastHeartbeat: Date(),
             status: .online
         )
 
         agents[agentName] = agentInfo
-        
+
         app.logger.info("Agent registered", metadata: [
             "agentName": .string(agentName),
             "hostname": .string(message.hostname),
@@ -98,7 +128,7 @@ actor AgentService {
 
     func unregisterAgent(_ agentName: String) async throws {
         let db = app.db
-        
+
         // Update database
         if let agent = try await Agent.query(on: db)
             .filter(\.$name == agentName)
@@ -106,9 +136,10 @@ actor AgentService {
             agent.status = .offline
             try await agent.save(on: db)
         }
-        
+
         // Remove from in-memory tracking
         agents.removeValue(forKey: agentName)
+        app.websocketManager.removeConnection(agentName: agentName)
 
         // Remove VM mappings for this agent
         let vmIds = vmToAgentMapping.compactMap { (vmId, mappedAgentId) in
@@ -121,10 +152,11 @@ actor AgentService {
 
         app.logger.info("Agent unregistered", metadata: ["agentName": .string(agentName)])
     }
-    
+
     func forceUnregisterAgent(_ agentName: String) async {
         // Remove from in-memory tracking only (database handled separately)
         agents.removeValue(forKey: agentName)
+        app.websocketManager.removeConnection(agentName: agentName)
 
         // Remove VM mappings for this agent
         let vmIds = vmToAgentMapping.compactMap { (vmId, mappedAgentId) in
@@ -137,39 +169,24 @@ actor AgentService {
 
         app.logger.info("Agent force unregistered from memory", metadata: ["agentName": .string(agentName)])
     }
-    
-    // MARK: - Connection Tracking
-    
-    func setConnectionAgentName(_ websocket: WebSocket, agentName: String) {
-        let connectionId = ObjectIdentifier(websocket)
-        connectionToAgentName[connectionId] = agentName
-    }
-    
-    func getConnectionAgentName(_ websocket: WebSocket) -> String? {
-        let connectionId = ObjectIdentifier(websocket)
-        return connectionToAgentName[connectionId]
-    }
-    
-    func removeConnectionTracking(_ websocket: WebSocket) {
-        let connectionId = ObjectIdentifier(websocket)
-        if let agentName = connectionToAgentName.removeValue(forKey: connectionId) {
-            // Mark agent as offline in memory
-            if agents[agentName] != nil {
-                agents.removeValue(forKey: agentName)
-                
-                // Update database status asynchronously
-                Task {
-                    do {
-                        let db = self.app.db
-                        if let agent = try await Agent.query(on: db)
-                            .filter(\.$name == agentName)
-                            .first() {
-                            agent.status = .offline
-                            try await agent.save(on: db)
-                        }
-                    } catch {
-                        self.app.logger.error("Failed to update agent offline status in database: \(error)")
+
+    func removeAgent(_ agentName: String) async {
+        // Mark agent as offline in memory
+        if agents[agentName] != nil {
+            agents.removeValue(forKey: agentName)
+
+            // Update database status asynchronously
+            Task {
+                do {
+                    let db = self.app.db
+                    if let agent = try await Agent.query(on: db)
+                        .filter(\.$name == agentName)
+                        .first() {
+                        agent.status = .offline
+                        try await agent.save(on: db)
                     }
+                } catch {
+                    self.app.logger.error("Failed to update agent offline status in database: \(error)")
                 }
             }
         }
@@ -281,7 +298,7 @@ actor AgentService {
             throw AgentServiceError.noAvailableAgent
         }
 
-        guard let agent = agents[agentId] else {
+        guard agents[agentId] != nil else {
             throw AgentServiceError.agentNotFound(agentId)
         }
 
@@ -290,7 +307,7 @@ actor AgentService {
             vmConfig: vmConfig
         )
 
-        try await sendMessageToAgent(message, agent: agent)
+        try await sendMessageToAgent(message, agentName: agentId)
 
         // Map VM to agent (in-memory)
         vmToAgentMapping[vm.id?.uuidString ?? ""] = agentId
@@ -310,12 +327,12 @@ actor AgentService {
             throw AgentServiceError.vmNotMapped(vmId)
         }
 
-        guard let agent = agents[agentId] else {
+        guard agents[agentId] != nil else {
             throw AgentServiceError.agentNotFound(agentId)
         }
 
         let message = VMOperationMessage(type: operation, vmId: vmId)
-        try await sendMessageToAgent(message, agent: agent)
+        try await sendMessageToAgent(message, agentName: agentId)
 
         app.logger.info("VM operation requested", metadata: [
             "operation": .string(operation.rawValue),
@@ -329,12 +346,12 @@ actor AgentService {
             throw AgentServiceError.vmNotMapped(vmId)
         }
 
-        guard let agent = agents[agentId] else {
+        guard agents[agentId] != nil else {
             throw AgentServiceError.agentNotFound(agentId)
         }
 
         let message = VMInfoRequestMessage(vmId: vmId)
-        let response = try await sendMessageToAgentWithResponse(message, agent: agent)
+        let response = try await sendMessageToAgentWithResponse(message, agentName: agentId)
 
         guard case .success(let data) = response,
               let vmInfo = try? data?.decode(as: VmInfo.self) else {
@@ -349,12 +366,12 @@ actor AgentService {
             throw AgentServiceError.vmNotMapped(vmId)
         }
 
-        guard let agent = agents[agentId] else {
+        guard agents[agentId] != nil else {
             throw AgentServiceError.agentNotFound(agentId)
         }
 
         let message = VMOperationMessage(type: .vmStatus, vmId: vmId)
-        let response = try await sendMessageToAgentWithResponse(message, agent: agent)
+        let response = try await sendMessageToAgentWithResponse(message, agentName: agentId)
 
         guard case .success(let data) = response,
               let status = try? data?.decode(as: VMStatus.self) else {
@@ -396,14 +413,18 @@ actor AgentService {
 
     // MARK: - Message Sending
 
-    private func sendMessageToAgent<T: WebSocketMessage>(_ message: T, agent: AgentInfo) async throws {
+    private func sendMessageToAgent<T: WebSocketMessage>(_ message: T, agentName: String) async throws {
+        guard let websocket = app.websocketManager.getConnection(agentName: agentName) else {
+            throw AgentServiceError.agentNotFound(agentName)
+        }
+
         let envelope = try MessageEnvelope(message: message)
         let data = try JSONEncoder().encode(envelope)
 
-        agent.websocket.send(data)
+        websocket.send(data)
     }
 
-    private func sendMessageToAgentWithResponse<T: WebSocketMessage>(_ message: T, agent: AgentInfo) async throws -> AgentServiceResponse {
+    private func sendMessageToAgentWithResponse<T: WebSocketMessage>(_ message: T, agentName: String) async throws -> AgentServiceResponse {
         return try await withCheckedThrowingContinuation { continuation in
             Task {
                 do {
@@ -411,7 +432,7 @@ actor AgentService {
                     await storePendingRequest(message.requestId, continuation: continuation)
 
                     // Send message
-                    try await sendMessageToAgent(message, agent: agent)
+                    try await sendMessageToAgent(message, agentName: agentName)
 
                     // Set timeout
                     Task {
@@ -484,7 +505,6 @@ struct AgentInfo {
     let version: String
     let capabilities: [String]
     var resources: AgentResources
-    let websocket: WebSocket
     var lastHeartbeat: Date
     var status: AgentStatus
 }
@@ -520,6 +540,24 @@ enum AgentServiceError: Error, LocalizedError {
 // MARK: - Application Extension
 
 extension Application {
+    private struct WebSocketManagerKey: StorageKey {
+        typealias Value = WebSocketManager
+    }
+
+    var websocketManager: WebSocketManager {
+        get {
+            if let existing = storage[WebSocketManagerKey.self] {
+                return existing
+            }
+            let new = WebSocketManager()
+            storage[WebSocketManagerKey.self] = new
+            return new
+        }
+        set {
+            storage[WebSocketManagerKey.self] = newValue
+        }
+    }
+
     private struct AgentServiceKey: StorageKey {
         typealias Value = AgentService
     }

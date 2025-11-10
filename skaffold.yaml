@@ -47,14 +47,9 @@ profiles:
         value:
           SWIFT_BUILD_FLAGS: "--configuration debug"
       - op: add
-        path: /build/artifacts/1/docker/buildArgs
-        value:
-          SWIFT_BUILD_FLAGS: "--configuration debug"
-      - op: add
         path: /manifests/helm/releases/0/setValues
         value:
-          controlPlane.env.LOG_LEVEL: "debug"
-          agent.env.LOG_LEVEL: "debug"
+          strato.logLevel: "debug"
 
   - name: minimal
     activation:
