@@ -67,19 +67,20 @@ This hybrid approach:
 
 ## PR Approval Requirement
 
-For security, workflows triggered by pull requests require manual approval from a maintainer before they can run. This is controlled by the `pr-approval` environment.
+For security, workflows triggered by pull requests should require manual approval from a maintainer before they can run on self-hosted runners.
 
 ### Setting Up PR Approval
 
-1. Go to your repository settings
-2. Navigate to **Environments**
-3. Create a new environment named `pr-approval`
-4. Configure environment protection rules:
-   - Enable **Required reviewers**
-   - Add maintainers/admins as reviewers
-   - Optionally set **Wait timer** (e.g., 0 minutes for immediate review)
+Configure this using GitHub's built-in repository settings:
 
-Once configured, any workflow job that runs on PRs will require a maintainer to review and approve the workflow run before it executes on self-hosted runners.
+1. Go to your repository **Settings**
+2. Navigate to **Actions** → **General**
+3. Scroll to **Fork pull request workflows from outside collaborators**
+4. Select **Require approval for all outside collaborators**
+   OR
+5. Select **Require approval for first-time contributors**
+
+This ensures that workflows on self-hosted runners require maintainer approval before execution for PRs from external contributors or first-time contributors.
 
 ### Why PR Approval?
 
@@ -93,11 +94,11 @@ Note: ARM64 and macOS builds run on GitHub-hosted runners and don't require the 
 
 ### Approving Workflow Runs
 
-When a PR is opened or updated:
+When a PR from an outside collaborator or first-time contributor is opened or updated:
 1. GitHub will pause the workflow and wait for approval
-2. Maintainers will receive a notification
+2. Maintainers will see a notification in the Actions tab
 3. Review the PR code changes carefully
-4. If safe, approve the workflow run in the Actions tab
+4. If safe, click "Approve and run" in the Actions tab
 5. The workflow will then execute on self-hosted runners
 
 ## Security Considerations

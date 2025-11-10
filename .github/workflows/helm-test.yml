@@ -41,9 +41,6 @@ jobs:
   lint:
     runs-on: self-hosted
     name: Helm Chart Linting
-    environment:
-      name: pr-approval
-      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,9 +69,6 @@ jobs:
     runs-on: self-hosted
     name: Template Validation
     needs: lint
-    environment:
-      name: pr-approval
-      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -150,9 +144,6 @@ jobs:
     name: Kubernetes Integration Test (Experimental)
     needs: [lint, template-validation]
     if: false  # Disabled due to CI resource constraints
-    environment:
-      name: pr-approval
-      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -304,9 +295,6 @@ jobs:
     runs-on: self-hosted
     name: Security Scanning
     needs: lint
-    environment:
-      name: pr-approval
-      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -370,9 +358,6 @@ jobs:
     name: Chart Upgrade Test (Experimental)
     needs: [lint, template-validation]
     if: false  # Disabled due to CI resource constraints
-    environment:
-      name: pr-approval
-      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
