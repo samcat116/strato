@@ -35,17 +35,35 @@ Triggers Claude Code assistant when `@claude` is mentioned in issues or PRs.
 ### Claude Code Review (`claude-code-review.yml`)
 Automatically reviews pull requests using Claude Code.
 
-## Self-Hosted Runners
+## Runner Configuration
 
-All workflows use `runs-on: self-hosted` to run on self-hosted runners. Make sure you have:
+Workflows use a hybrid approach with both self-hosted and GitHub-hosted runners:
 
-1. Self-hosted runners configured in your repository settings
-2. Runners with the necessary tools installed:
-   - Swift 6.0+
-   - Docker
-   - Node.js 20+
-   - Helm (for helm tests)
-   - QEMU dependencies (for agent builds)
+### Self-Hosted Runners (x64/AMD64)
+Used for:
+- PR validation (build.yaml)
+- Main branch x64 builds (main-build.yaml)
+- Release x64 builds (release.yaml)
+- Helm tests (helm-test.yml)
+- Claude Code workflows (claude.yml, claude-code-review.yml)
+
+Requirements for self-hosted runners:
+- Swift 6.0+
+- Docker
+- Node.js 20+
+- Helm (for helm tests)
+- QEMU dependencies (for agent builds)
+
+### GitHub-Hosted Runners (ARM64)
+Used for:
+- Main branch ARM64 builds (`ubuntu-24.04-arm`)
+- Release ARM64 Docker images (`ubuntu-latest-arm`)
+- macOS binary builds (`macos-latest`)
+
+This hybrid approach:
+- Reduces load on self-hosted infrastructure
+- Provides ARM64 build capability without ARM64 self-hosted runners
+- Maintains security controls via PR approval for self-hosted jobs
 
 ## PR Approval Requirement
 
@@ -70,6 +88,8 @@ PR approval is critical for security when using self-hosted runners because:
 - Malicious PRs could execute arbitrary code on your runners
 - Approval ensures maintainers review the code before it runs
 - Prevents unauthorized access to secrets and resources
+
+Note: ARM64 and macOS builds run on GitHub-hosted runners and don't require the same approval process since they run in isolated, ephemeral environments provided by GitHub.
 
 ### Approving Workflow Runs
 
