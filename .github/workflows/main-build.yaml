@@ -13,7 +13,7 @@ permissions:
 jobs:
   build-swift-release:
     name: Build Swift Release Binaries
-    runs-on: self-hosted
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'self-hosted' }}
     strategy:
       matrix:
         include:
@@ -88,7 +88,7 @@ jobs:
   build:
     name: Build Docker Images
     needs: [build-swift-release]
-    runs-on: self-hosted
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'self-hosted' }}
     strategy:
       matrix:
         include:

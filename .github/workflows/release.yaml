@@ -86,7 +86,7 @@ jobs:
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
 
   build-and-push-images:
-    runs-on: self-hosted
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-latest-arm' || 'self-hosted' }}
     needs: create-release
     strategy:
       matrix:
@@ -152,23 +152,27 @@ jobs:
           cache-to: type=gha,mode=max,key=agent-${{ matrix.platform }}
 
   build-swift-binaries:
-    runs-on: self-hosted
+    runs-on: ${{ matrix.os }}
     needs: create-release
     strategy:
       matrix:
         include:
-          - asset_name: strato-linux-x86_64
-          - asset_name: strato-macos-x86_64
+          - os: self-hosted
+            asset_name: strato-linux-x86_64
+          - os: macos-latest
+            asset_name: strato-macos-x86_64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Swift
+      - name: Set up Swift (Linux)
+        if: matrix.os == 'self-hosted'
         uses: swift-actions/setup-swift@v1
         with:
           swift-version: '6.0'
 
-      - name: Install system dependencies
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev zlib1g-dev
