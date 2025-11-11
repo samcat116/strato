@@ -82,6 +82,10 @@ public func configure(_ app: Application) async throws {
 
     try await app.autoMigrate()
 
+    // Bootstrap initial admin user if needed
+    let bootstrapService = BootstrapService(app: app)
+    try await bootstrapService.bootstrap()
+
     // Configure scheduler service
     // Default strategy can be configured via environment variable
     let schedulingStrategy = Environment.get("SCHEDULING_STRATEGY")
