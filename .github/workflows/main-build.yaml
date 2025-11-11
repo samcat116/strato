@@ -13,23 +13,16 @@ permissions:
 jobs:
   build-swift-release:
     name: Build Swift Release Binaries
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'self-hosted' }}
     strategy:
       matrix:
         include:
-          - runner: ubuntu-latest
-            arch: x64
-          - runner: ubuntu-24.04-arm
-            arch: arm64
+          - arch: x64
+          - arch: arm64
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev zlib1g-dev zstd libjemalloc-dev
 
       - name: Cache Swift packages
         uses: actions/cache@v4
@@ -56,6 +49,8 @@ jobs:
       - name: Build TailwindCSS for production
         working-directory: control-plane
         run: npm run build-css-prod
+
+      - uses: vapor/swiftly-action@v0.2
 
       - name: Build Control Plane Release Binary
         working-directory: control-plane
@@ -90,14 +85,12 @@ jobs:
   build:
     name: Build Docker Images
     needs: [build-swift-release]
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'self-hosted' }}
     strategy:
       matrix:
         include:
-          - runner: ubuntu-latest
-            arch: x64
-          - runner: ubuntu-24.04-arm
-            arch: arm64
+          - arch: x64
+          - arch: arm64
 
     steps:
       - name: Checkout Code
