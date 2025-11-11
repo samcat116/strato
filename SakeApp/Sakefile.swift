@@ -405,10 +405,10 @@ struct Commands: SakeApp {
                     NOW(),
                     NOW()
                 )
-                ON CONFLICT (id) DO NOTHING;
+                ON CONFLICT (username) DO NOTHING;
                 """
 
-                try runProcess("/usr/bin/docker", arguments: [
+                try? runProcess("/usr/bin/docker", arguments: [
                     "exec", "strato-postgres",
                     "psql", "-U", "vapor_username", "-d", "vapor_database",
                     "-c", createUserSQL
@@ -427,7 +427,7 @@ struct Commands: SakeApp {
                 ON CONFLICT (id) DO NOTHING;
                 """
 
-                try runProcess("/usr/bin/docker", arguments: [
+                try? runProcess("/usr/bin/docker", arguments: [
                     "exec", "strato-postgres",
                     "psql", "-U", "vapor_username", "-d", "vapor_database",
                     "-c", createOrgSQL
@@ -435,7 +435,7 @@ struct Commands: SakeApp {
 
                 // Link user to organization
                 let linkUserOrgSQL = """
-                INSERT INTO user_organization (user_id, organization_id)
+                INSERT INTO user_organizations (user_id, organization_id)
                 VALUES (
                     '00000000-0000-0000-0000-000000000001',
                     '00000000-0000-0000-0000-000000000001'
@@ -443,7 +443,7 @@ struct Commands: SakeApp {
                 ON CONFLICT DO NOTHING;
                 """
 
-                try runProcess("/usr/bin/docker", arguments: [
+                try? runProcess("/usr/bin/docker", arguments: [
                     "exec", "strato-postgres",
                     "psql", "-U", "vapor_username", "-d", "vapor_database",
                     "-c", linkUserOrgSQL
@@ -456,7 +456,7 @@ struct Commands: SakeApp {
                 WHERE id = '00000000-0000-0000-0000-000000000001';
                 """
 
-                try runProcess("/usr/bin/docker", arguments: [
+                try? runProcess("/usr/bin/docker", arguments: [
                     "exec", "strato-postgres",
                     "psql", "-U", "vapor_username", "-d", "vapor_database",
                     "-c", updateUserOrgSQL
@@ -478,7 +478,7 @@ struct Commands: SakeApp {
                 ON CONFLICT (id) DO NOTHING;
                 """
 
-                try runProcess("/usr/bin/docker", arguments: [
+                try? runProcess("/usr/bin/docker", arguments: [
                     "exec", "strato-postgres",
                     "psql", "-U", "vapor_username", "-d", "vapor_database",
                     "-c", createProjectSQL
@@ -488,7 +488,7 @@ struct Commands: SakeApp {
                 print("🔐 Setting up authorization relationships...")
 
                 // User is admin of organization
-                try runSpiceDBRelationship(
+                try? runSpiceDBRelationship(
                     operation: "create",
                     resourceType: "organization",
                     resourceId: "00000000-0000-0000-0000-000000000001",
@@ -498,7 +498,7 @@ struct Commands: SakeApp {
                 )
 
                 // Project belongs to organization
-                try runSpiceDBRelationship(
+                try? runSpiceDBRelationship(
                     operation: "create",
                     resourceType: "project",
                     resourceId: "00000000-0000-0000-0000-000000000001",
