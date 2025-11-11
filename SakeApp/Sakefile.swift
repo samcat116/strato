@@ -225,7 +225,7 @@ struct Commands: SakeApp {
                 // Build control-plane
                 print("🔨 Building control-plane...")
                 try runProcess(
-                    "/usr/bin/swift",
+                    findSwiftExecutable(),
                     arguments: ["build", "--package-path", "\(projectRoot)/control-plane"],
                     showOutput: true
                 )
@@ -234,7 +234,7 @@ struct Commands: SakeApp {
                 print("▶️  Starting control-plane...")
 
                 let controlPlane = Process()
-                controlPlane.executableURL = URL(fileURLWithPath: "/usr/bin/swift")
+                controlPlane.executableURL = URL(fileURLWithPath: findSwiftExecutable())
                 controlPlane.arguments = ["run", "--package-path", "\(projectRoot)/control-plane"]
 
                 // Set environment variables
@@ -331,7 +331,7 @@ struct Commands: SakeApp {
                 // Build agent
                 print("🔨 Building agent...")
                 try runProcess(
-                    "/usr/bin/swift",
+                    findSwiftExecutable(),
                     arguments: ["build", "--package-path", "\(projectRoot)/agent"],
                     showOutput: true
                 )
@@ -349,7 +349,7 @@ struct Commands: SakeApp {
                 print("▶️  Starting agent...")
 
                 let agent = Process()
-                agent.executableURL = URL(fileURLWithPath: "/usr/bin/swift")
+                agent.executableURL = URL(fileURLWithPath: findSwiftExecutable())
                 agent.arguments = [
                     "run", "--package-path", "\(projectRoot)/agent",
                     "StratoAgent",
@@ -725,6 +725,48 @@ struct Commands: SakeApp {
 }
 
 // MARK: - Helper Functions
+
+func findSwiftExecutable() -> String {
+    // Try to find swift in PATH using 'which' command
+    let whichProcess = Process()
+    whichProcess.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+    whichProcess.arguments = ["swift"]
+
+    let pipe = Pipe()
+    whichProcess.standardOutput = pipe
+    whichProcess.standardError = Pipe()
+
+    do {
+        try whichProcess.run()
+        whichProcess.waitUntilExit()
+
+        if whichProcess.terminationStatus == 0 {
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !path.isEmpty {
+                return path
+            }
+        }
+    } catch {
+        // Fall through to defaults
+    }
+
+    // Fallback to common locations
+    let commonPaths = [
+        "/usr/bin/swift",
+        "/usr/local/bin/swift",
+        "/home/sam/.local/share/swiftly/bin/swift"
+    ]
+
+    for path in commonPaths {
+        if FileManager.default.fileExists(atPath: path) {
+            return path
+        }
+    }
+
+    // Last resort - hope it's in PATH
+    return "swift"
+}
 
 func runProcess(_ executable: String, arguments: [String], showOutput: Bool = false) throws {
     let process = Process()
