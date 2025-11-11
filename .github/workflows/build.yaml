@@ -13,7 +13,7 @@ permissions:
 jobs:
   lint-js:
     name: JavaScript Linting
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -35,7 +35,7 @@ jobs:
 
   test:
     name: Build and Test Swift Packages
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     services:
       postgres:
         image: postgres:15
@@ -54,11 +54,6 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev zlib1g-dev zstd
-
       - name: Cache Swift packages
         uses: actions/cache@v4
         with:
@@ -68,6 +63,8 @@ jobs:
           key: ${{ runner.os }}-swift-${{ hashFiles('control-plane/Package.resolved', 'shared/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-swift-
+
+      - uses: vapor/swiftly-action@v0.2
 
       - name: Build Shared Package
         working-directory: shared
@@ -83,7 +80,7 @@ jobs:
 
   security:
     name: Security Scan
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
