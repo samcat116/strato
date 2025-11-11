@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
@@ -32,40 +32,40 @@ jobs:
         run: |
           # Get the previous tag
           PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          
+
           # Generate changelog between tags
           if [ -n "$PREVIOUS_TAG" ]; then
             CHANGELOG=$(git log --pretty=format:"- %s (%h)" $PREVIOUS_TAG..HEAD)
           else
             CHANGELOG=$(git log --pretty=format:"- %s (%h)")
           fi
-          
+
           # Save to file for multiline output
           echo "$CHANGELOG" > changelog.txt
-          
+
           # Create release notes
           cat > release_notes.md << EOF
           ## Changes
-          
+
           $CHANGELOG
-          
+
           ## Docker Images
-          
+
           - \`ghcr.io/${{ github.repository }}-control-plane:${GITHUB_REF#refs/tags/}\`
           - \`ghcr.io/${{ github.repository }}-agent:${GITHUB_REF#refs/tags/}\`
-          
+
           ## Installation
-          
+
           ### Using Docker Compose
-          
+
           \`\`\`bash
           # Update your docker-compose.yml to use the new version
           docker compose pull
           docker compose up -d
           \`\`\`
-          
+
           ### Manual Installation
-          
+
           \`\`\`bash
           # Pull the images
           docker pull ghcr.io/${{ github.repository }}-control-plane:${GITHUB_REF#refs/tags/}
@@ -122,7 +122,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_AGENT }}
           tags: |
-            type=ref,event=tag  
+            type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
@@ -169,13 +169,7 @@ jobs:
         if: matrix.os == 'self-hosted'
         uses: swift-actions/setup-swift@v1
         with:
-          swift-version: '6.0'
-
-      - name: Install system dependencies (Linux)
-        if: matrix.os == 'self-hosted'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev zlib1g-dev
+          swift-version: "6.0"
 
       - name: Build Swift binaries
         run: |
@@ -183,7 +177,7 @@ jobs:
           cd control-plane
           swift build -c release
           cd ..
-          
+
           # Build agent
           cd agent
           swift build -c release
@@ -242,16 +236,16 @@ jobs:
         run: |
           cat > docker-compose.release.yml << 'EOF'
           version: '3.8'
-          
+
           volumes:
             db_data:
             cloud_hypervisor_socket:
             vm_images:
-          
+
           networks:
             strato-network:
               driver: bridge
-          
+
           services:
             control-plane:
               image: ghcr.io/${{ github.repository }}-control-plane:${{ github.ref_name }}
@@ -272,7 +266,7 @@ jobs:
               networks:
                 - strato-network
               command: ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]
-          
+
             agent:
               image: ghcr.io/${{ github.repository }}-agent:${{ github.ref_name }}
               depends_on:
@@ -284,7 +278,7 @@ jobs:
                 - strato-network
               privileged: true
               command: ["--control-plane-url", "ws://control-plane:8080/agent/ws", "--hypervisor-socket", "/var/run/cloud-hypervisor/cloud-hypervisor.sock", "--log-level", "info"]
-          
+
             migrate:
               image: ghcr.io/${{ github.repository }}-control-plane:${{ github.ref_name }}
               environment:
@@ -300,7 +294,7 @@ jobs:
               command: ["migrate", "--yes"]
               deploy:
                 replicas: 0
-          
+
             db:
               image: postgres:16-alpine
               volumes:
@@ -314,7 +308,7 @@ jobs:
                 - "5432:5432"
               networks:
                 - strato-network
-          
+
             permify:
               image: ghcr.io/permify/permify:latest
               ports:
