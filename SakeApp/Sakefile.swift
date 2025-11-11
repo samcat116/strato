@@ -1,6 +1,9 @@
 import Foundation
 import Sake
 
+// Get the project root directory dynamically
+let projectRoot = FileManager.default.currentDirectoryPath
+
 @main
 @CommandGroup
 struct Commands: SakeApp {
@@ -185,7 +188,7 @@ struct Commands: SakeApp {
             run: { _ in
                 print("📋 Loading SpiceDB schema...")
 
-                let schemaPath = "/home/user/strato/spicedb/schema.zed"
+                let schemaPath = "\(projectRoot)/spicedb/schema.zed"
 
                 // Check if schema file exists
                 guard FileManager.default.fileExists(atPath: schemaPath) else {
@@ -223,7 +226,7 @@ struct Commands: SakeApp {
                 print("🔨 Building control-plane...")
                 try runProcess(
                     "/usr/bin/swift",
-                    arguments: ["build", "--package-path", "/home/user/strato/control-plane"],
+                    arguments: ["build", "--package-path", "\(projectRoot)/control-plane"],
                     showOutput: true
                 )
 
@@ -232,7 +235,7 @@ struct Commands: SakeApp {
 
                 let controlPlane = Process()
                 controlPlane.executableURL = URL(fileURLWithPath: "/usr/bin/swift")
-                controlPlane.arguments = ["run", "--package-path", "/home/user/strato/control-plane"]
+                controlPlane.arguments = ["run", "--package-path", "\(projectRoot)/control-plane"]
 
                 // Set environment variables
                 var env = ProcessInfo.processInfo.environment
@@ -309,7 +312,7 @@ struct Commands: SakeApp {
                 log_level = "debug"
                 """
 
-                let configPath = "/home/user/strato/config.toml"
+                let configPath = "\(projectRoot)/config.toml"
                 try configContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
                 print("✅ Agent config created at \(configPath)")
@@ -329,7 +332,7 @@ struct Commands: SakeApp {
                 print("🔨 Building agent...")
                 try runProcess(
                     "/usr/bin/swift",
-                    arguments: ["build", "--package-path", "/home/user/strato/agent"],
+                    arguments: ["build", "--package-path", "\(projectRoot)/agent"],
                     showOutput: true
                 )
 
@@ -348,9 +351,9 @@ struct Commands: SakeApp {
                 let agent = Process()
                 agent.executableURL = URL(fileURLWithPath: "/usr/bin/swift")
                 agent.arguments = [
-                    "run", "--package-path", "/home/user/strato/agent",
+                    "run", "--package-path", "\(projectRoot)/agent",
                     "StratoAgent",
-                    "--config-file", "/home/user/strato/config.toml"
+                    "--config-file", "\(projectRoot)/config.toml"
                 ]
 
                 // Capture output to a log file
