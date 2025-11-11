@@ -1,35 +1,19 @@
 name: Helm Chart Tests
 
-# This workflow provides comprehensive Helm chart validation with a focus on reliability:
-#
-# ✅ RELIABLE TESTS (Always run):
-# - Helm Chart Linting: Validates chart structure and syntax
-# - Security Scanning: Checks for hardcoded secrets and security issues  
-# - Template Validation: Generates templates with multiple configurations
-#
-# ⚠️  EXPERIMENTAL TESTS (Disabled by default):
-# - Kubernetes Integration/Upgrade Tests: Unreliable in GitHub Actions CI
-#   due to Kind resource constraints causing frequent timeouts
-#
-# For integration testing, use:
-# - Local testing: scripts/test-helm-chart.sh
-# - Manual minikube/kind testing
-# - Dedicated Kubernetes test environments
-
 permissions:
   contents: read
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
     paths:
-      - 'helm/**'
-      - '.github/workflows/helm-test.yml'
+      - "helm/**"
+      - ".github/workflows/helm-test.yml"
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
     paths:
-      - 'helm/**'
-      - '.github/workflows/helm-test.yml'
+      - "helm/**"
+      - ".github/workflows/helm-test.yml"
   workflow_dispatch:
 
 env:
@@ -125,7 +109,7 @@ jobs:
             echo "Checking $file..."
             python3 -c "import yaml; yaml.safe_load(open('$file'))" && echo "✅ $file is valid YAML" || echo "❌ $file has YAML syntax errors"
           done
-          
+
           echo "Templates generated and validated successfully!"
 
       - name: Upload templates as artifacts
@@ -143,7 +127,7 @@ jobs:
     runs-on: self-hosted
     name: Kubernetes Integration Test (Experimental)
     needs: [lint, template-validation]
-    if: false  # Disabled due to CI resource constraints
+    if: false # Disabled due to CI resource constraints
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -188,7 +172,7 @@ jobs:
           # Use external database configuration (no actual DB deployment)
           postgresql:
             enabled: false
-            
+
           externalDatabase:
             host: "fake-db-host"
             password: "fake-password"
@@ -206,7 +190,7 @@ jobs:
             enabled: false
           readinessProbe:
             enabled: false
-            
+
           initContainers:
             waitForDB:
               enabled: false
@@ -232,10 +216,10 @@ jobs:
           kubectl get services
           kubectl get secrets
           kubectl get configmaps
-          
+
           # Verify the main pod is ready
           kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=strato-control-plane --timeout=60s
-          
+
           echo "✅ Chart deployed successfully with lightweight configuration"
 
       - name: Test chart configuration
@@ -244,44 +228,43 @@ jobs:
           echo "Checking chart configuration..."
           helm get values strato-ci-test
           helm get notes strato-ci-test
-          
+
           # Check that secrets and configmaps were created correctly
           kubectl get secrets -o name | grep strato-ci-test || echo "No chart secrets found (expected with lightweight config)"
           kubectl get configmaps -o name | grep strato-ci-test || echo "No chart configmaps found"
-          
-          echo "✅ Chart configuration validated"
 
+          echo "✅ Chart configuration validated"
 
       - name: Describe failing pods (if any)
         if: failure()
         run: |
           echo "=== Pod Status ==="
           kubectl get pods -o wide
-          
+
           echo "=== Events ==="
           kubectl get events --sort-by='.metadata.creationTimestamp'
-          
+
           echo "=== Services ==="
           kubectl get services -o wide
-          
+
           echo "=== Secrets ==="
           kubectl get secrets
-          
+
           echo "=== ConfigMaps ==="
           kubectl get configmaps
-          
+
           echo "=== Helm Status ==="
           helm status strato-ci-test || true
-          
+
           echo "=== Pod Descriptions ==="
           kubectl get pods -o name | xargs -I {} kubectl describe {} || true
-          
+
           echo "=== Pod Logs ==="
           kubectl get pods -o name | while read pod; do
             echo "--- Logs for $pod ---"
             kubectl logs $pod --all-containers=true --previous=false || true
           done
-          
+
           echo "=== Resource Usage ==="
           kubectl top nodes || true
           kubectl top pods || true
@@ -313,10 +296,6 @@ jobs:
         run: |
           cd helm/strato-control-plane
           helm dependency build
-
-      - name: Install checkov
-        run: |
-          pip install checkov
 
       - name: Generate template for security scan
         run: |
@@ -357,7 +336,7 @@ jobs:
     runs-on: self-hosted
     name: Chart Upgrade Test (Experimental)
     needs: [lint, template-validation]
-    if: false  # Disabled due to CI resource constraints
+    if: false # Disabled due to CI resource constraints
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -390,21 +369,21 @@ jobs:
           image:
             repository: nginx
             tag: "1.20"
-          
+
           strato:
             logLevel: info
-            
+
           # Disable heavy components for faster testing
           spicedb:
             enabled: false
-            
+
           postgresql:
             enabled: false
-            
+
           externalDatabase:
             host: "fake-db-host-v1"
             password: "fake-password-v1"
-            
+
           resources:
             requests:
               cpu: 10m
@@ -412,18 +391,18 @@ jobs:
             limits:
               cpu: 50m
               memory: 64Mi
-              
+
           livenessProbe:
             enabled: false
           readinessProbe:
             enabled: false
-              
+
           initContainers:
             waitForDB:
               enabled: false
             waitForSpiceDB:
               enabled: false
-              
+
           migration:
             enabled: false
           EOF
@@ -439,21 +418,21 @@ jobs:
           image:
             repository: nginx
             tag: "1.21"
-          
+
           strato:
             logLevel: debug
-            
+
           # Disable heavy components for faster testing
           spicedb:
             enabled: false
-                
+
           postgresql:
             enabled: false
-            
+
           externalDatabase:
             host: "fake-db-host-v2"
             password: "fake-password-v2"
-              
+
           resources:
             requests:
               cpu: 15m
@@ -461,18 +440,18 @@ jobs:
             limits:
               cpu: 75m
               memory: 96Mi
-              
+
           livenessProbe:
             enabled: false
           readinessProbe:
             enabled: false
-              
+
           initContainers:
             waitForDB:
               enabled: false
             waitForSpiceDB:
               enabled: false
-              
+
           migration:
             enabled: false
           EOF
@@ -487,15 +466,15 @@ jobs:
           # Check that pods are running with new configuration
           echo "Checking upgraded deployment..."
           kubectl get pods -o wide
-          
+
           # Wait for upgraded pod to be ready
           kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=strato-control-plane --timeout=60s
-          
+
           # Check helm history and values
           echo "Checking upgrade history..."
           helm history strato-upgrade-test
           helm get values strato-upgrade-test
-          
+
           # Verify the image was upgraded
           if kubectl get deployment -o jsonpath='{.items[0].spec.template.spec.containers[0].image}' | grep -q '1.21'; then
             echo "✅ Image successfully upgraded to nginx:1.21"
@@ -503,7 +482,7 @@ jobs:
             echo "❌ Image upgrade failed"
             exit 1
           fi
-          
+
           echo "✅ Chart upgrade completed successfully"
 
       - name: Cleanup
