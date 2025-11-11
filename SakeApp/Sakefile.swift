@@ -305,7 +305,7 @@ struct Commands: SakeApp {
                 let configContent = """
                 # Strato Agent Configuration
                 control_plane_url = "ws://localhost:8080/agent/ws"
-                qemu_socket_dir = "/var/run/qemu"
+                qemu_socket_dir = "/tmp/strato-qemu-sockets"
                 log_level = "debug"
                 """
 
@@ -334,7 +334,7 @@ struct Commands: SakeApp {
                 )
 
                 // Ensure QEMU socket directory exists
-                let socketDir = "/var/run/qemu"
+                let socketDir = "/tmp/strato-qemu-sockets"
                 if !FileManager.default.fileExists(atPath: socketDir) {
                     try FileManager.default.createDirectory(
                         atPath: socketDir,
@@ -755,18 +755,22 @@ func runSpiceDBRelationship(
 ) throws {
     let relationship = """
     {
-      "operation": "\(operation)",
-      "resource": {
-        "objectType": "\(resourceType)",
-        "objectId": "\(resourceId)"
-      },
-      "relation": "\(relation)",
-      "subject": {
-        "object": {
-          "objectType": "\(subjectType)",
-          "objectId": "\(subjectId)"
+      "updates": [{
+        "operation": "OPERATION_CREATE",
+        "relationship": {
+          "resource": {
+            "objectType": "\(resourceType)",
+            "objectId": "\(resourceId)"
+          },
+          "relation": "\(relation)",
+          "subject": {
+            "object": {
+              "objectType": "\(subjectType)",
+              "objectId": "\(subjectId)"
+            }
+          }
         }
-      }
+      }]
     }
     """
 

@@ -255,7 +255,7 @@ tail -f /tmp/strato-agent.log
 ps aux | grep StratoAgent
 
 # Verify QEMU socket directory
-ls -la /var/run/qemu
+ls -la /tmp/strato-qemu-sockets
 ```
 
 ### Docker Permission Issues

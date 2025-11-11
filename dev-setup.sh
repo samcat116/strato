@@ -201,7 +201,7 @@ cmd_start_agent() {
     cat > "$PROJECT_ROOT/config.toml" <<EOF
 # Strato Agent Configuration
 control_plane_url = "ws://localhost:$CONTROL_PLANE_PORT/agent/ws"
-qemu_socket_dir = "/var/run/qemu"
+qemu_socket_dir = "/tmp/strato-qemu-sockets"
 log_level = "debug"
 EOF
 
@@ -212,8 +212,8 @@ EOF
     cd "$PROJECT_ROOT"
 
     # Ensure QEMU socket directory exists
-    sudo mkdir -p /var/run/qemu
-    sudo chmod 777 /var/run/qemu
+    mkdir -p /tmp/strato-qemu-sockets
+    chmod 755 /tmp/strato-qemu-sockets
 
     # Run agent in background
     log_info "Starting agent..."
@@ -294,44 +294,58 @@ EOF
     log_info "Setting up authorization relationships..."
 
     # User is admin of organization
-    curl -X POST \
+    log_info "Creating user->organization admin relationship..."
+    if ! curl -sf -X POST \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $SPICEDB_KEY" \
         -d '{
-            "operation": "OPERATION_CREATE",
-            "resource": {
-                "objectType": "organization",
-                "objectId": "00000000-0000-0000-0000-000000000001"
-            },
-            "relation": "admin",
-            "subject": {
-                "object": {
-                    "objectType": "user",
-                    "objectId": "00000000-0000-0000-0000-000000000001"
+            "updates": [{
+                "operation": "OPERATION_CREATE",
+                "relationship": {
+                    "resource": {
+                        "objectType": "organization",
+                        "objectId": "00000000-0000-0000-0000-000000000001"
+                    },
+                    "relation": "admin",
+                    "subject": {
+                        "object": {
+                            "objectType": "user",
+                            "objectId": "00000000-0000-0000-0000-000000000001"
+                        }
+                    }
                 }
-            }
+            }]
         }' \
-        "http://localhost:$SPICEDB_HTTP_PORT/v1/relationships/write" > /dev/null 2>&1
+        "http://localhost:$SPICEDB_HTTP_PORT/v1/relationships/write" > /dev/null; then
+        log_warning "Failed to create user->organization relationship (may already exist)"
+    fi
 
     # Project belongs to organization
-    curl -X POST \
+    log_info "Creating project->organization relationship..."
+    if ! curl -sf -X POST \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $SPICEDB_KEY" \
         -d '{
-            "operation": "OPERATION_CREATE",
-            "resource": {
-                "objectType": "project",
-                "objectId": "00000000-0000-0000-0000-000000000001"
-            },
-            "relation": "organization",
-            "subject": {
-                "object": {
-                    "objectType": "organization",
-                    "objectId": "00000000-0000-0000-0000-000000000001"
+            "updates": [{
+                "operation": "OPERATION_CREATE",
+                "relationship": {
+                    "resource": {
+                        "objectType": "project",
+                        "objectId": "00000000-0000-0000-0000-000000000001"
+                    },
+                    "relation": "organization",
+                    "subject": {
+                        "object": {
+                            "objectType": "organization",
+                            "objectId": "00000000-0000-0000-0000-000000000001"
+                        }
+                    }
                 }
-            }
+            }]
         }' \
-        "http://localhost:$SPICEDB_HTTP_PORT/v1/relationships/write" > /dev/null 2>&1
+        "http://localhost:$SPICEDB_HTTP_PORT/v1/relationships/write" > /dev/null; then
+        log_warning "Failed to create project->organization relationship (may already exist)"
+    fi
 
     log_success "Test data created!"
 }
