@@ -197,10 +197,26 @@ cmd_start_control_plane() {
 cmd_start_agent() {
     log_info "Building and starting agent..."
 
+    # Create agent registration token
+    log_info "Creating agent registration token..."
+    AGENT_TOKEN=$(uuidgen)
+    docker exec $POSTGRES_CONTAINER psql -U $DB_USER -d $DB_NAME <<TOKENSQL > /dev/null 2>&1
+INSERT INTO agent_registration_tokens (id, token, agent_name, is_used, expires_at, created_at)
+VALUES (
+    '$(uuidgen)',
+    '${AGENT_TOKEN}',
+    'strato-dev',
+    false,
+    NOW() + INTERVAL '24 hours',
+    NOW()
+)
+ON CONFLICT DO NOTHING;
+TOKENSQL
+
     # Create agent config
     cat > "$PROJECT_ROOT/config.toml" <<EOF
 # Strato Agent Configuration
-control_plane_url = "ws://localhost:$CONTROL_PLANE_PORT/agent/ws"
+control_plane_url = "ws://localhost:$CONTROL_PLANE_PORT/agent/ws?token=${AGENT_TOKEN}&name=strato-dev"
 qemu_socket_dir = "/tmp/strato-qemu-sockets"
 log_level = "debug"
 EOF
