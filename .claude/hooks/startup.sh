@@ -22,11 +22,11 @@ fi
 
 # Update package lists
 echo "Updating package lists..."
-sudo apt-get update -qq
+apt-get update -qq
 
 # Install system dependencies needed for Swift
 echo "Installing system dependencies..."
-sudo apt-get install -y -qq \
+apt-get install -y -qq \
     binutils \
     git \
     gnupg2 \
@@ -50,20 +50,21 @@ sudo apt-get install -y -qq \
 # Install Swift 6.0 (latest stable version as of knowledge cutoff)
 echo "Installing Swift 6.0..."
 SWIFT_VERSION="6.0.2"
-SWIFT_PLATFORM="ubuntu2404"
+SWIFT_PLATFORM="ubuntu22.04"
+SWIFT_PLATFORM_DIR="ubuntu2204"
 SWIFT_PACKAGE="swift-${SWIFT_VERSION}-RELEASE-${SWIFT_PLATFORM}"
 
 # Download Swift
 cd /tmp
-wget -q "https://download.swift.org/swift-${SWIFT_VERSION}-release/${SWIFT_PLATFORM}/swift-${SWIFT_VERSION}-RELEASE/${SWIFT_PACKAGE}.tar.gz"
+wget -q "https://download.swift.org/swift-${SWIFT_VERSION}-release/${SWIFT_PLATFORM_DIR}/swift-${SWIFT_VERSION}-RELEASE/${SWIFT_PACKAGE}.tar.gz"
 
 # Extract Swift
-sudo tar xzf "${SWIFT_PACKAGE}.tar.gz" -C /opt
+tar xzf "${SWIFT_PACKAGE}.tar.gz" -C /opt
 
 # Create symlinks
-sudo ln -sf "/opt/${SWIFT_PACKAGE}/usr/bin/swift" /usr/local/bin/swift
-sudo ln -sf "/opt/${SWIFT_PACKAGE}/usr/bin/swiftc" /usr/local/bin/swiftc
-sudo ln -sf "/opt/${SWIFT_PACKAGE}/usr/bin/swift-package" /usr/local/bin/swift-package
+ln -sf "/opt/${SWIFT_PACKAGE}/usr/bin/swift" /usr/local/bin/swift
+ln -sf "/opt/${SWIFT_PACKAGE}/usr/bin/swiftc" /usr/local/bin/swiftc
+ln -sf "/opt/${SWIFT_PACKAGE}/usr/bin/swift-package" /usr/local/bin/swift-package
 
 # Cleanup
 rm "${SWIFT_PACKAGE}.tar.gz"
