@@ -2,12 +2,54 @@
 
 This document describes how to set up a complete local development environment for Strato, including the control-plane, agent, and all required dependencies.
 
-## Quick Start
+## Prerequisites
 
-The easiest way to get started is using the `dev-setup.sh` script:
+### Install Sake
+
+Sake is a Swift-based task runner that manages all development tasks. Install it using one of these methods:
+
+**Homebrew (Recommended)**:
+```bash
+brew install kattouf/sake/sake
+```
+
+**Manual Installation (Linux)**:
+```bash
+curl -sL "https://github.com/kattouf/Sake/releases/download/1.0.3/sake-1.0.3-x86_64-unknown-linux-gnu.zip" -o /tmp/sake.zip
+unzip /tmp/sake.zip -d /tmp
+chmod +x /tmp/sake
+sudo mv /tmp/sake /usr/local/bin/
+```
+
+**Manual Installation (macOS)**:
+```bash
+curl -sL "https://github.com/kattouf/Sake/releases/download/1.0.3/sake-1.0.3-x86_64-apple-macosx.zip" -o /tmp/sake.zip
+unzip /tmp/sake.zip -d /tmp
+chmod +x /tmp/sake
+sudo mv /tmp/sake /usr/local/bin/
+```
+
+Verify installation:
+```bash
+sake --version
+```
+
+### Build SakeApp
+
+The Sake tasks are defined in `SakeApp/Sakefile.swift`. Build it once:
 
 ```bash
-./dev-setup.sh dev
+cd SakeApp
+swift build -c release
+cd ..
+```
+
+## Quick Start
+
+Start the complete development environment:
+
+```bash
+sake dev
 ```
 
 This will:
@@ -19,64 +61,41 @@ This will:
 6. Create test user and organization data
 7. Display service status and URLs
 
-## Available Scripts
+## Available Commands
 
-### Bash Script (Recommended for Getting Started)
-
-**Location**: `./dev-setup.sh`
-
-**Usage**:
+List all available commands:
 ```bash
-# Start complete development environment
-./dev-setup.sh dev
-
-# View service status
-./dev-setup.sh status
-
-# View logs
-./dev-setup.sh logs                    # All services
-./dev-setup.sh logs control-plane      # Control plane only
-./dev-setup.sh logs agent              # Agent only
-
-# Stop all services
-./dev-setup.sh stop
-
-# Clean up everything (stops services and removes containers)
-./dev-setup.sh clean
+sake list
 ```
 
-**Individual Commands**:
+### Common Commands
+
+**View service status**:
 ```bash
-./dev-setup.sh start-postgres       # Start PostgreSQL only
-./dev-setup.sh start-spicedb        # Start SpiceDB only
-./dev-setup.sh load-schema          # Load SpiceDB schema
-./dev-setup.sh start-control-plane  # Start control-plane only
-./dev-setup.sh start-agent          # Start agent only
-./dev-setup.sh setup-test-data      # Create test data
+sake status
 ```
 
-### Sake Script (Advanced)
-
-**Location**: `./SakeApp/Sakefile.swift`
-
-A Swift-based task runner using the [Sake](https://sakeswift.org/) library. This provides a type-safe, Swift-native way to manage development tasks.
-
-**Installation**:
+**View logs**:
 ```bash
-# Install Sake
-curl -sL "https://github.com/kattouf/Sake/releases/download/1.0.3/sake-1.0.3-x86_64-unknown-linux-gnu.zip" -o /tmp/sake.zip
-unzip /tmp/sake.zip -d /tmp
-chmod +x /tmp/sake
-sudo mv /tmp/sake /usr/local/bin/
+sake logs
 ```
 
-**Build**:
+**Stop all services**:
 ```bash
-cd SakeApp
-swift build -c release
+sake stop
 ```
 
-**Available Tasks**:
+**Clean up everything** (stops services and removes containers):
+```bash
+sake clean
+```
+
+**Check running VMs**:
+```bash
+sake checkVM
+```
+
+### Individual Service Commands
 - `dev` - Start complete development environment
 - `startPostgres` - Start PostgreSQL database
 - `startSpiceDB` - Start SpiceDB authorization service
@@ -205,7 +224,7 @@ pgrep -a qemu
 ### Via Logs
 ```bash
 # View agent logs to see VM operations
-./dev-setup.sh logs agent
+sake logs
 ```
 
 ## Troubleshooting
@@ -279,14 +298,14 @@ ls -la /dev/kvm
 
 ### Stop Services
 ```bash
-./dev-setup.sh stop
+sake stop
 ```
 
 This stops all services but keeps data in Docker containers.
 
 ### Complete Cleanup
 ```bash
-./dev-setup.sh clean
+sake clean
 ```
 
 This stops all services, removes Docker containers, and cleans up log files.
@@ -311,24 +330,24 @@ rm -f config.toml
 ### Typical Workflow
 ```bash
 # 1. Start development environment
-./dev-setup.sh dev
+sake dev
 
 # 2. Make code changes in your editor
 
 # 3. Stop services
-./dev-setup.sh stop
+sake stop
 
 # 4. Restart to test changes
-./dev-setup.sh dev
+sake dev
 
 # 5. View logs to debug
-./dev-setup.sh logs
+sake logs
 
 # 6. Check service status
-./dev-setup.sh status
+sake status
 
 # 7. Clean up when done
-./dev-setup.sh clean
+sake clean
 ```
 
 ### Hot Reload Development
@@ -351,6 +370,7 @@ skaffold dev --profile=minimal
 ## Support
 
 For issues or questions:
-- Check logs using `./dev-setup.sh logs`
+- Check logs using `sake logs`
+- Check status using `sake status`
 - Review troubleshooting section above
 - Open an issue on GitHub
