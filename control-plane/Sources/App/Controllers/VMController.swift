@@ -101,9 +101,8 @@ struct VMController: RouteCollection {
 
             projectId = requestedProjectId
         } else {
-            // Use default project for user's current organization
             guard let currentOrgId = user.currentOrganizationId else {
-                throw Abort(.badRequest, reason: "No current organization set. Please specify a project.")
+                        throw Abort(.badRequest, reason: "No current organization set. Please specify a project.")
             }
 
             // Find or create default project for organization
@@ -115,7 +114,6 @@ struct VMController: RouteCollection {
             guard let project = defaultProject else {
                 throw Abort(.badRequest, reason: "No default project found. Please specify a project.")
             }
-
             projectId = project.id!
         }
 
@@ -204,11 +202,11 @@ struct VMController: RouteCollection {
 
             // hypervisorId is set and saved by AgentService via scheduler
             req.logger.info("VM created successfully via agent", metadata: [
-                "vm_id": .string(vmId),
+                "vm_id": .string(vmID.uuidString),
                 "hypervisor_id": .string(vm.hypervisorId ?? "unknown")
             ])
         } catch {
-            req.logger.error("Failed to create VM via agent: \(error)", metadata: ["vm_id": .string(vmId)])
+            req.logger.error("Failed to create VM via agent: \(error)", metadata: ["vm_id": .string(vmID.uuidString)])
 
             // Don't fail the entire request - VM is created in DB but not in hypervisor
             // This allows for manual retry later

@@ -9,17 +9,12 @@ let package = Package(
     dependencies: [
         // StratoShared for common models and protocols
         .package(path: "../shared"),
-        // SwiftQEMU for QEMU integration
         .package(url: "https://github.com/samcat116/swift-qemu", branch: "main"),
-        // 🔵 Non-blocking, event-driven networking for Swift
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
-        // 🗄 ArgumentParser for CLI
+        .package(url: "https://github.com/vapor/websocket-kit.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
-        // 📝 Logging
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
-        // 🌐 OVN/OVS networking integration
         .package(url: "https://github.com/samcat116/swift-ovn.git", branch: "main"),
-        // ⚙️ TOML configuration parsing
         .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
     ],
     targets: [
@@ -29,8 +24,7 @@ let package = Package(
                 .product(name: "StratoShared", package: "shared"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
-                .product(name: "NIOWebSocket", package: "swift-nio"),
-                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "WebSocketKit", package: "websocket-kit"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Toml", package: "swift-toml"),
@@ -38,11 +32,10 @@ let package = Package(
             swiftSettings: swiftSettings
         )
     ],
-    swiftLanguageModes: [.v6]
+    swiftLanguageModes: [.v5]
 )
 
 var swiftSettings: [SwiftSetting] {
-    // Minimal settings for Swift 6 compatibility
     []
 }
 

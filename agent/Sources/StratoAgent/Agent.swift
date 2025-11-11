@@ -17,16 +17,20 @@ actor Agent {
     private var heartbeatTask: Task<Void, Error>?
     private var isRunning = false
     
+    private let networkMode: NetworkMode?
+
     init(
         agentID: String,
         webSocketURL: String,
         qemuSocketDir: String,
+        networkMode: NetworkMode?,
         isRegistrationMode: Bool,
         logger: Logger
     ) {
         self.agentID = agentID
         self.webSocketURL = webSocketURL
         self.qemuSocketDir = qemuSocketDir
+        self.networkMode = networkMode
         self.isRegistrationMode = isRegistrationMode
         self.logger = logger
     }
@@ -39,12 +43,28 @@ actor Agent {
         
         logger.info("Initializing network service")
 
-        // Initialize platform-specific network service
-        #if os(Linux)
-        networkService = NetworkServiceLinux(logger: logger)
-        #else
-        networkService = NetworkServiceMacOS(logger: logger)
-        #endif
+        // Initialize network service based on config, falling back to platform defaults
+        let selectedMode = networkMode ?? {
+            #if os(Linux)
+            return .ovn
+            #else
+            return .user
+            #endif
+        }()
+
+        switch selectedMode {
+        case .ovn:
+            #if os(Linux)
+            logger.info("Network service initialized with SwiftOVN support")
+            networkService = NetworkServiceLinux(logger: logger)
+            #else
+            logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
+            networkService = NetworkServiceMacOS(logger: logger)
+            #endif
+        case .user:
+            logger.info("Network service initialized with user-mode networking")
+            networkService = NetworkServiceMacOS(logger: logger)
+        }
 
         do {
             if let service = networkService {
@@ -274,9 +294,9 @@ extension Agent {
     
     private func handleVMCreate(_ message: VMCreateMessage) async {
         logger.info("Creating VM", metadata: ["vmId": .string(message.vmData.id.uuidString)])
-        
+
         do {
-            try await qemuService?.createVM(config: message.vmConfig)
+            try await qemuService?.createVM(vmId: message.vmData.id.uuidString, config: message.vmConfig)
             await sendSuccess(for: message.requestId, message: "VM created successfully")
             logger.info("VM created successfully", metadata: ["vmId": .string(message.vmData.id.uuidString)])
         } catch {
@@ -287,9 +307,9 @@ extension Agent {
     
     private func handleVMBoot(_ message: VMOperationMessage) async {
         logger.info("Booting VM", metadata: ["vmId": .string(message.vmId)])
-        
+
         do {
-            try await qemuService?.bootVM()
+            try await qemuService?.bootVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM booted successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .running)
             logger.info("VM booted successfully", metadata: ["vmId": .string(message.vmId)])

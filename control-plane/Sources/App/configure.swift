@@ -26,8 +26,7 @@ public func configure(_ app: Application) async throws {
         relyingPartyOrigin: relyingPartyOrigin
     )
 
-    // Add SpiceDB authorization middleware AFTER session middleware
-    // Skip SpiceDB in testing environment
+
     if app.environment != .testing {
         app.middleware.use(SpiceDBAuthMiddleware())
     }

@@ -115,7 +115,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         )
         
         // Find or create the logical switch
-        _ = try await findOrCreateLogicalSwitch(name: config.networkName, subnet: config.subnet)
+        _ = try await findOrCreateLogicalSwitch(name: config.networkName, subnet: config.subnet ?? "10.0.0.0/24")
         
         // Create the logical switch port
         let portUUID = try await ovnManager?.createLogicalSwitchPort(logicalPort)

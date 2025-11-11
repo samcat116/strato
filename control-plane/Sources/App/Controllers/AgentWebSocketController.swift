@@ -10,164 +10,206 @@ struct AgentWebSocketController: RouteCollection {
         agentRoutes.webSocket("ws", onUpgrade: websocketHandler)
     }
 
-    private func websocketHandler(req: Request, ws: WebSocket) async {
-        // Validate registration token on connection
-        guard let validatedAgentName = await validateRegistrationToken(req: req, ws: ws) else {
-            // Validation failed, connection will be closed by validateRegistrationToken
+    // Non-async handler - runs on WebSocket's event loop
+    private func websocketHandler(req: Request, ws: WebSocket) {
+        // Extract token and agent name from query parameters
+        guard let token = req.query[String.self, at: "token"],
+              let agentName = req.query[String.self, at: "name"] else {
+            sendErrorResponse(ws: ws, requestId: "", error: "Registration token and agent name are required")
+            _ = ws.close(code: .unacceptableData)
             return
         }
-        
-        req.logger.info("Agent WebSocket connection established", metadata: [
-            "agentName": .string(validatedAgentName)
-        ])
 
-        // Store agent name for this connection
-        await req.agentService.setConnectionAgentName(ws, agentName: validatedAgentName)
-
-        ws.onText { ws, text in
-            Task {
-                await handleWebSocketMessage(req: req, ws: ws, text: text)
-            }
-        }
-
-        ws.onBinary { _, _ in
-            req.logger.warning("Received unexpected binary data from agent")
-        }
-
-        ws.onClose.whenComplete { result in
-            Task {
-                let agentName = await req.agentService.getConnectionAgentName(ws)
-                switch result {
-                case .success:
-                    req.logger.info("Agent WebSocket connection closed normally", metadata: [
-                        "agentName": .string(agentName ?? "unknown")
-                    ])
-                case .failure(let error):
-                    req.logger.error("Agent WebSocket connection closed with error: \(error)", metadata: [
-                        "agentName": .string(agentName ?? "unknown")
-                    ])
+        // Validate registration token using EventLoopFuture
+        validateRegistrationToken(req: req, ws: ws, token: token, agentName: agentName)
+            .flatMap { isValid -> EventLoopFuture<Void> in
+                guard isValid else {
+                    return ws.eventLoop.makeSucceededFuture(())
                 }
-                
-                // Clean up connection tracking
-                await req.agentService.removeConnectionTracking(ws)
+
+                req.logger.info("Agent WebSocket connection established", metadata: [
+                    "agentName": .string(agentName)
+                ])
+
+                // Store WebSocket for this agent - we're already on the WebSocket's event loop
+                req.application.websocketManager.setConnection(agentName: agentName, websocket: ws)
+
+                // Set up message handlers
+                ws.onText { ws, text in
+                    self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
+                }
+
+                ws.onBinary { ws, buffer in
+                    req.logger.info("Received WebSocket binary message from agent", metadata: ["agentName": .string(agentName), "bytes": .string("\(buffer.readableBytes)")])
+                    // Convert binary buffer to string and process as text message
+                    if let text = buffer.getString(at: 0, length: buffer.readableBytes) {
+                        self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
+                    } else {
+                        req.logger.error("Failed to convert binary buffer to string")
+                    }
+                }
+
+                ws.onClose.whenComplete { result in
+                    switch result {
+                    case .success:
+                        req.logger.info("Agent WebSocket connection closed normally", metadata: [
+                            "agentName": .string(agentName)
+                        ])
+                    case .failure(let error):
+                        req.logger.error("Agent WebSocket connection closed with error: \(error)", metadata: [
+                            "agentName": .string(agentName)
+                        ])
+                    }
+
+                    // Clean up connection tracking
+                    req.application.websocketManager.removeConnection(agentName: agentName)
+
+                    // Mark agent as offline asynchronously
+                    Task {
+                        await req.agentService.removeAgent(agentName)
+                    }
+                }
+
+                return ws.eventLoop.makeSucceededFuture(())
             }
-        }
+            .whenFailure { error in
+                req.logger.error("WebSocket handler error: \(error)")
+                _ = ws.close(code: .unexpectedServerError)
+            }
     }
 
-    private func handleWebSocketMessage(req: Request, ws: WebSocket, text: String) async {
-        do {
-            guard let data = text.data(using: .utf8) else {
-                req.logger.error("Failed to convert WebSocket text to data")
-                return
+    private func validateRegistrationToken(
+        req: Request,
+        ws: WebSocket,
+        token: String,
+        agentName: String
+    ) -> EventLoopFuture<Bool> {
+        // Query database for token
+        let query = AgentRegistrationToken.query(on: req.db)
+            .filter(\.$token == token)
+            .filter(\.$agentName == agentName)
+            .first()
+
+        return query.flatMapThrowing { registrationToken -> Bool in
+            guard let registrationToken = registrationToken else {
+                self.sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token")
+                _ = ws.close(code: .unacceptableData)
+                return false
             }
 
-            let envelope = try JSONDecoder().decode(MessageEnvelope.self, from: data)
-
-            switch envelope.type {
-            case .agentRegister:
-                let message = try envelope.decode(as: AgentRegisterMessage.self)
-                try await req.agentService.registerAgent(message, websocket: ws)
-                await sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Agent registered successfully")
-
-            case .agentHeartbeat:
-                let message = try envelope.decode(as: AgentHeartbeatMessage.self)
-                try await req.agentService.updateAgentHeartbeat(message)
-                await sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged")
-
-            case .agentUnregister:
-                let message = try envelope.decode(as: AgentUnregisterMessage.self)
-                try await req.agentService.unregisterAgent(message.agentId)
-                await sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Agent unregistered successfully")
-
-            case .success, .error, .statusUpdate:
-                // Handle responses from agents
-                await req.agentService.handleAgentResponse(envelope)
-
-            default:
-                req.logger.warning("Received unexpected message type from agent: \(envelope.type)")
-                await sendErrorResponse(ws: ws, requestId: "", error: "Unexpected message type: \(envelope.type)")
-            }
-
-        } catch {
-            req.logger.error("Failed to handle WebSocket message: \(error)")
-            await sendErrorResponse(ws: ws, requestId: "", error: "Failed to process message: \(error.localizedDescription)")
-        }
-    }
-
-    private func sendSuccessResponse(ws: WebSocket, requestId: String, message: String) async {
-        do {
-            let response = SuccessMessage(requestId: requestId, message: message)
-            let envelope = try MessageEnvelope(message: response)
-            let data = try JSONEncoder().encode(envelope)
-
-            ws.send(data)
-        } catch {
-            // Log error but don't throw since we're already in an error handling context
-            print("Failed to send success response: \(error)")
-        }
-    }
-
-    private func sendErrorResponse(ws: WebSocket, requestId: String, error: String) async {
-        do {
-            let response = ErrorMessage(requestId: requestId, error: error)
-            let envelope = try MessageEnvelope(message: response)
-            let data = try JSONEncoder().encode(envelope)
-
-            ws.send(data)
-        } catch {
-            // Log error but don't throw since we're already in an error handling context
-            print("Failed to send error response: \(error)")
-        }
-    }
-    
-    private func validateRegistrationToken(req: Request, ws: WebSocket) async -> String? {
-        do {
-            // Extract token and agent name from query parameters
-            guard let token = req.query[String.self, at: "token"] else {
-                await sendErrorResponse(ws: ws, requestId: "", error: "Registration token is required")
-                try? await ws.close(code: .unacceptableData)
-                return nil
-            }
-            
-            guard let agentName = req.query[String.self, at: "name"] else {
-                await sendErrorResponse(ws: ws, requestId: "", error: "Agent name is required")
-                try? await ws.close(code: .unacceptableData)
-                return nil
-            }
-            
-            // Find and validate the registration token
-            guard let registrationToken = try await AgentRegistrationToken.query(on: req.db)
-                .filter(\.$token == token)
-                .filter(\.$agentName == agentName)
-                .first() else {
-                await sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token")
-                try? await ws.close(code: .unacceptableData)
-                return nil
-            }
-            
-            // Check if token is still valid (not used and not expired)
             guard registrationToken.isValid else {
-                await sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token")
-                try? await ws.close(code: .unacceptableData)
-                return nil
+                self.sendErrorResponse(ws: ws, requestId: "", error: "Registration token is invalid or expired")
+                _ = ws.close(code: .unacceptableData)
+                return false
             }
-            
+
             // Mark token as used
             registrationToken.markAsUsed()
-            try await registrationToken.save(on: req.db)
-            
+
+            // Save asynchronously
+            Task {
+                try? await registrationToken.save(on: req.db)
+            }
+
             req.logger.info("Agent registration token validated", metadata: [
                 "agentName": .string(agentName),
                 "token": .string(token)
             ])
-            
-            return agentName
-            
-        } catch {
+
+            return true
+        }.flatMapErrorThrowing { error in
             req.logger.error("Error validating registration token: \(error)")
-            await sendErrorResponse(ws: ws, requestId: "", error: "Internal server error during token validation")
-            try? await ws.close(code: .unexpectedServerError)
-            return nil
+            self.sendErrorResponse(ws: ws, requestId: "", error: "Internal server error during token validation")
+            _ = ws.close(code: .unexpectedServerError)
+            return false
+        }
+    }
+
+    private func handleWebSocketMessage(req: Request, ws: WebSocket, text: String, agentName: String) {
+        req.logger.info("Processing WebSocket message", metadata: ["agentName": .string(agentName), "messageLength": .string("\(text.count)")])
+
+        guard let data = text.data(using: .utf8) else {
+            req.logger.error("Failed to convert WebSocket text to data")
+            return
+        }
+
+        do {
+            let envelope = try JSONDecoder().decode(MessageEnvelope.self, from: data)
+            req.logger.info("Decoded message envelope", metadata: ["type": .string("\(envelope.type)"), "agentName": .string(agentName)])
+
+            switch envelope.type {
+            case .agentRegister:
+                let message = try envelope.decode(as: AgentRegisterMessage.self)
+                Task {
+                    do {
+                        try await req.agentService.registerAgent(message, agentName: agentName)
+                        self.sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Agent registered successfully")
+                    } catch {
+                        req.logger.error("Failed to register agent: \(error)")
+                        self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to register agent: \(error.localizedDescription)")
+                    }
+                }
+
+            case .agentHeartbeat:
+                let message = try envelope.decode(as: AgentHeartbeatMessage.self)
+                Task {
+                    do {
+                        try await req.agentService.updateAgentHeartbeat(message)
+                        self.sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged")
+                    } catch {
+                        req.logger.error("Failed to update heartbeat: \(error)")
+                        self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to update heartbeat")
+                    }
+                }
+
+            case .agentUnregister:
+                let message = try envelope.decode(as: AgentUnregisterMessage.self)
+                Task {
+                    do {
+                        try await req.agentService.unregisterAgent(message.agentId)
+                        self.sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Agent unregistered successfully")
+                    } catch {
+                        req.logger.error("Failed to unregister agent: \(error)")
+                        self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to unregister agent")
+                    }
+                }
+
+            case .success, .error, .statusUpdate:
+                // Handle responses from agents
+                Task {
+                    await req.agentService.handleAgentResponse(envelope)
+                }
+
+            default:
+                req.logger.warning("Received unexpected message type from agent: \(envelope.type)")
+                sendErrorResponse(ws: ws, requestId: "", error: "Unexpected message type: \(envelope.type)")
+            }
+
+        } catch {
+            req.logger.error("Failed to handle WebSocket message: \(error)")
+            sendErrorResponse(ws: ws, requestId: "", error: "Failed to process message: \(error.localizedDescription)")
+        }
+    }
+
+    private func sendSuccessResponse(ws: WebSocket, requestId: String, message: String) {
+        do {
+            let response = SuccessMessage(requestId: requestId, message: message)
+            let envelope = try MessageEnvelope(message: response)
+            let data = try JSONEncoder().encode(envelope)
+            ws.send(data)
+        } catch {
+            print("Failed to send success response: \(error)")
+        }
+    }
+
+    private func sendErrorResponse(ws: WebSocket, requestId: String, error: String) {
+        do {
+            let response = ErrorMessage(requestId: requestId, error: error)
+            let envelope = try MessageEnvelope(message: response)
+            let data = try JSONEncoder().encode(envelope)
+            ws.send(data)
+        } catch {
+            print("Failed to send error response: \(error)")
         }
     }
 }
