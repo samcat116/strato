@@ -50,6 +50,8 @@ jobs:
         working-directory: control-plane
         run: npm run build-css-prod
 
+      - uses: vapor/swiftly-action@v0.2
+
       - name: Build Control Plane Release Binary
         working-directory: control-plane
         run: |

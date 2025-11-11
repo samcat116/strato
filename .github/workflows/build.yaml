@@ -64,6 +64,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-swift-
 
+      - uses: vapor/swiftly-action@v0.2
+
       - name: Build Shared Package
         working-directory: shared
         run: swift build --build-tests
