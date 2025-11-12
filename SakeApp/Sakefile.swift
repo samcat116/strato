@@ -508,23 +508,168 @@ struct Commands: SakeApp {
                 )
 
                 print("✅ Test user and organization created!")
+
+                // Get the actual user ID from the database
+                let getUserIDProcess = Process()
+                getUserIDProcess.executableURL = URL(fileURLWithPath: "/usr/bin/docker")
+                getUserIDProcess.arguments = [
+                    "exec", "strato-postgres",
+                    "psql", "-U", "vapor_username", "-d", "vapor_database",
+                    "-t", "-A", "-c", "SELECT id FROM users WHERE username = 'admin' LIMIT 1;"
+                ]
+                let userIDPipe = Pipe()
+                getUserIDProcess.standardOutput = userIDPipe
+                try getUserIDProcess.run()
+                getUserIDProcess.waitUntilExit()
+
+                let userIDData = userIDPipe.fileHandleForReading.readDataToEndOfFile()
+                let actualUserID = String(data: userIDData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "00000000-0000-0000-0000-000000000001"
+
                 print("   Username: admin")
-                print("   User ID: 00000000-0000-0000-0000-000000000001")
+                print("   User ID: \(actualUserID)")
                 print("   Organization: Default Organization")
 
-                // Note: Actually creating a VM requires a valid template and session authentication
-                // which is complex to set up programmatically. Instead, we'll just verify the setup is ready.
+                // Create an API key for the admin user to make API calls
+                print("\n🔑 Creating API key for admin user...")
+
+                // Generate API key components
+                let apiKeyValue = "sk_dev_test_key_\(UUID().uuidString.prefix(32))"
+                let keyPrefix = String(apiKeyValue.prefix(16))
+
+                // Hash the key for storage using sha256sum
+                let hashProcess = Process()
+                hashProcess.executableURL = URL(fileURLWithPath: "/usr/bin/bash")
+                hashProcess.arguments = ["-c", "echo -n '\(apiKeyValue)' | sha256sum | cut -d' ' -f1"]
+                let hashPipe = Pipe()
+                hashProcess.standardOutput = hashPipe
+                try hashProcess.run()
+                hashProcess.waitUntilExit()
+
+                let hashData = hashPipe.fileHandleForReading.readDataToEndOfFile()
+                let keyHash = String(data: hashData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                // Delete any existing test API key first
+                let deleteOldKeySQL = "DELETE FROM api_keys WHERE name = 'Development Test Key';"
+                try? runProcess("/usr/bin/docker", arguments: [
+                    "exec", "strato-postgres",
+                    "psql", "-U", "vapor_username", "-d", "vapor_database",
+                    "-c", deleteOldKeySQL
+                ])
+
+                let createAPIKeySQL = """
+                INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, scopes, is_active, created_at, updated_at)
+                VALUES (
+                    gen_random_uuid(),
+                    '\(actualUserID)',
+                    'Development Test Key',
+                    '\(keyHash)',
+                    '\(keyPrefix)',
+                    ARRAY['read', 'write'],
+                    true,
+                    NOW(),
+                    NOW()
+                );
+                """
+
+                try? runProcess("/usr/bin/docker", arguments: [
+                    "exec", "strato-postgres",
+                    "psql", "-U", "vapor_username", "-d", "vapor_database",
+                    "-c", createAPIKeySQL
+                ])
+
+                print("✅ API key created!")
+
+                // Get the user's current organization ID
+                let getOrgIDProcess = Process()
+                getOrgIDProcess.executableURL = URL(fileURLWithPath: "/usr/bin/docker")
+                getOrgIDProcess.arguments = [
+                    "exec", "strato-postgres",
+                    "psql", "-U", "vapor_username", "-d", "vapor_database",
+                    "-t", "-A", "-c", "SELECT current_organization_id FROM users WHERE username = 'admin' LIMIT 1;"
+                ]
+                let orgIDPipe = Pipe()
+                getOrgIDProcess.standardOutput = orgIDPipe
+                try getOrgIDProcess.run()
+                getOrgIDProcess.waitUntilExit()
+
+                let orgIDData = orgIDPipe.fileHandleForReading.readDataToEndOfFile()
+                let orgID = String(data: orgIDData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                // Get the default project ID for this organization
+                let getProjectIDProcess = Process()
+                getProjectIDProcess.executableURL = URL(fileURLWithPath: "/usr/bin/docker")
+                getProjectIDProcess.arguments = [
+                    "exec", "strato-postgres",
+                    "psql", "-U", "vapor_username", "-d", "vapor_database",
+                    "-t", "-A", "-c", "SELECT id FROM projects WHERE organization_id = '\(orgID)' LIMIT 1;"
+                ]
+                let projectIDPipe = Pipe()
+                getProjectIDProcess.standardOutput = projectIDPipe
+                try getProjectIDProcess.run()
+                getProjectIDProcess.waitUntilExit()
+
+                let projectIDData = projectIDPipe.fileHandleForReading.readDataToEndOfFile()
+                let projectID = String(data: projectIDData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                // Create a test VM via the API
+                print("\n🖥️  Creating test VM via API...")
+
+                let vmCreatePayload = """
+                {
+                    "name": "test-vm-\(UUID().uuidString.prefix(8))",
+                    "description": "Test VM created by sake dev",
+                    "templateName": "ubuntu-22.04",
+                    "projectId": "\(projectID)",
+                    "environment": "development"
+                }
+                """
+
+                // Save payload to temp file
+                let payloadPath = "/tmp/vm-create-payload.json"
+                try vmCreatePayload.write(toFile: payloadPath, atomically: true, encoding: .utf8)
+
+                // Make API request to create VM
+                let curlProcess = Process()
+                curlProcess.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+                curlProcess.arguments = [
+                    "-X", "POST",
+                    "-H", "Content-Type: application/json",
+                    "-H", "Authorization: Bearer \(apiKeyValue)",
+                    "-d", "@\(payloadPath)",
+                    "-s",
+                    "http://localhost:8080/vms"
+                ]
+
+                let curlPipe = Pipe()
+                curlProcess.standardOutput = curlPipe
+                curlProcess.standardError = curlPipe
+
+                try curlProcess.run()
+                curlProcess.waitUntilExit()
+
+                let responseData = curlPipe.fileHandleForReading.readDataToEndOfFile()
+                let responseString = String(data: responseData, encoding: .utf8) ?? ""
+
+                if curlProcess.terminationStatus == 0 && !responseString.isEmpty {
+                    print("✅ VM created successfully!")
+                    print("   Response: \(responseString.prefix(200))...")
+                } else {
+                    print("⚠️  VM creation may have failed. Response: \(responseString)")
+                }
+
+                // Clean up temp file
+                try? FileManager.default.removeItem(atPath: payloadPath)
+
                 print("\n🎉 Development environment is ready!")
-                print("\n📝 To create a VM manually:")
-                print("   1. Open http://localhost:8080 in your browser")
-                print("   2. Register a new account (or login if you already have one)")
-                print("   3. Complete the onboarding to create an organization")
-                print("   4. Navigate to VMs and create a new VM")
                 print("\n📊 Service Status:")
                 print("   • PostgreSQL:     http://localhost:5432")
                 print("   • SpiceDB:        http://localhost:8081")
                 print("   • Control Plane:  http://localhost:8080")
                 print("   • Agent:          Connected via WebSocket")
+                print("\n📝 Next steps:")
+                print("   • Check VM status: sake checkVM")
+                print("   • View logs: sake logs")
+                print("   • Open web UI: http://localhost:8080")
             }
         )
     }
