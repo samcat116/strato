@@ -43,7 +43,7 @@ struct APIKeyAuthenticatorTests {
     @Test("APIKeyAuthenticator authenticates valid API key")
     func testValidAPIKey() async throws {
         let app = try await Application.makeForTesting()
-        defer { app.shutdown() }
+        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -72,7 +72,7 @@ struct APIKeyAuthenticatorTests {
     @Test("APIKeyAuthenticator rejects invalid API key")
     func testInvalidAPIKey() async throws {
         let app = try await Application.makeForTesting()
-        defer { app.shutdown() }
+        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -100,7 +100,7 @@ struct APIKeyAuthenticatorTests {
     @Test("APIKeyAuthenticator rejects request without API key")
     func testMissingAPIKey() async throws {
         let app = try await Application.makeForTesting()
-        defer { app.shutdown() }
+        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -125,7 +125,7 @@ struct APIKeyAuthenticatorTests {
     @Test("APIKeyAuthenticator only processes keys with sk_ prefix")
     func testAPIKeyPrefix() async throws {
         let app = try await Application.makeForTesting()
-        defer { app.shutdown() }
+        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -156,7 +156,7 @@ struct APIKeyAuthenticatorTests {
     @Test("APIKeyAuthenticator rejects inactive API key")
     func testInactiveAPIKey() async throws {
         let app = try await Application.makeForTesting()
-        defer { app.shutdown() }
+        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -184,7 +184,7 @@ struct APIKeyAuthenticatorTests {
     @Test("APIKeyAuthenticator rejects expired API key")
     func testExpiredAPIKey() async throws {
         let app = try await Application.makeForTesting()
-        defer { app.shutdown() }
+        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -213,7 +213,7 @@ struct APIKeyAuthenticatorTests {
     @Test("APIKeyAuthenticator accepts API key with future expiration")
     func testFutureExpirationAPIKey() async throws {
         let app = try await Application.makeForTesting()
-        defer { app.shutdown() }
+        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -245,7 +245,7 @@ struct APIKeyAuthenticatorTests {
     @Test("APIKeyAuthenticator loads associated user")
     func testUserAssociation() async throws {
         let app = try await Application.makeForTesting()
-        defer { app.shutdown() }
+        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -276,7 +276,7 @@ struct APIKeyAuthenticatorTests {
     @Test("APIKeyAuthenticator stores API key in request storage")
     func testAPIKeyStorage() async throws {
         let app = try await Application.makeForTesting()
-        defer { app.shutdown() }
+        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -305,7 +305,7 @@ struct APIKeyAuthenticatorTests {
     @Test("Request isAPIKeyAuthenticated property works correctly")
     func testIsAPIKeyAuthenticated() async throws {
         let app = try await Application.makeForTesting()
-        defer { app.shutdown() }
+        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()

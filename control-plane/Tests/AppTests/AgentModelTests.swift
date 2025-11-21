@@ -264,7 +264,7 @@ struct AgentModelTests {
     @Test("AgentResponse initializes from Agent")
     func testAgentResponseInitialization() async throws {
         let app = try await Application.makeForTesting()
-        defer { app.shutdown() }
+        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
