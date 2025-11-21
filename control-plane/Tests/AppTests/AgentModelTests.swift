@@ -63,7 +63,6 @@ struct AgentModelTests {
         #expect(agent.availableCPU == 6)
         #expect(agent.totalMemory == 16_000_000_000)
         #expect(agent.availableMemory == 12_000_000_000)
-        try await app.asyncShutdown()
     }
 
     // MARK: - Update Resources Tests
@@ -83,7 +82,6 @@ struct AgentModelTests {
         #expect(agent.availableCPU == 4)
         #expect(agent.availableMemory == 8_000_000_000)
         #expect(agent.availableDisk == 60_000_000_000)
-        try await app.asyncShutdown()
     }
 
     @Test("Agent updateResources updates lastHeartbeat")
@@ -99,7 +97,6 @@ struct AgentModelTests {
 
         #expect(agent.lastHeartbeat != nil)
         #expect(agent.lastHeartbeat! > oldHeartbeat!)
-        try await app.asyncShutdown()
     }
 
     // MARK: - Resources Property Tests
@@ -116,7 +113,6 @@ struct AgentModelTests {
         #expect(resources.availableMemory == 12_000_000_000)
         #expect(resources.totalDisk == 100_000_000_000)
         #expect(resources.availableDisk == 80_000_000_000)
-        try await app.asyncShutdown()
     }
 
     // MARK: - Online Status Tests
@@ -126,7 +122,6 @@ struct AgentModelTests {
         let agent = createTestAgent(lastHeartbeat: Date())
 
         #expect(agent.isOnline == true)
-        try await app.asyncShutdown()
     }
 
     @Test("Agent isOnline returns false when heartbeat is old")
@@ -135,7 +130,6 @@ struct AgentModelTests {
         let agent = createTestAgent(lastHeartbeat: oldDate)
 
         #expect(agent.isOnline == false)
-        try await app.asyncShutdown()
     }
 
     @Test("Agent isOnline returns false when no heartbeat")
@@ -143,7 +137,6 @@ struct AgentModelTests {
         let agent = createTestAgent(lastHeartbeat: nil)
 
         #expect(agent.isOnline == false)
-        try await app.asyncShutdown()
     }
 
     @Test("Agent isOnline threshold is 60 seconds")
@@ -157,7 +150,6 @@ struct AgentModelTests {
         let justOver = Date().addingTimeInterval(-61)
         let agentOffline = createTestAgent(lastHeartbeat: justOver)
         #expect(agentOffline.isOnline == false)
-        try await app.asyncShutdown()
     }
 
     // MARK: - Update Status Based on Heartbeat Tests
@@ -169,7 +161,6 @@ struct AgentModelTests {
         agent.updateStatusBasedOnHeartbeat()
 
         #expect(agent.status == .online)
-        try await app.asyncShutdown()
     }
 
     @Test("Agent updateStatusBasedOnHeartbeat sets offline when heartbeat is old and status is online")
@@ -180,7 +171,6 @@ struct AgentModelTests {
         agent.updateStatusBasedOnHeartbeat()
 
         #expect(agent.status == .offline)
-        try await app.asyncShutdown()
     }
 
     @Test("Agent updateStatusBasedOnHeartbeat does not change status when already correct")
@@ -195,7 +185,6 @@ struct AgentModelTests {
         let agentOffline = createTestAgent(status: .offline, lastHeartbeat: oldDate)
         agentOffline.updateStatusBasedOnHeartbeat()
         #expect(agentOffline.status == .offline)
-        try await app.asyncShutdown()
     }
 
     @Test("Agent updateStatusBasedOnHeartbeat handles connecting status")
@@ -210,7 +199,6 @@ struct AgentModelTests {
         let agentOld = createTestAgent(status: .connecting, lastHeartbeat: oldDate)
         agentOld.updateStatusBasedOnHeartbeat()
         #expect(agentOld.status == .connecting) // Does not change from connecting to offline
-        try await app.asyncShutdown()
     }
 
     // MARK: - Agent.from(registration:name:) Tests
@@ -219,6 +207,7 @@ struct AgentModelTests {
     func testFromRegistrationMessage() {
         let resources = createTestAgentResources()
         let message = AgentRegisterMessage(
+            agentId: "reg-agent",
             hostname: "reg-host",
             version: "2.0.0",
             capabilities: ["kvm", "hvf"],
@@ -231,17 +220,17 @@ struct AgentModelTests {
         #expect(agent.hostname == "reg-host")
         #expect(agent.version == "2.0.0")
         #expect(agent.capabilities == ["kvm", "hvf"])
-        #expect(agent.status == .connecting)
+        #expect(agent.status == AgentStatus.connecting)
         #expect(agent.totalCPU == 8)
         #expect(agent.availableCPU == 6)
         #expect(agent.lastHeartbeat != nil)
-        try await app.asyncShutdown()
     }
 
     @Test("Agent.from sets status to connecting by default")
     func testFromRegistrationSetsConnectingStatus() {
         let resources = createTestAgentResources()
         let message = AgentRegisterMessage(
+            agentId: "reg-agent",
             hostname: "reg-host",
             version: "2.0.0",
             capabilities: [],
@@ -250,14 +239,14 @@ struct AgentModelTests {
 
         let agent = Agent.from(registration: message, name: "reg-agent")
 
-        #expect(agent.status == .connecting)
-        try await app.asyncShutdown()
+        #expect(agent.status == AgentStatus.connecting)
     }
 
     @Test("Agent.from sets recent lastHeartbeat")
     func testFromRegistrationSetsRecentHeartbeat() {
         let resources = createTestAgentResources()
         let message = AgentRegisterMessage(
+            agentId: "reg-agent",
             hostname: "reg-host",
             version: "2.0.0",
             capabilities: [],
@@ -271,7 +260,6 @@ struct AgentModelTests {
         // Should be very recent (within last second)
         let timeDifference = abs(Date().timeIntervalSince(agent.lastHeartbeat!))
         #expect(timeDifference < 1.0)
-        try await app.asyncShutdown()
     }
 
     // MARK: - AgentResponse DTO Tests
@@ -296,7 +284,6 @@ struct AgentModelTests {
         #expect(response.status == .online)
         #expect(response.resources.totalCPU == 8)
         #expect(response.isOnline == true)
-        try await app.asyncShutdown()
     }
 
     @Test("AgentResponse throws when agent has no ID")
