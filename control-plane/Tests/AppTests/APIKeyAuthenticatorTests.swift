@@ -66,6 +66,10 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "testuser")
         }
+
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
     }
 
     @Test("APIKeyAuthenticator rejects invalid API key")
@@ -93,6 +97,10 @@ struct APIKeyAuthenticatorTests {
         }) { res async in
             #expect(res.status == .unauthorized)
         }
+
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
     }
 
     @Test("APIKeyAuthenticator rejects request without API key")
@@ -115,6 +123,10 @@ struct APIKeyAuthenticatorTests {
         try await app.test(.GET, "/test") { res async in
             #expect(res.status == .unauthorized)
         }
+
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
     }
 
     // MARK: - API Key Format Tests
@@ -145,6 +157,10 @@ struct APIKeyAuthenticatorTests {
         }) { res async in
             #expect(res.status == .unauthorized)
         }
+
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
     }
 
     // MARK: - API Key Status Tests
@@ -174,6 +190,10 @@ struct APIKeyAuthenticatorTests {
         }) { res async in
             #expect(res.status == .unauthorized)
         }
+
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
     }
 
     @Test("APIKeyAuthenticator rejects expired API key")
@@ -202,6 +222,10 @@ struct APIKeyAuthenticatorTests {
         }) { res async in
             #expect(res.status == .unauthorized)
         }
+
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
     }
 
     @Test("APIKeyAuthenticator accepts API key with future expiration")
@@ -231,6 +255,10 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "testuser")
         }
+
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
     }
 
     // MARK: - User Association Tests
@@ -261,6 +289,10 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "testuser:test@example.com")
         }
+
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
     }
 
     // MARK: - API Key Storage Tests
@@ -291,6 +323,10 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "Test API Key")
         }
+
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
     }
 
     @Test("Request isAPIKeyAuthenticated property works correctly")
@@ -322,6 +358,10 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "false")
         }
+
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
     }
 
     // MARK: - Hash Function Tests

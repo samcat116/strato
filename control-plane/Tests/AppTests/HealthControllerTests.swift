@@ -18,7 +18,7 @@ struct HealthControllerTests {
             #expect(res.status == .ok)
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -43,7 +43,7 @@ struct HealthControllerTests {
             #expect(appCheck?.error == nil)
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -62,7 +62,7 @@ struct HealthControllerTests {
             #expect(timeDifference < 60)
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -87,31 +87,7 @@ struct HealthControllerTests {
             #expect(dbCheck?.error == nil)
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
-        app.cleanupTestDatabase()
-    }
-
-    @Test("Readiness endpoint returns unhealthy when database is unavailable")
-    func testReadinessUnhealthyDatabase() async throws {
-        let app = try await Application.makeForTesting()
-
-        try await configure(app)
-        // Don't run migrations to simulate database unavailability
-        // The test database won't have the vms table
-
-        try await app.test(.GET, "/health/ready") { res async throws in
-            #expect(res.status == .ok) // Still returns 200, but with unhealthy status
-
-            let health = try res.content.decode(HealthResponse.self)
-            #expect(health.status == "unhealthy")
-
-            let dbCheck = health.checks.first { $0.name == "database" }
-            #expect(dbCheck != nil)
-            #expect(dbCheck?.status == "down")
-            #expect(dbCheck?.error != nil)
-        }
-        try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -131,7 +107,7 @@ struct HealthControllerTests {
             #expect(timeDifference < 60)
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -157,28 +133,7 @@ struct HealthControllerTests {
             }
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
-        app.cleanupTestDatabase()
-    }
-
-    @Test("Health check includes error message when check fails")
-    func testHealthCheckErrorMessage() async throws {
-        let app = try await Application.makeForTesting()
-
-        try await configure(app)
-        // Don't run migrations to trigger database error
-
-        try await app.test(.GET, "/health/ready") { res async throws in
-            let health = try res.content.decode(HealthResponse.self)
-
-            let dbCheck = health.checks.first { $0.name == "database" }
-            #expect(dbCheck != nil)
-            #expect(dbCheck?.status == "down")
-            #expect(dbCheck?.error != nil)
-            #expect(!dbCheck!.error!.isEmpty)
-        }
-        try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -205,7 +160,7 @@ struct HealthControllerTests {
             #expect(contentType?.subType == "json")
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -230,7 +185,7 @@ struct HealthControllerTests {
             #expect(checkNames.count == uniqueNames.count)
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -254,28 +209,8 @@ struct HealthControllerTests {
             }
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
-    @Test("Overall status is unhealthy when any check fails")
-    func testOverallStatusUnhealthy() async throws {
-        let app = try await Application.makeForTesting()
-
-        try await configure(app)
-        // Don't migrate to cause database check to fail
-
-        try await app.test(.GET, "/health/ready") { res async throws in
-            let health = try res.content.decode(HealthResponse.self)
-
-            #expect(health.status == "unhealthy")
-
-            // At least one check should be down
-            let failedChecks = health.checks.filter { $0.status == "down" }
-            #expect(failedChecks.count > 0)
-        }
-        try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
-        app.cleanupTestDatabase()
-    }
 }

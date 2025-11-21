@@ -286,7 +286,7 @@ struct AgentModelTests {
         #expect(response.isOnline == true)
 
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 

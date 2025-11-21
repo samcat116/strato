@@ -8,7 +8,10 @@ import VaporTesting
 
 extension Application {
     static func makeForTesting(_ environment: Environment = .testing) async throws -> Application {
-        let app = try await Application.make(environment)
+        var env = environment
+        env.arguments = ["vapor"]
+
+        let app = try await Application.make(env)
         app.logger.logLevel = .debug
 
         // Use file-based SQLite with unique names for better isolation
@@ -52,14 +55,14 @@ func withTestApp(_ test: (Application) async throws -> Void) async throws {
         try? await app.autoRevert()
         try await app.asyncShutdown()
         // Give time for shutdown to complete
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
         throw error
     }
 
     try await app.asyncShutdown()
     // Give time for shutdown to complete before deallocation
-    try? await Task.sleep(for: .milliseconds(100))
+    try? await Task.sleep(for: .seconds(2))
     app.cleanupTestDatabase()
 }
 
@@ -73,13 +76,13 @@ func withApp(_ test: (Application) async throws -> Void) async throws {
         try await test(app)
     } catch {
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
         throw error
     }
 
     try await app.asyncShutdown()
-    try? await Task.sleep(for: .milliseconds(100))
+    try? await Task.sleep(for: .seconds(2))
     app.cleanupTestDatabase()
 }
 

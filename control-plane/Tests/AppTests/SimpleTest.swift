@@ -17,7 +17,7 @@ final class SimpleTests {
 
         try await app.asyncShutdown()
         // Give time for shutdown to complete
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -36,7 +36,7 @@ final class SimpleTests {
 
         try await app.asyncShutdown()
         // Give time for shutdown to complete
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 }
