@@ -96,7 +96,7 @@ final class Agent: Model, Content, @unchecked Sendable {
     }
 }
 
-enum AgentStatus: String, Codable, CaseIterable {
+enum AgentStatus: String, Codable, CaseIterable, Sendable {
     case online = "online"
     case offline = "offline"
     case connecting = "connecting"

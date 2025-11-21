@@ -452,7 +452,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
 // MARK: - Network Error Types
 
-enum NetworkError: Error, LocalizedError {
+enum NetworkError: Error, LocalizedError, Sendable {
     case notConnected(String)
     case networkNotFound(String)
     case bridgeNotFound(String)

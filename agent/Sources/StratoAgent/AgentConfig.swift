@@ -2,12 +2,12 @@ import Foundation
 import Toml
 import Logging
 
-enum NetworkMode: String, Codable {
+enum NetworkMode: String, Codable, Sendable {
     case ovn
     case user
 }
 
-struct AgentConfig: Codable {
+struct AgentConfig: Codable, Sendable {
     let controlPlaneURL: String
     let qemuSocketDir: String?
     let logLevel: String?
@@ -136,7 +136,7 @@ struct AgentConfig: Codable {
     }
 }
 
-enum AgentConfigError: Error, LocalizedError {
+enum AgentConfigError: Error, LocalizedError, Sendable {
     case configFileNotFound(String)
     case invalidTOMLFormat(String)
     case missingRequiredField(String)
