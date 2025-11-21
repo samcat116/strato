@@ -5,6 +5,24 @@ import NIOPosix
 import Logging
 import StratoShared
 
+// Thread-safe boolean wrapper for continuation resume tracking
+final class AtomicBool: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Bool
+
+    init(_ initialValue: Bool) {
+        self.value = initialValue
+    }
+
+    func testAndSet(_ newValue: Bool) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let oldValue = value
+        value = newValue
+        return oldValue
+    }
+}
+
 actor WebSocketClient {
     private let url: String
     private weak var agent: Agent?
@@ -40,7 +58,7 @@ actor WebSocketClient {
 
         // Create connection and wait for it to be established
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            var resumed = false
+            let resumed = AtomicBool(false)
 
             // Create connection - this returns immediately, callback fires when connected
             _ = WebSocket.connect(
@@ -50,20 +68,18 @@ actor WebSocketClient {
                 // Connection established - handle in actor context
                 Task { [weak self] in
                     guard let self = self else {
-                        if !resumed {
-                            resumed = true
+                        if !resumed.testAndSet(true) {
                             continuation.resume(throwing: WebSocketClientError.connectionFailed("Client deallocated"))
                         }
                         return
                     }
 
                     // Store reference and set up handlers
-                    await self.setWebSocket(ws)
-                    await self.setConnected(true)
+                    await self.setConnection(ws: ws, connected: true)
 
                     ws.onText { ws, text in
                         Task { [weak self] in
-                            await self?.logDebug("Received WebSocket text message", metadata: ["text": .string(text)])
+                            self?.logger.debug("Received WebSocket text message", metadata: ["text": .string(text)])
                         }
                     }
 
@@ -71,53 +87,52 @@ actor WebSocketClient {
                         Task { [weak self] in
                             guard let self = self else { return }
 
-                            await self.logDebug("Received WebSocket binary message")
+                            self.logger.debug("Received WebSocket binary message")
 
                             // Convert binary buffer to string
                             guard let text = buffer.getString(at: 0, length: buffer.readableBytes) else {
-                                await self.logError("Failed to convert binary buffer to string")
+                                self.logger.error("Failed to convert binary buffer to string")
                                 return
                             }
 
                             // Parse JSON to MessageEnvelope
                             guard let data = text.data(using: .utf8) else {
-                                await self.logError("Failed to convert string to UTF-8 data")
+                                self.logger.error("Failed to convert string to UTF-8 data")
                                 return
                             }
 
                             do {
                                 let envelope = try JSONDecoder().decode(MessageEnvelope.self, from: data)
-                                await self.logInfo("Received message from control plane", metadata: [
+                                self.logger.info("Received message from control plane", metadata: [
                                     "type": .string(envelope.type.rawValue)
                                 ])
 
                                 // Handle message asynchronously
                                 await self.agent?.handleMessage(envelope)
                             } catch {
-                                await self.logError("Failed to decode message: \(error)")
+                                self.logger.error("Failed to decode message: \(error)")
                             }
                         }
                     }
 
                     ws.onClose.whenComplete { result in
                         Task { [weak self] in
-                            await self?.logInfo("WebSocket connection closed")
-                            await self?.setConnected(false)
+                            guard let self = self else { return }
+                            self.logger.info("WebSocket connection closed")
+                            await self.setConnection(ws: nil, connected: false)
                         }
                     }
 
-                    await self.logInfo("WebSocket connection established and ready")
+                    self.logger.info("WebSocket connection established and ready")
                     await self.startHeartbeat()
 
                     // Resume to indicate successful connection
-                    if !resumed {
-                        resumed = true
+                    if !resumed.testAndSet(true) {
                         continuation.resume()
                     }
                 }
             }.whenFailure { error in
-                if !resumed {
-                    resumed = true
+                if !resumed.testAndSet(true) {
                     continuation.resume(throwing: WebSocketClientError.connectionFailed("Failed to connect: \(error.localizedDescription)"))
                 }
             }
@@ -173,26 +188,11 @@ actor WebSocketClient {
         logger.debug("WebSocket message sent successfully")
     }
 
-    // MARK: - Actor Helper Methods
+    // MARK: - Private Methods
 
-    private func setWebSocket(_ ws: WebSocket) {
+    private func setConnection(ws: WebSocket?, connected: Bool) {
         self.ws = ws
-    }
-
-    private func setConnected(_ connected: Bool) {
         self.isConnected = connected
-    }
-
-    private func logDebug(_ message: String, metadata: Logger.Metadata? = nil) {
-        logger.debug(Logger.Message(stringLiteral: message), metadata: metadata)
-    }
-
-    private func logInfo(_ message: String, metadata: Logger.Metadata? = nil) {
-        logger.info(Logger.Message(stringLiteral: message), metadata: metadata)
-    }
-
-    private func logError(_ message: String, metadata: Logger.Metadata? = nil) {
-        logger.error(Logger.Message(stringLiteral: message), metadata: metadata)
     }
 
     private func startHeartbeat() {
