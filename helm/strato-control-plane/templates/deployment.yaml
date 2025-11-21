@@ -100,6 +100,25 @@ spec:
             - name: EXTERNAL_HOSTNAME
               value: "{{ .Values.strato.externalHostname }}"
             {{- end }}
+            {{- if .Values.opentelemetry.enabled }}
+            - name: OTEL_SERVICE_NAME
+              value: "{{ .Values.opentelemetry.serviceName }}"
+            - name: OTEL_SERVICE_VERSION
+              value: "{{ .Values.opentelemetry.serviceVersion }}"
+            - name: OTEL_METRICS_ENABLED
+              value: "{{ .Values.opentelemetry.metrics.enabled }}"
+            - name: OTEL_LOGS_ENABLED
+              value: "{{ .Values.opentelemetry.logs.enabled }}"
+            - name: OTEL_TRACES_ENABLED
+              value: "{{ .Values.opentelemetry.traces.enabled }}"
+            {{- if .Values.opentelemetry.collector.enabled }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://{{ include "strato-control-plane.fullname" . }}-otel-collector:{{ .Values.opentelemetry.collector.service.grpcPort }}"
+            {{- else if .Values.opentelemetry.collector.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "{{ .Values.opentelemetry.collector.endpoint }}"
+            {{- end }}
+            {{- end }}
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:
             httpGet:
