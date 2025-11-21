@@ -171,6 +171,12 @@ jobs:
         with:
           swift-version: "6.0"
 
+      - name: Debug jemalloc
+        if: matrix.os == 'self-hosted'
+        run: |
+          ldconfig -p | grep -i jemalloc || echo "jemalloc missing"
+          find /usr -name "libjemalloc*"
+
       - name: Build Swift binaries
         run: |
           # Build control plane
