@@ -95,6 +95,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install jemalloc dependencies (arm64)
+        if: matrix.platform == 'linux/arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libjemalloc-dev
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -170,6 +176,12 @@ jobs:
         uses: swift-actions/setup-swift@v1
         with:
           swift-version: "6.0"
+
+      - name: Debug jemalloc
+        if: matrix.os == 'self-hosted'
+        run: |
+          ldconfig -p | grep -i jemalloc || echo "jemalloc missing"
+          find /usr -name "libjemalloc*"
 
       - name: Build Swift binaries
         run: |

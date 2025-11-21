@@ -20,6 +20,14 @@ charts
 /tls.crt
 /tls.key
 /strato-control-plane-0.1.0.tgz
+
 Package.resolved
 SakeApp/.build/
 SakeApp/Package.resolved
+
+
+# VitePress
+docs/.vitepress/dist
+docs/.vitepress/cache
+.temp
+
