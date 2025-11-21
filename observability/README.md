@@ -209,7 +209,7 @@ kubectl port-forward -n strato-skaffold svc/strato-prometheus 9090:9090
 
 ## Future Enhancements
 
-Once Swift 6.1+ is available:
+Planned enhancements:
 
 1. Complete the integration with swift-otel 1.0+
 2. Add custom tracing spans for key operations:
