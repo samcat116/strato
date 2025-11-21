@@ -58,6 +58,7 @@ struct APIKeyAuthenticatorTests {
                 throw Abort(.unauthorized)
             }
             return authUser.username
+        try await app.asyncShutdown()
         }
 
         try await app.test(.GET, "/test", beforeRequest: { req in
@@ -66,6 +67,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "testuser")
         }
+        try await app.asyncShutdown()
     }
 
     @Test("APIKeyAuthenticator rejects invalid API key")
@@ -86,6 +88,7 @@ struct APIKeyAuthenticatorTests {
                 throw Abort(.unauthorized)
             }
             return authUser.username
+        try await app.asyncShutdown()
         }
 
         try await app.test(.GET, "/test", beforeRequest: { req in
@@ -93,6 +96,7 @@ struct APIKeyAuthenticatorTests {
         }) { res async in
             #expect(res.status == .unauthorized)
         }
+        try await app.asyncShutdown()
     }
 
     @Test("APIKeyAuthenticator rejects request without API key")
@@ -110,11 +114,13 @@ struct APIKeyAuthenticatorTests {
                 throw Abort(.unauthorized)
             }
             return authUser.username
+        try await app.asyncShutdown()
         }
 
         try await app.test(.GET, "/test") { res async in
             #expect(res.status == .unauthorized)
         }
+        try await app.asyncShutdown()
     }
 
     // MARK: - API Key Format Tests
@@ -137,6 +143,7 @@ struct APIKeyAuthenticatorTests {
                 throw Abort(.unauthorized)
             }
             return authUser.username
+        try await app.asyncShutdown()
         }
 
         // Try with a non-sk_ prefixed token (should be ignored by authenticator)
@@ -145,6 +152,7 @@ struct APIKeyAuthenticatorTests {
         }) { res async in
             #expect(res.status == .unauthorized)
         }
+        try await app.asyncShutdown()
     }
 
     // MARK: - API Key Status Tests
@@ -167,6 +175,7 @@ struct APIKeyAuthenticatorTests {
                 throw Abort(.unauthorized)
             }
             return authUser.username
+        try await app.asyncShutdown()
         }
 
         try await app.test(.GET, "/test", beforeRequest: { req in
@@ -174,6 +183,7 @@ struct APIKeyAuthenticatorTests {
         }) { res async in
             #expect(res.status == .unauthorized)
         }
+        try await app.asyncShutdown()
     }
 
     @Test("APIKeyAuthenticator rejects expired API key")
@@ -195,6 +205,7 @@ struct APIKeyAuthenticatorTests {
                 throw Abort(.unauthorized)
             }
             return authUser.username
+        try await app.asyncShutdown()
         }
 
         try await app.test(.GET, "/test", beforeRequest: { req in
@@ -202,6 +213,7 @@ struct APIKeyAuthenticatorTests {
         }) { res async in
             #expect(res.status == .unauthorized)
         }
+        try await app.asyncShutdown()
     }
 
     @Test("APIKeyAuthenticator accepts API key with future expiration")
@@ -223,6 +235,7 @@ struct APIKeyAuthenticatorTests {
                 throw Abort(.unauthorized)
             }
             return authUser.username
+        try await app.asyncShutdown()
         }
 
         try await app.test(.GET, "/test", beforeRequest: { req in
@@ -231,6 +244,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "testuser")
         }
+        try await app.asyncShutdown()
     }
 
     // MARK: - User Association Tests
@@ -253,6 +267,7 @@ struct APIKeyAuthenticatorTests {
                 throw Abort(.unauthorized)
             }
             return "\(authUser.username):\(authUser.email)"
+        try await app.asyncShutdown()
         }
 
         try await app.test(.GET, "/test", beforeRequest: { req in
@@ -261,6 +276,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "testuser:test@example.com")
         }
+        try await app.asyncShutdown()
     }
 
     // MARK: - API Key Storage Tests
@@ -283,6 +299,7 @@ struct APIKeyAuthenticatorTests {
                 throw Abort(.internalServerError, reason: "API key not stored")
             }
             return storedKey.name
+        try await app.asyncShutdown()
         }
 
         try await app.test(.GET, "/test", beforeRequest: { req in
@@ -291,6 +308,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "Test API Key")
         }
+        try await app.asyncShutdown()
     }
 
     @Test("Request isAPIKeyAuthenticated property works correctly")
@@ -308,6 +326,7 @@ struct APIKeyAuthenticatorTests {
         let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
         protected.get("test") { req -> String in
             return req.isAPIKeyAuthenticated ? "true" : "false"
+        try await app.asyncShutdown()
         }
 
         try await app.test(.GET, "/test", beforeRequest: { req in
@@ -322,6 +341,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "false")
         }
+        try await app.asyncShutdown()
     }
 
     // MARK: - Hash Function Tests

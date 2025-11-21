@@ -14,7 +14,7 @@ struct HealthControllerTests {
 
         try await configure(app)
 
-        try await app.test(.GET, "/health") { res async in
+        try await app.test(.GET, "/health") { res async throws in
             #expect(res.status == .ok)
         }
         try await app.asyncShutdown()
@@ -28,7 +28,7 @@ struct HealthControllerTests {
 
         try await configure(app)
 
-        try await app.test(.GET, "/health/live") { res async in
+        try await app.test(.GET, "/health/live") { res async throws in
             #expect(res.status == .ok)
 
             let health = try res.content.decode(HealthResponse.self)
@@ -49,7 +49,7 @@ struct HealthControllerTests {
 
         try await configure(app)
 
-        try await app.test(.GET, "/health/live") { res async in
+        try await app.test(.GET, "/health/live") { res async throws in
             let health = try res.content.decode(HealthResponse.self)
 
             // Timestamp should be recent (within last minute)
@@ -69,7 +69,7 @@ struct HealthControllerTests {
         try await configure(app)
         try await app.autoMigrate()
 
-        try await app.test(.GET, "/health/ready") { res async in
+        try await app.test(.GET, "/health/ready") { res async throws in
             #expect(res.status == .ok)
 
             let health = try res.content.decode(HealthResponse.self)
@@ -91,7 +91,7 @@ struct HealthControllerTests {
         // Don't run migrations to simulate database unavailability
         // The test database won't have the vms table
 
-        try await app.test(.GET, "/health/ready") { res async in
+        try await app.test(.GET, "/health/ready") { res async throws in
             #expect(res.status == .ok) // Still returns 200, but with unhealthy status
 
             let health = try res.content.decode(HealthResponse.self)
@@ -112,7 +112,7 @@ struct HealthControllerTests {
         try await configure(app)
         try await app.autoMigrate()
 
-        try await app.test(.GET, "/health/ready") { res async in
+        try await app.test(.GET, "/health/ready") { res async throws in
             let health = try res.content.decode(HealthResponse.self)
 
             // Timestamp should be recent (within last minute)
@@ -131,7 +131,7 @@ struct HealthControllerTests {
 
         try await configure(app)
 
-        try await app.test(.GET, "/health/live") { res async in
+        try await app.test(.GET, "/health/live") { res async throws in
             let health = try res.content.decode(HealthResponse.self)
 
             // Verify required fields are present
@@ -154,7 +154,7 @@ struct HealthControllerTests {
         try await configure(app)
         // Don't run migrations to trigger database error
 
-        try await app.test(.GET, "/health/ready") { res async in
+        try await app.test(.GET, "/health/ready") { res async throws in
             let health = try res.content.decode(HealthResponse.self)
 
             let dbCheck = health.checks.first { $0.name == "database" }
@@ -175,17 +175,17 @@ struct HealthControllerTests {
         try await configure(app)
         try await app.autoMigrate()
 
-        try await app.test(.GET, "/health/live") { res async in
+        try await app.test(.GET, "/health/live") { res async throws in
             let contentType = res.headers.contentType
             #expect(contentType != nil)
-            #expect(contentType?.type == .application)
+            #expect(contentType?.type.description == "application")
             #expect(contentType?.subType == "json")
         }
 
-        try await app.test(.GET, "/health/ready") { res async in
+        try await app.test(.GET, "/health/ready") { res async throws in
             let contentType = res.headers.contentType
             #expect(contentType != nil)
-            #expect(contentType?.type == .application)
+            #expect(contentType?.type.description == "application")
             #expect(contentType?.subType == "json")
         }
         try await app.asyncShutdown()
@@ -200,7 +200,7 @@ struct HealthControllerTests {
         try await configure(app)
         try await app.autoMigrate()
 
-        try await app.test(.GET, "/health/ready") { res async in
+        try await app.test(.GET, "/health/ready") { res async throws in
             let health = try res.content.decode(HealthResponse.self)
 
             // Currently only database check, but structure supports multiple
@@ -223,7 +223,7 @@ struct HealthControllerTests {
         try await configure(app)
         try await app.autoMigrate()
 
-        try await app.test(.GET, "/health/ready") { res async in
+        try await app.test(.GET, "/health/ready") { res async throws in
             let health = try res.content.decode(HealthResponse.self)
 
             #expect(health.status == "healthy")
@@ -243,7 +243,7 @@ struct HealthControllerTests {
         try await configure(app)
         // Don't migrate to cause database check to fail
 
-        try await app.test(.GET, "/health/ready") { res async in
+        try await app.test(.GET, "/health/ready") { res async throws in
             let health = try res.content.decode(HealthResponse.self)
 
             #expect(health.status == "unhealthy")

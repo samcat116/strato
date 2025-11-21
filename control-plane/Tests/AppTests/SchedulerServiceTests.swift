@@ -11,6 +11,9 @@ struct SchedulerServiceTests {
         return VM(
             name: "test-vm",
             description: "Test VM",
+            image: "test-image",
+            projectID: UUID(),
+            environment: "test",
             cpu: cpu,
             memory: memory,
             disk: disk
@@ -18,8 +21,8 @@ struct SchedulerServiceTests {
     }
 
     func createTestAgent(
-        id: String,
-        name: String,
+        id: String = "test-agent",
+        name: String = "test-agent",
         totalCPU: Int = 8,
         availableCPU: Int = 6,
         totalMemory: Int64 = 16000,
