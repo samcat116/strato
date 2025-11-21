@@ -17,7 +17,11 @@ actor OTelLifecycleHandler: LifecycleHandler {
     public func didBootAsync(_ application: Application) async throws {
         application.logger.info("Starting OpenTelemetry observability service")
         task = Task {
-            try await observability.run()
+            do {
+                try await observability.run()
+            } catch {
+                application.logger.error("OpenTelemetry observability service failed", metadata: ["error": "\(error)"])
+            }
         }
     }
 
