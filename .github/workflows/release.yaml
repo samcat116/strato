@@ -95,6 +95,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install jemalloc dependencies (arm64)
+        if: matrix.platform == 'linux/arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libjemalloc-dev
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
