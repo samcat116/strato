@@ -1,4 +1,4 @@
-// swift-tools-version:6.0
+// swift-tools-version:6.1
 import PackageDescription
 
 let package = Package(
@@ -35,7 +35,7 @@ let package = Package(
     .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.0.0"),
         .package(url: "https://github.com/swift-server/swift-openapi-vapor.git", from: "1.0.0"),
         // 📊 OpenTelemetry observability (metrics, logging, tracing)
-        .package(url: "https://github.com/swift-otel/swift-otel.git", exact: "0.12.0")
+        .package(url: "https://github.com/swift-otel/swift-otel.git", from: "1.0.0")
     ],
     targets: [
         .executableTarget(

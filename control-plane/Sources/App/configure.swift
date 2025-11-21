@@ -94,7 +94,6 @@ public func configure(_ app: Application) async throws {
     if app.environment != .testing {
         var otelConfig = OTel.Configuration.default
         otelConfig.serviceName = Environment.get("OTEL_SERVICE_NAME") ?? "strato-control-plane"
-        otelConfig.serviceVersion = Environment.get("OTEL_SERVICE_VERSION") ?? "1.0.0"
 
         // Enable all three pillars of observability
         otelConfig.metrics.enabled = Environment.get("OTEL_METRICS_ENABLED").flatMap(Bool.init) ?? true
@@ -109,7 +108,6 @@ public func configure(_ app: Application) async throws {
 
         app.logger.info("Bootstrapping OpenTelemetry", metadata: [
             "service": .string(otelConfig.serviceName),
-            "version": .string(otelConfig.serviceVersion),
             "metrics": .stringConvertible(otelConfig.metrics.enabled),
             "logs": .stringConvertible(otelConfig.logs.enabled),
             "traces": .stringConvertible(otelConfig.traces.enabled)
