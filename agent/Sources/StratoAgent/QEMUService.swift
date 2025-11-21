@@ -491,7 +491,7 @@ private class MockQEMUVM {
 
 // MARK: - QEMU Service Error Types
 
-enum QEMUServiceError: Error, LocalizedError {
+enum QEMUServiceError: Error, LocalizedError, Sendable {
     case vmNotFound(String)
     case vmNotCreated(String)
     case kvmNotAvailable

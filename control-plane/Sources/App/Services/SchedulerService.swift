@@ -3,7 +3,7 @@ import Fluent
 import NIOConcurrencyHelpers
 
 /// Scheduling strategy for VM placement
-enum SchedulingStrategy: String, Codable {
+enum SchedulingStrategy: String, Codable, Sendable {
     /// Pack VMs onto agents with least remaining capacity (bin-packing)
     case bestFit = "best_fit"
 
@@ -18,7 +18,7 @@ enum SchedulingStrategy: String, Codable {
 }
 
 /// Represents an agent with its current resource availability
-struct SchedulableAgent {
+struct SchedulableAgent: Sendable {
     let id: String
     let name: String
     let totalCPU: Int
@@ -62,14 +62,14 @@ struct SchedulableAgent {
 }
 
 /// VM resource requirements for scheduling
-struct VMResourceRequirements {
+struct VMResourceRequirements: Sendable {
     let cpu: Int
     let memory: Int64
     let disk: Int64
 }
 
 /// Scheduler service errors
-enum SchedulerError: Error, CustomStringConvertible {
+enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case noAvailableAgents
     case insufficientResources(required: VMResourceRequirements, available: [SchedulableAgent])
     case invalidStrategy(String)
