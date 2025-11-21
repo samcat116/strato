@@ -287,4 +287,4 @@ minikube service strato-control-plane --url
 
 - See [Migration Guide](./migration-guide.md) for detailed migration steps
 - See [Troubleshooting Guide](./troubleshooting-k8s.md) for advanced debugging
-- Check [CLAUDE.md](../CLAUDE.md) for updated development commands
+- Check the repository root for updated development commands
