@@ -2,7 +2,7 @@ import Testing
 import Vapor
 @testable import App
 
-@Suite("SchedulerService Tests")
+@Suite("SchedulerService Tests", .serialized)
 struct SchedulerServiceTests {
 
     // MARK: - Test Data Helpers

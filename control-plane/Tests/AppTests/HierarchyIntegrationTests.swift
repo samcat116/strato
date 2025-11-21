@@ -4,7 +4,7 @@ import Fluent
 import VaporTesting
 @testable import App
 
-@Suite("Hierarchy Integration Tests")
+@Suite("Hierarchy Integration Tests", .serialized)
 final class HierarchyIntegrationTests {
     var app: Application!
     var builder: TestDataBuilder!
@@ -31,9 +31,15 @@ final class HierarchyIntegrationTests {
     }
 
     deinit {
-        let application = app
-        Task {
-            try? await application?.asyncShutdown()
+        if let app = app {
+            let semaphore = DispatchSemaphore(value: 0)
+            Task {
+                try? await app.asyncShutdown()
+                try? await Task.sleep(for: .milliseconds(100))
+                app.cleanupTestDatabase()
+                semaphore.signal()
+            }
+            semaphore.wait()
         }
     }
 

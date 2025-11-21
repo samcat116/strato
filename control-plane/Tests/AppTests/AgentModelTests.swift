@@ -3,7 +3,7 @@ import Vapor
 import StratoShared
 @testable import App
 
-@Suite("Agent Model Tests")
+@Suite("Agent Model Tests", .serialized)
 struct AgentModelTests {
 
     // MARK: - Test Helpers
@@ -284,6 +284,10 @@ struct AgentModelTests {
         #expect(response.status == .online)
         #expect(response.resources.totalCPU == 8)
         #expect(response.isOnline == true)
+
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
     }
 
     @Test("AgentResponse throws when agent has no ID")

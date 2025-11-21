@@ -4,7 +4,7 @@ import Fluent
 import VaporTesting
 @testable import App
 
-@Suite("Organizational Unit API Tests")
+@Suite("Organizational Unit API Tests", .serialized)
 final class OrganizationalUnitTests {
     var app: Application!
     var testUser: User!
@@ -44,9 +44,15 @@ final class OrganizationalUnitTests {
     }
 
     deinit {
-        let application = app
-        Task {
-            try? await application?.asyncShutdown()
+        if let app = app {
+            let semaphore = DispatchSemaphore(value: 0)
+            Task {
+                try? await app.asyncShutdown()
+                try? await Task.sleep(for: .milliseconds(100))
+                app.cleanupTestDatabase()
+                semaphore.signal()
+            }
+            semaphore.wait()
         }
     }
 

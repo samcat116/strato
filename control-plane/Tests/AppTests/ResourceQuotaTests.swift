@@ -4,7 +4,7 @@ import Fluent
 import VaporTesting
 @testable import App
 
-@Suite("Resource Quota API Tests")
+@Suite("Resource Quota API Tests", .serialized)
 final class ResourceQuotaTests {
     var app: Application!
     var testUser: User!
@@ -56,9 +56,15 @@ final class ResourceQuotaTests {
     }
 
     deinit {
-        let application = app
-        Task {
-            try? await application?.asyncShutdown()
+        if let app = app {
+            let semaphore = DispatchSemaphore(value: 0)
+            Task {
+                try? await app.asyncShutdown()
+                try? await Task.sleep(for: .milliseconds(100))
+                app.cleanupTestDatabase()
+                semaphore.signal()
+            }
+            semaphore.wait()
         }
     }
 

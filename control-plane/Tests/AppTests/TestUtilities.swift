@@ -11,10 +11,31 @@ extension Application {
         let app = try await Application.make(environment)
         app.logger.logLevel = .debug
 
-        // Configure in-memory SQLite for testing
-        app.databases.use(.sqlite(.memory), as: .sqlite)
+        // Use file-based SQLite with unique names for better isolation
+        // Generate a unique database file for each test
+        let testDBPath = "/tmp/strato-test-\(UUID().uuidString).db"
+        app.databases.use(.sqlite(.file(testDBPath)), as: .sqlite)
+
+        // Store the path so we can clean it up later
+        app.storage[TestDatabasePathKey.self] = testDBPath
 
         return app
+    }
+}
+
+// Storage key for test database path
+struct TestDatabasePathKey: StorageKey {
+    typealias Value = String
+}
+
+// Extension to clean up test database file
+extension Application {
+    func cleanupTestDatabase() {
+        if let dbPath = self.storage[TestDatabasePathKey.self] {
+            try? FileManager.default.removeItem(atPath: dbPath)
+            try? FileManager.default.removeItem(atPath: dbPath + "-shm")
+            try? FileManager.default.removeItem(atPath: dbPath + "-wal")
+        }
     }
 }
 
@@ -30,10 +51,36 @@ func withTestApp(_ test: (Application) async throws -> Void) async throws {
     } catch {
         try? await app.autoRevert()
         try await app.asyncShutdown()
+        // Give time for shutdown to complete
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
         throw error
     }
 
     try await app.asyncShutdown()
+    // Give time for shutdown to complete before deallocation
+    try? await Task.sleep(for: .milliseconds(100))
+    app.cleanupTestDatabase()
+}
+
+// Helper function to run a test with automatic app cleanup
+func withApp(_ test: (Application) async throws -> Void) async throws {
+    let app = try await Application.makeForTesting()
+
+    do {
+        try await configure(app)
+        try await app.autoMigrate()
+        try await test(app)
+    } catch {
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
+        throw error
+    }
+
+    try await app.asyncShutdown()
+    try? await Task.sleep(for: .milliseconds(100))
+    app.cleanupTestDatabase()
 }
 
 // Extension to safely shutdown Vapor apps

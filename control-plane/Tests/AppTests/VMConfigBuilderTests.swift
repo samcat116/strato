@@ -3,7 +3,7 @@ import Vapor
 import StratoShared
 @testable import App
 
-@Suite("VMConfigBuilder Tests")
+@Suite("VMConfigBuilder Tests", .serialized)
 struct VMConfigBuilderTests {
 
     // MARK: - Test Data Helpers

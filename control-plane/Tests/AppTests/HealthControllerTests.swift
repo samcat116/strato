@@ -3,7 +3,7 @@ import Vapor
 import VaporTesting
 @testable import App
 
-@Suite("HealthController Tests")
+@Suite("HealthController Tests", .serialized)
 struct HealthControllerTests {
 
     // MARK: - Basic Health Check Tests
@@ -18,6 +18,8 @@ struct HealthControllerTests {
             #expect(res.status == .ok)
         }
         try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
     }
 
     // MARK: - Liveness Check Tests
@@ -41,6 +43,8 @@ struct HealthControllerTests {
             #expect(appCheck?.error == nil)
         }
         try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
     }
 
     @Test("Liveness endpoint includes timestamp")
@@ -58,6 +62,8 @@ struct HealthControllerTests {
             #expect(timeDifference < 60)
         }
         try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
     }
 
     // MARK: - Readiness Check Tests
@@ -81,6 +87,8 @@ struct HealthControllerTests {
             #expect(dbCheck?.error == nil)
         }
         try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
     }
 
     @Test("Readiness endpoint returns unhealthy when database is unavailable")
@@ -103,6 +111,8 @@ struct HealthControllerTests {
             #expect(dbCheck?.error != nil)
         }
         try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
     }
 
     @Test("Readiness endpoint includes timestamp")
@@ -121,6 +131,8 @@ struct HealthControllerTests {
             #expect(timeDifference < 60)
         }
         try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
     }
 
     // MARK: - Response Structure Tests
@@ -145,6 +157,8 @@ struct HealthControllerTests {
             }
         }
         try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
     }
 
     @Test("Health check includes error message when check fails")
@@ -164,6 +178,8 @@ struct HealthControllerTests {
             #expect(!dbCheck!.error!.isEmpty)
         }
         try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
     }
 
     // MARK: - Content Type Tests
@@ -189,6 +205,8 @@ struct HealthControllerTests {
             #expect(contentType?.subType == "json")
         }
         try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
     }
 
     // MARK: - Multiple Checks Tests
@@ -212,6 +230,8 @@ struct HealthControllerTests {
             #expect(checkNames.count == uniqueNames.count)
         }
         try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
     }
 
     // MARK: - Overall Status Tests
@@ -234,6 +254,8 @@ struct HealthControllerTests {
             }
         }
         try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
     }
 
     @Test("Overall status is unhealthy when any check fails")
@@ -253,5 +275,7 @@ struct HealthControllerTests {
             #expect(failedChecks.count > 0)
         }
         try await app.asyncShutdown()
+        try? await Task.sleep(for: .milliseconds(100))
+        app.cleanupTestDatabase()
     }
 }
