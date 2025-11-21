@@ -10,21 +10,17 @@ This directory contains the OpenTelemetry (OTel) configuration for comprehensive
 
 ## Current Status
 
-⚠️ **Swift Version Requirement**
+✅ **Fully Functional**
 
-The swift-otel library version 1.0+ requires **Swift 6.1.0+**, but the current environment has Swift 6.0.2. The instrumentation code has been added but will not compile until Swift is upgraded.
+The OpenTelemetry instrumentation is now fully operational:
+- Swift toolchain: **6.1.2** ✅
+- swift-otel: **1.0.3** ✅
+- All code compiles successfully
+- Ready for deployment and testing
 
-### Options
+### Recent Updates
 
-1. **Upgrade Swift to 6.1+** (Recommended):
-   - Update the Swift toolchain to 6.1 or later
-   - Update `Package.swift` swift-tools-version to `6.1`
-   - Use swift-otel 1.0+ with the modern API
-
-2. **Use swift-otel 0.12.0**:
-   - This version supports Swift 5.9+ (compatible with Swift 6.0)
-   - However, the API is different and less documented
-   - Not recommended for production use
+**2025-11-21**: Upgraded from Swift 6.0.2 to 6.1.2 to support swift-otel 1.0+. The modern API is now in use and all features compile without errors.
 
 ## Architecture
 
