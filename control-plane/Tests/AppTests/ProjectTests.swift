@@ -5,7 +5,7 @@ import VaporTesting
 import NIOHTTP1
 @testable import App
 
-@Suite("Project API Tests")
+@Suite("Project API Tests", .serialized)
 final class ProjectTests {
 
     func withProjectTestApp(_ test: (Application, User, Organization, OrganizationalUnit, String) async throws -> Void) async throws {
@@ -57,10 +57,14 @@ final class ProjectTests {
         } catch {
             try? await app.autoRevert()
             try await app.asyncShutdown()
+            try? await Task.sleep(for: .seconds(2))
+            app.cleanupTestDatabase()
             throw error
         }
 
         try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
     }
 
     @Test("Create project in organization")

@@ -1,0 +1,216 @@
+import Testing
+import Vapor
+import VaporTesting
+@testable import App
+
+@Suite("HealthController Tests", .serialized)
+struct HealthControllerTests {
+
+    // MARK: - Basic Health Check Tests
+
+    @Test("Health endpoint returns 200 OK")
+    func testHealthEndpoint() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+
+        try await app.test(.GET, "/health") { res async throws in
+            #expect(res.status == .ok)
+        }
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
+    }
+
+    // MARK: - Liveness Check Tests
+
+    @Test("Liveness endpoint returns healthy status")
+    func testLivenessHealthy() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+
+        try await app.test(.GET, "/health/live") { res async throws in
+            #expect(res.status == .ok)
+
+            let health = try res.content.decode(HealthResponse.self)
+            #expect(health.status == "healthy")
+            #expect(health.checks.count > 0)
+
+            let appCheck = health.checks.first { $0.name == "application" }
+            #expect(appCheck != nil)
+            #expect(appCheck?.status == "up")
+            #expect(appCheck?.error == nil)
+        }
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
+    }
+
+    @Test("Liveness endpoint includes timestamp")
+    func testLivenessTimestamp() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+
+        try await app.test(.GET, "/health/live") { res async throws in
+            let health = try res.content.decode(HealthResponse.self)
+
+            // Timestamp should be recent (within last minute)
+            let now = Date()
+            let timeDifference = abs(now.timeIntervalSince(health.timestamp))
+            #expect(timeDifference < 60)
+        }
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
+    }
+
+    // MARK: - Readiness Check Tests
+
+    @Test("Readiness endpoint returns healthy when database is available")
+    func testReadinessHealthy() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+
+        try await app.test(.GET, "/health/ready") { res async throws in
+            #expect(res.status == .ok)
+
+            let health = try res.content.decode(HealthResponse.self)
+            #expect(health.status == "healthy")
+
+            let dbCheck = health.checks.first { $0.name == "database" }
+            #expect(dbCheck != nil)
+            #expect(dbCheck?.status == "up")
+            #expect(dbCheck?.error == nil)
+        }
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
+    }
+
+    @Test("Readiness endpoint includes timestamp")
+    func testReadinessTimestamp() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+
+        try await app.test(.GET, "/health/ready") { res async throws in
+            let health = try res.content.decode(HealthResponse.self)
+
+            // Timestamp should be recent (within last minute)
+            let now = Date()
+            let timeDifference = abs(now.timeIntervalSince(health.timestamp))
+            #expect(timeDifference < 60)
+        }
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
+    }
+
+    // MARK: - Response Structure Tests
+
+    @Test("Health response has correct structure")
+    func testHealthResponseStructure() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+
+        try await app.test(.GET, "/health/live") { res async throws in
+            let health = try res.content.decode(HealthResponse.self)
+
+            // Verify required fields are present
+            #expect(!health.status.isEmpty)
+            #expect(health.checks.count > 0)
+
+            // Verify check structure
+            for check in health.checks {
+                #expect(!check.name.isEmpty)
+                #expect(!check.status.isEmpty)
+            }
+        }
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
+    }
+
+    // MARK: - Content Type Tests
+
+    @Test("Health endpoints return JSON content")
+    func testHealthEndpointsReturnJSON() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+
+        try await app.test(.GET, "/health/live") { res async throws in
+            let contentType = res.headers.contentType
+            #expect(contentType != nil)
+            #expect(contentType?.type.description == "application")
+            #expect(contentType?.subType == "json")
+        }
+
+        try await app.test(.GET, "/health/ready") { res async throws in
+            let contentType = res.headers.contentType
+            #expect(contentType != nil)
+            #expect(contentType?.type.description == "application")
+            #expect(contentType?.subType == "json")
+        }
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
+    }
+
+    // MARK: - Multiple Checks Tests
+
+    @Test("Readiness endpoint can have multiple checks")
+    func testMultipleChecks() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+
+        try await app.test(.GET, "/health/ready") { res async throws in
+            let health = try res.content.decode(HealthResponse.self)
+
+            // Currently only database check, but structure supports multiple
+            #expect(health.checks.count >= 1)
+
+            // All check names should be unique
+            let checkNames = health.checks.map { $0.name }
+            let uniqueNames = Set(checkNames)
+            #expect(checkNames.count == uniqueNames.count)
+        }
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
+    }
+
+    // MARK: - Overall Status Tests
+
+    @Test("Overall status is healthy when all checks pass")
+    func testOverallStatusHealthy() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+
+        try await app.test(.GET, "/health/ready") { res async throws in
+            let health = try res.content.decode(HealthResponse.self)
+
+            #expect(health.status == "healthy")
+
+            // All checks should be up
+            for check in health.checks {
+                #expect(check.status == "up")
+            }
+        }
+        try await app.asyncShutdown()
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
+    }
+
+}

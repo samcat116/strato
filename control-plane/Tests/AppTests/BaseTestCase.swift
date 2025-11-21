@@ -13,7 +13,7 @@ class BaseTestCase {
     var testOrganization: Organization!
     var authToken: String!
 
-    /// Run a test with a fresh application instance and in-memory database
+    /// Run a test with a fresh application instance and file-based database
     func withApp(_ test: (Application) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
 
@@ -25,10 +25,16 @@ class BaseTestCase {
         } catch {
             try? await app.autoRevert()
             try await app.asyncShutdown()
+            // Give time for shutdown to complete
+            try? await Task.sleep(for: .seconds(2))
+            app.cleanupTestDatabase()
             throw error
         }
 
         try await app.asyncShutdown()
+        // Give time for shutdown to complete before deallocation
+        try? await Task.sleep(for: .seconds(2))
+        app.cleanupTestDatabase()
     }
 
     /// Set up common test data
