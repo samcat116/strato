@@ -1,0 +1,21 @@
+{
+  "name": "strato-docs",
+  "version": "1.0.0",
+  "description": "Documentation for Strato - Fast, secure private cloud platform",
+  "type": "module",
+  "scripts": {
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
+  },
+  "devDependencies": {
+    "vitepress": "^1.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samcat116/strato.git"
+  },
+  "keywords": ["strato", "cloud", "virtualization", "qemu", "swift"],
+  "author": "",
+  "license": "ISC"
+}
