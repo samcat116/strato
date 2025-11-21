@@ -18,9 +18,20 @@ let package = Package(
         .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
     ],
     targets: [
+        // Core library with testable code (no SwiftQEMU dependency)
+        .target(
+            name: "StratoAgentCore",
+            dependencies: [
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "Toml", package: "swift-toml"),
+            ],
+            path: "Sources/StratoAgentCore",
+            swiftSettings: swiftSettings
+        ),
         .executableTarget(
             name: "StratoAgent",
             dependencies: [
+                "StratoAgentCore",
                 .product(name: "StratoShared", package: "shared"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
@@ -29,6 +40,15 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Toml", package: "swift-toml"),
             ] + qemuAndNetworkDependencies,
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "StratoAgentTests",
+            dependencies: [
+                "StratoAgentCore",
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "Toml", package: "swift-toml"),
+            ],
             swiftSettings: swiftSettings
         )
     ],
