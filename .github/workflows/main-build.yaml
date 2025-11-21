@@ -53,7 +53,7 @@ jobs:
       - uses: vapor/swiftly-action@v0.2
 
       - name: Install jemalloc
-        run: sudo apt-get update && sudo apt-get install -y libjemalloc-dev
+        run: apt-get update && apt-get install -y libjemalloc-dev
 
       - name: Build Control Plane Release Binary
         working-directory: control-plane
