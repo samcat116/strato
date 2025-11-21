@@ -53,6 +53,9 @@ struct VMConfigBuilderTests {
         let vm = VM(
             name: "test-vm",
             description: "Test VM",
+            image: "test-image",
+            projectID: UUID(),
+            environment: "test",
             cpu: cpu,
             memory: memory,
             disk: disk,
@@ -86,16 +89,16 @@ struct VMConfigBuilderTests {
         let config = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
 
         // Verify CPU configuration
-        #expect(config.cpus.bootVcpus == 2)
-        #expect(config.cpus.maxVcpus == 4)
-        #expect(config.cpus.kvmHyperv == false)
+        #expect(config.cpus?.bootVcpus == 2)
+        #expect(config.cpus?.maxVcpus == 4)
+        #expect(config.cpus?.kvmHyperv == false)
 
         // Verify memory configuration
-        #expect(config.memory.size == 2048)
-        #expect(config.memory.mergeable == false)
-        #expect(config.memory.shared == false)
-        #expect(config.memory.hugepages == false)
-        #expect(config.memory.thp == true)
+        #expect(config.memory?.size == 2048)
+        #expect(config.memory?.mergeable == false)
+        #expect(config.memory?.shared == false)
+        #expect(config.memory?.hugepages == false)
+        #expect(config.memory?.thp == true)
     }
 
     // MARK: - Payload Configuration Tests
@@ -176,7 +179,7 @@ struct VMConfigBuilderTests {
 
         let config = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
 
-        #expect(config.memory.hugepages == true)
+        #expect(config.memory?.hugepages == true)
     }
 
     @Test("VMConfigBuilder configures shared memory correctly")
@@ -186,7 +189,7 @@ struct VMConfigBuilderTests {
 
         let config = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
 
-        #expect(config.memory.shared == true)
+        #expect(config.memory?.shared == true)
     }
 
     @Test("VMConfigBuilder sets memory size from VM")
@@ -196,7 +199,7 @@ struct VMConfigBuilderTests {
 
         let config = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
 
-        #expect(config.memory.size == 4096)
+        #expect(config.memory?.size == 4096)
     }
 
     // MARK: - Disk Configuration Tests
@@ -296,8 +299,8 @@ struct VMConfigBuilderTests {
 
         let config = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
 
-        #expect(config.console.socket == "/var/run/console.sock")
-        #expect(config.console.mode == "Pty")
+        #expect(config.console?.socket == "/var/run/console.sock")
+        #expect(config.console?.mode == "Pty")
     }
 
     @Test("VMConfigBuilder configures serial correctly")
@@ -310,8 +313,8 @@ struct VMConfigBuilderTests {
 
         let config = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
 
-        #expect(config.serial.socket == "/var/run/serial.sock")
-        #expect(config.serial.mode == "Tty")
+        #expect(config.serial?.socket == "/var/run/serial.sock")
+        #expect(config.serial?.mode == "Tty")
     }
 
     // MARK: - RNG Configuration Tests
@@ -323,7 +326,7 @@ struct VMConfigBuilderTests {
 
         let config = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
 
-        #expect(config.rng.src == "/dev/urandom")
+        #expect(config.rng?.src == "/dev/urandom")
     }
 
     // MARK: - Fixed Settings Tests
@@ -362,15 +365,15 @@ struct VMConfigBuilderTests {
         let config = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
 
         // Verify all components are present
-        #expect(config.cpus.bootVcpus == 4)
-        #expect(config.cpus.maxVcpus == 8)
-        #expect(config.memory.size == 8192)
-        #expect(config.memory.hugepages == true)
-        #expect(config.memory.shared == true)
+        #expect(config.cpus?.bootVcpus == 4)
+        #expect(config.cpus?.maxVcpus == 8)
+        #expect(config.memory?.size == 8192)
+        #expect(config.memory?.hugepages == true)
+        #expect(config.memory?.shared == true)
         #expect(config.disks != nil)
         #expect(config.net != nil)
         #expect(config.payload.kernel != nil)
-        #expect(config.rng.src == "/dev/urandom")
+        #expect(config.rng?.src == "/dev/urandom")
     }
 
     @Test("VMConfigBuilder creates minimal config without optional components")
@@ -384,12 +387,12 @@ struct VMConfigBuilderTests {
         let config = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
 
         // Verify only required components are present
-        #expect(config.cpus.bootVcpus == 2)
-        #expect(config.memory.size == 2048)
+        #expect(config.cpus?.bootVcpus == 2)
+        #expect(config.memory?.size == 2048)
         #expect(config.disks == nil)
         #expect(config.net == nil)
         #expect(config.payload.kernel != nil)
-        #expect(config.rng.src == "/dev/urandom")
+        #expect(config.rng?.src == "/dev/urandom")
     }
 
     // MARK: - CPU Configuration Tests
@@ -401,8 +404,8 @@ struct VMConfigBuilderTests {
 
         let config = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
 
-        #expect(config.cpus.bootVcpus == 8)
-        #expect(config.cpus.maxVcpus == 16)
+        #expect(config.cpus?.bootVcpus == 8)
+        #expect(config.cpus?.maxVcpus == 16)
     }
 
     @Test("VMConfigBuilder disables KVM Hyper-V by default")
@@ -412,6 +415,6 @@ struct VMConfigBuilderTests {
 
         let config = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
 
-        #expect(config.cpus.kvmHyperv == false)
+        #expect(config.cpus?.kvmHyperv == false)
     }
 }

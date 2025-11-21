@@ -11,13 +11,13 @@ struct HealthControllerTests {
     @Test("Health endpoint returns 200 OK")
     func testHealthEndpoint() async throws {
         let app = try await Application.makeForTesting()
-        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
 
         try await app.test(.GET, "/health") { res async in
             #expect(res.status == .ok)
         }
+        try await app.asyncShutdown()
     }
 
     // MARK: - Liveness Check Tests
@@ -25,7 +25,6 @@ struct HealthControllerTests {
     @Test("Liveness endpoint returns healthy status")
     func testLivenessHealthy() async throws {
         let app = try await Application.makeForTesting()
-        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
 
@@ -41,12 +40,12 @@ struct HealthControllerTests {
             #expect(appCheck?.status == "up")
             #expect(appCheck?.error == nil)
         }
+        try await app.asyncShutdown()
     }
 
     @Test("Liveness endpoint includes timestamp")
     func testLivenessTimestamp() async throws {
         let app = try await Application.makeForTesting()
-        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
 
@@ -58,6 +57,7 @@ struct HealthControllerTests {
             let timeDifference = abs(now.timeIntervalSince(health.timestamp))
             #expect(timeDifference < 60)
         }
+        try await app.asyncShutdown()
     }
 
     // MARK: - Readiness Check Tests
@@ -65,7 +65,6 @@ struct HealthControllerTests {
     @Test("Readiness endpoint returns healthy when database is available")
     func testReadinessHealthy() async throws {
         let app = try await Application.makeForTesting()
-        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -81,12 +80,12 @@ struct HealthControllerTests {
             #expect(dbCheck?.status == "up")
             #expect(dbCheck?.error == nil)
         }
+        try await app.asyncShutdown()
     }
 
     @Test("Readiness endpoint returns unhealthy when database is unavailable")
     func testReadinessUnhealthyDatabase() async throws {
         let app = try await Application.makeForTesting()
-        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         // Don't run migrations to simulate database unavailability
@@ -103,12 +102,12 @@ struct HealthControllerTests {
             #expect(dbCheck?.status == "down")
             #expect(dbCheck?.error != nil)
         }
+        try await app.asyncShutdown()
     }
 
     @Test("Readiness endpoint includes timestamp")
     func testReadinessTimestamp() async throws {
         let app = try await Application.makeForTesting()
-        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -121,6 +120,7 @@ struct HealthControllerTests {
             let timeDifference = abs(now.timeIntervalSince(health.timestamp))
             #expect(timeDifference < 60)
         }
+        try await app.asyncShutdown()
     }
 
     // MARK: - Response Structure Tests
@@ -128,7 +128,6 @@ struct HealthControllerTests {
     @Test("Health response has correct structure")
     func testHealthResponseStructure() async throws {
         let app = try await Application.makeForTesting()
-        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
 
@@ -145,12 +144,12 @@ struct HealthControllerTests {
                 #expect(!check.status.isEmpty)
             }
         }
+        try await app.asyncShutdown()
     }
 
     @Test("Health check includes error message when check fails")
     func testHealthCheckErrorMessage() async throws {
         let app = try await Application.makeForTesting()
-        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         // Don't run migrations to trigger database error
@@ -164,6 +163,7 @@ struct HealthControllerTests {
             #expect(dbCheck?.error != nil)
             #expect(!dbCheck!.error!.isEmpty)
         }
+        try await app.asyncShutdown()
     }
 
     // MARK: - Content Type Tests
@@ -171,7 +171,6 @@ struct HealthControllerTests {
     @Test("Health endpoints return JSON content")
     func testHealthEndpointsReturnJSON() async throws {
         let app = try await Application.makeForTesting()
-        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -189,6 +188,7 @@ struct HealthControllerTests {
             #expect(contentType?.type == .application)
             #expect(contentType?.subType == "json")
         }
+        try await app.asyncShutdown()
     }
 
     // MARK: - Multiple Checks Tests
@@ -196,7 +196,6 @@ struct HealthControllerTests {
     @Test("Readiness endpoint can have multiple checks")
     func testMultipleChecks() async throws {
         let app = try await Application.makeForTesting()
-        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -212,6 +211,7 @@ struct HealthControllerTests {
             let uniqueNames = Set(checkNames)
             #expect(checkNames.count == uniqueNames.count)
         }
+        try await app.asyncShutdown()
     }
 
     // MARK: - Overall Status Tests
@@ -219,7 +219,6 @@ struct HealthControllerTests {
     @Test("Overall status is healthy when all checks pass")
     func testOverallStatusHealthy() async throws {
         let app = try await Application.makeForTesting()
-        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         try await app.autoMigrate()
@@ -234,12 +233,12 @@ struct HealthControllerTests {
                 #expect(check.status == "up")
             }
         }
+        try await app.asyncShutdown()
     }
 
     @Test("Overall status is unhealthy when any check fails")
     func testOverallStatusUnhealthy() async throws {
         let app = try await Application.makeForTesting()
-        defer { try? await app.asyncShutdown() }
 
         try await configure(app)
         // Don't migrate to cause database check to fail
@@ -253,5 +252,6 @@ struct HealthControllerTests {
             let failedChecks = health.checks.filter { $0.status == "down" }
             #expect(failedChecks.count > 0)
         }
+        try await app.asyncShutdown()
     }
 }
