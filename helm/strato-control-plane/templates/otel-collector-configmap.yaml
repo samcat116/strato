@@ -23,8 +23,8 @@ data:
 
       memory_limiter:
         check_interval: 1s
-        limit_mib: {{ div (int .Values.opentelemetry.collector.resources.limits.memory) 1048576 }}
-        spike_limit_mib: {{ div (div (int .Values.opentelemetry.collector.resources.limits.memory) 1048576) 4 }}
+        limit_mib: {{ int (trimSuffix "Mi" .Values.opentelemetry.collector.resources.limits.memory) }}
+        spike_limit_mib: {{ div (int (trimSuffix "Mi" .Values.opentelemetry.collector.resources.limits.memory)) 4 }}
 
       resourcedetection:
         detectors: [env, system]

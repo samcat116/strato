@@ -211,19 +211,18 @@ kubectl port-forward -n strato-skaffold svc/strato-prometheus 9090:9090
 
 Planned enhancements:
 
-1. Complete the integration with swift-otel 1.0+
-2. Add custom tracing spans for key operations:
+1. Add custom tracing spans for key operations:
    - VM lifecycle operations
    - Database queries
    - WebSocket messages
    - Authorization checks
-3. Add custom metrics for:
+2. Add custom metrics for:
    - Active VM count
    - WebSocket connections
    - Agent health status
-4. Integrate with Jaeger for trace visualization
-5. Integrate with Loki for log aggregation
-6. Add Grafana dashboards
+3. Integrate with Jaeger for trace visualization
+4. Integrate with Loki for log aggregation
+5. Add Grafana dashboards
 
 ## References
 

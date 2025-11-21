@@ -66,6 +66,10 @@ spec:
         - name: config
           configMap:
             name: {{ include "strato-control-plane.fullname" . }}-prometheus
+        {{- if not .Values.opentelemetry.prometheus.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
   {{- if .Values.opentelemetry.prometheus.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:
@@ -78,8 +82,5 @@ spec:
         resources:
           requests:
             storage: {{ .Values.opentelemetry.prometheus.persistence.size }}
-  {{- else }}
-        - name: data
-          emptyDir: {}
   {{- end }}
 {{- end }}
