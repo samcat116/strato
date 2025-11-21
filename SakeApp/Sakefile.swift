@@ -310,6 +310,7 @@ struct Commands: SakeApp {
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 qemu_socket_dir = "/tmp/strato-qemu-sockets"
                 log_level = "debug"
+                network_mode = "user"
                 """
 
                 let configPath = "\(projectRoot)/config.toml"
@@ -320,11 +321,70 @@ struct Commands: SakeApp {
         )
     }
 
+    /// Create agent registration token
+    public static var createAgentRegistrationToken: Command {
+        Command(
+            description: "Create agent registration token in database",
+            dependencies: [startControlPlane],
+            run: { _ in
+                print("🔑 Creating agent registration token...")
+
+                let agentName = "strato-dev"
+                let tokenValue = UUID().uuidString
+
+                // Create registration token in database
+                let createTokenSQL = """
+                INSERT INTO agent_registration_tokens (id, token, agent_name, is_used, expires_at, created_at)
+                VALUES (
+                    gen_random_uuid(),
+                    '\(tokenValue)',
+                    '\(agentName)',
+                    false,
+                    NOW() + INTERVAL '24 hours',
+                    NOW()
+                )
+                ON CONFLICT DO NOTHING;
+                """
+
+                let createTokenProcess = Process()
+                createTokenProcess.executableURL = URL(fileURLWithPath: "/usr/bin/docker")
+                createTokenProcess.arguments = [
+                    "exec", "strato-postgres",
+                    "psql", "-U", "vapor_username", "-d", "vapor_database",
+                    "-c", createTokenSQL
+                ]
+
+                let tokenPipe = Pipe()
+                createTokenProcess.standardOutput = tokenPipe
+                createTokenProcess.standardError = tokenPipe
+
+                do {
+                    try createTokenProcess.run()
+                    createTokenProcess.waitUntilExit()
+                } catch {
+                    print("⚠️  Failed to create agent registration token: \(error)")
+                }
+
+                // Store the registration URL for the agent to use
+                let registrationURL = "ws://localhost:8080/agent/ws?token=\(tokenValue)&name=\(agentName)"
+                try registrationURL.write(
+                    toFile: "/tmp/strato-agent-registration-url.txt",
+                    atomically: true,
+                    encoding: .utf8
+                )
+
+                print("✅ Agent registration token created!")
+                print("   Agent name: \(agentName)")
+                print("   Registration URL saved to /tmp/strato-agent-registration-url.txt")
+            }
+        )
+    }
+
     /// Build and run agent
     public static var startAgent: Command {
         Command(
             description: "Build and start the agent service",
-            dependencies: [startControlPlane, createAgentConfig],
+            dependencies: [createAgentConfig, createAgentRegistrationToken],
             run: { _ in
                 print("🤖 Building and starting agent...")
 
@@ -345,15 +405,22 @@ struct Commands: SakeApp {
                     )
                 }
 
+                // Read registration URL
+                let registrationURLPath = "/tmp/strato-agent-registration-url.txt"
+                guard let registrationURL = try? String(contentsOfFile: registrationURLPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) else {
+                    throw DevSetupError.fileNotFound("Agent registration URL not found at \(registrationURLPath)")
+                }
+
                 // Run agent in background
-                print("▶️  Starting agent...")
+                print("▶️  Starting agent with registration URL...")
 
                 let agent = Process()
                 agent.executableURL = URL(fileURLWithPath: findSwiftExecutable())
                 agent.arguments = [
                     "run", "--package-path", "\(projectRoot)/agent",
                     "StratoAgent",
-                    "--config-file", "\(projectRoot)/config.toml"
+                    "--config-file", "\(projectRoot)/config.toml",
+                    "--registration-url", registrationURL
                 ]
 
                 // Capture output to a log file
@@ -374,7 +441,7 @@ struct Commands: SakeApp {
 
                 print("✅ Agent started!")
                 print("📋 Logs available at: \(logPath)")
-                sleep(3)
+                sleep(5) // Give agent more time to register
             }
         )
     }
@@ -408,11 +475,15 @@ struct Commands: SakeApp {
                 ON CONFLICT (username) DO NOTHING;
                 """
 
-                try? runProcess("/usr/bin/docker", arguments: [
-                    "exec", "strato-postgres",
-                    "psql", "-U", "vapor_username", "-d", "vapor_database",
-                    "-c", createUserSQL
-                ])
+                do {
+                    try runProcess("/usr/bin/docker", arguments: [
+                        "exec", "strato-postgres",
+                        "psql", "-U", "vapor_username", "-d", "vapor_database",
+                        "-c", createUserSQL
+                    ])
+                } catch {
+                    print("⚠️  Failed to create user in database: \(error)")
+                }
 
                 // Create organization
                 let createOrgSQL = """
@@ -427,11 +498,15 @@ struct Commands: SakeApp {
                 ON CONFLICT (id) DO NOTHING;
                 """
 
-                try? runProcess("/usr/bin/docker", arguments: [
-                    "exec", "strato-postgres",
-                    "psql", "-U", "vapor_username", "-d", "vapor_database",
-                    "-c", createOrgSQL
-                ])
+                do {
+                    try runProcess("/usr/bin/docker", arguments: [
+                        "exec", "strato-postgres",
+                        "psql", "-U", "vapor_username", "-d", "vapor_database",
+                        "-c", createOrgSQL
+                    ])
+                } catch {
+                    print("⚠️  Failed to create organization in database: \(error)")
+                }
 
                 // Link user to organization
                 let linkUserOrgSQL = """
@@ -443,11 +518,15 @@ struct Commands: SakeApp {
                 ON CONFLICT DO NOTHING;
                 """
 
-                try? runProcess("/usr/bin/docker", arguments: [
-                    "exec", "strato-postgres",
-                    "psql", "-U", "vapor_username", "-d", "vapor_database",
-                    "-c", linkUserOrgSQL
-                ])
+                do {
+                    try runProcess("/usr/bin/docker", arguments: [
+                        "exec", "strato-postgres",
+                        "psql", "-U", "vapor_username", "-d", "vapor_database",
+                        "-c", linkUserOrgSQL
+                    ])
+                } catch {
+                    print("⚠️  Failed to link user to organization: \(error)")
+                }
 
                 // Set current organization for user
                 let updateUserOrgSQL = """
@@ -456,11 +535,15 @@ struct Commands: SakeApp {
                 WHERE id = '00000000-0000-0000-0000-000000000001';
                 """
 
-                try? runProcess("/usr/bin/docker", arguments: [
-                    "exec", "strato-postgres",
-                    "psql", "-U", "vapor_username", "-d", "vapor_database",
-                    "-c", updateUserOrgSQL
-                ])
+                do {
+                    try runProcess("/usr/bin/docker", arguments: [
+                        "exec", "strato-postgres",
+                        "psql", "-U", "vapor_username", "-d", "vapor_database",
+                        "-c", updateUserOrgSQL
+                    ])
+                } catch {
+                    print("⚠️  Failed to set current organization for user: \(error)")
+                }
 
                 // Create default project
                 let createProjectSQL = """
@@ -478,18 +561,21 @@ struct Commands: SakeApp {
                 ON CONFLICT (id) DO NOTHING;
                 """
 
-                try? runProcess("/usr/bin/docker", arguments: [
-                    "exec", "strato-postgres",
-                    "psql", "-U", "vapor_username", "-d", "vapor_database",
-                    "-c", createProjectSQL
-                ])
+                do {
+                    try runProcess("/usr/bin/docker", arguments: [
+                        "exec", "strato-postgres",
+                        "psql", "-U", "vapor_username", "-d", "vapor_database",
+                        "-c", createProjectSQL
+                    ])
+                } catch {
+                    print("⚠️  Failed to create project in database: \(error)")
+                }
 
                 // Set up SpiceDB relationships
                 print("🔐 Setting up authorization relationships...")
 
                 // User is admin of organization
                 try? runSpiceDBRelationship(
-                    operation: "create",
                     resourceType: "organization",
                     resourceId: "00000000-0000-0000-0000-000000000001",
                     relation: "admin",
@@ -499,7 +585,6 @@ struct Commands: SakeApp {
 
                 // Project belongs to organization
                 try? runSpiceDBRelationship(
-                    operation: "create",
                     resourceType: "project",
                     resourceId: "00000000-0000-0000-0000-000000000001",
                     relation: "organization",
@@ -550,11 +635,15 @@ struct Commands: SakeApp {
 
                 // Delete any existing test API key first
                 let deleteOldKeySQL = "DELETE FROM api_keys WHERE name = 'Development Test Key';"
-                try? runProcess("/usr/bin/docker", arguments: [
-                    "exec", "strato-postgres",
-                    "psql", "-U", "vapor_username", "-d", "vapor_database",
-                    "-c", deleteOldKeySQL
-                ])
+                do {
+                    try runProcess("/usr/bin/docker", arguments: [
+                        "exec", "strato-postgres",
+                        "psql", "-U", "vapor_username", "-d", "vapor_database",
+                        "-c", deleteOldKeySQL
+                    ])
+                } catch {
+                    print("⚠️  Failed to delete old API key: \(error)")
+                }
 
                 let createAPIKeySQL = """
                 INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, scopes, is_active, created_at, updated_at)
@@ -571,11 +660,15 @@ struct Commands: SakeApp {
                 );
                 """
 
-                try? runProcess("/usr/bin/docker", arguments: [
-                    "exec", "strato-postgres",
-                    "psql", "-U", "vapor_username", "-d", "vapor_database",
-                    "-c", createAPIKeySQL
-                ])
+                do {
+                    try runProcess("/usr/bin/docker", arguments: [
+                        "exec", "strato-postgres",
+                        "psql", "-U", "vapor_username", "-d", "vapor_database",
+                        "-c", createAPIKeySQL
+                    ])
+                } catch {
+                    print("⚠️  Failed to create API key in database: \(error)")
+                }
 
                 print("✅ API key created!")
 
@@ -830,8 +923,8 @@ struct Commands: SakeApp {
                 pgCheck.standardOutput = pgPipe
                 try? pgCheck.run()
                 pgCheck.waitUntilExit()
-                let pgStatus = String(data: pgPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                print(!pgStatus!.isEmpty ? "✅ Running (\(pgStatus!))" : "❌ Stopped")
+                let pgStatus = String(data: pgPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                print(pgStatus.isEmpty ? "❌ Stopped" : "✅ Running (\(pgStatus))")
 
                 // Check SpiceDB
                 print("SpiceDB:       ", terminator: "")
@@ -842,8 +935,8 @@ struct Commands: SakeApp {
                 spiceCheck.standardOutput = spicePipe
                 try? spiceCheck.run()
                 spiceCheck.waitUntilExit()
-                let spiceStatus = String(data: spicePipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                print(!spiceStatus!.isEmpty ? "✅ Running (\(spiceStatus!))" : "❌ Stopped")
+                let spiceStatus = String(data: spicePipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                print(spiceStatus.isEmpty ? "❌ Stopped" : "✅ Running (\(spiceStatus))")
 
                 // Check control-plane
                 print("Control Plane: ", terminator: "")
@@ -899,8 +992,7 @@ func findSwiftExecutable() -> String {
     // Fallback to common locations
     let commonPaths = [
         "/usr/bin/swift",
-        "/usr/local/bin/swift",
-        "/home/sam/.local/share/swiftly/bin/swift"
+        "/usr/local/bin/swift"
     ]
 
     for path in commonPaths {
@@ -936,7 +1028,6 @@ func runProcess(_ executable: String, arguments: [String], showOutput: Bool = fa
 }
 
 func runSpiceDBRelationship(
-    operation: String,
     resourceType: String,
     resourceId: String,
     relation: String,
