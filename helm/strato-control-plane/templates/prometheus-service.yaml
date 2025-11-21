@@ -1,0 +1,19 @@
+{{- if and .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-prometheus
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.opentelemetry.prometheus.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "strato-control-plane.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+{{- end }}
