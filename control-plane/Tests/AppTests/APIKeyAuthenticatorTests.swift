@@ -66,7 +66,6 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "testuser")
         }
-        try await app.asyncShutdown()
     }
 
     @Test("APIKeyAuthenticator rejects invalid API key")
@@ -94,7 +93,6 @@ struct APIKeyAuthenticatorTests {
         }) { res async in
             #expect(res.status == .unauthorized)
         }
-        try await app.asyncShutdown()
     }
 
     @Test("APIKeyAuthenticator rejects request without API key")
@@ -117,7 +115,6 @@ struct APIKeyAuthenticatorTests {
         try await app.test(.GET, "/test") { res async in
             #expect(res.status == .unauthorized)
         }
-        try await app.asyncShutdown()
     }
 
     // MARK: - API Key Format Tests
@@ -148,7 +145,6 @@ struct APIKeyAuthenticatorTests {
         }) { res async in
             #expect(res.status == .unauthorized)
         }
-        try await app.asyncShutdown()
     }
 
     // MARK: - API Key Status Tests
@@ -178,7 +174,6 @@ struct APIKeyAuthenticatorTests {
         }) { res async in
             #expect(res.status == .unauthorized)
         }
-        try await app.asyncShutdown()
     }
 
     @Test("APIKeyAuthenticator rejects expired API key")
@@ -207,7 +202,6 @@ struct APIKeyAuthenticatorTests {
         }) { res async in
             #expect(res.status == .unauthorized)
         }
-        try await app.asyncShutdown()
     }
 
     @Test("APIKeyAuthenticator accepts API key with future expiration")
@@ -237,7 +231,6 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "testuser")
         }
-        try await app.asyncShutdown()
     }
 
     // MARK: - User Association Tests
@@ -268,7 +261,6 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "testuser:test@example.com")
         }
-        try await app.asyncShutdown()
     }
 
     // MARK: - API Key Storage Tests
@@ -281,7 +273,7 @@ struct APIKeyAuthenticatorTests {
         try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
-        let (apiKey, fullKey) = try await createTestAPIKey(for: user, on: app.db)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
 
         // Create a test route that checks API key storage
         app.routes.all.removeAll()
@@ -299,7 +291,6 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "Test API Key")
         }
-        try await app.asyncShutdown()
     }
 
     @Test("Request isAPIKeyAuthenticated property works correctly")
@@ -331,7 +322,6 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .ok)
             #expect(res.body.string == "false")
         }
-        try await app.asyncShutdown()
     }
 
     // MARK: - Hash Function Tests
@@ -343,7 +333,6 @@ struct APIKeyAuthenticatorTests {
         let hash2 = APIKey.hashAPIKey(key)
 
         #expect(hash1 == hash2)
-        try await app.asyncShutdown()
     }
 
     @Test("APIKey.hashAPIKey produces different hashes for different keys")
@@ -355,7 +344,6 @@ struct APIKeyAuthenticatorTests {
         let hash2 = APIKey.hashAPIKey(key2)
 
         #expect(hash1 != hash2)
-        try await app.asyncShutdown()
     }
 
     @Test("APIKey.hashAPIKey produces valid SHA256 hash")
@@ -370,7 +358,6 @@ struct APIKeyAuthenticatorTests {
         let hexCharacters = CharacterSet(charactersIn: "0123456789abcdef")
         let hashCharacters = CharacterSet(charactersIn: hash)
         #expect(hashCharacters.isSubset(of: hexCharacters))
-        try await app.asyncShutdown()
     }
 
     // MARK: - API Key Generation Tests
@@ -386,7 +373,6 @@ struct APIKeyAuthenticatorTests {
         let components = key.components(separatedBy: "_")
         #expect(components.count == 3)
         #expect(components[0] == "sk")
-        try await app.asyncShutdown()
     }
 
     @Test("APIKey.generateAPIKey produces unique keys")
@@ -395,6 +381,5 @@ struct APIKeyAuthenticatorTests {
         let key2 = APIKey.generateAPIKey()
 
         #expect(key1 != key2)
-        try await app.asyncShutdown()
     }
 }
