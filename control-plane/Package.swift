@@ -33,7 +33,9 @@ let package = Package(
         // OpenAPI generator and Vapor bindings (spec-first)
         .package(url: "https://github.com/apple/swift-openapi-generator.git", from: "1.2.0"),
     .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.0.0"),
-        .package(url: "https://github.com/swift-server/swift-openapi-vapor.git", from: "1.0.0")
+        .package(url: "https://github.com/swift-server/swift-openapi-vapor.git", from: "1.0.0"),
+        // 📊 OpenTelemetry observability (metrics, logging, tracing)
+        .package(url: "https://github.com/swift-otel/swift-otel.git", exact: "0.12.0")
     ],
     targets: [
         .executableTarget(
@@ -54,7 +56,8 @@ let package = Package(
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "OpenAPIVapor", package: "swift-openapi-vapor"),
-                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime")
+                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+                .product(name: "OTel", package: "swift-otel")
             ],
             swiftSettings: swiftSettings,
             plugins: [

@@ -1,0 +1,31 @@
+{{- if and .Values.opentelemetry.enabled .Values.opentelemetry.collector.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-otel-collector
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.opentelemetry.collector.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+    - port: {{ .Values.opentelemetry.collector.service.httpPort }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.opentelemetry.collector.service.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+    - port: {{ .Values.opentelemetry.collector.service.prometheusPort }}
+      targetPort: prometheus
+      protocol: TCP
+      name: prometheus
+  selector:
+    {{- include "strato-control-plane.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+{{- end }}

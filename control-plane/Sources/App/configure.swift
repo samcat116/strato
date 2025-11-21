@@ -3,6 +3,7 @@ import FluentPostgresDriver
 import ElementaryHTMX
 import NIOSSL
 import Vapor
+import OTel
 
 public func configure(_ app: Application) async throws {
     // Configure sessions
@@ -88,6 +89,36 @@ public func configure(_ app: Application) async throws {
         .flatMap { SchedulingStrategy(rawValue: $0) } ?? .leastLoaded
     app.scheduler = SchedulerService(logger: app.logger, defaultStrategy: schedulingStrategy)
     app.logger.info("Scheduler service initialized with strategy: \(schedulingStrategy.rawValue)")
+
+    // Configure OpenTelemetry observability (metrics, logs, traces)
+    if app.environment != .testing {
+        var otelConfig = OTel.Configuration.default
+        otelConfig.serviceName = Environment.get("OTEL_SERVICE_NAME") ?? "strato-control-plane"
+        otelConfig.serviceVersion = Environment.get("OTEL_SERVICE_VERSION") ?? "1.0.0"
+
+        // Enable all three pillars of observability
+        otelConfig.metrics.enabled = Environment.get("OTEL_METRICS_ENABLED").flatMap(Bool.init) ?? true
+        otelConfig.logs.enabled = Environment.get("OTEL_LOGS_ENABLED").flatMap(Bool.init) ?? true
+        otelConfig.traces.enabled = Environment.get("OTEL_TRACES_ENABLED").flatMap(Bool.init) ?? true
+
+        // Configure OTLP exporter protocol (defaults to gRPC on port 4317)
+        // Can be overridden with OTEL_EXPORTER_OTLP_ENDPOINT environment variable
+        otelConfig.metrics.otlpExporter.protocol = .grpc
+        otelConfig.logs.otlpExporter.protocol = .grpc
+        otelConfig.traces.otlpExporter.protocol = .grpc
+
+        app.logger.info("Bootstrapping OpenTelemetry", metadata: [
+            "service": .string(otelConfig.serviceName),
+            "version": .string(otelConfig.serviceVersion),
+            "metrics": .stringConvertible(otelConfig.metrics.enabled),
+            "logs": .stringConvertible(otelConfig.logs.enabled),
+            "traces": .stringConvertible(otelConfig.traces.enabled)
+        ])
+
+        let observability = try OTel.bootstrap(configuration: otelConfig)
+        app.lifecycle.use(OTelLifecycleHandler(observability: observability))
+        app.logger.info("OpenTelemetry observability service registered")
+    }
 
     try routes(app)
 

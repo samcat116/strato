@@ -1,0 +1,70 @@
+{{- if and .Values.opentelemetry.enabled .Values.opentelemetry.collector.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-otel-collector
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+data:
+  otel-collector-config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:{{ .Values.opentelemetry.collector.service.grpcPort }}
+          http:
+            endpoint: 0.0.0.0:{{ .Values.opentelemetry.collector.service.httpPort }}
+
+    processors:
+      batch:
+        timeout: 10s
+        send_batch_size: 1024
+
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: {{ div (int .Values.opentelemetry.collector.resources.limits.memory) 1048576 }}
+        spike_limit_mib: {{ div (div (int .Values.opentelemetry.collector.resources.limits.memory) 1048576) 4 }}
+
+      resourcedetection:
+        detectors: [env, system]
+        timeout: 5s
+
+    exporters:
+      debug:
+        verbosity: normal
+
+      {{- if .Values.opentelemetry.prometheus.enabled }}
+      prometheusremotewrite:
+        endpoint: "http://{{ include "strato-control-plane.fullname" . }}-prometheus:{{ .Values.opentelemetry.prometheus.service.port }}/api/v1/write"
+        tls:
+          insecure: true
+
+      prometheus:
+        endpoint: "0.0.0.0:{{ .Values.opentelemetry.collector.service.prometheusPort }}"
+      {{- end }}
+
+    service:
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch, resourcedetection]
+          exporters: [debug{{- if .Values.opentelemetry.prometheus.enabled }}, prometheusremotewrite, prometheus{{- end }}]
+
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch, resourcedetection]
+          exporters: [debug]
+
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch, resourcedetection]
+          exporters: [debug]
+
+      telemetry:
+        logs:
+          level: info
+        metrics:
+          level: detailed
+          address: 0.0.0.0:{{ .Values.opentelemetry.collector.service.metricsPort }}
+{{- end }}

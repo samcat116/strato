@@ -1,0 +1,69 @@
+{{- if and .Values.opentelemetry.enabled .Values.opentelemetry.collector.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-otel-collector
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+spec:
+  replicas: {{ .Values.opentelemetry.collector.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "strato-control-plane.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: otel-collector
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/otel-collector-configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "strato-control-plane.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: otel-collector
+    spec:
+      containers:
+        - name: otel-collector
+          image: "{{ .Values.opentelemetry.collector.image.repository }}:{{ .Values.opentelemetry.collector.image.tag }}"
+          imagePullPolicy: {{ .Values.opentelemetry.collector.image.pullPolicy }}
+          args:
+            - "--config=/etc/otel-collector/otel-collector-config.yaml"
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.opentelemetry.collector.service.grpcPort }}
+              protocol: TCP
+            - name: http
+              containerPort: {{ .Values.opentelemetry.collector.service.httpPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.opentelemetry.collector.service.metricsPort }}
+              protocol: TCP
+            - name: prometheus
+              containerPort: {{ .Values.opentelemetry.collector.service.prometheusPort }}
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel-collector
+              readOnly: true
+          resources:
+            {{- toYaml .Values.opentelemetry.collector.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.opentelemetry.collector.service.metricsPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.opentelemetry.collector.service.metricsPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "strato-control-plane.fullname" . }}-otel-collector
+{{- end }}
