@@ -1,0 +1,65 @@
+name: CodeQL Analysis
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run at 2:00 AM UTC every Monday
+    - cron: '0 2 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze Swift Code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Swift
+        uses: vapor/swiftly-action@v0.2
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            control-plane/.build
+            agent/.build
+            shared/.build
+          key: ${{ runner.os }}-swift-codeql-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swift-codeql-
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: swift
+
+      - name: Build Swift Packages
+        run: |
+          echo "Building Shared package..."
+          cd shared
+          swift build
+          cd ..
+
+          echo "Building Control Plane..."
+          cd control-plane
+          swift build
+          cd ..
+
+          echo "Building Agent..."
+          cd agent
+          swift build
+          cd ..
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:swift"
