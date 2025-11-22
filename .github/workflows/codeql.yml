@@ -42,23 +42,17 @@ jobs:
         with:
           languages: swift
 
-      - name: Build Swift Packages
-        run: |
-          echo "Building Shared package..."
-          cd shared
-          swift build
-          cd ..
+      - name: Build Shared Package
+        working-directory: shared
+        run: swift build
 
-          echo "Building Control Plane..."
-          cd control-plane
-          swift build
-          cd ..
+      - name: Build Control Plane Package
+        working-directory: control-plane
+        run: swift build
 
-          echo "Building Agent..."
-          cd agent
-          swift build
-          cd ..
-
+      - name: Build Agent Package
+        working-directory: agent
+        run: swift build
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
         with:
