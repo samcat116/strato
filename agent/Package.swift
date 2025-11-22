@@ -39,7 +39,6 @@ let package = Package(
                 .product(name: "WebSocketKit", package: "websocket-kit"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
-                .product(name: "Toml", package: "swift-toml"),
             ] + qemuAndNetworkDependencies,
             swiftSettings: swiftSettings
         ),
@@ -47,8 +46,6 @@ let package = Package(
             name: "StratoAgentTests",
             dependencies: [
                 "StratoAgentCore",
-                .product(name: "Logging", package: "swift-log"),
-                .product(name: "Toml", package: "swift-toml"),
                 .product(name: "Testing", package: "swift-testing"),
             ],
             swiftSettings: swiftSettings

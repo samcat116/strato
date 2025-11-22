@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import Logging
+import StratoAgentCore
 
 @main
 struct StratoAgent: AsyncParsableCommand {
