@@ -24,6 +24,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Install jemalloc dependencies (arm64)
+        if: matrix.arch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libjemalloc-dev
+
       - name: Cache Swift packages
         uses: actions/cache@v4
         with:
@@ -51,9 +57,6 @@ jobs:
         run: npm run build-css-prod
 
       - uses: vapor/swiftly-action@v0.2
-
-      - name: Install jemalloc
-        run: apt-get update && apt-get install -y libjemalloc-dev
 
       - name: Build Control Plane Release Binary
         working-directory: control-plane

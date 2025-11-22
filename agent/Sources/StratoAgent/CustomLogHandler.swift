@@ -2,7 +2,7 @@ import Foundation
 import Logging
 
 // Custom log handler that formats timestamps without timezone
-struct CustomLogHandler: LogHandler {
+struct CustomLogHandler: LogHandler, Sendable {
     private let label: String
     
     var logLevel: Logger.Level = .info

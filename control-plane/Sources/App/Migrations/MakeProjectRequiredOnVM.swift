@@ -32,7 +32,7 @@ struct MakeProjectRequiredOnVM: AsyncMigration {
     }
 }
 
-enum MigrationError: Error {
+enum MigrationError: Error, Sendable {
     case orphanedVMs(count: Int)
 
     var localizedDescription: String {

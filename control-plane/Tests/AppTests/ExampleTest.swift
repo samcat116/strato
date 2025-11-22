@@ -5,7 +5,7 @@ import FluentSQLiteDriver
 import VaporTesting
 @testable import App
 
-@Suite("Example Tests - Verify Setup")
+@Suite("Example Tests - Verify Setup", .serialized)
 final class ExampleTests: BaseTestCase {
 
     @Test("Database setup works correctly")

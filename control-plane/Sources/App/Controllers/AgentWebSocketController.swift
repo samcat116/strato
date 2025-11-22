@@ -20,6 +20,60 @@ struct AgentWebSocketController: RouteCollection {
             return
         }
 
+        // Set up message handlers IMMEDIATELY to prevent message loss
+        // Messages will be buffered until validation completes
+        // Note: All access to these variables happens on ws.eventLoop, so no actual concurrency
+        final class MessageState: @unchecked Sendable {
+            var buffer: [String] = []
+            var isValidated = false
+        }
+        let state = MessageState()
+
+        ws.onText { ws, text in
+            if state.isValidated {
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
+            } else {
+                // Buffer messages until validation completes
+                state.buffer.append(text)
+            }
+        }
+
+        ws.onBinary { ws, buffer in
+            req.logger.info("Received WebSocket binary message from agent", metadata: ["agentName": .string(agentName), "bytes": .string("\(buffer.readableBytes)")])
+            // Convert binary buffer to string and process as text message
+            if let text = buffer.getString(at: 0, length: buffer.readableBytes) {
+                if state.isValidated {
+                    self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
+                } else {
+                    // Buffer messages until validation completes
+                    state.buffer.append(text)
+                }
+            } else {
+                req.logger.error("Failed to convert binary buffer to string")
+            }
+        }
+
+        ws.onClose.whenComplete { result in
+            switch result {
+            case .success:
+                req.logger.info("Agent WebSocket connection closed normally", metadata: [
+                    "agentName": .string(agentName)
+                ])
+            case .failure(let error):
+                req.logger.error("Agent WebSocket connection closed with error: \(error)", metadata: [
+                    "agentName": .string(agentName)
+                ])
+            }
+
+            // Clean up connection tracking
+            req.application.websocketManager.removeConnection(agentName: agentName)
+
+            // Mark agent as offline asynchronously
+            Task {
+                await req.agentService.removeAgent(agentName)
+            }
+        }
+
         // Validate registration token using EventLoopFuture
         validateRegistrationToken(req: req, ws: ws, token: token, agentName: agentName)
             .flatMap { isValid -> EventLoopFuture<Void> in
@@ -34,41 +88,14 @@ struct AgentWebSocketController: RouteCollection {
                 // Store WebSocket for this agent - we're already on the WebSocket's event loop
                 req.application.websocketManager.setConnection(agentName: agentName, websocket: ws)
 
-                // Set up message handlers
-                ws.onText { ws, text in
+                // Mark as validated and process buffered messages
+                state.isValidated = true
+                req.logger.info("Processing \(state.buffer.count) buffered messages", metadata: ["agentName": .string(agentName)])
+
+                for text in state.buffer {
                     self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
                 }
-
-                ws.onBinary { ws, buffer in
-                    req.logger.info("Received WebSocket binary message from agent", metadata: ["agentName": .string(agentName), "bytes": .string("\(buffer.readableBytes)")])
-                    // Convert binary buffer to string and process as text message
-                    if let text = buffer.getString(at: 0, length: buffer.readableBytes) {
-                        self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
-                    } else {
-                        req.logger.error("Failed to convert binary buffer to string")
-                    }
-                }
-
-                ws.onClose.whenComplete { result in
-                    switch result {
-                    case .success:
-                        req.logger.info("Agent WebSocket connection closed normally", metadata: [
-                            "agentName": .string(agentName)
-                        ])
-                    case .failure(let error):
-                        req.logger.error("Agent WebSocket connection closed with error: \(error)", metadata: [
-                            "agentName": .string(agentName)
-                        ])
-                    }
-
-                    // Clean up connection tracking
-                    req.application.websocketManager.removeConnection(agentName: agentName)
-
-                    // Mark agent as offline asynchronously
-                    Task {
-                        await req.agentService.removeAgent(agentName)
-                    }
-                }
+                state.buffer.removeAll()
 
                 return ws.eventLoop.makeSucceededFuture(())
             }
@@ -126,7 +153,11 @@ struct AgentWebSocketController: RouteCollection {
     }
 
     private func handleWebSocketMessage(req: Request, ws: WebSocket, text: String, agentName: String) {
-        req.logger.info("Processing WebSocket message", metadata: ["agentName": .string(agentName), "messageLength": .string("\(text.count)")])
+        req.logger.info("Processing WebSocket message", metadata: [
+            "agentName": .string(agentName),
+            "messageLength": .string("\(text.count)"),
+            "rawTextPreview": .string(String(text.prefix(500)))
+        ])
 
         guard let data = text.data(using: .utf8) else {
             req.logger.error("Failed to convert WebSocket text to data")

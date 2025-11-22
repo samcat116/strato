@@ -269,9 +269,73 @@ monitoring:
     interval: 30s
     scrapeTimeout: 10s
     labels: {}
-  
+
   # Prometheus metrics
   metrics:
     enabled: false
     port: 9090
     path: /metrics
+
+# OpenTelemetry configuration
+opentelemetry:
+  enabled: true
+  serviceName: strato-control-plane
+  serviceVersion: 1.0.0
+
+  # Enable/disable individual signals
+  metrics:
+    enabled: true
+  logs:
+    enabled: true
+  traces:
+    enabled: true
+
+  # OTel Collector configuration
+  collector:
+    enabled: true
+    image:
+      repository: otel/opentelemetry-collector-contrib
+      tag: 0.112.0
+      pullPolicy: IfNotPresent
+
+    replicaCount: 1
+
+    service:
+      grpcPort: 4317
+      httpPort: 4318
+      metricsPort: 8888
+      prometheusPort: 8889
+
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 250m
+        memory: 256Mi
+
+    # OTLP exporter endpoint (if not using collector)
+    # endpoint: "http://external-collector:4317"
+
+  # Prometheus for metrics storage (if enabled)
+  prometheus:
+    enabled: true
+    image:
+      repository: prom/prometheus
+      tag: v2.56.0
+      pullPolicy: IfNotPresent
+
+    service:
+      port: 9090
+
+    persistence:
+      enabled: true
+      size: 10Gi
+
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi

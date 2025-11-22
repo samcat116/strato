@@ -499,7 +499,7 @@ actor AgentService {
 
 // MARK: - Supporting Types
 
-struct AgentInfo {
+struct AgentInfo: Sendable {
     let id: String
     let hostname: String
     let version: String
@@ -509,12 +509,12 @@ struct AgentInfo {
     var status: AgentStatus
 }
 
-enum AgentServiceResponse {
+enum AgentServiceResponse: Sendable {
     case success(AnyCodableValue?)
     case error(String, String?)
 }
 
-enum AgentServiceError: Error, LocalizedError {
+enum AgentServiceError: Error, LocalizedError, Sendable {
     case noAvailableAgent
     case agentNotFound(String)
     case vmNotMapped(String)
