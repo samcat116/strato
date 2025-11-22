@@ -38,15 +38,21 @@ jobs:
 
       - name: Build Shared Package
         working-directory: shared
-        run: swift build --clean=build -v
+        run: |
+          swift package clean
+          swift build -v
 
       - name: Build Control Plane Package
         working-directory: control-plane
-        run: swift build --clean=build -v
+        run: |
+          swift package clean
+          swift build -v
 
       - name: Build Agent Package
         working-directory: agent
-        run: swift build --clean=build -v
+        run: |
+          swift package clean
+          swift build -v
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
         with:
