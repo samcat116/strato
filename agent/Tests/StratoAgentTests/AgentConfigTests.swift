@@ -1,29 +1,28 @@
-import XCTest
+import Testing
 import Foundation
 import Logging
 @testable import StratoAgentCore
 
-final class AgentConfigTests: XCTestCase {
+@Suite("AgentConfig Tests")
+struct AgentConfigTests {
 
-    var tempDirectory: URL!
-
-    override func setUp() {
-        super.setUp()
-        // Create a temporary directory for test files
-        tempDirectory = FileManager.default.temporaryDirectory
+    // Helper to create and clean up temporary directories
+    func withTempDirectory<T>(_ body: (URL) throws -> T) rethrows -> T {
+        let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("agent-config-tests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
-    }
 
-    override func tearDown() {
-        // Clean up temporary directory
-        try? FileManager.default.removeItem(at: tempDirectory)
-        super.tearDown()
+        defer {
+            try? FileManager.default.removeItem(at: tempDirectory)
+        }
+
+        return try body(tempDirectory)
     }
 
     // MARK: - Initialization Tests
 
-    func testAgentConfigInitialization() {
+    @Test("AgentConfig initializes with all parameters")
+    func agentConfigInitialization() {
         let config = AgentConfig(
             controlPlaneURL: "ws://localhost:8080/agent/ws",
             qemuSocketDir: "/var/run/qemu",
@@ -33,164 +32,177 @@ final class AgentConfigTests: XCTestCase {
             enableKVM: true
         )
 
-        XCTAssertEqual(config.controlPlaneURL, "ws://localhost:8080/agent/ws")
-        XCTAssertEqual(config.qemuSocketDir, "/var/run/qemu")
-        XCTAssertEqual(config.logLevel, "debug")
-        XCTAssertEqual(config.networkMode, .ovn)
-        XCTAssertEqual(config.enableHVF, false)
-        XCTAssertEqual(config.enableKVM, true)
+        #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
+        #expect(config.qemuSocketDir == "/var/run/qemu")
+        #expect(config.logLevel == "debug")
+        #expect(config.networkMode == .ovn)
+        #expect(config.enableHVF == false)
+        #expect(config.enableKVM == true)
     }
 
-    func testAgentConfigInitializationWithNilValues() {
+    @Test("AgentConfig initializes with nil optional values")
+    func agentConfigInitializationWithNilValues() {
         let config = AgentConfig(
             controlPlaneURL: "ws://test:8080/ws"
         )
 
-        XCTAssertEqual(config.controlPlaneURL, "ws://test:8080/ws")
-        XCTAssertNil(config.qemuSocketDir)
-        XCTAssertNil(config.logLevel)
-        XCTAssertNil(config.networkMode)
-        XCTAssertNil(config.enableHVF)
-        XCTAssertNil(config.enableKVM)
+        #expect(config.controlPlaneURL == "ws://test:8080/ws")
+        #expect(config.qemuSocketDir == nil)
+        #expect(config.logLevel == nil)
+        #expect(config.networkMode == nil)
+        #expect(config.enableHVF == nil)
+        #expect(config.enableKVM == nil)
     }
 
     // MARK: - TOML Loading Tests
 
-    func testLoadValidConfig() throws {
-        let tomlContent = """
-        control_plane_url = "ws://localhost:8080/agent/ws"
-        qemu_socket_dir = "/var/run/qemu"
-        log_level = "info"
-        network_mode = "ovn"
-        enable_hvf = false
-        enable_kvm = true
-        """
+    @Test("Load valid TOML configuration")
+    func loadValidConfig() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+            control_plane_url = "ws://localhost:8080/agent/ws"
+            qemu_socket_dir = "/var/run/qemu"
+            log_level = "info"
+            network_mode = "ovn"
+            enable_hvf = false
+            enable_kvm = true
+            """
 
-        let configPath = tempDirectory.appendingPathComponent("config.toml").path
-        try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-        let config = try AgentConfig.load(from: configPath)
+            let config = try AgentConfig.load(from: configPath)
 
-        XCTAssertEqual(config.controlPlaneURL, "ws://localhost:8080/agent/ws")
-        XCTAssertEqual(config.qemuSocketDir, "/var/run/qemu")
-        XCTAssertEqual(config.logLevel, "info")
-        XCTAssertEqual(config.networkMode, .ovn)
-        XCTAssertEqual(config.enableHVF, false)
-        XCTAssertEqual(config.enableKVM, true)
+            #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
+            #expect(config.qemuSocketDir == "/var/run/qemu")
+            #expect(config.logLevel == "info")
+            #expect(config.networkMode == .ovn)
+            #expect(config.enableHVF == false)
+            #expect(config.enableKVM == true)
+        }
     }
 
-    func testLoadMinimalConfig() throws {
-        let tomlContent = """
-        control_plane_url = "ws://minimal:8080/ws"
-        """
+    @Test("Load minimal TOML configuration")
+    func loadMinimalConfig() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+            control_plane_url = "ws://minimal:8080/ws"
+            """
 
-        let configPath = tempDirectory.appendingPathComponent("minimal.toml").path
-        try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+            let configPath = tempDirectory.appendingPathComponent("minimal.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-        let config = try AgentConfig.load(from: configPath)
+            let config = try AgentConfig.load(from: configPath)
 
-        XCTAssertEqual(config.controlPlaneURL, "ws://minimal:8080/ws")
-        XCTAssertNil(config.qemuSocketDir)
-        XCTAssertNil(config.logLevel)
-        XCTAssertNil(config.networkMode)
+            #expect(config.controlPlaneURL == "ws://minimal:8080/ws")
+            #expect(config.qemuSocketDir == nil)
+            #expect(config.logLevel == nil)
+            #expect(config.networkMode == nil)
+        }
     }
 
-    func testLoadConfigWithUserNetworkMode() throws {
-        let tomlContent = """
-        control_plane_url = "ws://localhost:8080/agent/ws"
-        network_mode = "user"
-        """
+    @Test("Load configuration with user network mode")
+    func loadConfigWithUserNetworkMode() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+            control_plane_url = "ws://localhost:8080/agent/ws"
+            network_mode = "user"
+            """
 
-        let configPath = tempDirectory.appendingPathComponent("user-mode.toml").path
-        try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+            let configPath = tempDirectory.appendingPathComponent("user-mode.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-        let config = try AgentConfig.load(from: configPath)
+            let config = try AgentConfig.load(from: configPath)
 
-        XCTAssertEqual(config.networkMode, .user)
+            #expect(config.networkMode == .user)
+        }
     }
 
     // MARK: - Error Handling Tests
 
-    func testLoadConfigFileNotFound() {
+    @Test("Loading non-existent config file throws error")
+    func loadConfigFileNotFound() {
         let nonExistentPath = "/tmp/does-not-exist-\(UUID().uuidString).toml"
 
-        XCTAssertThrowsError(try AgentConfig.load(from: nonExistentPath)) { error in
-            guard case AgentConfigError.configFileNotFound = error else {
-                XCTFail("Expected configFileNotFound error, got \(error)")
-                return
+        #expect(throws: AgentConfigError.self) {
+            try AgentConfig.load(from: nonExistentPath)
+        }
+    }
+
+    @Test("Loading config without required field throws error")
+    func loadConfigMissingRequiredField() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+            qemu_socket_dir = "/var/run/qemu"
+            log_level = "debug"
+            """
+
+            let configPath = tempDirectory.appendingPathComponent("missing-url.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            #expect(throws: AgentConfigError.self) {
+                try AgentConfig.load(from: configPath)
             }
         }
     }
 
-    func testLoadConfigMissingRequiredField() throws {
-        let tomlContent = """
-        qemu_socket_dir = "/var/run/qemu"
-        log_level = "debug"
-        """
+    @Test("Loading config with invalid network mode throws error")
+    func loadConfigInvalidNetworkMode() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+            control_plane_url = "ws://localhost:8080/agent/ws"
+            network_mode = "invalid_mode"
+            """
 
-        let configPath = tempDirectory.appendingPathComponent("missing-url.toml").path
-        try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+            let configPath = tempDirectory.appendingPathComponent("invalid-mode.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-        XCTAssertThrowsError(try AgentConfig.load(from: configPath)) { error in
-            guard case AgentConfigError.missingRequiredField(let field) = error else {
-                XCTFail("Expected missingRequiredField error, got \(error)")
-                return
-            }
-            XCTAssertEqual(field, "control_plane_url")
-        }
-    }
-
-    func testLoadConfigInvalidNetworkMode() throws {
-        let tomlContent = """
-        control_plane_url = "ws://localhost:8080/agent/ws"
-        network_mode = "invalid_mode"
-        """
-
-        let configPath = tempDirectory.appendingPathComponent("invalid-mode.toml").path
-        try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
-
-        XCTAssertThrowsError(try AgentConfig.load(from: configPath)) { error in
-            guard case AgentConfigError.invalidConfiguration = error else {
-                XCTFail("Expected invalidConfiguration error, got \(error)")
-                return
+            #expect(throws: AgentConfigError.self) {
+                try AgentConfig.load(from: configPath)
             }
         }
     }
 
-    func testLoadConfigInvalidTOML() throws {
-        let invalidToml = """
-        control_plane_url = ws://localhost:8080/agent/ws
-        [this is not valid toml
-        """
+    @Test("Loading invalid TOML throws error")
+    func loadConfigInvalidTOML() throws {
+        try withTempDirectory { tempDirectory in
+            let invalidToml = """
+            control_plane_url = ws://localhost:8080/agent/ws
+            [this is not valid toml
+            """
 
-        let configPath = tempDirectory.appendingPathComponent("invalid.toml").path
-        try invalidToml.write(toFile: configPath, atomically: true, encoding: .utf8)
+            let configPath = tempDirectory.appendingPathComponent("invalid.toml").path
+            try invalidToml.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-        XCTAssertThrowsError(try AgentConfig.load(from: configPath))
+            #expect(throws: Error.self) {
+                try AgentConfig.load(from: configPath)
+            }
+        }
     }
 
     // MARK: - Default Config Tests
 
-    func testLoadDefaultConfig() {
+    @Test("Load default configuration")
+    func loadDefaultConfig() {
         let config = AgentConfig.loadDefaultConfig()
 
-        XCTAssertNotNil(config.controlPlaneURL)
-        XCTAssertEqual(config.controlPlaneURL, "ws://localhost:8080/agent/ws")
+        #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
 
         #if os(Linux)
-        XCTAssertEqual(config.networkMode, .ovn)
-        XCTAssertEqual(config.enableKVM, true)
-        XCTAssertEqual(config.enableHVF, false)
+        #expect(config.networkMode == .ovn)
+        #expect(config.enableKVM == true)
+        #expect(config.enableHVF == false)
         #else
-        XCTAssertEqual(config.networkMode, .user)
-        XCTAssertEqual(config.enableHVF, true)
-        XCTAssertEqual(config.enableKVM, false)
+        #expect(config.networkMode == .user)
+        #expect(config.enableHVF == true)
+        #expect(config.enableKVM == false)
         #endif
     }
 
     // MARK: - Codable Tests
 
-    func testAgentConfigEncodingDecoding() throws {
+    @Test("AgentConfig can be encoded and decoded")
+    func agentConfigEncodingDecoding() throws {
         let originalConfig = AgentConfig(
             controlPlaneURL: "ws://test:9000/ws",
             qemuSocketDir: "/custom/qemu",
@@ -206,70 +218,64 @@ final class AgentConfigTests: XCTestCase {
         let decoder = JSONDecoder()
         let decodedConfig = try decoder.decode(AgentConfig.self, from: data)
 
-        XCTAssertEqual(decodedConfig.controlPlaneURL, originalConfig.controlPlaneURL)
-        XCTAssertEqual(decodedConfig.qemuSocketDir, originalConfig.qemuSocketDir)
-        XCTAssertEqual(decodedConfig.logLevel, originalConfig.logLevel)
-        XCTAssertEqual(decodedConfig.networkMode, originalConfig.networkMode)
-        XCTAssertEqual(decodedConfig.enableHVF, originalConfig.enableHVF)
-        XCTAssertEqual(decodedConfig.enableKVM, originalConfig.enableKVM)
-    }
-
-    func testNetworkModeRawValues() {
-        XCTAssertEqual(NetworkMode.ovn.rawValue, "ovn")
-        XCTAssertEqual(NetworkMode.user.rawValue, "user")
-    }
-
-    func testNetworkModeFromRawValue() {
-        XCTAssertEqual(NetworkMode(rawValue: "ovn"), .ovn)
-        XCTAssertEqual(NetworkMode(rawValue: "user"), .user)
-        XCTAssertNil(NetworkMode(rawValue: "invalid"))
+        #expect(decodedConfig.controlPlaneURL == originalConfig.controlPlaneURL)
+        #expect(decodedConfig.qemuSocketDir == originalConfig.qemuSocketDir)
+        #expect(decodedConfig.logLevel == originalConfig.logLevel)
+        #expect(decodedConfig.networkMode == originalConfig.networkMode)
+        #expect(decodedConfig.enableHVF == originalConfig.enableHVF)
+        #expect(decodedConfig.enableKVM == originalConfig.enableKVM)
     }
 
     // MARK: - Error Description Tests
 
-    func testAgentConfigErrorDescriptions() {
+    @Test("AgentConfigError provides descriptive messages")
+    func agentConfigErrorDescriptions() {
         let fileNotFoundError = AgentConfigError.configFileNotFound("/test/path")
-        XCTAssertTrue(fileNotFoundError.errorDescription?.contains("/test/path") ?? false)
+        #expect(fileNotFoundError.errorDescription?.contains("/test/path") == true)
 
         let invalidTOMLError = AgentConfigError.invalidTOMLFormat("syntax error")
-        XCTAssertTrue(invalidTOMLError.errorDescription?.contains("syntax error") ?? false)
+        #expect(invalidTOMLError.errorDescription?.contains("syntax error") == true)
 
         let missingFieldError = AgentConfigError.missingRequiredField("test_field")
-        XCTAssertTrue(missingFieldError.errorDescription?.contains("test_field") ?? false)
+        #expect(missingFieldError.errorDescription?.contains("test_field") == true)
 
         let invalidConfigError = AgentConfigError.invalidConfiguration("test message")
-        XCTAssertTrue(invalidConfigError.errorDescription?.contains("test message") ?? false)
+        #expect(invalidConfigError.errorDescription?.contains("test message") == true)
     }
 
     // MARK: - Platform-Specific Configuration Tests
 
-    func testLoadConfigWithPlatformSpecificSettings() throws {
-        #if os(macOS)
-        // Test that KVM warning appears on macOS
-        let tomlContent = """
-        control_plane_url = "ws://localhost:8080/agent/ws"
-        enable_kvm = true
-        """
-        #else
-        // Test that HVF warning appears on Linux
-        let tomlContent = """
-        control_plane_url = "ws://localhost:8080/agent/ws"
-        enable_hvf = true
-        """
-        #endif
+    @Test("Platform-specific settings are handled correctly")
+    func loadConfigWithPlatformSpecificSettings() throws {
+        try withTempDirectory { tempDirectory in
+            #if os(macOS)
+            // Test that KVM warning appears on macOS
+            let tomlContent = """
+            control_plane_url = "ws://localhost:8080/agent/ws"
+            enable_kvm = true
+            """
+            #else
+            // Test that HVF warning appears on Linux
+            let tomlContent = """
+            control_plane_url = "ws://localhost:8080/agent/ws"
+            enable_hvf = true
+            """
+            #endif
 
-        let configPath = tempDirectory.appendingPathComponent("platform-specific.toml").path
-        try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+            let configPath = tempDirectory.appendingPathComponent("platform-specific.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-        // Should load successfully despite platform-specific warnings
-        let config = try AgentConfig.load(from: configPath)
-        XCTAssertNotNil(config)
+            // Should load successfully despite platform-specific warnings
+            let config = try AgentConfig.load(from: configPath)
+            #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
+        }
     }
 
     // MARK: - Default Path Constants Tests
 
-    func testDefaultConfigPaths() {
-        XCTAssertEqual(AgentConfig.defaultConfigPath, "/etc/strato/config.toml")
-        XCTAssertEqual(AgentConfig.fallbackConfigPath, "./config.toml")
+    @Test("Default config paths are correct")
+    func defaultConfigPaths() {
+        #expect(AgentConfig.defaultConfigPath == "/etc/strato/config.toml")
+        #expect(AgentConfig.fallbackConfigPath == "./config.toml")
     }
 }

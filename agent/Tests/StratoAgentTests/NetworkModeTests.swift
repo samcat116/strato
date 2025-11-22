@@ -1,51 +1,57 @@
-import XCTest
+import Testing
 import Foundation
 @testable import StratoAgentCore
 
-final class NetworkModeTests: XCTestCase {
+@Suite("NetworkMode Tests")
+struct NetworkModeTests {
 
-    // MARK: - NetworkMode Enum Tests
-
-    func testNetworkModeRawValues() {
-        XCTAssertEqual(NetworkMode.ovn.rawValue, "ovn")
-        XCTAssertEqual(NetworkMode.user.rawValue, "user")
+    @Test("NetworkMode has correct raw values")
+    func networkModeRawValues() {
+        #expect(NetworkMode.ovn.rawValue == "ovn")
+        #expect(NetworkMode.user.rawValue == "user")
     }
 
-    func testNetworkModeFromRawValue() {
-        XCTAssertEqual(NetworkMode(rawValue: "ovn"), .ovn)
-        XCTAssertEqual(NetworkMode(rawValue: "user"), .user)
-        XCTAssertNil(NetworkMode(rawValue: "invalid"))
-        XCTAssertNil(NetworkMode(rawValue: ""))
+    @Test("NetworkMode initializes from raw value")
+    func networkModeFromRawValue() {
+        #expect(NetworkMode(rawValue: "ovn") == .ovn)
+        #expect(NetworkMode(rawValue: "user") == .user)
+        #expect(NetworkMode(rawValue: "invalid") == nil)
+        #expect(NetworkMode(rawValue: "") == nil)
     }
 
-    func testNetworkModeEncoding() throws {
+    @Test("NetworkMode encodes to JSON correctly")
+    func networkModeEncoding() throws {
         let encoder = JSONEncoder()
 
         let ovnData = try encoder.encode(NetworkMode.ovn)
         let ovnString = String(data: ovnData, encoding: .utf8)
-        XCTAssertEqual(ovnString, "\"ovn\"")
+        #expect(ovnString == "\"ovn\"")
 
         let userData = try encoder.encode(NetworkMode.user)
         let userString = String(data: userData, encoding: .utf8)
-        XCTAssertEqual(userString, "\"user\"")
+        #expect(userString == "\"user\"")
     }
 
-    func testNetworkModeDecoding() throws {
+    @Test("NetworkMode decodes from JSON correctly")
+    func networkModeDecoding() throws {
         let decoder = JSONDecoder()
 
         let ovnData = "\"ovn\"".data(using: .utf8)!
         let ovnMode = try decoder.decode(NetworkMode.self, from: ovnData)
-        XCTAssertEqual(ovnMode, .ovn)
+        #expect(ovnMode == .ovn)
 
         let userData = "\"user\"".data(using: .utf8)!
         let userMode = try decoder.decode(NetworkMode.self, from: userData)
-        XCTAssertEqual(userMode, .user)
+        #expect(userMode == .user)
     }
 
-    func testNetworkModeDecodingInvalid() {
+    @Test("NetworkMode decoding fails for invalid mode")
+    func networkModeDecodingInvalid() throws {
         let decoder = JSONDecoder()
-
         let invalidData = "\"invalid_mode\"".data(using: .utf8)!
-        XCTAssertThrowsError(try decoder.decode(NetworkMode.self, from: invalidData))
+
+        #expect(throws: Error.self) {
+            try decoder.decode(NetworkMode.self, from: invalidData)
+        }
     }
 }

@@ -1,50 +1,49 @@
-import XCTest
+import Testing
 import Foundation
 import Logging
 @testable import StratoAgentCore
 
-final class CustomLogHandlerTests: XCTestCase {
+@Suite("CustomLogHandler Tests")
+struct CustomLogHandlerTests {
 
-    // MARK: - Initialization Tests
-
-    func testCustomLogHandlerInitialization() {
+    @Test("CustomLogHandler initializes with correct defaults")
+    func customLogHandlerInitialization() {
         let handler = CustomLogHandler(label: "test-logger")
 
-        XCTAssertEqual(handler.logLevel, .info, "Default log level should be info")
-        XCTAssertTrue(handler.metadata.isEmpty, "Default metadata should be empty")
+        #expect(handler.logLevel == .info)
+        #expect(handler.metadata.isEmpty)
     }
 
-    // MARK: - Log Level Tests
-
-    func testLogLevelProperty() {
+    @Test("Log level can be modified")
+    func logLevelProperty() {
         var handler = CustomLogHandler(label: "test-logger")
 
         handler.logLevel = .debug
-        XCTAssertEqual(handler.logLevel, .debug)
+        #expect(handler.logLevel == .debug)
 
         handler.logLevel = .error
-        XCTAssertEqual(handler.logLevel, .error)
+        #expect(handler.logLevel == .error)
 
         handler.logLevel = .trace
-        XCTAssertEqual(handler.logLevel, .trace)
+        #expect(handler.logLevel == .trace)
     }
 
-    // MARK: - Metadata Tests
-
-    func testMetadataSubscript() {
+    @Test("Metadata can be accessed via subscript")
+    func metadataSubscript() {
         var handler = CustomLogHandler(label: "test-logger")
 
         handler[metadataKey: "key1"] = "value1"
-        XCTAssertEqual(handler[metadataKey: "key1"], "value1")
+        #expect(handler[metadataKey: "key1"] == "value1")
 
         handler[metadataKey: "key2"] = .string("value2")
-        XCTAssertEqual(handler[metadataKey: "key2"], .string("value2"))
+        #expect(handler[metadataKey: "key2"] == .string("value2"))
 
         handler[metadataKey: "key1"] = nil
-        XCTAssertNil(handler[metadataKey: "key1"])
+        #expect(handler[metadataKey: "key1"] == nil)
     }
 
-    func testMetadataProperty() {
+    @Test("Metadata can be set as a whole")
+    func metadataProperty() {
         var handler = CustomLogHandler(label: "test-logger")
 
         let metadata: Logger.Metadata = [
@@ -53,29 +52,27 @@ final class CustomLogHandlerTests: XCTestCase {
         ]
         handler.metadata = metadata
 
-        XCTAssertEqual(handler.metadata["request_id"], "12345")
-        XCTAssertEqual(handler.metadata["user_id"], "user-67890")
+        #expect(handler.metadata["request_id"] == "12345")
+        #expect(handler.metadata["user_id"] == "user-67890")
     }
 
-    func testMetadataValueTypes() {
+    @Test("Metadata supports different value types")
+    func metadataValueTypes() {
         var handler = CustomLogHandler(label: "test-logger")
 
-        // Test different metadata value types
         handler[metadataKey: "string"] = .string("test")
         handler[metadataKey: "stringConvertible"] = .stringConvertible(42)
         handler[metadataKey: "array"] = .array(["a", "b"])
         handler[metadataKey: "dictionary"] = .dictionary(["key": "value"])
 
-        XCTAssertEqual(handler[metadataKey: "string"], .string("test"))
-        XCTAssertEqual(handler[metadataKey: "stringConvertible"], .stringConvertible(42))
-        XCTAssertEqual(handler[metadataKey: "array"], .array(["a", "b"]))
-        XCTAssertEqual(handler[metadataKey: "dictionary"], .dictionary(["key": "value"]))
+        #expect(handler[metadataKey: "string"] == .string("test"))
+        #expect(handler[metadataKey: "stringConvertible"] == .stringConvertible(42))
+        #expect(handler[metadataKey: "array"] == .array(["a", "b"]))
+        #expect(handler[metadataKey: "dictionary"] == .dictionary(["key": "value"]))
     }
 
-    // MARK: - Integration Tests
-
-    func testLoggerCreationWithCustomHandler() {
-        // Test that we can create a logger with our custom handler
+    @Test("Logger can be created with custom handler")
+    func loggerCreationWithCustomHandler() {
         LoggingSystem.bootstrap { label in
             CustomLogHandler(label: label)
         }
@@ -83,46 +80,42 @@ final class CustomLogHandlerTests: XCTestCase {
         var logger = Logger(label: "integration-test")
         logger.logLevel = .debug
 
-        // Verify logger was created with correct properties
-        XCTAssertEqual(logger.logLevel, .debug)
+        #expect(logger.logLevel == .debug)
 
-        // Test that logging doesn't crash (output goes to stderr but we don't capture it)
+        // Test that logging doesn't crash
         logger.info("Test message")
         logger.debug("Debug message", metadata: ["test_id": "12345"])
         logger.error("Error message")
     }
 
-    func testEmptyMetadata() {
+    @Test("Metadata can be added and removed")
+    func emptyMetadata() {
         var handler = CustomLogHandler(label: "test-logger")
 
-        // Initially empty
-        XCTAssertTrue(handler.metadata.isEmpty)
+        #expect(handler.metadata.isEmpty)
 
-        // Add and remove
         handler[metadataKey: "temp"] = "value"
-        XCTAssertFalse(handler.metadata.isEmpty)
+        #expect(!handler.metadata.isEmpty)
 
         handler[metadataKey: "temp"] = nil
-        XCTAssertTrue(handler.metadata.isEmpty)
+        #expect(handler.metadata.isEmpty)
     }
 
-    func testMetadataMerging() {
+    @Test("Metadata can be merged")
+    func metadataMerging() {
         var handler = CustomLogHandler(label: "test-logger")
         handler.metadata = ["global_key": "global_value"]
 
-        // Verify global metadata is set
-        XCTAssertEqual(handler.metadata["global_key"], "global_value")
+        #expect(handler.metadata["global_key"] == "global_value")
 
-        // Add more metadata
         handler[metadataKey: "local_key"] = "local_value"
 
-        // Both should be present
-        XCTAssertEqual(handler.metadata["global_key"], "global_value")
-        XCTAssertEqual(handler.metadata["local_key"], "local_value")
+        #expect(handler.metadata["global_key"] == "global_value")
+        #expect(handler.metadata["local_key"] == "local_value")
     }
 
-    func testMultipleHandlers() {
-        // Test that multiple handlers can coexist with different configurations
+    @Test("Multiple handlers can coexist independently")
+    func multipleHandlers() {
         var handler1 = CustomLogHandler(label: "handler-1")
         var handler2 = CustomLogHandler(label: "handler-2")
 
@@ -132,21 +125,24 @@ final class CustomLogHandlerTests: XCTestCase {
         handler1[metadataKey: "handler"] = "1"
         handler2[metadataKey: "handler"] = "2"
 
-        XCTAssertEqual(handler1.logLevel, .debug)
-        XCTAssertEqual(handler2.logLevel, .error)
-        XCTAssertEqual(handler1[metadataKey: "handler"], "1")
-        XCTAssertEqual(handler2[metadataKey: "handler"], "2")
+        #expect(handler1.logLevel == .debug)
+        #expect(handler2.logLevel == .error)
+        #expect(handler1[metadataKey: "handler"] == "1")
+        #expect(handler2[metadataKey: "handler"] == "2")
     }
 
-    func testLogLevelFiltering() {
+    @Test("All log levels are supported", arguments: [
+        Logger.Level.trace,
+        Logger.Level.debug,
+        Logger.Level.info,
+        Logger.Level.notice,
+        Logger.Level.warning,
+        Logger.Level.error,
+        Logger.Level.critical
+    ])
+    func logLevelFiltering(level: Logger.Level) {
         var handler = CustomLogHandler(label: "test-logger")
-
-        // Test all log levels
-        let levels: [Logger.Level] = [.trace, .debug, .info, .notice, .warning, .error, .critical]
-
-        for level in levels {
-            handler.logLevel = level
-            XCTAssertEqual(handler.logLevel, level, "Log level should match set value")
-        }
+        handler.logLevel = level
+        #expect(handler.logLevel == level)
     }
 }

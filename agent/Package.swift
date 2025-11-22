@@ -16,6 +16,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
         .package(url: "https://github.com/samcat116/swift-ovn.git", branch: "main"),
         .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
+        .package(url: "https://github.com/apple/swift-testing.git", from: "0.10.0"),
     ],
     targets: [
         // Core library with testable code (no SwiftQEMU dependency)
@@ -48,6 +49,7 @@ let package = Package(
                 "StratoAgentCore",
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Toml", package: "swift-toml"),
+                .product(name: "Testing", package: "swift-testing"),
             ],
             swiftSettings: swiftSettings
         )
