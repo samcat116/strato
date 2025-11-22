@@ -23,22 +23,29 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Cache Swift dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/.swiftpm/cache
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: swift
 
-      - name: Build Shared Package
-        working-directory: shared
-        run: swift build
-
-      - name: Build Control Plane Package
-        working-directory: control-plane
-        run: swift build
-
-      - name: Build Agent Package
-        working-directory: agent
-        run: swift build
+      - name: Build All Packages
+        run: |
+          # Build shared first (dependency for others)
+          cd shared && swift build && cd ..
+          # Build control-plane and agent in parallel
+          (cd control-plane && swift build) &
+          (cd agent && swift build) &
+          wait
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
         with:
