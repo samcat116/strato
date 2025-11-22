@@ -55,6 +55,20 @@ The agent uses TOML configuration files to set connection and operational parame
 - `minikube service strato-control-plane --url` - Get external URL for Control Plane
 - `minikube stop` - Stop Kubernetes cluster
 
+### NixOS Deployment (Agent)
+Strato Agent can be deployed on NixOS using the provided Nix flake. See [NIXOS.md](./NIXOS.md) for detailed documentation.
+
+**Quick start:**
+- `nix build` - Build the agent package
+- `nix develop` - Enter development shell with all dependencies
+- `nix run` - Run the agent directly
+
+**NixOS module:**
+Add to your NixOS configuration to run the agent as a systemd service with automatic dependency management (QEMU, KVM, OVN/OVS).
+
+**Direnv integration:**
+The repository includes `.envrc` for automatic environment loading with direnv.
+
 ### Docker Development (Legacy - being phased out)
 - `./scripts/prepare-build.sh` - Prepare build context (run before first Docker build)
 - `docker compose build` - Build Docker images for both control plane and agent
