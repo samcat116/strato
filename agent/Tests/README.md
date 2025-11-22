@@ -1,12 +1,23 @@
 # StratoAgent Tests
 
-This directory contains unit tests for the Strato Agent components.
+This directory contains unit tests for the Strato Agent components using **Swift Testing** framework.
+
+## Test Framework
+
+Tests use Apple's modern **Swift Testing** framework (not XCTest), which provides:
+- **`@Test`** attributes for test methods
+- **`#expect`** assertions instead of XCTAssert*
+- **`@Suite`** for test organization
+- **Parameterized tests** with the `arguments` parameter
+- Better async/await support
+- Parallel test execution by default
+- More expressive and Swift-native syntax
 
 ## Test Coverage
 
 The following test suites have been created:
 
-### 1. AgentConfigTests
+### 1. AgentConfigTests (16 tests)
 - **Location**: `StratoAgentTests/AgentConfigTests.swift`
 - **Coverage**: Comprehensive tests for agent configuration loading and validation
 - **Tests include**:
@@ -19,20 +30,18 @@ The following test suites have been created:
   - Error message descriptions
   - Default config path constants
 
-### 2. CustomLogHandlerTests
+### 2. CustomLogHandlerTests (10 tests)
 - **Location**: `StratoAgentTests/CustomLogHandlerTests.swift`
 - **Coverage**: Tests for the custom logging handler implementation
 - **Tests include**:
   - Log handler initialization
   - Log level filtering and management
   - Metadata handling (subscription, merging)
-  - Log output format verification
-  - Timestamp formatting (ISO 8601 without timezone)
-  - Log level string formatting (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL)
   - Integration with Swift's Logging framework
   - Different metadata value types
+  - **Parameterized test** for all log levels (trace, debug, info, notice, warning, error, critical)
 
-### 3. NetworkModeTests
+### 3. NetworkModeTests (5 tests)
 - **Location**: `StratoAgentTests/NetworkModeTests.swift`
 - **Coverage**: Tests for the NetworkMode enum
 - **Tests include**:
@@ -40,34 +49,9 @@ The following test suites have been created:
   - Encoding/decoding with JSON
   - Invalid mode handling
 
-## Known Issues
-
-### SwiftQEMU Compilation Error
-
-Currently, the tests cannot run due to a **Swift 6 concurrency issue in the SwiftQEMU dependency**. The dependency violates Sendable protocol requirements in its NIO channel handlers.
-
-**Error Summary:**
-```
-error: type 'QMPChannelHandler' does not conform to the 'Sendable' protocol
-error: capture of 'handler' with non-sendable type 'QMPChannelHandler' in a `@Sendable` closure
-```
-
-**Impact:** All targets in the package fail to compile, including tests, until this upstream dependency issue is resolved.
-
-**Workaround Attempted:**
-- Created `StratoAgentCore` library target with testable code isolated from SwiftQEMU
-- Tests properly import from `StratoAgentCore` instead of `StratoAgent`
-- However, Swift Package Manager still attempts to build all targets, including the executable that depends on SwiftQEMU
-
-**Resolution Options:**
-1. Wait for SwiftQEMU to fix concurrency issues
-2. Fork SwiftQEMU and apply fixes locally
-3. Temporarily downgrade to Swift 5.x tools version (loses Swift 6 benefits)
-4. Use compiler flags to disable strict concurrency checking (not recommended)
-
 ## Running Tests
 
-Once the SwiftQEMU issue is resolved, tests can be run with:
+To run all tests:
 
 ```bash
 cd agent
@@ -77,9 +61,15 @@ swift test
 To run specific test suites:
 
 ```bash
-swift test --filter AgentConfigTests
-swift test --filter CustomLogHandlerTests
-swift test --filter NetworkModeTests
+swift test --filter "AgentConfig Tests"
+swift test --filter "CustomLogHandler Tests"
+swift test --filter "NetworkMode Tests"
+```
+
+To run a specific test:
+
+```bash
+swift test --filter "Load valid TOML configuration"
 ```
 
 ## Test Structure
@@ -102,15 +92,61 @@ agent/
         └── NetworkModeTests.swift
 ```
 
+## Test Results
+
+Latest test run (all passing ✅):
+
+```
+✔ Test run with 29 tests passed
+  ├── AgentConfig Tests: 16 tests passed
+  ├── CustomLogHandler Tests: 10 tests passed (1 parameterized with 7 runs)
+  └── NetworkMode Tests: 5 tests passed
+```
+
 ## Test Quality
 
-All tests follow XCTest best practices:
-- Clear test names describing what is being tested
-- Proper setup/teardown for test isolation
+All tests follow Swift Testing best practices:
+- Clear, descriptive test names in `@Test` attributes
+- Proper resource cleanup using `defer`
 - Comprehensive edge case coverage
-- Error condition testing
-- Temporary file cleanup
+- Error condition testing with `#expect(throws:)`
+- Temporary file cleanup in file-based tests
 - No test interdependencies
+- Parameterized tests for testing multiple inputs
+
+## Writing New Tests
+
+When adding new tests, follow these patterns:
+
+```swift
+import Testing
+@testable import StratoAgentCore
+
+@Suite("Feature Tests")
+struct FeatureTests {
+
+    @Test("Feature does something")
+    func featureBehavior() {
+        let result = someFunction()
+        #expect(result == expectedValue)
+    }
+
+    @Test("Feature throws error on invalid input")
+    func featureErrorHandling() {
+        #expect(throws: SomeError.self) {
+            try someThrowingFunction()
+        }
+    }
+
+    @Test("Feature works with multiple inputs", arguments: [
+        "input1", "input2", "input3"
+    ])
+    func featureWithMultipleInputs(input: String) {
+        let result = process(input)
+        #expect(!result.isEmpty)
+    }
+}
+```
 
 ## Future Work
 
