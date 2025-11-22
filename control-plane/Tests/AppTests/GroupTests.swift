@@ -4,7 +4,7 @@ import Fluent
 import VaporTesting
 @testable import App
 
-@Suite("Group API Tests")
+@Suite("Group API Tests", .serialized)
 final class GroupTests: BaseTestCase {
 
     // MARK: - Create Group Tests

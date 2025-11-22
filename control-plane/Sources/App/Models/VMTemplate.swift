@@ -206,7 +206,7 @@ extension VMTemplate {
 
 // MARK: - Errors
 
-enum VMTemplateError: Error, LocalizedError {
+enum VMTemplateError: Error, LocalizedError, Sendable {
     case cpuOutOfRange(min: Int, max: Int, requested: Int)
     case memoryOutOfRange(min: Int64, max: Int64, requested: Int64)
     case diskOutOfRange(min: Int64, max: Int64, requested: Int64)

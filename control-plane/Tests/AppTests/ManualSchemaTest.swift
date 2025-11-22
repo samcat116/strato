@@ -5,7 +5,7 @@ import FluentSQLiteDriver
 import VaporTesting
 @testable import App
 
-@Suite("Manual Schema Tests")
+@Suite("Manual Schema Tests", .serialized)
 final class ManualSchemaTests: BaseTestCase {
 
     /// Manually create just the tables we need for testing

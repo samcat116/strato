@@ -3,6 +3,7 @@ import Logging
 import NIOCore
 import NIOPosix
 import StratoShared
+import StratoAgentCore
 
 actor Agent {
     private let agentID: String

@@ -5,10 +5,28 @@ import NIOPosix
 import Logging
 import StratoShared
 
-class WebSocketClient {
+// Thread-safe boolean wrapper for continuation resume tracking
+final class AtomicBool: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Bool
+
+    init(_ initialValue: Bool) {
+        self.value = initialValue
+    }
+
+    func testAndSet(_ newValue: Bool) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let oldValue = value
+        value = newValue
+        return oldValue
+    }
+}
+
+actor WebSocketClient {
     private let url: String
-    weak var agent: Agent?
-    let logger: Logger
+    private weak var agent: Agent?
+    private let logger: Logger
     private let eventLoopGroup: MultiThreadedEventLoopGroup
 
     private var ws: WebSocket?
@@ -40,77 +58,81 @@ class WebSocketClient {
 
         // Create connection and wait for it to be established
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            var resumed = false
+            let resumed = AtomicBool(false)
 
             // Create connection - this returns immediately, callback fires when connected
             _ = WebSocket.connect(
                 to: url,
                 on: eventLoopGroup.next()
-            ) { [weak self] ws in
-                guard let self = self else {
-                    if !resumed {
-                        resumed = true
-                        continuation.resume(throwing: WebSocketClientError.connectionFailed("Client deallocated"))
-                    }
-                    return
-                }
-
-                // Connection established - store reference and set up handlers
-                self.ws = ws
-                self.isConnected = true
-
-                ws.onText { [weak self] ws, text in
-                    self?.logger.debug("Received WebSocket text message", metadata: ["text": .string(text)])
-                }
-
-                ws.onBinary { [weak self] ws, buffer in
-                    guard let self = self else { return }
-
-                    self.logger.debug("Received WebSocket binary message")
-
-                    // Convert binary buffer to string
-                    guard let text = buffer.getString(at: 0, length: buffer.readableBytes) else {
-                        self.logger.error("Failed to convert binary buffer to string")
-                        return
-                    }
-
-                    // Parse JSON to MessageEnvelope
-                    guard let data = text.data(using: .utf8) else {
-                        self.logger.error("Failed to convert string to UTF-8 data")
-                        return
-                    }
-
-                    do {
-                        let envelope = try JSONDecoder().decode(MessageEnvelope.self, from: data)
-                        self.logger.info("Received message from control plane", metadata: [
-                            "type": .string(envelope.type.rawValue)
-                        ])
-
-                        // Handle message asynchronously
-                        Task {
-                            await self.agent?.handleMessage(envelope)
+            ) { ws in
+                // Connection established - handle in actor context
+                Task { [weak self] in
+                    guard let self = self else {
+                        if !resumed.testAndSet(true) {
+                            continuation.resume(throwing: WebSocketClientError.connectionFailed("Client deallocated"))
                         }
-                    } catch {
-                        self.logger.error("Failed to decode message: \(error)")
+                        return
                     }
-                }
 
-                ws.onClose.whenComplete { [weak self] result in
-                    self?.logger.info("WebSocket connection closed")
-                    self?.isConnected = false
-                }
+                    // Store reference and set up handlers
+                    await self.setConnection(ws: ws, connected: true)
 
-                self.logger.info("WebSocket connection established and ready")
-                self.startHeartbeat()
+                    ws.onText { ws, text in
+                        Task { [weak self] in
+                            self?.logger.debug("Received WebSocket text message", metadata: ["text": .string(text)])
+                        }
+                    }
 
-                // Resume to indicate successful connection
-                if !resumed {
-                    resumed = true
-                    continuation.resume()
+                    ws.onBinary { ws, buffer in
+                        Task { [weak self] in
+                            guard let self = self else { return }
+
+                            self.logger.debug("Received WebSocket binary message")
+
+                            // Convert binary buffer to string
+                            guard let text = buffer.getString(at: 0, length: buffer.readableBytes) else {
+                                self.logger.error("Failed to convert binary buffer to string")
+                                return
+                            }
+
+                            // Parse JSON to MessageEnvelope
+                            guard let data = text.data(using: .utf8) else {
+                                self.logger.error("Failed to convert string to UTF-8 data")
+                                return
+                            }
+
+                            do {
+                                let envelope = try JSONDecoder().decode(MessageEnvelope.self, from: data)
+                                self.logger.info("Received message from control plane", metadata: [
+                                    "type": .string(envelope.type.rawValue)
+                                ])
+
+                                // Handle message asynchronously
+                                await self.agent?.handleMessage(envelope)
+                            } catch {
+                                self.logger.error("Failed to decode message: \(error)")
+                            }
+                        }
+                    }
+
+                    ws.onClose.whenComplete { result in
+                        Task { [weak self] in
+                            guard let self = self else { return }
+                            self.logger.info("WebSocket connection closed")
+                            await self.setConnection(ws: nil, connected: false)
+                        }
+                    }
+
+                    self.logger.info("WebSocket connection established and ready")
+                    await self.startHeartbeat()
+
+                    // Resume to indicate successful connection
+                    if !resumed.testAndSet(true) {
+                        continuation.resume()
+                    }
                 }
             }.whenFailure { error in
-                if !resumed {
-                    resumed = true
+                if !resumed.testAndSet(true) {
                     continuation.resume(throwing: WebSocketClientError.connectionFailed("Failed to connect: \(error.localizedDescription)"))
                 }
             }
@@ -166,6 +188,13 @@ class WebSocketClient {
         logger.debug("WebSocket message sent successfully")
     }
 
+    // MARK: - Private Methods
+
+    private func setConnection(ws: WebSocket?, connected: Bool) {
+        self.ws = ws
+        self.isConnected = connected
+    }
+
     private func startHeartbeat() {
         heartbeatTask = Task {
             while !Task.isCancelled && isConnected {
@@ -194,7 +223,7 @@ class WebSocketClient {
 
 // MARK: - Errors
 
-enum WebSocketClientError: Error, LocalizedError {
+enum WebSocketClientError: Error, LocalizedError, Sendable {
     case invalidURL(String)
     case connectionFailed(String)
     case notConnected

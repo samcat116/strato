@@ -317,7 +317,7 @@ enum GroupProjectRole: String, Content {
 
 // MARK: - Errors
 
-enum SpiceDBError: Error {
+enum SpiceDBError: Error, Sendable {
     case permissionCheckFailed(HTTPStatus)
     case schemaWriteFailed(HTTPStatus)
     case relationshipWriteFailed(HTTPStatus)

@@ -189,7 +189,7 @@ struct WebAuthnService {
 
 // MARK: - Errors
 
-enum WebAuthnError: Error, AbortError {
+enum WebAuthnError: Error, AbortError, Sendable {
     case registrationFailed
     case authenticationFailed
     case challengeNotFound
