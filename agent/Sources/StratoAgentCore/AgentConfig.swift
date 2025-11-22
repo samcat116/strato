@@ -2,18 +2,18 @@ import Foundation
 import Toml
 import Logging
 
-enum NetworkMode: String, Codable, Sendable {
+public enum NetworkMode: String, Codable {
     case ovn
     case user
 }
 
-struct AgentConfig: Codable, Sendable {
-    let controlPlaneURL: String
-    let qemuSocketDir: String?
-    let logLevel: String?
-    let networkMode: NetworkMode?
-    let enableHVF: Bool?
-    let enableKVM: Bool?
+public struct AgentConfig: Codable {
+    public let controlPlaneURL: String
+    public let qemuSocketDir: String?
+    public let logLevel: String?
+    public let networkMode: NetworkMode?
+    public let enableHVF: Bool?
+    public let enableKVM: Bool?
 
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
@@ -24,7 +24,7 @@ struct AgentConfig: Codable, Sendable {
         case enableKVM = "enable_kvm"
     }
 
-    init(
+    public init(
         controlPlaneURL: String,
         qemuSocketDir: String? = nil,
         logLevel: String? = nil,
@@ -39,8 +39,8 @@ struct AgentConfig: Codable, Sendable {
         self.enableHVF = enableHVF
         self.enableKVM = enableKVM
     }
-    
-    static func load(from path: String, logger: Logger? = nil) throws -> AgentConfig {
+
+    public static func load(from path: String, logger: Logger? = nil) throws -> AgentConfig {
         let fileURL = URL(fileURLWithPath: path)
         
         guard FileManager.default.fileExists(atPath: path) else {
@@ -92,11 +92,11 @@ struct AgentConfig: Codable, Sendable {
             enableKVM: enableKVM
         )
     }
-    
-    static let defaultConfigPath = "/etc/strato/config.toml"
-    static let fallbackConfigPath = "./config.toml"
-    
-    static func loadDefaultConfig(logger: Logger? = nil) -> AgentConfig {
+
+    public static let defaultConfigPath = "/etc/strato/config.toml"
+    public static let fallbackConfigPath = "./config.toml"
+
+    public static func loadDefaultConfig(logger: Logger? = nil) -> AgentConfig {
         // Try to load from default path first
         do {
             return try load(from: defaultConfigPath, logger: logger)
@@ -136,13 +136,13 @@ struct AgentConfig: Codable, Sendable {
     }
 }
 
-enum AgentConfigError: Error, LocalizedError, Sendable {
+public enum AgentConfigError: Error, LocalizedError {
     case configFileNotFound(String)
     case invalidTOMLFormat(String)
     case missingRequiredField(String)
     case invalidConfiguration(String)
-    
-    var errorDescription: String? {
+
+    public var errorDescription: String? {
         switch self {
         case .configFileNotFound(let path):
             return "Configuration file not found at path: \(path)"
