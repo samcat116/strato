@@ -52,7 +52,7 @@ let package = Package(
             swiftSettings: swiftSettings
         )
     ],
-    swiftLanguageModes: [.v6]
+    swiftLanguageModes: [.v5]
 )
 
 var swiftSettings: [SwiftSetting] {
