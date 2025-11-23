@@ -79,6 +79,78 @@ struct Commands: SakeApp {
         )
     }
 
+    /// Start Valkey (Redis alternative) in Docker
+    public static var startValkey: Command {
+        Command(
+            description: "Start Valkey cache container",
+            run: { _ in
+                print("🔴 Starting Valkey...")
+
+                // Check if container already exists
+                let checkExisting = Process()
+                checkExisting.executableURL = URL(fileURLWithPath: "/usr/bin/docker")
+                checkExisting.arguments = ["ps", "-a", "--filter", "name=strato-valkey", "--format", "{{.Names}}"]
+
+                let checkPipe = Pipe()
+                checkExisting.standardOutput = checkPipe
+                try checkExisting.run()
+                checkExisting.waitUntilExit()
+
+                let checkData = checkPipe.fileHandleForReading.readDataToEndOfFile()
+                let existingContainer = String(data: checkData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if existingContainer == "strato-valkey" {
+                    print("⚠️  Valkey container already exists. Starting it...")
+                    try runProcess("/usr/bin/docker", arguments: ["start", "strato-valkey"])
+                } else {
+                    // Start new Valkey container
+                    try runProcess("/usr/bin/docker", arguments: [
+                        "run", "-d",
+                        "--name", "strato-valkey",
+                        "-e", "VALKEY_PASSWORD=valkey_password",
+                        "-p", "6379:6379",
+                        "-v", "strato-valkey-data:/data",
+                        "valkey/valkey:latest",
+                        "valkey-server", "--requirepass", "valkey_password", "--appendonly", "yes"
+                    ])
+                }
+
+                // Wait for Valkey to be ready
+                print("⏳ Waiting for Valkey to be ready...")
+                sleep(2)
+
+                for i in 1...30 {
+                    let checkReady = Process()
+                    checkReady.executableURL = URL(fileURLWithPath: "/usr/bin/docker")
+                    checkReady.arguments = [
+                        "exec", "strato-valkey",
+                        "valkey-cli", "-a", "valkey_password", "ping"
+                    ]
+
+                    let readyPipe = Pipe()
+                    checkReady.standardOutput = readyPipe
+                    checkReady.standardError = readyPipe
+                    try checkReady.run()
+                    checkReady.waitUntilExit()
+
+                    let readyData = readyPipe.fileHandleForReading.readDataToEndOfFile()
+                    let response = String(data: readyData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    if checkReady.terminationStatus == 0 && response == "PONG" {
+                        print("✅ Valkey is ready!")
+                        return
+                    }
+
+                    if i < 30 {
+                        sleep(1)
+                    }
+                }
+
+                throw DevSetupError.timeout("Valkey did not become ready in time")
+            }
+        )
+    }
+
     /// Start SpiceDB authorization service in Docker
     public static var startSpiceDB: Command {
         Command(
@@ -218,7 +290,7 @@ struct Commands: SakeApp {
     public static var startControlPlane: Command {
         Command(
             description: "Build and start the control-plane service",
-            dependencies: [loadSpiceDBSchema],
+            dependencies: [loadSpiceDBSchema, startValkey],
             run: { _ in
                 print("🚀 Building and starting control-plane...")
 
@@ -244,6 +316,9 @@ struct Commands: SakeApp {
                 env["DATABASE_NAME"] = "vapor_database"
                 env["DATABASE_USERNAME"] = "vapor_username"
                 env["DATABASE_PASSWORD"] = "vapor_password"
+                env["REDIS_HOST"] = "localhost"
+                env["REDIS_PORT"] = "6379"
+                env["REDIS_PASSWORD"] = "valkey_password"
                 env["SPICEDB_ENDPOINT"] = "http://localhost:8081"
                 env["SPICEDB_PRESHARED_KEY"] = "strato-dev-key"
                 env["WEBAUTHN_RELYING_PARTY_ID"] = "localhost"
@@ -756,6 +831,7 @@ struct Commands: SakeApp {
                 print("\n🎉 Development environment is ready!")
                 print("\n📊 Service Status:")
                 print("   • PostgreSQL:     http://localhost:5432")
+                print("   • Valkey (Redis): localhost:6379")
                 print("   • SpiceDB:        http://localhost:8081")
                 print("   • Control Plane:  http://localhost:8080")
                 print("   • Agent:          Connected via WebSocket")
@@ -825,6 +901,7 @@ struct Commands: SakeApp {
                 // Stop Docker containers
                 print("Stopping Docker containers...")
                 _ = try? runProcess("/usr/bin/docker", arguments: ["stop", "strato-spicedb"])
+                _ = try? runProcess("/usr/bin/docker", arguments: ["stop", "strato-valkey"])
                 _ = try? runProcess("/usr/bin/docker", arguments: ["stop", "strato-postgres"])
 
                 print("✅ All services stopped!")
@@ -843,6 +920,7 @@ struct Commands: SakeApp {
                 // Remove Docker containers
                 print("Removing Docker containers...")
                 _ = try? runProcess("/usr/bin/docker", arguments: ["rm", "-f", "strato-spicedb"])
+                _ = try? runProcess("/usr/bin/docker", arguments: ["rm", "-f", "strato-valkey"])
                 _ = try? runProcess("/usr/bin/docker", arguments: ["rm", "-f", "strato-postgres"])
 
                 // Remove log files
@@ -868,6 +946,7 @@ struct Commands: SakeApp {
                 print("   • Control Plane:  http://localhost:8080")
                 print("   • SpiceDB Admin:  http://localhost:8081")
                 print("   • PostgreSQL:     localhost:5432")
+                print("   • Valkey (Redis): localhost:6379")
                 print("\n📋 Logs:")
                 print("   • Control Plane:  tail -f /tmp/strato-control-plane.log")
                 print("   • Agent:          tail -f /tmp/strato-agent.log")
@@ -937,6 +1016,18 @@ struct Commands: SakeApp {
                 spiceCheck.waitUntilExit()
                 let spiceStatus = String(data: spicePipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 print(spiceStatus.isEmpty ? "❌ Stopped" : "✅ Running (\(spiceStatus))")
+
+                // Check Valkey
+                print("Valkey:        ", terminator: "")
+                let valkeyCheck = Process()
+                valkeyCheck.executableURL = URL(fileURLWithPath: "/usr/bin/docker")
+                valkeyCheck.arguments = ["ps", "--filter", "name=strato-valkey", "--format", "{{.Status}}"]
+                let valkeyPipe = Pipe()
+                valkeyCheck.standardOutput = valkeyPipe
+                try? valkeyCheck.run()
+                valkeyCheck.waitUntilExit()
+                let valkeyStatus = String(data: valkeyPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                print(valkeyStatus.isEmpty ? "❌ Stopped" : "✅ Running (\(valkeyStatus))")
 
                 // Check control-plane
                 print("Control Plane: ", terminator: "")

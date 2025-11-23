@@ -208,7 +208,32 @@ postgresql:
     requests:
       cpu: 500m
       memory: 1Gi
-    
+
+# Valkey (Redis alternative) configuration
+valkey:
+  enabled: true
+  auth:
+    password: valkey_password  # Change this in production!
+
+  architecture: standalone  # Single instance (not master-replica)
+
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 250m
+        memory: 256Mi
+
+  # Disable metrics by default
+  metrics:
+    enabled: false
+
 # External PostgreSQL configuration (if postgresql.enabled is false)
 externalDatabase:
   host: ""

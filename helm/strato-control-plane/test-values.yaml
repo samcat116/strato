@@ -1,0 +1,27 @@
+# Test values for validating Valkey integration
+# Minimal configuration to speed up testing
+
+# Disable observability to speed up deployment
+opentelemetry:
+  enabled: false
+
+# Keep PostgreSQL enabled (required)
+postgresql:
+  enabled: true
+
+# Keep Valkey enabled (what we're testing!)
+valkey:
+  enabled: true
+
+# Keep SpiceDB enabled (required)
+spicedb:
+  enabled: true
+
+# Use smaller resource requests for faster scheduling
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi

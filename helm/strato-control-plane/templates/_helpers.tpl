@@ -93,6 +93,34 @@ db-password
 {{- end }}
 
 {{/*
+Get the Valkey host
+*/}}
+{{- define "strato-control-plane.valkeyHost" -}}
+{{- printf "%s-valkey-master" .Release.Name }}
+{{- end }}
+
+{{/*
+Get the Valkey port
+*/}}
+{{- define "strato-control-plane.valkeyPort" -}}
+{{- print "6379" }}
+{{- end }}
+
+{{/*
+Get the Valkey password secret name
+*/}}
+{{- define "strato-control-plane.valkeySecretName" -}}
+{{- printf "%s-valkey" .Release.Name }}
+{{- end }}
+
+{{/*
+Get the Valkey password secret key
+*/}}
+{{- define "strato-control-plane.valkeySecretKey" -}}
+{{- print "valkey-password" }}
+{{- end }}
+
+{{/*
 SpiceDB labels
 */}}
 {{- define "strato-control-plane.spicedb.name" -}}

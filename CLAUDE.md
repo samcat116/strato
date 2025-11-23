@@ -42,9 +42,9 @@ The agent uses TOML configuration files to set connection and operational parame
 
 ### Skaffold + Helm Development (Recommended)
 - `minikube start --memory=4096 --cpus=2` - Start local Kubernetes cluster
-- `cd helm/strato && helm dependency build` - Build Helm chart dependencies (run once)
+- `cd helm/strato-control-plane && helm dependency build` - Build Helm chart dependencies including PostgreSQL, Valkey, and SpiceDB operator (run once after adding dependencies)
 - `skaffold dev` - Start full development environment with hot reload
-- `skaffold dev --profile=minimal` - Start minimal environment (Control Plane, PostgreSQL, Permify only)
+- `skaffold dev --profile=minimal` - Start minimal environment (Control Plane, PostgreSQL, Valkey, SpiceDB only)
 - `skaffold dev --profile=debug` - Start with debug logging and Swift debug builds
 - `skaffold build` - Build container images locally
 - `skaffold delete` - Stop and clean up development environment
@@ -54,6 +54,29 @@ The agent uses TOML configuration files to set connection and operational parame
 - `kubectl port-forward service/strato-control-plane 8080:8080` - Access Control Plane at localhost:8080
 - `minikube service strato-control-plane --url` - Get external URL for Control Plane
 - `minikube stop` - Stop Kubernetes cluster
+
+### Sake Development (Local Swift Processes)
+Sake is a Swift-based task runner for local development without Kubernetes:
+- `sake dev` - Start complete development environment (PostgreSQL, Valkey, SpiceDB, Control Plane, Agent, test VM)
+- `sake startPostgres` - Start PostgreSQL database container
+- `sake startValkey` - Start Valkey (Redis) cache container
+- `sake startSpiceDB` - Start SpiceDB authorization service
+- `sake loadSpiceDBSchema` - Load SpiceDB authorization schema
+- `sake startControlPlane` - Build and start control-plane service
+- `sake startAgent` - Build and start agent service
+- `sake createTestVM` - Create a test VM via API
+- `sake status` - Show status of all services
+- `sake logs` - Show recent logs from all services
+- `sake stop` - Stop all running services
+- `sake clean` - Stop services and remove all containers and data
+
+**Environment:**
+- Services run as local Swift processes (control-plane, agent) and Docker containers (PostgreSQL, Valkey, SpiceDB)
+- PostgreSQL: localhost:5432
+- Valkey: localhost:6379
+- SpiceDB: localhost:8081 (HTTP), localhost:50051 (gRPC)
+- Control Plane: localhost:8080
+- Logs: /tmp/strato-control-plane.log, /tmp/strato-agent.log
 
 ### Docker Development (Legacy - being phased out)
 - `./scripts/prepare-build.sh` - Prepare build context (run before first Docker build)
@@ -81,6 +104,7 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 - **Agent**: Swift command-line application that manages VMs on hypervisor nodes (supports both Linux and macOS)
 - **Shared Package**: Common models, DTOs, and WebSocket protocols used by both Control Plane and Agent
 - **Database**: PostgreSQL with Fluent migrations (Control Plane only)
+- **Cache**: Valkey (Redis-compatible) for caching and session management (Control Plane only)
 - **Authorization**: Permify for fine-grained access control and permissions (Control Plane only)
 - **Scheduler**: Intelligent VM placement service with multiple strategies (least-loaded, best-fit, round-robin, random) (Control Plane only)
 - **Frontend**: Leaf templates + HTMX for dynamic interactions (Control Plane only)
@@ -108,7 +132,7 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 - Database connection configured via environment variables (see docker-compose.yml)
 
 ### External Integrations
-- **Control Plane**: Permify authorization service, HTMX for frontend interactions, xterm.js for terminal interfaces
+- **Control Plane**: Valkey (Redis) for caching, Permify authorization service, HTMX for frontend interactions, xterm.js for terminal interfaces
 - **Agent**:
   - **VM Management**: QEMU via SwiftQEMU library for VM lifecycle management
   - **Networking (Linux)**: OVN/OVS via SwiftOVN for software-defined networking
