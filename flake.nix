@@ -16,8 +16,8 @@
             control_plane_url = "${cfg.controlPlaneUrl}"
             qemu_socket_dir = "${cfg.qemuSocketDir}"
             log_level = "${cfg.logLevel}"
-            ${lib.optionalString (cfg.networkMode != null) ''network_mode = "${cfg.networkMode}"''}
-            ${lib.optionalString (cfg.enableKvm != null) ''enable_kvm = ${if cfg.enableKvm then "true" else "false"}''}
+            network_mode = "${cfg.networkMode}"
+            enable_kvm = ${if cfg.enableKvm then "true" else "false"}
           '';
         in
         {
@@ -50,13 +50,13 @@
             };
 
             networkMode = lib.mkOption {
-              type = lib.types.nullOr (lib.types.enum [ "ovn" "user" ]);
+              type = lib.types.enum [ "ovn" "user" ];
               default = "ovn";
               description = "Networking mode: 'ovn' for OVN/OVS, 'user' for user-mode networking.";
             };
 
             enableKvm = lib.mkOption {
-              type = lib.types.nullOr lib.types.bool;
+              type = lib.types.bool;
               default = true;
               description = "Enable KVM hardware acceleration.";
             };
@@ -75,6 +75,14 @@
           };
 
           config = lib.mkIf cfg.enable {
+            # Validate required configuration
+            assertions = [
+              {
+                assertion = cfg.controlPlaneUrl != "";
+                message = "services.strato-agent.controlPlaneUrl must be set when the service is enabled.";
+              }
+            ];
+
             # Ensure required system packages are available
             environment.systemPackages = with pkgs; [
               qemu_kvm
@@ -92,16 +100,17 @@
 
             users.groups.${cfg.group} = {};
 
-            # Ensure QEMU socket directory exists
+            # Ensure QEMU socket directory and state directory exist
             systemd.tmpfiles.rules = [
-              "d ${cfg.qemuSocketDir} 0755 ${cfg.user} ${cfg.group} -"
+              "d ${cfg.qemuSocketDir} 0750 ${cfg.user} ${cfg.group} -"
+              "d /var/lib/strato 0750 ${cfg.user} ${cfg.group} -"
             ];
 
-            # Enable KVM module
-            boot.kernelModules = lib.mkIf cfg.enableKvm [ "kvm-intel" "kvm-amd" ];
+            # Enable KVM module (NixOS will automatically load the correct variant)
+            boot.kernelModules = lib.mkIf cfg.enableKvm [ "kvm" ];
 
             # Enable OVN/OVS services
-            virtualisation.openvswitch.enable = lib.mkIf (cfg.networkMode == "ovn") true;
+            virtualisation.openvswitch.enable = cfg.networkMode == "ovn";
 
             # Systemd service for the agent
             systemd.services.strato-agent = {
@@ -150,16 +159,13 @@
           pname = "strato-agent";
           version = "0.1.0";
 
-          src = ./.;
+          src = pkgs.lib.cleanSource ./.;
 
           nativeBuildInputs = with pkgs; [
             swift
-            swiftpm
-            swiftpm2nix
           ];
 
           buildInputs = with pkgs; [
-            Foundation
             glib
             qemu
           ] ++ lib.optionals stdenv.isLinux [
@@ -186,7 +192,13 @@
           meta = with pkgs.lib; {
             description = "Strato Hypervisor Agent - manages VMs on hypervisor nodes";
             homepage = "https://github.com/samcat116/strato";
-            license = licenses.mit;
+            license = {
+              shortName = "FSL-1.1-MIT";
+              fullName = "Functional Source License 1.1 with MIT Future License";
+              url = "https://fsl.software/";
+              free = false;
+              redistributable = true;
+            };
             platforms = platforms.linux ++ platforms.darwin;
             maintainers = [];
           };
@@ -203,7 +215,6 @@
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             swift
-            swiftpm
             qemu
             glib
             pkg-config

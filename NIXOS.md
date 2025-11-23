@@ -140,7 +140,7 @@ nix develop
 ```
 
 This gives you access to:
-- Swift 6.0 toolchain
+- Swift toolchain (version as provided by nixpkgs-unstable)
 - QEMU
 - OVN/OVS (on Linux)
 - glib and other build dependencies
