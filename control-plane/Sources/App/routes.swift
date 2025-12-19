@@ -133,6 +133,10 @@ func routes(_ app: Application) throws {
     // Agent management controller
     try app.register(collection: AgentController())
 
+    // SCIM controllers
+    try app.register(collection: SCIMController())
+    try app.register(collection: SCIMTokenController())
+
     // OpenAPI Vapor transport (spec-first). Once the generator produces APIProtocol
     // from Sources/App/openapi.yaml, register handlers here.
     // let transport = VaporTransport(routesBuilder: app)

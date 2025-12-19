@@ -17,6 +17,10 @@ final class Group: Model, @unchecked Sendable {
     @Parent(key: "organization_id")
     var organization: Organization
 
+    // SCIM provisioning field
+    @Field(key: "scim_provisioned")
+    var scimProvisioned: Bool
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -33,12 +37,14 @@ final class Group: Model, @unchecked Sendable {
         id: UUID? = nil,
         name: String,
         description: String,
-        organizationID: UUID
+        organizationID: UUID,
+        scimProvisioned: Bool = false
     ) {
         self.id = id
         self.name = name
         self.description = description
         self.$organization.id = organizationID
+        self.scimProvisioned = scimProvisioned
     }
 }
 
