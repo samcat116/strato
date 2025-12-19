@@ -1,5 +1,5 @@
 {
-  "originHash" : "92267e178767f55775752672b2b503a2ea40c3b3f2352d9988f1f27ae54d1ce0",
+  "originHash" : "63cd2f2d3e8235ff57622a2c26c49ee0dcf07734fee8f912a25ba3083bc6e6ff",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -421,7 +421,7 @@
       "location" : "https://github.com/samcat116/swift-scim.git",
       "state" : {
         "branch" : "main",
-        "revision" : "57d5f2c7f639f1ec6315ecdd6d56d15e3666b8a7"
+        "revision" : "2dab16349cbf38eb6d15b528044a98fe3a6ce4b2"
       }
     },
     {
