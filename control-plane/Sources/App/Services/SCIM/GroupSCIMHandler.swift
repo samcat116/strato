@@ -294,21 +294,29 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             return
         }
 
-        // Check if already a member
-        let existingMembership = try await App.UserGroup.query(on: db)
-            .filter(\.$user.$id == userID)
-            .filter(\.$group.$id == groupID)
-            .first()
-
-        if existingMembership == nil {
-            let membership = App.UserGroup(userID: userID, groupID: groupID)
+        // Try to create membership, handling race conditions where another request
+        // might create the same membership concurrently
+        let membership = App.UserGroup(userID: userID, groupID: groupID)
+        do {
             try await membership.save(on: db)
 
-            // Add to SpiceDB
+            // Add to SpiceDB only if DB save succeeded
             try await spicedb.addUserToGroup(
                 userID: userID.uuidString,
                 groupID: groupID.uuidString
             )
+        } catch {
+            // Check if this was a duplicate key error (membership already exists)
+            let errorDescription = String(describing: error).lowercased()
+            if errorDescription.contains("unique") || errorDescription.contains("duplicate") {
+                // Membership already exists, which is fine - ensure SpiceDB is in sync
+                try await spicedb.addUserToGroup(
+                    userID: userID.uuidString,
+                    groupID: groupID.uuidString
+                )
+            } else {
+                throw error
+            }
         }
     }
 

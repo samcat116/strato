@@ -67,7 +67,9 @@ final class SCIMToken: Model, @unchecked Sendable {
     // MARK: - Static Helper Methods
 
     static func generateToken() -> String {
-        // Generate a secure random SCIM token: scim_[48 random chars]
+        // Generate a secure random SCIM token: scim_[48 base64 chars]
+        // Uses 256 bits of cryptographic randomness, base64 encoded and filtered to 48 alphanumeric chars
+        // This provides approximately 285 bits of entropy (48 chars * ~5.95 bits/char for base64 without +/=)
         let randomBytes = SymmetricKey(size: .bits256)
         let keyData = randomBytes.withUnsafeBytes { Data($0) }
         let keyString = keyData.base64EncodedString()

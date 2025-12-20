@@ -152,10 +152,14 @@ struct SCIMController: RouteCollection {
             }
         }
 
-        // Extract headers
+        // Extract headers - combine multiple values with comma per RFC 7230
         var headers: [String: String] = [:]
         for (name, value) in req.headers {
-            headers[name] = value
+            if let existing = headers[name] {
+                headers[name] = existing + ", " + value
+            } else {
+                headers[name] = value
+            }
         }
 
         // Get body data
@@ -195,7 +199,17 @@ struct SCIMController: RouteCollection {
         }
         let host = req.headers.first(name: "Host") ?? "localhost:8080"
         let baseURLString = "\(scheme)://\(host)/organizations/\(organizationID.uuidString)/scim/v2"
-        let baseURL = URL(string: baseURLString) ?? URL(string: "http://localhost:8080")!
+        let baseURL: URL
+        if let parsedURL = URL(string: baseURLString) {
+            baseURL = parsedURL
+        } else {
+            req.logger.warning("Failed to construct valid SCIM base URL from request; falling back to localhost",
+                               metadata: [
+                                   "scim_base_url_string": .string(baseURLString),
+                                   "scim_host_header": .string(host)
+                               ])
+            baseURL = URL(string: "http://localhost:8080")!
+        }
 
         // Create configuration
         let config = SCIMProcessorConfiguration(
