@@ -124,6 +124,17 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
+        // Check if new username is already taken by another user
+        if user.username != resource.userName {
+            let existingUser = try await User.query(on: db)
+                .filter(\.$username == resource.userName)
+                .filter(\.$id != uuid)
+                .first()
+            if existingUser != nil {
+                throw SCIMServerError.conflict(detail: "User with username '\(resource.userName)' already exists")
+            }
+        }
+
         // Update user fields
         user.username = resource.userName
         user.displayName = resource.displayName ?? resource.name?.formatted ?? resource.userName
@@ -166,18 +177,48 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         }
 
         // Verify user is in this organization
-        let membership = try await UserOrganization.query(on: db)
+        guard let membership = try await UserOrganization.query(on: db)
             .filter(\.$user.$id == uuid)
             .filter(\.$organization.$id == organizationID)
             .first()
-
-        guard membership != nil else {
+        else {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
         // Soft delete - set scimActive to false
         user.scimActive = false
         try await user.save(on: db)
+
+        // Remove user from all groups in this organization
+        let groupMemberships = try await App.UserGroup.query(on: db)
+            .join(App.Group.self, on: \App.UserGroup.$group.$id == \App.Group.$id)
+            .filter(App.Group.self, \.$organization.$id == organizationID)
+            .filter(\.$user.$id == uuid)
+            .all()
+
+        for groupMembership in groupMemberships {
+            try await spicedb.removeUserFromGroup(
+                userID: uuid.uuidString,
+                groupID: groupMembership.$group.id.uuidString
+            )
+        }
+        try await App.UserGroup.query(on: db)
+            .join(App.Group.self, on: \App.UserGroup.$group.$id == \App.Group.$id)
+            .filter(App.Group.self, \.$organization.$id == organizationID)
+            .filter(\.$user.$id == uuid)
+            .delete()
+
+        // Remove SpiceDB organization membership relationship
+        try await spicedb.deleteRelationship(
+            entity: "organization",
+            entityId: organizationID.uuidString,
+            relation: "member",
+            subject: "user",
+            subjectId: uuid.uuidString
+        )
+
+        // Remove organization membership from database
+        try await membership.delete(on: db)
 
         // Delete external ID mapping
         try await SCIMExternalID.deleteMapping(

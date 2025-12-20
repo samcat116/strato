@@ -93,6 +93,18 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             throw SCIMServerError.notFound(resourceType: "Group", id: id)
         }
 
+        // Check if new name is already taken by another group in this organization
+        if group.name != resource.displayName {
+            let existingGroup = try await App.Group.query(on: db)
+                .filter(\.$name == resource.displayName)
+                .filter(\.$organization.$id == organizationID)
+                .filter(\.$id != uuid)
+                .first()
+            if existingGroup != nil {
+                throw SCIMServerError.conflict(detail: "Group with name '\(resource.displayName)' already exists in this organization")
+            }
+        }
+
         // Update group fields
         group.name = resource.displayName
         try await group.save(on: db)
@@ -301,16 +313,17 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
     }
 
     private func removeMemberFromGroup(userID: UUID, groupID: UUID) async throws {
-        try await App.UserGroup.query(on: db)
-            .filter(\.$user.$id == userID)
-            .filter(\.$group.$id == groupID)
-            .delete()
-
-        // Remove from SpiceDB
+        // Remove from SpiceDB first - if this fails, we don't want orphaned DB records
         try await spicedb.removeUserFromGroup(
             userID: userID.uuidString,
             groupID: groupID.uuidString
         )
+
+        // Then remove from database
+        try await App.UserGroup.query(on: db)
+            .filter(\.$user.$id == userID)
+            .filter(\.$group.$id == groupID)
+            .delete()
     }
 
     private func removeAllMembersFromGroup(groupID: UUID) async throws {

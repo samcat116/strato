@@ -90,6 +90,7 @@ extension SCIMExternalID {
     }
 
     /// Create or update an external ID mapping
+    /// Uses retry logic to handle race conditions where two requests try to create the same mapping concurrently.
     static func upsert(
         organizationID: UUID,
         resourceType: ResourceType,
@@ -97,23 +98,40 @@ extension SCIMExternalID {
         internalId: UUID,
         on db: Database
     ) async throws {
-        // Check if mapping already exists
-        if let existing = try await SCIMExternalID.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$resourceType == resourceType.rawValue)
-            .filter(\.$externalId == externalId)
-            .first()
-        {
-            existing.internalId = internalId
-            try await existing.save(on: db)
-        } else {
+        // Try to find and update existing, or create new with retry for race conditions
+        for attempt in 1...3 {
+            // Check if mapping already exists
+            if let existing = try await SCIMExternalID.query(on: db)
+                .filter(\.$organization.$id == organizationID)
+                .filter(\.$resourceType == resourceType.rawValue)
+                .filter(\.$externalId == externalId)
+                .first()
+            {
+                existing.internalId = internalId
+                try await existing.save(on: db)
+                return
+            }
+
+            // Try to create new mapping
             let mapping = SCIMExternalID(
                 organizationID: organizationID,
                 resourceType: resourceType.rawValue,
                 externalId: externalId,
                 internalId: internalId
             )
-            try await mapping.save(on: db)
+            do {
+                try await mapping.save(on: db)
+                return
+            } catch {
+                // If unique constraint violation, retry to find the existing record
+                let errorDescription = String(describing: error).lowercased()
+                if errorDescription.contains("unique") || errorDescription.contains("duplicate") {
+                    if attempt < 3 {
+                        continue
+                    }
+                }
+                throw error
+            }
         }
     }
 
