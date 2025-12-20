@@ -30,6 +30,13 @@ final class User: Model, @unchecked Sendable {
     @OptionalField(key: "oidc_subject")
     var oidcSubject: String? // The 'sub' claim from the OIDC provider
 
+    // SCIM provisioning fields
+    @Field(key: "scim_provisioned")
+    var scimProvisioned: Bool
+
+    @Field(key: "scim_active")
+    var scimActive: Bool
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -56,7 +63,9 @@ final class User: Model, @unchecked Sendable {
         displayName: String,
         isSystemAdmin: Bool = false,
         oidcProviderID: UUID? = nil,
-        oidcSubject: String? = nil
+        oidcSubject: String? = nil,
+        scimProvisioned: Bool = false,
+        scimActive: Bool = true
     ) {
         self.id = id
         self.username = username
@@ -67,6 +76,8 @@ final class User: Model, @unchecked Sendable {
             self.$oidcProvider.id = oidcProviderID
         }
         self.oidcSubject = oidcSubject
+        self.scimProvisioned = scimProvisioned
+        self.scimActive = scimActive
     }
 }
 
