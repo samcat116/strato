@@ -63,7 +63,7 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         if let externalId = resource.externalId {
             try await SCIMExternalID.upsert(
                 organizationID: organizationID,
-                resourceType: SCIMExternalID.ResourceType.user,
+                resourceType: .user,
                 externalId: externalId,
                 internalId: userID,
                 on: db
@@ -141,7 +141,7 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         if let externalId = resource.externalId {
             try await SCIMExternalID.upsert(
                 organizationID: organizationID,
-                resourceType: SCIMExternalID.ResourceType.user,
+                resourceType: .user,
                 externalId: externalId,
                 internalId: uuid,
                 on: db
@@ -182,7 +182,7 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         // Delete external ID mapping
         try await SCIMExternalID.deleteMapping(
             internalId: uuid,
-            resourceType: SCIMExternalID.ResourceType.user,
+            resourceType: .user,
             organizationID: organizationID,
             on: db
         )
@@ -237,7 +237,7 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         // Get external ID if exists
         let externalId = try await SCIMExternalID.findExternalID(
             internalId: userID,
-            resourceType: SCIMExternalID.ResourceType.user,
+            resourceType: .user,
             organizationID: organizationID,
             on: db
         )
@@ -284,13 +284,15 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
                 result = try applyFilter(right, to: result)
                 return result
             case .or, .not:
-                // OR and NOT are complex in Fluent - for now, just return the query unchanged
-                return query
+                throw SCIMServerError.invalidFilter(
+                    detail: "SCIM logical filter operator '\(logicalOp)' is not supported"
+                )
             }
 
-        case .not(_):
-            // NOT is complex - for now, just return the query unchanged
-            return query
+        case .not:
+            throw SCIMServerError.invalidFilter(
+                detail: "SCIM NOT filter is not supported"
+            )
 
         case .present(let path):
             // Check if attribute is present (not null)
@@ -341,6 +343,18 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         }
     }
 
+    /// Escape special characters used in SQL LIKE/ILIKE patterns.
+    /// This prevents user input from injecting unintended wildcards.
+    private func escapeLikePattern(_ value: String) -> String {
+        var escaped = value
+        // First escape the escape character itself
+        escaped = escaped.replacingOccurrences(of: "\\", with: "\\\\")
+        // Then escape wildcard characters
+        escaped = escaped.replacingOccurrences(of: "%", with: "\\%")
+        escaped = escaped.replacingOccurrences(of: "_", with: "\\_")
+        return escaped
+    }
+
     private func applyStringFilter(
         keyPath: KeyPath<User, FieldProperty<User, String>>,
         op: SCIMFilterOperator,
@@ -353,11 +367,14 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         case .notEqual:
             return query.filter(keyPath != value)
         case .contains:
-            return query.filter(keyPath, .custom("ILIKE"), "%\(value)%")
+            let escapedValue = escapeLikePattern(value)
+            return query.filter(keyPath, .custom("ILIKE"), "%\(escapedValue)%")
         case .startsWith:
-            return query.filter(keyPath, .custom("ILIKE"), "\(value)%")
+            let escapedValue = escapeLikePattern(value)
+            return query.filter(keyPath, .custom("ILIKE"), "\(escapedValue)%")
         case .endsWith:
-            return query.filter(keyPath, .custom("ILIKE"), "%\(value)")
+            let escapedValue = escapeLikePattern(value)
+            return query.filter(keyPath, .custom("ILIKE"), "%\(escapedValue)")
         case .greaterThan, .greaterThanOrEqual, .lessThan, .lessThanOrEqual, .present:
             // These don't make sense for strings, just return unchanged
             return query

@@ -45,12 +45,12 @@ final class SCIMExternalID: Model, @unchecked Sendable {
 
 extension SCIMExternalID: Content {}
 
-// MARK: - Resource Type Constants
+// MARK: - Resource Type
 
 extension SCIMExternalID {
-    enum ResourceType {
-        static let user = "User"
-        static let group = "Group"
+    enum ResourceType: String, Codable, Sendable {
+        case user = "User"
+        case group = "Group"
     }
 }
 
@@ -60,13 +60,13 @@ extension SCIMExternalID {
     /// Find internal ID by external ID for a specific resource type in an organization
     static func findInternalID(
         externalId: String,
-        resourceType: String,
+        resourceType: ResourceType,
         organizationID: UUID,
         on db: Database
     ) async throws -> UUID? {
         let mapping = try await SCIMExternalID.query(on: db)
             .filter(\.$organization.$id == organizationID)
-            .filter(\.$resourceType == resourceType)
+            .filter(\.$resourceType == resourceType.rawValue)
             .filter(\.$externalId == externalId)
             .first()
 
@@ -76,13 +76,13 @@ extension SCIMExternalID {
     /// Find external ID by internal ID for a specific resource type in an organization
     static func findExternalID(
         internalId: UUID,
-        resourceType: String,
+        resourceType: ResourceType,
         organizationID: UUID,
         on db: Database
     ) async throws -> String? {
         let mapping = try await SCIMExternalID.query(on: db)
             .filter(\.$organization.$id == organizationID)
-            .filter(\.$resourceType == resourceType)
+            .filter(\.$resourceType == resourceType.rawValue)
             .filter(\.$internalId == internalId)
             .first()
 
@@ -92,7 +92,7 @@ extension SCIMExternalID {
     /// Create or update an external ID mapping
     static func upsert(
         organizationID: UUID,
-        resourceType: String,
+        resourceType: ResourceType,
         externalId: String,
         internalId: UUID,
         on db: Database
@@ -100,7 +100,7 @@ extension SCIMExternalID {
         // Check if mapping already exists
         if let existing = try await SCIMExternalID.query(on: db)
             .filter(\.$organization.$id == organizationID)
-            .filter(\.$resourceType == resourceType)
+            .filter(\.$resourceType == resourceType.rawValue)
             .filter(\.$externalId == externalId)
             .first()
         {
@@ -109,7 +109,7 @@ extension SCIMExternalID {
         } else {
             let mapping = SCIMExternalID(
                 organizationID: organizationID,
-                resourceType: resourceType,
+                resourceType: resourceType.rawValue,
                 externalId: externalId,
                 internalId: internalId
             )
@@ -120,13 +120,13 @@ extension SCIMExternalID {
     /// Delete mapping for a specific internal resource
     static func deleteMapping(
         internalId: UUID,
-        resourceType: String,
+        resourceType: ResourceType,
         organizationID: UUID,
         on db: Database
     ) async throws {
         try await SCIMExternalID.query(on: db)
             .filter(\.$organization.$id == organizationID)
-            .filter(\.$resourceType == resourceType)
+            .filter(\.$resourceType == resourceType.rawValue)
             .filter(\.$internalId == internalId)
             .delete()
     }

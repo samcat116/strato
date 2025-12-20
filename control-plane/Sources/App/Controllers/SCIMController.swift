@@ -100,9 +100,13 @@ struct SCIMController: RouteCollection {
             return nil
         }
 
-        // Update last used (fire and forget)
+        // Update last used (best effort, with error logging)
         scimToken.updateLastUsed(ip: req.remoteAddress?.ipAddress)
-        try? await scimToken.save(on: req.db)
+        do {
+            try await scimToken.save(on: req.db)
+        } catch {
+            req.logger.error("Failed to update SCIM token lastUsed fields: \(error.localizedDescription)")
+        }
 
         return SCIMAuthContext(
             principal: "scim-token:\(scimToken.id?.uuidString ?? "unknown")",
@@ -177,7 +181,18 @@ struct SCIMController: RouteCollection {
         authContext: SCIMAuthContext
     ) async -> SCIMRequestProcessor {
         // Build base URL for this organization's SCIM endpoint
-        let scheme = req.headers.first(name: "X-Forwarded-Proto") ?? (req.application.environment == .production ? "https" : "http")
+        // Prioritize X-Forwarded-Proto header (set by reverse proxies), then check TLS config, then URL scheme
+        let forwardedProto = req.headers.first(name: "X-Forwarded-Proto")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scheme: String
+        if let proto = forwardedProto, !proto.isEmpty {
+            scheme = proto
+        } else if let urlScheme = req.url.scheme {
+            scheme = urlScheme
+        } else if req.application.http.server.configuration.tlsConfiguration != nil {
+            scheme = "https"
+        } else {
+            scheme = "http"
+        }
         let host = req.headers.first(name: "Host") ?? "localhost:8080"
         let baseURLString = "\(scheme)://\(host)/organizations/\(organizationID.uuidString)/scim/v2"
         let baseURL = URL(string: baseURLString) ?? URL(string: "http://localhost:8080")!

@@ -86,6 +86,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateSCIMExternalID())
     app.migrations.add(AddSCIMFieldsToUser())
     app.migrations.add(AddSCIMFieldsToGroup())
+    app.migrations.add(AlterSCIMTokenForeignKey())
 
     try await app.autoMigrate()
 
