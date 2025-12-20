@@ -86,8 +86,8 @@ final class SCIMToken: Model, @unchecked Sendable {
     }
 
     static func extractPrefix(_ token: String) -> String {
-        // Return first 12 characters for identification (scim_XXXXXXX)
-        return String(token.prefix(12))
+        // Return first 20 characters for identification (scim_XXXXXXXXXXXXXXX)
+        return String(token.prefix(20))
     }
 
     func updateLastUsed(ip: String?) {
