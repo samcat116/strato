@@ -81,6 +81,14 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateAgent())
     app.migrations.add(CreateAgentRegistrationToken())
 
+    // SCIM migrations
+    app.migrations.add(CreateSCIMToken())
+    app.migrations.add(CreateSCIMExternalID())
+    app.migrations.add(AddSCIMFieldsToUser())
+    app.migrations.add(AddSCIMFieldsToGroup())
+    app.migrations.add(AlterSCIMTokenForeignKey())
+    app.migrations.add(AddSCIMExternalIDIndex())
+
     try await app.autoMigrate()
 
     // Configure scheduler service
@@ -102,17 +110,10 @@ public func configure(_ app: Application) async throws {
 
         // Configure OTLP exporter protocol (defaults to gRPC on port 4317)
         // Can be overridden with OTEL_EXPORTER_OTLP_ENDPOINT environment variable
-        #if os(macOS)
-        if #available(macOS 15, *) {
-            otelConfig.metrics.otlpExporter.protocol = .grpc
-            otelConfig.logs.otlpExporter.protocol = .grpc
-            otelConfig.traces.otlpExporter.protocol = .grpc
-        }
-        #else
+
         otelConfig.metrics.otlpExporter.protocol = .grpc
         otelConfig.logs.otlpExporter.protocol = .grpc
         otelConfig.traces.otlpExporter.protocol = .grpc
-        #endif
 
         app.logger.info("Bootstrapping OpenTelemetry", metadata: [
             "service": .string(otelConfig.serviceName),
