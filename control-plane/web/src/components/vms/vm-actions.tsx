@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { vmsApi } from "@/lib/api/vms";
 import { toast } from "sonner";
-import type { VM, VMStatus } from "@/types/api";
+import type { VM } from "@/types/api";
 
 interface VMActionsProps {
   vm: VM;

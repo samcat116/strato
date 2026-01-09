@@ -5,7 +5,7 @@ import {
   useContext,
   useState,
   useCallback,
-  useEffect,
+  useMemo,
   type ReactNode,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -28,7 +28,8 @@ const OrganizationContext = createContext<OrganizationContextType | undefined>(
 export function OrganizationProvider({ children }: { children: ReactNode }) {
   const { user, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
-  const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+  // Only track user-selected org; null means use default
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
 
   const {
     data: organizations = [],
@@ -40,27 +41,24 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
     enabled: isAuthenticated,
   });
 
-  // Set initial org from user's current org or first org
-  useEffect(() => {
-    if (!currentOrgId && organizations.length > 0) {
-      const initialOrg = user?.currentOrganizationId
-        ? organizations.find((o) => o.id === user.currentOrganizationId)
-        : organizations[0];
-      if (initialOrg) {
-        setCurrentOrgId(initialOrg.id);
-      }
+  // Derive current org: user selection > user's default > first available
+  const userCurrentOrgId = user?.currentOrganizationId;
+  const currentOrg = useMemo(() => {
+    if (selectedOrgId) {
+      const selected = organizations.find((o) => o.id === selectedOrgId);
+      if (selected) return selected;
     }
-  }, [organizations, user?.currentOrganizationId, currentOrgId]);
-
-  const currentOrg =
-    organizations.find((o) => o.id === currentOrgId) ||
-    organizations[0] ||
-    null;
+    if (userCurrentOrgId) {
+      const userDefault = organizations.find((o) => o.id === userCurrentOrgId);
+      if (userDefault) return userDefault;
+    }
+    return organizations[0] || null;
+  }, [selectedOrgId, organizations, userCurrentOrgId]);
 
   const switchOrg = useCallback(
     async (orgId: string) => {
       await organizationsApi.switch(orgId);
-      setCurrentOrgId(orgId);
+      setSelectedOrgId(orgId);
       // Invalidate queries that depend on current org
       queryClient.invalidateQueries({ queryKey: ["vms"] });
       queryClient.invalidateQueries({ queryKey: ["agents"] });

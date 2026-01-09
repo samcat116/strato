@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -31,15 +31,12 @@ function SidebarSection({
   children,
   defaultOpen = false,
 }: SidebarSectionProps) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
-
-  // Restore state from localStorage
-  useEffect(() => {
+  // Initialize state from localStorage (lazy initializer avoids effect)
+  const [isOpen, setIsOpen] = useState(() => {
+    if (typeof window === "undefined") return defaultOpen;
     const stored = localStorage.getItem(`sidebar-${id}`);
-    if (stored === "expanded") {
-      setIsOpen(true);
-    }
-  }, [id]);
+    return stored === "expanded" ? true : stored === "collapsed" ? false : defaultOpen;
+  });
 
   const toggle = () => {
     const newState = !isOpen;
