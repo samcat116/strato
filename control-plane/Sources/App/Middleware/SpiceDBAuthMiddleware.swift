@@ -1,8 +1,22 @@
 import Fluent
 import Vapor
 
+struct DevUserKey: StorageKey {
+    typealias Value = User
+}
+
 struct SpiceDBAuthMiddleware: AsyncMiddleware {
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
+        // Dev mode bypass - skip all auth
+        if request.application.environment == .development,
+           Environment.get("DEV_AUTH_BYPASS") == "true"
+        {
+            if let devUser = request.application.storage[DevUserKey.self] {
+                request.auth.login(devUser)
+            }
+            return try await next.respond(to: request)
+        }
+
         // Skip auth for health checks, public routes, and auth endpoints
         if request.url.path.hasPrefix("/health") || request.url.path == "/"
             || request.url.path == "/hello" || request.url.path == "/login"
