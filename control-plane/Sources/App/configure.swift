@@ -91,6 +91,28 @@ public func configure(_ app: Application) async throws {
 
     try await app.autoMigrate()
 
+    // Dev auth bypass - create dev user for local development
+    if app.environment == .development, Environment.get("DEV_AUTH_BYPASS") == "true" {
+        app.logger.warning("⚠️ DEV_AUTH_BYPASS enabled - authentication is disabled!")
+        let devUser: User
+        if let existingUser = try await User.query(on: app.db)
+            .filter(\.$username == "dev")
+            .first()
+        {
+            devUser = existingUser
+        } else {
+            devUser = User(
+                username: "dev",
+                email: "dev@localhost",
+                displayName: "Dev User",
+                isSystemAdmin: true
+            )
+            try await devUser.save(on: app.db)
+            app.logger.info("Created dev user for auth bypass")
+        }
+        app.storage[DevUserKey.self] = devUser
+    }
+
     // Configure scheduler service
     // Default strategy can be configured via environment variable
     let schedulingStrategy = Environment.get("SCHEDULING_STRATEGY")
