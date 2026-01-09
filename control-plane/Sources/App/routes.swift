@@ -1,111 +1,9 @@
-import Elementary
-import ElementaryHTMX
 import Fluent
 import Vapor
 
 func routes(_ app: Application) throws {
-    // Public routes
-    app.get("") { req async throws -> Response in
-        req.logger.info("Root route accessed - checking authentication")
-
-        // Check if user is authenticated
-        if let user = req.auth.get(User.self) {
-            req.logger.info("User is authenticated, checking onboarding status")
-
-            // If user is system admin and has no organizations, redirect to onboarding
-            if user.isSystemAdmin {
-                try await user.$organizations.load(on: req.db)
-                if user.organizations.isEmpty {
-                    req.logger.info("System admin needs to complete onboarding")
-                    throw Abort.redirect(to: "/onboarding")
-                }
-            }
-
-            req.logger.info("Rendering dashboard")
-            let html = DashboardTemplate().render()
-            return Response(
-                status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]),
-                body: .init(string: html))
-        } else {
-            // Check if this is a fresh instance (no users exist)
-            let isFirstInstance = try await User.isFirstUser(on: req.db)
-            if isFirstInstance {
-                req.logger.info("Fresh instance - redirecting to register")
-                throw Abort.redirect(to: "/register")
-            } else {
-                req.logger.info("User not authenticated, redirecting to login")
-                throw Abort.redirect(to: "/login")
-            }
-        }
-    }
-
-    // Dashboard route (same as root but explicit)
-    app.get("dashboard") { req async throws -> Response in
-        req.logger.info("Dashboard route accessed - checking authentication")
-
-        // Check if user is authenticated
-        if let user = req.auth.get(User.self) {
-            req.logger.info("User is authenticated, checking onboarding status")
-
-            // If user is system admin and has no organizations, redirect to onboarding
-            if user.isSystemAdmin {
-                try await user.$organizations.load(on: req.db)
-                if user.organizations.isEmpty {
-                    req.logger.info("System admin needs to complete onboarding")
-                    throw Abort.redirect(to: "/onboarding")
-                }
-            }
-
-            req.logger.info("Rendering dashboard")
-            let html = DashboardTemplate().render()
-            return Response(
-                status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]),
-                body: .init(string: html))
-        } else {
-            // Check if this is a fresh instance (no users exist)
-            let isFirstInstance = try await User.isFirstUser(on: req.db)
-            if isFirstInstance {
-                req.logger.info("Fresh instance - redirecting to register")
-                throw Abort.redirect(to: "/register")
-            } else {
-                req.logger.info("User not authenticated, redirecting to login")
-                throw Abort.redirect(to: "/login")
-            }
-        }
-    }
-
     app.get("hello") { _ async -> String in
         "Hello, world!"
-    }
-
-    // Authentication views
-    app.get("login") { req async throws -> Response in
-        // Fetch all enabled OIDC providers from all organizations
-        let oidcProviders = try await OIDCProvider.query(on: req.db)
-            .filter(\.$enabled == true)
-            .with(\.$organization)
-            .all()
-
-        let providerInfos: [OIDCProviderInfo] = oidcProviders.compactMap { provider in
-            guard let providerID = provider.id,
-                  let organizationID = provider.organization.id else {
-                return nil
-            }
-            return OIDCProviderInfo(
-                providerID: providerID,
-                providerName: provider.name,
-                organizationID: organizationID,
-                organizationName: provider.organization.name
-            )
-        }
-
-        let html = LoginTemplate(oidcProviders: providerInfos).render()
-        return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
-    }
-
-    app.get("register") { _ -> Response in
-        let html = RegisterTemplate().render()
-        return Response(status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]), body: .init(string: html))
     }
 
     // Register controllers
@@ -142,4 +40,32 @@ func routes(_ app: Application) throws {
     // let transport = VaporTransport(routesBuilder: app)
     // let apiImpl = GeneratedAPIImpl() // conforms to generated protocol
     // try apiImpl.registerHandlers(on: transport)
+
+    // SPA catch-all route for Next.js static export
+    // This serves index.html for all frontend routes, allowing client-side routing
+    // FileMiddleware already handles static assets (_next/*, images, etc.)
+    app.get("**") { req async throws -> Response in
+        let path = req.url.path
+
+        // Skip paths that are handled by API controllers
+        let apiPrefixes = ["/api/", "/auth/", "/agent/", "/health"]
+        for prefix in apiPrefixes {
+            if path.hasPrefix(prefix) {
+                throw Abort(.notFound)
+            }
+        }
+
+        // Return 404 for static asset paths that weren't found by FileMiddleware
+        // This prevents serving index.html for missing .js, .css, etc. files
+        let staticExtensions = [".js", ".css", ".json", ".map", ".woff", ".woff2", ".svg", ".png", ".jpg", ".ico", ".txt"]
+        for ext in staticExtensions {
+            if path.hasSuffix(ext) {
+                throw Abort(.notFound)
+            }
+        }
+
+        // Serve index.html for SPA routing
+        let indexPath = app.directory.publicDirectory + "index.html"
+        return req.fileio.streamFile(at: indexPath)
+    }
 }
