@@ -6,13 +6,16 @@ FROM swift:6.1.2-noble AS build
 # Check if we're using prebuilt artifacts
 ARG PREBUILT_ARTIFACTS=""
 
-# Install OS updates and Node.js for TailwindCSS
+# Install OS updates and Bun for frontend build
 RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     && apt-get -q update \
     && apt-get -q dist-upgrade -y \
-    && apt-get install -y libjemalloc-dev curl \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs
+    && apt-get install -y libjemalloc-dev curl unzip \
+    && curl -fsSL https://bun.sh/install | bash
+
+# Add Bun to PATH
+ENV BUN_INSTALL="/root/.bun"
+ENV PATH="$BUN_INSTALL/bin:$PATH"
 
 # Set up a build area
 WORKDIR /build
@@ -30,20 +33,25 @@ RUN sed -i 's|.package(path: "../shared")|.package(path: "/build/shared")|' Pack
 RUN swift package resolve \
     $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true)
 
-# Copy package.json and package-lock.json for npm dependencies
-COPY ./control-plane/package*.json ./
+# Copy web frontend package files
+COPY ./control-plane/web/package.json ./control-plane/web/bun.lock* ./web/
 
-# Install npm dependencies (including devDependencies for TailwindCSS)
-RUN npm ci
+# Install frontend dependencies
+WORKDIR /build/control-plane/web
+RUN bun install --frozen-lockfile
 
 # Copy entire control-plane repo into container
+WORKDIR /build/control-plane
 COPY ./control-plane .
 
 # Copy artifacts directory (always exists due to workflow preparation)
 COPY ./artifacts /build/artifacts
 
-# Build TailwindCSS
-RUN npm run build-css-prod
+# Build and deploy frontend (Next.js static export to Public/)
+WORKDIR /build/control-plane/web
+RUN bun run build:deploy
+
+WORKDIR /build/control-plane
 
 # Build the application only if not using prebuilt artifacts
 RUN if [ -z "$PREBUILT_ARTIFACTS" ]; then \
