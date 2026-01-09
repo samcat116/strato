@@ -4,44 +4,24 @@ This document describes how to set up a complete local development environment f
 
 ## Prerequisites
 
-### Install Sake
+### Install Task
 
-Sake is a Swift-based task runner that manages all development tasks. Install it using one of these methods:
+Task is a task runner that manages all development tasks. Install it using one of these methods:
 
 **Homebrew (Recommended)**:
 ```bash
-brew install kattouf/sake/sake
+brew install go-task
 ```
 
-**Manual Installation (Linux)**:
-```bash
-curl -sL "https://github.com/kattouf/Sake/releases/download/1.0.3/sake-1.0.3-x86_64-unknown-linux-gnu.zip" -o /tmp/sake.zip
-unzip /tmp/sake.zip -d /tmp
-chmod +x /tmp/sake
-sudo mv /tmp/sake /usr/local/bin/
-```
-
-**Manual Installation (macOS)**:
-```bash
-curl -sL "https://github.com/kattouf/Sake/releases/download/1.0.3/sake-1.0.3-x86_64-apple-macosx.zip" -o /tmp/sake.zip
-unzip /tmp/sake.zip -d /tmp
-chmod +x /tmp/sake
-sudo mv /tmp/sake /usr/local/bin/
-```
+**Other Installation Methods**:
+See https://taskfile.dev/installation/ for additional installation options including:
+- npm: `npm install -g @go-task/cli`
+- snap: `snap install task --classic`
+- go: `go install github.com/go-task/task/v3/cmd/task@latest`
 
 Verify installation:
 ```bash
-sake --version
-```
-
-### Build SakeApp
-
-The Sake tasks are defined in `SakeApp/Sakefile.swift`. Build it once:
-
-```bash
-cd SakeApp
-swift build -c release
-cd ..
+task --version
 ```
 
 ## Quick Start
@@ -49,7 +29,7 @@ cd ..
 Start the complete development environment:
 
 ```bash
-sake dev
+task dev
 ```
 
 This will:
@@ -65,48 +45,48 @@ This will:
 
 List all available commands:
 ```bash
-sake list
+task --list
 ```
 
 ### Common Commands
 
 **View service status**:
 ```bash
-sake status
+task status
 ```
 
 **View logs**:
 ```bash
-sake logs
+task logs
 ```
 
 **Stop all services**:
 ```bash
-sake stop
+task stop
 ```
 
 **Clean up everything** (stops services and removes containers):
 ```bash
-sake clean
+task clean
 ```
 
 **Check running VMs**:
 ```bash
-sake checkVM
+task check-vm
 ```
 
 ### Individual Service Commands
-- `dev` - Start complete development environment
-- `startPostgres` - Start PostgreSQL database
-- `startSpiceDB` - Start SpiceDB authorization service
-- `loadSpiceDBSchema` - Load SpiceDB schema
-- `startControlPlane` - Build and start control-plane
-- `startAgent` - Build and start agent
-- `createTestVM` - Create test VM and setup
-- `status` - Show service status
-- `logs` - Show service logs
-- `stop` - Stop all services
-- `clean` - Clean up all resources
+- `task dev` - Start complete development environment
+- `task start-postgres` - Start PostgreSQL database
+- `task start-spicedb` - Start SpiceDB authorization service
+- `task load-spicedb-schema` - Load SpiceDB schema
+- `task start-control-plane` - Build and start control-plane
+- `task start-agent` - Build and start agent
+- `task create-test-vm` - Create test VM and setup
+- `task status` - Show service status
+- `task logs` - Show service logs
+- `task stop` - Stop all services
+- `task clean` - Clean up all resources
 
 ## Service Architecture
 
@@ -224,7 +204,7 @@ pgrep -a qemu
 ### Via Logs
 ```bash
 # View agent logs to see VM operations
-sake logs
+task logs
 ```
 
 ## Troubleshooting
@@ -298,14 +278,14 @@ ls -la /dev/kvm
 
 ### Stop Services
 ```bash
-sake stop
+task stop
 ```
 
 This stops all services but keeps data in Docker containers.
 
 ### Complete Cleanup
 ```bash
-sake clean
+task clean
 ```
 
 This stops all services, removes Docker containers, and cleans up log files.
@@ -330,24 +310,24 @@ rm -f config.toml
 ### Typical Workflow
 ```bash
 # 1. Start development environment
-sake dev
+task dev
 
 # 2. Make code changes in your editor
 
 # 3. Stop services
-sake stop
+task stop
 
 # 4. Restart to test changes
-sake dev
+task dev
 
 # 5. View logs to debug
-sake logs
+task logs
 
 # 6. Check service status
-sake status
+task status
 
 # 7. Clean up when done
-sake clean
+task clean
 ```
 
 ### Hot Reload Development
@@ -370,7 +350,7 @@ skaffold dev --profile=minimal
 ## Support
 
 For issues or questions:
-- Check logs using `sake logs`
-- Check status using `sake status`
+- Check logs using `task logs`
+- Check status using `task status`
 - Review troubleshooting section above
 - Open an issue on GitHub

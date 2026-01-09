@@ -1,0 +1,551 @@
+version: '3'
+
+vars:
+  PROJECT_ROOT:
+    sh: pwd
+  POSTGRES_CONTAINER: strato-postgres
+  SPICEDB_CONTAINER: strato-spicedb
+  POSTGRES_DB: vapor_database
+  POSTGRES_USER: vapor_username
+  POSTGRES_PASSWORD: vapor_password
+  SPICEDB_KEY: strato-dev-key
+
+env:
+  DATABASE_HOST: localhost
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: vapor_database
+  DATABASE_USERNAME: vapor_username
+  DATABASE_PASSWORD: vapor_password
+  SPICEDB_ENDPOINT: http://localhost:8081
+  SPICEDB_PRESHARED_KEY: strato-dev-key
+  WEBAUTHN_RELYING_PARTY_ID: localhost
+  WEBAUTHN_RELYING_PARTY_NAME: Strato
+  WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost:8080
+
+tasks:
+  # ============================================================================
+  # Main Development Task
+  # ============================================================================
+  dev:
+    desc: Start complete development environment
+    cmds:
+      - task: start-postgres
+      - task: start-spicedb
+      - task: load-spicedb-schema
+      - task: start-control-plane
+      - task: create-agent-config
+      - task: create-agent-token
+      - task: start-agent
+      - task: create-test-vm
+      - |
+        echo ""
+        echo "🎉 Development environment is fully running!"
+        echo ""
+        echo "📊 Service URLs:"
+        echo "   • Control Plane:  http://localhost:8080"
+        echo "   • SpiceDB Admin:  http://localhost:8081"
+        echo "   • PostgreSQL:     localhost:5432"
+        echo ""
+        echo "📋 Logs:"
+        echo "   • Control Plane:  tail -f /tmp/strato-control-plane.log"
+        echo "   • Agent:          tail -f /tmp/strato-agent.log"
+        echo ""
+        echo "⚠️  To stop all services, run: task stop"
+        echo "⚠️  To clean everything up, run: task clean"
+
+  # ============================================================================
+  # Infrastructure Tasks
+  # ============================================================================
+  start-postgres:
+    desc: Start PostgreSQL database container
+    cmds:
+      - echo "🐘 Starting PostgreSQL..."
+      - |
+        EXISTING=$(docker ps -a --filter "name={{.POSTGRES_CONTAINER}}" --format "{{`{{.Names}}`}}")
+        if [ "$EXISTING" = "{{.POSTGRES_CONTAINER}}" ]; then
+          echo "⚠️  PostgreSQL container already exists. Starting it..."
+          docker start {{.POSTGRES_CONTAINER}}
+        else
+          docker run -d \
+            --name {{.POSTGRES_CONTAINER}} \
+            -e POSTGRES_DB={{.POSTGRES_DB}} \
+            -e POSTGRES_USER={{.POSTGRES_USER}} \
+            -e POSTGRES_PASSWORD={{.POSTGRES_PASSWORD}} \
+            -p 5432:5432 \
+            postgres:16-alpine
+        fi
+      - echo "⏳ Waiting for PostgreSQL to be ready..."
+      - sleep 3
+      - |
+        for i in $(seq 1 30); do
+          if docker exec {{.POSTGRES_CONTAINER}} pg_isready -U {{.POSTGRES_USER}} -d {{.POSTGRES_DB}} > /dev/null 2>&1; then
+            echo "✅ PostgreSQL is ready!"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "❌ PostgreSQL did not become ready in time"
+        exit 1
+
+  start-spicedb:
+    desc: Start SpiceDB authorization service
+    cmds:
+      - echo "🔐 Starting SpiceDB..."
+      - |
+        EXISTING=$(docker ps -a --filter "name={{.SPICEDB_CONTAINER}}" --format "{{`{{.Names}}`}}")
+        if [ "$EXISTING" = "{{.SPICEDB_CONTAINER}}" ]; then
+          echo "⚠️  SpiceDB container already exists. Removing and recreating..."
+          docker rm -f {{.SPICEDB_CONTAINER}}
+        fi
+      - |
+        POSTGRES_IP=$(docker inspect -f '{{`{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}`}}' {{.POSTGRES_CONTAINER}})
+        CONN_STRING="postgres://{{.POSTGRES_USER}}:{{.POSTGRES_PASSWORD}}@${POSTGRES_IP}:5432/{{.POSTGRES_DB}}?sslmode=disable"
+
+        echo "🔄 Running SpiceDB migrations..."
+        docker run --rm \
+          --network host \
+          -e SPICEDB_DATASTORE_ENGINE=postgres \
+          -e "SPICEDB_DATASTORE_CONN_URI=${CONN_STRING}" \
+          authzed/spicedb:v1.35.3 \
+          migrate head
+
+        echo "▶️  Starting SpiceDB server..."
+        docker run -d \
+          --name {{.SPICEDB_CONTAINER}} \
+          --network host \
+          -e SPICEDB_DATASTORE_ENGINE=postgres \
+          -e "SPICEDB_DATASTORE_CONN_URI=${CONN_STRING}" \
+          -e SPICEDB_GRPC_PRESHARED_KEY={{.SPICEDB_KEY}} \
+          authzed/spicedb:v1.35.3 \
+          serve \
+          --grpc-preshared-key {{.SPICEDB_KEY}} \
+          --http-enabled \
+          --http-addr :8081 \
+          --grpc-addr :50051
+      - echo "⏳ Waiting for SpiceDB to be ready..."
+      - sleep 3
+      - |
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:8081/healthz > /dev/null 2>&1; then
+            echo "✅ SpiceDB is ready!"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "❌ SpiceDB did not become ready in time"
+        exit 1
+
+  load-spicedb-schema:
+    desc: Load SpiceDB authorization schema
+    cmds:
+      - echo "📋 Loading SpiceDB schema..."
+      - |
+        if [ ! -f "{{.PROJECT_ROOT}}/spicedb/schema.zed" ]; then
+          echo "❌ SpiceDB schema not found at {{.PROJECT_ROOT}}/spicedb/schema.zed"
+          exit 1
+        fi
+      - |
+        docker run --rm \
+          --network host \
+          -v "{{.PROJECT_ROOT}}/spicedb/schema.zed:/schema.zed:ro" \
+          authzed/zed:latest \
+          schema write /schema.zed \
+          --endpoint localhost:50051 \
+          --token {{.SPICEDB_KEY}} \
+          --insecure
+      - echo "✅ SpiceDB schema loaded!"
+
+  # ============================================================================
+  # Application Tasks
+  # ============================================================================
+  start-control-plane:
+    desc: Build and start the control-plane service
+    cmds:
+      - echo "🚀 Building and starting control-plane..."
+      - echo "🔨 Building control-plane..."
+      - swift build --package-path "{{.PROJECT_ROOT}}/control-plane"
+      - echo "▶️  Starting control-plane..."
+      - |
+        touch /tmp/strato-control-plane.log
+        nohup swift run --package-path "{{.PROJECT_ROOT}}/control-plane" > /tmp/strato-control-plane.log 2>&1 &
+        echo $! > /tmp/strato-control-plane.pid
+      - echo "⏳ Waiting for control-plane to be ready..."
+      - sleep 5
+      - |
+        for i in $(seq 1 60); do
+          if curl -sf http://localhost:8080/health/live > /dev/null 2>&1; then
+            echo "✅ Control-plane is ready!"
+            echo "📋 Logs available at: /tmp/strato-control-plane.log"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "⚠️  Control-plane may not be fully ready. Check logs at /tmp/strato-control-plane.log"
+
+  create-agent-config:
+    desc: Create agent configuration file
+    cmds:
+      - echo "📝 Creating agent configuration..."
+      - |
+        cat > "{{.PROJECT_ROOT}}/config.toml" << 'EOF'
+        # Strato Agent Configuration
+        control_plane_url = "ws://localhost:8080/agent/ws"
+        qemu_socket_dir = "/tmp/strato-qemu-sockets"
+        log_level = "debug"
+        network_mode = "user"
+        EOF
+      - echo "✅ Agent config created at {{.PROJECT_ROOT}}/config.toml"
+
+  create-agent-token:
+    desc: Create agent registration token in database
+    cmds:
+      - echo "🔑 Creating agent registration token..."
+      - |
+        TOKEN_VALUE=$(uuidgen)
+        AGENT_NAME="strato-dev"
+
+        docker exec {{.POSTGRES_CONTAINER}} psql -U {{.POSTGRES_USER}} -d {{.POSTGRES_DB}} -c "
+          INSERT INTO agent_registration_tokens (id, token, agent_name, is_used, expires_at, created_at)
+          VALUES (
+            gen_random_uuid(),
+            '${TOKEN_VALUE}',
+            '${AGENT_NAME}',
+            false,
+            NOW() + INTERVAL '24 hours',
+            NOW()
+          )
+          ON CONFLICT DO NOTHING;
+        " || echo "⚠️  Failed to create agent registration token"
+
+        REGISTRATION_URL="ws://localhost:8080/agent/ws?token=${TOKEN_VALUE}&name=${AGENT_NAME}"
+        echo "${REGISTRATION_URL}" > /tmp/strato-agent-registration-url.txt
+
+        echo "✅ Agent registration token created!"
+        echo "   Agent name: ${AGENT_NAME}"
+        echo "   Registration URL saved to /tmp/strato-agent-registration-url.txt"
+
+  start-agent:
+    desc: Build and start the agent service
+    cmds:
+      - echo "🤖 Building and starting agent..."
+      - echo "🔨 Building agent..."
+      - swift build --package-path "{{.PROJECT_ROOT}}/agent"
+      - mkdir -p /tmp/strato-qemu-sockets
+      - |
+        if [ ! -f /tmp/strato-agent-registration-url.txt ]; then
+          echo "❌ Agent registration URL not found at /tmp/strato-agent-registration-url.txt"
+          exit 1
+        fi
+        REGISTRATION_URL=$(cat /tmp/strato-agent-registration-url.txt)
+
+        echo "▶️  Starting agent with registration URL..."
+        touch /tmp/strato-agent.log
+        nohup swift run --package-path "{{.PROJECT_ROOT}}/agent" StratoAgent \
+          --config-file "{{.PROJECT_ROOT}}/config.toml" \
+          --registration-url "${REGISTRATION_URL}" > /tmp/strato-agent.log 2>&1 &
+        echo $! > /tmp/strato-agent.pid
+      - echo "✅ Agent started!"
+      - echo "📋 Logs available at: /tmp/strato-agent.log"
+      - sleep 5
+
+  create-test-vm:
+    desc: Create test VM and setup test data via API
+    cmds:
+      - echo "🖥️  Creating test VM..."
+      - echo "👤 Setting up test user and organization..."
+      - |
+        # Create user
+        docker exec {{.POSTGRES_CONTAINER}} psql -U {{.POSTGRES_USER}} -d {{.POSTGRES_DB}} -c "
+          INSERT INTO users (id, username, email, display_name, is_system_admin, created_at, updated_at)
+          VALUES (
+            '00000000-0000-0000-0000-000000000001',
+            'admin',
+            'admin@strato.local',
+            'System Administrator',
+            true,
+            NOW(),
+            NOW()
+          )
+          ON CONFLICT (username) DO NOTHING;
+        " || true
+
+        # Create organization
+        docker exec {{.POSTGRES_CONTAINER}} psql -U {{.POSTGRES_USER}} -d {{.POSTGRES_DB}} -c "
+          INSERT INTO organizations (id, name, description, created_at, updated_at)
+          VALUES (
+            '00000000-0000-0000-0000-000000000001',
+            'Default Organization',
+            'Default organization for testing',
+            NOW(),
+            NOW()
+          )
+          ON CONFLICT (id) DO NOTHING;
+        " || true
+
+        # Link user to organization
+        docker exec {{.POSTGRES_CONTAINER}} psql -U {{.POSTGRES_USER}} -d {{.POSTGRES_DB}} -c "
+          INSERT INTO user_organizations (user_id, organization_id)
+          VALUES (
+            '00000000-0000-0000-0000-000000000001',
+            '00000000-0000-0000-0000-000000000001'
+          )
+          ON CONFLICT DO NOTHING;
+        " || true
+
+        # Set current organization for user
+        docker exec {{.POSTGRES_CONTAINER}} psql -U {{.POSTGRES_USER}} -d {{.POSTGRES_DB}} -c "
+          UPDATE users
+          SET current_organization_id = '00000000-0000-0000-0000-000000000001'
+          WHERE id = '00000000-0000-0000-0000-000000000001';
+        " || true
+
+        # Create default project
+        docker exec {{.POSTGRES_CONTAINER}} psql -U {{.POSTGRES_USER}} -d {{.POSTGRES_DB}} -c "
+          INSERT INTO projects (id, organization_id, name, description, default_environment, environments, created_at, updated_at)
+          VALUES (
+            '00000000-0000-0000-0000-000000000001',
+            '00000000-0000-0000-0000-000000000001',
+            'Default Project',
+            'Default project for testing',
+            'development',
+            ARRAY['development', 'staging', 'production'],
+            NOW(),
+            NOW()
+          )
+          ON CONFLICT (id) DO NOTHING;
+        " || true
+      - echo "🔐 Setting up authorization relationships..."
+      - |
+        # User is admin of organization
+        curl -sf -X POST \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer {{.SPICEDB_KEY}}" \
+          -d '{
+            "updates": [{
+              "operation": "OPERATION_CREATE",
+              "relationship": {
+                "resource": {"objectType": "organization", "objectId": "00000000-0000-0000-0000-000000000001"},
+                "relation": "admin",
+                "subject": {"object": {"objectType": "user", "objectId": "00000000-0000-0000-0000-000000000001"}}
+              }
+            }]
+          }' \
+          http://localhost:8081/v1/relationships/write || true
+
+        # Project belongs to organization
+        curl -sf -X POST \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer {{.SPICEDB_KEY}}" \
+          -d '{
+            "updates": [{
+              "operation": "OPERATION_CREATE",
+              "relationship": {
+                "resource": {"objectType": "project", "objectId": "00000000-0000-0000-0000-000000000001"},
+                "relation": "organization",
+                "subject": {"object": {"objectType": "organization", "objectId": "00000000-0000-0000-0000-000000000001"}}
+              }
+            }]
+          }' \
+          http://localhost:8081/v1/relationships/write || true
+      - echo "✅ Test user and organization created!"
+      - echo "🔑 Creating API key for admin user..."
+      - |
+        API_KEY_VALUE="sk_dev_test_key_$(uuidgen | tr -d '-' | head -c 32)"
+        KEY_PREFIX=$(echo "${API_KEY_VALUE}" | head -c 16)
+        KEY_HASH=$(echo -n "${API_KEY_VALUE}" | sha256sum | cut -d' ' -f1)
+
+        # Get actual user ID
+        ACTUAL_USER_ID=$(docker exec {{.POSTGRES_CONTAINER}} psql -U {{.POSTGRES_USER}} -d {{.POSTGRES_DB}} -t -A -c "SELECT id FROM users WHERE username = 'admin' LIMIT 1;")
+
+        # Delete old test API key
+        docker exec {{.POSTGRES_CONTAINER}} psql -U {{.POSTGRES_USER}} -d {{.POSTGRES_DB}} -c "
+          DELETE FROM api_keys WHERE name = 'Development Test Key';
+        " || true
+
+        # Create new API key
+        docker exec {{.POSTGRES_CONTAINER}} psql -U {{.POSTGRES_USER}} -d {{.POSTGRES_DB}} -c "
+          INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, scopes, is_active, created_at, updated_at)
+          VALUES (
+            gen_random_uuid(),
+            '${ACTUAL_USER_ID}',
+            'Development Test Key',
+            '${KEY_HASH}',
+            '${KEY_PREFIX}',
+            ARRAY['read', 'write'],
+            true,
+            NOW(),
+            NOW()
+          );
+        " || true
+
+        echo "✅ API key created!"
+
+        # Get project ID
+        PROJECT_ID=$(docker exec {{.POSTGRES_CONTAINER}} psql -U {{.POSTGRES_USER}} -d {{.POSTGRES_DB}} -t -A -c "SELECT id FROM projects WHERE organization_id = '00000000-0000-0000-0000-000000000001' LIMIT 1;")
+
+        echo ""
+        echo "🖥️  Creating test VM via API..."
+        VM_NAME="test-vm-$(uuidgen | head -c 8)"
+
+        RESPONSE=$(curl -sf -X POST \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${API_KEY_VALUE}" \
+          -d "{
+            \"name\": \"${VM_NAME}\",
+            \"description\": \"Test VM created by task dev\",
+            \"templateName\": \"ubuntu-22.04\",
+            \"projectId\": \"${PROJECT_ID}\",
+            \"environment\": \"development\"
+          }" \
+          http://localhost:8080/vms 2>&1) || true
+
+        if [ -n "$RESPONSE" ]; then
+          echo "✅ VM created successfully!"
+          echo "   Response: ${RESPONSE:0:200}..."
+        else
+          echo "⚠️  VM creation may have failed."
+        fi
+      - |
+        echo ""
+        echo "🎉 Development environment is ready!"
+        echo ""
+        echo "📊 Service Status:"
+        echo "   • PostgreSQL:     http://localhost:5432"
+        echo "   • SpiceDB:        http://localhost:8081"
+        echo "   • Control Plane:  http://localhost:8080"
+        echo "   • Agent:          Connected via WebSocket"
+        echo ""
+        echo "📝 Next steps:"
+        echo "   • Check VM status: task check-vm"
+        echo "   • View logs: task logs"
+        echo "   • Open web UI: http://localhost:8080"
+
+  # ============================================================================
+  # Utility Tasks
+  # ============================================================================
+  check-vm:
+    desc: Check if VMs are running via QEMU
+    cmds:
+      - echo "🔍 Checking for running VMs..."
+      - |
+        OUTPUT=$(pgrep -a qemu 2>/dev/null || true)
+        if [ -n "$OUTPUT" ]; then
+          echo "✅ Found running QEMU processes:"
+          echo "$OUTPUT"
+        else
+          echo "ℹ️  No QEMU processes found. VMs may not be running yet."
+        fi
+
+  status:
+    desc: Show status of all services
+    cmds:
+      - echo "📊 Service Status"
+      - echo ""
+      - |
+        # Check PostgreSQL
+        PG_STATUS=$(docker ps --filter "name={{.POSTGRES_CONTAINER}}" --format "{{`{{.Status}}`}}" 2>/dev/null)
+        if [ -n "$PG_STATUS" ]; then
+          echo "PostgreSQL:    ✅ Running ($PG_STATUS)"
+        else
+          echo "PostgreSQL:    ❌ Stopped"
+        fi
+
+        # Check SpiceDB
+        SPICE_STATUS=$(docker ps --filter "name={{.SPICEDB_CONTAINER}}" --format "{{`{{.Status}}`}}" 2>/dev/null)
+        if [ -n "$SPICE_STATUS" ]; then
+          echo "SpiceDB:       ✅ Running ($SPICE_STATUS)"
+        else
+          echo "SpiceDB:       ❌ Stopped"
+        fi
+
+        # Check control-plane
+        if [ -f /tmp/strato-control-plane.pid ]; then
+          PID=$(cat /tmp/strato-control-plane.pid)
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "Control Plane: ✅ Running (PID: $PID)"
+          else
+            echo "Control Plane: ❌ Stopped"
+          fi
+        else
+          echo "Control Plane: ❌ Stopped"
+        fi
+
+        # Check agent
+        if [ -f /tmp/strato-agent.pid ]; then
+          PID=$(cat /tmp/strato-agent.pid)
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "Agent:         ✅ Running (PID: $PID)"
+          else
+            echo "Agent:         ❌ Stopped"
+          fi
+        else
+          echo "Agent:         ❌ Stopped"
+        fi
+
+  logs:
+    desc: Show logs from all services
+    cmds:
+      - echo "📋 Service Logs"
+      - echo ""
+      - echo "=== Control Plane Logs ==="
+      - |
+        if [ -f /tmp/strato-control-plane.log ]; then
+          tail -20 /tmp/strato-control-plane.log
+        else
+          echo "No logs found"
+        fi
+      - echo ""
+      - echo "=== Agent Logs ==="
+      - |
+        if [ -f /tmp/strato-agent.log ]; then
+          tail -20 /tmp/strato-agent.log
+        else
+          echo "No logs found"
+        fi
+
+  # ============================================================================
+  # Cleanup Tasks
+  # ============================================================================
+  stop:
+    desc: Stop all running services
+    cmds:
+      - echo "🛑 Stopping all services..."
+      - |
+        # Stop agent
+        if [ -f /tmp/strato-agent.pid ]; then
+          PID=$(cat /tmp/strato-agent.pid)
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "Stopping agent (PID: $PID)..."
+            kill "$PID" 2>/dev/null || true
+          fi
+          rm -f /tmp/strato-agent.pid
+        fi
+
+        # Stop control-plane
+        if [ -f /tmp/strato-control-plane.pid ]; then
+          PID=$(cat /tmp/strato-control-plane.pid)
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "Stopping control-plane (PID: $PID)..."
+            kill "$PID" 2>/dev/null || true
+          fi
+          rm -f /tmp/strato-control-plane.pid
+        fi
+
+        # Stop Docker containers
+        echo "Stopping Docker containers..."
+        docker stop {{.SPICEDB_CONTAINER}} 2>/dev/null || true
+        docker stop {{.POSTGRES_CONTAINER}} 2>/dev/null || true
+      - echo "✅ All services stopped!"
+
+  clean:
+    desc: Stop services and remove all containers and data
+    deps: [stop]
+    cmds:
+      - echo "🧹 Cleaning up all resources..."
+      - echo "Removing Docker containers..."
+      - docker rm -f {{.SPICEDB_CONTAINER}} 2>/dev/null || true
+      - docker rm -f {{.POSTGRES_CONTAINER}} 2>/dev/null || true
+      - echo "Removing log files..."
+      - rm -f /tmp/strato-control-plane.log /tmp/strato-agent.log
+      - rm -f /tmp/strato-agent-registration-url.txt
+      - echo "✅ Cleanup complete!"
