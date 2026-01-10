@@ -1,4 +1,4 @@
-version: '3'
+version: "3"
 
 vars:
   PROJECT_ROOT:
@@ -245,7 +245,7 @@ tasks:
           --registration-url "${REGISTRATION_URL}" > /tmp/strato-agent.log 2>&1 &
         echo $! > /tmp/strato-agent.pid
       - echo "✅ Agent started!"
-      - echo "📋 Logs available at: /tmp/strato-agent.log"
+      - echo "📋 Logs available at:\ /tmp/strato-agent.log"
       - sleep 5
 
   create-test-vm:
