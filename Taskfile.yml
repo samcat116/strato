@@ -173,7 +173,7 @@ tasks:
       - echo "▶️  Starting control-plane..."
       - |
         touch /tmp/strato-control-plane.log
-        nohup swift run --package-path "{{.PROJECT_ROOT}}/control-plane" > /tmp/strato-control-plane.log 2>&1 &
+        cd "{{.PROJECT_ROOT}}/control-plane" && nohup swift run > /tmp/strato-control-plane.log 2>&1 &
         echo $! > /tmp/strato-control-plane.pid
       - echo "⏳ Waiting for control-plane to be ready..."
       - sleep 5
