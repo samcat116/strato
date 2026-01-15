@@ -122,38 +122,47 @@ public func configure(_ app: Application) async throws {
 
     // Configure OpenTelemetry observability (metrics, logs, traces)
     if app.environment != .testing {
-        var otelConfig = OTel.Configuration.default
-        otelConfig.serviceName = Environment.get("OTEL_SERVICE_NAME") ?? "strato-control-plane"
+        let metricsEnabled = Environment.get("OTEL_METRICS_ENABLED").flatMap(Bool.init) ?? true
+        let logsEnabled = Environment.get("OTEL_LOGS_ENABLED").flatMap(Bool.init) ?? true
+        let tracesEnabled = Environment.get("OTEL_TRACES_ENABLED").flatMap(Bool.init) ?? true
 
-        // Enable all three pillars of observability
-        otelConfig.metrics.enabled = Environment.get("OTEL_METRICS_ENABLED").flatMap(Bool.init) ?? true
-        otelConfig.logs.enabled = Environment.get("OTEL_LOGS_ENABLED").flatMap(Bool.init) ?? true
-        otelConfig.traces.enabled = Environment.get("OTEL_TRACES_ENABLED").flatMap(Bool.init) ?? true
+        // Only bootstrap OpenTelemetry if at least one feature is enabled
+        if metricsEnabled || logsEnabled || tracesEnabled {
+            var otelConfig = OTel.Configuration.default
+            otelConfig.serviceName = Environment.get("OTEL_SERVICE_NAME") ?? "strato-control-plane"
 
-        // Configure OTLP exporter protocol (defaults to gRPC on port 4317)
-        // Can be overridden with OTEL_EXPORTER_OTLP_ENDPOINT environment variable
-        #if os(macOS)
-        if #available(macOS 15, *) {
+            // Enable all three pillars of observability
+            otelConfig.metrics.enabled = metricsEnabled
+            otelConfig.logs.enabled = logsEnabled
+            otelConfig.traces.enabled = tracesEnabled
+
+            // Configure OTLP exporter protocol (defaults to gRPC on port 4317)
+            // Can be overridden with OTEL_EXPORTER_OTLP_ENDPOINT environment variable
+            #if os(macOS)
+            if #available(macOS 15, *) {
+                otelConfig.metrics.otlpExporter.protocol = .grpc
+                otelConfig.logs.otlpExporter.protocol = .grpc
+                otelConfig.traces.otlpExporter.protocol = .grpc
+            }
+            #else
             otelConfig.metrics.otlpExporter.protocol = .grpc
             otelConfig.logs.otlpExporter.protocol = .grpc
             otelConfig.traces.otlpExporter.protocol = .grpc
+            #endif
+
+            app.logger.info("Bootstrapping OpenTelemetry", metadata: [
+                "service": .string(otelConfig.serviceName),
+                "metrics": .stringConvertible(otelConfig.metrics.enabled),
+                "logs": .stringConvertible(otelConfig.logs.enabled),
+                "traces": .stringConvertible(otelConfig.traces.enabled)
+            ])
+
+            let observability = try OTel.bootstrap(configuration: otelConfig)
+            app.lifecycle.use(OTelLifecycleHandler(observability: observability))
+            app.logger.info("OpenTelemetry observability service registered")
+        } else {
+            app.logger.info("OpenTelemetry disabled, skipping bootstrap")
         }
-        #else
-        otelConfig.metrics.otlpExporter.protocol = .grpc
-        otelConfig.logs.otlpExporter.protocol = .grpc
-        otelConfig.traces.otlpExporter.protocol = .grpc
-        #endif
-
-        app.logger.info("Bootstrapping OpenTelemetry", metadata: [
-            "service": .string(otelConfig.serviceName),
-            "metrics": .stringConvertible(otelConfig.metrics.enabled),
-            "logs": .stringConvertible(otelConfig.logs.enabled),
-            "traces": .stringConvertible(otelConfig.traces.enabled)
-        ])
-
-        let observability = try OTel.bootstrap(configuration: otelConfig)
-        app.lifecycle.use(OTelLifecycleHandler(observability: observability))
-        app.logger.info("OpenTelemetry observability service registered")
     }
 
     try routes(app)

@@ -118,6 +118,14 @@ spec:
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "{{ .Values.opentelemetry.collector.endpoint }}"
             {{- end }}
+            {{- else }}
+            # Disable OpenTelemetry when not enabled
+            - name: OTEL_METRICS_ENABLED
+              value: "false"
+            - name: OTEL_LOGS_ENABLED
+              value: "false"
+            - name: OTEL_TRACES_ENABLED
+              value: "false"
             {{- end }}
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:

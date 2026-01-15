@@ -21,6 +21,12 @@ env:
   WEBAUTHN_RELYING_PARTY_ID: localhost
   WEBAUTHN_RELYING_PARTY_NAME: Strato
   WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost:8080
+  # Disable OpenTelemetry for local development
+  OTEL_METRICS_ENABLED: "false"
+  OTEL_LOGS_ENABLED: "false"
+  OTEL_TRACES_ENABLED: "false"
+  # Enable dev auth bypass for local development
+  DEV_AUTH_BYPASS: "true"
 
 tasks:
   # ============================================================================
@@ -167,7 +173,7 @@ tasks:
       - echo "▶️  Starting control-plane..."
       - |
         touch /tmp/strato-control-plane.log
-        nohup swift run --package-path "{{.PROJECT_ROOT}}/control-plane" > /tmp/strato-control-plane.log 2>&1 &
+        cd "{{.PROJECT_ROOT}}/control-plane" && nohup swift run > /tmp/strato-control-plane.log 2>&1 &
         echo $! > /tmp/strato-control-plane.pid
       - echo "⏳ Waiting for control-plane to be ready..."
       - sleep 5

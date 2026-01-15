@@ -44,6 +44,16 @@ func routes(_ app: Application) throws {
     // SPA catch-all route for Next.js static export
     // This serves index.html for all frontend routes, allowing client-side routing
     // FileMiddleware already handles static assets (_next/*, images, etc.)
+
+    // Handle root path (** doesn't match /)
+    app.get { req async throws -> Response in
+        let indexPath = app.directory.publicDirectory + "index.html"
+        req.logger.info("Serving index.html from: \(indexPath)")
+        let response = try await req.fileio.asyncStreamFile(at: indexPath)
+        req.logger.info("Response status: \(response.status)")
+        return response
+    }
+
     app.get("**") { req async throws -> Response in
         let path = req.url.path
 
@@ -66,6 +76,6 @@ func routes(_ app: Application) throws {
 
         // Serve index.html for SPA routing
         let indexPath = app.directory.publicDirectory + "index.html"
-        return req.fileio.streamFile(at: indexPath)
+        return try await req.fileio.asyncStreamFile(at: indexPath)
     }
 }
