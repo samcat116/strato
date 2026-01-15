@@ -17,7 +17,7 @@ maintainers:
     email: sam@example.com
 dependencies:
   - name: postgresql
-    version: "~15.5.0"
+    version: "~16.4.0"
     repository: https://charts.bitnami.com/bitnami
     condition: postgresql.enabled
   - name: spicedb-operator
