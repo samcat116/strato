@@ -167,7 +167,7 @@ export function Sidebar({ onCreateVM, onAddAgent, onManageAPIKeys }: SidebarProp
           title="Settings"
           icon={<Settings className="h-4 w-4" />}
         >
-          <SidebarLink href="/organizations">Organization</SidebarLink>
+          <SidebarLink href="/organizations/settings">Organization</SidebarLink>
           <button
             onClick={onManageAPIKeys}
             className="flex items-center w-full px-3 py-2 text-sm text-gray-400 hover:bg-gray-700 hover:text-gray-200 rounded-md transition-colors"

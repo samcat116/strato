@@ -12,10 +12,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useOrganization } from "@/providers";
+import { CreateOrganizationDialog } from "./create-organization-dialog";
 
 export function OrganizationSwitcher() {
-  const { currentOrg, organizations, switchOrg, isLoading } = useOrganization();
+  const { currentOrg, organizations, switchOrg, isLoading, refresh } = useOrganization();
   const [open, setOpen] = useState(false);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
 
   const handleSwitch = async (orgId: string) => {
     await switchOrg(orgId);
@@ -53,11 +55,22 @@ export function OrganizationSwitcher() {
           ))}
         </div>
         <DropdownMenuSeparator className="bg-gray-700" />
-        <DropdownMenuItem className="text-blue-400 hover:bg-gray-700 focus:bg-gray-700 cursor-pointer">
+        <DropdownMenuItem
+          onClick={() => {
+            setOpen(false);
+            setCreateDialogOpen(true);
+          }}
+          className="text-blue-400 hover:bg-gray-700 focus:bg-gray-700 cursor-pointer"
+        >
           <Plus className="h-4 w-4 mr-2" />
           Create New Organization
         </DropdownMenuItem>
       </DropdownMenuContent>
+      <CreateOrganizationDialog
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+        onCreated={refresh}
+      />
     </DropdownMenu>
   );
 }
