@@ -3,37 +3,9 @@ import Fluent
 
 struct OnboardingController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        let onboarding = routes.grouped("onboarding")
-        onboarding.get(use: getOnboarding)
+        // API endpoint for onboarding setup
+        let onboarding = routes.grouped("api", "onboarding")
         onboarding.post("setup", use: setupOrganization)
-    }
-
-    func getOnboarding(req: Request) async throws -> Response {
-        // Only allow access if user is system admin and hasn't completed setup
-        guard let user = req.auth.get(User.self) else {
-            return req.redirect(to: "/login")
-        }
-
-        // Check if user is system admin
-        guard user.isSystemAdmin else {
-            throw Abort(.forbidden, reason: "Access denied")
-        }
-
-        // Check if user already has organizations
-        try await user.$organizations.load(on: req.db)
-        if !user.organizations.isEmpty {
-            // User already has organizations, redirect to dashboard
-            return req.redirect(to: "/")
-        }
-
-        // Render onboarding template
-        let template = OnboardingTemplate()
-        let html = template.render()
-        return Response(
-            status: .ok,
-            headers: HTTPHeaders([("Content-Type", "text/html")]),
-            body: .init(string: html)
-        )
     }
 
     func setupOrganization(req: Request) async throws -> OrganizationSetupResponse {

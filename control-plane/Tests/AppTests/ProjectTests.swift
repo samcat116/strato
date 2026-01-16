@@ -70,7 +70,7 @@ final class ProjectTests {
     @Test("Create project in organization")
     func testCreateProjectInOrganization() async throws {
         try await withProjectTestApp { app, _, testOrganization, _, authToken in
-            try await app.test(.POST, "/organizations/\(testOrganization.id!)/projects") { req in
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateProjectRequest(
                     name: "Web Application",
@@ -95,7 +95,7 @@ final class ProjectTests {
     @Test("Create project in OU")
     func testCreateProjectInOU() async throws {
         try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
-            try await app.test(.POST, "/organizations/\(testOrganization.id!)/ous/\(testOU.id!)/projects") { req in
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous/\(testOU.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateProjectRequest(
                     name: "Backend API",
@@ -119,7 +119,7 @@ final class ProjectTests {
     @Test("Create project with invalid parent fails")
     func testCreateProjectWithInvalidParent() async throws {
         try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
-            try await app.test(.POST, "/organizations/\(testOrganization.id!)/projects") { req in
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateProjectRequest(
                     name: "Invalid Project",
@@ -149,7 +149,7 @@ final class ProjectTests {
             project.path = try await project.buildPath(on: app.db)
             try await project.save(on: app.db)
 
-            try await app.test(.POST, "/projects/\(project.id!)/environments") { req in
+            try await app.test(.POST, "/api/projects/\(project.id!)/environments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(ProjectEnvironmentRequest(
                     environment: "qa"
@@ -179,7 +179,7 @@ final class ProjectTests {
             project.path = try await project.buildPath(on: app.db)
             try await project.save(on: app.db)
 
-            try await app.test(.DELETE, "/projects/\(project.id!)/environments/staging") { req in
+            try await app.test(.DELETE, "/api/projects/\(project.id!)/environments/staging") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -205,7 +205,7 @@ final class ProjectTests {
             )
             try await project.save(on: app.db)
 
-            try await app.test(.DELETE, "/projects/\(project.id!)/environments/dev") { req in
+            try await app.test(.DELETE, "/api/projects/\(project.id!)/environments/dev") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
@@ -235,7 +235,7 @@ final class ProjectTests {
             )
             try await ouProject.save(on: app.db)
 
-            try await app.test(.GET, "/projects") { req in
+            try await app.test(.GET, "/api/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -271,7 +271,7 @@ final class ProjectTests {
             )
             try await project.save(on: app.db)
 
-            try await app.test(.POST, "/projects/\(project.id!)/transfer") { req in
+            try await app.test(.POST, "/api/projects/\(project.id!)/transfer") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(TransferProjectRequest(
                     organizationId: nil,
@@ -299,7 +299,7 @@ final class ProjectTests {
             )
             try await project.save(on: app.db)
 
-            try await app.test(.PUT, "/projects/\(project.id!)") { req in
+            try await app.test(.PUT, "/api/projects/\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(UpdateProjectRequest(
                     name: "Updated Name",
@@ -331,7 +331,7 @@ final class ProjectTests {
             )
             try await project.save(on: app.db)
 
-            try await app.test(.DELETE, "/projects/\(project.id!)") { req in
+            try await app.test(.DELETE, "/api/projects/\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -366,7 +366,7 @@ final class ProjectTests {
             )
             try await vm.save(on: app.db)
 
-            try await app.test(.DELETE, "/projects/\(project.id!)") { req in
+            try await app.test(.DELETE, "/api/projects/\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == HTTPResponseStatus.conflict)

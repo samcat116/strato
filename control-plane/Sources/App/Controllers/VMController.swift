@@ -4,7 +4,7 @@ import StratoShared
 
 struct VMController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
-        let vms = routes.grouped("vms")
+        let vms = routes.grouped("api", "vms")
         vms.get(use: index)
         vms.post(use: create)
         vms.group(":vmID") { vm in

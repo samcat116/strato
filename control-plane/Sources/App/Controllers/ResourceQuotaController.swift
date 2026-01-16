@@ -5,7 +5,7 @@ import Fluent
 struct ResourceQuotaController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         // Global quota routes
-        let quotas = routes.grouped("quotas")
+        let quotas = routes.grouped("api", "quotas")
         quotas.get(use: indexByLevel) // Add route for /quotas?level=...
         quotas.group(":quotaID") { quota in
             quota.get(use: show)
@@ -15,7 +15,7 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         // Organization context routes
-        let organizations = routes.grouped("organizations")
+        let organizations = routes.grouped("api", "organizations")
         organizations.group(":organizationID") { org in
             let orgQuotas = org.grouped("quotas")
             orgQuotas.get(use: indexForOrganization)
@@ -29,7 +29,7 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         // Project context routes
-        let projects = routes.grouped("projects")
+        let projects = routes.grouped("api", "projects")
         projects.group(":projectID", "quotas") { projQuotas in
             projQuotas.get(use: indexForProject)
             projQuotas.post(use: createForProject)

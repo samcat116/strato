@@ -71,7 +71,7 @@ final class ResourceQuotaTests {
     @Test("Create organization-level quota")
     func testCreateOrganizationQuota() async throws {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
-            try await app.test(.POST, "/organizations/\(testOrganization.id!)/quotas") { req in
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/quotas") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateResourceQuotaRequest(
                     name: "Org Quota",
@@ -101,7 +101,7 @@ final class ResourceQuotaTests {
     @Test("Create project-level quota")
     func testCreateProjectQuota() async throws {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
-            try await app.test(.POST, "/projects/\(testProject.id!)/quotas") { req in
+            try await app.test(.POST, "/api/projects/\(testProject.id!)/quotas") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateResourceQuotaRequest(
                     name: "Project Quota",
@@ -127,7 +127,7 @@ final class ResourceQuotaTests {
     @Test("Create environment-specific quota")
     func testCreateEnvironmentQuota() async throws {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
-            try await app.test(.POST, "/projects/\(testProject.id!)/quotas") { req in
+            try await app.test(.POST, "/api/projects/\(testProject.id!)/quotas") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateResourceQuotaRequest(
                     name: "Production Quota",
@@ -175,7 +175,7 @@ final class ResourceQuotaTests {
             try await quota.save(on: app.db)
 
             // Get quota with usage
-            try await app.test(.GET, "/quotas/\(quota.id!)") { req in
+            try await app.test(.GET, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -252,7 +252,7 @@ final class ResourceQuotaTests {
             try await projectQuota.save(on: app.db)
 
             // List organization quotas
-            try await app.test(.GET, "/quotas?level=organization") { req in
+            try await app.test(.GET, "/api/quotas?level=organization") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -262,7 +262,7 @@ final class ResourceQuotaTests {
             }
 
             // List project quotas
-            try await app.test(.GET, "/quotas?level=project") { req in
+            try await app.test(.GET, "/api/quotas?level=project") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -290,7 +290,7 @@ final class ResourceQuotaTests {
             )
             try await quota.save(on: app.db)
 
-            try await app.test(.PUT, "/quotas/\(quota.id!)") { req in
+            try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(UpdateResourceQuotaRequest(
                     name: "Updated Name",
@@ -330,7 +330,7 @@ final class ResourceQuotaTests {
             quota.reservedVCPUs = 8
             try await quota.save(on: app.db)
 
-            try await app.test(.PUT, "/quotas/\(quota.id!)") { req in
+            try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(UpdateResourceQuotaRequest(
                     name: nil,
@@ -364,7 +364,7 @@ final class ResourceQuotaTests {
             )
             try await quota.save(on: app.db)
 
-            try await app.test(.DELETE, "/quotas/\(quota.id!)") { req in
+            try await app.test(.DELETE, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -392,7 +392,7 @@ final class ResourceQuotaTests {
             quota.vmCount = 1
             try await quota.save(on: app.db)
 
-            try await app.test(.DELETE, "/quotas/\(quota.id!)") { req in
+            try await app.test(.DELETE, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .conflict)

@@ -1,6 +1,5 @@
 import Fluent
 import FluentPostgresDriver
-import ElementaryHTMX
 import NIOSSL
 import Vapor
 import OTel
@@ -167,8 +166,5 @@ public func configure(_ app: Application) async throws {
 
     try routes(app)
 
-    if app.environment != .testing {
-        try await tailwind(app)
-    }
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
 }

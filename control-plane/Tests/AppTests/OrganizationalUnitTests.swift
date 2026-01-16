@@ -60,7 +60,7 @@ final class OrganizationalUnitTests {
     @Test("Create top-level OU")
     func testCreateTopLevelOU() async throws {
         try await withOUTestApp { app, testUser, testOrganization, authToken in
-            try await app.test(.POST, "/organizations/\(testOrganization.id!)/ous") { req in
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateOrganizationalUnitRequest(
                     name: "Engineering",
@@ -95,7 +95,7 @@ final class OrganizationalUnitTests {
             try await parentOU.save(on: app.db)
 
             // Create nested OU
-            try await app.test(.POST, "/organizations/\(testOrganization.id!)/ous") { req in
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateOrganizationalUnitRequest(
                     name: "Backend",
@@ -127,7 +127,7 @@ final class OrganizationalUnitTests {
             try await firstOU.save(on: app.db)
 
             // Try to create second OU with same name
-            try await app.test(.POST, "/organizations/\(testOrganization.id!)/ous") { req in
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateOrganizationalUnitRequest(
                     name: "Duplicate",
@@ -174,7 +174,7 @@ final class OrganizationalUnitTests {
             )
             try await nestedOU.save(on: app.db)
 
-            try await app.test(.GET, "/organizations/\(testOrganization.id!)/ous") { req in
+            try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/ous") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -229,7 +229,7 @@ final class OrganizationalUnitTests {
             childOU2.path = try await childOU2.buildPath(on: app.db)
             try await childOU2.save(on: app.db)
 
-            try await app.test(.GET, "/organizations/\(testOrganization.id!)/ous/\(rootOU.id!)/tree") { req in
+            try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/ous/\(rootOU.id!)/tree") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -282,7 +282,7 @@ final class OrganizationalUnitTests {
             try await childOU.save(on: app.db)
 
             // Move childOU from ou1 to ou2
-            try await app.test(.POST, "/organizations/\(testOrganization.id!)/ous/\(childOU.id!)/move") { req in
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous/\(childOU.id!)/move") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(MoveOrganizationalUnitRequest(
                     newParentOuId: ou2.id
@@ -311,7 +311,7 @@ final class OrganizationalUnitTests {
             )
             try await ou.save(on: app.db)
 
-            try await app.test(.PUT, "/organizations/\(testOrganization.id!)/ous/\(ou.id!)") { req in
+            try await app.test(.PUT, "/api/organizations/\(testOrganization.id!)/ous/\(ou.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(UpdateOrganizationalUnitRequest(
                     name: "Updated Name",
@@ -341,7 +341,7 @@ final class OrganizationalUnitTests {
             )
             try await ou.save(on: app.db)
 
-            try await app.test(.DELETE, "/organizations/\(testOrganization.id!)/ous/\(ou.id!)") { req in
+            try await app.test(.DELETE, "/api/organizations/\(testOrganization.id!)/ous/\(ou.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -374,7 +374,7 @@ final class OrganizationalUnitTests {
             )
             try await childOU.save(on: app.db)
 
-            try await app.test(.DELETE, "/organizations/\(testOrganization.id!)/ous/\(parentOU.id!)") { req in
+            try await app.test(.DELETE, "/api/organizations/\(testOrganization.id!)/ous/\(parentOU.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .conflict)

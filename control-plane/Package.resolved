@@ -1,5 +1,5 @@
 {
-  "originHash" : "63cd2f2d3e8235ff57622a2c26c49ee0dcf07734fee8f912a25ba3083bc6e6ff",
+  "originHash" : "8680da6ec390186ce4b48f11826b84dfa0c750c43aa59c2f78a11408fb2160db",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -26,24 +26,6 @@
       "state" : {
         "revision" : "742f624a998cba2a9e653d9b1e91ad3f3a5dff6b",
         "version" : "4.15.2"
-      }
-    },
-    {
-      "identity" : "elementary",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/sliemeobn/elementary.git",
-      "state" : {
-        "revision" : "65803c4770b6c8b6452c6ce83ab570c1b7042528",
-        "version" : "0.6.1"
-      }
-    },
-    {
-      "identity" : "elementary-htmx",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/sliemeobn/elementary-htmx.git",
-      "state" : {
-        "revision" : "f7ba147f2a076142a90a4f8300a89584164dba6d",
-        "version" : "0.5.1"
       }
     },
     {

@@ -2,10 +2,7 @@
   "name": "strato",
   "version": "1.0.0",
   "description": "Strato is a fast, secure, and easy to deploy private cloud platform based on battle tested technologies and built for modern infrastructure. It enables operators to run efficient, secure, and powerful infrastructure easily.",
-  "main": "tailwind.config.js",
   "scripts": {
-    "build-css": "npx tailwindcss -i ./Resources/styles/app.css -o ./Public/styles/app.generated.css --watch",
-    "build-css-prod": "npx tailwindcss -i ./Resources/styles/app.css -o ./Public/styles/app.generated.css --minify",
     "lint": "eslint Public/js/**/*.js",
     "lint:fix": "eslint Public/js/**/*.js --fix",
     "test": "npm run lint"
@@ -23,7 +20,6 @@
   },
   "homepage": "https://github.com/samcat116/strato#readme",
   "devDependencies": {
-    "tailwindcss": "^3.4.17",
     "eslint": "^9.0.0"
   },
   "dependencies": {
