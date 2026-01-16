@@ -4,7 +4,7 @@ import StratoShared
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
-#if canImport(CommonCrypto)
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
 import CommonCrypto
 #endif
 
@@ -242,7 +242,7 @@ actor ImageCacheService {
 // MARK: - SHA256 Hasher (Platform-agnostic)
 
 /// A simple SHA256 hasher that works on both macOS and Linux
-#if canImport(CommonCrypto)
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
 private struct SHA256Hasher {
     private var context: CC_SHA256_CTX
 
