@@ -233,7 +233,7 @@ final class HierarchyIntegrationTests {
             )
 
             // Test search
-            try await app.test(.GET, "/hierarchy/search?q=backend") { req in
+            try await app.test(.GET, "/api/hierarchy/search?q=backend") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
