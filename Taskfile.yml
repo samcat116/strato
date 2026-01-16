@@ -517,7 +517,7 @@ tasks:
     cmds:
       - echo "🛑 Stopping all services..."
       - |
-        # Stop agent
+        # Stop agent - first try PID file, then find by process name
         if [ -f /tmp/strato-agent.pid ]; then
           PID=$(cat /tmp/strato-agent.pid)
           if kill -0 "$PID" 2>/dev/null; then
@@ -526,8 +526,14 @@ tasks:
           fi
           rm -f /tmp/strato-agent.pid
         fi
+        # Also kill any orphaned StratoAgent processes
+        AGENT_PIDS=$(pgrep -f "StratoAgent" 2>/dev/null || true)
+        if [ -n "$AGENT_PIDS" ]; then
+          echo "Stopping orphaned StratoAgent processes: $AGENT_PIDS"
+          echo "$AGENT_PIDS" | xargs kill 2>/dev/null || true
+        fi
 
-        # Stop control-plane
+        # Stop control-plane - first try PID file, then find by port
         if [ -f /tmp/strato-control-plane.pid ]; then
           PID=$(cat /tmp/strato-control-plane.pid)
           if kill -0 "$PID" 2>/dev/null; then
@@ -535,6 +541,19 @@ tasks:
             kill "$PID" 2>/dev/null || true
           fi
           rm -f /tmp/strato-control-plane.pid
+        fi
+        # Also kill any process listening on port 8080 (the actual App binary)
+        APP_PIDS=$(lsof -ti :8080 2>/dev/null | grep -v "^$" || true)
+        if [ -n "$APP_PIDS" ]; then
+          echo "Stopping processes on port 8080: $APP_PIDS"
+          echo "$APP_PIDS" | xargs kill 2>/dev/null || true
+          sleep 1
+          # Force kill if still running
+          REMAINING=$(lsof -ti :8080 2>/dev/null | grep -v "^$" || true)
+          if [ -n "$REMAINING" ]; then
+            echo "Force killing remaining processes on port 8080: $REMAINING"
+            echo "$REMAINING" | xargs kill -9 2>/dev/null || true
+          fi
         fi
 
         # Stop Docker containers
