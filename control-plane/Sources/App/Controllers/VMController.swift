@@ -66,7 +66,8 @@ struct VMController: RouteCollection {
         struct CreateVMRequest: Content {
             let name: String
             let description: String?
-            let templateName: String
+            let templateName: String?  // Optional - either template or image required
+            let imageId: UUID?         // Optional - either template or image required
             let projectId: UUID?
             let environment: String?
             let cpu: Int?
@@ -77,12 +78,51 @@ struct VMController: RouteCollection {
 
         let createRequest = try req.content.decode(CreateVMRequest.self)
 
-        // Find the template
-        guard let template = try await VMTemplate.query(on: req.db)
-            .filter(\VMTemplate.$imageName, .equal, createRequest.templateName)
-            .filter(\VMTemplate.$isActive, .equal, true)
-            .first() else {
-            throw Abort(.badRequest, reason: "Template '\(createRequest.templateName)' not found or inactive")
+        // Validate that either templateName or imageId is provided (but not both)
+        if createRequest.templateName == nil && createRequest.imageId == nil {
+            throw Abort(.badRequest, reason: "Either 'templateName' or 'imageId' must be provided")
+        }
+        if createRequest.templateName != nil && createRequest.imageId != nil {
+            throw Abort(.badRequest, reason: "Cannot specify both 'templateName' and 'imageId'")
+        }
+
+        // Variables to hold template or image
+        var template: VMTemplate?
+        var image: Image?
+
+        if let templateName = createRequest.templateName {
+            // Find the template
+            guard let foundTemplate = try await VMTemplate.query(on: req.db)
+                .filter(\VMTemplate.$imageName, .equal, templateName)
+                .filter(\VMTemplate.$isActive, .equal, true)
+                .first() else {
+                throw Abort(.badRequest, reason: "Template '\(templateName)' not found or inactive")
+            }
+            template = foundTemplate
+        } else if let imageId = createRequest.imageId {
+            // Find the image
+            guard let foundImage = try await Image.find(imageId, on: req.db) else {
+                throw Abort(.badRequest, reason: "Image not found")
+            }
+
+            // Verify image is ready
+            guard foundImage.status == .ready else {
+                throw Abort(.badRequest, reason: "Image is not ready. Status: \(foundImage.status.rawValue)")
+            }
+
+            // Check user permission on image
+            let hasImagePermission = try await req.spicedb.checkPermission(
+                subject: user.id?.uuidString ?? "",
+                permission: "read",
+                resource: "image",
+                resourceId: imageId.uuidString
+            )
+
+            guard hasImagePermission else {
+                throw Abort(.forbidden, reason: "Access denied to image")
+            }
+
+            image = foundImage
         }
 
         // Determine project context
@@ -130,17 +170,45 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "Environment '\(environment)' not available in project. Available: \(project.environments.joined(separator: ", "))")
         }
 
-        // Create VM instance from template
-        let vm = try template.createVMInstance(
-            name: createRequest.name,
-            description: createRequest.description ?? "",
-            projectID: projectId,
-            environment: environment,
-            cpu: createRequest.cpu,
-            memory: createRequest.memory,
-            disk: createRequest.disk,
-            cmdline: createRequest.cmdline
-        )
+        // Create VM instance - either from template or image
+        let vm: VM
+        if let template = template {
+            // Template-based VM creation (legacy)
+            vm = try template.createVMInstance(
+                name: createRequest.name,
+                description: createRequest.description ?? "",
+                projectID: projectId,
+                environment: environment,
+                cpu: createRequest.cpu,
+                memory: createRequest.memory,
+                disk: createRequest.disk,
+                cmdline: createRequest.cmdline
+            )
+        } else if let image = image {
+            // Image-based VM creation (new)
+            // Pre-compute values to avoid complex expression
+            let cpuValue = createRequest.cpu ?? image.defaultCpu ?? 1
+            let memoryValue = createRequest.memory ?? image.defaultMemory ?? Int64(1024 * 1024 * 1024)
+            let diskValue = createRequest.disk ?? image.defaultDisk ?? Int64(10 * 1024 * 1024 * 1024)
+            let cmdlineValue = createRequest.cmdline ?? image.defaultCmdline
+
+            vm = VM(
+                name: createRequest.name,
+                description: createRequest.description ?? "",
+                image: image.name,
+                projectID: projectId,
+                environment: environment,
+                cpu: cpuValue,
+                memory: memoryValue,
+                disk: diskValue,
+                maxCpu: cpuValue
+            )
+            vm.cmdline = cmdlineValue
+            // Link VM to source image
+            vm.$sourceImage.id = image.id
+        } else {
+            throw Abort(.internalServerError, reason: "Neither template nor image available")
+        }
 
         // Save VM to database first to generate ID
         try await vm.save(on: req.db)
@@ -149,12 +217,20 @@ struct VMController: RouteCollection {
         guard let vmID = vm.id else {
             throw Abort(.internalServerError, reason: "VM ID is required after saving")
         }
-        vm.diskPath = template.generateDiskPath(for: vmID)
-        vm.macAddress = template.generateMacAddress()
-        vm.kernelPath = template.kernelPath
-        vm.initramfsPath = template.initramfsPath
-        vm.firmwarePath = template.firmwarePath
-        vm.cmdline = vm.cmdline ?? template.defaultCmdline
+
+        if let template = template {
+            // Template-based paths
+            vm.diskPath = template.generateDiskPath(for: vmID)
+            vm.macAddress = template.generateMacAddress()
+            vm.kernelPath = template.kernelPath
+            vm.initramfsPath = template.initramfsPath
+            vm.firmwarePath = template.firmwarePath
+            vm.cmdline = vm.cmdline ?? template.defaultCmdline
+        } else {
+            // Image-based paths - disk will be created by agent from cached image
+            vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
+            vm.macAddress = VM.generateMACAddress()
+        }
 
         // Set up console sockets
         vm.consoleSocket = "/tmp/vm-\(vmID.uuidString)-console.sock"
@@ -197,13 +273,30 @@ struct VMController: RouteCollection {
 
         // Create VM via agent (scheduler will select best hypervisor and set hypervisorId)
         do {
-            let vmConfig = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
-            try await req.agentService.createVM(vm: vm, vmConfig: vmConfig, db: req.db)
+            let vmConfig: VmConfig
+            var imageInfo: ImageInfo?
+
+            if let template = template {
+                // Template-based creation
+                vmConfig = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
+            } else if let image = image {
+                // Image-based creation
+                vmConfig = try await VMConfigBuilder.buildVMConfig(from: vm, image: image)
+
+                // Build ImageInfo for agent to download/cache the image
+                let controlPlaneURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
+                imageInfo = try VMConfigBuilder.buildImageInfo(from: image, controlPlaneURL: controlPlaneURL)
+            } else {
+                throw Abort(.internalServerError, reason: "Neither template nor image available")
+            }
+
+            try await req.agentService.createVM(vm: vm, vmConfig: vmConfig, db: req.db, imageInfo: imageInfo)
 
             // hypervisorId is set and saved by AgentService via scheduler
             req.logger.info("VM created successfully via agent", metadata: [
                 "vm_id": .string(vmID.uuidString),
-                "hypervisor_id": .string(vm.hypervisorId ?? "unknown")
+                "hypervisor_id": .string(vm.hypervisorId ?? "unknown"),
+                "created_from": .string(template != nil ? "template" : "image")
             ])
         } catch {
             req.logger.error("Failed to create VM via agent: \(error)", metadata: ["vm_id": .string(vmID.uuidString)])

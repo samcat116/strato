@@ -34,6 +34,9 @@ func routes(_ app: Application) throws {
     try app.register(collection: SCIMController())
     try app.register(collection: SCIMTokenController())
 
+    // Image management controller
+    try app.register(collection: ImageController())
+
     // OpenAPI Vapor transport (spec-first). Once the generator produces APIProtocol
     // from Sources/App/openapi.yaml, register handlers here.
     // let transport = VaporTransport(routesBuilder: app)

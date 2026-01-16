@@ -9,6 +9,7 @@ import SwiftQEMU
 actor QEMUService {
     private let logger: Logger
     private let networkService: (any NetworkServiceProtocol)?
+    private let imageCacheService: ImageCacheService?
 
     #if canImport(SwiftQEMU)
     private var activeVMs: [String: QEMUManager] = [:]
@@ -19,9 +20,10 @@ actor QEMUService {
     private var mockVMs: [String: MockQEMUVM] = [:]
     #endif
 
-    init(logger: Logger, networkService: (any NetworkServiceProtocol)? = nil) {
+    init(logger: Logger, networkService: (any NetworkServiceProtocol)? = nil, imageCacheService: ImageCacheService? = nil) {
         self.logger = logger
         self.networkService = networkService
+        self.imageCacheService = imageCacheService
 
         #if canImport(SwiftQEMU)
         #if os(Linux)
@@ -37,14 +39,78 @@ actor QEMUService {
     }
     
     // MARK: - VM Lifecycle Operations
-    
-    func createVM(vmId: String, config: VmConfig) async throws {
+
+    /// Creates a VM with optional image info for disk caching
+    func createVM(vmId: String, config: VmConfig, imageInfo: ImageInfo? = nil) async throws {
 
         #if canImport(SwiftQEMU)
         logger.info("Creating QEMU VM", metadata: ["vmId": .string(vmId)])
 
-        // Create disk images from base if they don't exist
-        if let disks = config.disks {
+        // If imageInfo is provided, use cached image
+        var effectiveConfig = config
+        if let imageInfo = imageInfo, let cacheService = imageCacheService {
+            logger.info("Using cached image for VM", metadata: [
+                "vmId": .string(vmId),
+                "imageId": .string(imageInfo.imageId.uuidString)
+            ])
+
+            do {
+                let cachedImagePath = try await cacheService.getImagePath(imageInfo: imageInfo)
+                logger.info("Image ready at cache path", metadata: [
+                    "vmId": .string(vmId),
+                    "cachedPath": .string(cachedImagePath)
+                ])
+
+                // Create a copy for this VM
+                let vmDiskPath = "/var/lib/strato/vms/\(vmId)/disk.qcow2"
+                let vmDiskDir = (vmDiskPath as NSString).deletingLastPathComponent
+
+                try FileManager.default.createDirectory(
+                    atPath: vmDiskDir,
+                    withIntermediateDirectories: true,
+                    attributes: nil
+                )
+
+                // Copy the cached image to VM-specific location
+                if !FileManager.default.fileExists(atPath: vmDiskPath) {
+                    try FileManager.default.copyItem(atPath: cachedImagePath, toPath: vmDiskPath)
+                    logger.info("Created VM disk from cached image", metadata: [
+                        "vmId": .string(vmId),
+                        "diskPath": .string(vmDiskPath)
+                    ])
+                }
+
+                // Update config with the new disk path
+                let newDisk = DiskConfig(
+                    path: vmDiskPath,
+                    readonly: false,
+                    direct: false,
+                    id: "disk0"
+                )
+                effectiveConfig = VmConfig(
+                    cpus: config.cpus,
+                    memory: config.memory,
+                    payload: config.payload,
+                    disks: [newDisk],
+                    net: config.net,
+                    rng: config.rng,
+                    serial: config.serial,
+                    console: config.console,
+                    iommu: config.iommu,
+                    watchdog: config.watchdog,
+                    pvpanic: config.pvpanic
+                )
+            } catch {
+                logger.error("Failed to get cached image, falling back to original config", metadata: [
+                    "vmId": .string(vmId),
+                    "error": .string(error.localizedDescription)
+                ])
+                // Continue with original config
+            }
+        }
+
+        // Create disk images from base if they don't exist (only if not using cached image)
+        if let disks = effectiveConfig.disks {
             for disk in disks {
                 let diskPath = disk.path
                 let fileManager = FileManager.default
@@ -89,16 +155,16 @@ actor QEMUService {
         let qemuManager = QEMUManager(logger: logger)
 
         // Set up VM networking first
-        if let networks = config.net, !networks.isEmpty {
+        if let networks = effectiveConfig.net, !networks.isEmpty {
             try await setupVMNetworking(vmId: vmId, networks: networks)
         }
 
         // Configure and create VM
-        let qemuConfig = convertToQEMUConfiguration(config, vmId: vmId)
+        let qemuConfig = convertToQEMUConfiguration(effectiveConfig, vmId: vmId)
         try await qemuManager.createVM(config: qemuConfig)
 
         activeVMs[vmId] = qemuManager
-        vmConfigs[vmId] = config
+        vmConfigs[vmId] = effectiveConfig
 
         logger.info("QEMU VM created successfully", metadata: ["vmId": .string(vmId)])
         #else

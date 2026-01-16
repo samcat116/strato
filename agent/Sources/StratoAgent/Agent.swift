@@ -11,14 +11,16 @@ actor Agent {
     private let qemuSocketDir: String
     private let isRegistrationMode: Bool
     private let logger: Logger
-    
+
     private var websocketClient: WebSocketClient?
     private var qemuService: QEMUService?
     private var networkService: (any NetworkServiceProtocol)?
+    private var imageCacheService: ImageCacheService?
     private var heartbeatTask: Task<Void, Error>?
     private var isRunning = false
-    
+
     private let networkMode: NetworkMode?
+    private let imageCachePath: String?
 
     init(
         agentID: String,
@@ -26,7 +28,8 @@ actor Agent {
         qemuSocketDir: String,
         networkMode: NetworkMode?,
         isRegistrationMode: Bool,
-        logger: Logger
+        logger: Logger,
+        imageCachePath: String? = nil
     ) {
         self.agentID = agentID
         self.webSocketURL = webSocketURL
@@ -34,6 +37,7 @@ actor Agent {
         self.networkMode = networkMode
         self.isRegistrationMode = isRegistrationMode
         self.logger = logger
+        self.imageCachePath = imageCachePath
     }
     
     func start() async throws {
@@ -77,8 +81,18 @@ actor Agent {
             logger.warning("VM networking will be limited")
         }
         
+        // Initialize image cache service
+        logger.info("Initializing image cache service")
+        imageCacheService = ImageCacheService(
+            logger: logger,
+            cachePath: imageCachePath,
+            controlPlaneURL: webSocketURL.replacingOccurrences(of: "ws://", with: "http://")
+                .replacingOccurrences(of: "wss://", with: "https://")
+                .replacingOccurrences(of: "/agent/ws", with: "")
+        )
+
         logger.info("Initializing QEMU service")
-        qemuService = QEMUService(logger: logger, networkService: networkService)
+        qemuService = QEMUService(logger: logger, networkService: networkService, imageCacheService: imageCacheService)
         
         if isRegistrationMode {
             logger.info("Connecting for agent registration", metadata: ["url": .string(webSocketURL)])
@@ -296,8 +310,21 @@ extension Agent {
     private func handleVMCreate(_ message: VMCreateMessage) async {
         logger.info("Creating VM", metadata: ["vmId": .string(message.vmData.id.uuidString)])
 
+        // Log image info if provided
+        if let imageInfo = message.imageInfo {
+            logger.info("VM creation includes image info", metadata: [
+                "vmId": .string(message.vmData.id.uuidString),
+                "imageId": .string(imageInfo.imageId.uuidString),
+                "filename": .string(imageInfo.filename)
+            ])
+        }
+
         do {
-            try await qemuService?.createVM(vmId: message.vmData.id.uuidString, config: message.vmConfig)
+            try await qemuService?.createVM(
+                vmId: message.vmData.id.uuidString,
+                config: message.vmConfig,
+                imageInfo: message.imageInfo
+            )
             await sendSuccess(for: message.requestId, message: "VM created successfully")
             logger.info("VM created successfully", metadata: ["vmId": .string(message.vmData.id.uuidString)])
         } catch {
