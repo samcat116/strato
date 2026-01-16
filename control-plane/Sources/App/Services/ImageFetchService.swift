@@ -5,6 +5,7 @@ import AsyncHTTPClient
 import NIOCore
 import NIOHTTP1
 import NIOPosix
+import Crypto
 
 /// Actor service for managing background image fetches from URLs
 actor ImageFetchService {
@@ -269,30 +270,23 @@ actor ImageFetchService {
 
 // MARK: - SHA256 Hasher Helper
 
-/// A simple wrapper for streaming SHA256 computation
+/// A simple wrapper for streaming SHA256 computation using swift-crypto
 private struct SHA256Hasher {
-    private var context: CC_SHA256_CTX
+    private var hasher: Crypto.SHA256
 
     init() {
-        context = CC_SHA256_CTX()
-        CC_SHA256_Init(&context)
+        hasher = Crypto.SHA256()
     }
 
     mutating func update(data: Data) {
-        data.withUnsafeBytes { bytes in
-            _ = CC_SHA256_Update(&context, bytes.baseAddress, CC_LONG(data.count))
-        }
+        hasher.update(data: data)
     }
 
     mutating func finalize() -> String {
-        var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        CC_SHA256_Final(&digest, &context)
+        let digest = hasher.finalize()
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 }
-
-// Import CommonCrypto for SHA256
-import CommonCrypto
 
 // MARK: - Application Extension
 
