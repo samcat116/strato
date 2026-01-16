@@ -47,13 +47,14 @@ export function CreateVMDialog({
 
     setIsLoading(true);
     try {
+      const GB = 1024 * 1024 * 1024; // 1 GB in bytes
       await vmsApi.create({
         name: formData.name,
         description: formData.description || undefined,
         templateName: formData.templateName,
         cpu: parseInt(formData.cpu) || 2,
-        memory: parseInt(formData.memory) || 4,
-        disk: parseInt(formData.disk) || 50,
+        memory: (parseInt(formData.memory) || 4) * GB,
+        disk: (parseInt(formData.disk) || 50) * GB,
       });
       toast.success(`VM "${formData.name}" created successfully`);
       onOpenChange(false);

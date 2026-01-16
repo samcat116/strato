@@ -121,6 +121,28 @@ struct OrganizationController: RouteCollection {
             subjectId: user.id?.uuidString ?? ""
         )
 
+        // Create default project for the organization
+        let defaultProject = Project(
+            name: "Default Project",
+            description: "Default project for \(organization.name)",
+            organizationID: organization.id,
+            path: "/\(organization.id!.uuidString)"
+        )
+        try await defaultProject.save(on: req.db)
+
+        // Update project path with its own ID
+        defaultProject.path = "/\(organization.id!.uuidString)/\(defaultProject.id!.uuidString)"
+        try await defaultProject.save(on: req.db)
+
+        // Create project relationship in SpiceDB
+        try await req.spicedb.writeRelationship(
+            entity: "project",
+            entityId: defaultProject.id?.uuidString ?? "",
+            relation: "organization",
+            subject: "organization",
+            subjectId: organization.id?.uuidString ?? ""
+        )
+
         return OrganizationResponse(from: organization, userRole: "admin")
     }
 

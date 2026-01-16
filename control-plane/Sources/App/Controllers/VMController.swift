@@ -65,7 +65,7 @@ struct VMController: RouteCollection {
 
         struct CreateVMRequest: Content {
             let name: String
-            let description: String
+            let description: String?
             let templateName: String
             let projectId: UUID?
             let environment: String?
@@ -133,7 +133,7 @@ struct VMController: RouteCollection {
         // Create VM instance from template
         let vm = try template.createVMInstance(
             name: createRequest.name,
-            description: createRequest.description,
+            description: createRequest.description ?? "",
             projectID: projectId,
             environment: environment,
             cpu: createRequest.cpu,
