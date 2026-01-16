@@ -1,10 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { imagesApi } from "@/lib/api/images";
-import type {
-  CreateImageRequest,
-  UpdateImageRequest,
-  Image,
-} from "@/types/api";
+import type { CreateImageRequest, UpdateImageRequest } from "@/types/api";
 
 export function useImages(projectId: string | undefined) {
   return useQuery({

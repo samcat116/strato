@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { projectsApi, type Project } from "@/lib/api/projects";
+import { projectsApi } from "@/lib/api/projects";
 
 export function useProjects() {
   return useQuery({

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Loader2, HardDrive, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -59,8 +59,11 @@ export function CreateVMDialog({
   const projectId = projects?.[0]?.id;
   const { data: images, isLoading: imagesLoading } = useImages(projectId);
 
-  // Filter to only show ready images
-  const readyImages = images?.filter((img) => img.status === "ready") || [];
+  // Filter to only show ready images (memoized to prevent dependency changes on every render)
+  const readyImages = useMemo(
+    () => images?.filter((img) => img.status === "ready") || [],
+    [images]
+  );
 
   // Apply image defaults when an image is selected
   useEffect(() => {

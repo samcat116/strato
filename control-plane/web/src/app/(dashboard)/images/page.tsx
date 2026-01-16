@@ -13,24 +13,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
 
 export default function ImagesPage() {
   const { currentOrg } = useOrganization();
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
-    null
-  );
+  const [userSelectedProjectId, setUserSelectedProjectId] = useState<
+    string | null
+  >(null);
 
   // Fetch projects for the current organization
   const { data: projects, isLoading: projectsLoading } =
     useProjectsForOrganization(currentOrg?.id);
 
-  // Auto-select first project when projects load
-  useEffect(() => {
-    if (projects && projects.length > 0 && !selectedProjectId) {
-      setSelectedProjectId(projects[0].id);
-    }
-  }, [projects, selectedProjectId]);
+  // Derive the selected project ID: use user selection if set, otherwise default to first project
+  const selectedProjectId = useMemo(() => {
+    if (userSelectedProjectId) return userSelectedProjectId;
+    if (projects && projects.length > 0) return projects[0].id;
+    return null;
+  }, [userSelectedProjectId, projects]);
 
   const projectId = selectedProjectId || "";
   const { data: images, isLoading: imagesLoading } = useImages(
@@ -98,7 +98,7 @@ export default function ImagesPage() {
           {projects.length > 1 && (
             <Select
               value={selectedProjectId || undefined}
-              onValueChange={setSelectedProjectId}
+              onValueChange={setUserSelectedProjectId}
             >
               <SelectTrigger className="w-48 bg-gray-900 border-gray-700 text-gray-100">
                 <SelectValue placeholder="Select project" />
