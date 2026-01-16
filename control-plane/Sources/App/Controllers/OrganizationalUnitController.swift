@@ -4,7 +4,7 @@ import Fluent
 
 struct OrganizationalUnitController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        let organizations = routes.grouped("organizations")
+        let organizations = routes.grouped("api", "organizations")
 
         // OU routes under organization context
         organizations.group(":organizationID") { org in

@@ -4,7 +4,7 @@ import Fluent
 
 struct ProjectController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        let projects = routes.grouped("projects")
+        let projects = routes.grouped("api", "projects")
 
         // User's projects (across all organizations)
         projects.get(use: index)
@@ -24,7 +24,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Organization context routes
-        let organizations = routes.grouped("organizations")
+        let organizations = routes.grouped("api", "organizations")
         organizations.group(":organizationID") { org in
             let orgProjects = org.grouped("projects")
             orgProjects.get(use: indexForOrganization)

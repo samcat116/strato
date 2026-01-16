@@ -15,7 +15,6 @@ func routes(_ app: Application) throws {
     try app.register(collection: APIDocumentationController())
     try app.register(collection: AgentWebSocketController())
     try app.register(collection: OnboardingController())
-    try app.register(collection: HTMXController())
 
     // Hierarchical IAM controllers
     try app.register(collection: OrganizationalUnitController())
