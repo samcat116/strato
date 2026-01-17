@@ -177,11 +177,25 @@ struct URLSigningService {
         // 4. Generate new key and store in database
         let newKey = generateRandomKey()
         let setting = AppSetting(key: AppSetting.imageDownloadSigningKey, value: newKey)
-        try await setting.save(on: app.db)
 
-        app.signingKeyCache.key = newKey
-        app.logger.info("Generated and stored new image download signing key")
-        return newKey
+        do {
+            try await setting.save(on: app.db)
+            app.signingKeyCache.key = newKey
+            app.logger.info("Generated and stored new image download signing key")
+            return newKey
+        } catch {
+            // Handle race condition: another instance may have inserted the key
+            // Re-query to get the existing key
+            if let existingSetting = try await AppSetting.query(on: app.db)
+                .filter(\.$key == AppSetting.imageDownloadSigningKey)
+                .first() {
+                app.signingKeyCache.key = existingSetting.value
+                app.logger.info("Loaded image download signing key from database (concurrent insert)")
+                return existingSetting.value
+            }
+            // If still not found, rethrow the original error
+            throw error
+        }
     }
 
     /// Generates a cryptographically secure random key
