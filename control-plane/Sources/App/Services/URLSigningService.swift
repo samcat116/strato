@@ -187,8 +187,11 @@ struct URLSigningService {
     /// Generates a cryptographically secure random key
     /// - Returns: 64-character hex string (256 bits)
     private static func generateRandomKey() -> String {
+        var generator = SystemRandomNumberGenerator()
         var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        for i in 0..<bytes.count {
+            bytes[i] = UInt8.random(in: 0...255, using: &generator)
+        }
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
