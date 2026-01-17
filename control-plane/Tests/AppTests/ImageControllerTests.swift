@@ -666,7 +666,7 @@ final class ImageControllerTests {
             try await app.test(.DELETE, "/api/projects/\(project.id!)/images/\(imageId)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
-                #expect(res.status == .ok)
+                #expect(res.status == .noContent)
             }
 
             // Verify image is deleted from database
