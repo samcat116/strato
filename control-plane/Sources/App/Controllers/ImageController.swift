@@ -466,7 +466,7 @@ struct ImageController: RouteCollection {
 
         req.logger.info("Image deleted", metadata: ["image_id": .string(imageID.uuidString)])
 
-        return .ok
+        return .noContent
     }
 
     // MARK: - Download Image
