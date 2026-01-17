@@ -173,8 +173,14 @@ struct AgentWebSocketController: RouteCollection {
                 let message = try envelope.decode(as: AgentRegisterMessage.self)
                 Task {
                     do {
-                        try await req.agentService.registerAgent(message, agentName: agentName)
-                        self.sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Agent registered successfully")
+                        let agentUUID = try await req.agentService.registerAgent(message, agentName: agentName)
+                        // Send registration response with the assigned UUID
+                        let response = AgentRegisterResponseMessage(
+                            requestId: message.requestId,
+                            agentId: agentUUID.uuidString,
+                            name: agentName
+                        )
+                        self.sendMessage(ws: ws, message: response)
                     } catch {
                         req.logger.error("Failed to register agent: \(error)")
                         self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to register agent: \(error.localizedDescription)")
@@ -219,6 +225,16 @@ struct AgentWebSocketController: RouteCollection {
         } catch {
             req.logger.error("Failed to handle WebSocket message: \(error)")
             sendErrorResponse(ws: ws, requestId: "", error: "Failed to process message: \(error.localizedDescription)")
+        }
+    }
+
+    private func sendMessage<T: WebSocketMessage>(ws: WebSocket, message: T) {
+        do {
+            let envelope = try MessageEnvelope(message: message)
+            let data = try JSONEncoder().encode(envelope)
+            ws.send(data)
+        } catch {
+            print("Failed to send message: \(error)")
         }
     }
 

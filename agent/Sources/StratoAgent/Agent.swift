@@ -5,8 +5,23 @@ import NIOPosix
 import StratoShared
 import StratoAgentCore
 
+enum AgentError: Error, LocalizedError {
+    case registrationTimeout
+    case notRegistered
+
+    var errorDescription: String? {
+        switch self {
+        case .registrationTimeout:
+            return "Registration timed out waiting for control plane response"
+        case .notRegistered:
+            return "Agent is not registered with control plane"
+        }
+    }
+}
+
 actor Agent {
-    private let agentID: String
+    private let initialAgentID: String  // ID used for registration (hostname or CLI arg)
+    private var assignedAgentID: String?  // UUID assigned by control plane after registration
     private let webSocketURL: String
     private let qemuSocketDir: String
     private let isRegistrationMode: Bool
@@ -18,6 +33,7 @@ actor Agent {
     private var imageCacheService: ImageCacheService?
     private var heartbeatTask: Task<Void, Error>?
     private var isRunning = false
+    private var registrationContinuation: CheckedContinuation<String, Error>?
 
     private let networkMode: NetworkMode?
     private let imageCachePath: String?
@@ -31,13 +47,18 @@ actor Agent {
         logger: Logger,
         imageCachePath: String? = nil
     ) {
-        self.agentID = agentID
+        self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
         self.qemuSocketDir = qemuSocketDir
         self.networkMode = networkMode
         self.isRegistrationMode = isRegistrationMode
         self.logger = logger
         self.imageCachePath = imageCachePath
+    }
+
+    /// Returns the effective agent ID (assigned UUID if registered, initial ID otherwise)
+    private var effectiveAgentID: String {
+        return assignedAgentID ?? initialAgentID
     }
     
     func start() async throws {
@@ -152,7 +173,7 @@ actor Agent {
         let resources = await getAgentResources()
         let capabilities = getAgentCapabilities()
         let message = AgentRegisterMessage(
-            agentId: agentID,
+            agentId: initialAgentID,
             hostname: ProcessInfo.processInfo.hostName,
             version: "1.0.0",
             capabilities: capabilities,
@@ -162,7 +183,34 @@ actor Agent {
         if let client = websocketClient {
             try await client.sendMessage(message)
         }
-        logger.info("Registration message sent to control plane")
+        logger.info("Registration message sent to control plane, waiting for response...")
+
+        // Wait for registration response with timeout
+        let assignedId = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            self.registrationContinuation = continuation
+
+            // Set up timeout
+            Task {
+                try await Task.sleep(for: .seconds(30))
+                if self.registrationContinuation != nil {
+                    self.registrationContinuation?.resume(throwing: AgentError.registrationTimeout)
+                    self.registrationContinuation = nil
+                }
+            }
+        }
+
+        self.assignedAgentID = assignedId
+        logger.info("Registration complete, assigned ID: \(assignedId)")
+    }
+
+    /// Handle registration response from control plane
+    func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) {
+        guard let continuation = registrationContinuation else {
+            logger.warning("Received registration response but no continuation waiting")
+            return
+        }
+        registrationContinuation = nil
+        continuation.resume(returning: response.agentId)
     }
 
     private func getAgentCapabilities() -> [String] {
@@ -181,10 +229,10 @@ actor Agent {
     
     private func unregisterFromControlPlane() async throws {
         let message = AgentUnregisterMessage(
-            agentId: agentID,
+            agentId: effectiveAgentID,
             reason: "Agent shutdown"
         )
-        
+
         if let client = websocketClient {
             try await client.sendMessage(message)
         }
@@ -214,19 +262,25 @@ actor Agent {
     }
     
     private func _sendHeartbeat() async throws {
+        // Only send heartbeat if we have an assigned ID from registration
+        guard assignedAgentID != nil else {
+            logger.debug("Skipping heartbeat - not yet registered")
+            return
+        }
+
         let resources = await getAgentResources()
         let runningVMs = await getRunningVMList()
-        
+
         let message = AgentHeartbeatMessage(
-            agentId: agentID,
+            agentId: effectiveAgentID,
             resources: resources,
             runningVMs: runningVMs
         )
-        
+
         if let client = websocketClient {
             try await client.sendMessage(message)
         }
-        logger.debug("Heartbeat sent")
+        logger.debug("Heartbeat sent", metadata: ["agentId": .string(effectiveAgentID)])
     }
     
     private func getAgentResources() async -> AgentResources {
@@ -254,6 +308,9 @@ extension Agent {
     func handleMessage(_ envelope: MessageEnvelope) async {
         do {
             switch envelope.type {
+            case .agentRegisterResponse:
+                let message = try envelope.decode(as: AgentRegisterResponseMessage.self)
+                handleRegistrationResponse(message)
             case .vmCreate:
                 let message = try envelope.decode(as: VMCreateMessage.self)
                 await handleVMCreate(message)
