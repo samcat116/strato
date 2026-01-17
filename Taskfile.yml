@@ -38,6 +38,7 @@ tasks:
       - task: start-postgres
       - task: start-spicedb
       - task: load-spicedb-schema
+      - task: build-frontend
       - task: start-control-plane
       - task: create-agent-config
       - task: create-agent-token
@@ -164,6 +165,23 @@ tasks:
   # ============================================================================
   # Application Tasks
   # ============================================================================
+  build-frontend:
+    desc: Build and deploy the Next.js frontend
+    cmds:
+      - echo "🎨 Building frontend..."
+      - |
+        cd "{{.PROJECT_ROOT}}/control-plane/web"
+        if [ ! -d "node_modules" ]; then
+          echo "📦 Installing npm dependencies..."
+          npm install
+        fi
+        echo "🔨 Building Next.js app..."
+        npm run build
+        echo "📁 Deploying to Public folder..."
+        rm -rf ../Public/_next ../Public/index.html ../Public/404.html
+        cp -r out/* ../Public/
+      - echo "✅ Frontend built and deployed!"
+
   start-control-plane:
     desc: Build and start the control-plane service
     cmds:

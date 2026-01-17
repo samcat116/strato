@@ -142,10 +142,10 @@ export type ImageStatus =
 export type ImageFormat = "qcow2" | "raw";
 
 export interface Image {
-  id: string;
+  id?: string;
   name: string;
   description: string;
-  projectId: string;
+  projectId?: string;
   filename: string;
   size: number;
   sizeFormatted: string;
@@ -159,9 +159,9 @@ export interface Image {
   defaultMemory?: number;
   defaultDisk?: number;
   defaultCmdline?: string;
-  uploadedById: string;
-  createdAt: string;
-  updatedAt: string;
+  uploadedById?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface CreateImageRequest {

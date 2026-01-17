@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Loader2, HardDrive, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,13 +13,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { vmsApi } from "@/lib/api/vms";
 import { useImages } from "@/lib/hooks/use-images";
 import { useProjectsForOrganization } from "@/lib/hooks/use-projects";
@@ -59,28 +52,30 @@ export function CreateVMDialog({
   const projectId = projects?.[0]?.id;
   const { data: images, isLoading: imagesLoading } = useImages(projectId);
 
-  // Filter to only show ready images (memoized to prevent dependency changes on every render)
+  // Filter to only show ready images with valid IDs (memoized to prevent dependency changes on every render)
   const readyImages = useMemo(
-    () => images?.filter((img) => img.status === "ready") || [],
+    () => images?.filter((img) => img.status === "ready" && img.id) || [],
     [images]
   );
 
-  // Apply image defaults when an image is selected
-  useEffect(() => {
-    if (sourceType === "image" && formData.imageId) {
-      const selectedImage = readyImages.find(
-        (img) => img.id === formData.imageId
-      );
+  // Handle image selection - applies defaults directly without useEffect
+  const handleImageSelect = useCallback(
+    (imageId: string) => {
+      const selectedImage = readyImages.find((img) => img.id === imageId);
       if (selectedImage) {
         setFormData((prev) => ({
           ...prev,
+          imageId,
           cpu: selectedImage.defaultCpu?.toString() || prev.cpu,
           memory: selectedImage.defaultMemory?.toString() || prev.memory,
           disk: selectedImage.defaultDisk?.toString() || prev.disk,
         }));
+      } else {
+        setFormData((prev) => ({ ...prev, imageId }));
       }
-    }
-  }, [formData.imageId, sourceType, readyImages]);
+    },
+    [readyImages]
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -161,34 +156,21 @@ export function CreateVMDialog({
               first.
             </div>
           ) : (
-            <Select
+            <select
               value={formData.imageId}
-              onValueChange={(value) =>
-                setFormData({ ...formData, imageId: value })
-              }
+              onChange={(e) => handleImageSelect(e.target.value)}
               disabled={isLoading}
+              className="w-full h-9 px-3 py-2 bg-gray-900 border border-gray-700 text-gray-100 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <SelectTrigger className="w-full bg-gray-900 border-gray-700 text-gray-100">
-                <SelectValue placeholder="Select an image" />
-              </SelectTrigger>
-              <SelectContent className="bg-gray-800 border-gray-700">
-                {readyImages.map((image) => (
-                  <SelectItem
-                    key={image.id}
-                    value={image.id}
-                    className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
-                  >
-                    <div className="flex items-center gap-2">
-                      <HardDrive className="h-4 w-4 text-gray-400" />
-                      <span>{image.name}</span>
-                      <span className="text-gray-500 text-xs">
-                        ({image.sizeFormatted})
-                      </span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              <option value="" disabled>
+                Select an image
+              </option>
+              {readyImages.map((image) => (
+                <option key={image.id} value={image.id!}>
+                  {image.name} ({image.sizeFormatted})
+                </option>
+              ))}
+            </select>
           )}
         </div>
       );
