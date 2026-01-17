@@ -5,6 +5,7 @@ import Foundation
 public enum MessageType: String, Codable, Sendable {
     // Agent registration and heartbeat
     case agentRegister = "agent_register"
+    case agentRegisterResponse = "agent_register_response"
     case agentHeartbeat = "agent_heartbeat"
     case agentUnregister = "agent_unregister"
     
@@ -108,7 +109,7 @@ public struct AgentUnregisterMessage: WebSocketMessage {
     public let timestamp: Date
     public let agentId: String
     public let reason: String?
-    
+
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
@@ -119,6 +120,26 @@ public struct AgentUnregisterMessage: WebSocketMessage {
         self.timestamp = timestamp
         self.agentId = agentId
         self.reason = reason
+    }
+}
+
+public struct AgentRegisterResponseMessage: WebSocketMessage {
+    public let type: MessageType = .agentRegisterResponse
+    public let requestId: String
+    public let timestamp: Date
+    public let agentId: String  // The database UUID assigned to this agent
+    public let name: String     // The human-readable name
+
+    public init(
+        requestId: String,
+        timestamp: Date = Date(),
+        agentId: String,
+        name: String
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.agentId = agentId
+        self.name = name
     }
 }
 
