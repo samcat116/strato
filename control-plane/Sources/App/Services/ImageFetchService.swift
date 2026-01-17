@@ -7,8 +7,15 @@ import NIOHTTP1
 import NIOPosix
 import Crypto
 
+/// Protocol for image fetch services (enables testing with mocks)
+protocol ImageFetchServiceProtocol: Sendable {
+    func startFetch(imageId: UUID) async throws
+    func cancelFetch(imageId: UUID) async
+    func isFetchActive(imageId: UUID) async -> Bool
+}
+
 /// Actor service for managing background image fetches from URLs
-actor ImageFetchService {
+actor ImageFetchService: ImageFetchServiceProtocol {
     private let app: Application
     private var activeFetches: [UUID: Task<Void, Error>] = [:]
     private let httpClient: HTTPClient
@@ -292,10 +299,10 @@ private struct SHA256Hasher {
 
 extension Application {
     private struct ImageFetchServiceKey: StorageKey {
-        typealias Value = ImageFetchService
+        typealias Value = ImageFetchServiceProtocol
     }
 
-    var imageFetchService: ImageFetchService {
+    var imageFetchService: ImageFetchServiceProtocol {
         get {
             if let existing = storage[ImageFetchServiceKey.self] {
                 return existing
@@ -313,7 +320,7 @@ extension Application {
 // MARK: - Request Extension
 
 extension Request {
-    var imageFetchService: ImageFetchService {
+    var imageFetchService: ImageFetchServiceProtocol {
         application.imageFetchService
     }
 }
