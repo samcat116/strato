@@ -92,7 +92,13 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateImage())
     app.migrations.add(AddImageToVM())
 
+    // App settings migration (for signing keys, etc.)
+    app.migrations.add(CreateAppSetting())
+
     try await app.autoMigrate()
+
+    // Initialize the image download signing key (generates if not exists)
+    _ = try await URLSigningService.getSigningKeyAsync(from: app)
 
     // Dev auth bypass - create dev user for local development
     if app.environment == .development, Environment.get("DEV_AUTH_BYPASS") == "true" {

@@ -281,7 +281,14 @@ actor AgentService {
 
     // MARK: - VM Operations
 
-    func createVM(vm: VM, vmConfig: VmConfig, db: Database, strategy: SchedulingStrategy? = nil, imageInfo: ImageInfo? = nil) async throws {
+    /// Creates a VM on an agent selected by the scheduler
+    /// - Parameters:
+    ///   - vm: The VM to create
+    ///   - vmConfig: VM configuration for QEMU
+    ///   - db: Database connection
+    ///   - strategy: Optional scheduling strategy override
+    ///   - image: Optional image for image-based VM creation (will generate signed download URL)
+    func createVM(vm: VM, vmConfig: VmConfig, db: Database, strategy: SchedulingStrategy? = nil, image: Image? = nil) async throws {
         // Convert agents to schedulable format
         let schedulableAgents = getSchedulableAgents()
 
@@ -300,6 +307,24 @@ actor AgentService {
 
         guard agents[agentId] != nil else {
             throw AgentServiceError.agentNotFound(agentId)
+        }
+
+        // Build ImageInfo with signed URL now that we know the agent
+        var imageInfo: ImageInfo?
+        if let image = image {
+            do {
+                let controlPlaneURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
+                let signingKey = try URLSigningService.getSigningKey(from: app)
+                imageInfo = try VMConfigBuilder.buildImageInfo(
+                    from: image,
+                    controlPlaneURL: controlPlaneURL,
+                    agentName: agentId,
+                    signingKey: signingKey
+                )
+            } catch {
+                app.logger.error("Failed to build image info: \(error)")
+                throw error
+            }
         }
 
         let message = VMCreateMessage(
