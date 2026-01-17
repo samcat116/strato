@@ -130,7 +130,9 @@ export function Sidebar({ onCreateVM, onAddAgent, onManageAPIKeys }: SidebarProp
           id="storage-section"
           title="Storage"
           icon={<HardDrive className="h-4 w-4" />}
+          defaultOpen
         >
+          <SidebarLink href="/images">Images</SidebarLink>
           <SidebarLink href="/storage/volumes">Volumes</SidebarLink>
           <SidebarLink href="/storage/snapshots">Snapshots</SidebarLink>
         </SidebarSection>

@@ -30,6 +30,10 @@ public enum MessageType: String, Codable, Sendable {
     case networkAttach = "network_attach"
     case networkDetach = "network_detach"
     
+    // Image operations
+    case imageInfo = "image_info"
+    case imageInfoResponse = "image_info_response"
+
     // Responses
     case success = "success"
     case error = "error"
@@ -151,17 +155,85 @@ public struct VMCreateMessage: WebSocketMessage {
     public let timestamp: Date
     public let vmData: VMData
     public let vmConfig: VmConfig
-    
+    public let imageInfo: ImageInfo?
+
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         vmData: VMData,
-        vmConfig: VmConfig
+        vmConfig: VmConfig,
+        imageInfo: ImageInfo? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.vmData = vmData
         self.vmConfig = vmConfig
+        self.imageInfo = imageInfo
+    }
+}
+
+// MARK: - Image Information
+
+/// Contains information for the agent to download and cache an image
+public struct ImageInfo: Codable, Sendable {
+    public let imageId: UUID
+    public let projectId: UUID
+    public let filename: String
+    public let checksum: String
+    public let size: Int64
+    public let downloadURL: String
+
+    public init(
+        imageId: UUID,
+        projectId: UUID,
+        filename: String,
+        checksum: String,
+        size: Int64,
+        downloadURL: String
+    ) {
+        self.imageId = imageId
+        self.projectId = projectId
+        self.filename = filename
+        self.checksum = checksum
+        self.size = size
+        self.downloadURL = downloadURL
+    }
+}
+
+public struct ImageInfoRequestMessage: WebSocketMessage {
+    public let type: MessageType = .imageInfo
+    public let requestId: String
+    public let timestamp: Date
+    public let imageId: UUID
+
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        imageId: UUID
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.imageId = imageId
+    }
+}
+
+public struct ImageInfoResponseMessage: WebSocketMessage {
+    public let type: MessageType = .imageInfoResponse
+    public let requestId: String
+    public let timestamp: Date
+    public let imageInfo: ImageInfo?
+    public let error: String?
+
+    public init(
+        requestId: String,
+        timestamp: Date = Date(),
+        imageInfo: ImageInfo? = nil,
+        error: String? = nil
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.imageInfo = imageInfo
+        self.error = error
     }
 }
 

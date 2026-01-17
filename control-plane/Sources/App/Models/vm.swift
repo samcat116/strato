@@ -32,6 +32,10 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "environment")
     var environment: String
 
+    // Optional reference to the Image used to create this VM (new image system)
+    @OptionalParent(key: "image_id")
+    var sourceImage: Image?
+
     // CPU configuration
     @Field(key: "cpu")
     var cpu: Int // boot_vcpus
@@ -212,5 +216,11 @@ extension VM {
 
     var canResume: Bool {
         return status == .paused
+    }
+
+    /// Generates a random MAC address with VMware OUI (00:0c:29)
+    static func generateMACAddress() -> String {
+        let randomBytes = (0..<3).map { _ in String(format: "%02x", Int.random(in: 0...255)) }
+        return "00:0c:29:\(randomBytes.joined(separator: ":"))"
     }
 }

@@ -94,7 +94,9 @@ export interface SessionResponse {
 export interface CreateVMRequest {
   name: string;
   description?: string;
-  templateName: string;
+  /** @deprecated Use imageId instead */
+  templateName?: string;
+  imageId?: string;
   projectId?: string;
   environment?: string;
   cpu?: number;
@@ -126,4 +128,66 @@ export interface CreateAPIKeyRequest {
 export interface CreateAgentRegistrationTokenRequest {
   agentName: string;
   expirationHours?: number;
+}
+
+// Image types
+export type ImageStatus =
+  | "pending"
+  | "uploading"
+  | "downloading"
+  | "validating"
+  | "ready"
+  | "error";
+
+export type ImageFormat = "qcow2" | "raw";
+
+export interface Image {
+  id: string;
+  name: string;
+  description: string;
+  projectId: string;
+  filename: string;
+  size: number;
+  sizeFormatted: string;
+  format: ImageFormat;
+  checksum?: string;
+  status: ImageStatus;
+  sourceURL?: string;
+  downloadProgress?: number;
+  errorMessage?: string;
+  defaultCpu?: number;
+  defaultMemory?: number;
+  defaultDisk?: number;
+  defaultCmdline?: string;
+  uploadedById: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateImageRequest {
+  name: string;
+  description?: string;
+  sourceURL?: string;
+  defaultCpu?: number;
+  defaultMemory?: number;
+  defaultDisk?: number;
+  defaultCmdline?: string;
+}
+
+export interface UpdateImageRequest {
+  name?: string;
+  description?: string;
+  defaultCpu?: number;
+  defaultMemory?: number;
+  defaultDisk?: number;
+  defaultCmdline?: string;
+}
+
+export interface ImageStatusResponse {
+  id: string;
+  status: ImageStatus;
+  downloadProgress?: number;
+  errorMessage?: string;
+  size?: number;
+  checksum?: string;
 }

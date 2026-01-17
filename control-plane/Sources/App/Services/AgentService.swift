@@ -281,7 +281,7 @@ actor AgentService {
 
     // MARK: - VM Operations
 
-    func createVM(vm: VM, vmConfig: VmConfig, db: Database, strategy: SchedulingStrategy? = nil) async throws {
+    func createVM(vm: VM, vmConfig: VmConfig, db: Database, strategy: SchedulingStrategy? = nil, imageInfo: ImageInfo? = nil) async throws {
         // Convert agents to schedulable format
         let schedulableAgents = getSchedulableAgents()
 
@@ -304,7 +304,8 @@ actor AgentService {
 
         let message = VMCreateMessage(
             vmData: vm.toVMData(),
-            vmConfig: vmConfig
+            vmConfig: vmConfig,
+            imageInfo: imageInfo
         )
 
         try await sendMessageToAgent(message, agentName: agentId)
@@ -318,7 +319,8 @@ actor AgentService {
 
         app.logger.info("VM creation requested", metadata: [
             "vmId": .string(vm.id?.uuidString ?? ""),
-            "agentId": .string(agentId)
+            "agentId": .string(agentId),
+            "hasImageInfo": .string(imageInfo != nil ? "yes" : "no")
         ])
     }
 

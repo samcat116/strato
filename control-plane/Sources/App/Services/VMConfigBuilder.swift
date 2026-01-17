@@ -3,6 +3,9 @@ import Vapor
 import StratoShared
 
 struct VMConfigBuilder {
+    /// Builds VM configuration from VM and template (legacy method)
+    /// - Note: This method is deprecated. Use `buildVMConfig(from:image:)` instead.
+    @available(*, deprecated, message: "Use buildVMConfig(from:image:) instead")
     static func buildVMConfig(from vm: VM, template: VMTemplate) async throws -> VmConfig {
         // Payload configuration
         let payload = PayloadConfig(
@@ -80,6 +83,115 @@ struct VMConfigBuilder {
             iommu: false,
             watchdog: false,
             pvpanic: false
+        )
+    }
+
+    /// Builds VM configuration from VM and Image (new method)
+    static func buildVMConfig(from vm: VM, image: Image) async throws -> VmConfig {
+        // Payload configuration - use image defaults if available
+        let payload = PayloadConfig(
+            firmware: vm.firmwarePath,
+            kernel: vm.kernelPath,
+            cmdline: vm.cmdline ?? image.defaultCmdline,
+            initramfs: vm.initramfsPath
+        )
+
+        // CPU configuration - use image defaults or VM values
+        let cpuCount = vm.cpu > 0 ? vm.cpu : (image.defaultCpu ?? 1)
+        let cpus = CpusConfig(
+            bootVcpus: cpuCount,
+            maxVcpus: vm.maxCpu > 0 ? vm.maxCpu : cpuCount,
+            kvmHyperv: false
+        )
+
+        // Memory configuration - use image defaults or VM values
+        let memorySize = vm.memory > 0 ? vm.memory : (image.defaultMemory ?? 1024 * 1024 * 1024) // 1GB default
+        let memory = MemoryConfig(
+            size: memorySize,
+            mergeable: false,
+            shared: vm.sharedMemory,
+            hugepages: vm.hugepages,
+            thp: true
+        )
+
+        // Disk configuration - disk path will be set by agent using cached image
+        var disks: [DiskConfig] = []
+        if let diskPath = vm.diskPath {
+            let disk = DiskConfig(
+                path: diskPath,
+                readonly: vm.readonlyDisk,
+                direct: false,
+                id: "disk0"
+            )
+            disks.append(disk)
+        }
+
+        // Network configuration
+        var networks: [NetConfig] = []
+        if let macAddress = vm.macAddress {
+            let network = NetConfig(
+                ip: vm.ipAddress ?? "192.168.249.1",
+                mask: vm.networkMask ?? "255.255.255.0",
+                mac: macAddress,
+                numQueues: 2,
+                queueSize: 256,
+                id: "net0"
+            )
+            networks.append(network)
+        }
+
+        // Console configuration
+        let console = ConsoleConfig(
+            socket: vm.consoleSocket,
+            mode: vm.consoleMode.rawValue
+        )
+
+        let serial = ConsoleConfig(
+            socket: vm.serialSocket,
+            mode: vm.serialMode.rawValue
+        )
+
+        // RNG configuration
+        let rng = RngConfig(src: "/dev/urandom")
+
+        return VmConfig(
+            cpus: cpus,
+            memory: memory,
+            payload: payload,
+            disks: disks.isEmpty ? nil : disks,
+            net: networks.isEmpty ? nil : networks,
+            rng: rng,
+            serial: serial,
+            console: console,
+            iommu: false,
+            watchdog: false,
+            pvpanic: false
+        )
+    }
+
+    /// Builds ImageInfo for agent to download and cache the image
+    static func buildImageInfo(from image: Image, controlPlaneURL: String) throws -> ImageInfo {
+        guard let imageId = image.id else {
+            throw Abort(.internalServerError, reason: "Image ID is required")
+        }
+
+        guard let checksum = image.checksum else {
+            throw Abort(.internalServerError, reason: "Image checksum is required")
+        }
+
+        guard image.status == .ready else {
+            throw Abort(.badRequest, reason: "Image is not ready for use")
+        }
+
+        let downloadURL = "\(controlPlaneURL)/api/projects/\(image.$project.id)/images/\(imageId)/download"
+
+        return ImageInfo(
+            imageId: imageId,
+            projectId: image.$project.id,
+            filename: image.filename,
+            checksum: checksum,
+            size: image.size,
+            downloadURL: downloadURL
         )
     }
 }

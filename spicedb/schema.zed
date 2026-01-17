@@ -40,6 +40,29 @@ definition project {
     permission delete_project = organization->admin
 }
 
+/** image represents a VM disk image that can be used to create VMs */
+definition image {
+    /** owner is the user who uploaded the image */
+    relation owner: user
+
+    /** project that contains this image */
+    relation project: project
+
+    /** viewer can see image details but not modify */
+    relation viewer: user
+
+    /** editor can modify image settings */
+    relation editor: user
+
+    // Permissions - combining direct relations and project permissions
+    // Note: Using project->view_project which includes org admin/members
+    permission create = project->admin
+    permission read = owner + viewer + editor + project->view_project
+    permission update = owner + editor + project->update_project
+    permission delete = owner + project->delete_project
+    permission download = owner + viewer + editor + project->view_project
+}
+
 /** virtual_machine represents a virtual machine instance */
 definition virtual_machine {
     /** owner is the user who created the VM */

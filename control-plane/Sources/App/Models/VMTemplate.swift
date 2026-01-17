@@ -1,6 +1,15 @@
 import Fluent
 import Vapor
 
+/// VMTemplate is DEPRECATED. Use Image model for new VM creation.
+///
+/// VMTemplates were the original way to define VM configurations with
+/// hardcoded paths to kernel, initramfs, and disk images. The new Image
+/// model provides user-uploadable disk images with dynamic caching on agents.
+///
+/// This class is kept for backward compatibility with existing VMs.
+/// New VMs should be created using Images instead.
+@available(*, deprecated, message: "Use Image model instead for new VM creation")
 final class VMTemplate: Model, @unchecked Sendable {
     static let schema = "vm_templates"
 

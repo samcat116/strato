@@ -88,6 +88,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AlterSCIMTokenForeignKey())
     app.migrations.add(AddSCIMExternalIDIndex())
 
+    // Image management migrations
+    app.migrations.add(CreateImage())
+    app.migrations.add(AddImageToVM())
+
     try await app.autoMigrate()
 
     // Dev auth bypass - create dev user for local development
