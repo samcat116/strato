@@ -10,6 +10,8 @@ actor QEMUService {
     private let logger: Logger
     private let networkService: (any NetworkServiceProtocol)?
     private let imageCacheService: ImageCacheService?
+    private let vmStoragePath: String
+    private let qemuBinaryPath: String
 
     #if canImport(SwiftQEMU)
     private var activeVMs: [String: QEMUManager] = [:]
@@ -20,10 +22,12 @@ actor QEMUService {
     private var mockVMs: [String: MockQEMUVM] = [:]
     #endif
 
-    init(logger: Logger, networkService: (any NetworkServiceProtocol)? = nil, imageCacheService: ImageCacheService? = nil) {
+    init(logger: Logger, networkService: (any NetworkServiceProtocol)? = nil, imageCacheService: ImageCacheService? = nil, vmStoragePath: String, qemuBinaryPath: String) {
         self.logger = logger
         self.networkService = networkService
         self.imageCacheService = imageCacheService
+        self.vmStoragePath = vmStoragePath
+        self.qemuBinaryPath = qemuBinaryPath
 
         #if canImport(SwiftQEMU)
         #if os(Linux)
@@ -62,7 +66,7 @@ actor QEMUService {
                 ])
 
                 // Create a copy for this VM
-                let vmDiskPath = "/var/lib/strato/vms/\(vmId)/disk.qcow2"
+                let vmDiskPath = "\(vmStoragePath)/\(vmId)/disk.qcow2"
                 let vmDiskDir = (vmDiskPath as NSString).deletingLastPathComponent
 
                 try FileManager.default.createDirectory(
@@ -152,7 +156,7 @@ actor QEMUService {
             }
         }
 
-        let qemuManager = QEMUManager(logger: logger)
+        let qemuManager = QEMUManager(qemuPath: qemuBinaryPath, logger: logger)
 
         // Set up VM networking first
         if let networks = effectiveConfig.net, !networks.isEmpty {
@@ -403,6 +407,17 @@ actor QEMUService {
     private func convertToQEMUConfiguration(_ config: VmConfig, vmId: String) -> QEMUConfiguration {
         var qemuConfig = QEMUConfiguration()
 
+        // Configure machine type based on architecture
+        #if arch(arm64)
+        qemuConfig.machineType = "virt"
+        qemuConfig.cpuType = "host"
+        logger.debug("Configuring ARM64 machine type: virt")
+        #else
+        qemuConfig.machineType = "q35"
+        qemuConfig.cpuType = "host"
+        logger.debug("Configuring x86_64 machine type: q35")
+        #endif
+
         // Configure CPU
         if let cpuConfig = config.cpus {
             qemuConfig.cpuCount = Int(cpuConfig.bootVcpus)
@@ -473,7 +488,8 @@ actor QEMUService {
         qemuConfig.enableKVM = true
         logger.debug("Enabling KVM acceleration")
         #elseif os(macOS)
-        // Enable Hypervisor.framework (HVF) on macOS
+        // Disable KVM (not available on macOS) and enable Hypervisor.framework (HVF)
+        qemuConfig.enableKVM = false
         qemuConfig.additionalArgs.append(contentsOf: ["-accel", "hvf"])
         logger.debug("Enabling Hypervisor.framework (HVF) acceleration")
         #endif

@@ -14,6 +14,8 @@ public struct AgentConfig: Codable {
     public let networkMode: NetworkMode?
     public let enableHVF: Bool?
     public let enableKVM: Bool?
+    public let vmStoragePath: String?
+    public let qemuBinaryPath: String?
 
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
@@ -22,6 +24,8 @@ public struct AgentConfig: Codable {
         case networkMode = "network_mode"
         case enableHVF = "enable_hvf"
         case enableKVM = "enable_kvm"
+        case vmStoragePath = "vm_storage_dir"
+        case qemuBinaryPath = "qemu_binary_path"
     }
 
     public init(
@@ -30,7 +34,9 @@ public struct AgentConfig: Codable {
         logLevel: String? = nil,
         networkMode: NetworkMode? = nil,
         enableHVF: Bool? = nil,
-        enableKVM: Bool? = nil
+        enableKVM: Bool? = nil,
+        vmStoragePath: String? = nil,
+        qemuBinaryPath: String? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
         self.qemuSocketDir = qemuSocketDir
@@ -38,6 +44,8 @@ public struct AgentConfig: Codable {
         self.networkMode = networkMode
         self.enableHVF = enableHVF
         self.enableKVM = enableKVM
+        self.vmStoragePath = vmStoragePath
+        self.qemuBinaryPath = qemuBinaryPath
     }
 
     public static func load(from path: String, logger: Logger? = nil) throws -> AgentConfig {
@@ -60,6 +68,8 @@ public struct AgentConfig: Codable {
         let networkModeString = tomlData.string("network_mode")
         let enableHVF = tomlData.bool("enable_hvf")
         let enableKVM = tomlData.bool("enable_kvm")
+        let vmStoragePath = tomlData.string("vm_storage_dir")
+        let qemuBinaryPath = tomlData.string("qemu_binary_path")
 
         // Validate and parse network mode
         let networkMode: NetworkMode?
@@ -89,11 +99,22 @@ public struct AgentConfig: Codable {
             logLevel: logLevel,
             networkMode: networkMode,
             enableHVF: enableHVF,
-            enableKVM: enableKVM
+            enableKVM: enableKVM,
+            vmStoragePath: vmStoragePath,
+            qemuBinaryPath: qemuBinaryPath
         )
     }
 
-    public static let defaultConfigPath = "/etc/strato/config.toml"
+    /// Default config file path (platform-specific)
+    public static var defaultConfigPath: String {
+        #if os(macOS)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/Application Support/strato/config.toml"
+        #else
+        return "/etc/strato/config.toml"
+        #endif
+    }
+
     public static let fallbackConfigPath = "./config.toml"
 
     public static func loadDefaultConfig(logger: Logger? = nil) -> AgentConfig {
@@ -115,23 +136,75 @@ public struct AgentConfig: Codable {
         logger?.info("Using default configuration")
 
         #if os(Linux)
+        #if arch(arm64)
+        let defaultQemuPath = "/usr/bin/qemu-system-aarch64"
+        #else
+        let defaultQemuPath = "/usr/bin/qemu-system-x86_64"
+        #endif
         return AgentConfig(
             controlPlaneURL: "ws://localhost:8080/agent/ws",
             qemuSocketDir: "/var/run/qemu",
             logLevel: "info",
             networkMode: .ovn,
             enableHVF: false,
-            enableKVM: true
+            enableKVM: true,
+            vmStoragePath: "/var/lib/strato/vms",
+            qemuBinaryPath: defaultQemuPath
         )
         #else
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        #if arch(arm64)
+        let defaultQemuPath = "/opt/homebrew/bin/qemu-system-aarch64"
+        #else
+        let defaultQemuPath = "/opt/homebrew/bin/qemu-system-x86_64"
+        #endif
         return AgentConfig(
             controlPlaneURL: "ws://localhost:8080/agent/ws",
-            qemuSocketDir: "/var/run/qemu",
+            qemuSocketDir: "\(home)/Library/Application Support/strato/qemu-sockets",
             logLevel: "info",
             networkMode: .user,
             enableHVF: true,
-            enableKVM: false
+            enableKVM: false,
+            vmStoragePath: "\(home)/Library/Application Support/strato/vms",
+            qemuBinaryPath: defaultQemuPath
         )
+        #endif
+    }
+
+    /// Default VM storage path (platform-specific)
+    public static var defaultVMStoragePath: String {
+        #if os(macOS)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/Application Support/strato/vms"
+        #else
+        return "/var/lib/strato/vms"
+        #endif
+    }
+
+    /// Default QEMU socket directory (platform-specific)
+    public static var defaultQemuSocketDir: String {
+        #if os(macOS)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/Application Support/strato/qemu-sockets"
+        #else
+        return "/var/run/qemu"
+        #endif
+    }
+
+    /// Default QEMU binary path (platform and architecture-specific)
+    public static var defaultQemuBinaryPath: String {
+        #if os(macOS)
+            #if arch(arm64)
+            return "/opt/homebrew/bin/qemu-system-aarch64"
+            #else
+            return "/opt/homebrew/bin/qemu-system-x86_64"
+            #endif
+        #else
+            #if arch(arm64)
+            return "/usr/bin/qemu-system-aarch64"
+            #else
+            return "/usr/bin/qemu-system-x86_64"
+            #endif
         #endif
     }
 }
