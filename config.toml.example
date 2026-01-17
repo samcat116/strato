@@ -1,7 +1,12 @@
 # Strato Agent Configuration File
-# 
+#
 # This file configures the Strato hypervisor agent. Command-line arguments
 # will override these settings when provided.
+#
+# Default config file locations:
+#   macOS: ~/Library/Application Support/strato/config.toml
+#   Linux: /etc/strato/config.toml
+# Fallback: ./config.toml (current directory)
 
 # WebSocket URL for connecting to the Control Plane
 # Required field - agent cannot start without this
@@ -22,6 +27,14 @@ log_level = "info"
 #   macOS: ~/Library/Application Support/strato/vms
 #   Linux: /var/lib/strato/vms
 # vm_storage_dir = "/var/lib/strato/vms"
+
+# Path to QEMU binary
+# Optional - platform and architecture-specific defaults:
+#   macOS arm64: /opt/homebrew/bin/qemu-system-aarch64
+#   macOS x86_64: /opt/homebrew/bin/qemu-system-x86_64
+#   Linux arm64: /usr/bin/qemu-system-aarch64
+#   Linux x86_64: /usr/bin/qemu-system-x86_64
+# qemu_binary_path = "/opt/homebrew/bin/qemu-system-aarch64"
 
 # Additional configuration options can be added here as needed
 # Examples:

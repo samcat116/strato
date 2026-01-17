@@ -38,6 +38,7 @@ actor Agent {
     private let networkMode: NetworkMode?
     private let imageCachePath: String?
     private let vmStoragePath: String
+    private let qemuBinaryPath: String
 
     init(
         agentID: String,
@@ -47,7 +48,8 @@ actor Agent {
         isRegistrationMode: Bool,
         logger: Logger,
         imageCachePath: String? = nil,
-        vmStoragePath: String
+        vmStoragePath: String,
+        qemuBinaryPath: String
     ) {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
@@ -57,6 +59,7 @@ actor Agent {
         self.logger = logger
         self.imageCachePath = imageCachePath
         self.vmStoragePath = vmStoragePath
+        self.qemuBinaryPath = qemuBinaryPath
     }
 
     /// Returns the effective agent ID (assigned UUID if registered, initial ID otherwise)
@@ -116,7 +119,7 @@ actor Agent {
         )
 
         logger.info("Initializing QEMU service")
-        qemuService = QEMUService(logger: logger, networkService: networkService, imageCacheService: imageCacheService, vmStoragePath: vmStoragePath)
+        qemuService = QEMUService(logger: logger, networkService: networkService, imageCacheService: imageCacheService, vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath)
         
         if isRegistrationMode {
             logger.info("Connecting for agent registration", metadata: ["url": .string(webSocketURL)])
