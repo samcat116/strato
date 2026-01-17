@@ -1,5 +1,5 @@
 {
-  "originHash" : "83566960252e041212e22aae27a088f1e540ce98c5a85fd89014df1a9588cd9c",
+  "originHash" : "8c479ba45c8a31fe57ebaf0451725f85e5b1778419e235f9109a0ce3a17c8954",
   "pins" : [
     {
       "identity" : "swift-algorithms",
@@ -152,15 +152,6 @@
       "state" : {
         "revision" : "0c0290ff6b24942dadb83a929ffaaa1481df04a2",
         "version" : "1.1.1"
-      }
-    },
-    {
-      "identity" : "swift-ovn",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/samcat116/swift-ovn.git",
-      "state" : {
-        "branch" : "main",
-        "revision" : "fe6364754f8d0e4a5ce8f01f42cf138f7899a9d9"
       }
     },
     {

@@ -87,10 +87,10 @@ actor WebSocketClient {
             let resumed = AtomicBool(false)
             let wsHolderRef = self.wsHolder
             let loggerRef = self.logger
-            weak var agentRef = self.agent
+            let agentRef = self.agent
 
             // Create connection - this returns immediately, callback fires when connected
-            _ = WebSocket.connect(
+            WebSocket.connect(
                 to: url,
                 on: eventLoop
             ) { ws in
@@ -124,8 +124,8 @@ actor WebSocketClient {
                         ])
 
                         // Handle message in a Task to bridge to async
-                        Task {
-                            await agentRef?.handleMessage(envelope)
+                        Task { [weak agent = agentRef] in
+                            await agent?.handleMessage(envelope)
                         }
                     } catch {
                         loggerRef.error("Failed to decode message: \(error)")

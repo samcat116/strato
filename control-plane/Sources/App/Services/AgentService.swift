@@ -30,7 +30,7 @@ final class WebSocketManager: @unchecked Sendable {
     /// Remove connection by agent name
     func removeConnection(agentName: String) {
         lock.withLock {
-            connections.removeValue(forKey: agentName)
+            _ = connections.removeValue(forKey: agentName)
         }
     }
 
@@ -456,18 +456,18 @@ actor AgentService {
             Task {
                 do {
                     // Store continuation for response handling
-                    await storePendingRequest(message.requestId, continuation: continuation)
+                    self.storePendingRequest(message.requestId, continuation: continuation)
 
                     // Send message
-                    try await sendMessageToAgent(message, agentName: agentName)
+                    try await self.sendMessageToAgent(message, agentName: agentName)
 
                     // Set timeout
                     Task {
                         try await Task.sleep(for: .seconds(30))
-                        await timeoutRequest(message.requestId)
+                        self.timeoutRequest(message.requestId)
                     }
                 } catch {
-                    await removePendingRequest(message.requestId)
+                    _ = self.removePendingRequest(message.requestId)
                     continuation.resume(throwing: error)
                 }
             }
@@ -492,7 +492,7 @@ actor AgentService {
 
     func handleAgentResponse(_ envelope: MessageEnvelope) {
         Task {
-            guard let continuation = await removePendingRequest(envelope.payload.base64EncodedString()) else {
+            guard let continuation = self.removePendingRequest(envelope.payload.base64EncodedString()) else {
                 return
             }
 
