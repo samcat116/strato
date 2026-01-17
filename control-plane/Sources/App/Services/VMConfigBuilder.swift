@@ -170,7 +170,20 @@ struct VMConfigBuilder {
     }
 
     /// Builds ImageInfo for agent to download and cache the image
-    static func buildImageInfo(from image: Image, controlPlaneURL: String) throws -> ImageInfo {
+    /// - Parameters:
+    ///   - image: The image to build info for
+    ///   - controlPlaneURL: Base URL of the control plane
+    ///   - agentName: Name of the agent that will download the image
+    ///   - signingKey: Secret key for signing the download URL
+    ///   - expiresIn: Time until the URL expires (default: 1 hour)
+    /// - Returns: ImageInfo with a signed download URL
+    static func buildImageInfo(
+        from image: Image,
+        controlPlaneURL: String,
+        agentName: String,
+        signingKey: String,
+        expiresIn: TimeInterval = URLSigningService.defaultExpiration
+    ) throws -> ImageInfo {
         guard let imageId = image.id else {
             throw Abort(.internalServerError, reason: "Image ID is required")
         }
@@ -183,7 +196,18 @@ struct VMConfigBuilder {
             throw Abort(.badRequest, reason: "Image is not ready for use")
         }
 
-        let downloadURL = "\(controlPlaneURL)/api/projects/\(image.$project.id)/images/\(imageId)/download"
+        // Generate signed URL for agent download
+        let downloadURL = URLSigningService.signImageDownloadURL(
+            imageId: imageId,
+            projectId: image.$project.id,
+            agentName: agentName,
+            baseURL: controlPlaneURL,
+            expiresIn: expiresIn,
+            signingKey: signingKey
+        )
+
+        // Calculate expiration date for agent awareness
+        let expiresAt = Date().addingTimeInterval(expiresIn)
 
         return ImageInfo(
             imageId: imageId,
@@ -191,7 +215,8 @@ struct VMConfigBuilder {
             filename: image.filename,
             checksum: checksum,
             size: image.size,
-            downloadURL: downloadURL
+            downloadURL: downloadURL,
+            expiresAt: expiresAt
         )
     }
 }

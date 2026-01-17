@@ -182,6 +182,8 @@ public struct ImageInfo: Codable, Sendable {
     public let checksum: String
     public let size: Int64
     public let downloadURL: String
+    /// When the signed download URL expires (optional, for agent awareness)
+    public let expiresAt: Date?
 
     public init(
         imageId: UUID,
@@ -189,7 +191,8 @@ public struct ImageInfo: Codable, Sendable {
         filename: String,
         checksum: String,
         size: Int64,
-        downloadURL: String
+        downloadURL: String,
+        expiresAt: Date? = nil
     ) {
         self.imageId = imageId
         self.projectId = projectId
@@ -197,6 +200,7 @@ public struct ImageInfo: Codable, Sendable {
         self.checksum = checksum
         self.size = size
         self.downloadURL = downloadURL
+        self.expiresAt = expiresAt
     }
 }
 

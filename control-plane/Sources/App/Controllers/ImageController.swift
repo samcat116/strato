@@ -472,25 +472,61 @@ struct ImageController: RouteCollection {
     // MARK: - Download Image
 
     func download(req: Request) async throws -> Response {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
-
         guard let projectID = req.parameters.get("projectID", as: UUID.self),
               let imageID = req.parameters.get("imageID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 
-        guard let image = try await Image.find(imageID, on: req.db) else {
-            throw Abort(.notFound, reason: "Image not found")
+        // Try signed URL authentication first (for agents)
+        if let agentName = req.query[String.self, at: "agent"],
+           let expiresStr = req.query[String.self, at: "expires"],
+           let expires = Int(expiresStr),
+           let signature = req.query[String.self, at: "sig"] {
+
+            // Verify the signing key is configured
+            let signingKey: String
+            do {
+                signingKey = try URLSigningService.getSigningKey(from: req.application)
+            } catch {
+                req.logger.error("Image download signing key not configured")
+                throw error
+            }
+
+            // Verify the signature
+            let path = "/api/projects/\(projectID)/images/\(imageID)/download"
+            let isValid = URLSigningService.verifySignature(
+                path: path,
+                imageId: imageID,
+                projectId: projectID,
+                agentName: agentName,
+                expires: expires,
+                signature: signature,
+                signingKey: signingKey
+            )
+
+            guard isValid else {
+                req.logger.warning("Invalid or expired image download signature", metadata: [
+                    "imageId": .string(imageID.uuidString),
+                    "agent": .string(agentName)
+                ])
+                throw Abort(.forbidden, reason: "Invalid or expired download signature")
+            }
+
+            req.logger.info("Agent downloading image via signed URL", metadata: [
+                "imageId": .string(imageID.uuidString),
+                "agent": .string(agentName)
+            ])
+
+            // Signature valid - serve the file
+            return try await serveImageFile(req: req, imageID: imageID, projectID: projectID)
         }
 
-        // Verify image belongs to the project
-        guard image.$project.id == projectID else {
-            throw Abort(.notFound, reason: "Image not found in project")
+        // Fall back to user session authentication
+        guard let user = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
         }
 
-        // Check permission
+        // Check permission via SpiceDB
         let hasPermission = try await req.spicedb.checkPermission(
             subject: user.id?.uuidString ?? "",
             permission: "download",
@@ -500,6 +536,21 @@ struct ImageController: RouteCollection {
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to download image")
+        }
+
+        return try await serveImageFile(req: req, imageID: imageID, projectID: projectID)
+    }
+
+    // MARK: - Serve Image File (shared helper)
+
+    private func serveImageFile(req: Request, imageID: UUID, projectID: UUID) async throws -> Response {
+        guard let image = try await Image.find(imageID, on: req.db) else {
+            throw Abort(.notFound, reason: "Image not found")
+        }
+
+        // Verify image belongs to the project
+        guard image.$project.id == projectID else {
+            throw Abort(.notFound, reason: "Image not found in project")
         }
 
         // Verify image is ready
