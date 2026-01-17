@@ -95,7 +95,9 @@ export function ImageTable({
               {image.sizeFormatted || "—"}
             </TableCell>
             <TableCell className="text-gray-300">
-              {new Date(image.createdAt).toLocaleDateString()}
+              {image.createdAt
+                ? new Date(image.createdAt).toLocaleDateString()
+                : "—"}
             </TableCell>
             <TableCell className="text-right">
               <ImageActions
