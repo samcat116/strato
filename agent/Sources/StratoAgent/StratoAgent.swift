@@ -89,7 +89,7 @@ struct StratoAgent: AsyncParsableCommand {
         }
         
         // Override config values with command-line arguments if provided
-        let finalQemuSocketDir = qemuSocketDir ?? config.qemuSocketDir ?? "/var/run/qemu"
+        let finalQemuSocketDir = qemuSocketDir ?? config.qemuSocketDir ?? AgentConfig.defaultQemuSocketDir
         let finalLogLevel = logLevel ?? config.logLevel ?? "info"
         let finalAgentID = agentID ?? ProcessInfo.processInfo.hostName
         let finalVMStoragePath = vmStorageDir ?? config.vmStoragePath ?? AgentConfig.defaultVMStoragePath

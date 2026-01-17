@@ -8,8 +8,10 @@
 control_plane_url = "ws://localhost:8080/agent/ws"
 
 # Directory where QEMU will create domain sockets for VM communication
-# Optional - defaults to "/var/run/qemu" if not specified
-qemu_socket_dir = "/var/run/qemu"
+# Optional - platform-specific defaults:
+#   macOS: ~/Library/Application Support/strato/qemu-sockets
+#   Linux: /var/run/qemu
+# qemu_socket_dir = "/var/run/qemu"
 
 # Logging level: trace, debug, info, notice, warning, error, critical
 # Optional - defaults to "info" if not specified

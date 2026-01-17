@@ -134,7 +134,7 @@ public struct AgentConfig: Codable {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return AgentConfig(
             controlPlaneURL: "ws://localhost:8080/agent/ws",
-            qemuSocketDir: "/var/run/qemu",
+            qemuSocketDir: "\(home)/Library/Application Support/strato/qemu-sockets",
             logLevel: "info",
             networkMode: .user,
             enableHVF: true,
@@ -151,6 +151,16 @@ public struct AgentConfig: Codable {
         return "\(home)/Library/Application Support/strato/vms"
         #else
         return "/var/lib/strato/vms"
+        #endif
+    }
+
+    /// Default QEMU socket directory (platform-specific)
+    public static var defaultQemuSocketDir: String {
+        #if os(macOS)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/Application Support/strato/qemu-sockets"
+        #else
+        return "/var/run/qemu"
         #endif
     }
 }
