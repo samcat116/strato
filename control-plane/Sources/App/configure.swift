@@ -119,6 +119,84 @@ public func configure(_ app: Application) async throws {
             try await devUser.save(on: app.db)
             app.logger.info("Created dev user for auth bypass")
         }
+        // Ensure dev user has a default organization
+        let defaultOrg: Organization
+        if let existingOrg = try await Organization.query(on: app.db)
+            .filter(\.$name == "Default Organization")
+            .first()
+        {
+            defaultOrg = existingOrg
+        } else {
+            defaultOrg = Organization(
+                name: "Default Organization",
+                description: "Default organization for development"
+            )
+            try await defaultOrg.save(on: app.db)
+            app.logger.info("Created default organization for dev user")
+        }
+
+        // Ensure default project exists for the organization
+        let defaultProject: Project
+        if let existingProject = try await Project.query(on: app.db)
+            .filter(\.$organization.$id == defaultOrg.id!)
+            .filter(\.$name == "Default Project")
+            .first()
+        {
+            defaultProject = existingProject
+        } else {
+            defaultProject = Project(
+                name: "Default Project",
+                description: "Default project for Default Organization",
+                organizationID: defaultOrg.id,
+                path: "/\(defaultOrg.id!.uuidString)"
+            )
+            try await defaultProject.save(on: app.db)
+
+            // Update project path with its own ID
+            defaultProject.path = "/\(defaultOrg.id!.uuidString)/\(defaultProject.id!.uuidString)"
+            try await defaultProject.save(on: app.db)
+            app.logger.info("Created default project for dev organization")
+        }
+
+        // Always ensure SpiceDB relationships exist (idempotent)
+        // This handles cases where DB state exists but SpiceDB was reset
+        try await app.spicedb.writeRelationship(
+            entity: "organization",
+            entityId: defaultOrg.id!.uuidString,
+            relation: "admin",
+            subject: "user",
+            subjectId: devUser.id!.uuidString
+        )
+
+        try await app.spicedb.writeRelationship(
+            entity: "project",
+            entityId: defaultProject.id!.uuidString,
+            relation: "organization",
+            subject: "organization",
+            subjectId: defaultOrg.id!.uuidString
+        )
+
+        // Link dev user to organization if not already linked
+        let existingMembership = try await UserOrganization.query(on: app.db)
+            .filter(\.$user.$id == devUser.id!)
+            .filter(\.$organization.$id == defaultOrg.id!)
+            .first()
+
+        if existingMembership == nil {
+            let membership = UserOrganization(
+                userID: devUser.id!,
+                organizationID: defaultOrg.id!,
+                role: "admin"
+            )
+            try await membership.save(on: app.db)
+        }
+
+        // Set current organization if not set
+        if devUser.currentOrganizationId == nil {
+            devUser.currentOrganizationId = defaultOrg.id
+            try await devUser.save(on: app.db)
+        }
+
         app.storage[DevUserKey.self] = devUser
     }
 
