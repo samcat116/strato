@@ -14,6 +14,7 @@ public struct AgentConfig: Codable {
     public let networkMode: NetworkMode?
     public let enableHVF: Bool?
     public let enableKVM: Bool?
+    public let vmStoragePath: String?
 
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
@@ -22,6 +23,7 @@ public struct AgentConfig: Codable {
         case networkMode = "network_mode"
         case enableHVF = "enable_hvf"
         case enableKVM = "enable_kvm"
+        case vmStoragePath = "vm_storage_dir"
     }
 
     public init(
@@ -30,7 +32,8 @@ public struct AgentConfig: Codable {
         logLevel: String? = nil,
         networkMode: NetworkMode? = nil,
         enableHVF: Bool? = nil,
-        enableKVM: Bool? = nil
+        enableKVM: Bool? = nil,
+        vmStoragePath: String? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
         self.qemuSocketDir = qemuSocketDir
@@ -38,6 +41,7 @@ public struct AgentConfig: Codable {
         self.networkMode = networkMode
         self.enableHVF = enableHVF
         self.enableKVM = enableKVM
+        self.vmStoragePath = vmStoragePath
     }
 
     public static func load(from path: String, logger: Logger? = nil) throws -> AgentConfig {
@@ -60,6 +64,7 @@ public struct AgentConfig: Codable {
         let networkModeString = tomlData.string("network_mode")
         let enableHVF = tomlData.bool("enable_hvf")
         let enableKVM = tomlData.bool("enable_kvm")
+        let vmStoragePath = tomlData.string("vm_storage_dir")
 
         // Validate and parse network mode
         let networkMode: NetworkMode?
@@ -89,7 +94,8 @@ public struct AgentConfig: Codable {
             logLevel: logLevel,
             networkMode: networkMode,
             enableHVF: enableHVF,
-            enableKVM: enableKVM
+            enableKVM: enableKVM,
+            vmStoragePath: vmStoragePath
         )
     }
 
@@ -121,17 +127,30 @@ public struct AgentConfig: Codable {
             logLevel: "info",
             networkMode: .ovn,
             enableHVF: false,
-            enableKVM: true
+            enableKVM: true,
+            vmStoragePath: "/var/lib/strato/vms"
         )
         #else
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
         return AgentConfig(
             controlPlaneURL: "ws://localhost:8080/agent/ws",
             qemuSocketDir: "/var/run/qemu",
             logLevel: "info",
             networkMode: .user,
             enableHVF: true,
-            enableKVM: false
+            enableKVM: false,
+            vmStoragePath: "\(home)/Library/Application Support/strato/vms"
         )
+        #endif
+    }
+
+    /// Default VM storage path (platform-specific)
+    public static var defaultVMStoragePath: String {
+        #if os(macOS)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/Application Support/strato/vms"
+        #else
+        return "/var/lib/strato/vms"
         #endif
     }
 }

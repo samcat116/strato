@@ -21,6 +21,7 @@ actor Agent {
 
     private let networkMode: NetworkMode?
     private let imageCachePath: String?
+    private let vmStoragePath: String
 
     init(
         agentID: String,
@@ -29,7 +30,8 @@ actor Agent {
         networkMode: NetworkMode?,
         isRegistrationMode: Bool,
         logger: Logger,
-        imageCachePath: String? = nil
+        imageCachePath: String? = nil,
+        vmStoragePath: String
     ) {
         self.agentID = agentID
         self.webSocketURL = webSocketURL
@@ -38,6 +40,7 @@ actor Agent {
         self.isRegistrationMode = isRegistrationMode
         self.logger = logger
         self.imageCachePath = imageCachePath
+        self.vmStoragePath = vmStoragePath
     }
     
     func start() async throws {
@@ -92,7 +95,7 @@ actor Agent {
         )
 
         logger.info("Initializing QEMU service")
-        qemuService = QEMUService(logger: logger, networkService: networkService, imageCacheService: imageCacheService)
+        qemuService = QEMUService(logger: logger, networkService: networkService, imageCacheService: imageCacheService, vmStoragePath: vmStoragePath)
         
         if isRegistrationMode {
             logger.info("Connecting for agent registration", metadata: ["url": .string(webSocketURL)])

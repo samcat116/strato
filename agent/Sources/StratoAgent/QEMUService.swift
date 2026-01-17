@@ -10,6 +10,7 @@ actor QEMUService {
     private let logger: Logger
     private let networkService: (any NetworkServiceProtocol)?
     private let imageCacheService: ImageCacheService?
+    private let vmStoragePath: String
 
     #if canImport(SwiftQEMU)
     private var activeVMs: [String: QEMUManager] = [:]
@@ -20,10 +21,11 @@ actor QEMUService {
     private var mockVMs: [String: MockQEMUVM] = [:]
     #endif
 
-    init(logger: Logger, networkService: (any NetworkServiceProtocol)? = nil, imageCacheService: ImageCacheService? = nil) {
+    init(logger: Logger, networkService: (any NetworkServiceProtocol)? = nil, imageCacheService: ImageCacheService? = nil, vmStoragePath: String) {
         self.logger = logger
         self.networkService = networkService
         self.imageCacheService = imageCacheService
+        self.vmStoragePath = vmStoragePath
 
         #if canImport(SwiftQEMU)
         #if os(Linux)
@@ -62,7 +64,7 @@ actor QEMUService {
                 ])
 
                 // Create a copy for this VM
-                let vmDiskPath = "/var/lib/strato/vms/\(vmId)/disk.qcow2"
+                let vmDiskPath = "\(vmStoragePath)/\(vmId)/disk.qcow2"
                 let vmDiskDir = (vmDiskPath as NSString).deletingLastPathComponent
 
                 try FileManager.default.createDirectory(

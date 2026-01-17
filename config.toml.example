@@ -15,8 +15,13 @@ qemu_socket_dir = "/var/run/qemu"
 # Optional - defaults to "info" if not specified
 log_level = "info"
 
+# Directory where VM disk images are stored
+# Optional - platform-specific defaults:
+#   macOS: ~/Library/Application Support/strato/vms
+#   Linux: /var/lib/strato/vms
+# vm_storage_dir = "/var/lib/strato/vms"
+
 # Additional configuration options can be added here as needed
 # Examples:
 # heartbeat_interval = 30
 # max_vms = 10
-# vm_images_dir = "/var/lib/strato/images"

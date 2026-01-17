@@ -28,7 +28,10 @@ struct StratoAgent: AsyncParsableCommand {
     
     @Option(name: .long, help: "Path to configuration file")
     var configFile: String?
-    
+
+    @Option(name: .long, help: "VM storage directory path (overrides config file)")
+    var vmStorageDir: String?
+
     @Flag(name: .long, help: "Enable debug mode")
     var debug: Bool = false
     
@@ -89,6 +92,7 @@ struct StratoAgent: AsyncParsableCommand {
         let finalQemuSocketDir = qemuSocketDir ?? config.qemuSocketDir ?? "/var/run/qemu"
         let finalLogLevel = logLevel ?? config.logLevel ?? "info"
         let finalAgentID = agentID ?? ProcessInfo.processInfo.hostName
+        let finalVMStoragePath = vmStorageDir ?? config.vmStoragePath ?? AgentConfig.defaultVMStoragePath
         
         // Update log level based on final configuration
         logger.logLevel = debug ? .debug : Logger.Level(rawValue: finalLogLevel) ?? .info
@@ -97,6 +101,7 @@ struct StratoAgent: AsyncParsableCommand {
             "agentID": .string(finalAgentID),
             "webSocketURL": .string(finalWebSocketURL),
             "qemuSocketDir": .string(finalQemuSocketDir),
+            "vmStoragePath": .string(finalVMStoragePath),
             "logLevel": .string(finalLogLevel),
             "registrationMode": .string(isRegistrationMode ? "yes" : "no")
         ])
@@ -107,7 +112,8 @@ struct StratoAgent: AsyncParsableCommand {
             qemuSocketDir: finalQemuSocketDir,
             networkMode: config.networkMode,
             isRegistrationMode: isRegistrationMode,
-            logger: logger
+            logger: logger,
+            vmStoragePath: finalVMStoragePath
         )
         
         do {
