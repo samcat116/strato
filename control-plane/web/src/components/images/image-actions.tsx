@@ -28,6 +28,11 @@ export function ImageActions({
   const deleteImage = useDeleteImage(projectId);
 
   const handleDelete = async () => {
+    if (!image.id) {
+      console.error("Cannot delete image without ID");
+      return;
+    }
+
     if (!confirm(`Are you sure you want to delete "${image.name}"?`)) {
       return;
     }
@@ -45,6 +50,10 @@ export function ImageActions({
   };
 
   const handleDownload = () => {
+    if (!image.id) {
+      console.error("Cannot download image without ID");
+      return;
+    }
     const downloadURL = imagesApi.getDownloadURL(projectId, image.id);
     window.open(downloadURL, "_blank");
   };
