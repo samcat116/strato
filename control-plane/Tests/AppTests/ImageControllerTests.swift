@@ -112,6 +112,10 @@ final class ImageControllerTests {
             setenv("IMAGE_STORAGE_PATH", tempStoragePath, 1)
 
             try await configure(app)
+
+            // Inject mock ImageFetchService to prevent real HTTP requests
+            app.imageFetchService = MockImageFetchService()
+
             try await app.autoMigrate()
 
             // Create test user

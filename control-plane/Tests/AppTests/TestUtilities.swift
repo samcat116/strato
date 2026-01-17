@@ -305,6 +305,27 @@ struct TestDataBuilder {
     }
 }
 
+// MARK: - Mock Image Fetch Service
+
+/// Mock ImageFetchService that does nothing (prevents real HTTP requests in tests)
+actor MockImageFetchService: ImageFetchServiceProtocol {
+    var startedFetches: [UUID] = []
+    var cancelledFetches: [UUID] = []
+
+    func startFetch(imageId: UUID) async throws {
+        startedFetches.append(imageId)
+        // No-op: don't actually fetch anything
+    }
+
+    func cancelFetch(imageId: UUID) async {
+        cancelledFetches.append(imageId)
+    }
+
+    func isFetchActive(imageId: UUID) async -> Bool {
+        return false
+    }
+}
+
 // MARK: - Mock SpiceDB Service
 
 class MockSpiceDBService {
