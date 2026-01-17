@@ -51,7 +51,7 @@ public protocol WebSocketMessage: Codable, Sendable {
 // MARK: - Agent Messages
 
 public struct AgentRegisterMessage: WebSocketMessage {
-    public let type: MessageType = .agentRegister
+    public var type: MessageType { .agentRegister }
     public let requestId: String
     public let timestamp: Date
     public let agentId: String
@@ -80,7 +80,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
 }
 
 public struct AgentHeartbeatMessage: WebSocketMessage {
-    public let type: MessageType = .agentHeartbeat
+    public var type: MessageType { .agentHeartbeat }
     public let requestId: String
     public let timestamp: Date
     public let agentId: String
@@ -103,7 +103,7 @@ public struct AgentHeartbeatMessage: WebSocketMessage {
 }
 
 public struct AgentUnregisterMessage: WebSocketMessage {
-    public let type: MessageType = .agentUnregister
+    public var type: MessageType { .agentUnregister }
     public let requestId: String
     public let timestamp: Date
     public let agentId: String
@@ -150,7 +150,7 @@ public struct AgentResources: Codable, Sendable {
 // MARK: - VM Operation Messages
 
 public struct VMCreateMessage: WebSocketMessage {
-    public let type: MessageType = .vmCreate
+    public var type: MessageType { .vmCreate }
     public let requestId: String
     public let timestamp: Date
     public let vmData: VMData
@@ -205,7 +205,7 @@ public struct ImageInfo: Codable, Sendable {
 }
 
 public struct ImageInfoRequestMessage: WebSocketMessage {
-    public let type: MessageType = .imageInfo
+    public var type: MessageType { .imageInfo }
     public let requestId: String
     public let timestamp: Date
     public let imageId: UUID
@@ -222,7 +222,7 @@ public struct ImageInfoRequestMessage: WebSocketMessage {
 }
 
 public struct ImageInfoResponseMessage: WebSocketMessage {
-    public let type: MessageType = .imageInfoResponse
+    public var type: MessageType { .imageInfoResponse }
     public let requestId: String
     public let timestamp: Date
     public let imageInfo: ImageInfo?
@@ -261,7 +261,7 @@ public struct VMOperationMessage: WebSocketMessage {
 }
 
 public struct VMInfoRequestMessage: WebSocketMessage {
-    public let type: MessageType = .vmInfo
+    public var type: MessageType { .vmInfo }
     public let requestId: String
     public let timestamp: Date
     public let vmId: String
@@ -280,7 +280,7 @@ public struct VMInfoRequestMessage: WebSocketMessage {
 // MARK: - Response Messages
 
 public struct SuccessMessage: WebSocketMessage {
-    public let type: MessageType = .success
+    public var type: MessageType { .success }
     public let requestId: String
     public let timestamp: Date
     public let message: String?
@@ -300,7 +300,7 @@ public struct SuccessMessage: WebSocketMessage {
 }
 
 public struct ErrorMessage: WebSocketMessage {
-    public let type: MessageType = .error
+    public var type: MessageType { .error }
     public let requestId: String
     public let timestamp: Date
     public let error: String
@@ -320,7 +320,7 @@ public struct ErrorMessage: WebSocketMessage {
 }
 
 public struct StatusUpdateMessage: WebSocketMessage {
-    public let type: MessageType = .statusUpdate
+    public var type: MessageType { .statusUpdate }
     public let requestId: String
     public let timestamp: Date
     public let vmId: String
@@ -426,7 +426,7 @@ public enum CodableValue: Codable, Sendable {
 // MARK: - Network Operation Messages
 
 public struct NetworkCreateMessage: WebSocketMessage {
-    public let type: MessageType = .networkCreate
+    public var type: MessageType { .networkCreate }
     public let requestId: String
     public let timestamp: Date
     public let networkName: String
@@ -458,7 +458,7 @@ public struct NetworkCreateMessage: WebSocketMessage {
 }
 
 public struct NetworkDeleteMessage: WebSocketMessage {
-    public let type: MessageType = .networkDelete
+    public var type: MessageType { .networkDelete }
     public let requestId: String
     public let timestamp: Date
     public let networkName: String
@@ -475,7 +475,7 @@ public struct NetworkDeleteMessage: WebSocketMessage {
 }
 
 public struct NetworkListMessage: WebSocketMessage {
-    public let type: MessageType = .networkList
+    public var type: MessageType { .networkList }
     public let requestId: String
     public let timestamp: Date
     
@@ -489,7 +489,7 @@ public struct NetworkListMessage: WebSocketMessage {
 }
 
 public struct NetworkInfoMessage: WebSocketMessage {
-    public let type: MessageType = .networkInfo
+    public var type: MessageType { .networkInfo }
     public let requestId: String
     public let timestamp: Date
     public let networkName: String
@@ -506,7 +506,7 @@ public struct NetworkInfoMessage: WebSocketMessage {
 }
 
 public struct NetworkAttachMessage: WebSocketMessage {
-    public let type: MessageType = .networkAttach
+    public var type: MessageType { .networkAttach }
     public let requestId: String
     public let timestamp: Date
     public let vmId: String
@@ -529,7 +529,7 @@ public struct NetworkAttachMessage: WebSocketMessage {
 }
 
 public struct NetworkDetachMessage: WebSocketMessage {
-    public let type: MessageType = .networkDetach
+    public var type: MessageType { .networkDetach }
     public let requestId: String
     public let timestamp: Date
     public let vmId: String

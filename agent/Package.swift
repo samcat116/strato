@@ -14,10 +14,9 @@ let package = Package(
         .package(url: "https://github.com/vapor/websocket-kit.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
-        .package(url: "https://github.com/samcat116/swift-ovn.git", branch: "main"),
         .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
         .package(url: "https://github.com/apple/swift-testing.git", from: "0.10.0"),
-    ],
+    ] + platformPackageDependencies,
     targets: [
         // Core library with testable code (no SwiftQEMU dependency)
         .target(
@@ -62,6 +61,9 @@ var swiftSettings: [SwiftSetting] {
 // SwiftQEMU: Available on both Linux (KVM) and macOS (HVF)
 // SwiftOVN: Linux only (OVN/OVS not available on macOS)
 #if os(Linux)
+var platformPackageDependencies: [Package.Dependency] {
+    [.package(url: "https://github.com/samcat116/swift-ovn.git", branch: "main")]
+}
 var qemuAndNetworkDependencies: [Target.Dependency] {
     [
         .product(name: "SwiftQEMU", package: "swift-qemu"),
@@ -69,6 +71,9 @@ var qemuAndNetworkDependencies: [Target.Dependency] {
     ]
 }
 #else
+var platformPackageDependencies: [Package.Dependency] {
+    []
+}
 var qemuAndNetworkDependencies: [Target.Dependency] {
     // macOS: SwiftQEMU with HVF support, user-mode networking (no OVN/OVS)
     [
