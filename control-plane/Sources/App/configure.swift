@@ -133,9 +133,18 @@ public func configure(_ app: Application) async throws {
             )
             try await defaultOrg.save(on: app.db)
             app.logger.info("Created default organization for dev user")
+        }
 
-            // Create default project for the organization
-            let defaultProject = Project(
+        // Ensure default project exists for the organization
+        let defaultProject: Project
+        if let existingProject = try await Project.query(on: app.db)
+            .filter(\.$organization.$id == defaultOrg.id!)
+            .filter(\.$name == "Default Project")
+            .first()
+        {
+            defaultProject = existingProject
+        } else {
+            defaultProject = Project(
                 name: "Default Project",
                 description: "Default project for Default Organization",
                 organizationID: defaultOrg.id,
@@ -147,25 +156,25 @@ public func configure(_ app: Application) async throws {
             defaultProject.path = "/\(defaultOrg.id!.uuidString)/\(defaultProject.id!.uuidString)"
             try await defaultProject.save(on: app.db)
             app.logger.info("Created default project for dev organization")
-
-            // Create SpiceDB relationships for the organization and project
-            try await app.spicedb.writeRelationship(
-                entity: "organization",
-                entityId: defaultOrg.id!.uuidString,
-                relation: "admin",
-                subject: "user",
-                subjectId: devUser.id!.uuidString
-            )
-
-            try await app.spicedb.writeRelationship(
-                entity: "project",
-                entityId: defaultProject.id!.uuidString,
-                relation: "organization",
-                subject: "organization",
-                subjectId: defaultOrg.id!.uuidString
-            )
-            app.logger.info("Created SpiceDB relationships for dev organization")
         }
+
+        // Always ensure SpiceDB relationships exist (idempotent)
+        // This handles cases where DB state exists but SpiceDB was reset
+        try await app.spicedb.writeRelationship(
+            entity: "organization",
+            entityId: defaultOrg.id!.uuidString,
+            relation: "admin",
+            subject: "user",
+            subjectId: devUser.id!.uuidString
+        )
+
+        try await app.spicedb.writeRelationship(
+            entity: "project",
+            entityId: defaultProject.id!.uuidString,
+            relation: "organization",
+            subject: "organization",
+            subjectId: defaultOrg.id!.uuidString
+        )
 
         // Link dev user to organization if not already linked
         let existingMembership = try await UserOrganization.query(on: app.db)
