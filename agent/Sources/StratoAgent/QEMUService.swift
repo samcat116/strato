@@ -17,9 +17,13 @@ actor QEMUService {
     private var activeVMs: [String: QEMUManager] = [:]
     private var vmConfigs: [String: VmConfig] = [:]
     private var vmNetworkInfo: [String: VMNetworkInfo] = [:]
+    private var vmConsoleSocketPaths: [String: String] = [:]
+    private var vmSerialSocketPaths: [String: String] = [:]
+    private var pendingVMs: Set<String> = []  // Track VMs being created (to handle concurrent boot requests)
     #else
     // Mock mode when SwiftQEMU is not available
     private var mockVMs: [String: MockQEMUVM] = [:]
+    private var pendingVMs: Set<String> = []  // Track VMs being created (to handle concurrent boot requests)
     #endif
 
     init(logger: Logger, networkService: (any NetworkServiceProtocol)? = nil, imageCacheService: ImageCacheService? = nil, vmStoragePath: String, qemuBinaryPath: String) {
@@ -46,6 +50,9 @@ actor QEMUService {
 
     /// Creates a VM with optional image info for disk caching
     func createVM(vmId: String, config: VmConfig, imageInfo: ImageInfo? = nil) async throws {
+        // Mark VM as pending to handle concurrent boot requests
+        pendingVMs.insert(vmId)
+        defer { pendingVMs.remove(vmId) }
 
         #if canImport(SwiftQEMU)
         logger.info("Creating QEMU VM", metadata: ["vmId": .string(vmId)])
@@ -165,7 +172,33 @@ actor QEMUService {
 
         // Configure and create VM
         let qemuConfig = convertToQEMUConfiguration(effectiveConfig, vmId: vmId)
-        try await qemuManager.createVM(config: qemuConfig)
+
+        // Create VM with timeout - QMP connection can hang indefinitely
+        logger.info("Starting QEMU VM creation with 30 second timeout", metadata: ["vmId": .string(vmId)])
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try await qemuManager.createVM(config: qemuConfig)
+                }
+
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 30_000_000_000) // 30 seconds
+                    throw QEMUServiceError.configurationError("QEMU VM creation timed out after 30 seconds - QMP connection may have failed")
+                }
+
+                // Wait for the first task to complete (either success or timeout)
+                try await group.next()
+                group.cancelAll()
+            }
+        } catch {
+            logger.error("QEMU VM creation failed", metadata: [
+                "vmId": .string(vmId),
+                "error": .string(error.localizedDescription)
+            ])
+            // Clean up the QEMU process if it's still running
+            try? await qemuManager.destroy()
+            throw error
+        }
 
         activeVMs[vmId] = qemuManager
         vmConfigs[vmId] = effectiveConfig
@@ -180,25 +213,32 @@ actor QEMUService {
     
     func bootVM(vmId: String) async throws {
         #if canImport(SwiftQEMU)
-        // Retry logic for VM boot - VM might still be initializing
+        // Wait for VM to be ready - it may still be creating (downloading image, etc.)
         var retries = 0
-        let maxRetries = 10
+        let maxRetries = 120  // 60 seconds total (120 * 0.5s) - creation can take a while
         var vm: QEMUManager?
 
         while retries < maxRetries {
+            // Check if VM is ready
             if let foundVM = activeVMs[vmId] {
                 vm = foundVM
                 break
             }
 
-            // Wait and retry
-            logger.debug("VM not ready yet, waiting...", metadata: ["vmId": .string(vmId), "retry": .stringConvertible(retries)])
-            try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-            retries += 1
+            // If VM is being created, wait for it
+            if pendingVMs.contains(vmId) {
+                logger.debug("VM is being created, waiting...", metadata: ["vmId": .string(vmId), "retry": .stringConvertible(retries)])
+                try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                retries += 1
+                continue
+            }
+
+            // VM not found and not pending - fail fast
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found and not being created")
         }
 
         guard let vm = vm else {
-            throw QEMUServiceError.vmNotFound("VM \(vmId) not found in active VMs after \(maxRetries) retries")
+            throw QEMUServiceError.vmNotFound("VM \(vmId) creation timed out after \(maxRetries / 2) seconds")
         }
 
         logger.info("Booting QEMU VM", metadata: ["vmId": .string(vmId)])
@@ -307,6 +347,18 @@ actor QEMUService {
         vmConfigs.removeValue(forKey: vmId)
         vmNetworkInfo.removeValue(forKey: vmId)
 
+        // Clean up console socket
+        if let socketPath = vmConsoleSocketPaths.removeValue(forKey: vmId) {
+            try? FileManager.default.removeItem(atPath: socketPath)
+            logger.debug("Removed console socket: \(socketPath)")
+        }
+
+        // Clean up serial socket
+        if let socketPath = vmSerialSocketPaths.removeValue(forKey: vmId) {
+            try? FileManager.default.removeItem(atPath: socketPath)
+            logger.debug("Removed serial socket: \(socketPath)")
+        }
+
         logger.info("QEMU VM deleted", metadata: ["vmId": .string(vmId)])
         #else
         // Mock mode
@@ -347,6 +399,68 @@ actor QEMUService {
             state: "running",
             memoryActualSize: mockConfig.memory?.size
         )
+        #endif
+    }
+
+    /// Returns the console socket path for a VM
+    /// The path is computed deterministically from vmStoragePath and vmId
+    /// Returns nil if the socket file doesn't exist (VM not running or not created)
+    func getConsoleSocketPath(vmId: String) -> String? {
+        #if canImport(SwiftQEMU)
+        // First check in-memory cache for VMs created this session
+        if let cachedPath = vmConsoleSocketPaths[vmId] {
+            // Verify socket file exists
+            if FileManager.default.fileExists(atPath: cachedPath) {
+                return cachedPath
+            }
+        }
+
+        // Compute the expected path deterministically
+        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let consoleSocketPath = (vmDir as NSString).appendingPathComponent("console.sock")
+
+        // Check if the socket file exists (VM is running with console enabled)
+        if FileManager.default.fileExists(atPath: consoleSocketPath) {
+            logger.debug("Found console socket at computed path: \(consoleSocketPath)")
+            return consoleSocketPath
+        }
+
+        logger.debug("Console socket not found at: \(consoleSocketPath)")
+        return nil
+        #else
+        // Mock mode - return a mock path
+        return mockVMs[vmId] != nil ? "/var/run/strato/vm-\(vmId)-console.sock" : nil
+        #endif
+    }
+
+    /// Returns the serial console socket path for a VM
+    /// The path is computed deterministically from vmStoragePath and vmId
+    /// Returns nil if the socket file doesn't exist (VM not running or not created)
+    func getSerialSocketPath(vmId: String) -> String? {
+        #if canImport(SwiftQEMU)
+        // First check in-memory cache for VMs created this session
+        if let cachedPath = vmSerialSocketPaths[vmId] {
+            // Verify socket file exists
+            if FileManager.default.fileExists(atPath: cachedPath) {
+                return cachedPath
+            }
+        }
+
+        // Compute the expected path deterministically
+        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let serialSocketPath = (vmDir as NSString).appendingPathComponent("serial.sock")
+
+        // Check if the socket file exists (VM is running with serial enabled)
+        if FileManager.default.fileExists(atPath: serialSocketPath) {
+            logger.debug("Found serial socket at computed path: \(serialSocketPath)")
+            return serialSocketPath
+        }
+
+        logger.debug("Serial socket not found at: \(serialSocketPath)")
+        return nil
+        #else
+        // Mock mode - return a mock path
+        return mockVMs[vmId] != nil ? "/var/run/strato/vm-\(vmId)-serial.sock" : nil
         #endif
     }
 
@@ -475,12 +589,36 @@ actor QEMUService {
             }
         }
 
-        // Configure kernel if provided
-        // TEMPORARILY DISABLED FOR E2E TESTING - kernel args causing QEMU to crash
-        // let payload = config.payload
-        // qemuConfig.kernel = payload.kernel
-        // qemuConfig.initrd = payload.initramfs
-        // qemuConfig.kernelArgs = payload.cmdline
+        // Configure kernel if provided (direct kernel boot)
+        // Note: This is for direct kernel boot, not disk-based boot
+        // For disk-based boot, kernel params are configured via cloud-init or GRUB
+        let payload = config.payload
+        if let kernel = payload.kernel, !kernel.isEmpty {
+            qemuConfig.kernel = kernel
+            qemuConfig.initrd = payload.initramfs
+            // Ensure serial console is in kernel args
+            var cmdline = payload.cmdline ?? ""
+            let consoleArgs = [
+                "console=tty0",
+                "console=ttyS0,115200",
+                "console=ttyAMA0,115200",
+                "console=hvc0"
+            ]
+            if cmdline.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                cmdline = consoleArgs.joined(separator: " ")
+            } else {
+                for arg in consoleArgs {
+                    if !cmdline.contains(arg) {
+                        cmdline.append(" \(arg)")
+                    }
+                }
+            }
+            qemuConfig.kernelArgs = cmdline
+            logger.info("Direct kernel boot configured", metadata: [
+                "kernel": .string(kernel),
+                "cmdline": .string(cmdline)
+            ])
+        }
 
         // Enable hardware acceleration based on platform
         #if os(Linux)
@@ -495,7 +633,53 @@ actor QEMUService {
         #endif
 
         qemuConfig.noGraphic = true
-        qemuConfig.startPaused = true
+        // Start VM immediately to avoid QMP resume dependency during boot
+        qemuConfig.startPaused = false
+
+        // Configure virtio-console for VM console streaming
+        // Use the VM's storage directory for the socket (user-writable)
+        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        let consoleSocketPath = (vmDir as NSString).appendingPathComponent("console.sock")
+
+        // Create VM directory if it doesn't exist (should already exist from disk creation)
+        let fileManager = FileManager.default
+        if !fileManager.fileExists(atPath: vmDir) {
+            do {
+                try fileManager.createDirectory(atPath: vmDir, withIntermediateDirectories: true, attributes: nil)
+                logger.debug("Created VM directory for console socket: \(vmDir)")
+            } catch {
+                logger.warning("Failed to create VM directory for console socket: \(error)")
+            }
+        }
+
+        // Add virtio-serial device and virtconsole
+        qemuConfig.additionalArgs.append(contentsOf: [
+            "-device", "virtio-serial-pci,id=virtio-serial0",
+            "-chardev", "socket,id=console0,path=\(consoleSocketPath),server=on,wait=off",
+            "-device", "virtconsole,chardev=console0,id=virtconsole0"
+        ])
+
+        // Store the socket path for later access
+        vmConsoleSocketPaths[vmId] = consoleSocketPath
+        logger.debug("Configured virtio-console socket at: \(consoleSocketPath)")
+
+        // For disk-based boot, create cloud-init ISO to configure serial console
+        // Cloud-init allows configuring the guest without modifying the disk image
+        let cloudInitISOPath = (vmDir as NSString).appendingPathComponent("cloud-init.iso")
+        if createCloudInitISO(at: cloudInitISOPath, vmId: vmId) {
+            qemuConfig.additionalArgs.append(contentsOf: [
+                "-drive", "file=\(cloudInitISOPath),format=raw,if=virtio,readonly=on"
+            ])
+            logger.info("Cloud-init ISO attached for serial console configuration")
+        }
+
+        // Configure serial console socket (most Linux distros output to ttyS0 by default)
+        let serialSocketPath = (vmDir as NSString).appendingPathComponent("serial.sock")
+        qemuConfig.additionalArgs.append(contentsOf: [
+            "-serial", "unix:\(serialSocketPath),server,nowait"
+        ])
+        vmSerialSocketPaths[vmId] = serialSocketPath
+        logger.debug("Configured serial console socket at: \(serialSocketPath)")
 
         return qemuConfig
     }
@@ -554,6 +738,115 @@ actor QEMUService {
                 "error": .string(error.localizedDescription)
             ])
             // Don't throw here to avoid blocking VM deletion
+        }
+    }
+
+    /// Creates a cloud-init NoCloud ISO for configuring the guest VM
+    /// This enables serial console output by configuring GRUB and systemd
+    private func createCloudInitISO(at isoPath: String, vmId: String) -> Bool {
+        let fileManager = FileManager.default
+        let tempDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("cloud-init-\(vmId)")
+
+        // Clean up any existing temp directory
+        try? fileManager.removeItem(atPath: tempDir)
+
+        do {
+            // Create temp directory structure
+            try fileManager.createDirectory(atPath: tempDir, withIntermediateDirectories: true, attributes: nil)
+
+            // Create meta-data file (required for NoCloud)
+            let metaData = """
+            instance-id: \(vmId)
+            local-hostname: vm-\(vmId.prefix(8))
+            """
+            let metaDataPath = (tempDir as NSString).appendingPathComponent("meta-data")
+            try metaData.write(toFile: metaDataPath, atomically: true, encoding: .utf8)
+
+            // Create user-data file with serial console configuration
+            let userData = """
+            #cloud-config
+            # Enable serial console output
+            bootcmd:
+              # Update GRUB to output to serial console
+              - 'sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\\"console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0\\"/" /etc/default/grub || true'
+              - 'update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg 2>/dev/null || true'
+
+            # Enable getty on serial console
+            runcmd:
+              - systemctl enable --now serial-getty@ttyS0.service || true
+              - systemctl enable --now serial-getty@ttyAMA0.service || true
+              - systemctl enable --now serial-getty@hvc0.service || true
+              # Emit a marker so we can verify console output quickly
+              - "sh -c 'echo [cloud-init] console marker > /dev/ttyS0 2>/dev/null || true'"
+              - "sh -c 'echo [cloud-init] console marker > /dev/ttyAMA0 2>/dev/null || true'"
+              - "sh -c 'echo [cloud-init] console marker > /dev/hvc0 2>/dev/null || true'"
+
+            # Set password for ubuntu/root user for console login (development only)
+            chpasswd:
+              expire: false
+              users:
+                - name: ubuntu
+                  password: ubuntu
+                  type: text
+
+            # Ensure SSH is available
+            ssh_pwauth: true
+            """
+            let userDataPath = (tempDir as NSString).appendingPathComponent("user-data")
+            try userData.write(toFile: userDataPath, atomically: true, encoding: .utf8)
+
+            // Create ISO using hdiutil (macOS) or genisoimage/mkisofs (Linux)
+            let process = Process()
+            #if os(macOS)
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+            process.arguments = [
+                "makehybrid",
+                "-iso",
+                "-joliet",
+                "-o", isoPath,
+                "-default-volume-name", "cidata",
+                tempDir
+            ]
+            #else
+            // Try genisoimage first, then mkisofs
+            let genisoimagePath = "/usr/bin/genisoimage"
+            let mkisofsPath = "/usr/bin/mkisofs"
+            if fileManager.fileExists(atPath: genisoimagePath) {
+                process.executableURL = URL(fileURLWithPath: genisoimagePath)
+            } else {
+                process.executableURL = URL(fileURLWithPath: mkisofsPath)
+            }
+            process.arguments = [
+                "-output", isoPath,
+                "-volid", "cidata",
+                "-joliet",
+                "-rock",
+                tempDir
+            ]
+            #endif
+
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+
+            try process.run()
+            process.waitUntilExit()
+
+            // Clean up temp directory
+            try? fileManager.removeItem(atPath: tempDir)
+
+            if process.terminationStatus == 0 {
+                logger.debug("Created cloud-init ISO at: \(isoPath)")
+                return true
+            } else {
+                let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                logger.warning("Failed to create cloud-init ISO: \(output)")
+                return false
+            }
+        } catch {
+            logger.warning("Failed to create cloud-init ISO: \(error.localizedDescription)")
+            try? fileManager.removeItem(atPath: tempDir)
+            return false
         }
     }
     #endif

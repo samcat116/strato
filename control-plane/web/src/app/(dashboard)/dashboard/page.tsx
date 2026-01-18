@@ -40,7 +40,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-400">
-              {vms.filter((vm) => vm.status === "running").length}
+              {vms.filter((vm) => vm.status === "Running").length}
             </div>
           </CardContent>
         </Card>
@@ -52,7 +52,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-red-400">
-              {vms.filter((vm) => vm.status === "shutdown").length}
+              {vms.filter((vm) => vm.status === "Shutdown").length}
             </div>
           </CardContent>
         </Card>

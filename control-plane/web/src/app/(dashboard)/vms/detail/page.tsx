@@ -2,12 +2,37 @@
 
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Cpu, HardDrive, MemoryStick, Clock } from "lucide-react";
+import dynamic from "next/dynamic";
+import {
+  ArrowLeft,
+  Cpu,
+  HardDrive,
+  MemoryStick,
+  Clock,
+  Terminal,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { VMStatusBadge, VMActions } from "@/components/vms";
 import { useVM, useInvalidateVMs } from "@/lib/hooks";
+
+// Dynamically import ConsoleTerminal to avoid SSR issues with xterm.js
+const ConsoleTerminal = dynamic(
+  () =>
+    import("@/components/terminal/console-terminal").then(
+      (mod) => mod.ConsoleTerminal
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-[500px] bg-gray-900 rounded-lg flex items-center justify-center">
+        <p className="text-gray-400">Loading console...</p>
+      </div>
+    ),
+  }
+);
 
 export default function VMDetailPage() {
   const searchParams = useSearchParams();
@@ -56,6 +81,8 @@ export default function VMDetailPage() {
     );
   }
 
+  const isRunning = vm.status === "Running";
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
@@ -79,94 +106,148 @@ export default function VMDetailPage() {
         <VMActions vm={vm} onActionComplete={invalidateVMs} />
       </div>
 
-      {/* Resources */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="bg-gray-800 border-gray-700">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
-              <Cpu className="h-4 w-4" />
-              CPU
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl font-bold text-gray-100">
-              {vm.cpu} / {vm.maxCpu}
-            </div>
-            <p className="text-sm text-gray-500">cores</p>
-          </CardContent>
-        </Card>
-        <Card className="bg-gray-800 border-gray-700">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
-              <MemoryStick className="h-4 w-4" />
-              Memory
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl font-bold text-gray-100">{vm.memory}</div>
-            <p className="text-sm text-gray-500">GB</p>
-          </CardContent>
-        </Card>
-        <Card className="bg-gray-800 border-gray-700">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
-              <HardDrive className="h-4 w-4" />
-              Disk
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl font-bold text-gray-100">{vm.disk}</div>
-            <p className="text-sm text-gray-500">GB</p>
-          </CardContent>
-        </Card>
-        <Card className="bg-gray-800 border-gray-700">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
-              <Clock className="h-4 w-4" />
-              Created
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-sm font-medium text-gray-100">
-              {new Date(vm.createdAt).toLocaleDateString()}
-            </div>
-            <p className="text-sm text-gray-500">
-              {new Date(vm.createdAt).toLocaleTimeString()}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Tabs */}
+      <Tabs defaultValue="overview" className="w-full">
+        <TabsList className="bg-gray-800 border-gray-700">
+          <TabsTrigger
+            value="overview"
+            className="data-[state=active]:bg-gray-700"
+          >
+            Overview
+          </TabsTrigger>
+          <TabsTrigger
+            value="console"
+            className="data-[state=active]:bg-gray-700"
+            disabled={!isRunning}
+          >
+            <Terminal className="h-4 w-4 mr-2" />
+            Console
+            {!isRunning && (
+              <span className="ml-2 text-xs text-gray-500">(VM not running)</span>
+            )}
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Details */}
-      <Card className="bg-gray-800 border-gray-700">
-        <CardHeader>
-          <CardTitle className="text-lg font-semibold text-gray-100">
-            Details
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <p className="text-gray-400">ID</p>
-              <p className="text-gray-100 font-mono">{vm.id}</p>
-            </div>
-            <div>
-              <p className="text-gray-400">Image</p>
-              <p className="text-gray-100">{vm.image}</p>
-            </div>
-            <div>
-              <p className="text-gray-400">Hypervisor</p>
-              <p className="text-gray-100">{vm.hypervisorId || "Unassigned"}</p>
-            </div>
-            <div>
-              <p className="text-gray-400">Last Updated</p>
-              <p className="text-gray-100">
-                {new Date(vm.updatedAt).toLocaleString()}
-              </p>
-            </div>
+        <TabsContent value="overview" className="space-y-6 mt-6">
+          {/* Resources */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <Card className="bg-gray-800 border-gray-700">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
+                  <Cpu className="h-4 w-4" />
+                  CPU
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-xl font-bold text-gray-100">
+                  {vm.cpu} / {vm.maxCpu}
+                </div>
+                <p className="text-sm text-gray-500">cores</p>
+              </CardContent>
+            </Card>
+            <Card className="bg-gray-800 border-gray-700">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
+                  <MemoryStick className="h-4 w-4" />
+                  Memory
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-xl font-bold text-gray-100">
+                  {vm.memory}
+                </div>
+                <p className="text-sm text-gray-500">GB</p>
+              </CardContent>
+            </Card>
+            <Card className="bg-gray-800 border-gray-700">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
+                  <HardDrive className="h-4 w-4" />
+                  Disk
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-xl font-bold text-gray-100">{vm.disk}</div>
+                <p className="text-sm text-gray-500">GB</p>
+              </CardContent>
+            </Card>
+            <Card className="bg-gray-800 border-gray-700">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
+                  <Clock className="h-4 w-4" />
+                  Created
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-sm font-medium text-gray-100">
+                  {new Date(vm.createdAt).toLocaleDateString()}
+                </div>
+                <p className="text-sm text-gray-500">
+                  {new Date(vm.createdAt).toLocaleTimeString()}
+                </p>
+              </CardContent>
+            </Card>
           </div>
-        </CardContent>
-      </Card>
+
+          {/* Details */}
+          <Card className="bg-gray-800 border-gray-700">
+            <CardHeader>
+              <CardTitle className="text-lg font-semibold text-gray-100">
+                Details
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-gray-400">ID</p>
+                  <p className="text-gray-100 font-mono">{vm.id}</p>
+                </div>
+                <div>
+                  <p className="text-gray-400">Image</p>
+                  <p className="text-gray-100">{vm.image}</p>
+                </div>
+                <div>
+                  <p className="text-gray-400">Hypervisor</p>
+                  <p className="text-gray-100">
+                    {vm.hypervisorId || "Unassigned"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-400">Last Updated</p>
+                  <p className="text-gray-100">
+                    {new Date(vm.updatedAt).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="console" className="mt-6">
+          {isRunning ? (
+            <Card className="bg-gray-900 border-gray-700">
+              <CardContent className="p-0">
+                <ConsoleTerminal
+                  vmId={id}
+                  className="h-[500px] rounded-lg overflow-hidden"
+                />
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="bg-gray-800 border-gray-700">
+              <CardContent className="py-12 text-center">
+                <Terminal className="h-12 w-12 text-gray-600 mx-auto mb-4" />
+                <p className="text-gray-400">
+                  Console is only available when the VM is running.
+                </p>
+                <p className="text-gray-500 text-sm mt-2">
+                  Start the VM to access the console.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

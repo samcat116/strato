@@ -3,6 +3,24 @@ import Vapor
 import StratoShared
 
 struct VMController: RouteCollection {
+    private static func defaultVMStoragePath() -> String {
+        if let override = Environment.get("VM_STORAGE_DIR"), !override.isEmpty {
+            return override
+        }
+        #if os(macOS)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/Application Support/strato/vms"
+        #else
+        return "/var/lib/strato/vms"
+        #endif
+    }
+
+    private static func socketPath(for vmID: UUID, filename: String) -> String {
+        let base = defaultVMStoragePath()
+        let vmDir = (base as NSString).appendingPathComponent(vmID.uuidString)
+        return (vmDir as NSString).appendingPathComponent(filename)
+    }
+
     func boot(routes: any RoutesBuilder) throws {
         let vms = routes.grouped("api", "vms")
         vms.get(use: index)
@@ -232,9 +250,9 @@ struct VMController: RouteCollection {
             vm.macAddress = VM.generateMACAddress()
         }
 
-        // Set up console sockets
-        vm.consoleSocket = "/tmp/vm-\(vmID.uuidString)-console.sock"
-        vm.serialSocket = "/tmp/vm-\(vmID.uuidString)-serial.sock"
+        // Set up console sockets to align with agent VM storage path
+        vm.consoleSocket = Self.socketPath(for: vmID, filename: "console.sock")
+        vm.serialSocket = Self.socketPath(for: vmID, filename: "serial.sock")
 
         // Update VM with generated paths
         try await vm.update(on: req.db)
@@ -361,7 +379,7 @@ struct VMController: RouteCollection {
         return .ok
     }
 
-    func pause(req: Request) async throws -> HTTPStatus {
+    func pause(req: Request) async throws -> VM {
         guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
@@ -392,10 +410,10 @@ struct VMController: RouteCollection {
             throw Abort(.internalServerError, reason: "Failed to pause VM: \(error.localizedDescription)")
         }
 
-        return .ok
+        return vm
     }
 
-    func resume(req: Request) async throws -> HTTPStatus {
+    func resume(req: Request) async throws -> VM {
         guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
@@ -426,7 +444,7 @@ struct VMController: RouteCollection {
             throw Abort(.internalServerError, reason: "Failed to resume VM: \(error.localizedDescription)")
         }
 
-        return .ok
+        return vm
     }
 
     func status(req: Request) async throws -> VM {
@@ -454,7 +472,7 @@ struct VMController: RouteCollection {
         return vm
     }
 
-    func start(req: Request) async throws -> HTTPStatus {
+    func start(req: Request) async throws -> VM {
         guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
@@ -493,10 +511,10 @@ struct VMController: RouteCollection {
             throw Abort(.internalServerError, reason: "Failed to start VM: \(error.localizedDescription)")
         }
 
-        return .ok
+        return vm
     }
 
-    func stop(req: Request) async throws -> HTTPStatus {
+    func stop(req: Request) async throws -> VM {
         guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
@@ -529,10 +547,10 @@ struct VMController: RouteCollection {
             throw Abort(.internalServerError, reason: "Failed to stop VM: \(error.localizedDescription)")
         }
 
-        return .ok
+        return vm
     }
 
-    func restart(req: Request) async throws -> HTTPStatus {
+    func restart(req: Request) async throws -> VM {
         guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
@@ -561,6 +579,6 @@ struct VMController: RouteCollection {
             throw Abort(.internalServerError, reason: "Failed to restart VM: \(error.localizedDescription)")
         }
 
-        return .ok
+        return vm
     }
 }

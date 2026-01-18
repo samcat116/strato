@@ -123,7 +123,7 @@ struct VMConfigBuilderTests {
         #expect(config.payload.kernel == "/vm/kernel")
         #expect(config.payload.initramfs == "/vm/initramfs")
         #expect(config.payload.firmware == "/vm/firmware")
-        #expect(config.payload.cmdline == "vm cmdline")
+        #expect(config.payload.cmdline == "vm cmdline console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0")
     }
 
     @Test("VMConfigBuilder falls back to template paths")
@@ -146,7 +146,7 @@ struct VMConfigBuilderTests {
         #expect(config.payload.kernel == "/template/kernel")
         #expect(config.payload.initramfs == "/template/initramfs")
         #expect(config.payload.firmware == "/template/firmware")
-        #expect(config.payload.cmdline == "template cmdline")
+        #expect(config.payload.cmdline == "template cmdline console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0")
     }
 
     @Test("VMConfigBuilder handles missing optional template paths")
@@ -167,7 +167,7 @@ struct VMConfigBuilderTests {
         #expect(config.payload.kernel == "/vm/kernel")
         #expect(config.payload.initramfs == nil)
         #expect(config.payload.firmware == nil)
-        #expect(config.payload.cmdline == "cmdline")
+        #expect(config.payload.cmdline == "cmdline console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0")
     }
 
     // MARK: - Memory Configuration Tests

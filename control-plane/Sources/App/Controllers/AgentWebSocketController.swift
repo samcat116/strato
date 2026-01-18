@@ -217,6 +217,36 @@ struct AgentWebSocketController: RouteCollection {
                     await req.agentService.handleAgentResponse(envelope)
                 }
 
+            case .consoleData:
+                // Route console data from agent to frontend
+                let message = try envelope.decode(as: ConsoleDataMessage.self)
+                if let data = message.rawData {
+                    req.consoleSessionManager.routeToFrontend(
+                        vmId: message.vmId,
+                        sessionId: message.sessionId,
+                        data: data
+                    )
+                }
+
+            case .consoleConnected:
+                let message = try envelope.decode(as: ConsoleConnectedMessage.self)
+                req.logger.info("Console connected confirmation from agent", metadata: [
+                    "vmId": .string(message.vmId),
+                    "sessionId": .string(message.sessionId)
+                ])
+                // Notify the frontend that the console is ready for input
+                req.consoleSessionManager.notifyFrontendReady(sessionId: message.sessionId)
+
+            case .consoleDisconnected:
+                let message = try envelope.decode(as: ConsoleDisconnectedMessage.self)
+                req.logger.info("Console disconnected from agent", metadata: [
+                    "vmId": .string(message.vmId),
+                    "sessionId": .string(message.sessionId),
+                    "reason": .string(message.reason ?? "unknown")
+                ])
+                // Clean up the session
+                req.consoleSessionManager.removeSession(sessionId: message.sessionId)
+
             default:
                 req.logger.warning("Received unexpected message type from agent: \(envelope.type)")
                 sendErrorResponse(ws: ws, requestId: "", error: "Unexpected message type: \(envelope.type)")
