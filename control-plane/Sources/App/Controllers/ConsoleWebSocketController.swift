@@ -89,11 +89,11 @@ struct ConsoleWebSocketController: RouteCollection {
                         ])
                     }
 
-                    // Clean up session
-                    req.consoleSessionManager.removeSession(sessionId: sessionId)
-
-                    // Notify agent to disconnect console
+                    // Notify agent to disconnect console before removing session
                     Task {
+                        defer {
+                            req.consoleSessionManager.removeSession(sessionId: sessionId)
+                        }
                         try? await req.consoleSessionManager.sendConsoleDisconnect(sessionId: sessionId)
                     }
                 }
