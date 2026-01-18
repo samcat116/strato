@@ -35,6 +35,13 @@ public enum MessageType: String, Codable, Sendable {
     case imageInfo = "image_info"
     case imageInfoResponse = "image_info_response"
 
+    // Console operations
+    case consoleConnect = "console_connect"
+    case consoleDisconnect = "console_disconnect"
+    case consoleData = "console_data"
+    case consoleConnected = "console_connected"
+    case consoleDisconnected = "console_disconnected"
+
     // Responses
     case success = "success"
     case error = "error"
@@ -563,6 +570,132 @@ public struct NetworkDetachMessage: WebSocketMessage {
         self.requestId = requestId
         self.timestamp = timestamp
         self.vmId = vmId
+    }
+}
+
+// MARK: - Console Operation Messages
+
+public struct ConsoleConnectMessage: WebSocketMessage {
+    public var type: MessageType { .consoleConnect }
+    public let requestId: String
+    public let timestamp: Date
+    public let vmId: String
+    public let sessionId: String
+
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        vmId: String,
+        sessionId: String
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.vmId = vmId
+        self.sessionId = sessionId
+    }
+}
+
+public struct ConsoleDisconnectMessage: WebSocketMessage {
+    public var type: MessageType { .consoleDisconnect }
+    public let requestId: String
+    public let timestamp: Date
+    public let vmId: String
+    public let sessionId: String
+
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        vmId: String,
+        sessionId: String
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.vmId = vmId
+        self.sessionId = sessionId
+    }
+}
+
+public struct ConsoleDataMessage: WebSocketMessage {
+    public var type: MessageType { .consoleData }
+    public let requestId: String
+    public let timestamp: Date
+    public let vmId: String
+    public let sessionId: String
+    public let data: String  // Base64 encoded bytes
+
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        vmId: String,
+        sessionId: String,
+        data: String
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.vmId = vmId
+        self.sessionId = sessionId
+        self.data = data
+    }
+
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        vmId: String,
+        sessionId: String,
+        rawData: Data
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.vmId = vmId
+        self.sessionId = sessionId
+        self.data = rawData.base64EncodedString()
+    }
+
+    public var rawData: Data? {
+        Data(base64Encoded: data)
+    }
+}
+
+public struct ConsoleConnectedMessage: WebSocketMessage {
+    public var type: MessageType { .consoleConnected }
+    public let requestId: String
+    public let timestamp: Date
+    public let vmId: String
+    public let sessionId: String
+
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        vmId: String,
+        sessionId: String
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.vmId = vmId
+        self.sessionId = sessionId
+    }
+}
+
+public struct ConsoleDisconnectedMessage: WebSocketMessage {
+    public var type: MessageType { .consoleDisconnected }
+    public let requestId: String
+    public let timestamp: Date
+    public let vmId: String
+    public let sessionId: String
+    public let reason: String?
+
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        vmId: String,
+        sessionId: String,
+        reason: String? = nil
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.vmId = vmId
+        self.sessionId = sessionId
+        self.reason = reason
     }
 }
 

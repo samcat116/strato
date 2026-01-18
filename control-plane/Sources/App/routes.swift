@@ -37,6 +37,9 @@ func routes(_ app: Application) throws {
     // Image management controller
     try app.register(collection: ImageController())
 
+    // Console WebSocket controller for VM console streaming
+    try app.register(collection: ConsoleWebSocketController())
+
     // OpenAPI Vapor transport (spec-first). Once the generator produces APIProtocol
     // from Sources/App/openapi.yaml, register handlers here.
     // let transport = VaporTransport(routesBuilder: app)

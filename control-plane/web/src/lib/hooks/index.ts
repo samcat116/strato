@@ -18,3 +18,4 @@ export {
   useUpdateProject,
   useDeleteProject,
 } from "./use-projects";
+export { useConsole } from "./use-console";

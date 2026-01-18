@@ -3,6 +3,35 @@ import Vapor
 import StratoShared
 
 struct VMConfigBuilder {
+    private static func ensureSerialConsole(_ cmdline: String?) -> String? {
+        let trimmed = (cmdline ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0"
+        }
+        var parts = trimmed.split(whereSeparator: \.isWhitespace).map(String.init)
+        var seen: Set<String> = []
+        for index in parts.indices {
+            if parts[index].hasPrefix("console=tty0") {
+                parts[index] = "console=tty0"
+                seen.insert("tty0")
+            } else if parts[index].hasPrefix("console=ttyS0") {
+                parts[index] = "console=ttyS0,115200"
+                seen.insert("ttyS0")
+            } else if parts[index].hasPrefix("console=ttyAMA0") {
+                parts[index] = "console=ttyAMA0,115200"
+                seen.insert("ttyAMA0")
+            } else if parts[index].hasPrefix("console=hvc0") {
+                parts[index] = "console=hvc0"
+                seen.insert("hvc0")
+            }
+        }
+        if !seen.contains("tty0") { parts.append("console=tty0") }
+        if !seen.contains("ttyS0") { parts.append("console=ttyS0,115200") }
+        if !seen.contains("ttyAMA0") { parts.append("console=ttyAMA0,115200") }
+        if !seen.contains("hvc0") { parts.append("console=hvc0") }
+        return parts.joined(separator: " ")
+    }
+
     /// Builds VM configuration from VM and template (legacy method)
     /// - Note: This method is deprecated. Use `buildVMConfig(from:image:)` instead.
     @available(*, deprecated, message: "Use buildVMConfig(from:image:) instead")
@@ -11,7 +40,7 @@ struct VMConfigBuilder {
         let payload = PayloadConfig(
             firmware: vm.firmwarePath ?? template.firmwarePath,
             kernel: vm.kernelPath ?? template.kernelPath,
-            cmdline: vm.cmdline ?? template.defaultCmdline,
+            cmdline: ensureSerialConsole(vm.cmdline ?? template.defaultCmdline),
             initramfs: vm.initramfsPath ?? template.initramfsPath
         )
 
@@ -92,7 +121,7 @@ struct VMConfigBuilder {
         let payload = PayloadConfig(
             firmware: vm.firmwarePath,
             kernel: vm.kernelPath,
-            cmdline: vm.cmdline ?? image.defaultCmdline,
+            cmdline: ensureSerialConsole(vm.cmdline ?? image.defaultCmdline),
             initramfs: vm.initramfsPath
         )
 

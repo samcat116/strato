@@ -31,9 +31,11 @@ actor Agent {
     private var qemuService: QEMUService?
     private var networkService: (any NetworkServiceProtocol)?
     private var imageCacheService: ImageCacheService?
+    private var consoleSocketManager: ConsoleSocketManager?
     private var heartbeatTask: Task<Void, Error>?
     private var isRunning = false
     private var registrationContinuation: CheckedContinuation<String, Error>?
+    private let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
 
     private let networkMode: NetworkMode?
     private let imageCachePath: String?
@@ -120,6 +122,12 @@ actor Agent {
 
         logger.info("Initializing QEMU service")
         qemuService = QEMUService(logger: logger, networkService: networkService, imageCacheService: imageCacheService, vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath)
+
+        logger.info("Initializing console socket manager")
+        consoleSocketManager = ConsoleSocketManager(logger: logger, eventLoopGroup: eventLoopGroup)
+        await consoleSocketManager?.setOnConsoleData { [weak self] vmId, sessionId, data in
+            await self?.sendConsoleData(vmId: vmId, sessionId: sessionId, data: data)
+        }
         
         if isRegistrationMode {
             logger.info("Connecting for agent registration", metadata: ["url": .string(webSocketURL)])
@@ -312,6 +320,10 @@ actor Agent {
 
 extension Agent {
     func handleMessage(_ envelope: MessageEnvelope) async {
+        logger.debug("Handling message from control plane", metadata: [
+            "type": .string(envelope.type.rawValue)
+        ])
+
         do {
             switch envelope.type {
             case .agentRegisterResponse:
@@ -362,6 +374,15 @@ extension Agent {
             case .networkDetach:
                 let message = try envelope.decode(as: NetworkDetachMessage.self)
                 await handleNetworkDetach(message)
+            case .consoleConnect:
+                let message = try envelope.decode(as: ConsoleConnectMessage.self)
+                await handleConsoleConnect(message)
+            case .consoleDisconnect:
+                let message = try envelope.decode(as: ConsoleDisconnectMessage.self)
+                await handleConsoleDisconnect(message)
+            case .consoleData:
+                let message = try envelope.decode(as: ConsoleDataMessage.self)
+                await handleConsoleData(message)
             default:
                 logger.warning("Received unknown message type: \(envelope.type)")
             }
@@ -656,12 +677,12 @@ extension Agent {
     
     private func handleNetworkDetach(_ message: NetworkDetachMessage) async {
         logger.info("Detaching VM from network", metadata: ["vmId": .string(message.vmId)])
-        
+
         guard let networkService = networkService else {
             await sendError(for: message.requestId, error: "Network service not available")
             return
         }
-        
+
         do {
             try await networkService.detachVMFromNetwork(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM detached from network successfully")
@@ -669,6 +690,164 @@ extension Agent {
         } catch {
             await sendError(for: message.requestId, error: "Failed to detach VM from network: \(error.localizedDescription)")
             logger.error("Failed to detach VM from network", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
+        }
+    }
+
+    // MARK: - Console Message Handlers
+
+    private func handleConsoleConnect(_ message: ConsoleConnectMessage) async {
+        logger.info("Console connect request received", metadata: [
+            "vmId": .string(message.vmId),
+            "sessionId": .string(message.sessionId),
+            "requestId": .string(message.requestId)
+        ])
+
+        guard let qemuService = qemuService else {
+            logger.error("QEMU service not available for console connect")
+            await sendError(for: message.requestId, error: "QEMU service not available")
+            return
+        }
+
+        // Try serial socket first, then fall back to virtio-console if connect fails.
+        logger.debug("Looking up serial socket path", metadata: ["vmId": .string(message.vmId)])
+        let serialPath = await qemuService.getSerialSocketPath(vmId: message.vmId)
+        let consolePath = await qemuService.getConsoleSocketPath(vmId: message.vmId)
+
+        guard serialPath != nil || consolePath != nil else {
+            logger.error("No console socket found (tried serial and virtio-console)", metadata: ["vmId": .string(message.vmId)])
+            await sendError(for: message.requestId, error: "Console socket not found for VM \(message.vmId)")
+            return
+        }
+
+        guard let consoleManager = consoleSocketManager else {
+            logger.error("Console manager not available")
+            await sendError(for: message.requestId, error: "Console manager not available")
+            return
+        }
+
+        var connectedPath: String?
+        var lastError: Error?
+
+        if let serialPath = serialPath {
+            do {
+                try await consoleManager.connect(vmId: message.vmId, sessionId: message.sessionId, socketPath: serialPath)
+                connectedPath = serialPath
+                logger.debug("Connected to serial console socket", metadata: ["socketPath": .string(serialPath)])
+            } catch {
+                lastError = error
+                logger.warning("Failed to connect to serial socket, will try virtio-console", metadata: [
+                    "vmId": .string(message.vmId),
+                    "sessionId": .string(message.sessionId),
+                    "error": .string(error.localizedDescription)
+                ])
+            }
+        }
+
+        if connectedPath == nil, let consolePath = consolePath {
+            do {
+                try await consoleManager.connect(vmId: message.vmId, sessionId: message.sessionId, socketPath: consolePath)
+                connectedPath = consolePath
+                logger.debug("Connected to virtio-console socket", metadata: ["socketPath": .string(consolePath)])
+            } catch {
+                lastError = error
+            }
+        }
+
+        guard connectedPath != nil else {
+            let errorMessage = "Failed to connect to console: \(lastError?.localizedDescription ?? "unknown error")"
+            await sendError(for: message.requestId, error: errorMessage)
+            logger.error("Failed to connect to console", metadata: [
+                "vmId": .string(message.vmId),
+                "sessionId": .string(message.sessionId),
+                "error": .string(lastError?.localizedDescription ?? "unknown")
+            ])
+            return
+        }
+
+        // Send connected confirmation
+        let connectedMessage = ConsoleConnectedMessage(
+            requestId: message.requestId,
+            vmId: message.vmId,
+            sessionId: message.sessionId
+        )
+        do {
+            try await websocketClient?.sendMessage(connectedMessage)
+        } catch {
+            logger.error("Failed to send console connected message: \(error)")
+        }
+
+        logger.info("Console connected", metadata: [
+            "vmId": .string(message.vmId),
+            "sessionId": .string(message.sessionId),
+            "socketPath": .string(connectedPath ?? "unknown")
+        ])
+    }
+
+    private func handleConsoleDisconnect(_ message: ConsoleDisconnectMessage) async {
+        logger.info("Console disconnect request", metadata: [
+            "vmId": .string(message.vmId),
+            "sessionId": .string(message.sessionId)
+        ])
+
+        guard let consoleManager = consoleSocketManager else {
+            await sendError(for: message.requestId, error: "Console manager not available")
+            return
+        }
+
+        await consoleManager.disconnect(sessionId: message.sessionId)
+
+        // Send disconnected confirmation
+        let disconnectedMessage = ConsoleDisconnectedMessage(
+            requestId: message.requestId,
+            vmId: message.vmId,
+            sessionId: message.sessionId,
+            reason: "User requested disconnect"
+        )
+        do {
+            try await websocketClient?.sendMessage(disconnectedMessage)
+        } catch {
+            logger.error("Failed to send disconnected message: \(error)")
+        }
+
+        logger.info("Console disconnected", metadata: [
+            "vmId": .string(message.vmId),
+            "sessionId": .string(message.sessionId)
+        ])
+    }
+
+    private func handleConsoleData(_ message: ConsoleDataMessage) async {
+        // User input from frontend - write to console socket
+        guard let consoleManager = consoleSocketManager else {
+            logger.warning("Console manager not available for data write")
+            return
+        }
+
+        guard let data = message.rawData else {
+            logger.warning("Invalid console data received (failed to decode base64)")
+            return
+        }
+
+        do {
+            try await consoleManager.write(sessionId: message.sessionId, data: data)
+        } catch {
+            logger.error("Failed to write to console", metadata: [
+                "sessionId": .string(message.sessionId),
+                "error": .string(error.localizedDescription)
+            ])
+        }
+    }
+
+    /// Called by ConsoleSocketManager when data arrives from VM console
+    func sendConsoleData(vmId: String, sessionId: String, data: Data) async {
+        let message = ConsoleDataMessage(
+            vmId: vmId,
+            sessionId: sessionId,
+            rawData: data
+        )
+        do {
+            try await websocketClient?.sendMessage(message)
+        } catch {
+            logger.error("Failed to send console data: \(error)")
         }
     }
 }
