@@ -16,6 +16,8 @@ public struct AgentConfig: Codable {
     public let enableKVM: Bool?
     public let vmStoragePath: String?
     public let qemuBinaryPath: String?
+    public let firmwarePathARM64: String?
+    public let firmwarePathX86_64: String?
 
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
@@ -26,6 +28,8 @@ public struct AgentConfig: Codable {
         case enableKVM = "enable_kvm"
         case vmStoragePath = "vm_storage_dir"
         case qemuBinaryPath = "qemu_binary_path"
+        case firmwarePathARM64 = "firmware_path_arm64"
+        case firmwarePathX86_64 = "firmware_path_x86_64"
     }
 
     public init(
@@ -36,7 +40,9 @@ public struct AgentConfig: Codable {
         enableHVF: Bool? = nil,
         enableKVM: Bool? = nil,
         vmStoragePath: String? = nil,
-        qemuBinaryPath: String? = nil
+        qemuBinaryPath: String? = nil,
+        firmwarePathARM64: String? = nil,
+        firmwarePathX86_64: String? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
         self.qemuSocketDir = qemuSocketDir
@@ -46,6 +52,8 @@ public struct AgentConfig: Codable {
         self.enableKVM = enableKVM
         self.vmStoragePath = vmStoragePath
         self.qemuBinaryPath = qemuBinaryPath
+        self.firmwarePathARM64 = firmwarePathARM64
+        self.firmwarePathX86_64 = firmwarePathX86_64
     }
 
     public static func load(from path: String, logger: Logger? = nil) throws -> AgentConfig {
@@ -70,6 +78,8 @@ public struct AgentConfig: Codable {
         let enableKVM = tomlData.bool("enable_kvm")
         let vmStoragePath = tomlData.string("vm_storage_dir")
         let qemuBinaryPath = tomlData.string("qemu_binary_path")
+        let firmwarePathARM64 = tomlData.string("firmware_path_arm64")
+        let firmwarePathX86_64 = tomlData.string("firmware_path_x86_64")
 
         // Validate and parse network mode
         let networkMode: NetworkMode?
@@ -101,7 +111,9 @@ public struct AgentConfig: Codable {
             enableHVF: enableHVF,
             enableKVM: enableKVM,
             vmStoragePath: vmStoragePath,
-            qemuBinaryPath: qemuBinaryPath
+            qemuBinaryPath: qemuBinaryPath,
+            firmwarePathARM64: firmwarePathARM64,
+            firmwarePathX86_64: firmwarePathX86_64
         )
     }
 
@@ -205,6 +217,40 @@ public struct AgentConfig: Codable {
             #else
             return "/usr/bin/qemu-system-x86_64"
             #endif
+        #endif
+    }
+
+    /// Default UEFI firmware path for ARM64 guests (platform-specific)
+    /// Used when VMs boot from disk images rather than direct kernel boot
+    public static var defaultFirmwarePathARM64: String? {
+        #if os(macOS)
+        let path = "/opt/homebrew/share/qemu/edk2-aarch64-code.fd"
+        return FileManager.default.fileExists(atPath: path) ? path : nil
+        #else
+        // Linux: try common paths for different distributions
+        let paths = [
+            "/usr/share/AAVMF/AAVMF_CODE.fd",
+            "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+            "/usr/share/edk2/aarch64/QEMU_EFI.fd"
+        ]
+        return paths.first { FileManager.default.fileExists(atPath: $0) }
+        #endif
+    }
+
+    /// Default UEFI firmware path for x86_64 guests (platform-specific)
+    /// Used when VMs boot from disk images rather than direct kernel boot
+    public static var defaultFirmwarePathX86_64: String? {
+        #if os(macOS)
+        let path = "/opt/homebrew/share/qemu/edk2-x86_64-code.fd"
+        return FileManager.default.fileExists(atPath: path) ? path : nil
+        #else
+        // Linux: try common paths for different distributions
+        let paths = [
+            "/usr/share/OVMF/OVMF_CODE.fd",
+            "/usr/share/edk2/ovmf/OVMF_CODE.fd",
+            "/usr/share/qemu/OVMF.fd"
+        ]
+        return paths.first { FileManager.default.fileExists(atPath: $0) }
         #endif
     }
 }

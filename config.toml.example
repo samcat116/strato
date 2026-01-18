@@ -36,6 +36,22 @@ log_level = "info"
 #   Linux x86_64: /usr/bin/qemu-system-x86_64
 # qemu_binary_path = "/opt/homebrew/bin/qemu-system-aarch64"
 
+# UEFI firmware paths for disk-based VM boot
+# These are used when VMs boot from disk images rather than direct kernel boot.
+# Optional - platform and architecture-specific defaults will be used if not set.
+#
+# ARM64 (aarch64) UEFI firmware:
+#   macOS (Homebrew): /opt/homebrew/share/qemu/edk2-aarch64-code.fd
+#   Linux (Debian/Ubuntu): /usr/share/AAVMF/AAVMF_CODE.fd
+#   Linux (Fedora/RHEL): /usr/share/edk2/aarch64/QEMU_EFI.fd
+# firmware_path_arm64 = "/opt/homebrew/share/qemu/edk2-aarch64-code.fd"
+#
+# x86_64 UEFI firmware (OVMF):
+#   macOS (Homebrew): /opt/homebrew/share/qemu/edk2-x86_64-code.fd
+#   Linux (Debian/Ubuntu): /usr/share/OVMF/OVMF_CODE.fd
+#   Linux (Fedora/RHEL): /usr/share/edk2/ovmf/OVMF_CODE.fd
+# firmware_path_x86_64 = "/usr/share/OVMF/OVMF_CODE.fd"
+
 # Additional configuration options can be added here as needed
 # Examples:
 # heartbeat_interval = 30
