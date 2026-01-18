@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import StratoShared
+import StratoAgentCore
 
 #if canImport(SwiftQEMU)
 import SwiftQEMU
@@ -518,14 +519,48 @@ actor QEMUService {
     // MARK: - Private Configuration Methods
 
     #if canImport(SwiftQEMU)
+    /// Resolves the UEFI firmware path for the current architecture
+    /// Priority: 1) Explicit firmware path from config, 2) Platform default
+    /// Returns nil if no firmware is found
+    private func resolveFirmwarePath(_ explicitPath: String?) -> String? {
+        // If explicit path provided, validate and return it
+        if let path = explicitPath, !path.isEmpty {
+            if FileManager.default.fileExists(atPath: path) {
+                logger.debug("Using explicit firmware path: \(path)")
+                return path
+            }
+            logger.warning("Specified firmware path does not exist: \(path), trying defaults")
+        }
+
+        // Use architecture-specific default
+        #if arch(arm64)
+        let defaultPath = AgentConfig.defaultFirmwarePathARM64
+        #else
+        let defaultPath = AgentConfig.defaultFirmwarePathX86_64
+        #endif
+
+        guard let path = defaultPath else {
+            logger.warning("No UEFI firmware found for this platform/architecture")
+            return nil
+        }
+
+        logger.debug("Using default firmware path: \(path)")
+        return path
+    }
+
     private func convertToQEMUConfiguration(_ config: VmConfig, vmId: String) -> QEMUConfiguration {
         var qemuConfig = QEMUConfiguration()
 
-        // Configure machine type based on architecture
+        // Determine boot mode: direct kernel boot or UEFI firmware boot
+        let payload = config.payload
+        let hasKernelBoot = payload.kernel != nil && !payload.kernel!.isEmpty
+
+        // Configure machine type based on architecture and boot mode
         #if arch(arm64)
-        qemuConfig.machineType = "virt"
+        // For ARM64 UEFI boot, we need gic-version=3 for EDK2 firmware compatibility
+        qemuConfig.machineType = hasKernelBoot ? "virt" : "virt,gic-version=3"
         qemuConfig.cpuType = "host"
-        logger.debug("Configuring ARM64 machine type: virt")
+        logger.debug("Configuring ARM64 machine type: \(qemuConfig.machineType)")
         #else
         qemuConfig.machineType = "q35"
         qemuConfig.cpuType = "host"
@@ -589,12 +624,10 @@ actor QEMUService {
             }
         }
 
-        // Configure kernel if provided (direct kernel boot)
-        // Note: This is for direct kernel boot, not disk-based boot
-        // For disk-based boot, kernel params are configured via cloud-init or GRUB
-        let payload = config.payload
-        if let kernel = payload.kernel, !kernel.isEmpty {
-            qemuConfig.kernel = kernel
+        // Configure boot mode: direct kernel boot or UEFI firmware boot
+        if hasKernelBoot {
+            // Direct kernel boot
+            qemuConfig.kernel = payload.kernel
             qemuConfig.initrd = payload.initramfs
             // Ensure serial console is in kernel args
             var cmdline = payload.cmdline ?? ""
@@ -615,9 +648,24 @@ actor QEMUService {
             }
             qemuConfig.kernelArgs = cmdline
             logger.info("Direct kernel boot configured", metadata: [
-                "kernel": .string(kernel),
+                "kernel": .string(payload.kernel!),
                 "cmdline": .string(cmdline)
             ])
+        } else {
+            // UEFI firmware boot (disk-based)
+            // Resolve firmware path: explicit config > platform default
+            if let firmwarePath = resolveFirmwarePath(payload.firmware) {
+                qemuConfig.additionalArgs.append(contentsOf: ["-bios", firmwarePath])
+                logger.info("UEFI firmware boot configured", metadata: [
+                    "firmware": .string(firmwarePath),
+                    "vmId": .string(vmId)
+                ])
+            } else {
+                // No firmware found - VM may fail to boot without UEFI firmware on ARM64
+                logger.warning("No UEFI firmware configured - VM may fail to boot on ARM64", metadata: [
+                    "vmId": .string(vmId)
+                ])
+            }
         }
 
         // Enable hardware acceleration based on platform
