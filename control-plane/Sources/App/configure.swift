@@ -105,6 +105,9 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateImage())
     app.migrations.add(AddImageToVM())
 
+    // Hypervisor type migration
+    app.migrations.add(AddHypervisorTypeToVM())
+
     // App settings migration (for signing keys, etc.)
     app.migrations.add(CreateAppSetting())
 

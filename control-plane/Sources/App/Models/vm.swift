@@ -25,6 +25,9 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "hypervisor_id")
     var hypervisorId: String?
 
+    @Enum(key: "hypervisor_type")
+    var hypervisorType: HypervisorType
+
     // Project and environment tracking
     @Parent(key: "project_id")
     var project: Project
@@ -119,6 +122,7 @@ final class VM: Model, @unchecked Sendable {
         memory: Int64,
         disk: Int64,
         status: VMStatus = .created,
+        hypervisorType: HypervisorType = .qemu,
         maxCpu: Int? = nil,
         hugepages: Bool = false,
         sharedMemory: Bool = false,
@@ -137,6 +141,7 @@ final class VM: Model, @unchecked Sendable {
         self.memory = memory
         self.disk = disk
         self.status = status
+        self.hypervisorType = hypervisorType
         self.hugepages = hugepages
         self.sharedMemory = sharedMemory
         self.readonlyDisk = readonlyDisk
@@ -158,6 +163,7 @@ extension VM {
             image: image,
             status: status,
             hypervisorId: hypervisorId,
+            hypervisorType: hypervisorType,
             cpu: cpu,
             maxCpu: maxCpu,
             memory: memory,

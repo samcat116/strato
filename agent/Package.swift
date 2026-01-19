@@ -9,6 +9,8 @@ let package = Package(
     dependencies: [
         // StratoShared for common models and protocols
         .package(path: "../shared"),
+        // SwiftFirecracker for Firecracker microVM support (Linux only)
+        .package(path: "../SwiftFirecracker"),
         .package(url: "https://github.com/samcat116/swift-qemu", branch: "main"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.25.0"),
@@ -70,6 +72,7 @@ var qemuAndNetworkDependencies: [Target.Dependency] {
     [
         .product(name: "SwiftQEMU", package: "swift-qemu"),
         .product(name: "SwiftOVN", package: "swift-ovn"),
+        .product(name: "SwiftFirecracker", package: "SwiftFirecracker"),
     ]
 }
 #else
