@@ -56,6 +56,44 @@ spec:
               until nc -w 1 -z {{ include "strato-control-plane.valkeyHost" . }}{{- if .Values.valkey.enabled }}.{{ .Release.Namespace }}.svc.cluster.local{{- end }} {{ include "strato-control-plane.valkeyPort" . }}; do echo waiting for Valkey; sleep 2; done
         {{- end }}
       containers:
+        {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
+        - name: envoy-sidecar
+          image: "{{ .Values.spire.envoy.image.repository }}:{{ .Values.spire.envoy.image.tag }}"
+          imagePullPolicy: {{ .Values.spire.envoy.image.pullPolicy }}
+          args:
+            - -c
+            - /etc/envoy/envoy.yaml
+            - --log-level
+            - info
+          ports:
+            - name: agent-mtls
+              containerPort: {{ .Values.spire.envoy.agentPort }}
+              protocol: TCP
+            - name: envoy-health
+              containerPort: {{ .Values.spire.envoy.healthPort }}
+              protocol: TCP
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+              readOnly: true
+            - name: spire-agent-socket
+              mountPath: /var/run/spire/sockets
+              readOnly: true
+          resources:
+            {{- toYaml .Values.spire.envoy.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: envoy-health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: envoy-health
+            initialDelaySeconds: 5
+            periodSeconds: 5
+        {{- end }}
         - name: {{ .Chart.Name }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
@@ -174,6 +212,16 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: {{ include "strato-control-plane.fullname" . }}-envoy-sidecar
+        - name: spire-agent-socket
+          hostPath:
+            path: {{ .Values.spire.envoy.spireAgentSocketDir }}
+            type: DirectoryOrCreate
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

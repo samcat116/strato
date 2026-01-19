@@ -119,6 +119,14 @@ struct StratoAgent: AsyncParsableCommand {
             "registrationMode": .string(isRegistrationMode ? "yes" : "no")
         ])
 
+        // Log SPIFFE configuration if enabled
+        if let spiffe = config.spiffe, spiffe.enabled {
+            logger.info("SPIFFE authentication enabled", metadata: [
+                "trustDomain": .string(spiffe.trustDomain ?? "strato.local"),
+                "sourceType": .string(spiffe.sourceType ?? "workload_api")
+            ])
+        }
+
         let agent = Agent(
             agentID: finalAgentID,
             webSocketURL: finalWebSocketURL,
@@ -128,7 +136,8 @@ struct StratoAgent: AsyncParsableCommand {
             logger: logger,
             vmStoragePath: finalVMStoragePath,
             qemuBinaryPath: finalQemuBinaryPath,
-            firmwarePath: finalFirmwarePath
+            firmwarePath: finalFirmwarePath,
+            spiffeConfig: config.spiffe
         )
         
         do {

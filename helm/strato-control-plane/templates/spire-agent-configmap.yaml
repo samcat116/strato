@@ -1,0 +1,65 @@
+{{- if .Values.spire.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spire-agent
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-agent
+data:
+  agent.conf: |
+    agent {
+        data_dir = "/var/lib/spire/agent"
+        log_level = "{{ .Values.spire.logLevel }}"
+        log_format = "json"
+        server_address = "{{ include "strato-control-plane.fullname" . }}-spire-server"
+        server_port = "{{ .Values.spire.service.grpcPort }}"
+        socket_path = "/var/run/spire/sockets/workload.sock"
+        trust_domain = "{{ .Values.spire.trustDomain }}"
+
+        # Enable SDS for Envoy
+        sds {
+            default_svid_name = "default"
+            default_bundle_name = "ROOTCA"
+        }
+    }
+
+    plugins {
+        {{- if .Values.spire.attestors.k8sPsat.enabled }}
+        NodeAttestor "k8s_psat" {
+            plugin_data {
+                cluster = "{{ .Values.spire.clusterName }}"
+                token_path = "/var/run/secrets/tokens/spire-agent"
+            }
+        }
+        {{- else }}
+        NodeAttestor "join_token" {
+            plugin_data {}
+        }
+        {{- end }}
+
+        KeyManager "memory" {
+            plugin_data {}
+        }
+
+        WorkloadAttestor "k8s" {
+            plugin_data {
+                skip_kubelet_verification = true
+            }
+        }
+
+        WorkloadAttestor "unix" {
+            plugin_data {
+                discover_workload_path = true
+            }
+        }
+    }
+
+    health_checks {
+        listener_enabled = true
+        bind_address = "0.0.0.0"
+        bind_port = "8080"
+        live_path = "/live"
+        ready_path = "/ready"
+    }
+{{- end }}

@@ -56,3 +56,30 @@ log_level = "info"
 # Examples:
 # heartbeat_interval = 30
 # max_vms = 10
+
+# SPIFFE/SPIRE Configuration
+# Enables mutual TLS authentication using SPIFFE identities
+# The agent will obtain an X.509 SVID from SPIRE and use it to
+# authenticate with the Control Plane over mTLS.
+#
+# [spiffe]
+# enabled = true
+#
+# # Trust domain for SPIFFE identities (e.g., "strato.local")
+# trust_domain = "strato.local"
+#
+# # Source for obtaining SVIDs:
+# #   "workload_api" - Connect to SPIRE Agent's Workload API (recommended)
+# #   "files" - Read certificates from files (works with spiffe-helper)
+# source_type = "workload_api"
+#
+# # For workload_api source:
+# # Path to the SPIRE Workload API Unix socket
+# workload_api_socket_path = "/var/run/spire/sockets/workload.sock"
+#
+# # For files source:
+# # Paths to certificate, key, and trust bundle files
+# # These are typically written by spiffe-helper
+# # certificate_path = "/var/run/spire/certs/svid.pem"
+# # private_key_path = "/var/run/spire/certs/svid_key.pem"
+# # trust_bundle_path = "/var/run/spire/certs/bundle.pem"

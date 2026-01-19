@@ -1,0 +1,112 @@
+{{- if .Values.spire.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spire-agent
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-agent
+spec:
+  selector:
+    matchLabels:
+      {{- include "strato-control-plane.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: spire-agent
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/spire-agent-configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "strato-control-plane.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: spire-agent
+    spec:
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: {{ include "strato-control-plane.fullname" . }}-spire-agent
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # Wait for SPIRE Server to be ready
+        - name: wait-for-spire-server
+          image: busybox:1.36.1
+          command:
+            - sh
+            - -c
+            - |
+              until nc -w 1 -z {{ include "strato-control-plane.fullname" . }}-spire-server.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.spire.service.grpcPort }}; do
+                echo "Waiting for SPIRE Server..."
+                sleep 2
+              done
+      containers:
+        - name: spire-agent
+          image: "ghcr.io/spiffe/spire-agent:{{ .Values.spire.image.tag }}"
+          imagePullPolicy: {{ .Values.spire.image.pullPolicy }}
+          args:
+            - -config
+            - /etc/spire/agent/agent.conf
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: MY_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: 200m
+              memory: 128Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/spire/agent
+              readOnly: true
+            - name: spire-agent-socket-dir
+              mountPath: /var/run/spire/sockets
+            - name: spire-token
+              mountPath: /var/run/secrets/tokens
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "strato-control-plane.fullname" . }}-spire-agent
+        - name: spire-agent-socket-dir
+          hostPath:
+            path: /var/run/spire/sockets
+            type: DirectoryOrCreate
+        - name: spire-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: spire-server
+                  expirationSeconds: 7200
+                  path: spire-agent
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

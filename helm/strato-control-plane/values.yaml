@@ -389,3 +389,108 @@ externalValkey:
   port: 6379
   password: ""
   database: 0
+
+# SPIRE configuration for agent mTLS authentication
+spire:
+  enabled: false
+
+  # Trust domain for SPIFFE IDs (e.g., "strato.local")
+  trustDomain: "strato.local"
+
+  # Cluster name (for k8s attestation)
+  clusterName: "strato"
+
+  # SPIRE Server image
+  image:
+    repository: ghcr.io/spiffe/spire-server
+    tag: "1.9.6"
+    pullPolicy: IfNotPresent
+
+  replicaCount: 1
+
+  # Logging level
+  logLevel: "INFO"
+
+  # CA certificate TTL
+  caTTL: "168h"  # 7 days
+
+  # SVID TTLs
+  svidTTL: "1h"
+  jwtSvidTTL: "5m"
+
+  # Database configuration (uses the same PostgreSQL as control plane)
+  database:
+    username: spire
+    password: spire_password  # Change in production!
+
+  # Service configuration
+  service:
+    type: ClusterIP
+    grpcPort: 8081
+    federationPort: 8443
+
+  # Persistence
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+
+  # Resources
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  # RBAC
+  rbac:
+    create: true
+
+  # Node attestors
+  attestors:
+    # Kubernetes Projected Service Account Token attestor
+    k8sPsat:
+      enabled: false
+      serviceAccountAllowList:
+        - "strato-agent"
+
+  # Trust bundle notifier
+  notifier:
+    k8sbundle:
+      enabled: true
+
+  # Control plane integration
+  controlPlane:
+    # Enable mTLS for agent connections
+    enableMTLS: false
+    # Trust bundle refresh interval (seconds)
+    bundleRefreshInterval: 300
+    # Require client certificates
+    requireClientCert: true
+
+  # Envoy sidecar configuration for mTLS termination
+  envoy:
+    enabled: true
+    image:
+      repository: envoyproxy/envoy
+      tag: "v1.31.0"
+      pullPolicy: IfNotPresent
+    # Port for agent mTLS connections
+    agentPort: 8443
+    # Port for Envoy health checks
+    healthPort: 8444
+    # Port for Envoy admin interface (localhost only)
+    adminPort: 9901
+    # Directory containing SPIRE Agent socket
+    spireAgentSocketDir: /var/run/spire/sockets
+    # Full path to SPIRE Agent socket
+    spireAgentSocketPath: /var/run/spire/sockets/workload.sock
+    resources:
+      limits:
+        cpu: 200m
+        memory: 128Mi
+      requests:
+        cpu: 100m
+        memory: 64Mi

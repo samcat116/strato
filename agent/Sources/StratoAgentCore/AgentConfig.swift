@@ -7,6 +7,67 @@ public enum NetworkMode: String, Codable {
     case user
 }
 
+/// SPIFFE/SPIRE configuration
+public struct SPIFFEConfig: Codable, Sendable {
+    /// Whether SPIFFE authentication is enabled
+    public let enabled: Bool
+
+    /// Trust domain (e.g., "strato.local")
+    public let trustDomain: String?
+
+    /// Path to the SPIRE Workload API socket
+    public let workloadAPISocketPath: String?
+
+    /// Source type: "workload_api" or "files"
+    public let sourceType: String?
+
+    /// Path to certificate file (for file-based source)
+    public let certificatePath: String?
+
+    /// Path to private key file (for file-based source)
+    public let privateKeyPath: String?
+
+    /// Path to trust bundle file (for file-based source)
+    public let trustBundlePath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case trustDomain = "trust_domain"
+        case workloadAPISocketPath = "workload_api_socket_path"
+        case sourceType = "source_type"
+        case certificatePath = "certificate_path"
+        case privateKeyPath = "private_key_path"
+        case trustBundlePath = "trust_bundle_path"
+    }
+
+    public init(
+        enabled: Bool = false,
+        trustDomain: String? = nil,
+        workloadAPISocketPath: String? = nil,
+        sourceType: String? = nil,
+        certificatePath: String? = nil,
+        privateKeyPath: String? = nil,
+        trustBundlePath: String? = nil
+    ) {
+        self.enabled = enabled
+        self.trustDomain = trustDomain
+        self.workloadAPISocketPath = workloadAPISocketPath
+        self.sourceType = sourceType
+        self.certificatePath = certificatePath
+        self.privateKeyPath = privateKeyPath
+        self.trustBundlePath = trustBundlePath
+    }
+
+    /// Default SPIFFE configuration (disabled)
+    public static let disabled = SPIFFEConfig(enabled: false)
+
+    /// Default Workload API socket path
+    public static let defaultWorkloadAPISocketPath = "/var/run/spire/sockets/workload.sock"
+
+    /// Default trust domain
+    public static let defaultTrustDomain = "strato.local"
+}
+
 public struct AgentConfig: Codable {
     public let controlPlaneURL: String
     public let qemuSocketDir: String?
@@ -18,6 +79,7 @@ public struct AgentConfig: Codable {
     public let qemuBinaryPath: String?
     public let firmwarePathARM64: String?
     public let firmwarePathX86_64: String?
+    public let spiffe: SPIFFEConfig?
 
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
@@ -30,6 +92,7 @@ public struct AgentConfig: Codable {
         case qemuBinaryPath = "qemu_binary_path"
         case firmwarePathARM64 = "firmware_path_arm64"
         case firmwarePathX86_64 = "firmware_path_x86_64"
+        case spiffe
     }
 
     public init(
@@ -42,7 +105,8 @@ public struct AgentConfig: Codable {
         vmStoragePath: String? = nil,
         qemuBinaryPath: String? = nil,
         firmwarePathARM64: String? = nil,
-        firmwarePathX86_64: String? = nil
+        firmwarePathX86_64: String? = nil,
+        spiffe: SPIFFEConfig? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
         self.qemuSocketDir = qemuSocketDir
@@ -54,18 +118,19 @@ public struct AgentConfig: Codable {
         self.qemuBinaryPath = qemuBinaryPath
         self.firmwarePathARM64 = firmwarePathARM64
         self.firmwarePathX86_64 = firmwarePathX86_64
+        self.spiffe = spiffe
     }
 
     public static func load(from path: String, logger: Logger? = nil) throws -> AgentConfig {
         let fileURL = URL(fileURLWithPath: path)
-        
+
         guard FileManager.default.fileExists(atPath: path) else {
             throw AgentConfigError.configFileNotFound(path)
         }
-        
+
         let tomlString = try String(contentsOf: fileURL, encoding: .utf8)
         let tomlData = try Toml(withString: tomlString)
-        
+
         // Extract configuration values from TOML
         guard let controlPlaneURL = tomlData.string("control_plane_url") else {
             throw AgentConfigError.missingRequiredField("control_plane_url")
@@ -92,6 +157,37 @@ public struct AgentConfig: Codable {
             networkMode = nil
         }
 
+        // Parse SPIFFE configuration from [spiffe] section
+        let spiffeConfig: SPIFFEConfig?
+        if let spiffeTable = tomlData.table("spiffe") {
+            let enabled = spiffeTable.bool("enabled") ?? false
+            let trustDomain = spiffeTable.string("trust_domain")
+            let workloadAPISocketPath = spiffeTable.string("workload_api_socket_path")
+            let sourceType = spiffeTable.string("source_type")
+            let certificatePath = spiffeTable.string("certificate_path")
+            let privateKeyPath = spiffeTable.string("private_key_path")
+            let trustBundlePath = spiffeTable.string("trust_bundle_path")
+
+            spiffeConfig = SPIFFEConfig(
+                enabled: enabled,
+                trustDomain: trustDomain,
+                workloadAPISocketPath: workloadAPISocketPath,
+                sourceType: sourceType,
+                certificatePath: certificatePath,
+                privateKeyPath: privateKeyPath,
+                trustBundlePath: trustBundlePath
+            )
+
+            if enabled {
+                logger?.info("SPIFFE authentication enabled", metadata: [
+                    "trustDomain": .string(trustDomain ?? SPIFFEConfig.defaultTrustDomain),
+                    "sourceType": .string(sourceType ?? "workload_api")
+                ])
+            }
+        } else {
+            spiffeConfig = nil
+        }
+
         // Validate platform-specific settings
         #if os(macOS)
         if enableKVM == true {
@@ -113,7 +209,8 @@ public struct AgentConfig: Codable {
             vmStoragePath: vmStoragePath,
             qemuBinaryPath: qemuBinaryPath,
             firmwarePathARM64: firmwarePathARM64,
-            firmwarePathX86_64: firmwarePathX86_64
+            firmwarePathX86_64: firmwarePathX86_64,
+            spiffe: spiffeConfig
         )
     }
 
