@@ -143,7 +143,7 @@ spec:
               value: "{{ include "strato-control-plane.valkeyPort" . }}"
             - name: VALKEY_DATABASE
               value: "{{ .Values.externalValkey.database | default 0 }}"
-            {{- if or .Values.valkey.auth.enabled .Values.externalValkey.password }}
+            {{- if or (and .Values.valkey.enabled .Values.valkey.auth.enabled) .Values.externalValkey.password }}
             - name: VALKEY_PASSWORD
               valueFrom:
                 secretKeyRef:
