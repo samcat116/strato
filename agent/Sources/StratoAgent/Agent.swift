@@ -41,6 +41,7 @@ actor Agent {
     private let imageCachePath: String?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
+    private let firmwarePath: String?
 
     init(
         agentID: String,
@@ -51,7 +52,8 @@ actor Agent {
         logger: Logger,
         imageCachePath: String? = nil,
         vmStoragePath: String,
-        qemuBinaryPath: String
+        qemuBinaryPath: String,
+        firmwarePath: String? = nil
     ) {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
@@ -62,6 +64,7 @@ actor Agent {
         self.imageCachePath = imageCachePath
         self.vmStoragePath = vmStoragePath
         self.qemuBinaryPath = qemuBinaryPath
+        self.firmwarePath = firmwarePath
     }
 
     /// Returns the effective agent ID (assigned UUID if registered, initial ID otherwise)
@@ -121,7 +124,7 @@ actor Agent {
         )
 
         logger.info("Initializing QEMU service")
-        qemuService = QEMUService(logger: logger, networkService: networkService, imageCacheService: imageCacheService, vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath)
+        qemuService = QEMUService(logger: logger, networkService: networkService, imageCacheService: imageCacheService, vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath)
 
         logger.info("Initializing console socket manager")
         consoleSocketManager = ConsoleSocketManager(logger: logger, eventLoopGroup: eventLoopGroup)

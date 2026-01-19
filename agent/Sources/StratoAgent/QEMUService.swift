@@ -13,6 +13,7 @@ actor QEMUService {
     private let imageCacheService: ImageCacheService?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
+    private let configuredFirmwarePath: String?
 
     #if canImport(SwiftQEMU)
     private var activeVMs: [String: QEMUManager] = [:]
@@ -27,12 +28,13 @@ actor QEMUService {
     private var pendingVMs: Set<String> = []  // Track VMs being created (to handle concurrent boot requests)
     #endif
 
-    init(logger: Logger, networkService: (any NetworkServiceProtocol)? = nil, imageCacheService: ImageCacheService? = nil, vmStoragePath: String, qemuBinaryPath: String) {
+    init(logger: Logger, networkService: (any NetworkServiceProtocol)? = nil, imageCacheService: ImageCacheService? = nil, vmStoragePath: String, qemuBinaryPath: String, firmwarePath: String? = nil) {
         self.logger = logger
         self.networkService = networkService
         self.imageCacheService = imageCacheService
         self.vmStoragePath = vmStoragePath
         self.qemuBinaryPath = qemuBinaryPath
+        self.configuredFirmwarePath = firmwarePath
 
         #if canImport(SwiftQEMU)
         #if os(Linux)
@@ -520,19 +522,28 @@ actor QEMUService {
 
     #if canImport(SwiftQEMU)
     /// Resolves the UEFI firmware path for the current architecture
-    /// Priority: 1) Explicit firmware path from config, 2) Platform default
+    /// Priority: 1) Explicit per-VM firmware path, 2) Agent config file path, 3) Platform default
     /// Returns nil if no firmware is found
     private func resolveFirmwarePath(_ explicitPath: String?) -> String? {
-        // If explicit path provided, validate and return it
+        // 1. If explicit per-VM path provided, validate and return it
         if let path = explicitPath, !path.isEmpty {
             if FileManager.default.fileExists(atPath: path) {
-                logger.debug("Using explicit firmware path: \(path)")
+                logger.debug("Using explicit per-VM firmware path: \(path)")
                 return path
             }
-            logger.warning("Specified firmware path does not exist: \(path), trying defaults")
+            logger.warning("Specified per-VM firmware path does not exist: \(path), trying config file setting")
         }
 
-        // Use architecture-specific default
+        // 2. Check agent config file setting
+        if let path = configuredFirmwarePath, !path.isEmpty {
+            if FileManager.default.fileExists(atPath: path) {
+                logger.debug("Using firmware path from config file: \(path)")
+                return path
+            }
+            logger.warning("Config file firmware path does not exist: \(path), trying platform defaults")
+        }
+
+        // 3. Use architecture-specific platform default
         #if arch(arm64)
         let defaultPath = AgentConfig.defaultFirmwarePathARM64
         #else
@@ -544,7 +555,7 @@ actor QEMUService {
             return nil
         }
 
-        logger.debug("Using default firmware path: \(path)")
+        logger.debug("Using platform default firmware path: \(path)")
         return path
     }
 
