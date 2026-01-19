@@ -17,8 +17,17 @@ build:
             dest: /app/Sources
           - src: "control-plane/Resources/**/*"
             dest: /app/Resources
-          - src: "control-plane/web/**/*"
-            dest: /app/web
+
+    - image: strato-frontend
+      context: control-plane/web
+      docker:
+        dockerfile: Dockerfile
+      sync:
+        manual:
+          - src: "src/**/*"
+            dest: /app/src
+          - src: "public/**/*"
+            dest: /app/public
 
 manifests:
   helm:
@@ -30,6 +39,8 @@ manifests:
         setValueTemplates:
           image.repository: "{{.IMAGE_REPO_strato_control_plane}}"
           image.tag: "{{.IMAGE_TAG_strato_control_plane}}"
+          frontend.image.repository: "{{.IMAGE_REPO_strato_frontend}}"
+          frontend.image.tag: "{{.IMAGE_TAG_strato_frontend}}"
         namespace: strato-skaffold
         createNamespace: true
         wait: true

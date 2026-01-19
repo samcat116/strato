@@ -25,7 +25,7 @@ env:
   SPICEDB_PRESHARED_KEY: strato-dev-key
   WEBAUTHN_RELYING_PARTY_ID: localhost
   WEBAUTHN_RELYING_PARTY_NAME: Strato
-  WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost:8080
+  WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost:3000
   # Disable OpenTelemetry for local development
   OTEL_METRICS_ENABLED: "false"
   OTEL_LOGS_ENABLED: "false"
@@ -41,13 +41,12 @@ tasks:
   # Main Development Task
   # ============================================================================
   dev:
-    desc: Start complete development environment
+    desc: Start backend development environment (run frontend separately)
     cmds:
       - task: start-postgres
       - task: start-spicedb
       - task: start-valkey
       - task: load-spicedb-schema
-      - task: build-frontend
       - task: start-control-plane
       - task: create-agent-config
       - task: create-agent-token
@@ -55,13 +54,17 @@ tasks:
       - task: create-test-vm
       - |
         echo ""
-        echo "🎉 Development environment is fully running!"
+        echo "🎉 Backend development environment is running!"
         echo ""
         echo "📊 Service URLs:"
-        echo "   • Control Plane:  http://localhost:8080"
-        echo "   • SpiceDB Admin:  http://localhost:8081"
-        echo "   • PostgreSQL:     localhost:5432"
-        echo "   • Valkey:         localhost:6379"
+        echo "   • Control Plane API:  http://localhost:8080"
+        echo "   • SpiceDB Admin:      http://localhost:8081"
+        echo "   • PostgreSQL:         localhost:5432"
+        echo "   • Valkey:             localhost:6379"
+        echo ""
+        echo "🎨 Frontend:"
+        echo "   Run 'task dev-frontend' in another terminal"
+        echo "   Frontend will be at http://localhost:3000"
         echo ""
         echo "📋 Logs:"
         echo "   • Control Plane:  tail -f /tmp/strato-control-plane.log"
@@ -69,6 +72,12 @@ tasks:
         echo ""
         echo "⚠️  To stop all services, run: task stop"
         echo "⚠️  To clean everything up, run: task clean"
+
+  dev-compose:
+    desc: Start full development environment via Docker Compose
+    cmds:
+      - echo "🐳 Starting Docker Compose environment..."
+      - docker compose up --build
 
   # ============================================================================
   # Infrastructure Tasks
@@ -609,7 +618,7 @@ tasks:
   # SPIFFE Development Environment
   # ============================================================================
   dev-spiffe:
-    desc: Start development environment with SPIFFE/SPIRE mTLS authentication
+    desc: Start SPIFFE development environment (run frontend separately)
     cmds:
       - task: start-postgres
       - task: start-spicedb
@@ -619,7 +628,6 @@ tasks:
       - task: create-spire-entries
       - task: start-envoy
       - task: load-spicedb-schema
-      - task: build-frontend
       - task: start-control-plane-spiffe
       - task: fetch-agent-svid
       - task: create-agent-config-spiffe
@@ -627,16 +635,20 @@ tasks:
       - task: create-test-vm
       - |
         echo ""
-        echo "🎉 SPIFFE Development environment is fully running!"
+        echo "🎉 SPIFFE Development environment is running!"
         echo ""
         echo "📊 Service URLs:"
-        echo "   • Control Plane:     http://localhost:8080"
-        echo "   • Agent mTLS:        https://localhost:8443"
-        echo "   • SPIRE Server:      localhost:8085 (gRPC)"
-        echo "   • SpiceDB:           localhost:8081 (gRPC)"
-        echo "   • PostgreSQL:        localhost:5432"
-        echo "   • Valkey:            localhost:6379"
-        echo "   • Envoy Admin:       http://localhost:9901"
+        echo "   • Control Plane API:  http://localhost:8080"
+        echo "   • Agent mTLS:         https://localhost:8443"
+        echo "   • SPIRE Server:       localhost:8085 (gRPC)"
+        echo "   • SpiceDB:            localhost:8081 (gRPC)"
+        echo "   • PostgreSQL:         localhost:5432"
+        echo "   • Valkey:             localhost:6379"
+        echo "   • Envoy Admin:        http://localhost:9901"
+        echo ""
+        echo "🎨 Frontend:"
+        echo "   Run 'task dev-frontend' in another terminal"
+        echo "   Frontend will be at http://localhost:3000"
         echo ""
         echo "🔐 SPIFFE/SPIRE:"
         echo "   • Trust Domain:      {{.SPIRE_TRUST_DOMAIN}}"
@@ -750,21 +762,43 @@ tasks:
   # Application Tasks
   # ============================================================================
   build-frontend:
-    desc: Build and deploy the Next.js frontend
+    desc: Build the Next.js frontend
     cmds:
       - echo "🎨 Building frontend..."
       - |
         cd "{{.PROJECT_ROOT}}/control-plane/web"
         if [ ! -d "node_modules" ]; then
-          echo "📦 Installing npm dependencies..."
-          npm install
+          echo "📦 Installing dependencies..."
+          bun install
         fi
         echo "🔨 Building Next.js app..."
-        npm run build
-        echo "📁 Deploying to Public folder..."
-        rm -rf ../Public/_next ../Public/index.html ../Public/404.html
-        cp -r out/* ../Public/
-      - echo "✅ Frontend built and deployed!"
+        bun run build
+      - echo "✅ Frontend built!"
+
+  dev-frontend:
+    desc: Start Next.js frontend in development mode (hot reload)
+    cmds:
+      - echo "🎨 Starting frontend dev server..."
+      - |
+        cd "{{.PROJECT_ROOT}}/control-plane/web"
+        if [ ! -d "node_modules" ]; then
+          echo "📦 Installing dependencies..."
+          bun install
+        fi
+      - cd "{{.PROJECT_ROOT}}/control-plane/web" && bun run dev
+
+  start-frontend:
+    desc: Start Next.js frontend in production mode
+    cmds:
+      - echo "🎨 Starting frontend..."
+      - |
+        cd "{{.PROJECT_ROOT}}/control-plane/web"
+        bun run build
+        touch /tmp/strato-frontend.log
+        nohup bun run start > /tmp/strato-frontend.log 2>&1 &
+        echo $! > /tmp/strato-frontend.pid
+      - echo "✅ Frontend started on port 3000!"
+      - echo "📋 Logs available at /tmp/strato-frontend.log"
 
   start-control-plane:
     desc: Build and start the control-plane service
@@ -1114,6 +1148,18 @@ tasks:
           echo "Control Plane: ❌ Stopped"
         fi
 
+        # Check frontend
+        if [ -f /tmp/strato-frontend.pid ]; then
+          PID=$(cat /tmp/strato-frontend.pid)
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "Frontend:      ✅ Running (PID: $PID)"
+          else
+            echo "Frontend:      ❌ Stopped"
+          fi
+        else
+          echo "Frontend:      ❌ Stopped"
+        fi
+
         # Check agent
         if [ -f /tmp/strato-agent.pid ]; then
           PID=$(cat /tmp/strato-agent.pid)
@@ -1163,6 +1209,14 @@ tasks:
           echo "No logs found"
         fi
       - echo ""
+      - echo "=== Frontend Logs ==="
+      - |
+        if [ -f /tmp/strato-frontend.log ]; then
+          tail -20 /tmp/strato-frontend.log
+        else
+          echo "No logs found"
+        fi
+      - echo ""
       - echo "=== Agent Logs ==="
       - |
         if [ -f /tmp/strato-agent.log ]; then
@@ -1179,6 +1233,22 @@ tasks:
     cmds:
       - echo "🛑 Stopping all services..."
       - |
+        # Stop frontend
+        if [ -f /tmp/strato-frontend.pid ]; then
+          PID=$(cat /tmp/strato-frontend.pid)
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "Stopping frontend (PID: $PID)..."
+            kill "$PID" 2>/dev/null || true
+          fi
+          rm -f /tmp/strato-frontend.pid
+        fi
+        # Also kill any process listening on port 3000
+        FRONTEND_PIDS=$(lsof -ti :3000 2>/dev/null | grep -v "^$" || true)
+        if [ -n "$FRONTEND_PIDS" ]; then
+          echo "Stopping processes on port 3000: $FRONTEND_PIDS"
+          echo "$FRONTEND_PIDS" | xargs kill 2>/dev/null || true
+        fi
+
         # Stop agent - first try PID file, then find by process name
         if [ -f /tmp/strato-agent.pid ]; then
           PID=$(cat /tmp/strato-agent.pid)
@@ -1248,8 +1318,8 @@ tasks:
       - docker volume rm spire-server-data 2>/dev/null || true
       - docker volume rm spire-agent-data 2>/dev/null || true
       - echo "Removing log files..."
-      - rm -f /tmp/strato-control-plane.log /tmp/strato-agent.log
-      - rm -f /tmp/strato-agent-registration-url.txt
+      - rm -f /tmp/strato-control-plane.log /tmp/strato-agent.log /tmp/strato-frontend.log
+      - rm -f /tmp/strato-agent-registration-url.txt /tmp/strato-frontend.pid
       - echo "Removing SPIFFE/SPIRE temp directories..."
       - rm -rf /tmp/spire-server /tmp/spire-agent /tmp/spire-sockets /tmp/envoy
       - rm -f /tmp/spire-join-token.txt

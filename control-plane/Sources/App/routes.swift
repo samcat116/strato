@@ -46,41 +46,6 @@ func routes(_ app: Application) throws {
     // let apiImpl = GeneratedAPIImpl() // conforms to generated protocol
     // try apiImpl.registerHandlers(on: transport)
 
-    // SPA catch-all route for Next.js static export
-    // This serves index.html for all frontend routes, allowing client-side routing
-    // FileMiddleware already handles static assets (_next/*, images, etc.)
-
-    // Handle root path (** doesn't match /)
-    app.get { req async throws -> Response in
-        let indexPath = app.directory.publicDirectory + "index.html"
-        req.logger.info("Serving index.html from: \(indexPath)")
-        let response = try await req.fileio.asyncStreamFile(at: indexPath)
-        req.logger.info("Response status: \(response.status)")
-        return response
-    }
-
-    app.get("**") { req async throws -> Response in
-        let path = req.url.path
-
-        // Skip paths that are handled by API controllers
-        let apiPrefixes = ["/api/", "/auth/", "/agent/", "/health"]
-        for prefix in apiPrefixes {
-            if path.hasPrefix(prefix) {
-                throw Abort(.notFound)
-            }
-        }
-
-        // Return 404 for static asset paths that weren't found by FileMiddleware
-        // This prevents serving index.html for missing .js, .css, etc. files
-        let staticExtensions = [".js", ".css", ".json", ".map", ".woff", ".woff2", ".svg", ".png", ".jpg", ".ico", ".txt"]
-        for ext in staticExtensions {
-            if path.hasSuffix(ext) {
-                throw Abort(.notFound)
-            }
-        }
-
-        // Serve index.html for SPA routing
-        let indexPath = app.directory.publicDirectory + "index.html"
-        return try await req.fileio.asyncStreamFile(at: indexPath)
-    }
+    // Note: Frontend is now served by a separate Next.js container.
+    // SPA catch-all routes have been removed - routing is handled by ingress/nginx.
 }
