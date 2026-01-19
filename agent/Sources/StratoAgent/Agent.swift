@@ -33,6 +33,9 @@ actor Agent {
 
     private var websocketClient: WebSocketClient?
     private var qemuService: QEMUService?
+    #if os(Linux)
+    private var firecrackerService: FirecrackerService?
+    #endif
     private var networkService: (any NetworkServiceProtocol)?
     private var imageCacheService: ImageCacheService?
     private var consoleSocketManager: ConsoleSocketManager?
@@ -41,11 +44,16 @@ actor Agent {
     private var registrationContinuation: CheckedContinuation<String, Error>?
     private let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
 
+    // Track which hypervisor type is used for each VM
+    private var vmHypervisorMap: [String: HypervisorType] = [:]
+
     private let networkMode: NetworkMode?
     private let imageCachePath: String?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
     private let firmwarePath: String?
+    private let firecrackerBinaryPath: String
+    private let firecrackerSocketDir: String
 
     // SPIFFE/SPIRE support
     private let spiffeConfig: SPIFFEConfig?
@@ -62,6 +70,8 @@ actor Agent {
         vmStoragePath: String,
         qemuBinaryPath: String,
         firmwarePath: String? = nil,
+        firecrackerBinaryPath: String = "/usr/bin/firecracker",
+        firecrackerSocketDir: String = "/tmp/firecracker",
         spiffeConfig: SPIFFEConfig? = nil
     ) {
         self.initialAgentID = agentID
@@ -74,6 +84,8 @@ actor Agent {
         self.vmStoragePath = vmStoragePath
         self.qemuBinaryPath = qemuBinaryPath
         self.firmwarePath = firmwarePath
+        self.firecrackerBinaryPath = firecrackerBinaryPath
+        self.firecrackerSocketDir = firecrackerSocketDir
         self.spiffeConfig = spiffeConfig
     }
 
@@ -135,6 +147,18 @@ actor Agent {
 
         logger.info("Initializing QEMU service")
         qemuService = QEMUService(logger: logger, networkService: networkService, imageCacheService: imageCacheService, vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath)
+
+        #if os(Linux)
+        logger.info("Initializing Firecracker service (Linux only)")
+        firecrackerService = FirecrackerService(
+            logger: logger,
+            networkService: networkService,
+            imageCacheService: imageCacheService,
+            vmStoragePath: vmStoragePath,
+            firecrackerBinaryPath: firecrackerBinaryPath,
+            socketDirectory: firecrackerSocketDir
+        )
+        #endif
 
         logger.info("Initializing console socket manager")
         consoleSocketManager = ConsoleSocketManager(logger: logger, eventLoopGroup: eventLoopGroup)
@@ -220,7 +244,10 @@ actor Agent {
         }
         websocketClient = nil
         qemuService = nil
-        
+        #if os(Linux)
+        firecrackerService = nil
+        #endif
+
         if let service = networkService {
             await service.disconnect()
         }
@@ -231,6 +258,9 @@ actor Agent {
             await manager.stop()
         }
         svidManager = nil
+
+        // Clear VM hypervisor mapping
+        vmHypervisorMap.removeAll()
 
         logger.info("Agent stopped")
     }
@@ -348,7 +378,7 @@ actor Agent {
 
         #if canImport(SwiftQEMU)
         #if os(Linux)
-        capabilities.append(contentsOf: ["kvm", "ovn_networking"])
+        capabilities.append(contentsOf: ["kvm", "ovn_networking", "firecracker"])
         #elseif os(macOS)
         capabilities.append(contentsOf: ["hvf", "user_networking"])
         #endif
@@ -427,8 +457,23 @@ actor Agent {
     }
     
     private func getRunningVMList() async -> [String] {
-        // TODO: Get actual running VMs from QEMU
-        return []
+        var vmList: [String] = []
+
+        // Get VMs from QEMU service
+        if let qemu = qemuService {
+            let qemuVMs = await qemu.listVMs()
+            vmList.append(contentsOf: qemuVMs)
+        }
+
+        // Get VMs from Firecracker service (Linux only)
+        #if os(Linux)
+        if let firecracker = firecrackerService {
+            let firecrackerVMs = await firecracker.listVMs()
+            vmList.append(contentsOf: firecrackerVMs)
+        }
+        #endif
+
+        return vmList
     }
 }
 
@@ -507,37 +552,79 @@ extension Agent {
         }
     }
     
+    /// Get the hypervisor service for a VM based on its type
+    private func getHypervisorService(for hypervisorType: HypervisorType) -> (any HypervisorService)? {
+        switch hypervisorType {
+        case .qemu:
+            return qemuService
+        case .firecracker:
+            #if os(Linux)
+            return firecrackerService
+            #else
+            logger.warning("Firecracker is only available on Linux, falling back to QEMU")
+            return qemuService
+            #endif
+        }
+    }
+
+    /// Get the hypervisor service for an existing VM
+    private func getHypervisorServiceForVM(vmId: String) -> (any HypervisorService)? {
+        guard let hypervisorType = vmHypervisorMap[vmId] else {
+            logger.warning("No hypervisor type recorded for VM, defaulting to QEMU", metadata: ["vmId": .string(vmId)])
+            return qemuService
+        }
+        return getHypervisorService(for: hypervisorType)
+    }
+
     private func handleVMCreate(_ message: VMCreateMessage) async {
-        logger.info("Creating VM", metadata: ["vmId": .string(message.vmData.id.uuidString)])
+        let vmId = message.vmData.id.uuidString
+        let hypervisorType = message.vmData.hypervisorType
+
+        logger.info("Creating VM", metadata: [
+            "vmId": .string(vmId),
+            "hypervisorType": .string(hypervisorType.rawValue)
+        ])
 
         // Log image info if provided
         if let imageInfo = message.imageInfo {
             logger.info("VM creation includes image info", metadata: [
-                "vmId": .string(message.vmData.id.uuidString),
+                "vmId": .string(vmId),
                 "imageId": .string(imageInfo.imageId.uuidString),
                 "filename": .string(imageInfo.filename)
             ])
         }
 
+        guard let service = getHypervisorService(for: hypervisorType) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for type: \(hypervisorType.rawValue)")
+            return
+        }
+
         do {
-            try await qemuService?.createVM(
-                vmId: message.vmData.id.uuidString,
+            try await service.createVM(
+                vmId: vmId,
                 config: message.vmConfig,
                 imageInfo: message.imageInfo
             )
+            // Record the hypervisor type for this VM
+            vmHypervisorMap[vmId] = hypervisorType
             await sendSuccess(for: message.requestId, message: "VM created successfully")
-            logger.info("VM created successfully", metadata: ["vmId": .string(message.vmData.id.uuidString)])
+            logger.info("VM created successfully", metadata: ["vmId": .string(vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to create VM: \(error.localizedDescription)")
-            logger.error("Failed to create VM", metadata: ["vmId": .string(message.vmData.id.uuidString), "error": .string(error.localizedDescription)])
+            logger.error("Failed to create VM", metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
         }
     }
     
     private func handleVMBoot(_ message: VMOperationMessage) async {
         logger.info("Booting VM", metadata: ["vmId": .string(message.vmId)])
 
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            return
+        }
+
         do {
-            try await qemuService?.bootVM(vmId: message.vmId)
+            try await service.bootVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM booted successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .running)
             logger.info("VM booted successfully", metadata: ["vmId": .string(message.vmId)])
@@ -549,9 +636,14 @@ extension Agent {
     
     private func handleVMShutdown(_ message: VMOperationMessage) async {
         logger.info("Shutting down VM", metadata: ["vmId": .string(message.vmId)])
-        
+
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            return
+        }
+
         do {
-            try await qemuService?.shutdownVM()
+            try await service.shutdownVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM shut down successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .shutdown)
             logger.info("VM shut down successfully", metadata: ["vmId": .string(message.vmId)])
@@ -560,12 +652,17 @@ extension Agent {
             logger.error("Failed to shutdown VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
-    
+
     private func handleVMReboot(_ message: VMOperationMessage) async {
         logger.info("Rebooting VM", metadata: ["vmId": .string(message.vmId)])
-        
+
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            return
+        }
+
         do {
-            try await qemuService?.rebootVM()
+            try await service.rebootVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM rebooted successfully")
             logger.info("VM rebooted successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
@@ -573,12 +670,17 @@ extension Agent {
             logger.error("Failed to reboot VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
-    
+
     private func handleVMPause(_ message: VMOperationMessage) async {
         logger.info("Pausing VM", metadata: ["vmId": .string(message.vmId)])
-        
+
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            return
+        }
+
         do {
-            try await qemuService?.pauseVM()
+            try await service.pauseVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM paused successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .paused)
             logger.info("VM paused successfully", metadata: ["vmId": .string(message.vmId)])
@@ -587,12 +689,17 @@ extension Agent {
             logger.error("Failed to pause VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
-    
+
     private func handleVMResume(_ message: VMOperationMessage) async {
         logger.info("Resuming VM", metadata: ["vmId": .string(message.vmId)])
-        
+
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            return
+        }
+
         do {
-            try await qemuService?.resumeVM()
+            try await service.resumeVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM resumed successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .running)
             logger.info("VM resumed successfully", metadata: ["vmId": .string(message.vmId)])
@@ -601,12 +708,19 @@ extension Agent {
             logger.error("Failed to resume VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
-    
+
     private func handleVMDelete(_ message: VMOperationMessage) async {
         logger.info("Deleting VM", metadata: ["vmId": .string(message.vmId)])
-        
+
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            return
+        }
+
         do {
-            try await qemuService?.deleteVM()
+            try await service.deleteVM(vmId: message.vmId)
+            // Clean up the hypervisor mapping
+            vmHypervisorMap.removeValue(forKey: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM deleted successfully")
             logger.info("VM deleted successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
@@ -617,9 +731,14 @@ extension Agent {
     
     private func handleVMInfo(_ message: VMInfoRequestMessage) async {
         logger.info("Getting VM info", metadata: ["vmId": .string(message.vmId)])
-        
+
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            return
+        }
+
         do {
-            let vmInfo = try await qemuService?.getVMInfo()
+            let vmInfo = try await service.getVMInfo(vmId: message.vmId)
             let data = try AnyCodableValue(vmInfo)
             await sendSuccess(for: message.requestId, message: "VM info retrieved", data: data)
             logger.info("VM info retrieved successfully", metadata: ["vmId": .string(message.vmId)])
@@ -628,12 +747,17 @@ extension Agent {
             logger.error("Failed to get VM info", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
-    
+
     private func handleVMStatus(_ message: VMOperationMessage) async {
         logger.info("Getting VM status", metadata: ["vmId": .string(message.vmId)])
-        
+
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            return
+        }
+
         do {
-            let status = try await qemuService?.syncVMStatus() ?? .shutdown
+            let status = try await service.getVMStatus(vmId: message.vmId)
             let data = try AnyCodableValue(status)
             await sendSuccess(for: message.requestId, message: "VM status retrieved", data: data)
             logger.info("VM status retrieved successfully", metadata: ["vmId": .string(message.vmId), "status": .string(status.rawValue)])

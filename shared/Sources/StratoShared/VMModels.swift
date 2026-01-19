@@ -27,7 +27,8 @@ public struct VMData: Codable, Sendable {
     public let image: String
     public let status: VMStatus
     public let hypervisorId: String?
-    
+    public let hypervisorType: HypervisorType
+
     // CPU configuration
     public let cpu: Int
     public let maxCpu: Int
@@ -70,6 +71,7 @@ public struct VMData: Codable, Sendable {
         image: String,
         status: VMStatus,
         hypervisorId: String? = nil,
+        hypervisorType: HypervisorType = .qemu,
         cpu: Int,
         maxCpu: Int,
         memory: Int64,
@@ -98,6 +100,7 @@ public struct VMData: Codable, Sendable {
         self.image = image
         self.status = status
         self.hypervisorId = hypervisorId
+        self.hypervisorType = hypervisorType
         self.cpu = cpu
         self.maxCpu = maxCpu
         self.memory = memory

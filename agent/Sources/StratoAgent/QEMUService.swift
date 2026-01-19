@@ -7,13 +7,16 @@ import StratoAgentCore
 import SwiftQEMU
 #endif
 
-actor QEMUService {
+actor QEMUService: HypervisorService {
     private let logger: Logger
     private let networkService: (any NetworkServiceProtocol)?
     private let imageCacheService: ImageCacheService?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
     private let configuredFirmwarePath: String?
+
+    // HypervisorService protocol requirement
+    public let hypervisorType: HypervisorType = .qemu
 
     #if canImport(SwiftQEMU)
     private var activeVMs: [String: QEMUManager] = [:]
@@ -257,84 +260,84 @@ actor QEMUService {
         #endif
     }
     
-    func shutdownVM() async throws {
+    func shutdownVM(vmId: String) async throws {
         #if canImport(SwiftQEMU)
-        guard let firstVM = activeVMs.values.first else {
-            throw QEMUServiceError.vmNotFound("No VM available to shutdown")
+        guard let vm = activeVMs[vmId] else {
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
 
-        logger.info("Shutting down QEMU VM")
+        logger.info("Shutting down QEMU VM", metadata: ["vmId": .string(vmId)])
 
         // Graceful shutdown
-        try await firstVM.shutdown()
+        try await vm.shutdown()
 
-        logger.info("QEMU VM shutdown completed")
+        logger.info("QEMU VM shutdown completed", metadata: ["vmId": .string(vmId)])
         #else
         // Mock mode
-        logger.info("Shutting down mock QEMU VM (mock mode)")
+        logger.info("Shutting down mock QEMU VM (mock mode)", metadata: ["vmId": .string(vmId)])
         try await Task.sleep(for: .milliseconds(200)) // Simulate shutdown delay
         #endif
     }
 
-    func rebootVM() async throws {
+    func rebootVM(vmId: String) async throws {
         #if canImport(SwiftQEMU)
-        guard let firstVM = activeVMs.values.first else {
-            throw QEMUServiceError.vmNotFound("No VM available to reboot")
+        guard let vm = activeVMs[vmId] else {
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
 
-        logger.info("Rebooting QEMU VM")
+        logger.info("Rebooting QEMU VM", metadata: ["vmId": .string(vmId)])
 
         // System reset
-        try await firstVM.reset()
+        try await vm.reset()
 
-        logger.info("QEMU VM reboot initiated")
+        logger.info("QEMU VM reboot initiated", metadata: ["vmId": .string(vmId)])
         #else
         // Mock mode
-        logger.info("Rebooting mock QEMU VM (mock mode)")
+        logger.info("Rebooting mock QEMU VM (mock mode)", metadata: ["vmId": .string(vmId)])
         try await Task.sleep(for: .milliseconds(300)) // Simulate reboot delay
         #endif
     }
 
-    func pauseVM() async throws {
+    func pauseVM(vmId: String) async throws {
         #if canImport(SwiftQEMU)
-        guard let firstVM = activeVMs.values.first else {
-            throw QEMUServiceError.vmNotFound("No VM available to pause")
+        guard let vm = activeVMs[vmId] else {
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
 
-        logger.info("Pausing QEMU VM")
+        logger.info("Pausing QEMU VM", metadata: ["vmId": .string(vmId)])
 
         // Pause VM
-        try await firstVM.pause()
+        try await vm.pause()
 
-        logger.info("QEMU VM paused")
+        logger.info("QEMU VM paused", metadata: ["vmId": .string(vmId)])
         #else
         // Mock mode
-        logger.info("Pausing mock QEMU VM (mock mode)")
+        logger.info("Pausing mock QEMU VM (mock mode)", metadata: ["vmId": .string(vmId)])
         #endif
     }
 
-    func resumeVM() async throws {
+    func resumeVM(vmId: String) async throws {
         #if canImport(SwiftQEMU)
-        guard let firstVM = activeVMs.values.first else {
-            throw QEMUServiceError.vmNotFound("No VM available to resume")
+        guard let vm = activeVMs[vmId] else {
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
 
-        logger.info("Resuming QEMU VM")
+        logger.info("Resuming QEMU VM", metadata: ["vmId": .string(vmId)])
 
         // Resume VM
-        try await firstVM.start()
+        try await vm.start()
 
-        logger.info("QEMU VM resumed")
+        logger.info("QEMU VM resumed", metadata: ["vmId": .string(vmId)])
         #else
         // Mock mode
-        logger.info("Resuming mock QEMU VM (mock mode)")
+        logger.info("Resuming mock QEMU VM (mock mode)", metadata: ["vmId": .string(vmId)])
         #endif
     }
 
-    func deleteVM() async throws {
+    func deleteVM(vmId: String) async throws {
         #if canImport(SwiftQEMU)
-        guard let (vmId, qemuManager) = activeVMs.first else {
-            throw QEMUServiceError.vmNotFound("No VM available to delete")
+        guard let qemuManager = activeVMs[vmId] else {
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
 
         logger.info("Deleting QEMU VM", metadata: ["vmId": .string(vmId)])
@@ -365,20 +368,18 @@ actor QEMUService {
         logger.info("QEMU VM deleted", metadata: ["vmId": .string(vmId)])
         #else
         // Mock mode
-        if let (vmId, _) = mockVMs.first {
-            logger.info("Deleting mock QEMU VM (mock mode)", metadata: ["vmId": .string(vmId)])
-            mockVMs.removeValue(forKey: vmId)
-        }
+        logger.info("Deleting mock QEMU VM (mock mode)", metadata: ["vmId": .string(vmId)])
+        mockVMs.removeValue(forKey: vmId)
         #endif
     }
     
     // MARK: - VM Information
-    
-    func getVMInfo() async throws -> VmInfo {
+
+    func getVMInfo(vmId: String) async throws -> VmInfo {
         #if canImport(SwiftQEMU)
-        guard let (vmId, qemuManager) = activeVMs.first,
+        guard let qemuManager = activeVMs[vmId],
               let config = vmConfigs[vmId] else {
-            throw QEMUServiceError.vmNotFound("No VM available for info")
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
 
         // Query VM status
@@ -391,6 +392,9 @@ actor QEMUService {
         )
         #else
         // Mock mode - return mock info
+        guard mockVMs[vmId] != nil else {
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
+        }
         let mockConfig = VmConfig(
             cpus: CpusConfig(bootVcpus: 2, maxVcpus: 4),
             memory: MemoryConfig(size: 2 * 1024 * 1024 * 1024), // 2GB
@@ -467,9 +471,9 @@ actor QEMUService {
         #endif
     }
 
-    func syncVMStatus() async throws -> StratoShared.VMStatus {
+    func getVMStatus(vmId: String) async throws -> VMStatus {
         #if canImport(SwiftQEMU)
-        guard let qemuManager = activeVMs.values.first else {
+        guard let qemuManager = activeVMs[vmId] else {
             return .shutdown
         }
 
@@ -495,27 +499,67 @@ actor QEMUService {
         }
         #else
         // Mock mode - return mock status
-        return mockVMs.isEmpty ? .shutdown : .running
+        return mockVMs[vmId] != nil ? .running : .shutdown
         #endif
     }
-    
+
+    func listVMs() async -> [String] {
+        #if canImport(SwiftQEMU)
+        return Array(activeVMs.keys)
+        #else
+        return Array(mockVMs.keys)
+        #endif
+    }
+
+    // MARK: - Legacy Methods (for backward compatibility)
+
+    /// Syncs VM status for the first VM (legacy method)
+    func syncVMStatus() async throws -> VMStatus {
+        #if canImport(SwiftQEMU)
+        guard let vmId = activeVMs.keys.first else {
+            return .shutdown
+        }
+        return try await getVMStatus(vmId: vmId)
+        #else
+        guard let vmId = mockVMs.keys.first else {
+            return .shutdown
+        }
+        return try await getVMStatus(vmId: vmId)
+        #endif
+    }
+
+    /// Gets VM info for the first VM (legacy method)
+    func getVMInfo() async throws -> VmInfo {
+        #if canImport(SwiftQEMU)
+        guard let vmId = activeVMs.keys.first else {
+            throw QEMUServiceError.vmNotFound("No VM available for info")
+        }
+        return try await getVMInfo(vmId: vmId)
+        #else
+        guard let vmId = mockVMs.keys.first else {
+            throw QEMUServiceError.vmNotFound("No VM available for info")
+        }
+        return try await getVMInfo(vmId: vmId)
+        #endif
+    }
+
     // MARK: - VM Management Helpers
-    
+
     func createAndStartVM(vmId: String, config: VmConfig) async throws {
         try await createVM(vmId: vmId, config: config)
         try await bootVM(vmId: vmId)
     }
-    
-    func stopAndDeleteVM() async throws {
+
+    func stopAndDeleteVM(vmId: String) async throws {
         do {
-            try await shutdownVM()
+            try await shutdownVM(vmId: vmId)
             // Wait a moment for graceful shutdown
             try await Task.sleep(for: .seconds(2))
         } catch {
             logger.warning("VM shutdown failed, forcing delete: \(error)")
         }
-        
-        try await deleteVM()
+
+        try await deleteVM(vmId: vmId)
     }
     
     // MARK: - Private Configuration Methods
