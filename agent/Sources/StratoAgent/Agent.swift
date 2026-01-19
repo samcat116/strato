@@ -965,6 +965,16 @@ extension Agent {
             return
         }
 
+        // Clean up any existing sessions for this VM to prevent stale data routing
+        let existingSessions = await consoleManager.getSessionsForVM(vmId: message.vmId)
+        if !existingSessions.isEmpty {
+            logger.info("Cleaning up existing console sessions for VM", metadata: [
+                "vmId": .string(message.vmId),
+                "sessionCount": .stringConvertible(existingSessions.count)
+            ])
+            await consoleManager.disconnectAllForVM(vmId: message.vmId)
+        }
+
         var connectedPath: String?
         var lastError: Error?
 
