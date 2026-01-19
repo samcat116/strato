@@ -486,8 +486,8 @@ struct VMController: RouteCollection {
         }
 
         do {
-            if vm.status == .created {
-                // Boot the VM
+            if vm.status == .created || vm.status == .shutdown {
+                // Boot the VM (fresh start or restart after shutdown)
                 try await req.agentService.performVMOperation(.vmBoot, vmId: vm.id?.uuidString ?? "")
             } else {
                 // Resume from paused state
