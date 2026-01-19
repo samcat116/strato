@@ -339,3 +339,53 @@ opentelemetry:
       requests:
         cpu: 250m
         memory: 512Mi
+
+# Valkey (Redis-compatible) configuration for session storage and caching
+valkey:
+  enabled: true
+  # Override with Valkey image instead of Redis
+  image:
+    registry: docker.io
+    repository: valkey/valkey
+    tag: "8.0"
+    pullPolicy: IfNotPresent
+
+  # Standalone architecture for simplicity
+  architecture: standalone
+
+  # Authentication
+  auth:
+    enabled: true
+    password: ""  # Auto-generated if empty
+    existingSecret: ""
+    existingSecretPasswordKey: ""
+
+  # Master node configuration
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+      storageClass: ""
+
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 250m
+        memory: 256Mi
+
+  # Metrics
+  metrics:
+    enabled: false
+
+  # Network policies
+  networkPolicy:
+    enabled: false
+
+# External Valkey configuration (when valkey.enabled is false)
+externalValkey:
+  host: ""
+  port: 6379
+  password: ""
+  database: 0

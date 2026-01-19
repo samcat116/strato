@@ -5,6 +5,7 @@ vars:
     sh: pwd
   POSTGRES_CONTAINER: strato-postgres
   SPICEDB_CONTAINER: strato-spicedb
+  VALKEY_CONTAINER: strato-valkey
   POSTGRES_DB: vapor_database
   POSTGRES_USER: vapor_username
   POSTGRES_PASSWORD: vapor_password
@@ -27,6 +28,9 @@ env:
   OTEL_TRACES_ENABLED: "false"
   # Enable dev auth bypass for local development
   DEV_AUTH_BYPASS: "true"
+  # Valkey configuration
+  VALKEY_HOST: localhost
+  VALKEY_PORT: "6379"
 
 tasks:
   # ============================================================================
@@ -37,6 +41,7 @@ tasks:
     cmds:
       - task: start-postgres
       - task: start-spicedb
+      - task: start-valkey
       - task: load-spicedb-schema
       - task: build-frontend
       - task: start-control-plane
@@ -52,6 +57,7 @@ tasks:
         echo "   • Control Plane:  http://localhost:8080"
         echo "   • SpiceDB Admin:  http://localhost:8081"
         echo "   • PostgreSQL:     localhost:5432"
+        echo "   • Valkey:         localhost:6379"
         echo ""
         echo "📋 Logs:"
         echo "   • Control Plane:  tail -f /tmp/strato-control-plane.log"
@@ -140,6 +146,34 @@ tasks:
           sleep 1
         done
         echo "❌ SpiceDB did not become ready in time"
+        exit 1
+
+  start-valkey:
+    desc: Start Valkey (Redis-compatible) container
+    cmds:
+      - echo "🔴 Starting Valkey..."
+      - |
+        EXISTING=$(docker ps -a --filter "name={{.VALKEY_CONTAINER}}" --format "{{`{{.Names}}`}}")
+        if [ "$EXISTING" = "{{.VALKEY_CONTAINER}}" ]; then
+          echo "⚠️  Valkey container already exists. Starting it..."
+          docker start {{.VALKEY_CONTAINER}}
+        else
+          docker run -d \
+            --name {{.VALKEY_CONTAINER}} \
+            -p 6379:6379 \
+            valkey/valkey:8.0-alpine
+        fi
+      - echo "⏳ Waiting for Valkey to be ready..."
+      - sleep 2
+      - |
+        for i in $(seq 1 30); do
+          if docker exec {{.VALKEY_CONTAINER}} valkey-cli ping 2>/dev/null | grep -q "PONG"; then
+            echo "✅ Valkey is ready!"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "❌ Valkey did not become ready in time"
         exit 1
 
   load-spicedb-schema:
@@ -482,6 +516,14 @@ tasks:
           echo "SpiceDB:       ❌ Stopped"
         fi
 
+        # Check Valkey
+        VALKEY_STATUS=$(docker ps --filter "name={{.VALKEY_CONTAINER}}" --format "{{`{{.Status}}`}}" 2>/dev/null)
+        if [ -n "$VALKEY_STATUS" ]; then
+          echo "Valkey:        ✅ Running ($VALKEY_STATUS)"
+        else
+          echo "Valkey:        ❌ Stopped"
+        fi
+
         # Check control-plane
         if [ -f /tmp/strato-control-plane.pid ]; then
           PID=$(cat /tmp/strato-control-plane.pid)
@@ -576,6 +618,7 @@ tasks:
 
         # Stop Docker containers
         echo "Stopping Docker containers..."
+        docker stop {{.VALKEY_CONTAINER}} 2>/dev/null || true
         docker stop {{.SPICEDB_CONTAINER}} 2>/dev/null || true
         docker stop {{.POSTGRES_CONTAINER}} 2>/dev/null || true
       - echo "✅ All services stopped!"
@@ -586,6 +629,7 @@ tasks:
     cmds:
       - echo "🧹 Cleaning up all resources..."
       - echo "Removing Docker containers..."
+      - docker rm -f {{.VALKEY_CONTAINER}} 2>/dev/null || true
       - docker rm -f {{.SPICEDB_CONTAINER}} 2>/dev/null || true
       - docker rm -f {{.POSTGRES_CONTAINER}} 2>/dev/null || true
       - echo "Removing log files..."

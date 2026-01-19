@@ -20,6 +20,11 @@ dependencies:
     version: "~16.4.0"
     repository: https://charts.bitnami.com/bitnami
     condition: postgresql.enabled
+  - name: redis
+    version: "~20.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    alias: valkey
+    condition: valkey.enabled
   - name: spicedb-operator
     version: "2.2.0"
     repository: https://bushelpowered.github.io/spicedb-operator-chart/
