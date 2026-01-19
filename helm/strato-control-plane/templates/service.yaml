@@ -11,5 +11,11 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
+    - port: {{ .Values.spire.envoy.agentPort }}
+      targetPort: agent-mtls
+      protocol: TCP
+      name: agent-mtls
+    {{- end }}
   selector:
     {{- include "strato-control-plane.selectorLabels" . | nindent 4 }}

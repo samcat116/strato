@@ -220,6 +220,9 @@ public func configure(_ app: Application) async throws {
     app.scheduler = SchedulerService(logger: app.logger, defaultStrategy: schedulingStrategy)
     app.logger.info("Scheduler service initialized with strategy: \(schedulingStrategy.rawValue)")
 
+    // Configure SPIFFE/SPIRE authentication (if enabled via environment)
+    try await app.configureSPIRE()
+
     // Configure OpenTelemetry observability (metrics, logs, traces)
     if app.environment != .testing {
         let metricsEnabled = Environment.get("OTEL_METRICS_ENABLED").flatMap(Bool.init) ?? true

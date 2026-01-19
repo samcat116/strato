@@ -2,12 +2,14 @@ import Foundation
 import Logging
 import NIOCore
 import NIOPosix
+import NIOSSL
 import StratoShared
 import StratoAgentCore
 
 enum AgentError: Error, LocalizedError {
     case registrationTimeout
     case notRegistered
+    case spiffeConfigurationError(String)
 
     var errorDescription: String? {
         switch self {
@@ -15,6 +17,8 @@ enum AgentError: Error, LocalizedError {
             return "Registration timed out waiting for control plane response"
         case .notRegistered:
             return "Agent is not registered with control plane"
+        case .spiffeConfigurationError(let message):
+            return "SPIFFE configuration error: \(message)"
         }
     }
 }
@@ -43,6 +47,10 @@ actor Agent {
     private let qemuBinaryPath: String
     private let firmwarePath: String?
 
+    // SPIFFE/SPIRE support
+    private let spiffeConfig: SPIFFEConfig?
+    private var svidManager: SVIDManager?
+
     init(
         agentID: String,
         webSocketURL: String,
@@ -53,7 +61,8 @@ actor Agent {
         imageCachePath: String? = nil,
         vmStoragePath: String,
         qemuBinaryPath: String,
-        firmwarePath: String? = nil
+        firmwarePath: String? = nil,
+        spiffeConfig: SPIFFEConfig? = nil
     ) {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
@@ -65,6 +74,7 @@ actor Agent {
         self.vmStoragePath = vmStoragePath
         self.qemuBinaryPath = qemuBinaryPath
         self.firmwarePath = firmwarePath
+        self.spiffeConfig = spiffeConfig
     }
 
     /// Returns the effective agent ID (assigned UUID if registered, initial ID otherwise)
@@ -132,13 +142,46 @@ actor Agent {
             await self?.sendConsoleData(vmId: vmId, sessionId: sessionId, data: data)
         }
         
+        // Initialize SPIFFE/mTLS if enabled
+        var tlsConfiguration: TLSConfiguration?
+        if let spiffe = spiffeConfig, spiffe.enabled {
+            logger.info("Initializing SPIFFE authentication", metadata: [
+                "trustDomain": .string(spiffe.trustDomain ?? SPIFFEConfig.defaultTrustDomain),
+                "sourceType": .string(spiffe.sourceType ?? "files")
+            ])
+
+            do {
+                let spiffeClient = try createSPIFFEClient(config: spiffe)
+                svidManager = SVIDManager(client: spiffeClient, logger: logger)
+                try await svidManager?.start()
+
+                // Get TLS configuration from SVID
+                tlsConfiguration = try await svidManager?.getTLSConfiguration()
+                logger.info("SPIFFE authentication initialized successfully")
+
+                // Register for SVID rotation
+                await svidManager?.onRotation { [weak self] _ in
+                    guard let self = self else { return }
+                    await self.handleSVIDRotation()
+                }
+            } catch {
+                logger.error("Failed to initialize SPIFFE: \(error)")
+                if webSocketURL.hasPrefix("wss://") {
+                    throw AgentError.spiffeConfigurationError(
+                        "SPIFFE is required for wss:// connections but failed to initialize: \(error)"
+                    )
+                }
+                logger.warning("Continuing without SPIFFE authentication")
+            }
+        }
+
         if isRegistrationMode {
             logger.info("Connecting for agent registration", metadata: ["url": .string(webSocketURL)])
         } else {
             logger.info("Connecting to control plane", metadata: ["url": .string(webSocketURL)])
         }
-        websocketClient = WebSocketClient(url: webSocketURL, agent: self, logger: logger)
-        
+        websocketClient = WebSocketClient(url: webSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration)
+
         if let client = websocketClient {
             try await client.connect()
         }
@@ -182,10 +225,80 @@ actor Agent {
             await service.disconnect()
         }
         networkService = nil
-        
+
+        // Stop SVID manager
+        if let manager = svidManager {
+            await manager.stop()
+        }
+        svidManager = nil
+
         logger.info("Agent stopped")
     }
-    
+
+    // MARK: - SPIFFE Helpers
+
+    private func createSPIFFEClient(config: SPIFFEConfig) throws -> any SPIFFEClientProtocol {
+        let trustDomain = config.trustDomain ?? SPIFFEConfig.defaultTrustDomain
+        let agentName = initialAgentID.replacingOccurrences(of: ".", with: "-")
+        let spiffeID = SPIFFEIdentity(trustDomain: trustDomain, path: "/agent/\(agentName)")
+
+        switch config.sourceType {
+        case "files":
+            guard let certPath = config.certificatePath,
+                  let keyPath = config.privateKeyPath,
+                  let bundlePath = config.trustBundlePath else {
+                throw AgentError.spiffeConfigurationError(
+                    "File-based SPIFFE requires certificate_path, private_key_path, and trust_bundle_path"
+                )
+            }
+
+            logger.info("Using file-based SPIFFE client", metadata: [
+                "certificatePath": .string(certPath),
+                "spiffeID": .string(spiffeID.uri)
+            ])
+
+            return FileSPIFFEClient(
+                certificatePath: certPath,
+                privateKeyPath: keyPath,
+                trustBundlePath: bundlePath,
+                spiffeID: spiffeID,
+                logger: logger
+            )
+
+        case "workload_api", nil:
+            let socketPath = config.workloadAPISocketPath ?? SPIFFEConfig.defaultWorkloadAPISocketPath
+
+            logger.info("Using Workload API SPIFFE client", metadata: [
+                "socketPath": .string(socketPath),
+                "spiffeID": .string(spiffeID.uri)
+            ])
+
+            return WorkloadAPISPIFFEClient(
+                socketPath: socketPath,
+                logger: logger
+            )
+
+        default:
+            throw AgentError.spiffeConfigurationError(
+                "Unknown SPIFFE source_type: \(config.sourceType ?? "nil"). Use 'files' or 'workload_api'"
+            )
+        }
+    }
+
+    private func handleSVIDRotation() async {
+        logger.info("SVID rotated, updating WebSocket TLS configuration")
+
+        do {
+            let newTLSConfig = try await svidManager?.getTLSConfiguration()
+            if let client = websocketClient {
+                await client.updateTLSConfiguration(newTLSConfig)
+            }
+            logger.info("WebSocket TLS configuration updated after SVID rotation")
+        } catch {
+            logger.error("Failed to update TLS configuration after SVID rotation: \(error)")
+        }
+    }
+
     private func registerWithControlPlane() async throws {
         let resources = await getAgentResources()
         let capabilities = getAgentCapabilities()

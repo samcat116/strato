@@ -2,6 +2,7 @@ import Foundation
 import WebSocketKit
 import NIOCore
 import NIOPosix
+import NIOSSL
 import Logging
 import StratoShared
 
@@ -51,17 +52,27 @@ actor WebSocketClient {
     private let logger: Logger
     private let eventLoopGroup: MultiThreadedEventLoopGroup
 
+    // TLS configuration for mTLS (optional, nil for unencrypted connections)
+    private var tlsConfiguration: TLSConfiguration?
+
     // WebSocket state managed via thread-safe wrapper to avoid EventLoop affinity issues
     private let wsHolder: LockedWebSocket
     private var isConnected = false
     private var heartbeatTask: Task<Void, Never>?
 
-    init(url: String, agent: Agent, logger: Logger) {
+    init(url: String, agent: Agent, logger: Logger, tlsConfiguration: TLSConfiguration? = nil) {
         self.url = url
         self.agent = agent
         self.logger = logger
+        self.tlsConfiguration = tlsConfiguration
         self.eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         self.wsHolder = LockedWebSocket()
+    }
+
+    /// Update TLS configuration (for SVID rotation)
+    func updateTLSConfiguration(_ tlsConfig: TLSConfiguration?) {
+        self.tlsConfiguration = tlsConfig
+        logger.info("TLS configuration updated")
     }
 
     func connect() async throws {
@@ -78,10 +89,24 @@ actor WebSocketClient {
             throw WebSocketClientError.invalidURL("Invalid scheme: \(scheme)")
         }
 
-        logger.debug("Connecting with WebSocketKit")
+        // Log TLS status
+        if let tlsConfig = tlsConfiguration {
+            logger.info("Connecting with mTLS enabled", metadata: [
+                "scheme": .string(scheme),
+                "certificateVerification": .string(String(describing: tlsConfig.certificateVerification))
+            ])
+        } else {
+            logger.debug("Connecting without TLS (plain WebSocket)")
+        }
 
         // Create connection and wait for it to be established
         let eventLoop = eventLoopGroup.next()
+
+        // Build WebSocket client configuration with optional TLS
+        var wsConfig = WebSocketKit.WebSocketClient.Configuration()
+        if let tlsConfig = tlsConfiguration {
+            wsConfig.tlsConfiguration = tlsConfig
+        }
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let resumed = AtomicBool(false)
@@ -92,6 +117,7 @@ actor WebSocketClient {
             // Create connection - this returns immediately, callback fires when connected
             WebSocket.connect(
                 to: url,
+                configuration: wsConfig,
                 on: eventLoop
             ) { ws in
                 // Store WebSocket in thread-safe box (still on EventLoop)

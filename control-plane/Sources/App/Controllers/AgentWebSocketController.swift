@@ -12,11 +12,121 @@ struct AgentWebSocketController: RouteCollection {
 
     // Non-async handler - runs on WebSocket's event loop
     private func websocketHandler(req: Request, ws: WebSocket) {
+        // Check for SPIFFE/mTLS authentication first
+        if let spireService = req.application.spireService {
+            Task {
+                let isEnabled = await spireService.isEnabled
+                if isEnabled {
+                    await self.handleMTLSAuthentication(req: req, ws: ws, spireService: spireService)
+                } else {
+                    self.handleTokenAuthentication(req: req, ws: ws)
+                }
+            }
+            return
+        }
+
+        // Fall back to token-based authentication
+        handleTokenAuthentication(req: req, ws: ws)
+    }
+
+    // MARK: - mTLS Authentication (SPIFFE/SPIRE)
+
+    private func handleMTLSAuthentication(req: Request, ws: WebSocket, spireService: SPIREService) async {
+        // Try to extract SPIFFE ID from X-Forwarded-Client-Cert header (set by Envoy proxy)
+        if let spiffeID = extractSPIFFEIDFromXFCC(req: req) {
+            do {
+                let agentID = try await spireService.validateAgentIdentity(spiffeID)
+
+                req.logger.info("Agent authenticated via XFCC header (Envoy mTLS)", metadata: [
+                    "spiffeID": .string(spiffeID.uri),
+                    "agentID": .string(agentID)
+                ])
+
+                // Continue with WebSocket setup using the validated agent ID
+                setupWebSocketConnection(req: req, ws: ws, agentName: agentID, authMethod: "mTLS-XFCC")
+                return
+            } catch {
+                req.logger.error("SPIFFE ID validation failed: \(error)")
+                sendErrorResponse(ws: ws, requestId: "", error: "SPIFFE identity validation failed: \(error.localizedDescription)")
+                Task { try? await ws.close(code: .unacceptableData) }
+                return
+            }
+        }
+
+        // Fall back to direct TLS certificate extraction
+        guard let peerCertificatePEM = req.peerCertificate else {
+            // No client certificate provided - check if we should fall back to token auth
+            if let _ = req.query[String.self, at: "token"],
+               let agentName = req.query[String.self, at: "name"] {
+                req.logger.warning("No client certificate or XFCC header provided, falling back to token authentication", metadata: [
+                    "agentName": .string(agentName)
+                ])
+                handleTokenAuthentication(req: req, ws: ws)
+                return
+            }
+
+            req.logger.error("mTLS required but no client certificate or XFCC header provided")
+            sendErrorResponse(ws: ws, requestId: "", error: "Client certificate required for agent authentication")
+            Task { try? await ws.close(code: .unacceptableData) }
+            return
+        }
+
+        // Validate certificate and extract SPIFFE ID
+        do {
+            let spiffeID = try await spireService.validateCertificate(peerCertificatePEM)
+            let agentID = try await spireService.validateAgentIdentity(spiffeID)
+
+            req.logger.info("Agent authenticated via direct mTLS", metadata: [
+                "spiffeID": .string(spiffeID.uri),
+                "agentID": .string(agentID)
+            ])
+
+            // Continue with WebSocket setup using the validated agent ID
+            setupWebSocketConnection(req: req, ws: ws, agentName: agentID, authMethod: "mTLS-direct")
+        } catch {
+            req.logger.error("mTLS certificate validation failed: \(error)")
+            sendErrorResponse(ws: ws, requestId: "", error: "Certificate validation failed: \(error.localizedDescription)")
+            Task { try? await ws.close(code: .unacceptableData) }
+        }
+    }
+
+    // MARK: - XFCC Header Parsing
+
+    /// Extract SPIFFE ID from X-Forwarded-Client-Cert header set by Envoy
+    /// XFCC format: By=spiffe://...;Hash=...;URI=spiffe://strato.local/agent/xxx;Subject="..."
+    private func extractSPIFFEIDFromXFCC(req: Request) -> SPIFFEIdentity? {
+        guard let xfcc = req.headers.first(name: "X-Forwarded-Client-Cert") else {
+            return nil
+        }
+
+        req.logger.debug("Parsing XFCC header", metadata: ["xfcc": .string(xfcc)])
+
+        // Parse URI field from XFCC
+        // The header can contain multiple certificates separated by commas
+        // Each certificate's fields are separated by semicolons
+        for component in xfcc.split(separator: ";") {
+            let trimmed = component.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("URI=") {
+                let uri = String(trimmed.dropFirst("URI=".count))
+                if let spiffeID = SPIFFEIdentity(uri: uri) {
+                    req.logger.debug("Extracted SPIFFE ID from XFCC", metadata: ["spiffeID": .string(spiffeID.uri)])
+                    return spiffeID
+                }
+            }
+        }
+
+        req.logger.warning("XFCC header present but no valid SPIFFE URI found", metadata: ["xfcc": .string(xfcc)])
+        return nil
+    }
+
+    // MARK: - Token Authentication (Legacy)
+
+    private func handleTokenAuthentication(req: Request, ws: WebSocket) {
         // Extract token and agent name from query parameters
         guard let token = req.query[String.self, at: "token"],
               let agentName = req.query[String.self, at: "name"] else {
             sendErrorResponse(ws: ws, requestId: "", error: "Registration token and agent name are required")
-            _ = ws.close(code: .unacceptableData)
+            Task { try? await ws.close(code: .unacceptableData) }
             return
         }
 
@@ -288,5 +398,90 @@ struct AgentWebSocketController: RouteCollection {
         } catch {
             print("Failed to send error response: \(error)")
         }
+    }
+
+    // MARK: - WebSocket Connection Setup (shared by both auth methods)
+
+    /// Set up WebSocket connection - MUST be called from WebSocket's event loop
+    /// This method schedules the actual setup on the event loop to ensure handlers are registered correctly
+    private func setupWebSocketConnection(req: Request, ws: WebSocket, agentName: String, authMethod: String) {
+        // Execute on the WebSocket's event loop to avoid NIOLoopBound precondition failures
+        ws.eventLoop.execute {
+            req.logger.info("Setting up WebSocket connection", metadata: [
+                "agentName": .string(agentName),
+                "authMethod": .string(authMethod)
+            ])
+
+            // Set up message handlers
+            ws.onText { [self] ws, text in
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
+            }
+
+            ws.onBinary { [self] ws, buffer in
+                req.logger.info("Received WebSocket binary message from agent", metadata: [
+                    "agentName": .string(agentName),
+                    "bytes": .string("\(buffer.readableBytes)")
+                ])
+                if let text = buffer.getString(at: 0, length: buffer.readableBytes) {
+                    self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
+                } else {
+                    req.logger.error("Failed to convert binary buffer to string")
+                }
+            }
+
+            ws.onClose.whenComplete { result in
+                switch result {
+                case .success:
+                    req.logger.info("Agent WebSocket connection closed normally", metadata: [
+                        "agentName": .string(agentName),
+                        "authMethod": .string(authMethod)
+                    ])
+                case .failure(let error):
+                    req.logger.error("Agent WebSocket connection closed with error: \(error)", metadata: [
+                        "agentName": .string(agentName),
+                        "authMethod": .string(authMethod)
+                    ])
+                }
+
+                // Clean up connection tracking
+                req.application.websocketManager.removeConnection(agentName: agentName)
+
+                // Mark agent as offline asynchronously
+                Task {
+                    await req.agentService.removeAgent(agentName)
+                }
+            }
+
+            // Store WebSocket for this agent
+            req.application.websocketManager.setConnection(agentName: agentName, websocket: ws)
+
+            req.logger.info("Agent WebSocket connection established via \(authMethod)", metadata: [
+                "agentName": .string(agentName)
+            ])
+        }
+    }
+}
+
+// MARK: - Request Extension for Peer Certificate Access
+
+extension Request {
+    /// Get the peer certificate from the TLS connection (if available)
+    /// Returns the certificate in PEM format, or nil if no certificate is available
+    var peerCertificate: String? {
+        // Note: This requires the server to be configured with TLS and client certificate verification
+        // The actual implementation depends on how Vapor/NIO exposes client certificates
+        // In production, this would extract the certificate from the TLS connection
+
+        // Placeholder: In a real implementation, you would access the TLS session info
+        // through Vapor's Request object or NIO's channel pipeline
+        //
+        // For example, with NIO SSL:
+        // if let sslHandler = request.channel.pipeline.handler(type: NIOSSLHandler.self),
+        //    let peerCert = try? sslHandler.peerCertificate {
+        //     return peerCert.pemEncoded
+        // }
+
+        // For now, return nil - this needs to be implemented when TLS is configured
+        return nil
     }
 }
