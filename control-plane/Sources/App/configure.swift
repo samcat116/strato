@@ -3,11 +3,24 @@ import FluentPostgresDriver
 import NIOSSL
 import Vapor
 import OTel
+import Redis
 
 public func configure(_ app: Application) async throws {
-    // Configure sessions
+    // Configure Valkey if available, fallback to Fluent sessions
+    if let valkeyConfig = ValkeyConfiguration.fromEnvironment() {
+        do {
+            try app.configureValkey(valkeyConfig)
+            app.sessions.use(.redis)
+            app.logger.info("Using Valkey for session storage")
+        } catch {
+            app.logger.warning("Valkey configuration failed, using Fluent sessions: \(error)")
+            app.sessions.use(.fluent)
+        }
+    } else {
+        app.sessions.use(.fluent)
+        app.logger.info("Valkey not configured, using Fluent for session storage")
+    }
     app.middleware.use(app.sessions.middleware)
-    app.sessions.use(.fluent)
 
     // Configure user authentication with sessions
     app.middleware.use(User.sessionAuthenticator())

@@ -32,7 +32,9 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.0.0"),
         .package(url: "https://github.com/swift-server/swift-openapi-vapor.git", from: "1.0.0"),
         // 📊 OpenTelemetry observability (metrics, logging, tracing)
-        .package(url: "https://github.com/swift-otel/swift-otel.git", from: "1.0.0")
+        .package(url: "https://github.com/swift-otel/swift-otel.git", from: "1.0.0"),
+        // 🔴 Valkey/Redis support for caching and sessions
+        .package(url: "https://github.com/vapor/redis.git", from: "4.0.0")
     ],
     targets: [
         .executableTarget(
@@ -53,7 +55,8 @@ let package = Package(
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "OpenAPIVapor", package: "swift-openapi-vapor"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
-                .product(name: "OTel", package: "swift-otel")
+                .product(name: "OTel", package: "swift-otel"),
+                .product(name: "Redis", package: "redis")
             ],
             swiftSettings: swiftSettings,
             plugins: [

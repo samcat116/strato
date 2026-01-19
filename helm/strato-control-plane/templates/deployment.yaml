@@ -46,6 +46,15 @@ spec:
             - |
               until nc -w 1 -z {{ include "strato-control-plane.spicedb.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.spicedb.service.grpcPort }}; do echo waiting for SpiceDB; sleep 2; done
         {{- end }}
+        {{- if or .Values.valkey.enabled .Values.externalValkey.host }}
+        - name: wait-for-valkey
+          image: {{ default "busybox:1.36.1" .Values.initContainers.waitForDB.image | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              until nc -w 1 -z {{ include "strato-control-plane.valkeyHost" . }}{{- if .Values.valkey.enabled }}.{{ .Release.Namespace }}.svc.cluster.local{{- end }} {{ include "strato-control-plane.valkeyPort" . }}; do echo waiting for Valkey; sleep 2; done
+        {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -126,6 +135,21 @@ spec:
               value: "false"
             - name: OTEL_TRACES_ENABLED
               value: "false"
+            {{- end }}
+            {{- if or .Values.valkey.enabled .Values.externalValkey.host }}
+            - name: VALKEY_HOST
+              value: "{{ include "strato-control-plane.valkeyHost" . }}"
+            - name: VALKEY_PORT
+              value: "{{ include "strato-control-plane.valkeyPort" . }}"
+            - name: VALKEY_DATABASE
+              value: "{{ .Values.externalValkey.database | default 0 }}"
+            {{- if or (and .Values.valkey.enabled .Values.valkey.auth.enabled) .Values.externalValkey.password }}
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ include "strato-control-plane.valkeySecretName" . }}"
+                  key: "{{ include "strato-control-plane.valkeySecretKey" . }}"
+            {{- end }}
             {{- end }}
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:

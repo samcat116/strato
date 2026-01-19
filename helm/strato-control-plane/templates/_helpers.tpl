@@ -213,3 +213,65 @@ fsGroup: 10001
 seccompProfile:
   type: RuntimeDefault
 {{- end }}
+
+{{/*
+Get the Valkey host
+*/}}
+{{- define "strato-control-plane.valkeyHost" -}}
+{{- if .Values.valkey.enabled }}
+{{- printf "%s-valkey-master" .Release.Name }}
+{{- else }}
+{{- .Values.externalValkey.host }}
+{{- end }}
+{{- end }}
+
+{{/*
+Get the Valkey port
+*/}}
+{{- define "strato-control-plane.valkeyPort" -}}
+{{- if .Values.valkey.enabled }}
+{{- 6379 }}
+{{- else }}
+{{- .Values.externalValkey.port | default 6379 }}
+{{- end }}
+{{- end }}
+
+{{/*
+Get the Valkey password secret name
+*/}}
+{{- define "strato-control-plane.valkeySecretName" -}}
+{{- if .Values.valkey.enabled }}
+{{- if .Values.valkey.auth.existingSecret }}
+{{- .Values.valkey.auth.existingSecret }}
+{{- else }}
+{{- printf "%s-valkey" .Release.Name }}
+{{- end }}
+{{- else }}
+{{- printf "%s-external-valkey" (include "strato-control-plane.fullname" .) }}
+{{- end }}
+{{- end }}
+
+{{/*
+Get the Valkey password secret key
+*/}}
+{{- define "strato-control-plane.valkeySecretKey" -}}
+{{- if .Values.valkey.enabled }}
+{{- .Values.valkey.auth.existingSecretPasswordKey | default "redis-password" }}
+{{- else }}
+{{- "valkey-password" }}
+{{- end }}
+{{- end }}
+
+{{/*
+Valkey labels
+*/}}
+{{- define "strato-control-plane.valkey.labels" -}}
+helm.sh/chart: {{ include "strato-control-plane.chart" . }}
+app.kubernetes.io/name: {{ include "strato-control-plane.name" . }}-valkey
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: valkey
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
