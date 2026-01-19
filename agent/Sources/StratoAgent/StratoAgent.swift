@@ -98,6 +98,13 @@ struct StratoAgent: AsyncParsableCommand {
         let finalVMStoragePath = vmStorageDir ?? config.vmStoragePath ?? AgentConfig.defaultVMStoragePath
         let finalQemuBinaryPath = qemuBinaryPath ?? config.qemuBinaryPath ?? AgentConfig.defaultQemuBinaryPath
 
+        // Resolve firmware path from config (architecture-specific)
+        #if arch(arm64)
+        let finalFirmwarePath = config.firmwarePathARM64
+        #else
+        let finalFirmwarePath = config.firmwarePathX86_64
+        #endif
+
         // Update log level based on final configuration
         logger.logLevel = debug ? .debug : Logger.Level(rawValue: finalLogLevel) ?? .info
 
@@ -107,6 +114,7 @@ struct StratoAgent: AsyncParsableCommand {
             "qemuSocketDir": .string(finalQemuSocketDir),
             "vmStoragePath": .string(finalVMStoragePath),
             "qemuBinaryPath": .string(finalQemuBinaryPath),
+            "firmwarePath": .string(finalFirmwarePath ?? "(platform default)"),
             "logLevel": .string(finalLogLevel),
             "registrationMode": .string(isRegistrationMode ? "yes" : "no")
         ])
@@ -119,7 +127,8 @@ struct StratoAgent: AsyncParsableCommand {
             isRegistrationMode: isRegistrationMode,
             logger: logger,
             vmStoragePath: finalVMStoragePath,
-            qemuBinaryPath: finalQemuBinaryPath
+            qemuBinaryPath: finalQemuBinaryPath,
+            firmwarePath: finalFirmwarePath
         )
         
         do {
