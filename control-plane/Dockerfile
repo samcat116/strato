@@ -6,16 +6,11 @@ FROM swift:6.1.2-noble AS build
 # Check if we're using prebuilt artifacts
 ARG PREBUILT_ARTIFACTS=""
 
-# Install OS updates and Bun for frontend build
+# Install OS updates
 RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     && apt-get -q update \
     && apt-get -q dist-upgrade -y \
-    && apt-get install -y libjemalloc-dev curl unzip \
-    && curl -fsSL https://bun.sh/install | bash
-
-# Add Bun to PATH
-ENV BUN_INSTALL="/root/.bun"
-ENV PATH="$BUN_INSTALL/bin:$PATH"
+    && apt-get install -y libjemalloc-dev
 
 # Set up a build area
 WORKDIR /build
@@ -33,25 +28,12 @@ RUN sed -i 's|.package(path: "../shared")|.package(path: "/build/shared")|' Pack
 RUN swift package resolve \
     $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true)
 
-# Copy web frontend package files
-COPY ./control-plane/web/package.json ./control-plane/web/bun.lock* ./web/
-
-# Install frontend dependencies
-WORKDIR /build/control-plane/web
-RUN bun install --frozen-lockfile
-
 # Copy entire control-plane repo into container
 WORKDIR /build/control-plane
 COPY ./control-plane .
 
 # Copy artifacts directory (always exists due to workflow preparation)
 COPY ./artifacts /build/artifacts
-
-# Build and deploy frontend (Next.js static export to Public/)
-WORKDIR /build/control-plane/web
-RUN bun run build:deploy
-
-WORKDIR /build/control-plane
 
 # Build the application only if not using prebuilt artifacts
 RUN if [ -z "$PREBUILT_ARTIFACTS" ]; then \
@@ -74,7 +56,6 @@ RUN if [ -n "$PREBUILT_ARTIFACTS" ]; then \
             fi; \
             # Copy resources if they exist
             ([ -d "/build/artifacts/control-plane/resources" ] && cp -R /build/artifacts/control-plane/resources/* ./ || true) && \
-            ([ -d "/build/artifacts/control-plane/Public" ] && cp -R /build/artifacts/control-plane/Public ./ || true) && \
             ([ -d "/build/artifacts/control-plane/Resources" ] && cp -R /build/artifacts/control-plane/Resources ./ || true); \
         else \
             echo "Error: PREBUILT_ARTIFACTS specified but no artifacts found"; \
@@ -85,13 +66,11 @@ RUN if [ -n "$PREBUILT_ARTIFACTS" ]; then \
         cp "$(swift build --package-path /build/control-plane -c release --show-bin-path)/App" ./ && \
         (cp "/usr/lib/swift/linux/swift-backtrace-static" ./ 2>/dev/null || cp "/usr/libexec/swift/linux/swift-backtrace-static" ./ 2>/dev/null || echo "Warning: swift-backtrace-static not found") && \
         find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \; && \
-        ([ -d /build/control-plane/Public ] && cp -R /build/control-plane/Public ./ || true) && \
         ([ -d /build/control-plane/Resources ] && cp -R /build/control-plane/Resources ./ || true); \
     fi
 
 # Ensure proper permissions
 RUN chmod +x ./App && \
-    chmod -R a-w ./Public 2>/dev/null || true && \
     chmod -R a-w ./Resources 2>/dev/null || true
 
 # ================================

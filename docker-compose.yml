@@ -1,0 +1,109 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vapor_username
+      POSTGRES_PASSWORD: vapor_password
+      POSTGRES_DB: vapor_database
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vapor_username -d vapor_database"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # SpiceDB authorization
+  spicedb:
+    image: authzed/spicedb:v1.35.3
+    command:
+      - serve
+      - --grpc-preshared-key=strato-dev-key
+      - --http-enabled
+      - --datastore-engine=memory
+    ports:
+      - "50051:50051"
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Valkey (Redis-compatible) for sessions
+  valkey:
+    image: valkey/valkey:8.0-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Vapor Control Plane (API only)
+  control-plane:
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile
+    environment:
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: vapor_database
+      DATABASE_USERNAME: vapor_username
+      DATABASE_PASSWORD: vapor_password
+      SPICEDB_ENDPOINT: http://spicedb:8080
+      SPICEDB_PRESHARED_KEY: strato-dev-key
+      VALKEY_HOST: valkey
+      VALKEY_PORT: 6379
+      WEBAUTHN_RELYING_PARTY_ID: localhost
+      WEBAUTHN_RELYING_PARTY_NAME: Strato
+      WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost
+      LOG_LEVEL: debug
+      DEV_AUTH_BYPASS: "true"
+      # Disable OpenTelemetry
+      OTEL_METRICS_ENABLED: "false"
+      OTEL_LOGS_ENABLED: "false"
+      OTEL_TRACES_ENABLED: "false"
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      spicedb:
+        condition: service_started
+      valkey:
+        condition: service_healthy
+
+  # Next.js Frontend
+  frontend:
+    build:
+      context: control-plane/web
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - control-plane
+
+  # Nginx reverse proxy for local development
+  # Routes /api/* to control-plane, /* to frontend
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.dev.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - control-plane
+      - frontend
+
+volumes:
+  postgres_data:

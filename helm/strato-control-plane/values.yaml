@@ -13,6 +13,50 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+# Frontend (Next.js) configuration
+frontend:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: strato-frontend
+    pullPolicy: IfNotPresent
+    tag: "latest"
+
+  service:
+    type: ClusterIP
+    port: 3000
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+  livenessProbe:
+    enabled: true
+    path: /
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    enabled: true
+    path: /
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 3
+
+  # Environment variables
+  env:
+    # Empty means use same origin (ingress handles routing)
+    NEXT_PUBLIC_API_URL: ""
+
 serviceAccount:
   create: true
   annotations: {}
