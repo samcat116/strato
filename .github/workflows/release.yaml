@@ -14,6 +14,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME_CONTROL_PLANE: ${{ github.repository }}-control-plane
   IMAGE_NAME_AGENT: ${{ github.repository }}-agent
+  IMAGE_NAME_FRONTEND: ${{ github.repository }}-frontend
 
 jobs:
   create-release:
@@ -52,6 +53,7 @@ jobs:
           ## Docker Images
 
           - \`ghcr.io/${{ github.repository }}-control-plane:${GITHUB_REF#refs/tags/}\`
+          - \`ghcr.io/${{ github.repository }}-frontend:${GITHUB_REF#refs/tags/}\`
           - \`ghcr.io/${{ github.repository }}-agent:${GITHUB_REF#refs/tags/}\`
 
           ## Installation
@@ -69,6 +71,7 @@ jobs:
           \`\`\`bash
           # Pull the images
           docker pull ghcr.io/${{ github.repository }}-control-plane:${GITHUB_REF#refs/tags/}
+          docker pull ghcr.io/${{ github.repository }}-frontend:${GITHUB_REF#refs/tags/}
           docker pull ghcr.io/${{ github.repository }}-agent:${GITHUB_REF#refs/tags/}
           \`\`\`
           EOF
@@ -133,6 +136,17 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
 
+      - name: Extract metadata for frontend image
+        id: meta-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_FRONTEND }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
       - name: Build and push control plane image
         uses: docker/build-push-action@v5
         with:
@@ -156,6 +170,18 @@ jobs:
           labels: ${{ steps.meta-agent.outputs.labels }}
           cache-from: type=gha,key=agent-${{ matrix.platform }}
           cache-to: type=gha,mode=max,key=agent-${{ matrix.platform }}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./control-plane/web
+          file: ./control-plane/web/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha,key=frontend-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,key=frontend-${{ matrix.platform }}
 
   build-swift-binaries:
     runs-on: ${{ matrix.os }}
@@ -259,6 +285,20 @@ jobs:
               driver: bridge
 
           services:
+            # Nginx reverse proxy - main entry point
+            nginx:
+              image: nginx:alpine
+              ports:
+                - "80:80"
+              volumes:
+                - ./nginx.conf:/etc/nginx/nginx.conf:ro
+              depends_on:
+                - control-plane
+                - frontend
+              networks:
+                - strato-network
+
+            # Vapor Control Plane (API)
             control-plane:
               image: ghcr.io/${{ github.repository }}-control-plane:${{ github.ref_name }}
               environment:
@@ -269,15 +309,24 @@ jobs:
                 PERMIFY_ENDPOINT: http://permify:3476
                 WEBAUTHN_RELYING_PARTY_ID: localhost
                 WEBAUTHN_RELYING_PARTY_NAME: Strato
-                WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost:8080
+                WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost
               depends_on:
                 - db
                 - permify
-              ports:
-                - "8080:8080"
               networks:
                 - strato-network
               command: ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]
+
+            # Next.js Frontend
+            frontend:
+              image: ghcr.io/${{ github.repository }}-frontend:${{ github.ref_name }}
+              environment:
+                NODE_ENV: production
+                PORT: 3000
+              depends_on:
+                - control-plane
+              networks:
+                - strato-network
 
             agent:
               image: ghcr.io/${{ github.repository }}-agent:${{ github.ref_name }}
@@ -336,6 +385,77 @@ jobs:
               networks:
                 - strato-network
           EOF
+
+      - name: Create nginx config file
+        run: |
+          cat > nginx.conf << 'EOF'
+          events {
+              worker_connections 1024;
+          }
+
+          http {
+              upstream control-plane {
+                  server control-plane:8080;
+              }
+
+              upstream frontend {
+                  server frontend:3000;
+              }
+
+              server {
+                  listen 80;
+
+                  # WebSocket support
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection "upgrade";
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+
+                  # API routes to control plane
+                  location /api/ {
+                      proxy_pass http://control-plane;
+                      proxy_read_timeout 3600s;
+                      proxy_send_timeout 3600s;
+                  }
+
+                  location /auth/ {
+                      proxy_pass http://control-plane;
+                  }
+
+                  location /agent/ {
+                      proxy_pass http://control-plane;
+                      proxy_read_timeout 3600s;
+                      proxy_send_timeout 3600s;
+                  }
+
+                  location /health/ {
+                      proxy_pass http://control-plane;
+                  }
+
+                  location /organizations/ {
+                      proxy_pass http://control-plane;
+                  }
+
+                  # Frontend catch-all
+                  location / {
+                      proxy_pass http://frontend;
+                  }
+              }
+          }
+          EOF
+
+      - name: Upload nginx config file
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./nginx.conf
+          asset_name: nginx.conf
+          asset_content_type: text/plain
 
       - name: Upload docker-compose release file
         uses: actions/upload-release-asset@v1
