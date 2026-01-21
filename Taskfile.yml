@@ -1233,6 +1233,20 @@ tasks:
     cmds:
       - echo "🛑 Stopping all services..."
       - |
+        # Stop any running QEMU VMs first (before killing agent)
+        QEMU_PIDS=$(pgrep -f "qemu-system" 2>/dev/null || true)
+        if [ -n "$QEMU_PIDS" ]; then
+          echo "Stopping QEMU VMs: $QEMU_PIDS"
+          echo "$QEMU_PIDS" | xargs kill 2>/dev/null || true
+          sleep 2
+          # Force kill any remaining
+          REMAINING=$(pgrep -f "qemu-system" 2>/dev/null || true)
+          if [ -n "$REMAINING" ]; then
+            echo "Force killing remaining QEMU VMs: $REMAINING"
+            echo "$REMAINING" | xargs kill -9 2>/dev/null || true
+          fi
+        fi
+
         # Stop frontend
         if [ -f /tmp/strato-frontend.pid ]; then
           PID=$(cat /tmp/strato-frontend.pid)
