@@ -38,7 +38,7 @@ struct VMController: RouteCollection {
         }
     }
 
-    func index(req: Request) async throws -> [VM] {
+    func index(req: Request) async throws -> [VMDetailResponse] {
         // Get user from middleware
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
@@ -46,7 +46,7 @@ struct VMController: RouteCollection {
 
         // Filter VMs based on user permissions
         let allVMs = try await VM.query(on: req.db).all()
-        var authorizedVMs: [VM] = []
+        var authorizedVMs: [VMDetailResponse] = []
 
         for vm in allVMs {
             let hasPermission = try await req.spicedb.checkPermission(
@@ -57,14 +57,14 @@ struct VMController: RouteCollection {
             )
 
             if hasPermission {
-                authorizedVMs.append(vm)
+                authorizedVMs.append(VMDetailResponse(from: vm))
             }
         }
 
         return authorizedVMs
     }
 
-    func show(req: Request) async throws -> VM {
+    func show(req: Request) async throws -> VMDetailResponse {
         guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
@@ -73,7 +73,7 @@ struct VMController: RouteCollection {
             throw Abort(.notFound)
         }
 
-        return vm
+        return VMDetailResponse(from: vm)
     }
 
     func create(req: Request) async throws -> VM {
