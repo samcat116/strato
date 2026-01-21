@@ -154,9 +154,8 @@ export default function VMDetailPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-xl font-bold text-gray-100">
-                  {vm.memory}
+                  {vm.memoryFormatted}
                 </div>
-                <p className="text-sm text-gray-500">GB</p>
               </CardContent>
             </Card>
             <Card className="bg-gray-800 border-gray-700">
@@ -167,8 +166,9 @@ export default function VMDetailPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-xl font-bold text-gray-100">{vm.disk}</div>
-                <p className="text-sm text-gray-500">GB</p>
+                <div className="text-xl font-bold text-gray-100">
+                  {vm.diskFormatted}
+                </div>
               </CardContent>
             </Card>
             <Card className="bg-gray-800 border-gray-700">
@@ -204,13 +204,29 @@ export default function VMDetailPage() {
                 </div>
                 <div>
                   <p className="text-gray-400">Image</p>
-                  <p className="text-gray-100">{vm.image}</p>
+                  {vm.imageId && vm.projectId ? (
+                    <Link
+                      href={`/images/detail?id=${vm.imageId}&projectId=${vm.projectId}`}
+                      className="text-blue-400 hover:text-blue-300 hover:underline"
+                    >
+                      {vm.image}
+                    </Link>
+                  ) : (
+                    <p className="text-gray-100">{vm.image}</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-gray-400">Hypervisor</p>
-                  <p className="text-gray-100">
-                    {vm.hypervisorId || "Unassigned"}
-                  </p>
+                  {vm.hypervisorId ? (
+                    <Link
+                      href={`/agents/detail?id=${vm.hypervisorId}`}
+                      className="text-blue-400 hover:text-blue-300 hover:underline font-mono"
+                    >
+                      {vm.hypervisorId}
+                    </Link>
+                  ) : (
+                    <p className="text-gray-100">Unassigned</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-gray-400">Last Updated</p>

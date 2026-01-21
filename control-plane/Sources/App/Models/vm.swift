@@ -230,3 +230,56 @@ extension VM {
         return "00:0c:29:\(randomBytes.joined(separator: ":"))"
     }
 }
+
+// MARK: - Response DTO
+
+struct VMDetailResponse: Content {
+    let id: UUID?
+    let name: String
+    let description: String
+    let image: String
+    let imageId: UUID?
+    let projectId: UUID?
+    let status: VMStatus
+    let hypervisorId: String?
+    let cpu: Int
+    let maxCpu: Int
+    let memory: Int64
+    let memoryFormatted: String
+    let disk: Int64
+    let diskFormatted: String
+    let createdAt: Date?
+    let updatedAt: Date?
+
+    init(from vm: VM) {
+        self.id = vm.id
+        self.name = vm.name
+        self.description = vm.description
+        self.image = vm.image
+        self.imageId = vm.$sourceImage.id
+        self.projectId = vm.$project.id
+        self.status = vm.status
+        self.hypervisorId = vm.hypervisorId
+        self.cpu = vm.cpu
+        self.maxCpu = vm.maxCpu
+        self.memory = vm.memory
+        self.memoryFormatted = VMDetailResponse.formatSize(vm.memory)
+        self.disk = vm.disk
+        self.diskFormatted = VMDetailResponse.formatSize(vm.disk)
+        self.createdAt = vm.createdAt
+        self.updatedAt = vm.updatedAt
+    }
+
+    static func formatSize(_ bytes: Int64) -> String {
+        let gb = Double(bytes) / 1024.0 / 1024.0 / 1024.0
+        if gb >= 1.0 {
+            return String(format: "%.2f GB", gb)
+        }
+        let mb = Double(bytes) / 1024.0 / 1024.0
+        if mb >= 1.0 {
+            return String(format: "%.2f MB", mb)
+        }
+        let kb = Double(bytes) / 1024.0
+        return String(format: "%.2f KB", kb)
+    }
+}

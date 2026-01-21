@@ -17,12 +17,16 @@ export interface VM {
   name: string;
   description: string;
   image: string;
+  imageId?: string;
+  projectId?: string;
   status: VMStatus;
   hypervisorId?: string;
   cpu: number;
   maxCpu: number;
   memory: number;
+  memoryFormatted: string;
   disk: number;
+  diskFormatted: string;
   createdAt: string;
   updatedAt: string;
 }
