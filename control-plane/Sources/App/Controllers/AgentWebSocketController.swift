@@ -357,6 +357,22 @@ struct AgentWebSocketController: RouteCollection {
                 // Clean up the session
                 req.consoleSessionManager.removeSession(sessionId: message.sessionId)
 
+            case .vmLog:
+                // Handle VM log messages from agent - push to Loki
+                let message = try envelope.decode(as: VMLogMessage.self)
+                Task {
+                    do {
+                        try await req.lokiService.pushLog(message)
+                        req.logger.debug("VM log pushed to Loki", metadata: [
+                            "vmId": .string(message.vmId),
+                            "level": .string(message.level.rawValue),
+                            "eventType": .string(message.eventType.rawValue)
+                        ])
+                    } catch {
+                        req.logger.error("Failed to push VM log to Loki: \(error)")
+                    }
+                }
+
             default:
                 req.logger.warning("Received unexpected message type from agent: \(envelope.type)")
                 sendErrorResponse(ws: ws, requestId: "", error: "Unexpected message type: \(envelope.type)")

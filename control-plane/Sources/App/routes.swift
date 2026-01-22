@@ -40,6 +40,9 @@ func routes(_ app: Application) throws {
     // Console WebSocket controller for VM console streaming
     try app.register(collection: ConsoleWebSocketController())
 
+    // VM Logs controller for querying logs from Loki
+    try app.register(collection: LogsController())
+
     // OpenAPI Vapor transport (spec-first). Once the generator produces APIProtocol
     // from Sources/App/openapi.yaml, register handlers here.
     // let transport = VaporTransport(routesBuilder: app)

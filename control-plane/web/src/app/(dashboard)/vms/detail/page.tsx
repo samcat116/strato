@@ -10,12 +10,13 @@ import {
   MemoryStick,
   Clock,
   Terminal,
+  ScrollText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { VMStatusBadge, VMActions } from "@/components/vms";
+import { VMStatusBadge, VMActions, LogViewer } from "@/components/vms";
 import { useVM, useInvalidateVMs } from "@/lib/hooks";
 
 // Dynamically import ConsoleTerminal to avoid SSR issues with xterm.js
@@ -125,6 +126,13 @@ export default function VMDetailPage() {
             {!isRunning && (
               <span className="ml-2 text-xs text-gray-500">(VM not running)</span>
             )}
+          </TabsTrigger>
+          <TabsTrigger
+            value="logs"
+            className="data-[state=active]:bg-gray-700"
+          >
+            <ScrollText className="h-4 w-4 mr-2" />
+            Logs
           </TabsTrigger>
         </TabsList>
 
@@ -246,6 +254,10 @@ export default function VMDetailPage() {
               </CardContent>
             </Card>
           )}
+        </TabsContent>
+
+        <TabsContent value="logs" className="mt-6">
+          <LogViewer vmId={id} />
         </TabsContent>
       </Tabs>
     </div>

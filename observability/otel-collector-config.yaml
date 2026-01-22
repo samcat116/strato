@@ -50,10 +50,15 @@ exporters:
   #   tls:
   #     insecure: true
 
-  # Optional: Loki exporter for logs
-  # Uncomment if you have Loki running
-  # loki:
-  #   endpoint: http://loki:3100/loki/api/v1/push
+  # Loki exporter for logs
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+    labels:
+      attributes:
+        service.name: "service_name"
+        vm.id: "vm_id"
+        operation: "operation"
+        source: "source"
 
 service:
   pipelines:
@@ -73,7 +78,7 @@ service:
     logs:
       receivers: [otlp]
       processors: [memory_limiter, batch, resourcedetection]
-      exporters: [debug] # Add loki when Loki is available
+      exporters: [debug, loki]
 
   # Telemetry configuration for the collector itself
   telemetry:

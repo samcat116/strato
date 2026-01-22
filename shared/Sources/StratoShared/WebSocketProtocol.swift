@@ -46,6 +46,9 @@ public enum MessageType: String, Codable, Sendable {
     case success = "success"
     case error = "error"
     case statusUpdate = "status_update"
+
+    // VM Logs
+    case vmLog = "vm_log"
 }
 
 // MARK: - Base Message Protocol
@@ -712,5 +715,73 @@ public struct MessageEnvelope: Codable, Sendable {
     
     public func decode<T: WebSocketMessage>(as messageType: T.Type) throws -> T {
         return try JSONDecoder().decode(messageType, from: payload)
+    }
+}
+
+// MARK: - VM Log Messages
+
+/// Log level for VM log messages
+public enum VMLogLevel: String, Codable, Sendable {
+    case debug = "debug"
+    case info = "info"
+    case warning = "warning"
+    case error = "error"
+}
+
+/// Source of the log message
+public enum VMLogSource: String, Codable, Sendable {
+    case agent = "agent"
+    case qemu = "qemu"
+    case controlPlane = "control_plane"
+}
+
+/// Type of VM event
+public enum VMEventType: String, Codable, Sendable {
+    case statusChange = "status_change"
+    case operation = "operation"
+    case qemuOutput = "qemu_output"
+    case error = "error"
+    case info = "info"
+}
+
+/// VM log message sent from agent to control plane
+public struct VMLogMessage: WebSocketMessage {
+    public var type: MessageType { .vmLog }
+    public let requestId: String
+    public let timestamp: Date
+    public let vmId: String
+    public let level: VMLogLevel
+    public let source: VMLogSource
+    public let eventType: VMEventType
+    public let message: String
+    public let operation: String?
+    public let details: String?
+    public let previousStatus: VMStatus?
+    public let newStatus: VMStatus?
+
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        vmId: String,
+        level: VMLogLevel,
+        source: VMLogSource,
+        eventType: VMEventType,
+        message: String,
+        operation: String? = nil,
+        details: String? = nil,
+        previousStatus: VMStatus? = nil,
+        newStatus: VMStatus? = nil
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.vmId = vmId
+        self.level = level
+        self.source = source
+        self.eventType = eventType
+        self.message = message
+        self.operation = operation
+        self.details = details
+        self.previousStatus = previousStatus
+        self.newStatus = newStatus
     }
 }
