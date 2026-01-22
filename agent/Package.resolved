@@ -1,5 +1,5 @@
 {
-  "originHash" : "8c479ba45c8a31fe57ebaf0451725f85e5b1778419e235f9109a0ce3a17c8954",
+  "originHash" : "a3dc0b881383540cc0572f9f55887709f0d9266c8da6377fcbf1f6093663de86",
   "pins" : [
     {
       "identity" : "swift-algorithms",
@@ -160,7 +160,7 @@
       "location" : "https://github.com/samcat116/swift-qemu",
       "state" : {
         "branch" : "main",
-        "revision" : "6edf1ca082f907d74aba5c7844e049128fa87a8e"
+        "revision" : "0e6fd6d0d2019767851b799b05ab95744e353690"
       }
     },
     {

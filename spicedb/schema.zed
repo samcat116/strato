@@ -25,19 +25,21 @@ definition organization {
 definition project {
     /** organization that owns this project */
     relation organization: organization
-    
+
     /** admin users have full control over the project */
     relation admin: user
-    
+
     /** member users can access project resources */
     relation member: user
-    
+
     // Permissions
     permission manage_vms = admin + member + organization->admin
     permission view_project = admin + member + organization->admin + organization->member
     permission create_project = organization->admin
     permission update_project = admin + organization->admin
     permission delete_project = organization->admin
+    permission create_volume = admin + organization->admin
+    permission read = view_project
 }
 
 /** image represents a VM disk image that can be used to create VMs */
@@ -61,6 +63,49 @@ definition image {
     permission update = owner + editor + project->update_project
     permission delete = owner + project->delete_project
     permission download = owner + viewer + editor + project->view_project
+}
+
+/** volume represents a persistent storage volume (QEMU only) */
+definition volume {
+    /** owner is the user who created the volume */
+    relation owner: user
+
+    /** project that contains this volume */
+    relation project: project
+
+    /** viewer can see volume details but not modify */
+    relation viewer: user
+
+    /** editor can modify volume and attach/detach */
+    relation editor: user
+
+    // Permissions - combining direct relations and project permissions
+    permission create = project->admin
+    permission read = owner + viewer + editor + project->view_project
+    permission update = owner + editor + project->update_project
+    permission delete = owner + project->delete_project
+    permission attach = owner + editor + project->admin
+    permission detach = owner + editor + project->admin
+    permission snapshot = owner + editor + project->admin
+    permission clone = owner + editor + project->admin
+    permission resize = owner + editor + project->admin
+}
+
+/** volume_snapshot represents a point-in-time snapshot of a volume */
+definition volume_snapshot {
+    /** owner is the user who created the snapshot */
+    relation owner: user
+
+    /** volume this snapshot was created from */
+    relation volume: volume
+
+    /** project that contains this snapshot */
+    relation project: project
+
+    // Permissions
+    permission read = owner + volume->read + project->view_project
+    permission delete = owner + volume->owner + project->delete_project
+    permission restore = owner + volume->editor + project->admin
 }
 
 /** virtual_machine represents a virtual machine instance */

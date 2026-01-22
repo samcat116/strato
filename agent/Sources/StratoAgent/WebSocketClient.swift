@@ -125,7 +125,27 @@ actor WebSocketClient {
 
                 // Set up handlers directly on the EventLoop (no Task hop)
                 ws.onText { _, text in
-                    loggerRef.debug("Received WebSocket text message", metadata: ["text": .string(text)])
+                    loggerRef.debug("Received WebSocket text message", metadata: ["length": .string("\(text.count)")])
+
+                    // Parse JSON to MessageEnvelope
+                    guard let data = text.data(using: .utf8) else {
+                        loggerRef.error("Failed to convert text message to UTF-8 data")
+                        return
+                    }
+
+                    do {
+                        let envelope = try JSONDecoder().decode(MessageEnvelope.self, from: data)
+                        loggerRef.info("Received message from control plane", metadata: [
+                            "type": .string(envelope.type.rawValue)
+                        ])
+
+                        // Handle message in a Task to bridge to async
+                        Task { [weak agent = agentRef] in
+                            await agent?.handleMessage(envelope)
+                        }
+                    } catch {
+                        loggerRef.error("Failed to decode text message: \(error)")
+                    }
                 }
 
                 ws.onBinary { _, buffer in

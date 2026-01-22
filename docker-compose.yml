@@ -28,7 +28,7 @@ services:
       - --datastore-engine=memory
     ports:
       - "50051:50051"
-      - "8081:8080"
+      - "8081:8443"
     healthcheck:
       test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
       interval: 5s

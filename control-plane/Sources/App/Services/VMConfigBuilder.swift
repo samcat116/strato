@@ -198,6 +198,153 @@ struct VMConfigBuilder {
         )
     }
 
+    /// Builds VM configuration from VM and Image, with attached volumes (QEMU only)
+    /// This method builds disk configs from the VM's attached volumes instead of the legacy diskPath field
+    /// - Parameters:
+    ///   - vm: The VM to build config for (must have volumes eager-loaded with .with(\.$volumes))
+    ///   - image: The image used for the boot volume (if no boot volume attached)
+    ///   - volumes: Attached volumes (sorted by boot order, then device name)
+    /// - Returns: VmConfig with disk configs built from volumes
+    static func buildVMConfigWithVolumes(from vm: VM, image: Image?, volumes: [Volume]) async throws -> VmConfig {
+        // Payload configuration - use image defaults if available
+        let payload = PayloadConfig(
+            firmware: vm.firmwarePath,
+            kernel: vm.kernelPath,
+            cmdline: ensureSerialConsole(vm.cmdline ?? image?.defaultCmdline),
+            initramfs: vm.initramfsPath
+        )
+
+        // CPU configuration - use image defaults or VM values
+        let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
+        let cpus = CpusConfig(
+            bootVcpus: cpuCount,
+            maxVcpus: vm.maxCpu > 0 ? vm.maxCpu : cpuCount,
+            kvmHyperv: false
+        )
+
+        // Memory configuration - use image defaults or VM values
+        let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024) // 1GB default
+        let memory = MemoryConfig(
+            size: memorySize,
+            mergeable: false,
+            shared: vm.sharedMemory,
+            hugepages: vm.hugepages,
+            thp: true
+        )
+
+        // Disk configuration from volumes
+        // Sort by boot order (nil boot order comes after explicit orders), then by device name
+        let sortedVolumes = volumes.sorted { v1, v2 in
+            switch (v1.bootOrder, v2.bootOrder) {
+            case (let o1?, let o2?):
+                return o1 < o2
+            case (nil, _?):
+                return false
+            case (_?, nil):
+                return true
+            case (nil, nil):
+                return (v1.deviceName ?? "") < (v2.deviceName ?? "")
+            }
+        }
+
+        var disks: [DiskConfig] = []
+        for volume in sortedVolumes where volume.status == .attached {
+            guard let storagePath = volume.storagePath else { continue }
+            let disk = DiskConfig(
+                path: storagePath,
+                readonly: false, // Could be enhanced to track readonly per-volume
+                direct: false,
+                id: volume.deviceName ?? "disk\(disks.count)"
+            )
+            disks.append(disk)
+        }
+
+        // Fallback to legacy diskPath if no volumes attached
+        if disks.isEmpty, let diskPath = vm.diskPath {
+            let disk = DiskConfig(
+                path: diskPath,
+                readonly: vm.readonlyDisk,
+                direct: false,
+                id: "disk0"
+            )
+            disks.append(disk)
+        }
+
+        // Network configuration
+        var networks: [NetConfig] = []
+        if let macAddress = vm.macAddress {
+            let network = NetConfig(
+                ip: vm.ipAddress ?? "192.168.249.1",
+                mask: vm.networkMask ?? "255.255.255.0",
+                mac: macAddress,
+                numQueues: 2,
+                queueSize: 256,
+                id: "net0"
+            )
+            networks.append(network)
+        }
+
+        // Console configuration
+        let console = ConsoleConfig(
+            socket: vm.consoleSocket,
+            mode: vm.consoleMode.rawValue
+        )
+
+        let serial = ConsoleConfig(
+            socket: vm.serialSocket,
+            mode: vm.serialMode.rawValue
+        )
+
+        // RNG configuration
+        let rng = RngConfig(src: "/dev/urandom")
+
+        return VmConfig(
+            cpus: cpus,
+            memory: memory,
+            payload: payload,
+            disks: disks.isEmpty ? nil : disks,
+            net: networks.isEmpty ? nil : networks,
+            rng: rng,
+            serial: serial,
+            console: console,
+            iommu: false,
+            watchdog: false,
+            pvpanic: false
+        )
+    }
+
+    /// Builds disk configurations from attached volumes
+    /// Used for updating VM disk config when volumes are attached/detached
+    static func buildDiskConfigs(from volumes: [Volume]) -> [DiskConfig] {
+        // Sort by boot order (nil boot order comes after explicit orders), then by device name
+        let sortedVolumes = volumes.sorted { v1, v2 in
+            switch (v1.bootOrder, v2.bootOrder) {
+            case (let o1?, let o2?):
+                return o1 < o2
+            case (nil, _?):
+                return false
+            case (_?, nil):
+                return true
+            case (nil, nil):
+                return (v1.deviceName ?? "") < (v2.deviceName ?? "")
+            }
+        }
+
+        var disks: [DiskConfig] = []
+        for volume in sortedVolumes where volume.status == .attached {
+            guard let storagePath = volume.storagePath else { continue }
+            let disk = DiskConfig(
+                path: storagePath,
+                readonly: false,
+                direct: false,
+                id: volume.deviceName ?? "disk\(disks.count)"
+            )
+            disks.append(disk)
+        }
+
+        return disks
+    }
+
     /// Builds ImageInfo for agent to download and cache the image
     /// - Parameters:
     ///   - image: The image to build info for

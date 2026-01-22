@@ -11,7 +11,13 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         if request.application.environment == .development,
            Environment.get("DEV_AUTH_BYPASS") == "true"
         {
-            if let devUser = request.application.storage[DevUserKey.self] {
+            // Reload the dev user from the database to ensure proper context
+            // This is necessary because the stored user object may not be properly
+            // bound to this request's database context
+            if let devUser = try await User.query(on: request.db)
+                .filter(\.$username == "dev")
+                .first()
+            {
                 request.auth.login(devUser)
             }
             return try await next.respond(to: request)
