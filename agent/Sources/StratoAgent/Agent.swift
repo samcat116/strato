@@ -616,6 +616,7 @@ extension Agent {
             "vmId": .string(vmId),
             "hypervisorType": .string(hypervisorType.rawValue)
         ])
+        await sendVMLog(vmId: vmId, level: .info, eventType: .operation, message: "Starting VM creation with hypervisor: \(hypervisorType.rawValue)", operation: "create")
 
         // Log image info if provided
         if let imageInfo = message.imageInfo {
@@ -624,10 +625,12 @@ extension Agent {
                 "imageId": .string(imageInfo.imageId.uuidString),
                 "filename": .string(imageInfo.filename)
             ])
+            await sendVMLog(vmId: vmId, level: .info, eventType: .info, message: "Using image: \(imageInfo.filename)", operation: "create")
         }
 
         guard let service = getHypervisorService(for: hypervisorType) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for type: \(hypervisorType.rawValue)")
+            await sendVMLog(vmId: vmId, level: .error, eventType: .error, message: "Hypervisor service not available for type: \(hypervisorType.rawValue)", operation: "create")
             return
         }
 
@@ -640,18 +643,22 @@ extension Agent {
             // Record the hypervisor type for this VM
             vmHypervisorMap[vmId] = hypervisorType
             await sendSuccess(for: message.requestId, message: "VM created successfully")
+            await sendVMLog(vmId: vmId, level: .info, eventType: .statusChange, message: "VM created successfully", operation: "create", newStatus: .created)
             logger.info("VM created successfully", metadata: ["vmId": .string(vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to create VM: \(error.localizedDescription)")
+            await sendVMLog(vmId: vmId, level: .error, eventType: .error, message: "Failed to create VM: \(error.localizedDescription)", operation: "create")
             logger.error("Failed to create VM", metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
         }
     }
     
     private func handleVMBoot(_ message: VMOperationMessage) async {
         logger.info("Booting VM", metadata: ["vmId": .string(message.vmId)])
+        await sendVMLog(vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM boot", operation: "boot")
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available", operation: "boot")
             return
         }
 
@@ -659,18 +666,22 @@ extension Agent {
             try await service.bootVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM booted successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .running)
+            await sendVMLog(vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM booted successfully", operation: "boot", newStatus: .running)
             logger.info("VM booted successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to boot VM: \(error.localizedDescription)")
+            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Failed to boot VM: \(error.localizedDescription)", operation: "boot")
             logger.error("Failed to boot VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
     
     private func handleVMShutdown(_ message: VMOperationMessage) async {
         logger.info("Shutting down VM", metadata: ["vmId": .string(message.vmId)])
+        await sendVMLog(vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM shutdown", operation: "shutdown")
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available", operation: "shutdown")
             return
         }
 
@@ -678,9 +689,11 @@ extension Agent {
             try await service.shutdownVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM shut down successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .shutdown)
+            await sendVMLog(vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM shut down successfully", operation: "shutdown", newStatus: .shutdown)
             logger.info("VM shut down successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to shutdown VM: \(error.localizedDescription)")
+            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Failed to shutdown VM: \(error.localizedDescription)", operation: "shutdown")
             logger.error("Failed to shutdown VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
@@ -705,9 +718,11 @@ extension Agent {
 
     private func handleVMPause(_ message: VMOperationMessage) async {
         logger.info("Pausing VM", metadata: ["vmId": .string(message.vmId)])
+        await sendVMLog(vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM pause", operation: "pause")
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available", operation: "pause")
             return
         }
 
@@ -715,18 +730,22 @@ extension Agent {
             try await service.pauseVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM paused successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .paused)
+            await sendVMLog(vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM paused successfully", operation: "pause", newStatus: .paused)
             logger.info("VM paused successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to pause VM: \(error.localizedDescription)")
+            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Failed to pause VM: \(error.localizedDescription)", operation: "pause")
             logger.error("Failed to pause VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
 
     private func handleVMResume(_ message: VMOperationMessage) async {
         logger.info("Resuming VM", metadata: ["vmId": .string(message.vmId)])
+        await sendVMLog(vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM resume", operation: "resume")
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available", operation: "resume")
             return
         }
 
@@ -734,18 +753,22 @@ extension Agent {
             try await service.resumeVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM resumed successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .running)
+            await sendVMLog(vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM resumed successfully", operation: "resume", newStatus: .running)
             logger.info("VM resumed successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to resume VM: \(error.localizedDescription)")
+            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Failed to resume VM: \(error.localizedDescription)", operation: "resume")
             logger.error("Failed to resume VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
 
     private func handleVMDelete(_ message: VMOperationMessage) async {
         logger.info("Deleting VM", metadata: ["vmId": .string(message.vmId)])
+        await sendVMLog(vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM deletion", operation: "delete")
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
+            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available", operation: "delete")
             return
         }
 
@@ -754,9 +777,11 @@ extension Agent {
             // Clean up the hypervisor mapping
             vmHypervisorMap.removeValue(forKey: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM deleted successfully")
+            await sendVMLog(vmId: message.vmId, level: .info, eventType: .operation, message: "VM deleted successfully", operation: "delete")
             logger.info("VM deleted successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to delete VM: \(error.localizedDescription)")
+            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Failed to delete VM: \(error.localizedDescription)", operation: "delete")
             logger.error("Failed to delete VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
@@ -823,6 +848,35 @@ extension Agent {
             try await websocketClient?.sendMessage(statusMessage)
         } catch {
             logger.error("Failed to send status update: \(error)")
+        }
+    }
+
+    /// Send a VM log message to the control plane for storage in Loki
+    private func sendVMLog(
+        vmId: String,
+        level: VMLogLevel,
+        eventType: VMEventType,
+        message: String,
+        operation: String? = nil,
+        details: String? = nil,
+        previousStatus: VMStatus? = nil,
+        newStatus: VMStatus? = nil
+    ) async {
+        let logMessage = VMLogMessage(
+            vmId: vmId,
+            level: level,
+            source: .agent,
+            eventType: eventType,
+            message: message,
+            operation: operation,
+            details: details,
+            previousStatus: previousStatus,
+            newStatus: newStatus
+        )
+        do {
+            try await websocketClient?.sendMessage(logMessage)
+        } catch {
+            logger.error("Failed to send VM log: \(error)")
         }
     }
     

@@ -195,3 +195,33 @@ export interface ImageStatusResponse {
   size?: number;
   checksum?: string;
 }
+
+// VM Log types
+export type VMLogLevel = "debug" | "info" | "warning" | "error";
+export type VMLogSource = "agent" | "qemu" | "control_plane";
+export type VMEventType =
+  | "status_change"
+  | "operation"
+  | "qemu_output"
+  | "error"
+  | "info";
+
+export interface VMLogEntry {
+  timestamp: string;
+  message: string;
+  labels: {
+    vm_id?: string;
+    level?: VMLogLevel;
+    source?: VMLogSource;
+    event_type?: VMEventType;
+    operation?: string;
+    [key: string]: string | undefined;
+  };
+}
+
+export interface VMLogsQueryParams {
+  limit?: number;
+  direction?: "forward" | "backward";
+  start?: number; // Unix timestamp
+  end?: number; // Unix timestamp
+}

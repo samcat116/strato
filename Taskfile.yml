@@ -6,6 +6,8 @@ vars:
   POSTGRES_CONTAINER: strato-postgres
   SPICEDB_CONTAINER: strato-spicedb
   VALKEY_CONTAINER: strato-valkey
+  LOKI_CONTAINER: strato-loki
+  OTEL_COLLECTOR_CONTAINER: strato-otel-collector
   SPIRE_SERVER_CONTAINER: strato-spire-server
   SPIRE_AGENT_CONTAINER: strato-spire-agent
   ENVOY_CONTAINER: strato-envoy
@@ -35,6 +37,8 @@ env:
   # Valkey configuration
   VALKEY_HOST: localhost
   VALKEY_PORT: "6379"
+  # Loki configuration for VM logs
+  LOKI_ENDPOINT: "http://localhost:3100"
 
 tasks:
   # ============================================================================
@@ -46,6 +50,8 @@ tasks:
       - task: start-postgres
       - task: start-spicedb
       - task: start-valkey
+      - task: start-loki
+      - task: start-otel-collector
       - task: load-spicedb-schema
       - task: start-control-plane
       - task: create-agent-config
@@ -61,6 +67,8 @@ tasks:
         echo "   • SpiceDB Admin:      http://localhost:8081"
         echo "   • PostgreSQL:         localhost:5432"
         echo "   • Valkey:             localhost:6379"
+        echo "   • Loki:               localhost:3100"
+        echo "   • OTel Collector:     localhost:4317 (gRPC), localhost:4318 (HTTP)"
         echo ""
         echo "🎨 Frontend:"
         echo "   Run 'task dev-frontend' in another terminal"
@@ -187,6 +195,72 @@ tasks:
           sleep 1
         done
         echo "❌ Valkey did not become ready in time"
+        exit 1
+
+  start-loki:
+    desc: Start Loki log aggregation service
+    cmds:
+      - echo "📊 Starting Loki..."
+      - |
+        EXISTING=$(docker ps -a --filter "name={{.LOKI_CONTAINER}}" --format "{{`{{.Names}}`}}")
+        if [ "$EXISTING" = "{{.LOKI_CONTAINER}}" ]; then
+          echo "⚠️  Loki container already exists. Starting it..."
+          docker start {{.LOKI_CONTAINER}}
+        else
+          docker run -d \
+            --name {{.LOKI_CONTAINER}} \
+            -p 3100:3100 \
+            grafana/loki:2.9.4 \
+            -config.file=/etc/loki/local-config.yaml
+        fi
+      - echo "⏳ Waiting for Loki to be ready..."
+      - sleep 3
+      - |
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:3100/ready > /dev/null 2>&1; then
+            echo "✅ Loki is ready!"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "❌ Loki did not become ready in time"
+        exit 1
+
+  start-otel-collector:
+    desc: Start OpenTelemetry Collector for logs, metrics, and traces
+    cmds:
+      - echo "📡 Starting OpenTelemetry Collector..."
+      - |
+        EXISTING=$(docker ps -a --filter "name={{.OTEL_COLLECTOR_CONTAINER}}" --format "{{`{{.Names}}`}}")
+        if [ "$EXISTING" = "{{.OTEL_COLLECTOR_CONTAINER}}" ]; then
+          echo "⚠️  OTel Collector container already exists. Removing and recreating..."
+          docker rm -f {{.OTEL_COLLECTOR_CONTAINER}}
+        fi
+      - |
+        # Get Loki container IP for collector to push logs
+        LOKI_IP=$(docker inspect -f '{{`{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}`}}' {{.LOKI_CONTAINER}})
+
+        docker run -d \
+          --name {{.OTEL_COLLECTOR_CONTAINER}} \
+          -p 4317:4317 \
+          -p 4318:4318 \
+          -p 8888:8888 \
+          -p 8889:8889 \
+          -v "{{.PROJECT_ROOT}}/observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro" \
+          -e LOKI_ENDPOINT="http://${LOKI_IP}:3100" \
+          otel/opentelemetry-collector-contrib:0.112.0 \
+          --config=/etc/otel-collector-config.yaml
+      - echo "⏳ Waiting for OTel Collector to be ready..."
+      - sleep 3
+      - |
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:8888/metrics > /dev/null 2>&1; then
+            echo "✅ OTel Collector is ready!"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "❌ OTel Collector did not become ready in time"
         exit 1
 
   # ============================================================================
@@ -623,6 +697,8 @@ tasks:
       - task: start-postgres
       - task: start-spicedb
       - task: start-valkey
+      - task: start-loki
+      - task: start-otel-collector
       - task: start-spire-server
       - task: start-spire-agent
       - task: create-spire-entries
@@ -644,6 +720,8 @@ tasks:
         echo "   • SpiceDB:            localhost:8081 (gRPC)"
         echo "   • PostgreSQL:         localhost:5432"
         echo "   • Valkey:             localhost:6379"
+        echo "   • Loki:               localhost:3100"
+        echo "   • OTel Collector:     localhost:4317 (gRPC), localhost:4318 (HTTP)"
         echo "   • Envoy Admin:        http://localhost:9901"
         echo ""
         echo "🎨 Frontend:"
@@ -1136,6 +1214,22 @@ tasks:
           echo "Valkey:        ❌ Stopped"
         fi
 
+        # Check Loki
+        LOKI_STATUS=$(docker ps --filter "name={{.LOKI_CONTAINER}}" --format "{{`{{.Status}}`}}" 2>/dev/null)
+        if [ -n "$LOKI_STATUS" ]; then
+          echo "Loki:          ✅ Running ($LOKI_STATUS)"
+        else
+          echo "Loki:          ❌ Stopped"
+        fi
+
+        # Check OTel Collector
+        OTEL_STATUS=$(docker ps --filter "name={{.OTEL_COLLECTOR_CONTAINER}}" --format "{{`{{.Status}}`}}" 2>/dev/null)
+        if [ -n "$OTEL_STATUS" ]; then
+          echo "OTel Collector: ✅ Running ($OTEL_STATUS)"
+        else
+          echo "OTel Collector: ❌ Stopped"
+        fi
+
         # Check control-plane
         if [ -f /tmp/strato-control-plane.pid ]; then
           PID=$(cat /tmp/strato-control-plane.pid)
@@ -1304,6 +1398,8 @@ tasks:
 
         # Stop Docker containers
         echo "Stopping Docker containers..."
+        docker stop {{.OTEL_COLLECTOR_CONTAINER}} 2>/dev/null || true
+        docker stop {{.LOKI_CONTAINER}} 2>/dev/null || true
         docker stop {{.VALKEY_CONTAINER}} 2>/dev/null || true
         docker stop {{.SPICEDB_CONTAINER}} 2>/dev/null || true
         docker stop {{.POSTGRES_CONTAINER}} 2>/dev/null || true
@@ -1321,6 +1417,8 @@ tasks:
     cmds:
       - echo "🧹 Cleaning up all resources..."
       - echo "Removing Docker containers..."
+      - docker rm -f {{.OTEL_COLLECTOR_CONTAINER}} 2>/dev/null || true
+      - docker rm -f {{.LOKI_CONTAINER}} 2>/dev/null || true
       - docker rm -f {{.VALKEY_CONTAINER}} 2>/dev/null || true
       - docker rm -f {{.SPICEDB_CONTAINER}} 2>/dev/null || true
       - docker rm -f {{.POSTGRES_CONTAINER}} 2>/dev/null || true
