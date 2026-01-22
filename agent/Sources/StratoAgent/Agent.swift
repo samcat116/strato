@@ -38,6 +38,7 @@ actor Agent {
     #endif
     private var networkService: (any NetworkServiceProtocol)?
     private var imageCacheService: ImageCacheService?
+    private var volumeService: VolumeService?
     private var consoleSocketManager: ConsoleSocketManager?
     private var heartbeatTask: Task<Void, Error>?
     private var isRunning = false
@@ -143,6 +144,12 @@ actor Agent {
             controlPlaneURL: webSocketURL.replacingOccurrences(of: "ws://", with: "http://")
                 .replacingOccurrences(of: "wss://", with: "https://")
                 .replacingOccurrences(of: "/agent/ws", with: "")
+        )
+
+        logger.info("Initializing volume service")
+        volumeService = VolumeService(
+            logger: logger,
+            imageCacheService: imageCacheService
         )
 
         logger.info("Initializing QEMU service")
@@ -544,6 +551,31 @@ extension Agent {
             case .consoleData:
                 let message = try envelope.decode(as: ConsoleDataMessage.self)
                 await handleConsoleData(message)
+            // Volume operations
+            case .volumeCreate:
+                let message = try envelope.decode(as: VolumeCreateMessage.self)
+                await handleVolumeCreate(message)
+            case .volumeDelete:
+                let message = try envelope.decode(as: VolumeDeleteMessage.self)
+                await handleVolumeDelete(message)
+            case .volumeAttach:
+                let message = try envelope.decode(as: VolumeAttachMessage.self)
+                await handleVolumeAttach(message)
+            case .volumeDetach:
+                let message = try envelope.decode(as: VolumeDetachMessage.self)
+                await handleVolumeDetach(message)
+            case .volumeResize:
+                let message = try envelope.decode(as: VolumeResizeMessage.self)
+                await handleVolumeResize(message)
+            case .volumeSnapshot:
+                let message = try envelope.decode(as: VolumeSnapshotMessage.self)
+                await handleVolumeSnapshot(message)
+            case .volumeClone:
+                let message = try envelope.decode(as: VolumeCloneMessage.self)
+                await handleVolumeClone(message)
+            case .volumeInfo:
+                let message = try envelope.decode(as: VolumeInfoMessage.self)
+                await handleVolumeInfo(message)
             default:
                 logger.warning("Received unknown message type: \(envelope.type)")
             }
@@ -1098,6 +1130,306 @@ extension Agent {
             try await websocketClient?.sendMessage(message)
         } catch {
             logger.error("Failed to send console data: \(error)")
+        }
+    }
+
+    // MARK: - Volume Message Handlers
+
+    private func handleVolumeCreate(_ message: VolumeCreateMessage) async {
+        logger.info("Creating volume", metadata: [
+            "volumeId": .string(message.volumeId),
+            "size": .stringConvertible(message.size),
+            "format": .string(message.format)
+        ])
+
+        guard let volumeService = volumeService else {
+            await sendError(for: message.requestId, error: "Volume service not available")
+            return
+        }
+
+        do {
+            let volumePath: String
+            if let imageInfo = message.sourceImageInfo {
+                // Create volume from image
+                volumePath = try await volumeService.createVolumeFromImage(volumeId: message.volumeId, imageInfo: imageInfo)
+            } else {
+                // Create empty volume
+                volumePath = try await volumeService.createVolume(volumeId: message.volumeId, size: message.size, format: message.format)
+            }
+
+            let response = VolumeStatusResponse(
+                volumeId: message.volumeId,
+                status: "available",
+                storagePath: volumePath
+            )
+            let data = try AnyCodableValue(response)
+            await sendSuccess(for: message.requestId, message: "Volume created successfully", data: data)
+            logger.info("Volume created successfully", metadata: [
+                "volumeId": .string(message.volumeId),
+                "path": .string(volumePath)
+            ])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to create volume: \(error.localizedDescription)")
+            logger.error("Failed to create volume", metadata: [
+                "volumeId": .string(message.volumeId),
+                "error": .string(error.localizedDescription)
+            ])
+        }
+    }
+
+    private func handleVolumeDelete(_ message: VolumeDeleteMessage) async {
+        logger.info("Deleting volume", metadata: [
+            "volumeId": .string(message.volumeId)
+        ])
+
+        guard let volumeService = volumeService else {
+            await sendError(for: message.requestId, error: "Volume service not available")
+            return
+        }
+
+        do {
+            try await volumeService.deleteVolume(volumeId: message.volumeId)
+            await sendSuccess(for: message.requestId, message: "Volume deleted successfully")
+            logger.info("Volume deleted successfully", metadata: ["volumeId": .string(message.volumeId)])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to delete volume: \(error.localizedDescription)")
+            logger.error("Failed to delete volume", metadata: [
+                "volumeId": .string(message.volumeId),
+                "error": .string(error.localizedDescription)
+            ])
+        }
+    }
+
+    private func handleVolumeAttach(_ message: VolumeAttachMessage) async {
+        logger.info("Attaching volume to VM (hot-plug)", metadata: [
+            "volumeId": .string(message.volumeId),
+            "vmId": .string(message.vmId),
+            "deviceName": .string(message.deviceName),
+            "volumePath": .string(message.volumePath)
+        ])
+
+        guard let qemuService = qemuService else {
+            await sendError(for: message.requestId, error: "QEMU service not available")
+            return
+        }
+
+        do {
+            try await qemuService.attachDisk(
+                vmId: message.vmId,
+                volumeId: message.volumeId,
+                volumePath: message.volumePath,
+                deviceName: message.deviceName,
+                readonly: message.readonly
+            )
+
+            let response = VolumeStatusResponse(
+                volumeId: message.volumeId,
+                status: "attached",
+                storagePath: message.volumePath
+            )
+            let data = try AnyCodableValue(response)
+            await sendSuccess(for: message.requestId, message: "Volume attached successfully", data: data)
+            logger.info("Volume attached successfully (hot-plug)", metadata: [
+                "volumeId": .string(message.volumeId),
+                "vmId": .string(message.vmId),
+                "deviceName": .string(message.deviceName)
+            ])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to attach volume: \(error.localizedDescription)")
+            logger.error("Failed to attach volume (hot-plug)", metadata: [
+                "volumeId": .string(message.volumeId),
+                "vmId": .string(message.vmId),
+                "error": .string(error.localizedDescription)
+            ])
+        }
+    }
+
+    private func handleVolumeDetach(_ message: VolumeDetachMessage) async {
+        logger.info("Detaching volume from VM (hot-unplug)", metadata: [
+            "volumeId": .string(message.volumeId),
+            "vmId": .string(message.vmId),
+            "deviceName": .string(message.deviceName)
+        ])
+
+        guard let qemuService = qemuService else {
+            await sendError(for: message.requestId, error: "QEMU service not available")
+            return
+        }
+
+        do {
+            try await qemuService.detachDisk(
+                vmId: message.vmId,
+                volumeId: message.volumeId,
+                deviceName: message.deviceName
+            )
+
+            let response = VolumeStatusResponse(
+                volumeId: message.volumeId,
+                status: "available",
+                storagePath: nil
+            )
+            let data = try AnyCodableValue(response)
+            await sendSuccess(for: message.requestId, message: "Volume detached successfully", data: data)
+            logger.info("Volume detached successfully (hot-unplug)", metadata: [
+                "volumeId": .string(message.volumeId),
+                "vmId": .string(message.vmId)
+            ])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to detach volume: \(error.localizedDescription)")
+            logger.error("Failed to detach volume (hot-unplug)", metadata: [
+                "volumeId": .string(message.volumeId),
+                "vmId": .string(message.vmId),
+                "error": .string(error.localizedDescription)
+            ])
+        }
+    }
+
+    private func handleVolumeResize(_ message: VolumeResizeMessage) async {
+        logger.info("Resizing volume", metadata: [
+            "volumeId": .string(message.volumeId),
+            "newSize": .stringConvertible(message.newSize)
+        ])
+
+        guard let volumeService = volumeService else {
+            await sendError(for: message.requestId, error: "Volume service not available")
+            return
+        }
+
+        do {
+            try await volumeService.resizeVolume(volumePath: message.volumePath, newSize: message.newSize)
+
+            let response = VolumeStatusResponse(
+                volumeId: message.volumeId,
+                status: "available",
+                storagePath: message.volumePath
+            )
+            let data = try AnyCodableValue(response)
+            await sendSuccess(for: message.requestId, message: "Volume resized successfully", data: data)
+            logger.info("Volume resized successfully", metadata: [
+                "volumeId": .string(message.volumeId),
+                "newSize": .stringConvertible(message.newSize)
+            ])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to resize volume: \(error.localizedDescription)")
+            logger.error("Failed to resize volume", metadata: [
+                "volumeId": .string(message.volumeId),
+                "error": .string(error.localizedDescription)
+            ])
+        }
+    }
+
+    private func handleVolumeSnapshot(_ message: VolumeSnapshotMessage) async {
+        logger.info("Creating volume snapshot", metadata: [
+            "volumeId": .string(message.volumeId),
+            "snapshotId": .string(message.snapshotId)
+        ])
+
+        guard let volumeService = volumeService else {
+            await sendError(for: message.requestId, error: "Volume service not available")
+            return
+        }
+
+        do {
+            let snapshotPath = try await volumeService.createSnapshot(
+                volumeId: message.volumeId,
+                snapshotId: message.snapshotId,
+                volumePath: message.volumePath
+            )
+
+            let response = VolumeStatusResponse(
+                volumeId: message.volumeId,
+                status: "available",
+                storagePath: snapshotPath
+            )
+            let data = try AnyCodableValue(response)
+            await sendSuccess(for: message.requestId, message: "Snapshot created successfully", data: data)
+            logger.info("Volume snapshot created successfully", metadata: [
+                "volumeId": .string(message.volumeId),
+                "snapshotId": .string(message.snapshotId),
+                "path": .string(snapshotPath)
+            ])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to create snapshot: \(error.localizedDescription)")
+            logger.error("Failed to create snapshot", metadata: [
+                "volumeId": .string(message.volumeId),
+                "snapshotId": .string(message.snapshotId),
+                "error": .string(error.localizedDescription)
+            ])
+        }
+    }
+
+    private func handleVolumeClone(_ message: VolumeCloneMessage) async {
+        logger.info("Cloning volume", metadata: [
+            "sourceVolumeId": .string(message.sourceVolumeId),
+            "targetVolumeId": .string(message.targetVolumeId)
+        ])
+
+        guard let volumeService = volumeService else {
+            await sendError(for: message.requestId, error: "Volume service not available")
+            return
+        }
+
+        do {
+            let targetPath = try await volumeService.cloneVolume(
+                sourceVolumeId: message.sourceVolumeId,
+                sourcePath: message.sourceVolumePath,
+                targetVolumeId: message.targetVolumeId
+            )
+
+            let response = VolumeStatusResponse(
+                volumeId: message.targetVolumeId,
+                status: "available",
+                storagePath: targetPath
+            )
+            let data = try AnyCodableValue(response)
+            await sendSuccess(for: message.requestId, message: "Volume cloned successfully", data: data)
+            logger.info("Volume cloned successfully", metadata: [
+                "sourceVolumeId": .string(message.sourceVolumeId),
+                "targetVolumeId": .string(message.targetVolumeId),
+                "targetPath": .string(targetPath)
+            ])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to clone volume: \(error.localizedDescription)")
+            logger.error("Failed to clone volume", metadata: [
+                "sourceVolumeId": .string(message.sourceVolumeId),
+                "targetVolumeId": .string(message.targetVolumeId),
+                "error": .string(error.localizedDescription)
+            ])
+        }
+    }
+
+    private func handleVolumeInfo(_ message: VolumeInfoMessage) async {
+        logger.info("Getting volume info", metadata: [
+            "volumeId": .string(message.volumeId)
+        ])
+
+        guard let volumeService = volumeService else {
+            await sendError(for: message.requestId, error: "Volume service not available")
+            return
+        }
+
+        do {
+            let info = try await volumeService.getVolumeInfo(volumePath: message.volumePath)
+
+            let response = VolumeInfoResponse(
+                volumeId: message.volumeId,
+                actualSize: info.actualSize,
+                virtualSize: info.virtualSize,
+                format: info.format,
+                dirty: info.dirty,
+                encrypted: info.encrypted
+            )
+            let data = try AnyCodableValue(response)
+            await sendSuccess(for: message.requestId, message: "Volume info retrieved successfully", data: data)
+            logger.info("Volume info retrieved successfully", metadata: [
+                "volumeId": .string(message.volumeId)
+            ])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to get volume info: \(error.localizedDescription)")
+            logger.error("Failed to get volume info", metadata: [
+                "volumeId": .string(message.volumeId),
+                "error": .string(error.localizedDescription)
+            ])
         }
     }
 }

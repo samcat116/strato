@@ -111,6 +111,10 @@ public func configure(_ app: Application) async throws {
     // App settings migration (for signing keys, etc.)
     app.migrations.add(CreateAppSetting())
 
+    // Volume management migrations
+    app.migrations.add(CreateVolume())
+    app.migrations.add(MigrateVMDisksToVolumes())
+
     try await app.autoMigrate()
 
     // Initialize the image download signing key (generates if not exists)
@@ -176,21 +180,30 @@ public func configure(_ app: Application) async throws {
 
         // Always ensure SpiceDB relationships exist (idempotent)
         // This handles cases where DB state exists but SpiceDB was reset
-        try await app.spicedb.writeRelationship(
-            entity: "organization",
-            entityId: defaultOrg.id!.uuidString,
-            relation: "admin",
-            subject: "user",
-            subjectId: devUser.id!.uuidString
-        )
+        // Catch 409 conflicts since they just mean the relationship already exists
+        do {
+            try await app.spicedb.writeRelationship(
+                entity: "organization",
+                entityId: defaultOrg.id!.uuidString,
+                relation: "admin",
+                subject: "user",
+                subjectId: devUser.id!.uuidString
+            )
+        } catch SpiceDBError.relationshipWriteFailed(let status) where status == .conflict {
+            // Relationship already exists, which is fine
+        }
 
-        try await app.spicedb.writeRelationship(
-            entity: "project",
-            entityId: defaultProject.id!.uuidString,
-            relation: "organization",
-            subject: "organization",
-            subjectId: defaultOrg.id!.uuidString
-        )
+        do {
+            try await app.spicedb.writeRelationship(
+                entity: "project",
+                entityId: defaultProject.id!.uuidString,
+                relation: "organization",
+                subject: "organization",
+                subjectId: defaultOrg.id!.uuidString
+            )
+        } catch SpiceDBError.relationshipWriteFailed(let status) where status == .conflict {
+            // Relationship already exists, which is fine
+        }
 
         // Link dev user to organization if not already linked
         let existingMembership = try await UserOrganization.query(on: app.db)

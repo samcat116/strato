@@ -45,9 +45,13 @@ struct ProjectController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
+        req.logger.info("ProjectController.index - User: \(user.username), ID: \(user.id?.uuidString ?? "nil")")
+
         // Get all organizations the user belongs to
         try await user.$organizations.load(on: req.db)
         let organizationIDs = user.organizations.compactMap { $0.id }
+
+        req.logger.info("ProjectController.index - Found \(organizationIDs.count) organizations: \(organizationIDs.map { $0.uuidString })")
 
         if organizationIDs.isEmpty {
             return []

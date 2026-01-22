@@ -561,7 +561,87 @@ actor QEMUService: HypervisorService {
 
         try await deleteVM(vmId: vmId)
     }
-    
+
+    // MARK: - Disk Hot-Plug Operations (Volume Support)
+
+    /// Attaches a disk to a running VM using QMP hot-plug
+    /// This uses QEMU's blockdev-add and device_add commands via SwiftQEMU
+    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool = false) async throws {
+        #if canImport(SwiftQEMU)
+        guard let manager = activeVMs[vmId] else {
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
+        }
+
+        logger.info("Attaching disk to VM via QMP hot-plug", metadata: [
+            "vmId": .string(vmId),
+            "volumeId": .string(volumeId),
+            "deviceName": .string(deviceName),
+            "volumePath": .string(volumePath),
+            "readonly": .stringConvertible(readonly)
+        ])
+
+        do {
+            try await manager.attachDisk(path: volumePath, deviceName: deviceName, readOnly: readonly)
+            logger.info("Disk attached successfully", metadata: [
+                "vmId": .string(vmId),
+                "volumeId": .string(volumeId),
+                "deviceName": .string(deviceName)
+            ])
+        } catch {
+            logger.error("Failed to attach disk via QMP hot-plug", metadata: [
+                "vmId": .string(vmId),
+                "volumeId": .string(volumeId),
+                "error": .string(String(describing: error))
+            ])
+            throw QEMUServiceError.hotPlugFailed("Failed to attach disk: \(error)")
+        }
+        #else
+        logger.info("Mock: Attaching disk to VM (mock mode)", metadata: [
+            "vmId": .string(vmId),
+            "volumeId": .string(volumeId),
+            "deviceName": .string(deviceName)
+        ])
+        #endif
+    }
+
+    /// Detaches a disk from a running VM using QMP hot-unplug
+    /// This uses QEMU's device_del and blockdev-del commands via SwiftQEMU
+    func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws {
+        #if canImport(SwiftQEMU)
+        guard let manager = activeVMs[vmId] else {
+            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
+        }
+
+        logger.info("Detaching disk from VM via QMP hot-unplug", metadata: [
+            "vmId": .string(vmId),
+            "volumeId": .string(volumeId),
+            "deviceName": .string(deviceName)
+        ])
+
+        do {
+            try await manager.detachDisk(deviceName: deviceName)
+            logger.info("Disk detached successfully", metadata: [
+                "vmId": .string(vmId),
+                "volumeId": .string(volumeId),
+                "deviceName": .string(deviceName)
+            ])
+        } catch {
+            logger.error("Failed to detach disk via QMP hot-unplug", metadata: [
+                "vmId": .string(vmId),
+                "volumeId": .string(volumeId),
+                "error": .string(String(describing: error))
+            ])
+            throw QEMUServiceError.hotPlugFailed("Failed to detach disk: \(error)")
+        }
+        #else
+        logger.info("Mock: Detaching disk from VM (mock mode)", metadata: [
+            "vmId": .string(vmId),
+            "volumeId": .string(volumeId),
+            "deviceName": .string(deviceName)
+        ])
+        #endif
+    }
+
     // MARK: - Private Configuration Methods
 
     #if canImport(SwiftQEMU)
@@ -976,6 +1056,7 @@ enum QEMUServiceError: Error, LocalizedError, Sendable {
     case qemuNotInstalled
     case configurationError(String)
     case diskCreationFailed(String)
+    case hotPlugFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -991,6 +1072,8 @@ enum QEMUServiceError: Error, LocalizedError, Sendable {
             return "QEMU configuration error: \(message)"
         case .diskCreationFailed(let message):
             return "Disk creation failed: \(message)"
+        case .hotPlugFailed(let message):
+            return "Hot-plug operation failed: \(message)"
         }
     }
 }

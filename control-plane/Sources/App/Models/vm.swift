@@ -39,6 +39,10 @@ final class VM: Model, @unchecked Sendable {
     @OptionalParent(key: "image_id")
     var sourceImage: Image?
 
+    // Volumes attached to this VM (QEMU only - requires eager loading with .with(\.$volumes))
+    @Children(for: \.$vm)
+    var volumes: [Volume]
+
     // CPU configuration
     @Field(key: "cpu")
     var cpu: Int // boot_vcpus

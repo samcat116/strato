@@ -37,6 +37,9 @@ func routes(_ app: Application) throws {
     // Image management controller
     try app.register(collection: ImageController())
 
+    // Volume management controller
+    try app.register(collection: VolumeController())
+
     // Console WebSocket controller for VM console streaming
     try app.register(collection: ConsoleWebSocketController())
 
