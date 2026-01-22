@@ -4,16 +4,16 @@ import StratoShared
 
 struct LogsController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        let logs = routes.grouped("api", "vms", ":vmId", "logs")
+        let logs = routes.grouped("api", "vms", ":vmID", "logs")
 
         logs.get(use: getVMLogs)
     }
 
-    /// GET /api/vms/:vmId/logs
+    /// GET /api/vms/:vmID/logs
     /// Query logs for a specific VM from Loki
     @Sendable
     func getVMLogs(req: Request) async throws -> [LogEntry] {
-        guard let vmIdString = req.parameters.get("vmId"),
+        guard let vmIdString = req.parameters.get("vmID"),
               let vmId = UUID(uuidString: vmIdString) else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
