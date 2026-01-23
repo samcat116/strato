@@ -4,6 +4,12 @@ import FoundationNetworking
 #endif
 import Logging
 
+#if os(Linux)
+import Glibc
+#else
+import Darwin
+#endif
+
 /// HTTP client that communicates over a Unix domain socket
 /// Used to interact with the Firecracker API
 public actor UnixSocketHTTPClient {
@@ -26,8 +32,12 @@ public actor UnixSocketHTTPClient {
         }
 
         // Create socket
-        let socket = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard socket >= 0 else {
+        #if os(Linux)
+        let sock = Glibc.socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
+        #else
+        let sock = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        #endif
+        guard sock >= 0 else {
             throw FirecrackerError.connectionFailed("Failed to create socket: \(errno)")
         }
 
@@ -42,16 +52,20 @@ public actor UnixSocketHTTPClient {
 
         let connectResult = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
-                Darwin.connect(socket, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+                #if os(Linux)
+                Glibc.connect(sock, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+                #else
+                Darwin.connect(sock, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+                #endif
             }
         }
 
         guard connectResult == 0 else {
-            close(socket)
+            close(sock)
             throw FirecrackerError.connectionFailed("Failed to connect: \(errno)")
         }
 
-        self.fileHandle = FileHandle(fileDescriptor: socket, closeOnDealloc: true)
+        self.fileHandle = FileHandle(fileDescriptor: sock, closeOnDealloc: true)
         logger.info("Connected to Firecracker socket", metadata: ["path": "\(socketPath)"])
     }
 

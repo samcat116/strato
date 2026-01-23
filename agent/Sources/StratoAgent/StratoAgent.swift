@@ -35,6 +35,12 @@ struct StratoAgent: AsyncParsableCommand {
     @Option(name: .long, help: "QEMU binary path (overrides config file)")
     var qemuBinaryPath: String?
 
+    @Option(name: .long, help: "Firecracker binary path (overrides config file, Linux only)")
+    var firecrackerBinaryPath: String?
+
+    @Option(name: .long, help: "Firecracker socket directory (overrides config file, Linux only)")
+    var firecrackerSocketDir: String?
+
     @Flag(name: .long, help: "Enable debug mode")
     var debug: Bool = false
     
@@ -105,6 +111,13 @@ struct StratoAgent: AsyncParsableCommand {
         let finalFirmwarePath = config.firmwarePathX86_64
         #endif
 
+        // Resolve Firecracker configuration (Linux only)
+        let finalFirecrackerBinaryPath = firecrackerBinaryPath ?? config.firecrackerBinaryPath ?? AgentConfig.defaultFirecrackerBinaryPath
+        let finalFirecrackerSocketDir = firecrackerSocketDir ?? config.firecrackerSocketDir ?? AgentConfig.defaultFirecrackerSocketDir
+
+        // Resolve hypervisor type
+        let finalHypervisorType = config.hypervisorType ?? AgentConfig.defaultHypervisorType
+
         // Update log level based on final configuration
         logger.logLevel = debug ? .debug : Logger.Level(rawValue: finalLogLevel) ?? .info
 
@@ -115,6 +128,9 @@ struct StratoAgent: AsyncParsableCommand {
             "vmStoragePath": .string(finalVMStoragePath),
             "qemuBinaryPath": .string(finalQemuBinaryPath),
             "firmwarePath": .string(finalFirmwarePath ?? "(platform default)"),
+            "firecrackerBinaryPath": .string(finalFirecrackerBinaryPath),
+            "firecrackerSocketDir": .string(finalFirecrackerSocketDir),
+            "hypervisorType": .string(finalHypervisorType.rawValue),
             "logLevel": .string(finalLogLevel),
             "registrationMode": .string(isRegistrationMode ? "yes" : "no")
         ])
@@ -137,6 +153,9 @@ struct StratoAgent: AsyncParsableCommand {
             vmStoragePath: finalVMStoragePath,
             qemuBinaryPath: finalQemuBinaryPath,
             firmwarePath: finalFirmwarePath,
+            firecrackerBinaryPath: finalFirecrackerBinaryPath,
+            firecrackerSocketDir: finalFirecrackerSocketDir,
+            hypervisorType: finalHypervisorType,
             spiffeConfig: config.spiffe
         )
         
