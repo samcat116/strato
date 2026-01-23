@@ -52,13 +52,10 @@ exporters:
 
   # Loki exporter for logs
   loki:
-    endpoint: http://loki:3100/loki/api/v1/push
-    labels:
-      attributes:
-        service.name: "service_name"
-        vm.id: "vm_id"
-        operation: "operation"
-        source: "source"
+    endpoint: ${env:LOKI_ENDPOINT}/loki/api/v1/push
+    default_labels_enabled:
+      exporter: false
+      job: true
 
 service:
   pipelines:

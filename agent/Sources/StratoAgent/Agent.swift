@@ -55,6 +55,7 @@ actor Agent {
     private let firmwarePath: String?
     private let firecrackerBinaryPath: String
     private let firecrackerSocketDir: String
+    private let hypervisorType: HypervisorType
 
     // SPIFFE/SPIRE support
     private let spiffeConfig: SPIFFEConfig?
@@ -73,6 +74,7 @@ actor Agent {
         firmwarePath: String? = nil,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
         firecrackerSocketDir: String = "/tmp/firecracker",
+        hypervisorType: HypervisorType = .qemu,
         spiffeConfig: SPIFFEConfig? = nil
     ) {
         self.initialAgentID = agentID
@@ -87,6 +89,7 @@ actor Agent {
         self.firmwarePath = firmwarePath
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.firecrackerSocketDir = firecrackerSocketDir
+        self.hypervisorType = hypervisorType
         self.spiffeConfig = spiffeConfig
     }
 
@@ -344,7 +347,8 @@ actor Agent {
             hostname: ProcessInfo.processInfo.hostName,
             version: "1.0.0",
             capabilities: capabilities,
-            resources: resources
+            resources: resources,
+            hypervisorType: hypervisorType
         )
 
         if let client = websocketClient {

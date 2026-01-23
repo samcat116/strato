@@ -52,6 +52,22 @@ log_level = "info"
 #   Linux (Fedora/RHEL): /usr/share/edk2/ovmf/OVMF_CODE.fd
 # firmware_path_x86_64 = "/usr/share/OVMF/OVMF_CODE.fd"
 
+# Firecracker Configuration (Linux only)
+# Firecracker is a lightweight VMM for creating microVMs.
+# Unlike QEMU, Firecracker requires direct kernel boot (not disk boot).
+# These settings are only used on Linux; on macOS, Firecracker is not available.
+#
+# Path to Firecracker binary
+# Optional - defaults are checked in this order:
+#   1. /usr/local/bin/firecracker
+#   2. /usr/bin/firecracker
+#   3. ~/.local/bin/firecracker
+# firecracker_binary_path = "/usr/local/bin/firecracker"
+#
+# Directory where Firecracker creates VM sockets
+# Optional - defaults to /tmp/firecracker
+# firecracker_socket_dir = "/tmp/firecracker"
+
 # Additional configuration options can be added here as needed
 # Examples:
 # heartbeat_interval = 30

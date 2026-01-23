@@ -107,6 +107,7 @@ public func configure(_ app: Application) async throws {
 
     // Hypervisor type migration
     app.migrations.add(AddHypervisorTypeToVM())
+    app.migrations.add(AddHypervisorTypeToAgent())
 
     // App settings migration (for signing keys, etc.)
     app.migrations.add(CreateAppSetting())

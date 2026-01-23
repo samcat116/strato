@@ -81,7 +81,8 @@ public struct AgentRegisterMessage: WebSocketMessage {
     public let version: String
     public let capabilities: [String]
     public let resources: AgentResources
-    
+    public let hypervisorType: HypervisorType
+
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
@@ -89,7 +90,8 @@ public struct AgentRegisterMessage: WebSocketMessage {
         hostname: String,
         version: String,
         capabilities: [String],
-        resources: AgentResources
+        resources: AgentResources,
+        hypervisorType: HypervisorType = .qemu
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -98,6 +100,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.version = version
         self.capabilities = capabilities
         self.resources = resources
+        self.hypervisorType = hypervisorType
     }
 }
 

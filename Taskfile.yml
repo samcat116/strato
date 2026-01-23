@@ -1169,6 +1169,113 @@ tasks:
         echo "   • Open web UI: http://localhost:8080"
 
   # ============================================================================
+  # Firecracker Tasks (Linux only)
+  # ============================================================================
+  install-firecracker:
+    desc: Download and install Firecracker binary (Linux only)
+    cmds:
+      - echo "📥 Installing Firecracker..."
+      - |
+        ARCH=$(uname -m)
+        RELEASE_URL="https://github.com/firecracker-microvm/firecracker/releases"
+        LATEST=$(curl -fsSL https://api.github.com/repos/firecracker-microvm/firecracker/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+        echo "Downloading Firecracker ${LATEST} for ${ARCH}..."
+        curl -fsSL ${RELEASE_URL}/download/${LATEST}/firecracker-${LATEST}-${ARCH}.tgz | tar -xz -C /tmp
+        mkdir -p ~/.local/bin
+        cp /tmp/release-${LATEST}-${ARCH}/firecracker-${LATEST}-${ARCH} ~/.local/bin/firecracker
+        chmod +x ~/.local/bin/firecracker
+        rm -rf /tmp/release-${LATEST}-${ARCH}
+      - echo "✅ Firecracker installed at ~/.local/bin/firecracker"
+      - ~/.local/bin/firecracker --version
+
+  download-firecracker-images:
+    desc: Download Firecracker sample kernel and rootfs images
+    cmds:
+      - echo "📥 Downloading Firecracker test images..."
+      - mkdir -p /tmp/firecracker-images
+      - |
+        ARCH=$(uname -m)
+        echo "Downloading kernel..."
+        curl -fsSL -o /tmp/firecracker-images/vmlinux.bin \
+          "https://s3.amazonaws.com/spec.ccfc.min/img/hello/kernel/hello-vmlinux.bin"
+        echo "Downloading rootfs..."
+        curl -fsSL -o /tmp/firecracker-images/rootfs.ext4 \
+          "https://s3.amazonaws.com/spec.ccfc.min/img/hello/fsfiles/hello-rootfs.ext4"
+      - echo "✅ Images downloaded to /tmp/firecracker-images/"
+      - ls -lh /tmp/firecracker-images/
+
+  create-agent-config-linux:
+    desc: Create agent configuration for Linux with OVN networking and Firecracker
+    cmds:
+      - echo "📝 Creating Linux agent configuration..."
+      - |
+        cat > "{{.PROJECT_ROOT}}/config.toml" << 'EOF'
+        # Strato Agent Configuration for Linux
+        control_plane_url = "ws://localhost:8080/agent/ws"
+        qemu_socket_dir = "/tmp/strato-qemu-sockets"
+        log_level = "debug"
+        network_mode = "user"
+
+        # Firecracker Configuration (Linux only)
+        firecracker_binary_path = "~/.local/bin/firecracker"
+        firecracker_socket_dir = "/tmp/firecracker"
+        EOF
+      - echo "✅ Linux agent config created at {{.PROJECT_ROOT}}/config.toml"
+
+  check-firecracker-vm:
+    desc: Check if Firecracker VMs are running
+    cmds:
+      - echo "🔍 Checking for running Firecracker VMs..."
+      - |
+        OUTPUT=$(pgrep -a firecracker 2>/dev/null || true)
+        if [ -n "$OUTPUT" ]; then
+          echo "✅ Found running Firecracker processes:"
+          echo "$OUTPUT"
+        else
+          echo "ℹ️  No Firecracker processes found."
+        fi
+
+  dev-linux:
+    desc: Start development environment optimized for Linux (KVM + Firecracker ready)
+    cmds:
+      - task: start-postgres
+      - task: start-spicedb
+      - task: start-valkey
+      - task: start-loki
+      - task: start-otel-collector
+      - task: load-spicedb-schema
+      - task: start-control-plane
+      - task: create-agent-config-linux
+      - task: create-agent-token
+      - task: start-agent
+      - task: create-test-vm
+      - |
+        echo ""
+        echo "🎉 Linux Development environment is running!"
+        echo ""
+        echo "📊 Service URLs:"
+        echo "   • Control Plane API:  http://localhost:8080"
+        echo "   • SpiceDB:            localhost:8081 (gRPC)"
+        echo "   • PostgreSQL:         localhost:5432"
+        echo "   • Valkey:             localhost:6379"
+        echo "   • Loki:               localhost:3100"
+        echo "   • OTel Collector:     localhost:4317 (gRPC), localhost:4318 (HTTP)"
+        echo ""
+        echo "🖥️  VMM Support:"
+        echo "   • QEMU/KVM:           ✅ Enabled"
+        echo "   • Firecracker:        ✅ Ready (if installed)"
+        echo ""
+        echo "📋 Logs:"
+        echo "   • Control Plane:      tail -f /tmp/strato-control-plane.log"
+        echo "   • Agent:              tail -f /tmp/strato-agent.log"
+        echo ""
+        echo "⚙️  Firecracker Setup:"
+        echo "   If Firecracker is not installed, run: task install-firecracker"
+        echo "   Download test images: task download-firecracker-images"
+        echo ""
+        echo "⚠️  To stop all services, run: task stop"
+
+  # ============================================================================
   # Utility Tasks
   # ============================================================================
   check-vm:

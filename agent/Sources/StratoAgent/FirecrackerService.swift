@@ -51,7 +51,7 @@ actor FirecrackerService: HypervisorService {
         logger.info("Creating Firecracker VM", metadata: ["vmId": .string(vmId)])
 
         // Validate Firecracker requirements
-        guard let payload = config.payload, payload.kernel != nil else {
+        guard config.payload.kernel != nil else {
             throw HypervisorServiceError.invalidConfiguration("Firecracker requires direct kernel boot - kernel path must be specified")
         }
 
@@ -130,7 +130,8 @@ actor FirecrackerService: HypervisorService {
 
         // Configure machine
         let vcpuCount = effectiveConfig.cpus?.bootVcpus ?? 1
-        let memoryMB = Int((effectiveConfig.memory?.size ?? (512 * 1024 * 1024)) / (1024 * 1024))
+        let memorySizeBytes: Int64 = effectiveConfig.memory?.size ?? (512 * 1024 * 1024)
+        let memoryMB = Int(memorySizeBytes / (1024 * 1024))
 
         let machineConfig = MachineConfig(
             vcpuCount: Int(vcpuCount),
@@ -139,14 +140,14 @@ actor FirecrackerService: HypervisorService {
         try await manager.configureMachine(machineConfig)
 
         // Configure boot source
-        guard let kernelPath = effectiveConfig.payload?.kernel else {
+        guard let kernelPath = effectiveConfig.payload.kernel else {
             throw HypervisorServiceError.invalidConfiguration("Kernel path is required for Firecracker")
         }
 
         let bootSource = BootSource(
             kernelImagePath: kernelPath,
-            initrdPath: effectiveConfig.payload?.initramfs,
-            bootArgs: effectiveConfig.payload?.cmdline ?? "console=ttyS0 reboot=k panic=1 pci=off"
+            initrdPath: effectiveConfig.payload.initramfs,
+            bootArgs: effectiveConfig.payload.cmdline ?? "console=ttyS0 reboot=k panic=1 pci=off"
         )
         try await manager.configureBootSource(bootSource)
 

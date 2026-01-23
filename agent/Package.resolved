@@ -155,6 +155,15 @@
       }
     },
     {
+      "identity" : "swift-ovn",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/samcat116/swift-ovn.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "fe6364754f8d0e4a5ce8f01f42cf138f7899a9d9"
+      }
+    },
+    {
       "identity" : "swift-qemu",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/samcat116/swift-qemu",

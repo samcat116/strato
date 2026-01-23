@@ -1,6 +1,7 @@
 import Foundation
 import Toml
 import Logging
+import StratoShared
 
 public enum NetworkMode: String, Codable {
     case ovn
@@ -80,6 +81,9 @@ public struct AgentConfig: Codable {
     public let firmwarePathARM64: String?
     public let firmwarePathX86_64: String?
     public let spiffe: SPIFFEConfig?
+    public let firecrackerBinaryPath: String?
+    public let firecrackerSocketDir: String?
+    public let hypervisorType: HypervisorType?
 
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
@@ -93,6 +97,9 @@ public struct AgentConfig: Codable {
         case firmwarePathARM64 = "firmware_path_arm64"
         case firmwarePathX86_64 = "firmware_path_x86_64"
         case spiffe
+        case firecrackerBinaryPath = "firecracker_binary_path"
+        case firecrackerSocketDir = "firecracker_socket_dir"
+        case hypervisorType = "hypervisor_type"
     }
 
     public init(
@@ -106,7 +113,10 @@ public struct AgentConfig: Codable {
         qemuBinaryPath: String? = nil,
         firmwarePathARM64: String? = nil,
         firmwarePathX86_64: String? = nil,
-        spiffe: SPIFFEConfig? = nil
+        spiffe: SPIFFEConfig? = nil,
+        firecrackerBinaryPath: String? = nil,
+        firecrackerSocketDir: String? = nil,
+        hypervisorType: HypervisorType? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
         self.qemuSocketDir = qemuSocketDir
@@ -119,6 +129,9 @@ public struct AgentConfig: Codable {
         self.firmwarePathARM64 = firmwarePathARM64
         self.firmwarePathX86_64 = firmwarePathX86_64
         self.spiffe = spiffe
+        self.firecrackerBinaryPath = firecrackerBinaryPath
+        self.firecrackerSocketDir = firecrackerSocketDir
+        self.hypervisorType = hypervisorType
     }
 
     public static func load(from path: String, logger: Logger? = nil) throws -> AgentConfig {
@@ -145,6 +158,9 @@ public struct AgentConfig: Codable {
         let qemuBinaryPath = tomlData.string("qemu_binary_path")
         let firmwarePathARM64 = tomlData.string("firmware_path_arm64")
         let firmwarePathX86_64 = tomlData.string("firmware_path_x86_64")
+        let firecrackerBinaryPath = tomlData.string("firecracker_binary_path")
+        let firecrackerSocketDir = tomlData.string("firecracker_socket_dir")
+        let hypervisorTypeString = tomlData.string("hypervisor_type")
 
         // Validate and parse network mode
         let networkMode: NetworkMode?
@@ -155,6 +171,18 @@ public struct AgentConfig: Codable {
             networkMode = mode
         } else {
             networkMode = nil
+        }
+
+        // Validate and parse hypervisor type
+        let hypervisorType: HypervisorType?
+        if let typeString = hypervisorTypeString {
+            guard let hType = HypervisorType(rawValue: typeString) else {
+                throw AgentConfigError.invalidConfiguration("hypervisor_type must be 'qemu' or 'firecracker', got '\(typeString)'")
+            }
+            hypervisorType = hType
+            logger?.info("Agent configured to use hypervisor type: \(typeString)")
+        } else {
+            hypervisorType = nil
         }
 
         // Parse SPIFFE configuration from [spiffe] section
@@ -210,7 +238,10 @@ public struct AgentConfig: Codable {
             qemuBinaryPath: qemuBinaryPath,
             firmwarePathARM64: firmwarePathARM64,
             firmwarePathX86_64: firmwarePathX86_64,
-            spiffe: spiffeConfig
+            spiffe: spiffeConfig,
+            firecrackerBinaryPath: firecrackerBinaryPath,
+            firecrackerSocketDir: firecrackerSocketDir,
+            hypervisorType: hypervisorType
         )
     }
 
@@ -349,6 +380,40 @@ public struct AgentConfig: Codable {
         ]
         return paths.first { FileManager.default.fileExists(atPath: $0) }
         #endif
+    }
+
+    /// Default Firecracker binary path (Linux only)
+    public static var defaultFirecrackerBinaryPath: String {
+        #if os(Linux)
+        // Check common installation paths
+        let paths = [
+            "/usr/local/bin/firecracker",
+            "/usr/bin/firecracker"
+        ]
+        if let path = paths.first(where: { FileManager.default.fileExists(atPath: $0) }) {
+            return path
+        }
+        // Also check user's local bin
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let userPath = "\(home)/.local/bin/firecracker"
+        if FileManager.default.fileExists(atPath: userPath) {
+            return userPath
+        }
+        return "/usr/local/bin/firecracker"
+        #else
+        return "/usr/local/bin/firecracker"  // Not available on macOS
+        #endif
+    }
+
+    /// Default Firecracker socket directory (Linux only)
+    public static var defaultFirecrackerSocketDir: String {
+        return "/tmp/firecracker"
+    }
+
+    /// Default hypervisor type (platform-specific)
+    /// Linux defaults to QEMU, but can be configured to use Firecracker
+    public static var defaultHypervisorType: HypervisorType {
+        return .qemu
     }
 }
 
