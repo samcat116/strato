@@ -49,7 +49,10 @@ final class Agent: Model, Content, @unchecked Sendable {
     
     @Timestamp(key: "updated_at", on: .update)
     var updatedAt: Date?
-    
+
+    @Field(key: "hypervisor_type")
+    var hypervisorType: String
+
     init() { }
     
     init(
@@ -60,6 +63,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         capabilities: [String],
         status: AgentStatus = .offline,
         resources: AgentResources,
+        hypervisorType: HypervisorType = .qemu,
         lastHeartbeat: Date? = nil
     ) {
         self.id = id
@@ -74,6 +78,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.availableCPU = resources.availableCPU
         self.availableMemory = resources.availableMemory
         self.availableDisk = resources.availableDisk
+        self.hypervisorType = hypervisorType.rawValue
         self.lastHeartbeat = lastHeartbeat
     }
     
@@ -115,6 +120,7 @@ extension Agent {
             capabilities: registration.capabilities,
             status: .connecting,
             resources: registration.resources,
+            hypervisorType: registration.hypervisorType,
             lastHeartbeat: Date()
         )
     }
@@ -145,15 +151,16 @@ struct AgentResponse: Content {
     let capabilities: [String]
     let status: AgentStatus
     let resources: AgentResources
+    let hypervisorType: HypervisorType
     let lastHeartbeat: Date?
     let createdAt: Date?
     let isOnline: Bool
-    
+
     init(from agent: Agent) throws {
         guard let id = agent.id else {
             throw Abort(.internalServerError, reason: "Agent missing ID")
         }
-        
+
         self.id = id
         self.name = agent.name
         self.hostname = agent.hostname
@@ -161,6 +168,7 @@ struct AgentResponse: Content {
         self.capabilities = agent.capabilities
         self.status = agent.status
         self.resources = agent.resources
+        self.hypervisorType = HypervisorType(rawValue: agent.hypervisorType) ?? .qemu
         self.lastHeartbeat = agent.lastHeartbeat
         self.createdAt = agent.createdAt
         self.isOnline = agent.isOnline

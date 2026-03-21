@@ -2,6 +2,7 @@ import Foundation
 import WebSocketKit
 import NIOCore
 import NIOPosix
+import NIOSSL
 import Logging
 import StratoShared
 
@@ -23,21 +24,55 @@ final class AtomicBool: @unchecked Sendable {
     }
 }
 
+// Thread-safe WebSocket wrapper to avoid EventLoop affinity issues
+final class LockedWebSocket: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ws: WebSocket?
+
+    init() {
+        self.ws = nil
+    }
+
+    func set(_ newValue: WebSocket?) {
+        lock.lock()
+        defer { lock.unlock() }
+        ws = newValue
+    }
+
+    func get() -> WebSocket? {
+        lock.lock()
+        defer { lock.unlock() }
+        return ws
+    }
+}
+
 actor WebSocketClient {
     private let url: String
     private weak var agent: Agent?
     private let logger: Logger
     private let eventLoopGroup: MultiThreadedEventLoopGroup
 
-    private var ws: WebSocket?
+    // TLS configuration for mTLS (optional, nil for unencrypted connections)
+    private var tlsConfiguration: TLSConfiguration?
+
+    // WebSocket state managed via thread-safe wrapper to avoid EventLoop affinity issues
+    private let wsHolder: LockedWebSocket
     private var isConnected = false
     private var heartbeatTask: Task<Void, Never>?
 
-    init(url: String, agent: Agent, logger: Logger) {
+    init(url: String, agent: Agent, logger: Logger, tlsConfiguration: TLSConfiguration? = nil) {
         self.url = url
         self.agent = agent
         self.logger = logger
+        self.tlsConfiguration = tlsConfiguration
         self.eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        self.wsHolder = LockedWebSocket()
+    }
+
+    /// Update TLS configuration (for SVID rotation)
+    func updateTLSConfiguration(_ tlsConfig: TLSConfiguration?) {
+        self.tlsConfiguration = tlsConfig
+        logger.info("TLS configuration updated")
     }
 
     func connect() async throws {
@@ -54,82 +89,105 @@ actor WebSocketClient {
             throw WebSocketClientError.invalidURL("Invalid scheme: \(scheme)")
         }
 
-        logger.debug("Connecting with WebSocketKit")
+        // Log TLS status
+        if let tlsConfig = tlsConfiguration {
+            logger.info("Connecting with mTLS enabled", metadata: [
+                "scheme": .string(scheme),
+                "certificateVerification": .string(String(describing: tlsConfig.certificateVerification))
+            ])
+        } else {
+            logger.debug("Connecting without TLS (plain WebSocket)")
+        }
 
         // Create connection and wait for it to be established
+        let eventLoop = eventLoopGroup.next()
+
+        // Build WebSocket client configuration with optional TLS
+        var wsConfig = WebSocketKit.WebSocketClient.Configuration()
+        if let tlsConfig = tlsConfiguration {
+            wsConfig.tlsConfiguration = tlsConfig
+        }
+
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let resumed = AtomicBool(false)
+            let wsHolderRef = self.wsHolder
+            let loggerRef = self.logger
+            let agentRef = self.agent
 
             // Create connection - this returns immediately, callback fires when connected
-            _ = WebSocket.connect(
+            WebSocket.connect(
                 to: url,
-                on: eventLoopGroup.next()
+                configuration: wsConfig,
+                on: eventLoop
             ) { ws in
-                // Connection established - handle in actor context
-                Task { [weak self] in
-                    guard let self = self else {
-                        if !resumed.testAndSet(true) {
-                            continuation.resume(throwing: WebSocketClientError.connectionFailed("Client deallocated"))
-                        }
+                // Store WebSocket in thread-safe box (still on EventLoop)
+                wsHolderRef.set(ws)
+
+                // Set up handlers directly on the EventLoop (no Task hop)
+                ws.onText { _, text in
+                    loggerRef.debug("Received WebSocket text message", metadata: ["length": .string("\(text.count)")])
+
+                    // Parse JSON to MessageEnvelope
+                    guard let data = text.data(using: .utf8) else {
+                        loggerRef.error("Failed to convert text message to UTF-8 data")
                         return
                     }
 
-                    // Store reference and set up handlers
-                    await self.setConnection(ws: ws, connected: true)
+                    do {
+                        let envelope = try JSONDecoder().decode(MessageEnvelope.self, from: data)
+                        loggerRef.info("Received message from control plane", metadata: [
+                            "type": .string(envelope.type.rawValue)
+                        ])
 
-                    ws.onText { ws, text in
-                        Task { [weak self] in
-                            self?.logger.debug("Received WebSocket text message", metadata: ["text": .string(text)])
+                        // Handle message in a Task to bridge to async
+                        Task { [weak agent = agentRef] in
+                            await agent?.handleMessage(envelope)
                         }
+                    } catch {
+                        loggerRef.error("Failed to decode text message: \(error)")
+                    }
+                }
+
+                ws.onBinary { _, buffer in
+                    loggerRef.debug("Received WebSocket binary message")
+
+                    // Convert binary buffer to string
+                    guard let text = buffer.getString(at: 0, length: buffer.readableBytes) else {
+                        loggerRef.error("Failed to convert binary buffer to string")
+                        return
                     }
 
-                    ws.onBinary { ws, buffer in
-                        Task { [weak self] in
-                            guard let self = self else { return }
+                    // Parse JSON to MessageEnvelope
+                    guard let data = text.data(using: .utf8) else {
+                        loggerRef.error("Failed to convert string to UTF-8 data")
+                        return
+                    }
 
-                            self.logger.debug("Received WebSocket binary message")
+                    do {
+                        let envelope = try JSONDecoder().decode(MessageEnvelope.self, from: data)
+                        loggerRef.info("Received message from control plane", metadata: [
+                            "type": .string(envelope.type.rawValue)
+                        ])
 
-                            // Convert binary buffer to string
-                            guard let text = buffer.getString(at: 0, length: buffer.readableBytes) else {
-                                self.logger.error("Failed to convert binary buffer to string")
-                                return
-                            }
-
-                            // Parse JSON to MessageEnvelope
-                            guard let data = text.data(using: .utf8) else {
-                                self.logger.error("Failed to convert string to UTF-8 data")
-                                return
-                            }
-
-                            do {
-                                let envelope = try JSONDecoder().decode(MessageEnvelope.self, from: data)
-                                self.logger.info("Received message from control plane", metadata: [
-                                    "type": .string(envelope.type.rawValue)
-                                ])
-
-                                // Handle message asynchronously
-                                await self.agent?.handleMessage(envelope)
-                            } catch {
-                                self.logger.error("Failed to decode message: \(error)")
-                            }
+                        // Handle message in a Task to bridge to async
+                        Task { [weak agent = agentRef] in
+                            await agent?.handleMessage(envelope)
                         }
+                    } catch {
+                        loggerRef.error("Failed to decode message: \(error)")
                     }
+                }
 
-                    ws.onClose.whenComplete { result in
-                        Task { [weak self] in
-                            guard let self = self else { return }
-                            self.logger.info("WebSocket connection closed")
-                            await self.setConnection(ws: nil, connected: false)
-                        }
-                    }
+                ws.onClose.whenComplete { _ in
+                    loggerRef.info("WebSocket connection closed")
+                    wsHolderRef.set(nil)
+                }
 
-                    self.logger.info("WebSocket connection established and ready")
-                    await self.startHeartbeat()
+                loggerRef.info("WebSocket connection established and ready")
 
-                    // Resume to indicate successful connection
-                    if !resumed.testAndSet(true) {
-                        continuation.resume()
-                    }
+                // Resume to indicate successful connection
+                if !resumed.testAndSet(true) {
+                    continuation.resume()
                 }
             }.whenFailure { error in
                 if !resumed.testAndSet(true) {
@@ -137,6 +195,10 @@ actor WebSocketClient {
                 }
             }
         }
+
+        // Mark as connected and start heartbeat after successful connection
+        isConnected = true
+        startHeartbeat()
 
         logger.info("WebSocket connect() returned - connection should stay alive")
     }
@@ -153,17 +215,21 @@ actor WebSocketClient {
         heartbeatTask = nil
 
         // Close WebSocket
-        if let ws = ws {
+        if let ws = wsHolder.get() {
             try? await ws.close().get()
         }
 
-        ws = nil
+        wsHolder.set(nil)
         isConnected = false
         logger.info("Disconnected from WebSocket server")
     }
 
     func sendMessage<T: WebSocketMessage>(_ message: T) async throws {
-        guard isConnected, let ws = ws else {
+        guard isConnected else {
+            throw WebSocketClientError.notConnected
+        }
+
+        guard let ws = wsHolder.get() else {
             throw WebSocketClientError.notConnected
         }
 
@@ -189,11 +255,6 @@ actor WebSocketClient {
     }
 
     // MARK: - Private Methods
-
-    private func setConnection(ws: WebSocket?, connected: Bool) {
-        self.ws = ws
-        self.isConnected = connected
-    }
 
     private func startHeartbeat() {
         heartbeatTask = Task {

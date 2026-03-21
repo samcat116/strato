@@ -1,0 +1,23 @@
+{{- if .Values.spire.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spire-server
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-server
+spec:
+  type: {{ .Values.spire.service.type }}
+  ports:
+    - name: grpc
+      port: {{ .Values.spire.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+    - name: federation
+      port: {{ .Values.spire.service.federationPort }}
+      targetPort: federation
+      protocol: TCP
+  selector:
+    {{- include "strato-control-plane.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-server
+{{- end }}

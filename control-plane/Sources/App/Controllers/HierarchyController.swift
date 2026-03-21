@@ -4,7 +4,7 @@ import Fluent
 
 struct HierarchyController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        let organizations = routes.grouped("organizations")
+        let organizations = routes.grouped("api", "organizations")
 
         organizations.group(":organizationID") { org in
             // Full hierarchy view
@@ -24,7 +24,7 @@ struct HierarchyController: RouteCollection {
         }
 
         // Global hierarchy utilities
-        let hierarchy = routes.grouped("hierarchy")
+        let hierarchy = routes.grouped("api", "hierarchy")
         hierarchy.get("search", use: globalSearchHierarchy)
         hierarchy.get("validate", use: validateHierarchy)
         hierarchy.post("repair", use: repairHierarchy)

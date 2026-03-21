@@ -14,7 +14,7 @@ final class GroupTests: BaseTestCase {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
 
-            try await app.test(.POST, "/organizations/\(testOrganization.id!)/groups") { req in
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateGroupRequest(
                     name: "Test Group",
@@ -46,7 +46,7 @@ final class GroupTests: BaseTestCase {
             try await firstGroup.save(on: app.db)
 
             // Try to create second group with same name
-            try await app.test(.POST, "/organizations/\(testOrganization.id!)/groups") { req in
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(CreateGroupRequest(
                     name: "Duplicate Group",
@@ -80,7 +80,7 @@ final class GroupTests: BaseTestCase {
 
             let memberToken = try await memberUser.generateAPIKey(on: app.db)
 
-            try await app.test(.POST, "/organizations/\(testOrganization.id!)/groups") { req in
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
                 try req.content.encode(CreateGroupRequest(
                     name: "Unauthorized Group",
@@ -114,7 +114,7 @@ final class GroupTests: BaseTestCase {
             )
             try await group2.save(on: app.db)
 
-            try await app.test(.GET, "/organizations/\(testOrganization.id!)/groups") { req in
+            try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -167,7 +167,7 @@ final class GroupTests: BaseTestCase {
             }
 
             // Add members to group
-            try await app.test(.POST, "/organizations/\(testOrganization.id!)/groups/\(group.id!)/members") { req in
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/groups/\(group.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(AddGroupMemberRequest(
                     userIds: [user1.id!, user2.id!]
@@ -213,7 +213,7 @@ final class GroupTests: BaseTestCase {
             try await group.addMember(user.id!, on: app.db)
 
             // Remove member from group
-            try await app.test(.DELETE, "/organizations/\(testOrganization.id!)/groups/\(group.id!)/members/\(user.id!)") { req in
+            try await app.test(.DELETE, "/api/organizations/\(testOrganization.id!)/groups/\(group.id!)/members/\(user.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -239,7 +239,7 @@ final class GroupTests: BaseTestCase {
             )
             try await group.save(on: app.db)
 
-            try await app.test(.PUT, "/organizations/\(testOrganization.id!)/groups/\(group.id!)") { req in
+            try await app.test(.PUT, "/api/organizations/\(testOrganization.id!)/groups/\(group.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(UpdateGroupRequest(
                     name: "Updated Name",
@@ -269,7 +269,7 @@ final class GroupTests: BaseTestCase {
             )
             try await group.save(on: app.db)
 
-            try await app.test(.DELETE, "/organizations/\(testOrganization.id!)/groups/\(group.id!)") { req in
+            try await app.test(.DELETE, "/api/organizations/\(testOrganization.id!)/groups/\(group.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)

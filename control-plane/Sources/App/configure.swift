@@ -1,14 +1,26 @@
 import Fluent
 import FluentPostgresDriver
-import ElementaryHTMX
 import NIOSSL
 import Vapor
 import OTel
+import Redis
 
 public func configure(_ app: Application) async throws {
-    // Configure sessions
+    // Configure Valkey if available, fallback to Fluent sessions
+    if let valkeyConfig = ValkeyConfiguration.fromEnvironment() {
+        do {
+            try app.configureValkey(valkeyConfig)
+            app.sessions.use(.redis)
+            app.logger.info("Using Valkey for session storage")
+        } catch {
+            app.logger.warning("Valkey configuration failed, using Fluent sessions: \(error)")
+            app.sessions.use(.fluent)
+        }
+    } else {
+        app.sessions.use(.fluent)
+        app.logger.info("Valkey not configured, using Fluent for session storage")
+    }
     app.middleware.use(app.sessions.middleware)
-    app.sessions.use(.fluent)
 
     // Configure user authentication with sessions
     app.middleware.use(User.sessionAuthenticator())
@@ -89,7 +101,25 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AlterSCIMTokenForeignKey())
     app.migrations.add(AddSCIMExternalIDIndex())
 
+    // Image management migrations
+    app.migrations.add(CreateImage())
+    app.migrations.add(AddImageToVM())
+
+    // Hypervisor type migration
+    app.migrations.add(AddHypervisorTypeToVM())
+    app.migrations.add(AddHypervisorTypeToAgent())
+
+    // App settings migration (for signing keys, etc.)
+    app.migrations.add(CreateAppSetting())
+
+    // Volume management migrations
+    app.migrations.add(CreateVolume())
+    app.migrations.add(MigrateVMDisksToVolumes())
+
     try await app.autoMigrate()
+
+    // Initialize the image download signing key (generates if not exists)
+    _ = try await URLSigningService.getSigningKeyAsync(from: app)
 
     // Dev auth bypass - create dev user for local development
     if app.environment == .development, Environment.get("DEV_AUTH_BYPASS") == "true" {
@@ -110,6 +140,93 @@ public func configure(_ app: Application) async throws {
             try await devUser.save(on: app.db)
             app.logger.info("Created dev user for auth bypass")
         }
+        // Ensure dev user has a default organization
+        let defaultOrg: Organization
+        if let existingOrg = try await Organization.query(on: app.db)
+            .filter(\.$name == "Default Organization")
+            .first()
+        {
+            defaultOrg = existingOrg
+        } else {
+            defaultOrg = Organization(
+                name: "Default Organization",
+                description: "Default organization for development"
+            )
+            try await defaultOrg.save(on: app.db)
+            app.logger.info("Created default organization for dev user")
+        }
+
+        // Ensure default project exists for the organization
+        let defaultProject: Project
+        if let existingProject = try await Project.query(on: app.db)
+            .filter(\.$organization.$id == defaultOrg.id!)
+            .filter(\.$name == "Default Project")
+            .first()
+        {
+            defaultProject = existingProject
+        } else {
+            defaultProject = Project(
+                name: "Default Project",
+                description: "Default project for Default Organization",
+                organizationID: defaultOrg.id,
+                path: "/\(defaultOrg.id!.uuidString)"
+            )
+            try await defaultProject.save(on: app.db)
+
+            // Update project path with its own ID
+            defaultProject.path = "/\(defaultOrg.id!.uuidString)/\(defaultProject.id!.uuidString)"
+            try await defaultProject.save(on: app.db)
+            app.logger.info("Created default project for dev organization")
+        }
+
+        // Always ensure SpiceDB relationships exist (idempotent)
+        // This handles cases where DB state exists but SpiceDB was reset
+        // Catch 409 conflicts since they just mean the relationship already exists
+        do {
+            try await app.spicedb.writeRelationship(
+                entity: "organization",
+                entityId: defaultOrg.id!.uuidString,
+                relation: "admin",
+                subject: "user",
+                subjectId: devUser.id!.uuidString
+            )
+        } catch SpiceDBError.relationshipWriteFailed(let status) where status == .conflict {
+            // Relationship already exists, which is fine
+        }
+
+        do {
+            try await app.spicedb.writeRelationship(
+                entity: "project",
+                entityId: defaultProject.id!.uuidString,
+                relation: "organization",
+                subject: "organization",
+                subjectId: defaultOrg.id!.uuidString
+            )
+        } catch SpiceDBError.relationshipWriteFailed(let status) where status == .conflict {
+            // Relationship already exists, which is fine
+        }
+
+        // Link dev user to organization if not already linked
+        let existingMembership = try await UserOrganization.query(on: app.db)
+            .filter(\.$user.$id == devUser.id!)
+            .filter(\.$organization.$id == defaultOrg.id!)
+            .first()
+
+        if existingMembership == nil {
+            let membership = UserOrganization(
+                userID: devUser.id!,
+                organizationID: defaultOrg.id!,
+                role: "admin"
+            )
+            try await membership.save(on: app.db)
+        }
+
+        // Set current organization if not set
+        if devUser.currentOrganizationId == nil {
+            devUser.currentOrganizationId = defaultOrg.id
+            try await devUser.save(on: app.db)
+        }
+
         app.storage[DevUserKey.self] = devUser
     }
 
@@ -120,46 +237,55 @@ public func configure(_ app: Application) async throws {
     app.scheduler = SchedulerService(logger: app.logger, defaultStrategy: schedulingStrategy)
     app.logger.info("Scheduler service initialized with strategy: \(schedulingStrategy.rawValue)")
 
+    // Configure SPIFFE/SPIRE authentication (if enabled via environment)
+    try await app.configureSPIRE()
+
     // Configure OpenTelemetry observability (metrics, logs, traces)
     if app.environment != .testing {
-        var otelConfig = OTel.Configuration.default
-        otelConfig.serviceName = Environment.get("OTEL_SERVICE_NAME") ?? "strato-control-plane"
+        let metricsEnabled = Environment.get("OTEL_METRICS_ENABLED").flatMap(Bool.init) ?? true
+        let logsEnabled = Environment.get("OTEL_LOGS_ENABLED").flatMap(Bool.init) ?? true
+        let tracesEnabled = Environment.get("OTEL_TRACES_ENABLED").flatMap(Bool.init) ?? true
 
-        // Enable all three pillars of observability
-        otelConfig.metrics.enabled = Environment.get("OTEL_METRICS_ENABLED").flatMap(Bool.init) ?? true
-        otelConfig.logs.enabled = Environment.get("OTEL_LOGS_ENABLED").flatMap(Bool.init) ?? true
-        otelConfig.traces.enabled = Environment.get("OTEL_TRACES_ENABLED").flatMap(Bool.init) ?? true
+        // Only bootstrap OpenTelemetry if at least one feature is enabled
+        if metricsEnabled || logsEnabled || tracesEnabled {
+            var otelConfig = OTel.Configuration.default
+            otelConfig.serviceName = Environment.get("OTEL_SERVICE_NAME") ?? "strato-control-plane"
 
-        // Configure OTLP exporter protocol (defaults to gRPC on port 4317)
-        // Can be overridden with OTEL_EXPORTER_OTLP_ENDPOINT environment variable
-        #if os(macOS)
-        if #available(macOS 15, *) {
+            // Enable all three pillars of observability
+            otelConfig.metrics.enabled = metricsEnabled
+            otelConfig.logs.enabled = logsEnabled
+            otelConfig.traces.enabled = tracesEnabled
+
+            // Configure OTLP exporter protocol (defaults to gRPC on port 4317)
+            // Can be overridden with OTEL_EXPORTER_OTLP_ENDPOINT environment variable
+            #if os(macOS)
+            if #available(macOS 15, *) {
+                otelConfig.metrics.otlpExporter.protocol = .grpc
+                otelConfig.logs.otlpExporter.protocol = .grpc
+                otelConfig.traces.otlpExporter.protocol = .grpc
+            }
+            #else
             otelConfig.metrics.otlpExporter.protocol = .grpc
             otelConfig.logs.otlpExporter.protocol = .grpc
             otelConfig.traces.otlpExporter.protocol = .grpc
+            #endif
+
+            app.logger.info("Bootstrapping OpenTelemetry", metadata: [
+                "service": .string(otelConfig.serviceName),
+                "metrics": .stringConvertible(otelConfig.metrics.enabled),
+                "logs": .stringConvertible(otelConfig.logs.enabled),
+                "traces": .stringConvertible(otelConfig.traces.enabled)
+            ])
+
+            let observability = try OTel.bootstrap(configuration: otelConfig)
+            app.lifecycle.use(OTelLifecycleHandler(observability: observability))
+            app.logger.info("OpenTelemetry observability service registered")
+        } else {
+            app.logger.info("OpenTelemetry disabled, skipping bootstrap")
         }
-        #else
-        otelConfig.metrics.otlpExporter.protocol = .grpc
-        otelConfig.logs.otlpExporter.protocol = .grpc
-        otelConfig.traces.otlpExporter.protocol = .grpc
-        #endif
-
-        app.logger.info("Bootstrapping OpenTelemetry", metadata: [
-            "service": .string(otelConfig.serviceName),
-            "metrics": .stringConvertible(otelConfig.metrics.enabled),
-            "logs": .stringConvertible(otelConfig.logs.enabled),
-            "traces": .stringConvertible(otelConfig.traces.enabled)
-        ])
-
-        let observability = try OTel.bootstrap(configuration: otelConfig)
-        app.lifecycle.use(OTelLifecycleHandler(observability: observability))
-        app.logger.info("OpenTelemetry observability service registered")
     }
 
     try routes(app)
 
-    if app.environment != .testing {
-        try await tailwind(app)
-    }
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
 }

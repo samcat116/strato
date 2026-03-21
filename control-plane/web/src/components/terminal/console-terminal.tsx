@@ -1,17 +1,38 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { useConsole } from "@/lib/hooks";
 import "@xterm/xterm/css/xterm.css";
 
 interface ConsoleTerminalProps {
+  vmId: string;
   className?: string;
+  onConnected?: () => void;
+  onDisconnected?: (reason?: string) => void;
 }
 
-export function ConsoleTerminal({ className }: ConsoleTerminalProps) {
+export function ConsoleTerminal({
+  vmId,
+  className,
+  onConnected,
+  onDisconnected,
+}: ConsoleTerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const termInstance = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+
+  const handleError = useCallback((error: Error) => {
+    console.error("Console error:", error);
+  }, []);
+
+  const { connect, disconnect, isConnected, isConnecting } = useConsole({
+    vmId,
+    onConnected,
+    onDisconnected,
+    onError: handleError,
+  });
 
   useEffect(() => {
     if (!terminalRef.current || termInstance.current) return;
@@ -27,6 +48,7 @@ export function ConsoleTerminal({ className }: ConsoleTerminalProps) {
       fontFamily: "ui-monospace, monospace",
       fontSize: 14,
       cursorBlink: true,
+      convertEol: true,
     });
 
     const fitAddon = new FitAddon();
@@ -34,18 +56,14 @@ export function ConsoleTerminal({ className }: ConsoleTerminalProps) {
     term.open(terminalRef.current);
     fitAddon.fit();
 
-    term.write("Strato Console Ready\r\n$ ");
-
     termInstance.current = term;
+    fitAddonRef.current = fitAddon;
 
-    // Expose for external logging
-    if (typeof window !== "undefined") {
-      (window as Window & { logToConsole?: (message: string) => void }).logToConsole = (
-        message: string
-      ) => {
-        term.write(`\r\n${message}\r\n$ `);
-      };
-    }
+    // Initial message
+    term.write("Connecting to VM console...\r\n");
+
+    // Connect to WebSocket
+    connect(term);
 
     // Handle window resize
     const handleResize = () => {
@@ -55,16 +73,56 @@ export function ConsoleTerminal({ className }: ConsoleTerminalProps) {
 
     return () => {
       window.removeEventListener("resize", handleResize);
+      disconnect();
       term.dispose();
       termInstance.current = null;
+      fitAddonRef.current = null;
+    };
+  }, [vmId, connect, disconnect]);
+
+  // Refit on container size changes
+  useEffect(() => {
+    const observer = new ResizeObserver(() => {
+      fitAddonRef.current?.fit();
+    });
+
+    if (terminalRef.current) {
+      observer.observe(terminalRef.current);
+    }
+
+    return () => {
+      observer.disconnect();
     };
   }, []);
 
   return (
-    <div
-      ref={terminalRef}
-      className={className}
-      style={{ height: "100%", width: "100%" }}
-    />
+    <div className={`relative ${className || ""}`}>
+      {/* Connection status indicator */}
+      <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
+        <div
+          className={`h-2 w-2 rounded-full ${
+            isConnected
+              ? "bg-green-500"
+              : isConnecting
+                ? "bg-yellow-500 animate-pulse"
+                : "bg-red-500"
+          }`}
+        />
+        <span className="text-xs text-gray-400">
+          {isConnected
+            ? "Connected"
+            : isConnecting
+              ? "Connecting..."
+              : "Disconnected"}
+        </span>
+      </div>
+
+      {/* Terminal container */}
+      <div
+        ref={terminalRef}
+        className="h-full w-full"
+        style={{ minHeight: "400px" }}
+      />
+    </div>
   );
 }

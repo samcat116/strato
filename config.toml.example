@@ -1,22 +1,101 @@
 # Strato Agent Configuration File
-# 
+#
 # This file configures the Strato hypervisor agent. Command-line arguments
 # will override these settings when provided.
+#
+# Default config file locations:
+#   macOS: ~/Library/Application Support/strato/config.toml
+#   Linux: /etc/strato/config.toml
+# Fallback: ./config.toml (current directory)
 
 # WebSocket URL for connecting to the Control Plane
 # Required field - agent cannot start without this
 control_plane_url = "ws://localhost:8080/agent/ws"
 
 # Directory where QEMU will create domain sockets for VM communication
-# Optional - defaults to "/var/run/qemu" if not specified
-qemu_socket_dir = "/var/run/qemu"
+# Optional - platform-specific defaults:
+#   macOS: ~/Library/Application Support/strato/qemu-sockets
+#   Linux: /var/run/qemu
+# qemu_socket_dir = "/var/run/qemu"
 
 # Logging level: trace, debug, info, notice, warning, error, critical
 # Optional - defaults to "info" if not specified
 log_level = "info"
 
+# Directory where VM disk images are stored
+# Optional - platform-specific defaults:
+#   macOS: ~/Library/Application Support/strato/vms
+#   Linux: /var/lib/strato/vms
+# vm_storage_dir = "/var/lib/strato/vms"
+
+# Path to QEMU binary
+# Optional - platform and architecture-specific defaults:
+#   macOS arm64: /opt/homebrew/bin/qemu-system-aarch64
+#   macOS x86_64: /opt/homebrew/bin/qemu-system-x86_64
+#   Linux arm64: /usr/bin/qemu-system-aarch64
+#   Linux x86_64: /usr/bin/qemu-system-x86_64
+# qemu_binary_path = "/opt/homebrew/bin/qemu-system-aarch64"
+
+# UEFI firmware paths for disk-based VM boot
+# These are used when VMs boot from disk images rather than direct kernel boot.
+# Optional - platform and architecture-specific defaults will be used if not set.
+#
+# ARM64 (aarch64) UEFI firmware:
+#   macOS (Homebrew): /opt/homebrew/share/qemu/edk2-aarch64-code.fd
+#   Linux (Debian/Ubuntu): /usr/share/AAVMF/AAVMF_CODE.fd
+#   Linux (Fedora/RHEL): /usr/share/edk2/aarch64/QEMU_EFI.fd
+# firmware_path_arm64 = "/opt/homebrew/share/qemu/edk2-aarch64-code.fd"
+#
+# x86_64 UEFI firmware (OVMF):
+#   macOS (Homebrew): /opt/homebrew/share/qemu/edk2-x86_64-code.fd
+#   Linux (Debian/Ubuntu): /usr/share/OVMF/OVMF_CODE.fd
+#   Linux (Fedora/RHEL): /usr/share/edk2/ovmf/OVMF_CODE.fd
+# firmware_path_x86_64 = "/usr/share/OVMF/OVMF_CODE.fd"
+
+# Firecracker Configuration (Linux only)
+# Firecracker is a lightweight VMM for creating microVMs.
+# Unlike QEMU, Firecracker requires direct kernel boot (not disk boot).
+# These settings are only used on Linux; on macOS, Firecracker is not available.
+#
+# Path to Firecracker binary
+# Optional - defaults are checked in this order:
+#   1. /usr/local/bin/firecracker
+#   2. /usr/bin/firecracker
+#   3. ~/.local/bin/firecracker
+# firecracker_binary_path = "/usr/local/bin/firecracker"
+#
+# Directory where Firecracker creates VM sockets
+# Optional - defaults to /tmp/firecracker
+# firecracker_socket_dir = "/tmp/firecracker"
+
 # Additional configuration options can be added here as needed
 # Examples:
 # heartbeat_interval = 30
 # max_vms = 10
-# vm_images_dir = "/var/lib/strato/images"
+
+# SPIFFE/SPIRE Configuration
+# Enables mutual TLS authentication using SPIFFE identities
+# The agent will obtain an X.509 SVID from SPIRE and use it to
+# authenticate with the Control Plane over mTLS.
+#
+# [spiffe]
+# enabled = true
+#
+# # Trust domain for SPIFFE identities (e.g., "strato.local")
+# trust_domain = "strato.local"
+#
+# # Source for obtaining SVIDs:
+# #   "workload_api" - Connect to SPIRE Agent's Workload API (recommended)
+# #   "files" - Read certificates from files (works with spiffe-helper)
+# source_type = "workload_api"
+#
+# # For workload_api source:
+# # Path to the SPIRE Workload API Unix socket
+# workload_api_socket_path = "/var/run/spire/sockets/workload.sock"
+#
+# # For files source:
+# # Paths to certificate, key, and trust bundle files
+# # These are typically written by spiffe-helper
+# # certificate_path = "/var/run/spire/certs/svid.pem"
+# # private_key_path = "/var/run/spire/certs/svid_key.pem"
+# # trust_bundle_path = "/var/run/spire/certs/bundle.pem"

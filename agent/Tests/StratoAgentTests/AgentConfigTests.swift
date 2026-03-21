@@ -275,7 +275,12 @@ struct AgentConfigTests {
 
     @Test("Default config paths are correct")
     func defaultConfigPaths() {
+        #if os(macOS)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        #expect(AgentConfig.defaultConfigPath == "\(home)/Library/Application Support/strato/config.toml")
+        #else
         #expect(AgentConfig.defaultConfigPath == "/etc/strato/config.toml")
+        #endif
         #expect(AgentConfig.fallbackConfigPath == "./config.toml")
     }
 }

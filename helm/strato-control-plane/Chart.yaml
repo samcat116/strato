@@ -17,9 +17,14 @@ maintainers:
     email: sam@example.com
 dependencies:
   - name: postgresql
-    version: "~15.5.0"
+    version: "~16.4.0"
     repository: https://charts.bitnami.com/bitnami
     condition: postgresql.enabled
+  - name: redis
+    version: "~20.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    alias: valkey
+    condition: valkey.enabled
   - name: spicedb-operator
     version: "2.2.0"
     repository: https://bushelpowered.github.io/spicedb-operator-chart/

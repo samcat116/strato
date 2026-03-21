@@ -10,19 +10,23 @@ export interface User {
   isSystemAdmin: boolean;
 }
 
-export type VMStatus = "running" | "shutdown" | "paused" | "created";
+export type VMStatus = "Running" | "Shutdown" | "Paused" | "Created";
 
 export interface VM {
   id: string;
   name: string;
   description: string;
   image: string;
+  imageId?: string;
+  projectId?: string;
   status: VMStatus;
   hypervisorId?: string;
   cpu: number;
   maxCpu: number;
   memory: number;
+  memoryFormatted: string;
   disk: number;
+  diskFormatted: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -94,7 +98,9 @@ export interface SessionResponse {
 export interface CreateVMRequest {
   name: string;
   description?: string;
-  templateName: string;
+  /** @deprecated Use imageId instead */
+  templateName?: string;
+  imageId?: string;
   projectId?: string;
   environment?: string;
   cpu?: number;
@@ -126,4 +132,96 @@ export interface CreateAPIKeyRequest {
 export interface CreateAgentRegistrationTokenRequest {
   agentName: string;
   expirationHours?: number;
+}
+
+// Image types
+export type ImageStatus =
+  | "pending"
+  | "uploading"
+  | "downloading"
+  | "validating"
+  | "ready"
+  | "error";
+
+export type ImageFormat = "qcow2" | "raw";
+
+export interface Image {
+  id?: string;
+  name: string;
+  description: string;
+  projectId?: string;
+  filename: string;
+  size: number;
+  sizeFormatted: string;
+  format: ImageFormat;
+  checksum?: string;
+  status: ImageStatus;
+  sourceURL?: string;
+  downloadProgress?: number;
+  errorMessage?: string;
+  defaultCpu?: number;
+  defaultMemory?: number;
+  defaultDisk?: number;
+  defaultCmdline?: string;
+  uploadedById?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CreateImageRequest {
+  name: string;
+  description?: string;
+  sourceURL?: string;
+  defaultCpu?: number;
+  defaultMemory?: number;
+  defaultDisk?: number;
+  defaultCmdline?: string;
+}
+
+export interface UpdateImageRequest {
+  name?: string;
+  description?: string;
+  defaultCpu?: number;
+  defaultMemory?: number;
+  defaultDisk?: number;
+  defaultCmdline?: string;
+}
+
+export interface ImageStatusResponse {
+  id: string;
+  status: ImageStatus;
+  downloadProgress?: number;
+  errorMessage?: string;
+  size?: number;
+  checksum?: string;
+}
+
+// VM Log types
+export type VMLogLevel = "debug" | "info" | "warning" | "error";
+export type VMLogSource = "agent" | "qemu" | "control_plane";
+export type VMEventType =
+  | "status_change"
+  | "operation"
+  | "qemu_output"
+  | "error"
+  | "info";
+
+export interface VMLogEntry {
+  timestamp: string;
+  message: string;
+  labels: {
+    vm_id?: string;
+    level?: VMLogLevel;
+    source?: VMLogSource;
+    event_type?: VMEventType;
+    operation?: string;
+    [key: string]: string | undefined;
+  };
+}
+
+export interface VMLogsQueryParams {
+  limit?: number;
+  direction?: "forward" | "backward";
+  start?: number; // Unix timestamp
+  end?: number; // Unix timestamp
 }

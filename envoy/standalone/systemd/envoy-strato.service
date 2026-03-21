@@ -1,0 +1,28 @@
+[Unit]
+Description=Envoy Proxy for Strato Control Plane mTLS
+Documentation=https://www.envoyproxy.io/
+After=network-online.target spire-agent.service
+Wants=network-online.target
+Requires=spire-agent.service
+
+[Service]
+Type=simple
+User=envoy
+Group=envoy
+ExecStartPre=/usr/bin/envoy --mode validate -c /etc/envoy/envoy.yaml
+ExecStart=/usr/bin/envoy -c /etc/envoy/envoy.yaml --log-level info
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/etc/envoy
+ReadWritePaths=/var/run/spire/sockets
+
+[Install]
+WantedBy=multi-user.target

@@ -70,8 +70,8 @@ export function AgentTable({ agents, isLoading }: AgentTableProps) {
               {agent.resources.availableCPU} / {agent.resources.totalCPU} cores
             </TableCell>
             <TableCell className="text-gray-300">
-              {Math.round(agent.resources.availableMemory / 1024)} /{" "}
-              {Math.round(agent.resources.totalMemory / 1024)} GB
+              {Math.round(agent.resources.availableMemory / 1024 / 1024 / 1024)} /{" "}
+              {Math.round(agent.resources.totalMemory / 1024 / 1024 / 1024)} GB
             </TableCell>
             <TableCell className="text-gray-400 text-sm">
               {agent.lastHeartbeat

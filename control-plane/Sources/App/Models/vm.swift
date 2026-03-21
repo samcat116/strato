@@ -25,12 +25,23 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "hypervisor_id")
     var hypervisorId: String?
 
+    @Enum(key: "hypervisor_type")
+    var hypervisorType: HypervisorType
+
     // Project and environment tracking
     @Parent(key: "project_id")
     var project: Project
 
     @Field(key: "environment")
     var environment: String
+
+    // Optional reference to the Image used to create this VM (new image system)
+    @OptionalParent(key: "image_id")
+    var sourceImage: Image?
+
+    // Volumes attached to this VM (QEMU only - requires eager loading with .with(\.$volumes))
+    @Children(for: \.$vm)
+    var volumes: [Volume]
 
     // CPU configuration
     @Field(key: "cpu")
@@ -115,6 +126,7 @@ final class VM: Model, @unchecked Sendable {
         memory: Int64,
         disk: Int64,
         status: VMStatus = .created,
+        hypervisorType: HypervisorType = .qemu,
         maxCpu: Int? = nil,
         hugepages: Bool = false,
         sharedMemory: Bool = false,
@@ -133,6 +145,7 @@ final class VM: Model, @unchecked Sendable {
         self.memory = memory
         self.disk = disk
         self.status = status
+        self.hypervisorType = hypervisorType
         self.hugepages = hugepages
         self.sharedMemory = sharedMemory
         self.readonlyDisk = readonlyDisk
@@ -154,6 +167,7 @@ extension VM {
             image: image,
             status: status,
             hypervisorId: hypervisorId,
+            hypervisorType: hypervisorType,
             cpu: cpu,
             maxCpu: maxCpu,
             memory: memory,
@@ -212,5 +226,64 @@ extension VM {
 
     var canResume: Bool {
         return status == .paused
+    }
+
+    /// Generates a random MAC address with VMware OUI (00:0c:29)
+    static func generateMACAddress() -> String {
+        let randomBytes = (0..<3).map { _ in String(format: "%02x", Int.random(in: 0...255)) }
+        return "00:0c:29:\(randomBytes.joined(separator: ":"))"
+    }
+}
+
+// MARK: - Response DTO
+
+struct VMDetailResponse: Content {
+    let id: UUID?
+    let name: String
+    let description: String
+    let image: String
+    let imageId: UUID?
+    let projectId: UUID?
+    let status: VMStatus
+    let hypervisorId: String?
+    let cpu: Int
+    let maxCpu: Int
+    let memory: Int64
+    let memoryFormatted: String
+    let disk: Int64
+    let diskFormatted: String
+    let createdAt: Date?
+    let updatedAt: Date?
+
+    init(from vm: VM) {
+        self.id = vm.id
+        self.name = vm.name
+        self.description = vm.description
+        self.image = vm.image
+        self.imageId = vm.$sourceImage.id
+        self.projectId = vm.$project.id
+        self.status = vm.status
+        self.hypervisorId = vm.hypervisorId
+        self.cpu = vm.cpu
+        self.maxCpu = vm.maxCpu
+        self.memory = vm.memory
+        self.memoryFormatted = VMDetailResponse.formatSize(vm.memory)
+        self.disk = vm.disk
+        self.diskFormatted = VMDetailResponse.formatSize(vm.disk)
+        self.createdAt = vm.createdAt
+        self.updatedAt = vm.updatedAt
+    }
+
+    static func formatSize(_ bytes: Int64) -> String {
+        let gb = Double(bytes) / 1024.0 / 1024.0 / 1024.0
+        if gb >= 1.0 {
+            return String(format: "%.2f GB", gb)
+        }
+        let mb = Double(bytes) / 1024.0 / 1024.0
+        if mb >= 1.0 {
+            return String(format: "%.2f MB", mb)
+        }
+        let kb = Double(bytes) / 1024.0
+        return String(format: "%.2f KB", kb)
     }
 }

@@ -1,0 +1,118 @@
+{{- if .Values.spire.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spire-server
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-server
+spec:
+  serviceName: {{ include "strato-control-plane.fullname" . }}-spire-server
+  replicas: {{ .Values.spire.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "strato-control-plane.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: spire-server
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/spire-server-configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "strato-control-plane.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: spire-server
+    spec:
+      serviceAccountName: {{ include "strato-control-plane.fullname" . }}-spire-server
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: spire-server
+          image: "{{ .Values.spire.image.repository }}:{{ .Values.spire.image.tag }}"
+          imagePullPolicy: {{ .Values.spire.image.pullPolicy }}
+          args:
+            - -config
+            - /etc/spire/server/server.conf
+          env:
+            - name: SPIRE_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "strato-control-plane.fullname" . }}-spire
+                  key: database-password
+          ports:
+            - name: grpc
+              containerPort: 8081
+              protocol: TCP
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+            - name: federation
+              containerPort: 8443
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.spire.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/spire/server
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/spire/server
+            {{- if .Values.spire.socketPath }}
+            - name: socket
+              mountPath: {{ dir .Values.spire.socketPath }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "strato-control-plane.fullname" . }}-spire-server
+        {{- if .Values.spire.socketPath }}
+        - name: socket
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.spire.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- if .Values.spire.persistence.storageClass }}
+        storageClassName: {{ .Values.spire.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.spire.persistence.size }}
+  {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+  {{- end }}
+{{- end }}

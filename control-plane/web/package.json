@@ -5,9 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:deploy": "next build && bun run deploy",
-    "deploy": "rm -rf ../Public/_next ../Public/index.html ../Public/404.html && cp -r out/* ../Public/",
-    "start": "next start",
+    "build:deploy": "next build",
+    "start": "next start -p ${PORT:-3000}",
     "lint": "eslint"
   },
   "dependencies": {

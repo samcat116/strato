@@ -5,10 +5,17 @@ vars:
     sh: pwd
   POSTGRES_CONTAINER: strato-postgres
   SPICEDB_CONTAINER: strato-spicedb
+  VALKEY_CONTAINER: strato-valkey
+  LOKI_CONTAINER: strato-loki
+  OTEL_COLLECTOR_CONTAINER: strato-otel-collector
+  SPIRE_SERVER_CONTAINER: strato-spire-server
+  SPIRE_AGENT_CONTAINER: strato-spire-agent
+  ENVOY_CONTAINER: strato-envoy
   POSTGRES_DB: vapor_database
   POSTGRES_USER: vapor_username
   POSTGRES_PASSWORD: vapor_password
   SPICEDB_KEY: strato-dev-key
+  SPIRE_TRUST_DOMAIN: strato.local
 
 env:
   DATABASE_HOST: localhost
@@ -20,17 +27,31 @@ env:
   SPICEDB_PRESHARED_KEY: strato-dev-key
   WEBAUTHN_RELYING_PARTY_ID: localhost
   WEBAUTHN_RELYING_PARTY_NAME: Strato
-  WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost:8080
+  WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost:3000
+  # Disable OpenTelemetry for local development
+  OTEL_METRICS_ENABLED: "false"
+  OTEL_LOGS_ENABLED: "false"
+  OTEL_TRACES_ENABLED: "false"
+  # Enable dev auth bypass for local development
+  DEV_AUTH_BYPASS: "true"
+  # Valkey configuration
+  VALKEY_HOST: localhost
+  VALKEY_PORT: "6379"
+  # Loki configuration for VM logs
+  LOKI_ENDPOINT: "http://localhost:3100"
 
 tasks:
   # ============================================================================
   # Main Development Task
   # ============================================================================
   dev:
-    desc: Start complete development environment
+    desc: Start backend development environment (run frontend separately)
     cmds:
       - task: start-postgres
       - task: start-spicedb
+      - task: start-valkey
+      - task: start-loki
+      - task: start-otel-collector
       - task: load-spicedb-schema
       - task: start-control-plane
       - task: create-agent-config
@@ -39,12 +60,19 @@ tasks:
       - task: create-test-vm
       - |
         echo ""
-        echo "🎉 Development environment is fully running!"
+        echo "🎉 Backend development environment is running!"
         echo ""
         echo "📊 Service URLs:"
-        echo "   • Control Plane:  http://localhost:8080"
-        echo "   • SpiceDB Admin:  http://localhost:8081"
-        echo "   • PostgreSQL:     localhost:5432"
+        echo "   • Control Plane API:  http://localhost:8080"
+        echo "   • SpiceDB Admin:      http://localhost:8081"
+        echo "   • PostgreSQL:         localhost:5432"
+        echo "   • Valkey:             localhost:6379"
+        echo "   • Loki:               localhost:3100"
+        echo "   • OTel Collector:     localhost:4317 (gRPC), localhost:4318 (HTTP)"
+        echo ""
+        echo "🎨 Frontend:"
+        echo "   Run 'task dev-frontend' in another terminal"
+        echo "   Frontend will be at http://localhost:3000"
         echo ""
         echo "📋 Logs:"
         echo "   • Control Plane:  tail -f /tmp/strato-control-plane.log"
@@ -52,6 +80,12 @@ tasks:
         echo ""
         echo "⚠️  To stop all services, run: task stop"
         echo "⚠️  To clean everything up, run: task clean"
+
+  dev-compose:
+    desc: Start full development environment via Docker Compose
+    cmds:
+      - echo "🐳 Starting Docker Compose environment..."
+      - docker compose up --build
 
   # ============================================================================
   # Infrastructure Tasks
@@ -135,6 +169,653 @@ tasks:
         echo "❌ SpiceDB did not become ready in time"
         exit 1
 
+  start-valkey:
+    desc: Start Valkey (Redis-compatible) container
+    cmds:
+      - echo "🔴 Starting Valkey..."
+      - |
+        EXISTING=$(docker ps -a --filter "name={{.VALKEY_CONTAINER}}" --format "{{`{{.Names}}`}}")
+        if [ "$EXISTING" = "{{.VALKEY_CONTAINER}}" ]; then
+          echo "⚠️  Valkey container already exists. Starting it..."
+          docker start {{.VALKEY_CONTAINER}}
+        else
+          docker run -d \
+            --name {{.VALKEY_CONTAINER}} \
+            -p 6379:6379 \
+            valkey/valkey:8.0-alpine
+        fi
+      - echo "⏳ Waiting for Valkey to be ready..."
+      - sleep 2
+      - |
+        for i in $(seq 1 30); do
+          if docker exec {{.VALKEY_CONTAINER}} valkey-cli ping 2>/dev/null | grep -q "PONG"; then
+            echo "✅ Valkey is ready!"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "❌ Valkey did not become ready in time"
+        exit 1
+
+  start-loki:
+    desc: Start Loki log aggregation service
+    cmds:
+      - echo "📊 Starting Loki..."
+      - |
+        EXISTING=$(docker ps -a --filter "name={{.LOKI_CONTAINER}}" --format "{{`{{.Names}}`}}")
+        if [ "$EXISTING" = "{{.LOKI_CONTAINER}}" ]; then
+          echo "⚠️  Loki container already exists. Starting it..."
+          docker start {{.LOKI_CONTAINER}}
+        else
+          docker run -d \
+            --name {{.LOKI_CONTAINER}} \
+            -p 3100:3100 \
+            grafana/loki:2.9.4 \
+            -config.file=/etc/loki/local-config.yaml
+        fi
+      - echo "⏳ Waiting for Loki to be ready..."
+      - sleep 3
+      - |
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:3100/ready > /dev/null 2>&1; then
+            echo "✅ Loki is ready!"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "❌ Loki did not become ready in time"
+        exit 1
+
+  start-otel-collector:
+    desc: Start OpenTelemetry Collector for logs, metrics, and traces
+    cmds:
+      - echo "📡 Starting OpenTelemetry Collector..."
+      - |
+        EXISTING=$(docker ps -a --filter "name={{.OTEL_COLLECTOR_CONTAINER}}" --format "{{`{{.Names}}`}}")
+        if [ "$EXISTING" = "{{.OTEL_COLLECTOR_CONTAINER}}" ]; then
+          echo "⚠️  OTel Collector container already exists. Removing and recreating..."
+          docker rm -f {{.OTEL_COLLECTOR_CONTAINER}}
+        fi
+      - |
+        # Get Loki container IP for collector to push logs
+        LOKI_IP=$(docker inspect -f '{{`{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}`}}' {{.LOKI_CONTAINER}})
+
+        docker run -d \
+          --name {{.OTEL_COLLECTOR_CONTAINER}} \
+          -p 4317:4317 \
+          -p 4318:4318 \
+          -p 8888:8888 \
+          -p 8889:8889 \
+          -v "{{.PROJECT_ROOT}}/observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro" \
+          -e LOKI_ENDPOINT="http://${LOKI_IP}:3100" \
+          otel/opentelemetry-collector-contrib:0.112.0 \
+          --config=/etc/otel-collector-config.yaml
+      - echo "⏳ Waiting for OTel Collector to be ready..."
+      - sleep 3
+      - |
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:8888/metrics > /dev/null 2>&1; then
+            echo "✅ OTel Collector is ready!"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "❌ OTel Collector did not become ready in time"
+        exit 1
+
+  # ============================================================================
+  # SPIFFE/SPIRE Infrastructure Tasks
+  # ============================================================================
+  start-spire-server:
+    desc: Start SPIRE Server container
+    cmds:
+      - echo "🔐 Starting SPIRE Server..."
+      - |
+        EXISTING=$(docker ps -a --filter "name={{.SPIRE_SERVER_CONTAINER}}" --format "{{`{{.Names}}`}}")
+        if [ "$EXISTING" = "{{.SPIRE_SERVER_CONTAINER}}" ]; then
+          echo "⚠️  SPIRE Server container already exists. Removing and recreating..."
+          docker rm -f {{.SPIRE_SERVER_CONTAINER}}
+        fi
+      - |
+        # Create SPIRE Server config directory
+        mkdir -p /tmp/spire-server
+
+        # Create SPIRE Server configuration
+        # Using ports 8085 (gRPC) and 8086 (health) to avoid conflicts with SpiceDB (8081) and control plane (8080)
+        cat > /tmp/spire-server/server.conf << 'EOF'
+        server {
+            bind_address = "0.0.0.0"
+            bind_port = "8085"
+            trust_domain = "{{.SPIRE_TRUST_DOMAIN}}"
+            data_dir = "/var/lib/spire/server"
+            log_level = "INFO"
+
+            ca_ttl = "168h"
+            default_x509_svid_ttl = "1h"
+            default_jwt_svid_ttl = "5m"
+        }
+
+        plugins {
+            DataStore "sql" {
+                plugin_data {
+                    database_type = "sqlite3"
+                    connection_string = "/var/lib/spire/server/datastore.sqlite3"
+                }
+            }
+
+            NodeAttestor "join_token" {}
+
+            KeyManager "disk" {
+                plugin_data {
+                    keys_path = "/var/lib/spire/server/keys"
+                }
+            }
+        }
+
+        health_checks {
+            listener_enabled = true
+            bind_address = "0.0.0.0"
+            bind_port = "8086"
+            live_path = "/live"
+            ready_path = "/ready"
+        }
+        EOF
+
+        # Start SPIRE Server
+        docker run -d \
+          --name {{.SPIRE_SERVER_CONTAINER}} \
+          --network host \
+          -v /tmp/spire-server:/etc/spire/server:ro \
+          -v spire-server-data:/var/lib/spire/server \
+          ghcr.io/spiffe/spire-server:1.9.6 \
+          -config /etc/spire/server/server.conf
+      - echo "⏳ Waiting for SPIRE Server to be ready..."
+      - sleep 3
+      - |
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:8086/ready > /dev/null 2>&1; then
+            echo "✅ SPIRE Server is ready!"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "❌ SPIRE Server did not become ready in time"
+        exit 1
+
+  create-spire-join-token:
+    desc: Create SPIRE join token for agent attestation
+    cmds:
+      - echo "🎫 Creating SPIRE join token..."
+      - |
+        JOIN_TOKEN=$(docker exec {{.SPIRE_SERVER_CONTAINER}} \
+          /opt/spire/bin/spire-server token generate \
+          -spiffeID spiffe://{{.SPIRE_TRUST_DOMAIN}}/spire-agent \
+          -ttl 3600 2>/dev/null | grep "Token:" | awk '{print $2}')
+
+        if [ -z "$JOIN_TOKEN" ]; then
+          echo "❌ Failed to generate join token"
+          exit 1
+        fi
+
+        echo "$JOIN_TOKEN" > /tmp/spire-join-token.txt
+        echo "✅ Join token created and saved to /tmp/spire-join-token.txt"
+
+  start-spire-agent:
+    desc: Start SPIRE Agent container
+    deps: [create-spire-join-token]
+    cmds:
+      - echo "🔐 Starting SPIRE Agent..."
+      - |
+        EXISTING=$(docker ps -a --filter "name={{.SPIRE_AGENT_CONTAINER}}" --format "{{`{{.Names}}`}}")
+        if [ "$EXISTING" = "{{.SPIRE_AGENT_CONTAINER}}" ]; then
+          echo "⚠️  SPIRE Agent container already exists. Removing and recreating..."
+          docker rm -f {{.SPIRE_AGENT_CONTAINER}}
+        fi
+      - |
+        # Create SPIRE Agent config directory
+        mkdir -p /tmp/spire-agent
+        mkdir -p /tmp/spire-sockets
+
+        JOIN_TOKEN=$(cat /tmp/spire-join-token.txt)
+
+        # Create SPIRE Agent configuration
+        # Connects to SPIRE Server on port 8085 (avoiding SpiceDB port conflict)
+        cat > /tmp/spire-agent/agent.conf << EOF
+        agent {
+            data_dir = "/var/lib/spire/agent"
+            log_level = "INFO"
+            server_address = "127.0.0.1"
+            server_port = "8085"
+            socket_path = "/var/run/spire/sockets/workload.sock"
+            trust_domain = "{{.SPIRE_TRUST_DOMAIN}}"
+            join_token = "${JOIN_TOKEN}"
+            insecure_bootstrap = true
+
+            sds {
+                default_svid_name = "default"
+                default_bundle_name = "ROOTCA"
+            }
+        }
+
+        plugins {
+            NodeAttestor "join_token" {}
+
+            KeyManager "disk" {
+                plugin_data {
+                    directory = "/var/lib/spire/agent"
+                }
+            }
+
+            WorkloadAttestor "unix" {
+                plugin_data {
+                    discover_workload_path = true
+                }
+            }
+        }
+
+        health_checks {
+            listener_enabled = true
+            bind_address = "0.0.0.0"
+            bind_port = "8082"
+            live_path = "/live"
+            ready_path = "/ready"
+        }
+        EOF
+
+        # Start SPIRE Agent
+        # Note: --privileged is required for the unix workload attestor to read /proc/<pid>/exe
+        docker run -d \
+          --name {{.SPIRE_AGENT_CONTAINER}} \
+          --network host \
+          --pid host \
+          --privileged \
+          -v /tmp/spire-agent:/etc/spire/agent:ro \
+          -v /tmp/spire-sockets:/var/run/spire/sockets \
+          -v spire-agent-data:/var/lib/spire/agent \
+          ghcr.io/spiffe/spire-agent:1.9.6 \
+          -config /etc/spire/agent/agent.conf
+      - echo "⏳ Waiting for SPIRE Agent to be ready..."
+      - sleep 5
+      - |
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:8082/ready > /dev/null 2>&1; then
+            echo "✅ SPIRE Agent is ready!"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "❌ SPIRE Agent did not become ready in time"
+        exit 1
+
+  create-spire-entries:
+    desc: Create SPIRE registration entries for control plane and agent
+    cmds:
+      - echo "📋 Creating SPIRE registration entries..."
+      - |
+        # Get the current SPIRE Agent's SPIFFE ID (required for parent ID)
+        AGENT_SPIFFE_ID=$(docker exec {{.SPIRE_SERVER_CONTAINER}} \
+          /opt/spire/bin/spire-server agent list 2>/dev/null | \
+          grep "SPIFFE ID" | head -1 | awk '{print $4}')
+
+        if [ -z "$AGENT_SPIFFE_ID" ]; then
+          echo "❌ No SPIRE Agent found. Run start-spire-agent first."
+          exit 1
+        fi
+        echo "Using SPIRE Agent: $AGENT_SPIFFE_ID"
+
+        # Create entry for control plane (Envoy runs as uid 101)
+        docker exec {{.SPIRE_SERVER_CONTAINER}} \
+          /opt/spire/bin/spire-server entry create \
+          -spiffeID spiffe://{{.SPIRE_TRUST_DOMAIN}}/control-plane \
+          -parentID "$AGENT_SPIFFE_ID" \
+          -selector unix:uid:101 \
+          -ttl 3600 || true
+        echo "✅ Control plane entry created (uid:101 for Envoy)"
+
+        # Create entry for strato agent (runs as root, uid 0)
+        docker exec {{.SPIRE_SERVER_CONTAINER}} \
+          /opt/spire/bin/spire-server entry create \
+          -spiffeID spiffe://{{.SPIRE_TRUST_DOMAIN}}/agent/strato-dev \
+          -parentID "$AGENT_SPIFFE_ID" \
+          -selector unix:uid:0 \
+          -ttl 3600 || true
+        echo "✅ Strato agent entry created (uid:0 for Swift agent)"
+      - echo "✅ SPIRE entries created!"
+
+  fetch-agent-svid:
+    desc: Fetch SVID for the Strato Agent and write to files
+    cmds:
+      - echo "🔐 Fetching SVID for Strato Agent..."
+      - |
+        # Create output directories (both on host and inside container mount)
+        mkdir -p /tmp/strato-spiffe
+        mkdir -p /tmp/spire-sockets/svid
+
+        # Use spire-agent CLI from inside the container to fetch SVIDs
+        # The output goes to mounted volume so host can read it
+        docker exec {{.SPIRE_AGENT_CONTAINER}} \
+          /opt/spire/bin/spire-agent api fetch x509 \
+          -socketPath /var/run/spire/sockets/workload.sock \
+          -write /var/run/spire/sockets/svid
+
+        # Copy the SVID files to host-accessible location
+        cp /tmp/spire-sockets/svid/svid.0.pem /tmp/strato-spiffe/svid.pem
+        cp /tmp/spire-sockets/svid/svid.0.key /tmp/strato-spiffe/svid.key
+        cp /tmp/spire-sockets/svid/bundle.0.pem /tmp/strato-spiffe/bundle.pem
+
+        # Verify files were created
+        if [ -f /tmp/strato-spiffe/svid.pem ] && [ -f /tmp/strato-spiffe/svid.key ]; then
+          echo "✅ SVID files written to /tmp/strato-spiffe/"
+          ls -la /tmp/strato-spiffe/
+        else
+          echo "❌ Failed to fetch SVID files"
+          exit 1
+        fi
+      - echo "✅ SVID fetch complete!"
+
+  start-envoy:
+    desc: Start Envoy proxy for mTLS termination
+    cmds:
+      - echo "🌐 Starting Envoy proxy..."
+      - |
+        EXISTING=$(docker ps -a --filter "name={{.ENVOY_CONTAINER}}" --format "{{`{{.Names}}`}}")
+        if [ "$EXISTING" = "{{.ENVOY_CONTAINER}}" ]; then
+          echo "⚠️  Envoy container already exists. Removing and recreating..."
+          docker rm -f {{.ENVOY_CONTAINER}}
+        fi
+      - |
+        # Create Envoy config directory
+        mkdir -p /tmp/envoy
+
+        # Create Envoy configuration
+        cat > /tmp/envoy/envoy.yaml << 'EOF'
+        node:
+          id: strato-control-plane
+          cluster: strato-control-plane
+
+        static_resources:
+          listeners:
+            - name: agent_mtls_listener
+              address:
+                socket_address:
+                  address: 0.0.0.0
+                  port_value: 8443
+              filter_chains:
+                - transport_socket:
+                    name: envoy.transport_sockets.tls
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+                      require_client_certificate: true
+                      common_tls_context:
+                        tls_certificate_sds_secret_configs:
+                          - name: "spiffe://strato.local/control-plane"
+                            sds_config:
+                              resource_api_version: V3
+                              api_config_source:
+                                api_type: GRPC
+                                transport_api_version: V3
+                                grpc_services:
+                                  - envoy_grpc:
+                                      cluster_name: spire_agent
+                        validation_context_sds_secret_config:
+                          name: "spiffe://strato.local"
+                          sds_config:
+                            resource_api_version: V3
+                            api_config_source:
+                              api_type: GRPC
+                              transport_api_version: V3
+                              grpc_services:
+                                - envoy_grpc:
+                                    cluster_name: spire_agent
+                  filters:
+                    - name: envoy.filters.network.http_connection_manager
+                      typed_config:
+                        "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                        stat_prefix: agent_mtls
+                        codec_type: AUTO
+                        upgrade_configs:
+                          - upgrade_type: websocket
+                        forward_client_cert_details: SANITIZE_SET
+                        set_current_client_cert_details:
+                          uri: true
+                          subject: true
+                        route_config:
+                          name: agent_route
+                          virtual_hosts:
+                            - name: control_plane
+                              domains: ["*"]
+                              routes:
+                                - match:
+                                    prefix: "/"
+                                  route:
+                                    cluster: control_plane_local
+                                    timeout: 0s
+                        http_filters:
+                          - name: envoy.filters.http.router
+                            typed_config:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+            - name: health_listener
+              address:
+                socket_address:
+                  address: 0.0.0.0
+                  port_value: 8444
+              filter_chains:
+                - filters:
+                    - name: envoy.filters.network.http_connection_manager
+                      typed_config:
+                        "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                        stat_prefix: health
+                        codec_type: AUTO
+                        route_config:
+                          name: health_route
+                          virtual_hosts:
+                            - name: health
+                              domains: ["*"]
+                              routes:
+                                - match:
+                                    prefix: "/ready"
+                                  direct_response:
+                                    status: 200
+                                    body:
+                                      inline_string: "OK"
+                        http_filters:
+                          - name: envoy.filters.http.router
+                            typed_config:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+          clusters:
+            - name: control_plane_local
+              connect_timeout: 5s
+              type: STATIC
+              lb_policy: ROUND_ROBIN
+              load_assignment:
+                cluster_name: control_plane_local
+                endpoints:
+                  - lb_endpoints:
+                      - endpoint:
+                          address:
+                            socket_address:
+                              address: 127.0.0.1
+                              port_value: 8080
+
+            - name: spire_agent
+              connect_timeout: 5s
+              type: STATIC
+              lb_policy: ROUND_ROBIN
+              typed_extension_protocol_options:
+                envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+                  "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+                  explicit_http_config:
+                    http2_protocol_options: {}
+              load_assignment:
+                cluster_name: spire_agent
+                endpoints:
+                  - lb_endpoints:
+                      - endpoint:
+                          address:
+                            pipe:
+                              path: /var/run/spire/sockets/workload.sock
+
+        admin:
+          address:
+            socket_address:
+              address: 127.0.0.1
+              port_value: 9901
+        EOF
+
+        # Start Envoy
+        # Note: --pid host is required for SPIRE Agent to attest Envoy's workload identity
+        docker run -d \
+          --name {{.ENVOY_CONTAINER}} \
+          --network host \
+          --pid host \
+          -v /tmp/envoy:/etc/envoy:ro \
+          -v /tmp/spire-sockets:/var/run/spire/sockets:ro \
+          envoyproxy/envoy:v1.31.0 \
+          -c /etc/envoy/envoy.yaml \
+          --log-level info
+      - echo "⏳ Waiting for Envoy to be ready..."
+      - sleep 3
+      - |
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:8444/ready > /dev/null 2>&1; then
+            echo "✅ Envoy is ready!"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "❌ Envoy did not become ready in time"
+        exit 1
+
+  # ============================================================================
+  # SPIFFE Development Environment
+  # ============================================================================
+  dev-spiffe:
+    desc: Start SPIFFE development environment (run frontend separately)
+    cmds:
+      - task: start-postgres
+      - task: start-spicedb
+      - task: start-valkey
+      - task: start-loki
+      - task: start-otel-collector
+      - task: start-spire-server
+      - task: start-spire-agent
+      - task: create-spire-entries
+      - task: start-envoy
+      - task: load-spicedb-schema
+      - task: start-control-plane-spiffe
+      - task: fetch-agent-svid
+      - task: create-agent-config-spiffe
+      - task: start-agent-spiffe
+      - task: create-test-vm
+      - |
+        echo ""
+        echo "🎉 SPIFFE Development environment is running!"
+        echo ""
+        echo "📊 Service URLs:"
+        echo "   • Control Plane API:  http://localhost:8080"
+        echo "   • Agent mTLS:         https://localhost:8443"
+        echo "   • SPIRE Server:       localhost:8085 (gRPC)"
+        echo "   • SpiceDB:            localhost:8081 (gRPC)"
+        echo "   • PostgreSQL:         localhost:5432"
+        echo "   • Valkey:             localhost:6379"
+        echo "   • Loki:               localhost:3100"
+        echo "   • OTel Collector:     localhost:4317 (gRPC), localhost:4318 (HTTP)"
+        echo "   • Envoy Admin:        http://localhost:9901"
+        echo ""
+        echo "🎨 Frontend:"
+        echo "   Run 'task dev-frontend' in another terminal"
+        echo "   Frontend will be at http://localhost:3000"
+        echo ""
+        echo "🔐 SPIFFE/SPIRE:"
+        echo "   • Trust Domain:      {{.SPIRE_TRUST_DOMAIN}}"
+        echo "   • Workload Socket:   /tmp/spire-sockets/workload.sock"
+        echo ""
+        echo "📋 Logs:"
+        echo "   • Control Plane:     tail -f /tmp/strato-control-plane.log"
+        echo "   • Agent:             tail -f /tmp/strato-agent.log"
+        echo "   • SPIRE Server:      docker logs -f {{.SPIRE_SERVER_CONTAINER}}"
+        echo "   • SPIRE Agent:       docker logs -f {{.SPIRE_AGENT_CONTAINER}}"
+        echo "   • Envoy:             docker logs -f {{.ENVOY_CONTAINER}}"
+        echo ""
+        echo "⚠️  To stop all services, run: task stop-spiffe"
+
+  create-agent-config-spiffe:
+    desc: Create agent configuration file with SPIFFE enabled
+    cmds:
+      - echo "📝 Creating agent configuration with SPIFFE..."
+      - |
+        cat > "{{.PROJECT_ROOT}}/config.toml" << 'EOF'
+        # Strato Agent Configuration with SPIFFE mTLS
+        # Connects to control plane via Envoy mTLS proxy
+        control_plane_url = "wss://localhost:8443/agent/ws"
+        qemu_socket_dir = "/tmp/strato-qemu-sockets"
+        log_level = "debug"
+        network_mode = "user"
+
+        [spiffe]
+        enabled = true
+        trust_domain = "strato.local"
+        # Using file-based SVIDs (fetched via fetch-agent-svid task)
+        source_type = "files"
+        certificate_path = "/tmp/strato-spiffe/svid.pem"
+        private_key_path = "/tmp/strato-spiffe/svid.key"
+        trust_bundle_path = "/tmp/strato-spiffe/bundle.pem"
+        EOF
+      - echo "✅ Agent config created at {{.PROJECT_ROOT}}/config.toml"
+
+  start-agent-spiffe:
+    desc: Build and start the agent service with SPIFFE mTLS authentication
+    cmds:
+      - echo "🤖 Building and starting agent with SPIFFE mTLS..."
+      - echo "🔨 Building agent..."
+      - swift build --package-path "{{.PROJECT_ROOT}}/agent"
+      - mkdir -p /tmp/strato-qemu-sockets
+      - |
+        echo "▶️  Starting agent with SPIFFE mTLS..."
+        touch /tmp/strato-agent.log
+
+        # Verify SVID files exist
+        if [ ! -f /tmp/strato-spiffe/svid.pem ]; then
+          echo "❌ SVID files not found. Run 'task fetch-agent-svid' first."
+          exit 1
+        fi
+
+        # Start agent with SPIFFE mTLS (uses config from create-agent-config-spiffe)
+        nohup swift run --package-path "{{.PROJECT_ROOT}}/agent" StratoAgent \
+          --config-file "{{.PROJECT_ROOT}}/config.toml" \
+          --debug > /tmp/strato-agent.log 2>&1 &
+        echo $! > /tmp/strato-agent.pid
+      - echo "✅ Agent started with SPIFFE mTLS!"
+      - echo "📋 Logs available at /tmp/strato-agent.log"
+      - sleep 5
+
+  stop-spiffe:
+    desc: Stop all SPIFFE-related services
+    cmds:
+      - echo "🛑 Stopping SPIFFE services..."
+      - task: stop
+      - docker stop {{.ENVOY_CONTAINER}} 2>/dev/null || true
+      - docker stop {{.SPIRE_AGENT_CONTAINER}} 2>/dev/null || true
+      - docker stop {{.SPIRE_SERVER_CONTAINER}} 2>/dev/null || true
+      - echo "✅ SPIFFE services stopped!"
+
+  clean-spiffe:
+    desc: Clean up all SPIFFE-related containers and data
+    deps: [stop-spiffe]
+    cmds:
+      - echo "🧹 Cleaning up SPIFFE resources..."
+      - docker rm -f {{.ENVOY_CONTAINER}} 2>/dev/null || true
+      - docker rm -f {{.SPIRE_AGENT_CONTAINER}} 2>/dev/null || true
+      - docker rm -f {{.SPIRE_SERVER_CONTAINER}} 2>/dev/null || true
+      - docker volume rm spire-server-data 2>/dev/null || true
+      - docker volume rm spire-agent-data 2>/dev/null || true
+      - rm -rf /tmp/spire-server /tmp/spire-agent /tmp/spire-sockets /tmp/envoy
+      - rm -f /tmp/spire-join-token.txt
+      - task: clean
+      - echo "✅ SPIFFE cleanup complete!"
+
   load-spicedb-schema:
     desc: Load SpiceDB authorization schema
     cmds:
@@ -158,6 +839,45 @@ tasks:
   # ============================================================================
   # Application Tasks
   # ============================================================================
+  build-frontend:
+    desc: Build the Next.js frontend
+    cmds:
+      - echo "🎨 Building frontend..."
+      - |
+        cd "{{.PROJECT_ROOT}}/control-plane/web"
+        if [ ! -d "node_modules" ]; then
+          echo "📦 Installing dependencies..."
+          bun install
+        fi
+        echo "🔨 Building Next.js app..."
+        bun run build
+      - echo "✅ Frontend built!"
+
+  dev-frontend:
+    desc: Start Next.js frontend in development mode (hot reload)
+    cmds:
+      - echo "🎨 Starting frontend dev server..."
+      - |
+        cd "{{.PROJECT_ROOT}}/control-plane/web"
+        if [ ! -d "node_modules" ]; then
+          echo "📦 Installing dependencies..."
+          bun install
+        fi
+      - cd "{{.PROJECT_ROOT}}/control-plane/web" && bun run dev
+
+  start-frontend:
+    desc: Start Next.js frontend in production mode
+    cmds:
+      - echo "🎨 Starting frontend..."
+      - |
+        cd "{{.PROJECT_ROOT}}/control-plane/web"
+        bun run build
+        touch /tmp/strato-frontend.log
+        nohup bun run start > /tmp/strato-frontend.log 2>&1 &
+        echo $! > /tmp/strato-frontend.pid
+      - echo "✅ Frontend started on port 3000!"
+      - echo "📋 Logs available at /tmp/strato-frontend.log"
+
   start-control-plane:
     desc: Build and start the control-plane service
     cmds:
@@ -167,7 +887,7 @@ tasks:
       - echo "▶️  Starting control-plane..."
       - |
         touch /tmp/strato-control-plane.log
-        nohup swift run --package-path "{{.PROJECT_ROOT}}/control-plane" > /tmp/strato-control-plane.log 2>&1 &
+        cd "{{.PROJECT_ROOT}}/control-plane" && nohup swift run > /tmp/strato-control-plane.log 2>&1 &
         echo $! > /tmp/strato-control-plane.pid
       - echo "⏳ Waiting for control-plane to be ready..."
       - sleep 5
@@ -175,6 +895,34 @@ tasks:
         for i in $(seq 1 60); do
           if curl -sf http://localhost:8080/health/live > /dev/null 2>&1; then
             echo "✅ Control-plane is ready!"
+            echo "📋 Logs available at: /tmp/strato-control-plane.log"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "⚠️  Control-plane may not be fully ready. Check logs at /tmp/strato-control-plane.log"
+
+  start-control-plane-spiffe:
+    desc: Build and start the control-plane with SPIFFE/SPIRE mTLS enabled
+    cmds:
+      - echo "🚀 Building and starting control-plane with SPIFFE/SPIRE..."
+      - echo "🔨 Building control-plane..."
+      - swift build --package-path "{{.PROJECT_ROOT}}/control-plane"
+      - echo "▶️  Starting control-plane with SPIFFE enabled..."
+      - |
+        touch /tmp/strato-control-plane.log
+        cd "{{.PROJECT_ROOT}}/control-plane" && \
+        SPIRE_ENABLED=true \
+        SPIRE_TRUST_DOMAIN={{.SPIRE_TRUST_DOMAIN}} \
+        SPIRE_TRUST_BUNDLE_PATH=/tmp/strato-spiffe/bundle.pem \
+        nohup swift run > /tmp/strato-control-plane.log 2>&1 &
+        echo $! > /tmp/strato-control-plane.pid
+      - echo "⏳ Waiting for control-plane to be ready..."
+      - sleep 5
+      - |
+        for i in $(seq 1 60); do
+          if curl -sf http://localhost:8080/health/live > /dev/null 2>&1; then
+            echo "✅ Control-plane with SPIFFE is ready!"
             echo "📋 Logs available at: /tmp/strato-control-plane.log"
             exit 0
           fi
@@ -421,6 +1169,113 @@ tasks:
         echo "   • Open web UI: http://localhost:8080"
 
   # ============================================================================
+  # Firecracker Tasks (Linux only)
+  # ============================================================================
+  install-firecracker:
+    desc: Download and install Firecracker binary (Linux only)
+    cmds:
+      - echo "📥 Installing Firecracker..."
+      - |
+        ARCH=$(uname -m)
+        RELEASE_URL="https://github.com/firecracker-microvm/firecracker/releases"
+        LATEST=$(curl -fsSL https://api.github.com/repos/firecracker-microvm/firecracker/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+        echo "Downloading Firecracker ${LATEST} for ${ARCH}..."
+        curl -fsSL ${RELEASE_URL}/download/${LATEST}/firecracker-${LATEST}-${ARCH}.tgz | tar -xz -C /tmp
+        mkdir -p ~/.local/bin
+        cp /tmp/release-${LATEST}-${ARCH}/firecracker-${LATEST}-${ARCH} ~/.local/bin/firecracker
+        chmod +x ~/.local/bin/firecracker
+        rm -rf /tmp/release-${LATEST}-${ARCH}
+      - echo "✅ Firecracker installed at ~/.local/bin/firecracker"
+      - ~/.local/bin/firecracker --version
+
+  download-firecracker-images:
+    desc: Download Firecracker sample kernel and rootfs images
+    cmds:
+      - echo "📥 Downloading Firecracker test images..."
+      - mkdir -p /tmp/firecracker-images
+      - |
+        ARCH=$(uname -m)
+        echo "Downloading kernel..."
+        curl -fsSL -o /tmp/firecracker-images/vmlinux.bin \
+          "https://s3.amazonaws.com/spec.ccfc.min/img/hello/kernel/hello-vmlinux.bin"
+        echo "Downloading rootfs..."
+        curl -fsSL -o /tmp/firecracker-images/rootfs.ext4 \
+          "https://s3.amazonaws.com/spec.ccfc.min/img/hello/fsfiles/hello-rootfs.ext4"
+      - echo "✅ Images downloaded to /tmp/firecracker-images/"
+      - ls -lh /tmp/firecracker-images/
+
+  create-agent-config-linux:
+    desc: Create agent configuration for Linux with OVN networking and Firecracker
+    cmds:
+      - echo "📝 Creating Linux agent configuration..."
+      - |
+        cat > "{{.PROJECT_ROOT}}/config.toml" << 'EOF'
+        # Strato Agent Configuration for Linux
+        control_plane_url = "ws://localhost:8080/agent/ws"
+        qemu_socket_dir = "/tmp/strato-qemu-sockets"
+        log_level = "debug"
+        network_mode = "user"
+
+        # Firecracker Configuration (Linux only)
+        firecracker_binary_path = "~/.local/bin/firecracker"
+        firecracker_socket_dir = "/tmp/firecracker"
+        EOF
+      - echo "✅ Linux agent config created at {{.PROJECT_ROOT}}/config.toml"
+
+  check-firecracker-vm:
+    desc: Check if Firecracker VMs are running
+    cmds:
+      - echo "🔍 Checking for running Firecracker VMs..."
+      - |
+        OUTPUT=$(pgrep -a firecracker 2>/dev/null || true)
+        if [ -n "$OUTPUT" ]; then
+          echo "✅ Found running Firecracker processes:"
+          echo "$OUTPUT"
+        else
+          echo "ℹ️  No Firecracker processes found."
+        fi
+
+  dev-linux:
+    desc: Start development environment optimized for Linux (KVM + Firecracker ready)
+    cmds:
+      - task: start-postgres
+      - task: start-spicedb
+      - task: start-valkey
+      - task: start-loki
+      - task: start-otel-collector
+      - task: load-spicedb-schema
+      - task: start-control-plane
+      - task: create-agent-config-linux
+      - task: create-agent-token
+      - task: start-agent
+      - task: create-test-vm
+      - |
+        echo ""
+        echo "🎉 Linux Development environment is running!"
+        echo ""
+        echo "📊 Service URLs:"
+        echo "   • Control Plane API:  http://localhost:8080"
+        echo "   • SpiceDB:            localhost:8081 (gRPC)"
+        echo "   • PostgreSQL:         localhost:5432"
+        echo "   • Valkey:             localhost:6379"
+        echo "   • Loki:               localhost:3100"
+        echo "   • OTel Collector:     localhost:4317 (gRPC), localhost:4318 (HTTP)"
+        echo ""
+        echo "🖥️  VMM Support:"
+        echo "   • QEMU/KVM:           ✅ Enabled"
+        echo "   • Firecracker:        ✅ Ready (if installed)"
+        echo ""
+        echo "📋 Logs:"
+        echo "   • Control Plane:      tail -f /tmp/strato-control-plane.log"
+        echo "   • Agent:              tail -f /tmp/strato-agent.log"
+        echo ""
+        echo "⚙️  Firecracker Setup:"
+        echo "   If Firecracker is not installed, run: task install-firecracker"
+        echo "   Download test images: task download-firecracker-images"
+        echo ""
+        echo "⚠️  To stop all services, run: task stop"
+
+  # ============================================================================
   # Utility Tasks
   # ============================================================================
   check-vm:
@@ -458,6 +1313,30 @@ tasks:
           echo "SpiceDB:       ❌ Stopped"
         fi
 
+        # Check Valkey
+        VALKEY_STATUS=$(docker ps --filter "name={{.VALKEY_CONTAINER}}" --format "{{`{{.Status}}`}}" 2>/dev/null)
+        if [ -n "$VALKEY_STATUS" ]; then
+          echo "Valkey:        ✅ Running ($VALKEY_STATUS)"
+        else
+          echo "Valkey:        ❌ Stopped"
+        fi
+
+        # Check Loki
+        LOKI_STATUS=$(docker ps --filter "name={{.LOKI_CONTAINER}}" --format "{{`{{.Status}}`}}" 2>/dev/null)
+        if [ -n "$LOKI_STATUS" ]; then
+          echo "Loki:          ✅ Running ($LOKI_STATUS)"
+        else
+          echo "Loki:          ❌ Stopped"
+        fi
+
+        # Check OTel Collector
+        OTEL_STATUS=$(docker ps --filter "name={{.OTEL_COLLECTOR_CONTAINER}}" --format "{{`{{.Status}}`}}" 2>/dev/null)
+        if [ -n "$OTEL_STATUS" ]; then
+          echo "OTel Collector: ✅ Running ($OTEL_STATUS)"
+        else
+          echo "OTel Collector: ❌ Stopped"
+        fi
+
         # Check control-plane
         if [ -f /tmp/strato-control-plane.pid ]; then
           PID=$(cat /tmp/strato-control-plane.pid)
@@ -468,6 +1347,18 @@ tasks:
           fi
         else
           echo "Control Plane: ❌ Stopped"
+        fi
+
+        # Check frontend
+        if [ -f /tmp/strato-frontend.pid ]; then
+          PID=$(cat /tmp/strato-frontend.pid)
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "Frontend:      ✅ Running (PID: $PID)"
+          else
+            echo "Frontend:      ❌ Stopped"
+          fi
+        else
+          echo "Frontend:      ❌ Stopped"
         fi
 
         # Check agent
@@ -482,6 +1373,30 @@ tasks:
           echo "Agent:         ❌ Stopped"
         fi
 
+        # Check SPIRE Server
+        SPIRE_SERVER_STATUS=$(docker ps --filter "name={{.SPIRE_SERVER_CONTAINER}}" --format "{{`{{.Status}}`}}" 2>/dev/null)
+        if [ -n "$SPIRE_SERVER_STATUS" ]; then
+          echo "SPIRE Server:  ✅ Running ($SPIRE_SERVER_STATUS)"
+        else
+          echo "SPIRE Server:  ❌ Stopped"
+        fi
+
+        # Check SPIRE Agent
+        SPIRE_AGENT_STATUS=$(docker ps --filter "name={{.SPIRE_AGENT_CONTAINER}}" --format "{{`{{.Status}}`}}" 2>/dev/null)
+        if [ -n "$SPIRE_AGENT_STATUS" ]; then
+          echo "SPIRE Agent:   ✅ Running ($SPIRE_AGENT_STATUS)"
+        else
+          echo "SPIRE Agent:   ❌ Stopped"
+        fi
+
+        # Check Envoy
+        ENVOY_STATUS=$(docker ps --filter "name={{.ENVOY_CONTAINER}}" --format "{{`{{.Status}}`}}" 2>/dev/null)
+        if [ -n "$ENVOY_STATUS" ]; then
+          echo "Envoy:         ✅ Running ($ENVOY_STATUS)"
+        else
+          echo "Envoy:         ❌ Stopped"
+        fi
+
   logs:
     desc: Show logs from all services
     cmds:
@@ -491,6 +1406,14 @@ tasks:
       - |
         if [ -f /tmp/strato-control-plane.log ]; then
           tail -20 /tmp/strato-control-plane.log
+        else
+          echo "No logs found"
+        fi
+      - echo ""
+      - echo "=== Frontend Logs ==="
+      - |
+        if [ -f /tmp/strato-frontend.log ]; then
+          tail -20 /tmp/strato-frontend.log
         else
           echo "No logs found"
         fi
@@ -511,7 +1434,37 @@ tasks:
     cmds:
       - echo "🛑 Stopping all services..."
       - |
-        # Stop agent
+        # Stop any running QEMU VMs first (before killing agent)
+        QEMU_PIDS=$(pgrep -f "qemu-system" 2>/dev/null || true)
+        if [ -n "$QEMU_PIDS" ]; then
+          echo "Stopping QEMU VMs: $QEMU_PIDS"
+          echo "$QEMU_PIDS" | xargs kill 2>/dev/null || true
+          sleep 2
+          # Force kill any remaining
+          REMAINING=$(pgrep -f "qemu-system" 2>/dev/null || true)
+          if [ -n "$REMAINING" ]; then
+            echo "Force killing remaining QEMU VMs: $REMAINING"
+            echo "$REMAINING" | xargs kill -9 2>/dev/null || true
+          fi
+        fi
+
+        # Stop frontend
+        if [ -f /tmp/strato-frontend.pid ]; then
+          PID=$(cat /tmp/strato-frontend.pid)
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "Stopping frontend (PID: $PID)..."
+            kill "$PID" 2>/dev/null || true
+          fi
+          rm -f /tmp/strato-frontend.pid
+        fi
+        # Also kill any process listening on port 3000
+        FRONTEND_PIDS=$(lsof -ti :3000 2>/dev/null | grep -v "^$" || true)
+        if [ -n "$FRONTEND_PIDS" ]; then
+          echo "Stopping processes on port 3000: $FRONTEND_PIDS"
+          echo "$FRONTEND_PIDS" | xargs kill 2>/dev/null || true
+        fi
+
+        # Stop agent - first try PID file, then find by process name
         if [ -f /tmp/strato-agent.pid ]; then
           PID=$(cat /tmp/strato-agent.pid)
           if kill -0 "$PID" 2>/dev/null; then
@@ -520,8 +1473,14 @@ tasks:
           fi
           rm -f /tmp/strato-agent.pid
         fi
+        # Also kill any orphaned StratoAgent processes
+        AGENT_PIDS=$(pgrep -f "StratoAgent" 2>/dev/null || true)
+        if [ -n "$AGENT_PIDS" ]; then
+          echo "Stopping orphaned StratoAgent processes: $AGENT_PIDS"
+          echo "$AGENT_PIDS" | xargs kill 2>/dev/null || true
+        fi
 
-        # Stop control-plane
+        # Stop control-plane - first try PID file, then find by port
         if [ -f /tmp/strato-control-plane.pid ]; then
           PID=$(cat /tmp/strato-control-plane.pid)
           if kill -0 "$PID" 2>/dev/null; then
@@ -530,11 +1489,33 @@ tasks:
           fi
           rm -f /tmp/strato-control-plane.pid
         fi
+        # Also kill any process listening on port 8080 (the actual App binary)
+        APP_PIDS=$(lsof -ti :8080 2>/dev/null | grep -v "^$" || true)
+        if [ -n "$APP_PIDS" ]; then
+          echo "Stopping processes on port 8080: $APP_PIDS"
+          echo "$APP_PIDS" | xargs kill 2>/dev/null || true
+          sleep 1
+          # Force kill if still running
+          REMAINING=$(lsof -ti :8080 2>/dev/null | grep -v "^$" || true)
+          if [ -n "$REMAINING" ]; then
+            echo "Force killing remaining processes on port 8080: $REMAINING"
+            echo "$REMAINING" | xargs kill -9 2>/dev/null || true
+          fi
+        fi
 
         # Stop Docker containers
         echo "Stopping Docker containers..."
+        docker stop {{.OTEL_COLLECTOR_CONTAINER}} 2>/dev/null || true
+        docker stop {{.LOKI_CONTAINER}} 2>/dev/null || true
+        docker stop {{.VALKEY_CONTAINER}} 2>/dev/null || true
         docker stop {{.SPICEDB_CONTAINER}} 2>/dev/null || true
         docker stop {{.POSTGRES_CONTAINER}} 2>/dev/null || true
+
+        # Stop SPIFFE/SPIRE containers
+        echo "Stopping SPIFFE/SPIRE containers..."
+        docker stop {{.SPIRE_SERVER_CONTAINER}} 2>/dev/null || true
+        docker stop {{.SPIRE_AGENT_CONTAINER}} 2>/dev/null || true
+        docker stop {{.ENVOY_CONTAINER}} 2>/dev/null || true
       - echo "✅ All services stopped!"
 
   clean:
@@ -543,9 +1524,23 @@ tasks:
     cmds:
       - echo "🧹 Cleaning up all resources..."
       - echo "Removing Docker containers..."
+      - docker rm -f {{.OTEL_COLLECTOR_CONTAINER}} 2>/dev/null || true
+      - docker rm -f {{.LOKI_CONTAINER}} 2>/dev/null || true
+      - docker rm -f {{.VALKEY_CONTAINER}} 2>/dev/null || true
       - docker rm -f {{.SPICEDB_CONTAINER}} 2>/dev/null || true
       - docker rm -f {{.POSTGRES_CONTAINER}} 2>/dev/null || true
+      - echo "Removing SPIFFE/SPIRE containers..."
+      - docker rm -f {{.SPIRE_SERVER_CONTAINER}} 2>/dev/null || true
+      - docker rm -f {{.SPIRE_AGENT_CONTAINER}} 2>/dev/null || true
+      - docker rm -f {{.ENVOY_CONTAINER}} 2>/dev/null || true
+      - echo "Removing Docker volumes..."
+      - docker volume rm spire-server-data 2>/dev/null || true
+      - docker volume rm spire-agent-data 2>/dev/null || true
       - echo "Removing log files..."
-      - rm -f /tmp/strato-control-plane.log /tmp/strato-agent.log
-      - rm -f /tmp/strato-agent-registration-url.txt
+      - rm -f /tmp/strato-control-plane.log /tmp/strato-agent.log /tmp/strato-frontend.log
+      - rm -f /tmp/strato-agent-registration-url.txt /tmp/strato-frontend.pid
+      - echo "Removing SPIFFE/SPIRE temp directories..."
+      - rm -rf /tmp/spire-server /tmp/spire-agent /tmp/spire-sockets /tmp/envoy
+      - rm -f /tmp/spire-join-token.txt
+      - rm -f /tmp/strato-agent-spiffe-config.toml
       - echo "✅ Cleanup complete!"

@@ -4,7 +4,7 @@ import Fluent
 
 struct ProjectController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        let projects = routes.grouped("projects")
+        let projects = routes.grouped("api", "projects")
 
         // User's projects (across all organizations)
         projects.get(use: index)
@@ -24,7 +24,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Organization context routes
-        let organizations = routes.grouped("organizations")
+        let organizations = routes.grouped("api", "organizations")
         organizations.group(":organizationID") { org in
             let orgProjects = org.grouped("projects")
             orgProjects.get(use: indexForOrganization)
@@ -45,9 +45,13 @@ struct ProjectController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
+        req.logger.info("ProjectController.index - User: \(user.username), ID: \(user.id?.uuidString ?? "nil")")
+
         // Get all organizations the user belongs to
         try await user.$organizations.load(on: req.db)
         let organizationIDs = user.organizations.compactMap { $0.id }
+
+        req.logger.info("ProjectController.index - Found \(organizationIDs.count) organizations: \(organizationIDs.map { $0.uuidString })")
 
         if organizationIDs.isEmpty {
             return []

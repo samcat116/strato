@@ -5,7 +5,7 @@ import WebAuthn
 
 struct UserController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        let users = routes.grouped("users")
+        let users = routes.grouped("api", "users")
         users.post("register", use: register)
         users.get(use: index)
         users.group(":userID") { user in

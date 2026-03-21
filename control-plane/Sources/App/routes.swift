@@ -15,7 +15,6 @@ func routes(_ app: Application) throws {
     try app.register(collection: APIDocumentationController())
     try app.register(collection: AgentWebSocketController())
     try app.register(collection: OnboardingController())
-    try app.register(collection: HTMXController())
 
     // Hierarchical IAM controllers
     try app.register(collection: OrganizationalUnitController())
@@ -35,37 +34,24 @@ func routes(_ app: Application) throws {
     try app.register(collection: SCIMController())
     try app.register(collection: SCIMTokenController())
 
+    // Image management controller
+    try app.register(collection: ImageController())
+
+    // Volume management controller
+    try app.register(collection: VolumeController())
+
+    // Console WebSocket controller for VM console streaming
+    try app.register(collection: ConsoleWebSocketController())
+
+    // VM Logs controller for querying logs from Loki
+    try app.register(collection: LogsController())
+
     // OpenAPI Vapor transport (spec-first). Once the generator produces APIProtocol
     // from Sources/App/openapi.yaml, register handlers here.
     // let transport = VaporTransport(routesBuilder: app)
     // let apiImpl = GeneratedAPIImpl() // conforms to generated protocol
     // try apiImpl.registerHandlers(on: transport)
 
-    // SPA catch-all route for Next.js static export
-    // This serves index.html for all frontend routes, allowing client-side routing
-    // FileMiddleware already handles static assets (_next/*, images, etc.)
-    app.get("**") { req async throws -> Response in
-        let path = req.url.path
-
-        // Skip paths that are handled by API controllers
-        let apiPrefixes = ["/api/", "/auth/", "/agent/", "/health"]
-        for prefix in apiPrefixes {
-            if path.hasPrefix(prefix) {
-                throw Abort(.notFound)
-            }
-        }
-
-        // Return 404 for static asset paths that weren't found by FileMiddleware
-        // This prevents serving index.html for missing .js, .css, etc. files
-        let staticExtensions = [".js", ".css", ".json", ".map", ".woff", ".woff2", ".svg", ".png", ".jpg", ".ico", ".txt"]
-        for ext in staticExtensions {
-            if path.hasSuffix(ext) {
-                throw Abort(.notFound)
-            }
-        }
-
-        // Serve index.html for SPA routing
-        let indexPath = app.directory.publicDirectory + "index.html"
-        return req.fileio.streamFile(at: indexPath)
-    }
+    // Note: Frontend is now served by a separate Next.js container.
+    // SPA catch-all routes have been removed - routing is handled by ingress/nginx.
 }

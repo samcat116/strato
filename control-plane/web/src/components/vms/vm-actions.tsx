@@ -75,10 +75,10 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
     }
   };
 
-  const canStart = vm.status === "shutdown" || vm.status === "created";
-  const canStop = vm.status === "running" || vm.status === "paused";
-  const canPause = vm.status === "running";
-  const canResume = vm.status === "paused";
+  const canStart = vm.status === "Shutdown" || vm.status === "Created";
+  const canStop = vm.status === "Running" || vm.status === "Paused";
+  const canPause = vm.status === "Running";
+  const canResume = vm.status === "Paused";
 
   return (
     <div className="flex items-center space-x-2">
@@ -148,7 +148,7 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
           <DropdownMenuItem
             onClick={() => handleAction("restart")}
             className="text-gray-200 hover:bg-gray-700 cursor-pointer"
-            disabled={vm.status !== "running"}
+            disabled={vm.status !== "Running"}
           >
             <RotateCcw className="h-4 w-4 mr-2 text-blue-400" />
             Restart

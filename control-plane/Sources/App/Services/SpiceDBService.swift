@@ -33,17 +33,21 @@ struct SpiceDBService: SpiceDBServiceProtocol {
     ) async throws -> Bool {
         let url = URI(string: "\(endpoint)/v1/permissions/check")
 
+        // Normalize UUIDs to uppercase for SpiceDB consistency
+        let normalizedSubject = subject.uppercased()
+        let normalizedResourceId = resourceId.uppercased()
+
         let payload = CheckPermissionRequest(
             consistency: Consistency(fullyConsistent: true),
             resource: ObjectReference(
                 objectType: resource,
-                objectId: resourceId
+                objectId: normalizedResourceId
             ),
             permission: permission,
             subject: SubjectReference(
                 object: ObjectReference(
                     objectType: "user",
-                    objectId: subject
+                    objectId: normalizedSubject
                 )
             )
         )
@@ -91,6 +95,10 @@ struct SpiceDBService: SpiceDBServiceProtocol {
     ) async throws {
         let url = URI(string: "\(endpoint)/v1/relationships/write")
 
+        // Normalize UUIDs to uppercase for SpiceDB consistency
+        let normalizedEntityId = entityId.uppercased()
+        let normalizedSubjectId = subjectId.uppercased()
+
         let payload = WriteRelationshipsRequest(
             updates: [
                 RelationshipUpdate(
@@ -98,13 +106,13 @@ struct SpiceDBService: SpiceDBServiceProtocol {
                     relationship: Relationship(
                         resource: ObjectReference(
                             objectType: entity,
-                            objectId: entityId
+                            objectId: normalizedEntityId
                         ),
                         relation: relation,
                         subject: SubjectReference(
                             object: ObjectReference(
                                 objectType: subject,
-                                objectId: subjectId
+                                objectId: normalizedSubjectId
                             )
                         )
                     )
@@ -132,6 +140,10 @@ struct SpiceDBService: SpiceDBServiceProtocol {
     ) async throws {
         let url = URI(string: "\(endpoint)/v1/relationships/write")
 
+        // Normalize UUIDs to uppercase for SpiceDB consistency
+        let normalizedEntityId = entityId.uppercased()
+        let normalizedSubjectId = subjectId.uppercased()
+
         let payload = WriteRelationshipsRequest(
             updates: [
                 RelationshipUpdate(
@@ -139,13 +151,13 @@ struct SpiceDBService: SpiceDBServiceProtocol {
                     relationship: Relationship(
                         resource: ObjectReference(
                             objectType: entity,
-                            objectId: entityId
+                            objectId: normalizedEntityId
                         ),
                         relation: relation,
                         subject: SubjectReference(
                             object: ObjectReference(
                                 objectType: subject,
-                                objectId: subjectId
+                                objectId: normalizedSubjectId
                             )
                         )
                     )

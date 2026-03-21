@@ -273,6 +273,57 @@ struct TestDataBuilder {
         try await vm.save(on: db)
         return vm
     }
+
+    func createImage(
+        name: String = "Test Image",
+        description: String = "Test image description",
+        project: Project,
+        filename: String = "test.qcow2",
+        size: Int64 = 10 * 1024 * 1024,
+        format: ImageFormat = .qcow2,
+        status: ImageStatus = .ready,
+        uploadedBy: User,
+        storagePath: String? = nil,
+        sourceURL: String? = nil,
+        checksum: String? = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ) async throws -> Image {
+        let image = Image(
+            name: name,
+            description: description,
+            projectID: project.id!,
+            filename: filename,
+            size: size,
+            format: format,
+            status: status,
+            uploadedByID: uploadedBy.id!,
+            sourceURL: sourceURL
+        )
+        image.storagePath = storagePath
+        image.checksum = checksum
+        try await image.save(on: db)
+        return image
+    }
+}
+
+// MARK: - Mock Image Fetch Service
+
+/// Mock ImageFetchService that does nothing (prevents real HTTP requests in tests)
+actor MockImageFetchService: ImageFetchServiceProtocol {
+    var startedFetches: [UUID] = []
+    var cancelledFetches: [UUID] = []
+
+    func startFetch(imageId: UUID) async throws {
+        startedFetches.append(imageId)
+        // No-op: don't actually fetch anything
+    }
+
+    func cancelFetch(imageId: UUID) async {
+        cancelledFetches.append(imageId)
+    }
+
+    func isFetchActive(imageId: UUID) async -> Bool {
+        return false
+    }
 }
 
 // MARK: - Mock SpiceDB Service

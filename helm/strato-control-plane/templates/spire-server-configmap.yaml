@@ -1,0 +1,82 @@
+{{- if .Values.spire.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spire-server
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-server
+data:
+  server.conf: |
+    server {
+        bind_address = "0.0.0.0"
+        bind_port = "8081"
+        trust_domain = "{{ .Values.spire.trustDomain }}"
+        data_dir = "/var/lib/spire/server"
+        log_level = "{{ .Values.spire.logLevel }}"
+        log_format = "json"
+
+        # CA certificate TTL
+        ca_ttl = "{{ .Values.spire.caTTL }}"
+
+        # Default SVID TTLs
+        default_x509_svid_ttl = "{{ .Values.spire.svidTTL }}"
+        default_jwt_svid_ttl = "{{ .Values.spire.jwtSvidTTL }}"
+
+        # Federation settings
+        federation {
+            bundle_endpoint {
+                address = "0.0.0.0"
+                port = 8443
+            }
+        }
+    }
+
+    plugins {
+        DataStore "sql" {
+            plugin_data {
+                database_type = "postgres"
+                connection_string = "host={{ include "strato-control-plane.databaseHost" . }} port={{ include "strato-control-plane.databasePort" . }} dbname=spire user={{ .Values.spire.database.username }} password=${SPIRE_DB_PASSWORD} sslmode=disable"
+            }
+        }
+
+        NodeAttestor "join_token" {
+            plugin_data {}
+        }
+
+        {{- if .Values.spire.attestors.k8sPsat.enabled }}
+        NodeAttestor "k8s_psat" {
+            plugin_data {
+                clusters = {
+                    "{{ .Values.spire.clusterName }}" = {
+                        service_account_allow_list = {{ toJson .Values.spire.attestors.k8sPsat.serviceAccountAllowList }}
+                    }
+                }
+            }
+        }
+        {{- end }}
+
+        KeyManager "disk" {
+            plugin_data {
+                keys_path = "/var/lib/spire/server/keys"
+            }
+        }
+
+        {{- if .Values.spire.notifier.k8sbundle.enabled }}
+        Notifier "k8sbundle" {
+            plugin_data {
+                namespace = "{{ .Release.Namespace }}"
+                config_map = "{{ include "strato-control-plane.fullname" . }}-spire-bundle"
+            }
+        }
+        {{- end }}
+    }
+
+    health_checks {
+        listener_enabled = true
+        bind_address = "0.0.0.0"
+        bind_port = "8080"
+        live_path = "/live"
+        ready_path = "/ready"
+    }
+{{- end }}

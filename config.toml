@@ -1,0 +1,5 @@
+# Strato Agent Configuration
+control_plane_url = "ws://localhost:8080/agent/ws"
+qemu_socket_dir = "/tmp/strato-qemu-sockets"
+log_level = "debug"
+network_mode = "user"

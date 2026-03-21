@@ -77,3 +77,25 @@ data:
         permission resume = owner + editor + organization->admin
         permission view_console = owner + editor + organization->admin
     }
+
+    /** image represents a VM disk image that can be used to create VMs */
+    definition image {
+        /** owner is the user who uploaded the image */
+        relation owner: user
+
+        /** project that contains this image */
+        relation project: project
+
+        /** viewer can see image details but not modify */
+        relation viewer: user
+
+        /** editor can modify image settings */
+        relation editor: user
+
+        // Permissions - combining direct relations and project permissions
+        permission create = project->admin + project->organization->admin
+        permission read = owner + viewer + editor + project->admin + project->member + project->organization->admin
+        permission update = owner + editor + project->admin + project->organization->admin
+        permission delete = owner + project->admin + project->organization->admin
+        permission download = owner + viewer + editor + project->admin + project->member + project->organization->admin
+    }
