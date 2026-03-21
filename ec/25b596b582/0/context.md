@@ -1,0 +1,12 @@
+# Session Context
+
+## User Prompts
+
+### Prompt 1
+
+I have several libraries that are outside of this project directory that I want to bring into this project for easier management. They are: /Users/sam/Projects/Active/swift-ovn, /Users/sam/Projects/Active/swift-qemu, /Users/sam/Projects/Active/swift-scim, /Users/sam/Projects/Active/swift-spiffe, and /Users/sam/Projects/Active/swift-ssf. Whats the best way to do this? Some are needed for the control plane and some are needed for the agent
+
+### Prompt 2
+
+Can we put up a PR for this?
+
