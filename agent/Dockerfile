@@ -15,6 +15,10 @@ WORKDIR /build
 # Copy shared package first
 COPY ./shared ./shared
 
+# Copy library dependencies
+COPY ./libs/swift-qemu ./libs/swift-qemu
+COPY ./libs/swift-ovn ./libs/swift-ovn
+
 # Copy agent package files
 COPY ./agent/Package.* ./agent/
 
@@ -25,6 +29,8 @@ COPY ./agent/Package.* ./agent/
 WORKDIR /build/agent
 # Update Package.swift to use absolute path for shared package in Docker
 RUN sed -i 's|.package(path: "../shared")|.package(path: "/build/shared")|' Package.swift
+RUN sed -i 's|.package(path: "../libs/swift-qemu")|.package(path: "/build/libs/swift-qemu")|' Package.swift
+RUN sed -i 's|.package(path: "../libs/swift-ovn")|.package(path: "/build/libs/swift-ovn")|' Package.swift
 RUN swift package resolve \
     $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true)
 

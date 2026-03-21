@@ -25,7 +25,7 @@ let package = Package(
     .package(url: "https://github.com/apple/swift-nio.git", from: "2.71.0"),
         // 🔐 WebAuthn/Passkey authentication
         .package(url: "https://github.com/swift-server/webauthn-swift.git", branch: "main"),
-        .package(url: "https://github.com/samcat116/swift-scim.git", branch: "main"),
+        .package(path: "../libs/swift-scim"),
         // 🔐 JWT token handling and HTTP client functionality
         .package(url: "https://github.com/vapor/jwt.git", from: "4.0.0"),
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.9.0"),

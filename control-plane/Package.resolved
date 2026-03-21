@@ -1,5 +1,5 @@
 {
-  "originHash" : "63cd2f2d3e8235ff57622a2c26c49ee0dcf07734fee8f912a25ba3083bc6e6ff",
+  "originHash" : "6d37d482cec1b9221e6aac865392aba99e8bdf631a0c0d246a53aee6d91e330e",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -413,15 +413,6 @@
       "state" : {
         "revision" : "c169a5744230951031770e27e475ff6eefe51f9d",
         "version" : "1.33.3"
-      }
-    },
-    {
-      "identity" : "swift-scim",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/samcat116/swift-scim.git",
-      "state" : {
-        "branch" : "main",
-        "revision" : "2dab16349cbf38eb6d15b528044a98fe3a6ce4b2"
       }
     },
     {

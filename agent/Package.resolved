@@ -1,5 +1,5 @@
 {
-  "originHash" : "83566960252e041212e22aae27a088f1e540ce98c5a85fd89014df1a9588cd9c",
+  "originHash" : "1d0935035d66f90351cb7dc0be98ff9a57ce0677f3e9afc53c19db0819f649a4",
   "pins" : [
     {
       "identity" : "swift-algorithms",
@@ -152,24 +152,6 @@
       "state" : {
         "revision" : "0c0290ff6b24942dadb83a929ffaaa1481df04a2",
         "version" : "1.1.1"
-      }
-    },
-    {
-      "identity" : "swift-ovn",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/samcat116/swift-ovn.git",
-      "state" : {
-        "branch" : "main",
-        "revision" : "fe6364754f8d0e4a5ce8f01f42cf138f7899a9d9"
-      }
-    },
-    {
-      "identity" : "swift-qemu",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/samcat116/swift-qemu",
-      "state" : {
-        "branch" : "main",
-        "revision" : "efcc2804969b415db703b09ebd4ace23d6a41fa7"
       }
     },
     {

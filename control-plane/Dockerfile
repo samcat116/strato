@@ -23,6 +23,9 @@ WORKDIR /build
 # Copy shared package first
 COPY ./shared ./shared
 
+# Copy library dependencies
+COPY ./libs/swift-scim ./libs/swift-scim
+
 # Copy control plane package files
 COPY ./control-plane/Package.* ./control-plane/
 
@@ -30,6 +33,7 @@ COPY ./control-plane/Package.* ./control-plane/
 WORKDIR /build/control-plane
 # Update Package.swift to use absolute path for shared package in Docker
 RUN sed -i 's|.package(path: "../shared")|.package(path: "/build/shared")|' Package.swift
+RUN sed -i 's|.package(path: "../libs/swift-scim")|.package(path: "/build/libs/swift-scim")|' Package.swift
 RUN swift package resolve \
     $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true)
 

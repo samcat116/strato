@@ -9,12 +9,12 @@ let package = Package(
     dependencies: [
         // StratoShared for common models and protocols
         .package(path: "../shared"),
-        .package(url: "https://github.com/samcat116/swift-qemu", branch: "main"),
+        .package(path: "../libs/swift-qemu"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
         .package(url: "https://github.com/vapor/websocket-kit.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
-        .package(url: "https://github.com/samcat116/swift-ovn.git", branch: "main"),
+        .package(path: "../libs/swift-ovn"),
         .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
         .package(url: "https://github.com/apple/swift-testing.git", from: "0.10.0"),
     ],
