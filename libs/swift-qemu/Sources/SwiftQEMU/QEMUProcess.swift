@@ -129,7 +129,11 @@ public final class QEMUProcess: @unchecked Sendable {
         guard let process = process else {
             throw QMPError.processNotRunning
         }
-        
+
+        guard process.isRunning else {
+            return
+        }
+
         await withCheckedContinuation { continuation in
             process.terminationHandler = { _ in
                 continuation.resume()

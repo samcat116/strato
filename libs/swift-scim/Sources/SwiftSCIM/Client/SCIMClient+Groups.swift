@@ -65,8 +65,8 @@ extension SCIMClient {
     /// - Parameters:
     ///   - id: The group ID
     ///   - patchRequest: The patch operations to apply
-    /// - Returns: The updated group
-    public func patchGroup(id: String, patchRequest: SCIMPatchRequest) async throws -> SCIMGroup {
+    /// - Returns: The updated group, or nil if the server returned 204 No Content
+    public func patchGroup(id: String, patchRequest: SCIMPatchRequest) async throws -> SCIMGroup? {
         return try await patch(
             path: "Groups/\(id)",
             body: patchRequest,
@@ -132,8 +132,8 @@ extension SCIMClient {
     ///   - groupId: The group ID
     ///   - userId: The user ID to add
     ///   - userDisplayName: Optional display name for the user
-    /// - Returns: The updated group
-    public func addUserToGroup(groupId: String, userId: String, userDisplayName: String? = nil) async throws -> SCIMGroup {
+    /// - Returns: The updated group, or nil if the server returned 204 No Content
+    public func addUserToGroup(groupId: String, userId: String, userDisplayName: String? = nil) async throws -> SCIMGroup? {
         var memberObject: [String: SCIMPatchValue] = [
             "value": .string(userId)
         ]
@@ -156,8 +156,8 @@ extension SCIMClient {
     /// - Parameters:
     ///   - groupId: The group ID
     ///   - userId: The user ID to remove
-    /// - Returns: The updated group
-    public func removeUserFromGroup(groupId: String, userId: String) async throws -> SCIMGroup {
+    /// - Returns: The updated group, or nil if the server returned 204 No Content
+    public func removeUserFromGroup(groupId: String, userId: String) async throws -> SCIMGroup? {
         let patchRequest = SCIMPatchRequest(
             operation: .remove(path: "members[value eq \"\(userId)\"]")
         )

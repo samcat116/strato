@@ -8,28 +8,37 @@ import Logging
 /// HTTP client for communicating with SSF transmitters
 public actor SSFHTTPClient {
     private let httpClient: HTTPClient
+    private let ownsHTTPClient: Bool
     private let baseURL: URL
     private let authToken: String?
     private let logger = Logger(label: "SwiftSSF.HTTPClient")
     private let jsonDecoder: JSONDecoder
     private let jsonEncoder: JSONEncoder
-    
+
     public init(baseURL: URL, authToken: String? = nil, httpClient: HTTPClient? = nil) {
         self.baseURL = baseURL
         self.authToken = authToken
-        self.httpClient = httpClient ?? HTTPClient(eventLoopGroupProvider: .singleton)
-        
+        if let httpClient = httpClient {
+            self.httpClient = httpClient
+            self.ownsHTTPClient = false
+        } else {
+            self.httpClient = HTTPClient(eventLoopGroupProvider: .singleton)
+            self.ownsHTTPClient = true
+        }
+
         self.jsonDecoder = JSONDecoder()
         self.jsonEncoder = JSONEncoder()
-        
+
         // Configure JSON coding
         jsonDecoder.dateDecodingStrategy = .secondsSince1970
         jsonEncoder.dateEncodingStrategy = .secondsSince1970
     }
-    
+
     deinit {
-        Task {
-            try? await httpClient.shutdown()
+        if ownsHTTPClient {
+            Task {
+                try? await httpClient.shutdown()
+            }
         }
     }
     
@@ -188,7 +197,12 @@ public actor SSFHTTPClient {
             throw SSFError.configurationError("Invalid base URL")
         }
         
-        components.path = path
+        let basePath = baseURL.path
+        if basePath.isEmpty || basePath == "/" {
+            components.path = path
+        } else {
+            components.path = basePath + path
+        }
         if !queryItems.isEmpty {
             components.queryItems = queryItems
         }

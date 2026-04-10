@@ -93,12 +93,12 @@ public actor OAuth2AuthenticationProvider: SCIMAuthenticationProvider {
         
         var bodyComponents = [
             "grant_type=refresh_token",
-            "refresh_token=\(refreshToken)",
-            "client_id=\(clientId)"
+            "refresh_token=\(formURLEncode(refreshToken))",
+            "client_id=\(formURLEncode(clientId))"
         ]
-        
+
         if let clientSecret = clientSecret {
-            bodyComponents.append("client_secret=\(clientSecret)")
+            bodyComponents.append("client_secret=\(formURLEncode(clientSecret))")
         }
         
         request.httpBody = bodyComponents.joined(separator: "&").data(using: .utf8)
@@ -149,6 +149,13 @@ public struct CustomAuthenticationProvider: SCIMAuthenticationProvider {
     public func refresh() async throws {
         try await refreshHandler()
     }
+}
+
+/// Percent-encode a value for use in application/x-www-form-urlencoded bodies
+private func formURLEncode(_ value: String) -> String {
+    var allowed = CharacterSet.urlQueryAllowed
+    allowed.remove(charactersIn: "+=&")
+    return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
 }
 
 /// OAuth 2.0 token response

@@ -244,12 +244,15 @@ final class SSFWebhookHandler: ChannelInboundHandler {
             }
             
             logger.debug("Received SET token via webhook")
-            
+
             // Process the security event token
-            await receiver.processSecurityEventToken(setToken, handler: eventHandler)
-            
-            // Send success response
-            sendResponse(context: context, status: .accepted, body: "")
+            do {
+                try await receiver.processAndValidateSecurityEventToken(setToken, handler: eventHandler)
+                sendResponse(context: context, status: .accepted, body: "")
+            } catch {
+                logger.error("Failed to process SET token: \(error)")
+                sendResponse(context: context, status: .badRequest, body: "Failed to process event")
+            }
             
         } catch {
             logger.error("Failed to process webhook request: \(error)")

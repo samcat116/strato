@@ -216,6 +216,7 @@ private final class QMPChannelHandler: ChannelInboundHandler, @unchecked Sendabl
     private let encoder = JSONEncoder()
     
     private var greetingContinuation: CheckedContinuation<Void, Error>?
+    private var receivedGreeting = false
     private var pendingRequests: [CheckedContinuation<QMPResponse?, Error>] = []
     private var buffer = ByteBuffer()
     
@@ -252,6 +253,10 @@ private final class QMPChannelHandler: ChannelInboundHandler, @unchecked Sendabl
     }
     
     func waitForGreeting() async throws {
+        if receivedGreeting {
+            receivedGreeting = false
+            return
+        }
         try await withCheckedThrowingContinuation { continuation in
             self.greetingContinuation = continuation
         }
@@ -299,8 +304,12 @@ private final class QMPChannelHandler: ChannelInboundHandler, @unchecked Sendabl
             logger.debug("Received QMP greeting", metadata: [
                 "version": .stringConvertible("\(greeting.QMP.version.qemu.major).\(greeting.QMP.version.qemu.minor).\(greeting.QMP.version.qemu.micro)")
             ])
-            greetingContinuation?.resume()
-            greetingContinuation = nil
+            if let continuation = greetingContinuation {
+                continuation.resume()
+                greetingContinuation = nil
+            } else {
+                receivedGreeting = true
+            }
             return
         }
 

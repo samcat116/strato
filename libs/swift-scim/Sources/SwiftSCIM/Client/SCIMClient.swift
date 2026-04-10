@@ -25,14 +25,17 @@ public actor SCIMClient {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         self.dateFormatter = formatter
-        
+
+        let formatterWithoutFractional = ISO8601DateFormatter()
+        formatterWithoutFractional.formatOptions = [.withInternetDateTime]
+
         self.encoder = JSONEncoder()
         self.encoder.dateEncodingStrategy = .custom { date, encoder in
             let string = formatter.string(from: date)
             var container = encoder.singleValueContainer()
             try container.encode(string)
         }
-        
+
         self.decoder = JSONDecoder()
         self.decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
@@ -40,7 +43,10 @@ public actor SCIMClient {
             if let date = formatter.date(from: string) {
                 return date
             }
-            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date format")
+            if let date = formatterWithoutFractional.date(from: string) {
+                return date
+            }
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date format: \(string)")
         }
     }
     
@@ -198,24 +204,29 @@ public actor SCIMClient {
     }
     
     /// Perform a PATCH request with a body and decode the response
+    /// Returns nil when the server responds with 204 No Content
     internal func patch<T: Codable, R: Codable>(
         path: String,
         body: T,
         responseType: R.Type
-    ) async throws -> R {
+    ) async throws -> R? {
         let bodyData: Data
         do {
             bodyData = try encoder.encode(body)
         } catch {
             throw SCIMClientError.encodingError(error)
         }
-        
-        let (data, _) = try await performRequest(
+
+        let (data, response) = try await performRequest(
             method: .PATCH,
             path: path,
             body: bodyData
         )
-        
+
+        if response.statusCode == 204 || data.isEmpty {
+            return nil
+        }
+
         do {
             return try decoder.decode(responseType, from: data)
         } catch {

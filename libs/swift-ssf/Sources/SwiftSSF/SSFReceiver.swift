@@ -206,6 +206,15 @@ public actor SSFReceiver {
             await handler.handleError(ssfError, token: nil)
         }
     }
+
+    /// Process a single SET token, throwing on validation or handler errors
+    public func processAndValidateSecurityEventToken(
+        _ token: String,
+        handler: SSFEventHandler
+    ) async throws {
+        let securityEventToken = try await parseAndValidateToken(token)
+        try await handler.handleEvent(securityEventToken)
+    }
     
     // MARK: - Discovery
     
@@ -255,8 +264,7 @@ public actor SSFReceiver {
         let (header, _) = try await jwtProcessor.parseJWT(token)
         
         guard let keyId = header.kid else {
-            logger.warning("JWT does not contain key ID, skipping signature verification")
-            return nil
+            throw SSFError.invalidJWT("Missing key ID (kid) in JWT header")
         }
         
         // Get JWKS
