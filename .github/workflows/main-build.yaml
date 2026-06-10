@@ -55,6 +55,8 @@ jobs:
         run: bun run build:deploy
 
       - uses: vapor/swiftly-action@v0.2
+        with:
+          toolchain: "6.3.2"
 
       - name: Build Control Plane Release Binary
         working-directory: control-plane

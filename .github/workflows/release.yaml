@@ -199,9 +199,9 @@ jobs:
 
       - name: Set up Swift (Linux)
         if: matrix.os == 'self-hosted'
-        uses: swift-actions/setup-swift@v1
+        uses: vapor/swiftly-action@v0.2
         with:
-          swift-version: "6.0"
+          toolchain: "6.3.2"
 
       - name: Debug jemalloc
         if: matrix.os == 'self-hosted'

@@ -28,7 +28,7 @@ This guide will help you set up Strato for development or production use.
 
 ### Swift Development (Optional)
 
-- Swift 6.0 or later
+- Swift 6.2 or later
 - Vapor CLI (optional): `brew install vapor`
 
 ## Installation

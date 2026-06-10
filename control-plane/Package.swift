@@ -1,4 +1,4 @@
-// swift-tools-version:6.1
+// swift-tools-version:6.2
 import PackageDescription
 
 let package = Package(
@@ -70,13 +70,24 @@ let package = Package(
                 .product(name: "VaporTesting", package: "vapor"),
                 .product(name: "FluentSQLiteDriver", package: "fluent-sqlite-driver")
             ],
-            swiftSettings: swiftSettings
+            swiftSettings: testSwiftSettings
         )
     ],
     swiftLanguageModes: [.v6]
 )
 
 var swiftSettings: [SwiftSetting] {
-    // Minimal settings for Swift 6 compatibility
-    []
+    [
+        .enableUpcomingFeature("InferIsolatedConformances"),
+        .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
+    ]
+}
+
+// VaporTesting's request/response closures are not yet compatible with
+// NonisolatedNonsendingByDefault, so the test target only gets the
+// non-behavioral feature.
+var testSwiftSettings: [SwiftSetting] {
+    [
+        .enableUpcomingFeature("InferIsolatedConformances"),
+    ]
 }

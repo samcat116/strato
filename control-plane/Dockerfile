@@ -1,7 +1,7 @@
 # ================================
 # Build image - only for local builds
 # ================================
-FROM swift:6.1.2-noble AS build
+FROM swift:6.3.2-noble AS build
 
 # Check if we're using prebuilt artifacts
 ARG PREBUILT_ARTIFACTS=""

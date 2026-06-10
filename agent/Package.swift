@@ -1,4 +1,4 @@
-// swift-tools-version:6.0
+// swift-tools-version:6.2
 import PackageDescription
 
 let package = Package(
@@ -18,13 +18,13 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
         .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
-        .package(url: "https://github.com/apple/swift-testing.git", from: "0.10.0"),
     ] + platformPackageDependencies,
     targets: [
         // Core library with testable code (no SwiftQEMU dependency)
         .target(
             name: "StratoAgentCore",
             dependencies: [
+                .product(name: "StratoShared", package: "shared"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Toml", package: "swift-toml"),
             ],
@@ -49,16 +49,18 @@ let package = Package(
             name: "StratoAgentTests",
             dependencies: [
                 "StratoAgentCore",
-                .product(name: "Testing", package: "swift-testing"),
             ],
             swiftSettings: swiftSettings
         )
     ],
-    swiftLanguageModes: [.v5]
+    swiftLanguageModes: [.v6]
 )
 
 var swiftSettings: [SwiftSetting] {
-    []
+    [
+        .enableUpcomingFeature("InferIsolatedConformances"),
+        .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
+    ]
 }
 
 // Conditional dependencies based on platform
