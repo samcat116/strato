@@ -258,7 +258,7 @@ The agent supports both Linux and macOS platforms with hardware-accelerated virt
 | **Production Ready** | ✅ Yes | ⚠️ Dev/Test only |
 
 ### Project Structure Notes
-- Swift strict concurrency enabled (Swift 6.0)
+- Swift strict concurrency enabled (Swift 6 language mode, swift-tools-version 6.2, upcoming features `InferIsolatedConformances` and `NonisolatedNonsendingByDefault` enabled)
 - Control Plane: Traditional Vapor web application with database
 - Agent: Cross-platform Swift application for hypervisor nodes
   - Linux: Production-ready with KVM and OVN/OVS

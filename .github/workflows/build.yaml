@@ -67,6 +67,8 @@ jobs:
             ${{ runner.os }}-swift-
 
       - uses: vapor/swiftly-action@v0.2
+        with:
+          toolchain: "6.3.2"
 
       - name: Build Shared Package
         working-directory: shared

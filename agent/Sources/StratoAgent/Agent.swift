@@ -362,7 +362,7 @@ actor Agent {
 
             // Set up timeout
             Task {
-                try await Task.sleep(for: .seconds(30))
+                try? await Task.sleep(for: .seconds(30))
                 if self.registrationContinuation != nil {
                     self.registrationContinuation?.resume(throwing: AgentError.registrationTimeout)
                     self.registrationContinuation = nil
