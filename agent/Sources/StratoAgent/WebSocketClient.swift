@@ -60,6 +60,10 @@ actor WebSocketClient {
     private var isConnected = false
     private var heartbeatTask: Task<Void, Never>?
 
+    // Distinguishes an operator-initiated disconnect (no reconnect) from an unexpected
+    // drop (triggers the agent's reconnection loop).
+    private var intentionalDisconnect = false
+
     init(url: String, agent: Agent, logger: Logger, tlsConfiguration: TLSConfiguration? = nil) {
         self.url = url
         self.agent = agent
@@ -77,6 +81,9 @@ actor WebSocketClient {
 
     func connect() async throws {
         logger.info("Attempting to connect to WebSocket server", metadata: ["url": .string(url)])
+
+        // A fresh connection attempt is, by definition, not an intentional disconnect.
+        intentionalDisconnect = false
 
         // Parse URL
         guard let parsedURL = URL(string: url) else {
@@ -114,12 +121,18 @@ actor WebSocketClient {
             let loggerRef = self.logger
             let agentRef = self.agent
 
-            // Create connection - this returns immediately, callback fires when connected
+            // Create connection - this returns immediately, callback fires when connected.
+            // Capture self weakly so the onClose handler can hop back to the actor without
+            // forming a self -> wsHolder -> ws -> onClose -> self retain cycle.
             WebSocket.connect(
                 to: url,
                 configuration: wsConfig,
                 on: eventLoop
-            ) { ws in
+            ) { [weak self] ws in
+                // Immutable, Sendable weak reference to this actor for use in the
+                // nested close handler (avoids capturing the mutable `self` binding).
+                let clientRef = self
+
                 // Store WebSocket in thread-safe box (still on EventLoop)
                 wsHolderRef.set(ws)
 
@@ -181,6 +194,9 @@ actor WebSocketClient {
                 ws.onClose.whenComplete { _ in
                     loggerRef.info("WebSocket connection closed")
                     wsHolderRef.set(nil)
+                    // Bridge the event-loop callback back onto the actor to update
+                    // connection state and trigger reconnection if this was unexpected.
+                    Task { await clientRef?.handleConnectionClosed() }
                 }
 
                 loggerRef.info("WebSocket connection established and ready")
@@ -209,6 +225,9 @@ actor WebSocketClient {
         }
 
         logger.info("Disconnecting from WebSocket server")
+
+        // Mark this close as intentional so the onClose handler does not reconnect.
+        intentionalDisconnect = true
 
         // Stop heartbeat
         heartbeatTask?.cancel()
@@ -255,6 +274,22 @@ actor WebSocketClient {
     }
 
     // MARK: - Private Methods
+
+    /// Invoked when the underlying WebSocket closes. Tears down connection state and,
+    /// unless the close was operator-initiated, asks the agent to begin reconnecting.
+    private func handleConnectionClosed() async {
+        isConnected = false
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+
+        if intentionalDisconnect {
+            logger.debug("WebSocket closed intentionally; not reconnecting")
+            return
+        }
+
+        logger.warning("WebSocket closed unexpectedly; requesting reconnection")
+        await agent?.handleConnectionLost()
+    }
 
     private func startHeartbeat() {
         heartbeatTask = Task {

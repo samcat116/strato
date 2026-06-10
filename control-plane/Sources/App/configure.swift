@@ -109,6 +109,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddHypervisorTypeToVM())
     app.migrations.add(AddHypervisorTypeToAgent())
 
+    // VM state reconciliation: must run before any data migration that loads the VM
+    // model (e.g. MigrateVMDisksToVolumes), since the model now selects this column.
+    app.migrations.add(AddStatusChangedAtToVM())
+
     // App settings migration (for signing keys, etc.)
     app.migrations.add(CreateAppSetting())
 

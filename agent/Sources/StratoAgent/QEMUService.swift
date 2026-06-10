@@ -15,6 +15,13 @@ actor QEMUService: HypervisorService {
     private let qemuBinaryPath: String
     private let configuredFirmwarePath: String?
 
+    // Durable record of managed VMs, used to detect VMs orphaned by an agent restart.
+    private let manifestStore: VMManifestStore
+    /// VM IDs this agent was managing before the current process started. These are
+    /// not under active management (no QEMU re-adoption in Option A) and are reported
+    /// to operators so the control plane can reconcile them.
+    private(set) var orphanedVMIDs: Set<String> = []
+
     // HypervisorService protocol requirement
     public let hypervisorType: HypervisorType = .qemu
 
@@ -38,6 +45,22 @@ actor QEMUService: HypervisorService {
         self.vmStoragePath = vmStoragePath
         self.qemuBinaryPath = qemuBinaryPath
         self.configuredFirmwarePath = firmwarePath
+        self.manifestStore = VMManifestStore(
+            path: (vmStoragePath as NSString).appendingPathComponent("qemu-manifest.json"),
+            logger: logger
+        )
+
+        // Any VMs recorded in the manifest were managed by a previous incarnation of
+        // this agent. We do not re-adopt them (Option A), so record them as orphaned
+        // and warn — the control plane will mark them for attention via reconciliation.
+        let previousManifest = manifestStore.load()
+        if !previousManifest.isEmpty {
+            let ids = Set(previousManifest.keys)
+            orphanedVMIDs = ids
+            logger.warning("Found \(previousManifest.count) VM(s) managed before restart; their QEMU processes are now unmanaged", metadata: [
+                "vmIds": .string(ids.sorted().joined(separator: ","))
+            ])
+        }
 
         #if canImport(SwiftQEMU)
         #if os(Linux)
@@ -208,6 +231,7 @@ actor QEMUService: HypervisorService {
 
         activeVMs[vmId] = qemuManager
         vmConfigs[vmId] = effectiveConfig
+        persistManifest()
 
         logger.info("QEMU VM created successfully", metadata: ["vmId": .string(vmId)])
         #else
@@ -351,6 +375,7 @@ actor QEMUService: HypervisorService {
         // Clean up VM resources
         activeVMs.removeValue(forKey: vmId)
         vmConfigs.removeValue(forKey: vmId)
+        persistManifest()
         vmNetworkInfo.removeValue(forKey: vmId)
 
         // Clean up console socket
@@ -508,6 +533,28 @@ actor QEMUService: HypervisorService {
         return Array(activeVMs.keys)
         #else
         return Array(mockVMs.keys)
+        #endif
+    }
+
+    /// Sum of vCPUs and memory (in bytes) reserved by all VMs this service is managing.
+    /// Used to compute accurate available-resource figures for the scheduler.
+    func reservedResources() -> (vcpus: Int, memoryBytes: Int64) {
+        var vcpus = 0
+        var memoryBytes: Int64 = 0
+        #if canImport(SwiftQEMU)
+        for config in vmConfigs.values {
+            vcpus += config.cpus?.bootVcpus ?? 0
+            memoryBytes += config.memory?.size ?? 0
+        }
+        #endif
+        return (vcpus, memoryBytes)
+    }
+
+    /// Persists the current set of managed VMs to the on-disk manifest so they can be
+    /// detected as orphaned after an agent restart.
+    private func persistManifest() {
+        #if canImport(SwiftQEMU)
+        manifestStore.save(vmConfigs)
         #endif
     }
 

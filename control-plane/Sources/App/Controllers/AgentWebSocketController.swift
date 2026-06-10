@@ -321,10 +321,16 @@ struct AgentWebSocketController: RouteCollection {
                     }
                 }
 
-            case .success, .error, .statusUpdate:
-                // Handle responses from agents
+            case .success, .error:
+                // Correlated responses to control-plane-initiated requests
                 Task {
                     await req.agentService.handleAgentResponse(envelope)
+                }
+
+            case .statusUpdate:
+                // Unsolicited VM state change reported by the agent; persist it
+                Task {
+                    await req.agentService.applyStatusUpdate(envelope)
                 }
 
             case .consoleData:

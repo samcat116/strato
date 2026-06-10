@@ -41,6 +41,7 @@ actor Agent {
     private var volumeService: VolumeService?
     private var consoleSocketManager: ConsoleSocketManager?
     private var heartbeatTask: Task<Void, Error>?
+    private var reconnectTask: Task<Void, Never>?
     private var isRunning = false
     private var registrationContinuation: CheckedContinuation<String, Error>?
     private let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
@@ -238,7 +239,10 @@ actor Agent {
     func stop() async {
         logger.info("Stopping agent")
         isRunning = false
-        
+
+        reconnectTask?.cancel()
+        reconnectTask = nil
+
         heartbeatTask?.cancel()
         heartbeatTask = nil
         
@@ -423,6 +427,54 @@ actor Agent {
             }
         }
     }
+
+    // MARK: - Reconnection
+
+    /// Called by the WebSocket client when the connection to the control plane drops
+    /// unexpectedly. Starts a single reconnection loop (guarded against duplicates).
+    func handleConnectionLost() async {
+        guard isRunning else { return }
+        guard reconnectTask == nil else {
+            logger.debug("Reconnection already in progress; ignoring duplicate signal")
+            return
+        }
+
+        logger.warning("Lost connection to control plane; beginning reconnection with backoff")
+        reconnectTask = Task { [weak self] in
+            await self?.runReconnectLoop()
+        }
+    }
+
+    /// Repeatedly attempts to reconnect to the control plane with exponential backoff
+    /// and jitter, re-registering on success. Runs until reconnected or the agent stops.
+    private func runReconnectLoop() async {
+        defer { reconnectTask = nil }
+
+        var delaySeconds = 1.0
+        let maxDelaySeconds = 30.0
+
+        while isRunning {
+            // Backoff with jitter to avoid thundering-herd reconnects across many agents.
+            let jitter = Double.random(in: 0...(delaySeconds * 0.3))
+            do {
+                try await Task.sleep(for: .seconds(delaySeconds + jitter))
+            } catch {
+                return // cancelled (agent stopping)
+            }
+
+            guard isRunning else { return }
+
+            do {
+                try await websocketClient?.connect()
+                try await registerWithControlPlane()
+                logger.info("Successfully reconnected and re-registered with control plane")
+                return
+            } catch {
+                logger.error("Reconnection attempt failed, will retry: \(error)")
+                delaySeconds = min(delaySeconds * 2, maxDelaySeconds)
+            }
+        }
+    }
     
     func sendHeartbeat() async {
         do {
@@ -455,15 +507,49 @@ actor Agent {
     }
     
     private func getAgentResources() async -> AgentResources {
-        // TODO: Implement actual resource detection
-        // For now, return mock values
+        // Host capacity, probed live from the machine the agent runs on.
+        let totalCPU = HostResources.logicalCoreCount
+        let totalMemory = HostResources.physicalMemoryBytes
+
+        // Resources committed to VMs currently managed on this host. We report
+        // available = total - reserved (1:1, no overcommit) so the scheduler treats
+        // CPU/memory as hard constraints; overcommit ratios can be layered on later.
+        var reservedCPU = 0
+        var reservedMemory: Int64 = 0
+
+        if let qemu = qemuService {
+            let reserved = await qemu.reservedResources()
+            reservedCPU += reserved.vcpus
+            reservedMemory += reserved.memoryBytes
+        }
+
+        #if os(Linux)
+        if let firecracker = firecrackerService {
+            let reserved = await firecracker.reservedResources()
+            reservedCPU += reserved.vcpus
+            reservedMemory += reserved.memoryBytes
+        }
+        #endif
+
+        let availableCPU = max(0, totalCPU - reservedCPU)
+        let availableMemory = max(0, totalMemory - reservedMemory)
+
+        // VM disks are created directly on the storage filesystem, so query it live
+        // rather than tracking reservations — this naturally accounts for existing disks.
+        let disk = HostResources.diskCapacity(forPath: vmStoragePath)
+        if disk == nil {
+            logger.warning("Unable to determine disk capacity for VM storage path", metadata: [
+                "path": .string(vmStoragePath)
+            ])
+        }
+
         return AgentResources(
-            totalCPU: 8,
-            availableCPU: 6,
-            totalMemory: 16 * 1024 * 1024 * 1024, // 16GB
-            availableMemory: 12 * 1024 * 1024 * 1024, // 12GB
-            totalDisk: 1000 * 1024 * 1024 * 1024, // 1TB
-            availableDisk: 800 * 1024 * 1024 * 1024 // 800GB
+            totalCPU: totalCPU,
+            availableCPU: availableCPU,
+            totalMemory: totalMemory,
+            availableMemory: availableMemory,
+            totalDisk: disk?.total ?? 0,
+            availableDisk: disk?.free ?? 0
         )
     }
     
