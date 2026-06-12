@@ -20,13 +20,16 @@ struct HealthController: RouteCollection {
     }
 
     func liveness(req: Request) async throws -> HealthResponse {
-        // Basic liveness check - if we can respond, we're alive
+        // Basic liveness check - if we can respond, we're alive.
+        // Includes per-boot identity so callers can tell *which* control plane
+        // answered (the missing signal when a stale duplicate hijacked the port).
         return HealthResponse(
             status: "healthy",
             timestamp: Date(),
             checks: [
                 HealthCheck(name: "application", status: "up")
-            ]
+            ],
+            identity: ServiceIdentity(req.instanceIdentity)
         )
     }
 
@@ -49,7 +52,8 @@ struct HealthController: RouteCollection {
         return HealthResponse(
             status: overallStatus,
             timestamp: Date(),
-            checks: checks
+            checks: checks,
+            identity: ServiceIdentity(req.instanceIdentity)
         )
     }
 }
@@ -58,6 +62,33 @@ struct HealthResponse: Content {
     let status: String
     let timestamp: Date
     let checks: [HealthCheck]
+    let identity: ServiceIdentity?
+
+    init(status: String, timestamp: Date, checks: [HealthCheck], identity: ServiceIdentity? = nil) {
+        self.status = status
+        self.timestamp = timestamp
+        self.checks = checks
+        self.identity = identity
+    }
+}
+
+/// Identity of the control-plane process answering this request. Surfaced on the
+/// health endpoints so two instances (e.g. a stale duplicate on the same port)
+/// are immediately distinguishable by their per-boot `instanceId`.
+struct ServiceIdentity: Content {
+    let instanceId: String
+    let startedAt: Date
+    let version: String
+    let gitSHA: String
+    let environment: String
+
+    init(_ identity: InstanceIdentity) {
+        self.instanceId = identity.instanceId.uuidString
+        self.startedAt = identity.startedAt
+        self.version = BuildInfo.version
+        self.gitSHA = BuildInfo.gitSHA
+        self.environment = identity.environment
+    }
 }
 
 struct HealthCheck: Content {

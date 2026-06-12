@@ -104,6 +104,14 @@ COPY --from=build --chown=vapor:vapor /staging /app
 # Provide configuration needed by the built-in crash reporter and some sensible default behaviors.
 ENV SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=./swift-backtrace-static
 
+# Build identity, surfaced on /health/* (see BuildInfo.swift). Pass via
+# `docker build --build-arg STRATO_VERSION=... --build-arg STRATO_GIT_SHA=...`.
+# Helm sets these directly in the Deployment env; defaults keep local builds honest.
+ARG STRATO_VERSION="dev"
+ARG STRATO_GIT_SHA="unknown"
+ENV STRATO_VERSION=${STRATO_VERSION}
+ENV STRATO_GIT_SHA=${STRATO_GIT_SHA}
+
 # Ensure all further commands run as the vapor user
 USER vapor:vapor
 

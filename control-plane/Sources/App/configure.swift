@@ -6,6 +6,19 @@ import OTel
 import Redis
 
 public func configure(_ app: Application) async throws {
+    // Capture this process's identity once, before anything else, so the boot log
+    // and the /health endpoints can report exactly who is answering. Two control
+    // planes on the same port will report different instanceIds — the tell we
+    // lacked when a stale duplicate silently intercepted port 8080.
+    let identity = InstanceIdentity(environment: app.environment.name)
+    app.instanceIdentity = identity
+    app.logger.info("Control plane booting", metadata: [
+        "instanceId": .string(identity.instanceId.uuidString),
+        "version": .string(BuildInfo.version),
+        "gitSHA": .string(BuildInfo.gitSHA),
+        "environment": .string(identity.environment)
+    ])
+
     // Configure Valkey if available, fallback to Fluent sessions
     if let valkeyConfig = ValkeyConfiguration.fromEnvironment() {
         do {
