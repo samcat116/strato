@@ -40,6 +40,12 @@ line buffering on stdout/stderr:
 nohup stdbuf -oL -eL swift run > /tmp/strato-control-plane.log 2>&1 &
 ```
 
+`stdbuf` ships with GNU coreutils. On macOS it isn't present by default — install
+coreutils (`brew install coreutils`), where it's available as `gstdbuf` unless the
+`gnubin` PATH is added. The Taskfile detects `stdbuf`/`gstdbuf` and simply runs
+without the wrapper if neither is found, so dev startup never breaks; logs just
+fall back to block buffering on that platform.
+
 If you launch a binary by hand and redirect to a file, do the same, or `tail -f`
 a TTY instead.
 

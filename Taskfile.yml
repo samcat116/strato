@@ -782,9 +782,14 @@ tasks:
           exit 1
         fi
 
+        # Force line buffering so logs aren't block-buffered when redirected to a
+        # file under nohup. stdbuf is GNU coreutils (gstdbuf on macOS/Homebrew);
+        # fall back to no wrapper if neither exists so dev startup still works.
+        LINEBUF=""
+        if command -v stdbuf >/dev/null 2>&1; then LINEBUF="stdbuf -oL -eL";
+        elif command -v gstdbuf >/dev/null 2>&1; then LINEBUF="gstdbuf -oL -eL"; fi
         # Start agent with SPIFFE mTLS (uses config from create-agent-config-spiffe)
-        # stdbuf -oL -eL forces line buffering so logs aren't hidden under nohup.
-        nohup stdbuf -oL -eL swift run --package-path "{{.PROJECT_ROOT}}/agent" StratoAgent \
+        nohup $LINEBUF swift run --package-path "{{.PROJECT_ROOT}}/agent" StratoAgent \
           --config-file "{{.PROJECT_ROOT}}/config.toml" \
           --debug > /tmp/strato-agent.log 2>&1 &
         echo $! > /tmp/strato-agent.pid
@@ -888,9 +893,14 @@ tasks:
       - echo "▶️  Starting control-plane..."
       - |
         touch /tmp/strato-control-plane.log
-        # stdbuf -oL -eL forces line buffering: stdout block-buffers when it is a
-        # file (as here under nohup), which otherwise hides logs for minutes.
-        cd "{{.PROJECT_ROOT}}/control-plane" && nohup stdbuf -oL -eL swift run > /tmp/strato-control-plane.log 2>&1 &
+        # Force line buffering: stdout block-buffers when it is a file (as here
+        # under nohup), which otherwise hides logs for minutes. stdbuf is GNU
+        # coreutils (gstdbuf on macOS/Homebrew); fall back to no wrapper if neither
+        # exists so dev startup still works.
+        LINEBUF=""
+        if command -v stdbuf >/dev/null 2>&1; then LINEBUF="stdbuf -oL -eL";
+        elif command -v gstdbuf >/dev/null 2>&1; then LINEBUF="gstdbuf -oL -eL"; fi
+        cd "{{.PROJECT_ROOT}}/control-plane" && nohup $LINEBUF swift run > /tmp/strato-control-plane.log 2>&1 &
         echo $! > /tmp/strato-control-plane.pid
       - echo "⏳ Waiting for control-plane to be ready..."
       - sleep 5
@@ -914,12 +924,16 @@ tasks:
       - echo "▶️  Starting control-plane with SPIFFE enabled..."
       - |
         touch /tmp/strato-control-plane.log
-        # stdbuf -oL -eL forces line buffering (see start-control-plane).
+        # Force line buffering (see start-control-plane); no-op if stdbuf/gstdbuf
+        # is unavailable so dev startup still works.
+        LINEBUF=""
+        if command -v stdbuf >/dev/null 2>&1; then LINEBUF="stdbuf -oL -eL";
+        elif command -v gstdbuf >/dev/null 2>&1; then LINEBUF="gstdbuf -oL -eL"; fi
         cd "{{.PROJECT_ROOT}}/control-plane" && \
         SPIRE_ENABLED=true \
         SPIRE_TRUST_DOMAIN={{.SPIRE_TRUST_DOMAIN}} \
         SPIRE_TRUST_BUNDLE_PATH=/tmp/strato-spiffe/bundle.pem \
-        nohup stdbuf -oL -eL swift run > /tmp/strato-control-plane.log 2>&1 &
+        nohup $LINEBUF swift run > /tmp/strato-control-plane.log 2>&1 &
         echo $! > /tmp/strato-control-plane.pid
       - echo "⏳ Waiting for control-plane to be ready..."
       - sleep 5
@@ -992,8 +1006,12 @@ tasks:
 
         echo "▶️  Starting agent with registration URL..."
         touch /tmp/strato-agent.log
-        # stdbuf -oL -eL forces line buffering so logs aren't hidden under nohup.
-        nohup stdbuf -oL -eL swift run --package-path "{{.PROJECT_ROOT}}/agent" StratoAgent \
+        # Force line buffering so logs aren't block-buffered under nohup; no-op if
+        # stdbuf/gstdbuf is unavailable (e.g. macOS without coreutils).
+        LINEBUF=""
+        if command -v stdbuf >/dev/null 2>&1; then LINEBUF="stdbuf -oL -eL";
+        elif command -v gstdbuf >/dev/null 2>&1; then LINEBUF="gstdbuf -oL -eL"; fi
+        nohup $LINEBUF swift run --package-path "{{.PROJECT_ROOT}}/agent" StratoAgent \
           --config-file "{{.PROJECT_ROOT}}/config.toml" \
           --registration-url "${REGISTRATION_URL}" > /tmp/strato-agent.log 2>&1 &
         echo $! > /tmp/strato-agent.pid
