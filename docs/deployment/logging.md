@@ -57,8 +57,11 @@ a TTY instead.
 http_request method=GET path=/health/live status=200 durationMs=1.4
 ```
 
-It is registered as the outermost middleware so the duration and status reflect
-the full request.
+Failed requests are logged too: a thrown `Abort` (401/403/404/…) propagates back
+through the middleware as an error, so the status is derived from the error
+(`AbortError.status`, else `500`) to match what the client receives. `5xx`
+responses are logged at `error` level, everything else at `info` — always as the
+same `http_request` event, so it's one status-bearing line per request.
 
 **Toggle:** the `REQUEST_LOGGING` environment variable (`true`/`false`). When
 unset it defaults to **on outside `.production`** and off in production; set
