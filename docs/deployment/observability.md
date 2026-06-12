@@ -33,7 +33,8 @@ All metrics are defined in one place: `control-plane/Sources/App/Telemetry/Telem
 | `strato_agent_connections_total` | counter | — | Agent successfully (re)registered |
 | `strato_agent_disconnections_total` | counter | `reason` = `connection_closed` \| `unregister` \| `stale` | Agent connection ended |
 | `strato_agent_registration_failures_total` | counter | `reason` = `invalid_token` \| `expired_token` \| `register_error` | A registration attempt was rejected |
-| `strato_agent_heartbeat_staleness_seconds` | gauge | `agent` = agent name | Seconds since the agent's last heartbeat (recorded every ~30s monitoring cycle) |
+| `strato_agent_up` | gauge | `agent` = agent name | `1` while connected, `0` once disconnected. Durable per-agent up/down signal — keeps reporting `0` after the stale sweep, so it's the basis for the "agent down" alert |
+| `strato_agent_heartbeat_staleness_seconds` | gauge | `agent` = agent name | Seconds since the agent's last heartbeat, recorded each ~30s cycle **while connected**. Secondary "heartbeats slowing" signal; stops updating once the agent is swept |
 | `strato_vm_errors_total` | counter | `reason` = `reconciliation` \| `stuck_transition` \| `agent_reported` | A VM transitioned into `.error` |
 
 ### Notes on the labels
@@ -55,11 +56,12 @@ Thresholds are starting points; tune to your fleet size and SLOs.
 
 ### Agent disconnected too long
 
-- **Condition:** an agent has no connection for more than **N minutes**
-  (suggest 5 min). Derive from `strato_agent_heartbeat_staleness_seconds`
-  climbing past `300`, or absence of a connection after a
-  `strato_agent_disconnections_total` increment with no following
-  `strato_agent_connections_total` for the same fleet.
+- **Condition:** `strato_agent_up == 0` for more than **N minutes** (suggest
+  5 min) — e.g. `min_over_time(strato_agent_up[5m]) == 0`. The `agent` label names
+  the down node. Use this gauge, **not** `strato_agent_heartbeat_staleness_seconds`:
+  the staleness gauge stops updating once the 60s stale sweep removes the agent
+  from memory, so it never climbs to a 5-minute threshold. `strato_agent_up` keeps
+  reporting `0` after the sweep, so the alert actually fires.
 - **Severity:** warning at 5 min, page at 15 min (capacity loss / VMs unmanaged).
 - **First checks:** is the agent process alive on the node? Network path to the
   control plane? Look for `register_error` / token issues in
@@ -100,8 +102,9 @@ The dev Taskfile disables OTel. To exercise metrics, run the control plane with
 `OTEL_METRICS_ENABLED=true` and an OTLP collector (the Taskfile's
 `start-otel-collector` brings one up), then:
 
-- Kill an agent → expect a `strato_agent_disconnections_total{reason="stale"}`
-  (or `connection_closed`) increment and `strato_agent_heartbeat_staleness_seconds`
-  climbing for that agent.
+- Kill an agent → expect `strato_agent_up{agent="…"}` to drop to `0` (and stay
+  there) and a `strato_agent_disconnections_total{reason="stale"}` (or
+  `connection_closed`) increment. While it's still in the 60s grace window,
+  `strato_agent_heartbeat_staleness_seconds` climbs before the sweep removes it.
 - Trigger a VM failure → expect `strato_vm_errors_total` to increment with the
   matching `reason`.

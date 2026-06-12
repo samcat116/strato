@@ -145,6 +145,7 @@ actor AgentService {
         agents[agentUUID.uuidString] = agentInfo
 
         Telemetry.agentConnected()
+        Telemetry.recordAgentUp(agentName: agentName, up: true)
         app.logger.info("Agent registered", metadata: [
             "agentId": .string(agentUUID.uuidString),
             "agentName": .string(agentName),
@@ -192,6 +193,9 @@ actor AgentService {
         }
 
         Telemetry.agentDisconnected(reason: "unregister")
+        if let name = agentName {
+            Telemetry.recordAgentUp(agentName: name, up: false)
+        }
         app.logger.info("Agent unregistered", metadata: ["agentId": .string(agentId)])
     }
 
@@ -235,6 +239,7 @@ actor AgentService {
         agents.removeValue(forKey: agentId)
 
         Telemetry.agentDisconnected(reason: "connection_closed")
+        Telemetry.recordAgentUp(agentName: agentName, up: false)
 
         // Update database status asynchronously
         Task {
@@ -412,10 +417,17 @@ actor AgentService {
                 // Fail any in-flight requests waiting on this agent before we drop it
                 failPendingRequests(for: agentId)
 
+                // Capture the name before removal so the up/down gauge keeps a
+                // durable `0` for this specific agent after it leaves memory.
+                let staleAgentName = agents[agentId]?.name
+
                 // Remove from memory
                 agents.removeValue(forKey: agentId)
 
                 Telemetry.agentDisconnected(reason: "stale")
+                if let name = staleAgentName {
+                    Telemetry.recordAgentUp(agentName: name, up: false)
+                }
 
                 // Update database using UUID
                 Task {

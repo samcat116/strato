@@ -32,9 +32,20 @@ enum Telemetry {
         Counter(label: "strato_agent_registration_failures_total", dimensions: [("reason", reason)]).increment()
     }
 
+    /// Per-agent connection state: `1` while connected, `0` once disconnected.
+    /// This is the durable, alertable signal — unlike the staleness gauge it keeps
+    /// reporting `0` after the stale sweep drops the agent from memory, so an alert
+    /// like `strato_agent_up == 0 for 5m` actually fires, and the `agent` label
+    /// identifies exactly which node is down. Set to `1` on (re)registration and
+    /// `0` on every disconnect path (close / unregister / stale sweep).
+    static func recordAgentUp(agentName: String, up: Bool) {
+        Gauge(label: "strato_agent_up", dimensions: [("agent", agentName)]).record(up ? 1 : 0)
+    }
+
     /// Seconds since an agent's last heartbeat, recorded per agent each monitoring
-    /// cycle. Alert when this climbs past the staleness threshold — a quiet agent
-    /// is the early signal of a hung or partitioned hypervisor node.
+    /// cycle *while the agent is still connected*. A secondary signal for spotting
+    /// heartbeats that are slowing before the 60s sweep removes the agent; once
+    /// swept it stops updating, so alert on `strato_agent_up` for hard-down detection.
     static func recordHeartbeatStaleness(agentName: String, seconds: Double) {
         Gauge(label: "strato_agent_heartbeat_staleness_seconds", dimensions: [("agent", agentName)]).record(seconds)
     }
