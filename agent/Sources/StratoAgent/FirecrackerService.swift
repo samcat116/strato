@@ -264,8 +264,10 @@ actor FirecrackerService: HypervisorService {
     }
 
     func getVMStatus(vmId: String) async throws -> VMStatus {
+        // An absent entry means this service does not manage the VM at all; report
+        // that honestly instead of fabricating `.shutdown` (see QEMUService).
         guard let manager = vmManagers[vmId] else {
-            return .shutdown
+            throw HypervisorServiceError.vmNotFound(vmId)
         }
 
         let instanceInfo = try await manager.getInstanceInfo()

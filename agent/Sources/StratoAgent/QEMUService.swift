@@ -498,8 +498,12 @@ actor QEMUService: HypervisorService {
 
     func getVMStatus(vmId: String) async throws -> VMStatus {
         #if canImport(SwiftQEMU)
+        // Shut-down VMs stay in activeVMs until deleted, so an absent entry means
+        // this service does not manage the VM at all (e.g. lost on agent restart).
+        // Report that honestly instead of fabricating `.shutdown` — the control
+        // plane relies on the distinction to preserve a reconciled `.error` state.
         guard let qemuManager = activeVMs[vmId] else {
-            return .shutdown
+            throw HypervisorServiceError.vmNotFound(vmId)
         }
 
         do {
@@ -524,7 +528,10 @@ actor QEMUService: HypervisorService {
         }
         #else
         // Mock mode - return mock status
-        return mockVMs[vmId] != nil ? .running : .shutdown
+        guard mockVMs[vmId] != nil else {
+            throw HypervisorServiceError.vmNotFound(vmId)
+        }
+        return .running
         #endif
     }
 
