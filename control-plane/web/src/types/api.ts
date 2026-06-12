@@ -10,7 +10,15 @@ export interface User {
   isSystemAdmin: boolean;
 }
 
-export type VMStatus = "Running" | "Shutdown" | "Paused" | "Created";
+export type VMStatus =
+  | "Running"
+  | "Shutdown"
+  | "Paused"
+  | "Created"
+  | "Starting"
+  | "Stopping"
+  | "Error"
+  | "Unknown";
 
 export interface VM {
   id: string;
