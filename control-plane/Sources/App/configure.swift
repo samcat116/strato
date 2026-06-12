@@ -19,6 +19,16 @@ public func configure(_ app: Application) async throws {
         "environment": .string(identity.environment)
     ])
 
+    // Request logging: one structured line per HTTP request (method/path/status/
+    // duration). Registered first so it's the outermost middleware and times the
+    // full request. Default on outside production; override with REQUEST_LOGGING.
+    let requestLoggingEnabled = Environment.get("REQUEST_LOGGING").flatMap(Bool.init)
+        ?? (app.environment != .production)
+    if requestLoggingEnabled {
+        app.middleware.use(RequestLoggingMiddleware())
+        app.logger.info("Request logging enabled")
+    }
+
     // Configure Valkey if available, fallback to Fluent sessions
     if let valkeyConfig = ValkeyConfiguration.fromEnvironment() {
         do {
