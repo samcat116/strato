@@ -236,12 +236,14 @@ struct AgentWebSocketController: RouteCollection {
 
         return query.flatMapThrowing { registrationToken -> Bool in
             guard let registrationToken = registrationToken else {
+                Telemetry.agentRegistrationFailed(reason: "invalid_token")
                 self.sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token")
                 _ = ws.close(code: .unacceptableData)
                 return false
             }
 
             guard registrationToken.isValid else {
+                Telemetry.agentRegistrationFailed(reason: "expired_token")
                 self.sendErrorResponse(ws: ws, requestId: "", error: "Registration token is invalid or expired")
                 _ = ws.close(code: .unacceptableData)
                 return false
@@ -320,6 +322,7 @@ struct AgentWebSocketController: RouteCollection {
                         )
                         self.sendMessage(ws: ws, message: response)
                     } catch {
+                        Telemetry.agentRegistrationFailed(reason: "register_error")
                         req.logger.error("Failed to register agent: \(error)")
                         self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to register agent: \(error.localizedDescription)")
                     }

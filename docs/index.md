@@ -73,3 +73,4 @@ Strato uses a distributed **Control Plane** and **Agent** architecture:
 - [Development with Skaffold](/development/skaffold)
 - [Deployment Guide](/deployment/overview)
 - [Logging & Log Visibility](/deployment/logging)
+- [Observability: Metrics & Alerts](/deployment/observability)
