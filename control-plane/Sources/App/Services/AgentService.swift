@@ -729,6 +729,27 @@ actor AgentService {
 
                 guard vm.status != update.status else { return }
 
+                // A transitional state means a control-plane-initiated operation is in
+                // flight. Only the confirmation that completes that transition (or an
+                // error) may land; anything else is a delayed update from an operation
+                // that predates the transition — the controller guards (canStart/canStop/
+                // canPause) make any other concurrent operation impossible — and applying
+                // it would mask the in-flight one (e.g. a late `Paused` overwriting
+                // `.stopping`, hiding a lost stop from the sweep).
+                if vm.status.isTransitional {
+                    let expected: Set<VMStatus> = vm.status == .starting
+                        ? [.running, .error]
+                        : [.shutdown, .error]
+                    guard expected.contains(update.status) else {
+                        app.logger.warning("Ignoring stale agent status update during in-flight operation", metadata: [
+                            "vmId": .string(update.vmId),
+                            "current": .string(vm.status.rawValue),
+                            "reported": .string(update.status.rawValue)
+                        ])
+                        return
+                    }
+                }
+
                 let previous = vm.status
                 vm.setStatus(update.status)
                 try await vm.save(on: app.db)
