@@ -489,6 +489,11 @@ actor Agent {
                 return
             } catch {
                 logger.error("Reconnection attempt failed, will retry: \(error)")
+                // Tear down any half-open socket from this attempt (connect succeeded
+                // but registration failed or timed out) so the next attempt starts
+                // from a clean state instead of stacking connections. disconnect()
+                // marks the close intentional, so it won't trigger a second loop.
+                await websocketClient?.disconnect()
                 delaySeconds = min(delaySeconds * 2, maxDelaySeconds)
             }
         }
