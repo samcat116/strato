@@ -47,7 +47,7 @@ final class LockedWebSocket: @unchecked Sendable {
 }
 
 actor WebSocketClient {
-    private let url: String
+    private var url: String
     private weak var agent: Agent?
     private let logger: Logger
     private let eventLoopGroup: MultiThreadedEventLoopGroup
@@ -77,6 +77,12 @@ actor WebSocketClient {
     func updateTLSConfiguration(_ tlsConfig: TLSConfiguration?) {
         self.tlsConfiguration = tlsConfig
         logger.info("TLS configuration updated")
+    }
+
+    /// Update the connection URL (for registration token rotation). Takes effect
+    /// on the next connect; the current connection is unaffected.
+    func updateURL(_ newURL: String) {
+        self.url = newURL
     }
 
     func connect() async throws {

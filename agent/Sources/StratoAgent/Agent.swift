@@ -27,6 +27,10 @@ actor Agent {
     private let initialAgentID: String  // ID used for registration (hostname or CLI arg)
     private var assignedAgentID: String?  // UUID assigned by control plane after registration
     private let webSocketURL: String
+    // The URL to dial, including any rotated registration token. Registration tokens
+    // are single-use, so the control plane returns a fresh one on each successful
+    // registration and this tracks it for the reconnect loop.
+    private var currentWebSocketURL: String
     private let qemuSocketDir: String
     private let isRegistrationMode: Bool
     private let logger: Logger
@@ -80,6 +84,7 @@ actor Agent {
     ) {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
+        self.currentWebSocketURL = webSocketURL
         self.qemuSocketDir = qemuSocketDir
         self.networkMode = networkMode
         self.isRegistrationMode = isRegistrationMode
@@ -215,7 +220,7 @@ actor Agent {
         } else {
             logger.info("Connecting to control plane", metadata: ["url": .string(webSocketURL)])
         }
-        websocketClient = WebSocketClient(url: webSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration)
+        websocketClient = WebSocketClient(url: currentWebSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration)
 
         if let client = websocketClient {
             try await client.connect()
@@ -379,7 +384,20 @@ actor Agent {
     }
 
     /// Handle registration response from control plane
-    func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) {
+    func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) async {
+        // Adopt the rotated reconnect token (if any) before resuming registration:
+        // the token this connection presented was consumed by the control plane, so
+        // the reconnect loop must dial with the fresh one to be accepted.
+        if let rotatedToken = response.reconnectToken {
+            if let updatedURL = WebSocketURLs.replacingTokenQueryParameter(in: currentWebSocketURL, with: rotatedToken) {
+                currentWebSocketURL = updatedURL
+                await websocketClient?.updateURL(updatedURL)
+                logger.info("Adopted rotated reconnect token from control plane")
+            } else {
+                logger.warning("Control plane sent a reconnect token but the WebSocket URL has no token parameter; ignoring")
+            }
+        }
+
         guard let continuation = registrationContinuation else {
             logger.warning("Received registration response but no continuation waiting")
             return
@@ -586,7 +604,7 @@ extension Agent {
             switch envelope.type {
             case .agentRegisterResponse:
                 let message = try envelope.decode(as: AgentRegisterResponseMessage.self)
-                handleRegistrationResponse(message)
+                await handleRegistrationResponse(message)
             case .vmCreate:
                 let message = try envelope.decode(as: VMCreateMessage.self)
                 await handleVMCreate(message)
