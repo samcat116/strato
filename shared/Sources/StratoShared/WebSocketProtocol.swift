@@ -154,16 +154,25 @@ public struct AgentRegisterResponseMessage: WebSocketMessage {
     public let agentId: String  // The database UUID assigned to this agent
     public let name: String     // The human-readable name
 
+    /// Fresh single-use token for the agent's next (re)connection. Registration
+    /// tokens are consumed on connect, so the control plane rotates them here —
+    /// otherwise the agent's automatic reconnect after an unexpected drop would
+    /// present an already-used token and be rejected. Nil for mTLS-authenticated
+    /// connections (and from control planes that predate rotation).
+    public let reconnectToken: String?
+
     public init(
         requestId: String,
         timestamp: Date = Date(),
         agentId: String,
-        name: String
+        name: String,
+        reconnectToken: String? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.agentId = agentId
         self.name = name
+        self.reconnectToken = reconnectToken
     }
 }
 

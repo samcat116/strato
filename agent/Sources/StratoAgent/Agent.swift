@@ -27,6 +27,10 @@ actor Agent {
     private let initialAgentID: String  // ID used for registration (hostname or CLI arg)
     private var assignedAgentID: String?  // UUID assigned by control plane after registration
     private let webSocketURL: String
+    // The URL to dial, including any rotated registration token. Registration tokens
+    // are single-use, so the control plane returns a fresh one on each successful
+    // registration and this tracks it for the reconnect loop.
+    private var currentWebSocketURL: String
     private let qemuSocketDir: String
     private let isRegistrationMode: Bool
     private let logger: Logger
@@ -41,6 +45,7 @@ actor Agent {
     private var volumeService: VolumeService?
     private var consoleSocketManager: ConsoleSocketManager?
     private var heartbeatTask: Task<Void, Error>?
+    private var reconnectTask: Task<Void, Never>?
     private var isRunning = false
     private var registrationContinuation: CheckedContinuation<String, Error>?
     private let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
@@ -79,6 +84,7 @@ actor Agent {
     ) {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
+        self.currentWebSocketURL = webSocketURL
         self.qemuSocketDir = qemuSocketDir
         self.networkMode = networkMode
         self.isRegistrationMode = isRegistrationMode
@@ -214,7 +220,7 @@ actor Agent {
         } else {
             logger.info("Connecting to control plane", metadata: ["url": .string(webSocketURL)])
         }
-        websocketClient = WebSocketClient(url: webSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration)
+        websocketClient = WebSocketClient(url: currentWebSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration)
 
         if let client = websocketClient {
             try await client.connect()
@@ -238,7 +244,10 @@ actor Agent {
     func stop() async {
         logger.info("Stopping agent")
         isRunning = false
-        
+
+        reconnectTask?.cancel()
+        reconnectTask = nil
+
         heartbeatTask?.cancel()
         heartbeatTask = nil
         
@@ -375,7 +384,20 @@ actor Agent {
     }
 
     /// Handle registration response from control plane
-    func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) {
+    func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) async {
+        // Adopt the rotated reconnect token (if any) before resuming registration:
+        // the token this connection presented was consumed by the control plane, so
+        // the reconnect loop must dial with the fresh one to be accepted.
+        if let rotatedToken = response.reconnectToken {
+            if let updatedURL = WebSocketURLs.replacingTokenQueryParameter(in: currentWebSocketURL, with: rotatedToken) {
+                currentWebSocketURL = updatedURL
+                await websocketClient?.updateURL(updatedURL)
+                logger.info("Adopted rotated reconnect token from control plane")
+            } else {
+                logger.warning("Control plane sent a reconnect token but the WebSocket URL has no token parameter; ignoring")
+            }
+        }
+
         guard let continuation = registrationContinuation else {
             logger.warning("Received registration response but no continuation waiting")
             return
@@ -423,6 +445,59 @@ actor Agent {
             }
         }
     }
+
+    // MARK: - Reconnection
+
+    /// Called by the WebSocket client when the connection to the control plane drops
+    /// unexpectedly. Starts a single reconnection loop (guarded against duplicates).
+    func handleConnectionLost() async {
+        guard isRunning else { return }
+        guard reconnectTask == nil else {
+            logger.debug("Reconnection already in progress; ignoring duplicate signal")
+            return
+        }
+
+        logger.warning("Lost connection to control plane; beginning reconnection with backoff")
+        reconnectTask = Task { [weak self] in
+            await self?.runReconnectLoop()
+        }
+    }
+
+    /// Repeatedly attempts to reconnect to the control plane with exponential backoff
+    /// and jitter, re-registering on success. Runs until reconnected or the agent stops.
+    private func runReconnectLoop() async {
+        defer { reconnectTask = nil }
+
+        var delaySeconds = 1.0
+        let maxDelaySeconds = 30.0
+
+        while isRunning {
+            // Backoff with jitter to avoid thundering-herd reconnects across many agents.
+            let jitter = Double.random(in: 0...(delaySeconds * 0.3))
+            do {
+                try await Task.sleep(for: .seconds(delaySeconds + jitter))
+            } catch {
+                return // cancelled (agent stopping)
+            }
+
+            guard isRunning else { return }
+
+            do {
+                try await websocketClient?.connect()
+                try await registerWithControlPlane()
+                logger.info("Successfully reconnected and re-registered with control plane")
+                return
+            } catch {
+                logger.error("Reconnection attempt failed, will retry: \(error)")
+                // Tear down any half-open socket from this attempt (connect succeeded
+                // but registration failed or timed out) so the next attempt starts
+                // from a clean state instead of stacking connections. disconnect()
+                // marks the close intentional, so it won't trigger a second loop.
+                await websocketClient?.disconnect()
+                delaySeconds = min(delaySeconds * 2, maxDelaySeconds)
+            }
+        }
+    }
     
     func sendHeartbeat() async {
         do {
@@ -455,15 +530,49 @@ actor Agent {
     }
     
     private func getAgentResources() async -> AgentResources {
-        // TODO: Implement actual resource detection
-        // For now, return mock values
+        // Host capacity, probed live from the machine the agent runs on.
+        let totalCPU = HostResources.logicalCoreCount
+        let totalMemory = HostResources.physicalMemoryBytes
+
+        // Resources committed to VMs currently managed on this host. We report
+        // available = total - reserved (1:1, no overcommit) so the scheduler treats
+        // CPU/memory as hard constraints; overcommit ratios can be layered on later.
+        var reservedCPU = 0
+        var reservedMemory: Int64 = 0
+
+        if let qemu = qemuService {
+            let reserved = await qemu.reservedResources()
+            reservedCPU += reserved.vcpus
+            reservedMemory += reserved.memoryBytes
+        }
+
+        #if os(Linux)
+        if let firecracker = firecrackerService {
+            let reserved = await firecracker.reservedResources()
+            reservedCPU += reserved.vcpus
+            reservedMemory += reserved.memoryBytes
+        }
+        #endif
+
+        let availableCPU = max(0, totalCPU - reservedCPU)
+        let availableMemory = max(0, totalMemory - reservedMemory)
+
+        // VM disks are created directly on the storage filesystem, so query it live
+        // rather than tracking reservations — this naturally accounts for existing disks.
+        let disk = HostResources.diskCapacity(forPath: vmStoragePath)
+        if disk == nil {
+            logger.warning("Unable to determine disk capacity for VM storage path", metadata: [
+                "path": .string(vmStoragePath)
+            ])
+        }
+
         return AgentResources(
-            totalCPU: 8,
-            availableCPU: 6,
-            totalMemory: 16 * 1024 * 1024 * 1024, // 16GB
-            availableMemory: 12 * 1024 * 1024 * 1024, // 12GB
-            totalDisk: 1000 * 1024 * 1024 * 1024, // 1TB
-            availableDisk: 800 * 1024 * 1024 * 1024 // 800GB
+            totalCPU: totalCPU,
+            availableCPU: availableCPU,
+            totalMemory: totalMemory,
+            availableMemory: availableMemory,
+            totalDisk: disk?.total ?? 0,
+            availableDisk: disk?.free ?? 0
         )
     }
     
@@ -500,7 +609,7 @@ extension Agent {
             switch envelope.type {
             case .agentRegisterResponse:
                 let message = try envelope.decode(as: AgentRegisterResponseMessage.self)
-                handleRegistrationResponse(message)
+                await handleRegistrationResponse(message)
             case .vmCreate:
                 let message = try envelope.decode(as: VMCreateMessage.self)
                 await handleVMCreate(message)

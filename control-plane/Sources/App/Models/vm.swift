@@ -25,6 +25,11 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "hypervisor_id")
     var hypervisorId: String?
 
+    // When `status` last changed. Used by the reconciliation sweep to detect VMs
+    // stuck in a transitional state past a timeout.
+    @OptionalField(key: "status_changed_at")
+    var statusChangedAt: Date?
+
     @Enum(key: "hypervisor_type")
     var hypervisorType: HypervisorType
 
@@ -213,11 +218,25 @@ extension VM {
     }
 
     var canStart: Bool {
-        return status == .created || status == .shutdown
+        // `.error` is included so an operator can recover a VM whose state could not
+        // be confirmed (e.g. a lost or timed-out start).
+        return status == .created || status == .shutdown || status == .error
     }
 
     var canStop: Bool {
         return status == .running || status == .paused
+    }
+
+    /// True when a fresh boot is the right action (as opposed to resuming from pause).
+    var shouldBootOnStart: Bool {
+        return status == .created || status == .shutdown || status == .error
+    }
+
+    /// Updates the VM status and stamps the change time for the reconciliation sweep.
+    /// Does not persist — call `save(on:)` afterwards.
+    func setStatus(_ newStatus: VMStatus, at date: Date = Date()) {
+        status = newStatus
+        statusChangedAt = date
     }
 
     var canPause: Bool {

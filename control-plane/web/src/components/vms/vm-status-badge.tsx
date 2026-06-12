@@ -21,10 +21,27 @@ const statusConfig: Record<
     label: "Created",
     className: "bg-blue-500/20 text-blue-400 border-blue-500/30",
   },
+  Starting: {
+    label: "Starting",
+    className:
+      "bg-green-500/20 text-green-400 border-green-500/30 animate-pulse",
+  },
+  Stopping: {
+    label: "Stopping",
+    className: "bg-red-500/20 text-red-400 border-red-500/30 animate-pulse",
+  },
+  Error: {
+    label: "Error",
+    className: "bg-red-500/20 text-red-400 border-red-500/30",
+  },
+  Unknown: {
+    label: "Unknown",
+    className: "bg-gray-500/20 text-gray-400 border-gray-500/30",
+  },
 };
 
 export function VMStatusBadge({ status }: { status: VMStatus }) {
-  const config = statusConfig[status] || statusConfig.Created;
+  const config = statusConfig[status] || statusConfig.Unknown;
 
   return (
     <Badge variant="outline" className={config.className}>

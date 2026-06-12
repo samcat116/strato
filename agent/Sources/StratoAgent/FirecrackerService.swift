@@ -264,8 +264,10 @@ actor FirecrackerService: HypervisorService {
     }
 
     func getVMStatus(vmId: String) async throws -> VMStatus {
+        // An absent entry means this service does not manage the VM at all; report
+        // that honestly instead of fabricating `.shutdown` (see QEMUService).
         guard let manager = vmManagers[vmId] else {
-            return .shutdown
+            throw HypervisorServiceError.vmNotFound(vmId)
         }
 
         let instanceInfo = try await manager.getInstanceInfo()
@@ -282,6 +284,18 @@ actor FirecrackerService: HypervisorService {
 
     func listVMs() async -> [String] {
         return Array(vmManagers.keys)
+    }
+
+    /// Sum of vCPUs and memory (in bytes) reserved by all VMs this service is managing.
+    /// Used to compute accurate available-resource figures for the scheduler.
+    func reservedResources() -> (vcpus: Int, memoryBytes: Int64) {
+        var vcpus = 0
+        var memoryBytes: Int64 = 0
+        for config in vmConfigs.values {
+            vcpus += config.cpus?.bootVcpus ?? 0
+            memoryBytes += config.memory?.size ?? 0
+        }
+        return (vcpus, memoryBytes)
     }
 
     // MARK: - Private Methods

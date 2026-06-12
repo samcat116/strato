@@ -34,6 +34,18 @@ final class WebSocketManager: @unchecked Sendable {
         }
     }
 
+    /// Remove the connection for an agent only if the stored socket is the given
+    /// instance. Used by close handlers so a delayed close from a replaced
+    /// connection cannot tear down its successor (e.g. after an agent reconnects
+    /// under the same name). Returns true when the connection was removed.
+    func removeConnection(agentName: String, ifCurrent websocket: WebSocket) -> Bool {
+        lock.withLock {
+            guard connections[agentName] === websocket else { return false }
+            connections.removeValue(forKey: agentName)
+            return true
+        }
+    }
+
     /// Get all agent names (for diagnostics)
     func getAllAgentNames() -> [String] {
         lock.withLock {
@@ -46,8 +58,15 @@ actor AgentService {
     private let app: Application
     private var agents: [String: AgentInfo] = [:]
     private var vmToAgentMapping: [String: String] = [:] // VM ID -> Agent ID
-    private var pendingRequests: [String: CheckedContinuation<AgentServiceResponse, Error>] = [:]
+    private var pendingRequests: [String: PendingRequest] = [:]
     private var heartbeatTask: Task<Void, Never>?
+
+    /// A request awaiting a response from a specific agent.
+    /// Tracking the agent lets us fail all of an agent's in-flight requests when it disconnects.
+    private struct PendingRequest {
+        let agentId: String
+        let continuation: CheckedContinuation<AgentServiceResponse, Error>
+    }
 
     init(app: Application) {
         self.app = app
@@ -153,6 +172,9 @@ actor AgentService {
         // Get agent name for WebSocket cleanup
         let agentName = agents[agentId]?.name
 
+        // Fail any in-flight requests waiting on this agent before we drop it
+        failPendingRequests(for: agentId)
+
         // Remove from in-memory tracking
         agents.removeValue(forKey: agentId)
         if let name = agentName {
@@ -178,6 +200,9 @@ actor AgentService {
             return
         }
 
+        // Fail any in-flight requests waiting on this agent before we drop it
+        failPendingRequests(for: agentId)
+
         // Remove from in-memory tracking
         agents.removeValue(forKey: agentId)
         app.websocketManager.removeConnection(agentName: agentName)
@@ -201,6 +226,9 @@ actor AgentService {
             return
         }
 
+        // Fail any in-flight requests waiting on this agent before we drop it
+        failPendingRequests(for: agentId)
+
         // Mark agent as offline in memory
         agents.removeValue(forKey: agentId)
 
@@ -219,9 +247,21 @@ actor AgentService {
         }
     }
 
-    func updateAgentHeartbeat(_ message: AgentHeartbeatMessage) async throws {
+    /// `agentName` identifies the authenticated connection the heartbeat arrived on;
+    /// the claimed `agentId` must belong to it, so one agent cannot drive another
+    /// agent's resource tracking or VM reconciliation.
+    func updateAgentHeartbeat(_ message: AgentHeartbeatMessage, fromAgentNamed agentName: String) async throws {
         guard var agentInfo = agents[message.agentId] else {
             app.logger.warning("Received heartbeat from unknown agent", metadata: ["agentId": .string(message.agentId)])
+            return
+        }
+
+        guard agentInfo.name == agentName else {
+            app.logger.warning("Heartbeat claims an agentId not owned by the authenticated connection; ignoring", metadata: [
+                "claimedAgentId": .string(message.agentId),
+                "claimedAgentName": .string(agentInfo.name),
+                "connectionAgentName": .string(agentName)
+            ])
             return
         }
 
@@ -249,7 +289,72 @@ actor AgentService {
             }
         }
 
+        // Reconcile the VMs the agent reports against what the database expects.
+        Task {
+            await self.reconcileVMs(forAgentId: message.agentId, reportedVMs: message.runningVMs)
+        }
+
         app.logger.debug("Agent heartbeat updated", metadata: ["agentId": .string(message.agentId)])
+    }
+
+    /// Reconciles an agent's reported set of managed VMs against the database.
+    ///
+    /// An agent's heartbeat lists every VM it is managing (running, paused, or
+    /// shut-down-but-not-deleted). If the database believes a VM lives on this agent
+    /// but the agent no longer reports it — e.g. the agent crashed and lost the VM,
+    /// or the process died — the database's view is stale and we mark the VM `.error`
+    /// so it surfaces for operator attention instead of appearing healthy.
+    private func reconcileVMs(forAgentId agentId: String, reportedVMs: [String]) async {
+        let db = app.db
+        let managed = Set(reportedVMs)
+
+        do {
+            let dbVMs = try await VM.query(on: db)
+                .filter(\.$hypervisorId == agentId)
+                .all()
+
+            var divergent = 0
+            for vm in dbVMs {
+                guard let vmId = vm.id?.uuidString else { continue }
+
+                // Only established states are safe to reconcile on absence:
+                //  - `.created` may still be mid-creation (image download / first boot)
+                //  - transitional and `.error`/`.unknown` states are handled by the sweep
+                // so an absent VM in those states is expected and left alone.
+                // `.shutdown` counts as established: agents keep shut-down-but-not-deleted
+                // VMs in their managed set, so one missing from the heartbeat was lost
+                // (e.g. agent restart) and a later start would fail with vmNotFound.
+                let reconcilable = (vm.status == .running || vm.status == .paused || vm.status == .shutdown)
+                guard reconcilable, !managed.contains(vmId) else { continue }
+
+                let previous = vm.status
+                vm.setStatus(.error)
+                try await vm.save(on: db)
+                divergent += 1
+
+                app.logger.warning("VM missing from agent heartbeat; marking as error", metadata: [
+                    "vmId": .string(vmId),
+                    "agentId": .string(agentId),
+                    "previousStatus": .string(previous.rawValue)
+                ])
+            }
+
+            // Orphans: VMs the agent reports that the database does not map to it.
+            let knownIds = Set(dbVMs.compactMap { $0.id?.uuidString })
+            let orphans = managed.subtracting(knownIds)
+            if !orphans.isEmpty {
+                app.logger.warning("Agent reports VMs unknown to control plane", metadata: [
+                    "agentId": .string(agentId),
+                    "orphanVMs": .string(orphans.sorted().joined(separator: ","))
+                ])
+            }
+
+            if divergent > 0 {
+                app.logger.info("Reconciliation marked \(divergent) VM(s) as error", metadata: ["agentId": .string(agentId)])
+            }
+        } catch {
+            app.logger.error("VM reconciliation failed for agent \(agentId): \(error)")
+        }
     }
     
     // MARK: - Heartbeat Monitoring
@@ -260,9 +365,12 @@ actor AgentService {
                 do {
                     // Sleep for 30 seconds
                     try await Task.sleep(for: .seconds(30))
-                    
+
                     // Check for stale agents
                     await checkStaleAgents()
+
+                    // Move VMs stuck in a transitional state to error
+                    await sweepStuckTransitionalVMs()
                 } catch {
                     if !Task.isCancelled {
                         app.logger.error("Error in heartbeat monitoring task: \(error)")
@@ -287,6 +395,9 @@ actor AgentService {
             app.logger.info("Found \(staleAgents.count) stale agents, marking as offline")
 
             for agentId in staleAgents {
+                // Fail any in-flight requests waiting on this agent before we drop it
+                failPendingRequests(for: agentId)
+
                 // Remove from memory
                 agents.removeValue(forKey: agentId)
 
@@ -304,6 +415,41 @@ actor AgentService {
                     }
                 }
             }
+        }
+    }
+
+    /// Moves VMs that have been stuck in a transitional state (.starting/.stopping)
+    /// longer than the timeout to `.error`. This catches operations whose terminal
+    /// confirmation never arrived — e.g. the agent crashed mid-boot, or the
+    /// statusUpdate message was lost.
+    private func sweepStuckTransitionalVMs() async {
+        let db = app.db
+        let timeout: TimeInterval = 120 // a VM may legitimately be transitional this long
+        let now = Date()
+
+        do {
+            let transitional = try await VM.query(on: db)
+                .filter(\.$status ~~ [.starting, .stopping])
+                .all()
+
+            for vm in transitional {
+                // Fall back to updatedAt, then now, if the timestamp is somehow missing
+                // (a missing timestamp yields age 0 and is left for the next sweep).
+                let changedAt = vm.statusChangedAt ?? vm.updatedAt ?? now
+                guard now.timeIntervalSince(changedAt) > timeout else { continue }
+
+                let previous = vm.status
+                vm.setStatus(.error)
+                try await vm.save(on: db)
+
+                app.logger.warning("VM stuck in transitional state past timeout; marking as error", metadata: [
+                    "vmId": .string(vm.id?.uuidString ?? ""),
+                    "stuckStatus": .string(previous.rawValue),
+                    "timeoutSeconds": .string("\(Int(timeout))")
+                ])
+            }
+        } catch {
+            app.logger.error("Stuck-VM sweep failed: \(error)")
         }
     }
 
@@ -489,7 +635,7 @@ actor AgentService {
             Task {
                 do {
                     // Store continuation for response handling
-                    self.storePendingRequest(message.requestId, continuation: continuation)
+                    self.storePendingRequest(message.requestId, agentId: agentId, continuation: continuation)
 
                     // Send message
                     try await self.sendMessageToAgent(message, agentId: agentId)
@@ -507,12 +653,12 @@ actor AgentService {
         }
     }
 
-    private func storePendingRequest(_ requestId: String, continuation: CheckedContinuation<AgentServiceResponse, Error>) {
-        pendingRequests[requestId] = continuation
+    private func storePendingRequest(_ requestId: String, agentId: String, continuation: CheckedContinuation<AgentServiceResponse, Error>) {
+        pendingRequests[requestId] = PendingRequest(agentId: agentId, continuation: continuation)
     }
 
     private func removePendingRequest(_ requestId: String) -> CheckedContinuation<AgentServiceResponse, Error>? {
-        return pendingRequests.removeValue(forKey: requestId)
+        return pendingRequests.removeValue(forKey: requestId)?.continuation
     }
 
     private func timeoutRequest(_ requestId: String) {
@@ -521,11 +667,46 @@ actor AgentService {
         }
     }
 
+    /// Fail all in-flight requests targeting an agent that has gone away, so callers
+    /// get a prompt error instead of waiting for the per-request timeout.
+    private func failPendingRequests(for agentId: String, reason: AgentServiceError = .connectionLost) {
+        let affected = pendingRequests.filter { $0.value.agentId == agentId }
+        guard !affected.isEmpty else { return }
+
+        for (requestId, request) in affected {
+            pendingRequests.removeValue(forKey: requestId)
+            request.continuation.resume(throwing: reason)
+        }
+
+        app.logger.info("Failed \(affected.count) in-flight request(s) for disconnected agent", metadata: [
+            "agentId": .string(agentId)
+        ])
+    }
+
     // MARK: - Response Handling
 
     func handleAgentResponse(_ envelope: MessageEnvelope) {
         Task {
-            guard let continuation = self.removePendingRequest(envelope.payload.base64EncodedString()) else {
+            // Extract the original request's ID from the typed payload so we can
+            // correlate the response with the continuation that is waiting for it.
+            let requestId: String
+            do {
+                switch envelope.type {
+                case .success:
+                    requestId = try envelope.decode(as: SuccessMessage.self).requestId
+                case .error:
+                    requestId = try envelope.decode(as: ErrorMessage.self).requestId
+                default:
+                    // Other message types (e.g. unsolicited statusUpdate) are not
+                    // request/response correlated and are handled elsewhere.
+                    return
+                }
+            } catch {
+                app.logger.error("Failed to decode agent response envelope: \(error)")
+                return
+            }
+
+            guard let continuation = self.removePendingRequest(requestId) else {
                 return
             }
 
@@ -542,6 +723,88 @@ actor AgentService {
                 }
             } catch {
                 continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    /// Applies an unsolicited VM status update reported by an agent to the database.
+    /// This is how transitional states (.starting/.stopping) get confirmed into their
+    /// terminal states (.running/.shutdown/.paused) once the agent completes the work.
+    /// `agentName` identifies the authenticated connection the update arrived on, so
+    /// an agent can only mutate VMs the database actually maps to it.
+    func applyStatusUpdate(_ envelope: MessageEnvelope, fromAgentNamed agentName: String) {
+        Task {
+            let update: StatusUpdateMessage
+            do {
+                update = try envelope.decode(as: StatusUpdateMessage.self)
+            } catch {
+                app.logger.error("Failed to decode status update from agent: \(error)")
+                return
+            }
+
+            guard let vmUUID = UUID(uuidString: update.vmId) else {
+                app.logger.warning("Status update referenced an invalid VM id", metadata: ["vmId": .string(update.vmId)])
+                return
+            }
+
+            guard let senderAgentId = self.findAgentIdByName(agentName) else {
+                app.logger.warning("Status update from unregistered agent; ignoring", metadata: [
+                    "vmId": .string(update.vmId),
+                    "agentName": .string(agentName)
+                ])
+                return
+            }
+
+            do {
+                guard let vm = try await VM.find(vmUUID, on: app.db) else {
+                    app.logger.warning("Status update for unknown VM", metadata: ["vmId": .string(update.vmId)])
+                    return
+                }
+
+                guard vm.hypervisorId == senderAgentId else {
+                    app.logger.warning("Status update from agent that does not own the VM; ignoring", metadata: [
+                        "vmId": .string(update.vmId),
+                        "agentName": .string(agentName),
+                        "senderAgentId": .string(senderAgentId),
+                        "owningAgentId": .string(vm.hypervisorId ?? "none")
+                    ])
+                    return
+                }
+
+                guard vm.status != update.status else { return }
+
+                // A transitional state means a control-plane-initiated operation is in
+                // flight. Only the confirmation that completes that transition (or an
+                // error) may land; anything else is a delayed update from an operation
+                // that predates the transition — the controller guards (canStart/canStop/
+                // canPause) make any other concurrent operation impossible — and applying
+                // it would mask the in-flight one (e.g. a late `Paused` overwriting
+                // `.stopping`, hiding a lost stop from the sweep).
+                if vm.status.isTransitional {
+                    let expected: Set<VMStatus> = vm.status == .starting
+                        ? [.running, .error]
+                        : [.shutdown, .error]
+                    guard expected.contains(update.status) else {
+                        app.logger.warning("Ignoring stale agent status update during in-flight operation", metadata: [
+                            "vmId": .string(update.vmId),
+                            "current": .string(vm.status.rawValue),
+                            "reported": .string(update.status.rawValue)
+                        ])
+                        return
+                    }
+                }
+
+                let previous = vm.status
+                vm.setStatus(update.status)
+                try await vm.save(on: app.db)
+
+                app.logger.info("Applied agent status update", metadata: [
+                    "vmId": .string(update.vmId),
+                    "from": .string(previous.rawValue),
+                    "to": .string(update.status.rawValue)
+                ])
+            } catch {
+                app.logger.error("Failed to apply status update for VM \(update.vmId): \(error)")
             }
         }
     }
@@ -580,6 +843,7 @@ enum AgentServiceError: Error, LocalizedError, Sendable {
     case agentNotFound(String)
     case vmNotMapped(String)
     case requestTimeout
+    case connectionLost
     case invalidResponse(String)
 
     var errorDescription: String? {
@@ -592,6 +856,8 @@ enum AgentServiceError: Error, LocalizedError, Sendable {
             return "VM not mapped to any agent: \(vmId)"
         case .requestTimeout:
             return "Request to agent timed out"
+        case .connectionLost:
+            return "Connection to agent was lost before a response was received"
         case .invalidResponse(let message):
             return "Invalid response from agent: \(message)"
         }

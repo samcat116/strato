@@ -75,7 +75,12 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
     }
   };
 
-  const canStart = vm.status === "Shutdown" || vm.status === "Created";
+  // Mirrors the backend's VM.canStart: `Error` is startable so an operator can
+  // recover a VM whose state could not be confirmed (e.g. a lost start).
+  const canStart =
+    vm.status === "Shutdown" ||
+    vm.status === "Created" ||
+    vm.status === "Error";
   const canStop = vm.status === "Running" || vm.status === "Paused";
   const canPause = vm.status === "Running";
   const canResume = vm.status === "Paused";

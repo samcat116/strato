@@ -175,8 +175,15 @@ struct AgentWebSocketController: RouteCollection {
                 ])
             }
 
-            // Clean up connection tracking
-            req.application.websocketManager.removeConnection(agentName: agentName)
+            // Only tear down agent state if this socket is still the agent's current
+            // connection — a delayed close from a connection the agent has already
+            // replaced (reconnect under the same name) must not remove its successor.
+            guard req.application.websocketManager.removeConnection(agentName: agentName, ifCurrent: ws) else {
+                req.logger.debug("Closed WebSocket was already superseded; skipping agent cleanup", metadata: [
+                    "agentName": .string(agentName)
+                ])
+                return
+            }
 
             // Mark agent as offline asynchronously
             Task {
@@ -281,14 +288,35 @@ struct AgentWebSocketController: RouteCollection {
             switch envelope.type {
             case .agentRegister:
                 let message = try envelope.decode(as: AgentRegisterMessage.self)
+                let isTokenAuthenticated = req.query[String.self, at: "token"] != nil
                 Task {
                     do {
                         let agentUUID = try await req.agentService.registerAgent(message, agentName: agentName)
+
+                        // Rotate the single-use registration token: the one this
+                        // connection presented was consumed at validation, so without a
+                        // fresh token an automatic reconnect after an unexpected drop
+                        // would be rejected. Rotation failure is non-fatal — the agent
+                        // is registered either way, reconnect just needs a new token.
+                        var reconnectToken: String?
+                        if isTokenAuthenticated {
+                            do {
+                                // Generous expiry: the token sits unused until the
+                                // connection drops, which may be long after registration.
+                                let rotated = AgentRegistrationToken(agentName: agentName, expirationHours: 24 * 30)
+                                try await rotated.save(on: req.db)
+                                reconnectToken = rotated.token
+                            } catch {
+                                req.logger.error("Failed to rotate reconnect token for agent \(agentName): \(error)")
+                            }
+                        }
+
                         // Send registration response with the assigned UUID
                         let response = AgentRegisterResponseMessage(
                             requestId: message.requestId,
                             agentId: agentUUID.uuidString,
-                            name: agentName
+                            name: agentName,
+                            reconnectToken: reconnectToken
                         )
                         self.sendMessage(ws: ws, message: response)
                     } catch {
@@ -301,7 +329,7 @@ struct AgentWebSocketController: RouteCollection {
                 let message = try envelope.decode(as: AgentHeartbeatMessage.self)
                 Task {
                     do {
-                        try await req.agentService.updateAgentHeartbeat(message)
+                        try await req.agentService.updateAgentHeartbeat(message, fromAgentNamed: agentName)
                         self.sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged")
                     } catch {
                         req.logger.error("Failed to update heartbeat: \(error)")
@@ -321,10 +349,16 @@ struct AgentWebSocketController: RouteCollection {
                     }
                 }
 
-            case .success, .error, .statusUpdate:
-                // Handle responses from agents
+            case .success, .error:
+                // Correlated responses to control-plane-initiated requests
                 Task {
                     await req.agentService.handleAgentResponse(envelope)
+                }
+
+            case .statusUpdate:
+                // Unsolicited VM state change reported by the agent; persist it
+                Task {
+                    await req.agentService.applyStatusUpdate(envelope, fromAgentNamed: agentName)
                 }
 
             case .consoleData:
@@ -459,8 +493,15 @@ struct AgentWebSocketController: RouteCollection {
                     ])
                 }
 
-                // Clean up connection tracking
-                req.application.websocketManager.removeConnection(agentName: agentName)
+                // Only tear down agent state if this socket is still the agent's current
+                // connection — a delayed close from a connection the agent has already
+                // replaced (reconnect under the same name) must not remove its successor.
+                guard req.application.websocketManager.removeConnection(agentName: agentName, ifCurrent: ws) else {
+                    req.logger.debug("Closed WebSocket was already superseded; skipping agent cleanup", metadata: [
+                        "agentName": .string(agentName)
+                    ])
+                    return
+                }
 
                 // Mark agent as offline asynchronously
                 Task {

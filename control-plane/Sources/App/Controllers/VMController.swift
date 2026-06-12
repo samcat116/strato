@@ -456,12 +456,15 @@ struct VMController: RouteCollection {
             throw Abort(.notFound)
         }
 
-        // Sync status with agent if VM exists there
-        if vm.hypervisorId != nil {
+        // Sync status with agent if VM exists there. Transitional states are owned by
+        // the dispatch path and confirmed via the agent's statusUpdate; a concurrent
+        // poll may still see the pre-operation state on the agent and must not
+        // overwrite the in-flight marker (which the stuck-VM sweep relies on).
+        if vm.hypervisorId != nil && !vm.status.isTransitional {
             do {
                 let actualStatus = try await req.agentService.getVMStatus(vmId: vm.id?.uuidString ?? "")
                 if actualStatus != vm.status {
-                    vm.status = actualStatus
+                    vm.setStatus(actualStatus)
                     try await vm.save(on: req.db)
                 }
             } catch {
@@ -485,28 +488,47 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "VM cannot be started in current state: \(vm.status.rawValue)")
         }
 
+        // Decide boot-vs-resume before we overwrite the status with a transitional one.
+        let bootFresh = vm.shouldBootOnStart
+        let previousStatus = vm.status
+
         do {
-            if vm.status == .created || vm.status == .shutdown {
-                // Boot the VM (fresh start or restart after shutdown)
+            // Mark the operation in flight before dispatching, so a crash or lost
+            // confirmation leaves the VM detectably `.starting` (the sweep will catch
+            // it) rather than silently appearing stopped. The agent confirms the
+            // terminal `.running` state via a statusUpdate once the VM is up.
+            vm.setStatus(.starting)
+            try await vm.save(on: req.db)
+
+            if bootFresh {
+                // Boot the VM (fresh start or restart after shutdown/error)
                 try await req.agentService.performVMOperation(.vmBoot, vmId: vm.id?.uuidString ?? "")
             } else {
                 // Resume from paused state
                 try await req.agentService.performVMOperation(.vmResume, vmId: vm.id?.uuidString ?? "")
             }
 
-            // Update VM status
-            vm.status = VMStatus.running
-            try await vm.save(on: req.db)
-
-            req.logger.info("VM started successfully", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            req.logger.info("VM start requested", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
 
         } catch {
             req.logger.error("Failed to start VM: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
 
-            // Sync status with agent
-            let actualStatus = try await req.agentService.getVMStatus(vmId: vm.id?.uuidString ?? "")
-            vm.status = actualStatus
-            try await vm.save(on: req.db)
+            switch error {
+            case AgentServiceError.vmNotMapped, AgentServiceError.agentNotFound:
+                // Thrown before anything was sent to an agent (e.g. the VM was never
+                // assigned one), and a status sync would fail the same way — restore
+                // the prior state instead of leaving a phantom `.starting` for the
+                // sweep to escalate to `.error`.
+                vm.setStatus(previousStatus)
+                try await vm.save(on: req.db)
+            default:
+                // Sync status with agent if reachable; otherwise leave it `.starting`
+                // for the reconciliation sweep to resolve.
+                if let actualStatus = try? await req.agentService.getVMStatus(vmId: vm.id?.uuidString ?? "") {
+                    vm.setStatus(actualStatus)
+                    try await vm.save(on: req.db)
+                }
+            }
 
             throw Abort(.internalServerError, reason: "Failed to start VM: \(error.localizedDescription)")
         }
@@ -527,22 +549,36 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "VM cannot be stopped in current state: \(vm.status.rawValue)")
         }
 
-        do {
-            try await req.agentService.performVMOperation(.vmShutdown, vmId: vm.id?.uuidString ?? "")
+        let previousStatus = vm.status
 
-            // Update VM status
-            vm.status = VMStatus.shutdown
+        do {
+            // Mark the operation in flight; the agent confirms `.shutdown` via a
+            // statusUpdate once the guest powers off, and the sweep catches stuck stops.
+            vm.setStatus(.stopping)
             try await vm.save(on: req.db)
 
-            req.logger.info("VM stopped successfully", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+            try await req.agentService.performVMOperation(.vmShutdown, vmId: vm.id?.uuidString ?? "")
+
+            req.logger.info("VM stop requested", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
 
         } catch {
             req.logger.error("Failed to stop VM: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
 
-            // Sync status with agent
-            let actualStatus = try await req.agentService.getVMStatus(vmId: vm.id?.uuidString ?? "")
-            vm.status = actualStatus
-            try await vm.save(on: req.db)
+            switch error {
+            case AgentServiceError.vmNotMapped, AgentServiceError.agentNotFound:
+                // Thrown before anything was sent to an agent, and a status sync
+                // would fail the same way — restore the prior state instead of
+                // leaving a phantom `.stopping` for the sweep to escalate to `.error`.
+                vm.setStatus(previousStatus)
+                try await vm.save(on: req.db)
+            default:
+                // Sync status with agent if reachable; otherwise leave it `.stopping`
+                // for the reconciliation sweep to resolve.
+                if let actualStatus = try? await req.agentService.getVMStatus(vmId: vm.id?.uuidString ?? "") {
+                    vm.setStatus(actualStatus)
+                    try await vm.save(on: req.db)
+                }
+            }
 
             throw Abort(.internalServerError, reason: "Failed to stop VM: \(error.localizedDescription)")
         }
