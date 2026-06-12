@@ -297,7 +297,10 @@ actor AgentService {
                 //  - `.created` may still be mid-creation (image download / first boot)
                 //  - transitional and `.error`/`.unknown` states are handled by the sweep
                 // so an absent VM in those states is expected and left alone.
-                let reconcilable = (vm.status == .running || vm.status == .paused)
+                // `.shutdown` counts as established: agents keep shut-down-but-not-deleted
+                // VMs in their managed set, so one missing from the heartbeat was lost
+                // (e.g. agent restart) and a later start would fail with vmNotFound.
+                let reconcilable = (vm.status == .running || vm.status == .paused || vm.status == .shutdown)
                 guard reconcilable, !managed.contains(vmId) else { continue }
 
                 let previous = vm.status
