@@ -34,6 +34,18 @@ final class WebSocketManager: @unchecked Sendable {
         }
     }
 
+    /// Remove the connection for an agent only if the stored socket is the given
+    /// instance. Used by close handlers so a delayed close from a replaced
+    /// connection cannot tear down its successor (e.g. after an agent reconnects
+    /// under the same name). Returns true when the connection was removed.
+    func removeConnection(agentName: String, ifCurrent websocket: WebSocket) -> Bool {
+        lock.withLock {
+            guard connections[agentName] === websocket else { return false }
+            connections.removeValue(forKey: agentName)
+            return true
+        }
+    }
+
     /// Get all agent names (for diagnostics)
     func getAllAgentNames() -> [String] {
         lock.withLock {

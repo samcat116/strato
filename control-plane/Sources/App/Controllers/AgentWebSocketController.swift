@@ -175,8 +175,15 @@ struct AgentWebSocketController: RouteCollection {
                 ])
             }
 
-            // Clean up connection tracking
-            req.application.websocketManager.removeConnection(agentName: agentName)
+            // Only tear down agent state if this socket is still the agent's current
+            // connection — a delayed close from a connection the agent has already
+            // replaced (reconnect under the same name) must not remove its successor.
+            guard req.application.websocketManager.removeConnection(agentName: agentName, ifCurrent: ws) else {
+                req.logger.debug("Closed WebSocket was already superseded; skipping agent cleanup", metadata: [
+                    "agentName": .string(agentName)
+                ])
+                return
+            }
 
             // Mark agent as offline asynchronously
             Task {
@@ -486,8 +493,15 @@ struct AgentWebSocketController: RouteCollection {
                     ])
                 }
 
-                // Clean up connection tracking
-                req.application.websocketManager.removeConnection(agentName: agentName)
+                // Only tear down agent state if this socket is still the agent's current
+                // connection — a delayed close from a connection the agent has already
+                // replaced (reconnect under the same name) must not remove its successor.
+                guard req.application.websocketManager.removeConnection(agentName: agentName, ifCurrent: ws) else {
+                    req.logger.debug("Closed WebSocket was already superseded; skipping agent cleanup", metadata: [
+                        "agentName": .string(agentName)
+                    ])
+                    return
+                }
 
                 // Mark agent as offline asynchronously
                 Task {
