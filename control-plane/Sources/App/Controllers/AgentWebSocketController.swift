@@ -322,7 +322,7 @@ struct AgentWebSocketController: RouteCollection {
                 let message = try envelope.decode(as: AgentHeartbeatMessage.self)
                 Task {
                     do {
-                        try await req.agentService.updateAgentHeartbeat(message)
+                        try await req.agentService.updateAgentHeartbeat(message, fromAgentNamed: agentName)
                         self.sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged")
                     } catch {
                         req.logger.error("Failed to update heartbeat: \(error)")

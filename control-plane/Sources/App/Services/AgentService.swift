@@ -235,9 +235,21 @@ actor AgentService {
         }
     }
 
-    func updateAgentHeartbeat(_ message: AgentHeartbeatMessage) async throws {
+    /// `agentName` identifies the authenticated connection the heartbeat arrived on;
+    /// the claimed `agentId` must belong to it, so one agent cannot drive another
+    /// agent's resource tracking or VM reconciliation.
+    func updateAgentHeartbeat(_ message: AgentHeartbeatMessage, fromAgentNamed agentName: String) async throws {
         guard var agentInfo = agents[message.agentId] else {
             app.logger.warning("Received heartbeat from unknown agent", metadata: ["agentId": .string(message.agentId)])
+            return
+        }
+
+        guard agentInfo.name == agentName else {
+            app.logger.warning("Heartbeat claims an agentId not owned by the authenticated connection; ignoring", metadata: [
+                "claimedAgentId": .string(message.agentId),
+                "claimedAgentName": .string(agentInfo.name),
+                "connectionAgentName": .string(agentName)
+            ])
             return
         }
 
