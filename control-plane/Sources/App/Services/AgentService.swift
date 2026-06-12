@@ -706,7 +706,9 @@ actor AgentService {
     /// Applies an unsolicited VM status update reported by an agent to the database.
     /// This is how transitional states (.starting/.stopping) get confirmed into their
     /// terminal states (.running/.shutdown/.paused) once the agent completes the work.
-    func applyStatusUpdate(_ envelope: MessageEnvelope) {
+    /// `agentName` identifies the authenticated connection the update arrived on, so
+    /// an agent can only mutate VMs the database actually maps to it.
+    func applyStatusUpdate(_ envelope: MessageEnvelope, fromAgentNamed agentName: String) {
         Task {
             let update: StatusUpdateMessage
             do {
@@ -721,9 +723,27 @@ actor AgentService {
                 return
             }
 
+            guard let senderAgentId = self.findAgentIdByName(agentName) else {
+                app.logger.warning("Status update from unregistered agent; ignoring", metadata: [
+                    "vmId": .string(update.vmId),
+                    "agentName": .string(agentName)
+                ])
+                return
+            }
+
             do {
                 guard let vm = try await VM.find(vmUUID, on: app.db) else {
                     app.logger.warning("Status update for unknown VM", metadata: ["vmId": .string(update.vmId)])
+                    return
+                }
+
+                guard vm.hypervisorId == senderAgentId else {
+                    app.logger.warning("Status update from agent that does not own the VM; ignoring", metadata: [
+                        "vmId": .string(update.vmId),
+                        "agentName": .string(agentName),
+                        "senderAgentId": .string(senderAgentId),
+                        "owningAgentId": .string(vm.hypervisorId ?? "none")
+                    ])
                     return
                 }
 

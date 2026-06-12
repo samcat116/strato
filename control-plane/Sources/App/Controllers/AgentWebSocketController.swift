@@ -330,7 +330,7 @@ struct AgentWebSocketController: RouteCollection {
             case .statusUpdate:
                 // Unsolicited VM state change reported by the agent; persist it
                 Task {
-                    await req.agentService.applyStatusUpdate(envelope)
+                    await req.agentService.applyStatusUpdate(envelope, fromAgentNamed: agentName)
                 }
 
             case .consoleData:

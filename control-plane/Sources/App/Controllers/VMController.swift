@@ -456,12 +456,15 @@ struct VMController: RouteCollection {
             throw Abort(.notFound)
         }
 
-        // Sync status with agent if VM exists there
-        if vm.hypervisorId != nil {
+        // Sync status with agent if VM exists there. Transitional states are owned by
+        // the dispatch path and confirmed via the agent's statusUpdate; a concurrent
+        // poll may still see the pre-operation state on the agent and must not
+        // overwrite the in-flight marker (which the stuck-VM sweep relies on).
+        if vm.hypervisorId != nil && !vm.status.isTransitional {
             do {
                 let actualStatus = try await req.agentService.getVMStatus(vmId: vm.id?.uuidString ?? "")
                 if actualStatus != vm.status {
-                    vm.status = actualStatus
+                    vm.setStatus(actualStatus)
                     try await vm.save(on: req.db)
                 }
             } catch {
