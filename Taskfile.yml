@@ -783,7 +783,8 @@ tasks:
         fi
 
         # Start agent with SPIFFE mTLS (uses config from create-agent-config-spiffe)
-        nohup swift run --package-path "{{.PROJECT_ROOT}}/agent" StratoAgent \
+        # stdbuf -oL -eL forces line buffering so logs aren't hidden under nohup.
+        nohup stdbuf -oL -eL swift run --package-path "{{.PROJECT_ROOT}}/agent" StratoAgent \
           --config-file "{{.PROJECT_ROOT}}/config.toml" \
           --debug > /tmp/strato-agent.log 2>&1 &
         echo $! > /tmp/strato-agent.pid
@@ -887,7 +888,9 @@ tasks:
       - echo "▶️  Starting control-plane..."
       - |
         touch /tmp/strato-control-plane.log
-        cd "{{.PROJECT_ROOT}}/control-plane" && nohup swift run > /tmp/strato-control-plane.log 2>&1 &
+        # stdbuf -oL -eL forces line buffering: stdout block-buffers when it is a
+        # file (as here under nohup), which otherwise hides logs for minutes.
+        cd "{{.PROJECT_ROOT}}/control-plane" && nohup stdbuf -oL -eL swift run > /tmp/strato-control-plane.log 2>&1 &
         echo $! > /tmp/strato-control-plane.pid
       - echo "⏳ Waiting for control-plane to be ready..."
       - sleep 5
@@ -911,11 +914,12 @@ tasks:
       - echo "▶️  Starting control-plane with SPIFFE enabled..."
       - |
         touch /tmp/strato-control-plane.log
+        # stdbuf -oL -eL forces line buffering (see start-control-plane).
         cd "{{.PROJECT_ROOT}}/control-plane" && \
         SPIRE_ENABLED=true \
         SPIRE_TRUST_DOMAIN={{.SPIRE_TRUST_DOMAIN}} \
         SPIRE_TRUST_BUNDLE_PATH=/tmp/strato-spiffe/bundle.pem \
-        nohup swift run > /tmp/strato-control-plane.log 2>&1 &
+        nohup stdbuf -oL -eL swift run > /tmp/strato-control-plane.log 2>&1 &
         echo $! > /tmp/strato-control-plane.pid
       - echo "⏳ Waiting for control-plane to be ready..."
       - sleep 5
@@ -988,7 +992,8 @@ tasks:
 
         echo "▶️  Starting agent with registration URL..."
         touch /tmp/strato-agent.log
-        nohup swift run --package-path "{{.PROJECT_ROOT}}/agent" StratoAgent \
+        # stdbuf -oL -eL forces line buffering so logs aren't hidden under nohup.
+        nohup stdbuf -oL -eL swift run --package-path "{{.PROJECT_ROOT}}/agent" StratoAgent \
           --config-file "{{.PROJECT_ROOT}}/config.toml" \
           --registration-url "${REGISTRATION_URL}" > /tmp/strato-agent.log 2>&1 &
         echo $! > /tmp/strato-agent.pid
@@ -1145,7 +1150,7 @@ tasks:
             \"projectId\": \"${PROJECT_ID}\",
             \"environment\": \"development\"
           }" \
-          http://localhost:8080/vms 2>&1) || true
+          http://localhost:8080/api/vms 2>&1) || true
 
         if [ -n "$RESPONSE" ]; then
           echo "✅ VM created successfully!"
