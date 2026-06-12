@@ -8,6 +8,7 @@ import StratoAgentCore
 
 enum AgentError: Error, LocalizedError {
     case registrationTimeout
+    case registrationRejected(String)
     case notRegistered
     case spiffeConfigurationError(String)
 
@@ -15,6 +16,8 @@ enum AgentError: Error, LocalizedError {
         switch self {
         case .registrationTimeout:
             return "Registration timed out waiting for control plane response"
+        case .registrationRejected(let reason):
+            return "Registration rejected by control plane: \(reason)"
         case .notRegistered:
             return "Agent is not registered with control plane"
         case .spiffeConfigurationError(let message):
@@ -406,6 +409,32 @@ actor Agent {
         continuation.resume(returning: response.agentId)
     }
 
+    /// Handle an `error` envelope from the control plane.
+    ///
+    /// Previously these fell through to the `default` case and were logged as
+    /// "unknown message type: error", discarding the real reason (e.g. "Invalid
+    /// registration token"). Now the reason is surfaced.
+    ///
+    /// If registration is still pending — we're waiting on `registrationContinuation`
+    /// — the control plane has rejected this connection (it sends such errors with an
+    /// empty `requestId` and closes the socket). Fail the registration with the real
+    /// reason instead of letting it time out after 30s; the caller (initial start or
+    /// the reconnect loop) then surfaces it and retries as appropriate.
+    func handleErrorResponse(_ message: ErrorMessage) async {
+        let detailSuffix = message.details.map { " (\($0))" } ?? ""
+
+        if let continuation = registrationContinuation {
+            registrationContinuation = nil
+            logger.error("Registration rejected by control plane: \(message.error)\(detailSuffix)")
+            continuation.resume(throwing: AgentError.registrationRejected(message.error))
+            return
+        }
+
+        logger.error("Control plane reported an error: \(message.error)\(detailSuffix)", metadata: [
+            "requestId": .string(message.requestId)
+        ])
+    }
+
     private func getAgentCapabilities() -> [String] {
         var capabilities = ["vm_management", "qemu"]
 
@@ -689,6 +718,17 @@ extension Agent {
             case .volumeInfo:
                 let message = try envelope.decode(as: VolumeInfoMessage.self)
                 await handleVolumeInfo(message)
+            case .success:
+                // ACK to a control-plane-initiated request (incl. every heartbeat).
+                // Logged at debug so it stops surfacing as "unknown message type".
+                let message = try envelope.decode(as: SuccessMessage.self)
+                logger.debug("Received success response from control plane", metadata: [
+                    "requestId": .string(message.requestId),
+                    "message": .string(message.message ?? "")
+                ])
+            case .error:
+                let message = try envelope.decode(as: ErrorMessage.self)
+                await handleErrorResponse(message)
             default:
                 logger.warning("Received unknown message type: \(envelope.type)")
             }
