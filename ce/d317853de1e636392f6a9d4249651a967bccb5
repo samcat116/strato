@@ -1,0 +1,23 @@
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_8abe30add70fdf::t_eb6725ab505630 78-83
+control-plane/web/src/types/api.ts
+  s_8abe30add70fdf::t_6195598d7f704c 13-21
+control-plane/web/src/components/vms/vm-status-badge.tsx
+  s_8abe30add70fdf::t_571b2f204c3aba 24-40,44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "ced317853de1e636392f6a9d4249651a967bccb5",
+  "prompts": {},
+  "sessions": {
+    "s_8abe30add70fdf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4aec5e02-e8c8-426c-bc3d-1d334f0a14b2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
