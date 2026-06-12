@@ -113,6 +113,13 @@ spec:
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           env:
+            # Build identity, surfaced on /health/* so a given response can be
+            # traced back to an exact version/commit. gitSHA defaults to the image
+            # tag when not set explicitly via .Values.strato.gitSHA.
+            - name: STRATO_VERSION
+              value: "{{ .Values.image.tag | default .Chart.AppVersion }}"
+            - name: STRATO_GIT_SHA
+              value: "{{ .Values.strato.gitSHA | default (.Values.image.tag | default .Chart.AppVersion) }}"
             - name: LOG_LEVEL
               value: "{{ .Values.strato.logLevel }}"
             - name: DATABASE_HOST

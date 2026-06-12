@@ -152,7 +152,12 @@ affinity: {}
 # Strato Control Plane configuration
 strato:
   logLevel: info
-  
+
+  # Git commit SHA this image was built from, surfaced on /health/* as gitSHA.
+  # Defaults to the image tag / chart appVersion when left empty; set to the full
+  # commit SHA in CI for precise build identification.
+  gitSHA: ""
+
   database:
     host: ""  # Will be set from PostgreSQL subchart if enabled
     port: 5432
