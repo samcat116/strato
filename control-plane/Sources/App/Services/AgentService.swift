@@ -144,6 +144,8 @@ actor AgentService {
 
         agents[agentUUID.uuidString] = agentInfo
 
+        Telemetry.agentConnected()
+        Telemetry.recordAgentUp(agentName: agentName, up: true)
         app.logger.info("Agent registered", metadata: [
             "agentId": .string(agentUUID.uuidString),
             "agentName": .string(agentName),
@@ -190,6 +192,10 @@ actor AgentService {
             vmToAgentMapping.removeValue(forKey: vmId)
         }
 
+        Telemetry.agentDisconnected(reason: "unregister")
+        if let name = agentName {
+            Telemetry.recordAgentUp(agentName: name, up: false)
+        }
         app.logger.info("Agent unregistered", metadata: ["agentId": .string(agentId)])
     }
 
@@ -231,6 +237,9 @@ actor AgentService {
 
         // Mark agent as offline in memory
         agents.removeValue(forKey: agentId)
+
+        Telemetry.agentDisconnected(reason: "connection_closed")
+        Telemetry.recordAgentUp(agentName: agentName, up: false)
 
         // Update database status asynchronously
         Task {
@@ -331,6 +340,7 @@ actor AgentService {
                 vm.setStatus(.error)
                 try await vm.save(on: db)
                 divergent += 1
+                Telemetry.vmEnteredError(reason: "reconciliation")
 
                 app.logger.warning("VM missing from agent heartbeat; marking as error", metadata: [
                     "vmId": .string(vmId),
@@ -384,6 +394,15 @@ actor AgentService {
         let now = Date()
         let staleThreshold: TimeInterval = 60 // 60 seconds
 
+        // Export per-agent heartbeat staleness as a gauge every cycle so alerting
+        // can watch an agent go quiet before the sweep removes it.
+        for agentInfo in agents.values {
+            Telemetry.recordHeartbeatStaleness(
+                agentName: agentInfo.name,
+                seconds: now.timeIntervalSince(agentInfo.lastHeartbeat)
+            )
+        }
+
         let staleAgents = agents.values.compactMap { agentInfo -> String? in
             if now.timeIntervalSince(agentInfo.lastHeartbeat) > staleThreshold {
                 return agentInfo.id  // This is the UUID
@@ -398,8 +417,17 @@ actor AgentService {
                 // Fail any in-flight requests waiting on this agent before we drop it
                 failPendingRequests(for: agentId)
 
+                // Capture the name before removal so the up/down gauge keeps a
+                // durable `0` for this specific agent after it leaves memory.
+                let staleAgentName = agents[agentId]?.name
+
                 // Remove from memory
                 agents.removeValue(forKey: agentId)
+
+                Telemetry.agentDisconnected(reason: "stale")
+                if let name = staleAgentName {
+                    Telemetry.recordAgentUp(agentName: name, up: false)
+                }
 
                 // Update database using UUID
                 Task {
@@ -441,6 +469,7 @@ actor AgentService {
                 let previous = vm.status
                 vm.setStatus(.error)
                 try await vm.save(on: db)
+                Telemetry.vmEnteredError(reason: "stuck_transition")
 
                 app.logger.warning("VM stuck in transitional state past timeout; marking as error", metadata: [
                     "vmId": .string(vm.id?.uuidString ?? ""),
@@ -797,6 +826,10 @@ actor AgentService {
                 let previous = vm.status
                 vm.setStatus(update.status)
                 try await vm.save(on: app.db)
+                if update.status == .error {
+                    // The agent pushed an error state — e.g. a failed create/boot.
+                    Telemetry.vmEnteredError(reason: "agent_reported")
+                }
 
                 app.logger.info("Applied agent status update", metadata: [
                     "vmId": .string(update.vmId),
