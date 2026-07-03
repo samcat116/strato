@@ -289,7 +289,7 @@ podDisruptionBudget:
 
 # Network policies for security
 networkPolicy:
-  enabled: false
+  enabled: true
   # Ingress rules - allow traffic from specific sources
   ingress:
     - from: []

@@ -154,6 +154,18 @@ spec:
             - name: EXTERNAL_HOSTNAME
               value: "{{ .Values.strato.externalHostname }}"
             {{- end }}
+            {{- if .Values.spire.enabled }}
+            # Enable SPIFFE/SPIRE authentication so the agent WebSocket handler
+            # enforces mTLS (via the Envoy sidecar) instead of legacy token auth.
+            - name: SPIRE_ENABLED
+              value: "true"
+            - name: SPIRE_TRUST_DOMAIN
+              value: "{{ .Values.spire.trustDomain }}"
+            - name: SPIRE_REQUIRE_CLIENT_CERT
+              value: "{{ .Values.spire.controlPlane.requireClientCert }}"
+            - name: SPIRE_BUNDLE_REFRESH_INTERVAL
+              value: "{{ .Values.spire.controlPlane.bundleRefreshInterval }}"
+            {{- end }}
             {{- if .Values.opentelemetry.enabled }}
             - name: OTEL_SERVICE_NAME
               value: "{{ .Values.opentelemetry.serviceName }}"
