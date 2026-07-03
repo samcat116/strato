@@ -12,6 +12,12 @@ import VaporTesting
 final class VMAuthorizationTests {
 
     /// Boots a configured test app with a non-admin user, org, project and one VM.
+    ///
+    /// `configure(app)` skips `SpiceDBAuthMiddleware` under `.testing`, so we install it
+    /// explicitly here — otherwise these requests would never traverse the middleware
+    /// whose `/api/vms` prefix regression this suite covers (they'd only exercise the
+    /// per-handler `authorizedVM` checks). Installed last, after configure()'s session /
+    /// bearer authenticators, matching production ordering.
     private func withVMTestApp(
         _ test: (Application, User, VM, String) async throws -> Void
     ) async throws {
@@ -19,6 +25,7 @@ final class VMAuthorizationTests {
 
         do {
             try await configure(app)
+            app.middleware.use(SpiceDBAuthMiddleware())
             try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
@@ -108,6 +115,65 @@ final class VMAuthorizationTests {
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
+        }
+    }
+
+    // MARK: - Direct middleware tests
+    //
+    // These isolate `SpiceDBAuthMiddleware` from the route handlers so the `/api/vms`
+    // prefix regression is pinned independently of the per-handler `authorizedVM`
+    // checks: reverting the guard to `/vms` makes `middlewareGuardsApiVmsPrefix` fail
+    // (the request falls through to `next` → 200 instead of throwing 403), and
+    // `middlewareIgnoresBareVmsPrefix` fails the other way.
+
+    /// A `next` responder that unconditionally succeeds, standing in for the route
+    /// handler so any 403 must originate from the middleware itself.
+    private struct OKResponder: AsyncResponder {
+        func respond(to request: Request) async throws -> Response {
+            Response(status: .ok)
+        }
+    }
+
+    private func runMiddleware(
+        _ app: Application,
+        user: User,
+        path: String,
+        method: HTTPMethod = .GET
+    ) async throws -> Response {
+        let req = Request(
+            application: app,
+            method: method,
+            url: URI(path: path),
+            on: app.eventLoopGroup.next()
+        )
+        req.auth.login(user)
+        return try await SpiceDBAuthMiddleware().respond(to: req, chainingTo: OKResponder())
+    }
+
+    @Test("Middleware runs its per-object check for the /api/vms prefix")
+    func middlewareGuardsApiVmsPrefix() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            // Denied: the middleware must reject before reaching the handler.
+            app.spicedbMockAllows = false
+            await #expect(throws: Abort.self) {
+                _ = try await self.runMiddleware(app, user: user, path: "/api/vms/\(vm.id!)")
+            }
+
+            // Granted: the middleware lets the request through to `next` (200).
+            app.spicedbMockAllows = true
+            let res = try await runMiddleware(app, user: user, path: "/api/vms/\(vm.id!)")
+            #expect(res.status == .ok)
+        }
+    }
+
+    @Test("Middleware does not guard the stale bare /vms prefix")
+    func middlewareIgnoresBareVmsPrefix() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            // The old (buggy) prefix must NOT be what's guarded: even with permission
+            // withheld, a bare `/vms/...` path is not a real route and falls through.
+            app.spicedbMockAllows = false
+            let res = try await runMiddleware(app, user: user, path: "/vms/\(vm.id!)")
+            #expect(res.status == .ok)
         }
     }
 }
