@@ -41,6 +41,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// Bridge that OVN's `ovn-controller` binds VM ports onto.
     static let ovnIntegrationBridge = "br-int"
 
+    /// Bound on `ovs-vsctl` so a config change can't hang the network actor
+    /// forever when `ovs-vswitchd` is down/overloaded (the default waits forever).
+    static let ovsCommandTimeoutSeconds = 10
+
     // MARK: - Connection Management
 
     func connect() async throws {
@@ -221,7 +225,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
         // Detach the TAP from the integration bridge (idempotent via --if-exists)
         do {
-            try run("ovs-vsctl", ["--if-exists", "del-port", Self.ovnIntegrationBridge, tapInterface])
+            try run("ovs-vsctl", [
+                "--timeout=\(Self.ovsCommandTimeoutSeconds)",
+                "--if-exists", "del-port", Self.ovnIntegrationBridge, tapInterface
+            ])
         } catch {
             logger.warning("Failed to remove OVS port", metadata: [
                 "tapInterface": .string(tapInterface),
@@ -455,6 +462,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // `ovs-vsctl` performs the port + interface insert and the external_ids set
         // atomically and idempotently (`--may-exist`).
         try run("ovs-vsctl", [
+            "--timeout=\(Self.ovsCommandTimeoutSeconds)",
             "--may-exist", "add-port", Self.ovnIntegrationBridge, tapInterface,
             "--", "set", "Interface", tapInterface, "external_ids:iface-id=\(portName)"
         ])
