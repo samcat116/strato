@@ -18,10 +18,9 @@ struct LogsController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        // Verify VM exists
-        guard let _ = try await VM.find(vmId, on: req.db) else {
-            throw Abort(.notFound, reason: "VM not found")
-        }
+        // Verify VM exists and the caller may read it (defense in depth alongside
+        // SpiceDBAuthMiddleware).
+        _ = try await req.authorizedVM(vmId, permission: "read")
 
         // Check if Loki is enabled
         guard req.application.lokiEnabled else {

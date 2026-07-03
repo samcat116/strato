@@ -69,9 +69,7 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let vm = try await req.authorizedVM(vmID, permission: "read")
 
         return VMDetailResponse(from: vm)
     }
@@ -328,9 +326,7 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        guard let existingVM = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let existingVM = try await req.authorizedVM(vmID, permission: "update")
 
         struct UpdateVMRequest: Content {
             let name: String?
@@ -358,9 +354,7 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let vm = try await req.authorizedVM(vmID, permission: "delete")
 
         // Stop and delete VM via agent first
         if vm.hypervisorId != nil {
@@ -384,9 +378,7 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let vm = try await req.authorizedVM(vmID, permission: "pause")
 
         guard vm.canPause else {
             throw Abort(.badRequest, reason: "VM cannot be paused in current state: \(vm.status.rawValue)")
@@ -418,9 +410,7 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let vm = try await req.authorizedVM(vmID, permission: "resume")
 
         guard vm.canResume else {
             throw Abort(.badRequest, reason: "VM cannot be resumed in current state: \(vm.status.rawValue)")
@@ -452,9 +442,7 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let vm = try await req.authorizedVM(vmID, permission: "read")
 
         // Sync status with agent if VM exists there. Transitional states are owned by
         // the dispatch path and confirmed via the agent's statusUpdate; a concurrent
@@ -480,9 +468,7 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let vm = try await req.authorizedVM(vmID, permission: "start")
 
         guard vm.canStart else {
             throw Abort(.badRequest, reason: "VM cannot be started in current state: \(vm.status.rawValue)")
@@ -541,9 +527,7 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let vm = try await req.authorizedVM(vmID, permission: "stop")
 
         guard vm.canStop else {
             throw Abort(.badRequest, reason: "VM cannot be stopped in current state: \(vm.status.rawValue)")
@@ -591,9 +575,7 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let vm = try await req.authorizedVM(vmID, permission: "restart")
 
         guard vm.isRunning else {
             throw Abort(.badRequest, reason: "VM must be running to restart. Current state: \(vm.status.rawValue)")

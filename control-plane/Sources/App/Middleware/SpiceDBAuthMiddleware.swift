@@ -25,11 +25,10 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
 
         // Skip auth for health checks, public routes, and auth endpoints
         if request.url.path.hasPrefix("/health") || request.url.path == "/"
-            || request.url.path == "/hello" || request.url.path == "/login"
-            || request.url.path == "/register" || request.url.path == "/api/docs"
+            || request.url.path == "/hello" || request.url.path == "/api/docs"
             || request.url.path == "/openapi.json" || request.url.path.hasPrefix("/auth")
-            || request.url.path.hasPrefix("/users/register")
-            || request.url.path.hasPrefix("/onboarding") || request.url.path.hasPrefix("/js/")
+            || request.url.path.hasPrefix("/api/users/register")
+            || request.url.path.hasPrefix("/api/onboarding") || request.url.path.hasPrefix("/js/")
             || request.url.path.hasPrefix("/styles/") || request.url.path == "/favicon.ico"
             || request.url.path.hasPrefix("/agent/ws")
         {
@@ -48,7 +47,7 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         }
 
         // For VM routes, check permissions
-        if request.url.path.hasPrefix("/vms") {
+        if request.url.path.hasPrefix("/api/vms") {
             try await checkVMPermissions(request: request, user: user)
         }
 
@@ -127,7 +126,7 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
             let hasPermission = try await request.spicedb.checkPermission(
                 subject: userId,
                 permission: permission,
-                resource: "vm",
+                resource: "virtual_machine",
                 resourceId: resourceId
             )
 

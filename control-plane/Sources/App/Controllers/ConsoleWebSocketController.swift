@@ -185,10 +185,36 @@ struct ConsoleWebSocketController: RouteCollection {
                         return ws.eventLoop.makeSucceededFuture(nil)
                     }
 
-                    // TODO: Add permission check via SpiceDB
-                    // For now, allow any authenticated user to access console
+                    // System admins bypass permission checks (matches SpiceDBAuthMiddleware).
+                    if user.isSystemAdmin {
+                        return ws.eventLoop.makeSucceededFuture((vm, agent.name, user.id?.uuidString))
+                    }
 
-                    return ws.eventLoop.makeSucceededFuture((vm, agent.name, user.id?.uuidString))
+                    // Enforce object-level authorization: the caller must have
+                    // `view_console` on this specific VM. This is stricter than the
+                    // middleware's `read` gate (a viewer has read but not view_console).
+                    let promise = ws.eventLoop.makePromise(of: (VM, String, String?)?.self)
+                    promise.completeWithTask {
+                        let hasPermission = try await req.spicedb.checkPermission(
+                            subject: user.id?.uuidString ?? "",
+                            permission: "view_console",
+                            resource: "virtual_machine",
+                            resourceId: vm.id?.uuidString ?? ""
+                        )
+
+                        guard hasPermission else {
+                            req.logger.warning("Console WebSocket access denied", metadata: [
+                                "vmId": .string(vm.id?.uuidString ?? ""),
+                                "userId": .string(user.id?.uuidString ?? "")
+                            ])
+                            try? await ws.send("error: Access denied")
+                            try? await ws.close(code: .policyViolation)
+                            return nil
+                        }
+
+                        return (vm, agent.name, user.id?.uuidString)
+                    }
+                    return promise.futureResult
                 }
             }
         }

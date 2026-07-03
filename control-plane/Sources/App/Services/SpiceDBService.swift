@@ -378,10 +378,23 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
 }
 
 extension Application {
+    /// Storage key for overriding the testing SpiceDB mock's permission verdict.
+    private struct SpiceDBMockAllowsKey: StorageKey {
+        typealias Value = Bool
+    }
+
+    /// In testing mode, controls whether the mock SpiceDB grants permission.
+    /// Defaults to `true` so existing tests keep passing; set to `false` to
+    /// exercise authorization-denied paths.
+    var spicedbMockAllows: Bool {
+        get { storage[SpiceDBMockAllowsKey.self] ?? true }
+        set { storage[SpiceDBMockAllowsKey.self] = newValue }
+    }
+
     var spicedb: SpiceDBServiceProtocol {
         // In testing mode, use a mock implementation
         if self.environment == .testing {
-            return MockSpiceDBService()
+            return MockSpiceDBService(checkPermissionResult: spicedbMockAllows)
         }
 
         guard let endpoint = Environment.get("SPICEDB_ENDPOINT") else {
