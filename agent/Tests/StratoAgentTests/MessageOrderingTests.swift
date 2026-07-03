@@ -120,30 +120,30 @@ struct MessageOrderingTests {
     @Test("Create and subsequent operations for the same VM share a lane")
     func createAndOperationShareLane() {
         let vmId = UUID()
-        let createKey = MessageEnvelope.serializationKey(
+        let createKeys = MessageEnvelope.serializationKeys(
             type: .vmCreate,
             payload: payload(["vmData": ["id": vmId.uuidString], "requestId": "r1"])
         )
-        let bootKey = MessageEnvelope.serializationKey(
+        let bootKeys = MessageEnvelope.serializationKeys(
             type: .vmBoot,
             payload: payload(["vmId": vmId.uuidString, "requestId": "r2"])
         )
-        let deleteKey = MessageEnvelope.serializationKey(
+        let deleteKeys = MessageEnvelope.serializationKeys(
             type: .vmDelete,
             payload: payload(["vmId": vmId.uuidString, "requestId": "r3"])
         )
 
-        #expect(createKey == bootKey)
-        #expect(bootKey == deleteKey)
+        #expect(createKeys == bootKeys)
+        #expect(bootKeys == deleteKeys)
     }
 
     @Test("VM id lane is case-insensitive to UUID formatting")
     func vmIdNormalizedAcrossCasing() {
         let vmId = UUID()
-        let upper = MessageEnvelope.serializationKey(
+        let upper = MessageEnvelope.serializationKeys(
             type: .vmBoot, payload: payload(["vmId": vmId.uuidString])
         )
-        let lower = MessageEnvelope.serializationKey(
+        let lower = MessageEnvelope.serializationKeys(
             type: .vmDelete, payload: payload(["vmId": vmId.uuidString.lowercased()])
         )
         #expect(upper == lower)
@@ -151,10 +151,10 @@ struct MessageOrderingTests {
 
     @Test("Different VMs get different lanes")
     func differentVMsGetDifferentLanes() {
-        let a = MessageEnvelope.serializationKey(
+        let a = MessageEnvelope.serializationKeys(
             type: .vmBoot, payload: payload(["vmId": UUID().uuidString])
         )
-        let b = MessageEnvelope.serializationKey(
+        let b = MessageEnvelope.serializationKeys(
             type: .vmBoot, payload: payload(["vmId": UUID().uuidString])
         )
         #expect(a != b)
@@ -163,46 +163,96 @@ struct MessageOrderingTests {
     @Test("Volume operations are keyed by volume id")
     func volumeOperationsKeyedByVolumeId() {
         let volumeId = UUID().uuidString
-        let attachKey = MessageEnvelope.serializationKey(
+        let attachKeys = MessageEnvelope.serializationKeys(
             type: .volumeAttach,
             payload: payload(["vmId": UUID().uuidString, "volumeId": volumeId])
         )
-        let detachKey = MessageEnvelope.serializationKey(
+        let detachKeys = MessageEnvelope.serializationKeys(
             type: .volumeDetach,
             payload: payload(["vmId": UUID().uuidString, "volumeId": volumeId])
         )
         // Same volume attached to then detached from different VMs still shares a lane.
-        #expect(attachKey == detachKey)
+        #expect(attachKeys == detachKeys)
+    }
+
+    @Test("Volume clone serializes against both its source and target volume lanes")
+    func volumeCloneSpansBothVolumeLanes() {
+        let sourceId = UUID().uuidString
+        let targetId = UUID().uuidString
+        let cloneKeys = MessageEnvelope.serializationKeys(
+            type: .volumeClone,
+            payload: payload([
+                "sourceVolumeId": sourceId, "sourceVolumePath": "/a",
+                "targetVolumeId": targetId, "targetVolumePath": "/b"
+            ])
+        )
+
+        // The clone participates in both volumes' lanes, so a resize of the source or a
+        // delete of the target cannot slip past it.
+        let sourceResizeKeys = MessageEnvelope.serializationKeys(
+            type: .volumeResize, payload: payload(["volumeId": sourceId])
+        )
+        let targetDeleteKeys = MessageEnvelope.serializationKeys(
+            type: .volumeDelete, payload: payload(["volumeId": targetId])
+        )
+
+        #expect(Set(cloneKeys) == Set([sourceId, targetId]))
+        #expect(!Set(cloneKeys).isDisjoint(with: sourceResizeKeys))
+        #expect(!Set(cloneKeys).isDisjoint(with: targetDeleteKeys))
+        #expect(!cloneKeys.contains(MessageEnvelope.unkeyedSerializationLane))
     }
 
     @Test("Network operations are keyed by name and never collide with ids")
     func networkOperationsKeyedByName() {
-        let createKey = MessageEnvelope.serializationKey(
+        let createKeys = MessageEnvelope.serializationKeys(
             type: .networkCreate, payload: payload(["networkName": "net0"])
         )
-        let deleteKey = MessageEnvelope.serializationKey(
+        let deleteKeys = MessageEnvelope.serializationKeys(
             type: .networkDelete, payload: payload(["networkName": "net0"])
         )
-        #expect(createKey == deleteKey)
-        #expect(createKey.hasPrefix("network:"))
+        #expect(createKeys == deleteKeys)
+        #expect(createKeys.allSatisfy { $0.hasPrefix("network:") })
     }
 
     @Test("Frames without a resource id fall back to the shared unkeyed lane")
     func unkeyedFramesShareLane() {
-        let successKey = MessageEnvelope.serializationKey(
+        let successKeys = MessageEnvelope.serializationKeys(
             type: .success, payload: payload(["requestId": "r1"])
         )
-        let listKey = MessageEnvelope.serializationKey(
+        let listKeys = MessageEnvelope.serializationKeys(
             type: .networkList, payload: payload(["requestId": "r2"])
         )
-        #expect(successKey == MessageEnvelope.unkeyedSerializationLane)
-        #expect(listKey == MessageEnvelope.unkeyedSerializationLane)
+        #expect(successKeys == [MessageEnvelope.unkeyedSerializationLane])
+        #expect(listKeys == [MessageEnvelope.unkeyedSerializationLane])
     }
 
-    @Test("Public serializationKey works end-to-end on a real encoded envelope")
+    @Test("Public serializationKeys works end-to-end on a real encoded envelope")
     func publicKeyOnEncodedEnvelope() throws {
         let vmId = UUID().uuidString
         let envelope = try MessageEnvelope(message: VMOperationMessage(type: .vmBoot, vmId: vmId))
-        #expect(envelope.serializationKey == vmId)
+        #expect(envelope.serializationKeys == [vmId])
+    }
+
+    @Test("A multi-lane item serializes against work on each of its lanes")
+    func multiLaneItemSerializesAcrossLanes() async {
+        let queue = SerialTaskQueue()
+        let recorder = Recorder()
+
+        // Prior work on lane A, then a clone spanning {A, B}, then work on lane B. FIFO on
+        // each shared lane must yield: A-op (0) before clone (1), and clone (1) before B-op (2).
+        await queue.enqueue(key: "vol-A") {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            await recorder.append(0)
+        }
+        await queue.enqueue(keys: ["vol-A", "vol-B"]) {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            await recorder.append(1)
+        }
+        await queue.enqueue(key: "vol-B") {
+            await recorder.append(2)
+        }
+
+        let values = await recorder.waitForCount(3)
+        #expect(values == [0, 1, 2])
     }
 }

@@ -22,24 +22,41 @@ public actor SerialTaskQueue {
     /// Submit `operation` to run once all previously enqueued work for `key` has completed.
     /// Work for distinct keys is unordered relative to each other and may run concurrently.
     public func enqueue(key: String, operation: @escaping @Sendable () async -> Void) {
-        nextID += 1
-        let id = nextID
-        let predecessor = tails[key]
-        tailIDs[key] = id
-        let task = Task {
-            // Wait for the previous item on this key, preserving arrival order.
-            await predecessor?.value
-            await operation()
-            self.retireTail(key: key, id: id)
-        }
-        tails[key] = task
+        enqueue(keys: [key], operation: operation)
     }
 
-    /// Drop a key's bookkeeping once its last task finishes, so idle keys don't accumulate.
-    private func retireTail(key: String, id: UInt64) {
-        guard tailIDs[key] == id else { return }
-        tails.removeValue(forKey: key)
-        tailIDs.removeValue(forKey: key)
+    /// Submit `operation` to run once all previously enqueued work for *every* key in `keys`
+    /// has completed; `operation` then blocks all of those keys until it finishes. Used for
+    /// operations that touch more than one resource (e.g. a volume clone reads a source and
+    /// writes a target), so they serialize against every lane they participate in.
+    ///
+    /// Deadlock-free: the predecessor tails are snapshotted atomically inside the actor, so a
+    /// task only ever waits on tasks submitted before it — dependencies form a DAG that
+    /// respects submission order.
+    public func enqueue(keys rawKeys: [String], operation: @escaping @Sendable () async -> Void) {
+        let keys = rawKeys.isEmpty ? [""] : Array(Set(rawKeys))
+        nextID += 1
+        let id = nextID
+        let predecessors = keys.compactMap { tails[$0] }
+        let task = Task {
+            // Wait for the previous item on each involved lane, preserving arrival order.
+            for predecessor in predecessors { await predecessor.value }
+            await operation()
+            self.retireTails(keys: keys, id: id)
+        }
+        for key in keys {
+            tails[key] = task
+            tailIDs[key] = id
+        }
+    }
+
+    /// Drop each key's bookkeeping once this task (identified by `id`) is still its tail, so
+    /// idle keys don't accumulate while never evicting a successor that took the slot.
+    private func retireTails(keys: [String], id: UInt64) {
+        for key in keys where tailIDs[key] == id {
+            tails.removeValue(forKey: key)
+            tailIDs.removeValue(forKey: key)
+        }
     }
 }
 
@@ -50,39 +67,48 @@ extension MessageEnvelope {
     /// list queries). They still run in arrival order relative to one another.
     public static let unkeyedSerializationLane = "__strato_unkeyed__"
 
-    /// The serial lane used to order this inbound frame relative to others.
+    /// The serial lanes used to order this inbound frame relative to others.
     ///
     /// Frames acting on the same resource share a lane and are therefore applied in the order
     /// they arrived; frames for unrelated resources get independent lanes and may proceed
     /// concurrently. VM ids are normalized so a VM's `create` frame (which carries the id under
     /// `vmData.id`) and its later operation frames (which carry it under `vmId`) land together.
-    public var serializationKey: String {
-        Self.serializationKey(type: type, payload: payload)
+    /// Most frames yield a single lane; operations spanning two resources (e.g. volume clone)
+    /// yield both so they serialize against each participating lane.
+    public var serializationKeys: [String] {
+        Self.serializationKeys(type: type, payload: payload)
     }
 
-    /// Compute the serial lane for a frame of `type` with the given raw JSON `payload`.
-    static func serializationKey(type: MessageType, payload: Data) -> String {
+    /// Compute the serial lanes for a frame of `type` with the given raw JSON `payload`.
+    static func serializationKeys(type: MessageType, payload: Data) -> [String] {
         let fields = try? JSONDecoder().decode(RoutingFields.self, from: payload)
 
-        let raw: String?
+        let raws: [String?]
         switch type {
         case .vmCreate:
-            raw = fields?.vmData?.id.uuidString
+            raws = [fields?.vmData?.id.uuidString]
+        case .volumeClone:
+            // A clone reads a source volume and writes a target volume; serialize against both
+            // so it can't race a delete/resize/info on either resource.
+            raws = [fields?.sourceVolumeId, fields?.targetVolumeId]
         case .volumeCreate, .volumeDelete, .volumeAttach, .volumeDetach,
-             .volumeResize, .volumeSnapshot, .volumeClone, .volumeInfo, .volumeStatus:
-            raw = fields?.volumeId
+             .volumeResize, .volumeSnapshot, .volumeInfo, .volumeStatus:
+            raws = [fields?.volumeId]
         case .networkCreate, .networkDelete, .networkInfo:
             // Networks are keyed by name; prefix so a name can never collide with a VM/volume id.
-            raw = fields?.networkName.map { "network:\($0)" }
+            raws = [fields?.networkName.map { "network:\($0)" }]
         default:
             // VM lifecycle, console, network attach/detach, and info/status queries all carry vmId.
-            raw = fields?.vmId
+            raws = [fields?.vmId]
         }
 
-        guard let raw, !raw.isEmpty else { return unkeyedSerializationLane }
         // Normalize UUIDs to canonical form so create/operation frames share a lane regardless
         // of the casing the control plane used.
-        return UUID(uuidString: raw)?.uuidString ?? raw
+        let keys = raws.compactMap { raw -> String? in
+            guard let raw, !raw.isEmpty else { return nil }
+            return UUID(uuidString: raw)?.uuidString ?? raw
+        }
+        return keys.isEmpty ? [unkeyedSerializationLane] : keys
     }
 
     /// Minimal projection of the possible resource-identifying fields across frame payloads,
@@ -92,6 +118,8 @@ extension MessageEnvelope {
         let vmData: VMDataID?
         let vmId: String?
         let volumeId: String?
+        let sourceVolumeId: String?
+        let targetVolumeId: String?
         let networkName: String?
     }
 }

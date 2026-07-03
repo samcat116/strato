@@ -669,7 +669,7 @@ extension Agent {
     /// Route a decoded inbound frame onto its per-resource serial lane. Frames for the same
     /// resource run in arrival order; frames for unrelated resources run concurrently.
     private func routeInboundMessage(_ envelope: MessageEnvelope) async {
-        await messageQueue.enqueue(key: envelope.serializationKey) { [weak self] in
+        await messageQueue.enqueue(keys: envelope.serializationKeys) { [weak self] in
             await self?.handleMessage(envelope)
         }
     }
