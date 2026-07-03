@@ -23,7 +23,10 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
             return try await next.respond(to: request)
         }
 
-        // Skip auth for health checks, public routes, and auth endpoints
+        // Skip auth for health checks, public routes, and auth endpoints.
+        // Note: `/login`, `/register`, and `/onboarding` are public frontend pages
+        // served by FileMiddleware (Public/login/index.html, etc.) in single-service
+        // deployments, so they must stay exempt or direct loads/bookmarks 401.
         if request.url.path.hasPrefix("/health") || request.url.path == "/"
             || request.url.path == "/hello" || request.url.path == "/login"
             || request.url.path == "/register" || request.url.path == "/api/docs"
@@ -48,7 +51,7 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         }
 
         // For VM routes, check permissions
-        if request.url.path.hasPrefix("/vms") {
+        if request.url.path.hasPrefix("/api/vms") {
             try await checkVMPermissions(request: request, user: user)
         }
 
@@ -127,7 +130,7 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
             let hasPermission = try await request.spicedb.checkPermission(
                 subject: userId,
                 permission: permission,
-                resource: "vm",
+                resource: "virtual_machine",
                 resourceId: resourceId
             )
 

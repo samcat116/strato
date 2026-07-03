@@ -65,32 +65,16 @@ struct VMController: RouteCollection {
     }
 
     /// Fetch a VM by its :vmID route parameter and enforce a SpiceDB permission on it.
+    ///
+    /// Delegates to the shared `Request.authorizedVM(_:permission:)` helper so the
+    /// per-object authorization logic lives in one place (also used by other VM-scoped
+    /// controllers such as `LogsController`).
     private func fetchVMWithPermission(req: Request, user: User, permission: String) async throws -> VM {
         guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
-
-        // System admins bypass permission checks
-        if user.isSystemAdmin {
-            return vm
-        }
-
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: permission,
-            resource: "virtual_machine",
-            resourceId: vmID.uuidString
-        )
-
-        guard hasPermission else {
-            throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this VM")
-        }
-
-        return vm
+        return try await req.authorizedVM(vmID, permission: permission)
     }
 
     func show(req: Request) async throws -> VMDetailResponse {
