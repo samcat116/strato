@@ -80,11 +80,26 @@ export interface Agent {
   isOnline: boolean;
 }
 
+// Returned only from the create endpoint — the plaintext `token` and the
+// `registrationURL` that embeds it are shown exactly once.
 export interface AgentRegistrationToken {
+  id: string;
   token: string;
   agentName: string;
   expiresAt: string;
   registrationURL: string;
+  isValid: boolean;
+}
+
+// Returned when listing tokens — the secret is intentionally absent.
+export interface AgentRegistrationTokenListItem {
+  id: string;
+  agentName: string;
+  expiresAt: string;
+  isUsed: boolean;
+  isValid: boolean;
+  createdAt?: string;
+  usedAt?: string;
 }
 
 export interface APIKey {

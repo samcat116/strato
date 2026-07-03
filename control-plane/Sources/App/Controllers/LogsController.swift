@@ -13,14 +13,29 @@ struct LogsController: RouteCollection {
     /// Query logs for a specific VM from Loki
     @Sendable
     func getVMLogs(req: Request) async throws -> [LogEntry] {
+        let user = try req.auth.require(User.self)
+
         guard let vmIdString = req.parameters.get("vmID"),
               let vmId = UUID(uuidString: vmIdString) else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        // Verify VM exists
-        guard let _ = try await VM.find(vmId, on: req.db) else {
-            throw Abort(.notFound, reason: "VM not found")
+        // Verify VM exists and the caller may read it (defense in depth alongside
+        // SpiceDBAuthMiddleware).
+        _ = try await req.authorizedVM(vmId, permission: "read")
+
+        // Enforce per-VM read permission (system admins bypass)
+        if !user.isSystemAdmin {
+            let hasPermission = try await req.spicedb.checkPermission(
+                subject: user.id!.uuidString,
+                permission: "read",
+                resource: "virtual_machine",
+                resourceId: vmId.uuidString
+            )
+
+            guard hasPermission else {
+                throw Abort(.forbidden, reason: "You don't have 'read' permission on this VM")
+            }
         }
 
         // Check if Loki is enabled

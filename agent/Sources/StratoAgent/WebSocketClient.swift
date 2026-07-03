@@ -3,6 +3,7 @@ import WebSocketKit
 import NIOCore
 import NIOPosix
 import NIOSSL
+import NIOHTTP1
 import Logging
 import StratoShared
 
@@ -52,6 +53,12 @@ actor WebSocketClient {
     private let logger: Logger
     private let eventLoopGroup: MultiThreadedEventLoopGroup
 
+    // Single-use registration token, presented in an `Authorization: Bearer` header
+    // at connect time (kept out of the URL so it never lands in proxy/ingress logs).
+    // Nil for mTLS-authenticated connections. Rotated between reconnects via
+    // `updateToken(_:)` after the control plane hands back a fresh one.
+    private var registrationToken: String?
+
     // TLS configuration for mTLS (optional, nil for unencrypted connections)
     private var tlsConfiguration: TLSConfiguration?
 
@@ -64,11 +71,12 @@ actor WebSocketClient {
     // drop (triggers the agent's reconnection loop).
     private var intentionalDisconnect = false
 
-    init(url: String, agent: Agent, logger: Logger, tlsConfiguration: TLSConfiguration? = nil) {
+    init(url: String, agent: Agent, logger: Logger, tlsConfiguration: TLSConfiguration? = nil, registrationToken: String? = nil) {
         self.url = url
         self.agent = agent
         self.logger = logger
         self.tlsConfiguration = tlsConfiguration
+        self.registrationToken = registrationToken
         self.eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         self.wsHolder = LockedWebSocket()
     }
@@ -79,10 +87,16 @@ actor WebSocketClient {
         logger.info("TLS configuration updated")
     }
 
-    /// Update the connection URL (for registration token rotation). Takes effect
-    /// on the next connect; the current connection is unaffected.
+    /// Update the connection URL. Takes effect on the next connect; the current
+    /// connection is unaffected.
     func updateURL(_ newURL: String) {
         self.url = newURL
+    }
+
+    /// Update the registration token (for single-use token rotation). Takes effect
+    /// on the next connect; the current connection is unaffected.
+    func updateToken(_ newToken: String?) {
+        self.registrationToken = newToken
     }
 
     func connect() async throws {
@@ -121,6 +135,13 @@ actor WebSocketClient {
             wsConfig.tlsConfiguration = tlsConfig
         }
 
+        // Present the registration token in an Authorization header rather than the
+        // URL query string, so it never appears in proxy/ingress/load-balancer logs.
+        var headers = HTTPHeaders()
+        if let token = registrationToken {
+            headers.add(name: "Authorization", value: "Bearer \(token)")
+        }
+
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let resumed = AtomicBool(false)
             let wsHolderRef = self.wsHolder
@@ -132,6 +153,7 @@ actor WebSocketClient {
             // forming a self -> wsHolder -> ws -> onClose -> self retain cycle.
             WebSocket.connect(
                 to: url,
+                headers: headers,
                 configuration: wsConfig,
                 on: eventLoop
             ) { [weak self] ws in

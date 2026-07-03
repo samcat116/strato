@@ -2,6 +2,7 @@ import Foundation
 import Vapor
 import WebAuthn
 import Fluent
+import SQLKit
 
 struct WebAuthnService {
     private let webAuthnManager: WebAuthnManager
@@ -129,6 +130,15 @@ struct WebAuthnService {
         authenticationCredential: AuthenticationCredential,
         on database: Database
     ) async throws -> User {
+        // Atomically consume the stored challenge *before* accepting the assertion.
+        // This is what provides replay protection: the challenge row must exist, be
+        // an unexpired "authentication" challenge issued by us, and be claimed
+        // exactly once. A replayed assertion re-using an already-spent challenge
+        // finds no row and is rejected here. We cannot rely on the authenticator's
+        // signature counter for this because platform passkeys commonly report
+        // signCount == 0 on every assertion.
+        try await consumeAuthenticationChallenge(challenge, on: database)
+
         let credentialID = authenticationCredential.id.urlDecoded.decoded ?? Data()
 
         guard let credential = try await UserCredential.query(on: database)
@@ -153,15 +163,54 @@ struct WebAuthnService {
         credential.lastUsedAt = Date()
         try await credential.save(on: database)
 
-        // Clean up challenge
-        if let authChallenge = try await AuthenticationChallenge.query(on: database)
+        return credential.user
+    }
+
+    /// Atomically claims a stored authentication challenge, enforcing that it
+    /// exists, is for the authentication operation, and has not expired. Throws
+    /// `WebAuthnError.challengeNotFound` if no matching, unexpired, unused
+    /// challenge is present.
+    ///
+    /// The claim is performed as a single `DELETE ... RETURNING` so that two
+    /// concurrent requests replaying the same challenge cannot both succeed:
+    /// the database serializes the deletes and only the first observes a
+    /// returned row.
+    func consumeAuthenticationChallenge(
+        _ challenge: String,
+        on database: Database
+    ) async throws {
+        // Look up the candidate row using Fluent so that the expiry comparison
+        // stays portable across database drivers.
+        let query = AuthenticationChallenge.query(on: database)
             .filter(\.$challenge == challenge)
             .filter(\.$operation == "authentication")
-            .first() {
-            try await authChallenge.delete(on: database)
+            .group(.or) { group in
+                group.filter(\.$expiresAt > Date())
+                    .filter(\.$expiresAt == nil)
+            }
+
+        guard let stored = try await query.first(),
+              let storedID = stored.id else {
+            throw WebAuthnError.challengeNotFound
         }
 
-        return credential.user
+        guard let sql = database as? SQLDatabase else {
+            // Non-SQL backends can't perform the atomic RETURNING claim. Fail
+            // closed rather than falling back to a racy read-then-delete.
+            throw WebAuthnError.invalidConfiguration
+        }
+
+        // Atomically remove the row and confirm we were the ones who removed it.
+        let claimed = try await sql.raw("""
+            DELETE FROM authentication_challenges
+            WHERE id = \(bind: storedID)
+            RETURNING id
+            """).first()
+
+        guard claimed != nil else {
+            // Another request consumed the same challenge first.
+            throw WebAuthnError.challengeNotFound
+        }
     }
 
     // MARK: - Challenge Management

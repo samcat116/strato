@@ -80,6 +80,33 @@ struct AgentRegistrationTokenResponse: Content {
     }
 }
 
+/// List-safe view of a registration token. Deliberately omits the plaintext
+/// `token` and the `registrationURL` that embeds it: the secret is returned only
+/// once, from the create endpoint. Listing tokens must not re-expose it.
+struct AgentRegistrationTokenListItem: Content {
+    let id: UUID
+    let agentName: String
+    let expiresAt: Date
+    let isUsed: Bool
+    let isValid: Bool
+    let createdAt: Date?
+    let usedAt: Date?
+
+    init(from tokenModel: AgentRegistrationToken) throws {
+        guard let id = tokenModel.id else {
+            throw Abort(.internalServerError, reason: "Registration token missing ID")
+        }
+
+        self.id = id
+        self.agentName = tokenModel.agentName
+        self.expiresAt = tokenModel.expiresAt ?? Date()
+        self.isUsed = tokenModel.isUsed
+        self.isValid = tokenModel.isValid
+        self.createdAt = tokenModel.createdAt
+        self.usedAt = tokenModel.usedAt
+    }
+}
+
 struct CreateAgentRegistrationTokenRequest: Content {
     let agentName: String
     let expirationHours: Int?

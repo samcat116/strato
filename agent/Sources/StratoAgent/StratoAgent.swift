@@ -71,8 +71,9 @@ struct StratoAgent: AsyncParsableCommand {
         
         // Determine the WebSocket URL to use
         let finalWebSocketURL: String
+        let finalRegistrationToken: String?
         let isRegistrationMode: Bool
-        
+
         if let regURL = registrationURL {
             // Validate registration URL format
             guard let url = URL(string: regURL),
@@ -81,10 +82,17 @@ struct StratoAgent: AsyncParsableCommand {
                   queryItems.contains(where: { $0.name == "token" }),
                   queryItems.contains(where: { $0.name == "name" }) else {
                 logger.error("Invalid registration URL format. Must include 'token' and 'name' query parameters.")
-                logger.error("Expected format: ws://host:port/agent/register?token=TOKEN&name=AGENT_NAME")
+                logger.error("Expected format: ws://host:port/agent/ws?token=TOKEN&name=AGENT_NAME")
                 throw ExitCode.failure
             }
-            finalWebSocketURL = regURL
+            // Strip the token out of the dialed URL and carry it in an Authorization
+            // header instead, so the plaintext token never lands in proxy/ingress logs.
+            guard let (strippedURL, token) = WebSocketURLs.extractingToken(from: regURL) else {
+                logger.error("Failed to extract registration token from URL")
+                throw ExitCode.failure
+            }
+            finalWebSocketURL = strippedURL
+            finalRegistrationToken = token
             isRegistrationMode = true
             logger.info("Using registration URL for initial agent registration")
         } else {
@@ -94,6 +102,7 @@ struct StratoAgent: AsyncParsableCommand {
             } else {
                 finalWebSocketURL = config.controlPlaneURL
             }
+            finalRegistrationToken = nil
             isRegistrationMode = false
         }
         
@@ -146,6 +155,7 @@ struct StratoAgent: AsyncParsableCommand {
         let agent = Agent(
             agentID: finalAgentID,
             webSocketURL: finalWebSocketURL,
+            registrationToken: finalRegistrationToken,
             qemuSocketDir: finalQemuSocketDir,
             networkMode: config.networkMode,
             isRegistrationMode: isRegistrationMode,
