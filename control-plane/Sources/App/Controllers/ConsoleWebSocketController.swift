@@ -185,10 +185,39 @@ struct ConsoleWebSocketController: RouteCollection {
                         return ws.eventLoop.makeSucceededFuture(nil)
                     }
 
-                    // TODO: Add permission check via SpiceDB
-                    // For now, allow any authenticated user to access console
+                    guard let userId = user.id?.uuidString, !userId.isEmpty else {
+                        ws.send("error: Invalid user session")
+                        _ = ws.close(code: .policyViolation)
+                        return ws.eventLoop.makeSucceededFuture(nil)
+                    }
 
-                    return ws.eventLoop.makeSucceededFuture((vm, agent.name, user.id?.uuidString))
+                    // Consistent with SpiceDBAuthMiddleware: system admins and the
+                    // dev-auth bypass skip the permission check.
+                    let devBypass = req.application.environment == .development
+                        && Environment.get("DEV_AUTH_BYPASS") == "true"
+                    if user.isSystemAdmin || devBypass {
+                        return ws.eventLoop.makeSucceededFuture((vm, agent.name, userId))
+                    }
+
+                    return ws.eventLoop.makeFutureWithTask {
+                        try await req.spicedb.checkPermission(
+                            subject: userId,
+                            permission: "view_console",
+                            resource: "virtual_machine",
+                            resourceId: vmId.uuidString
+                        )
+                    }.flatMap { hasPermission -> EventLoopFuture<(VM, String, String?)?> in
+                        guard hasPermission else {
+                            req.logger.warning("Console access denied", metadata: [
+                                "vmId": .string(vmId.uuidString),
+                                "userId": .string(userId)
+                            ])
+                            ws.send("error: You do not have permission to access this VM console")
+                            _ = ws.close(code: .policyViolation)
+                            return ws.eventLoop.makeSucceededFuture(nil)
+                        }
+                        return ws.eventLoop.makeSucceededFuture((vm, agent.name, userId))
+                    }
                 }
             }
         }
