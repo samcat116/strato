@@ -27,13 +27,31 @@ struct UserController: RouteCollection {
     // MARK: - User CRUD
 
     func index(req: Request) async throws -> [User.Public] {
+        guard let currentUser = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+
+        // Only system admins may enumerate all users
+        guard currentUser.isSystemAdmin else {
+            throw Abort(.forbidden, reason: "System admin access required")
+        }
+
         let users = try await User.query(on: req.db).all()
         return users.map { $0.asPublic() }
     }
 
     func show(req: Request) async throws -> User.Public {
+        guard let currentUser = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+
         guard let userID = req.parameters.get("userID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid user ID")
+        }
+
+        // Users may only view themselves unless they are a system admin
+        guard currentUser.isSystemAdmin || currentUser.id == userID else {
+            throw Abort(.forbidden, reason: "You may only access your own account")
         }
 
         guard let user = try await User.find(userID, on: req.db) else {
@@ -73,8 +91,17 @@ struct UserController: RouteCollection {
     }
 
     func update(req: Request) async throws -> User.Public {
+        guard let currentUser = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+
         guard let userID = req.parameters.get("userID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid user ID")
+        }
+
+        // Users may only update themselves unless they are a system admin
+        guard currentUser.isSystemAdmin || currentUser.id == userID else {
+            throw Abort(.forbidden, reason: "You may only modify your own account")
         }
 
         guard let user = try await User.find(userID, on: req.db) else {
@@ -90,8 +117,17 @@ struct UserController: RouteCollection {
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
+        guard let currentUser = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+
         guard let userID = req.parameters.get("userID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid user ID")
+        }
+
+        // Users may only delete themselves unless they are a system admin
+        guard currentUser.isSystemAdmin || currentUser.id == userID else {
+            throw Abort(.forbidden, reason: "You may only delete your own account")
         }
 
         guard let user = try await User.find(userID, on: req.db) else {
