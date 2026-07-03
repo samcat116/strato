@@ -67,16 +67,24 @@ actor WebSocketClient {
     private var isConnected = false
     private var heartbeatTask: Task<Void, Never>?
 
+    // Ordered hand-off for inbound frames. `onText`/`onBinary` fire sequentially on the
+    // single connection EventLoop, so yielding here preserves arrival order; the agent
+    // drains this stream and dispatches each frame onto a per-resource serial lane. This
+    // replaces the previous "one detached Task per frame" model, which gave no FIFO
+    // guarantee and could reorder operations for the same VM (see issue #179).
+    private let inboundContinuation: AsyncStream<MessageEnvelope>.Continuation
+
     // Distinguishes an operator-initiated disconnect (no reconnect) from an unexpected
     // drop (triggers the agent's reconnection loop).
     private var intentionalDisconnect = false
 
-    init(url: String, agent: Agent, logger: Logger, tlsConfiguration: TLSConfiguration? = nil, registrationToken: String? = nil) {
+    init(url: String, agent: Agent, logger: Logger, tlsConfiguration: TLSConfiguration? = nil, registrationToken: String? = nil, inboundContinuation: AsyncStream<MessageEnvelope>.Continuation) {
         self.url = url
         self.agent = agent
         self.logger = logger
         self.tlsConfiguration = tlsConfiguration
         self.registrationToken = registrationToken
+        self.inboundContinuation = inboundContinuation
         self.eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         self.wsHolder = LockedWebSocket()
     }
@@ -146,7 +154,7 @@ actor WebSocketClient {
             let resumed = AtomicBool(false)
             let wsHolderRef = self.wsHolder
             let loggerRef = self.logger
-            let agentRef = self.agent
+            let inboundRef = self.inboundContinuation
 
             // Create connection - this returns immediately, callback fires when connected.
             // Capture self weakly so the onClose handler can hop back to the actor without
@@ -180,10 +188,9 @@ actor WebSocketClient {
                             "type": .string(envelope.type.rawValue)
                         ])
 
-                        // Handle message in a Task to bridge to async
-                        Task { [weak agent = agentRef] in
-                            await agent?.handleMessage(envelope)
-                        }
+                        // Preserve arrival order: hand off to the agent's ordered inbound
+                        // pipeline rather than spawning an unordered per-frame Task.
+                        inboundRef.yield(envelope)
                     } catch {
                         loggerRef.error("Failed to decode text message: \(error)")
                     }
@@ -210,10 +217,9 @@ actor WebSocketClient {
                             "type": .string(envelope.type.rawValue)
                         ])
 
-                        // Handle message in a Task to bridge to async
-                        Task { [weak agent = agentRef] in
-                            await agent?.handleMessage(envelope)
-                        }
+                        // Preserve arrival order: hand off to the agent's ordered inbound
+                        // pipeline rather than spawning an unordered per-frame Task.
+                        inboundRef.yield(envelope)
                     } catch {
                         loggerRef.error("Failed to decode message: \(error)")
                     }
