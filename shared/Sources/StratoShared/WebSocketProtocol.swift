@@ -359,17 +359,31 @@ public struct ErrorMessage: WebSocketMessage {
     public let timestamp: Date
     public let error: String
     public let details: String?
-    
+    /// Machine-readable error classification (see `ErrorCode`). Optional so
+    /// peers that predate it decode fine; absent means unclassified, which
+    /// receivers must treat as potentially transient (safe to retry).
+    public let code: String?
+
+    /// Well-known values for `code`.
+    public enum ErrorCode {
+        /// The presented registration/reconnect token was rejected (invalid,
+        /// expired, or already used). Retrying with the same token can never
+        /// succeed.
+        public static let invalidToken = "invalid_token"
+    }
+
     public init(
         requestId: String,
         timestamp: Date = Date(),
         error: String,
-        details: String? = nil
+        details: String? = nil,
+        code: String? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.error = error
         self.details = details
+        self.code = code
     }
 }
 

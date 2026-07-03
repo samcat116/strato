@@ -122,10 +122,16 @@ public struct FileAgentStateStore: AgentStateStore {
             attributes: [.posixPermissions: 0o600]
         )
         do {
-            _ = try fileManager.replaceItemAt(
-                URL(fileURLWithPath: path),
-                withItemAt: URL(fileURLWithPath: tempPath)
-            )
+            if fileManager.fileExists(atPath: path) {
+                _ = try fileManager.replaceItemAt(
+                    URL(fileURLWithPath: path),
+                    withItemAt: URL(fileURLWithPath: tempPath)
+                )
+            } else {
+                // First save: replaceItemAt requires an existing destination on
+                // swift-corelibs-foundation (Linux), so create via plain rename.
+                try fileManager.moveItem(atPath: tempPath, toPath: path)
+            }
         } catch {
             try? fileManager.removeItem(atPath: tempPath)
             throw error
@@ -133,5 +139,29 @@ public struct FileAgentStateStore: AgentStateStore {
         // replaceItemAt can carry over the destination's old attributes;
         // re-assert the restrictive mode.
         try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+    }
+
+    /// Verifies the store can actually persist state, creating the directory
+    /// if needed. Called before a join consumes its single-use token: state
+    /// paths default to root-owned locations (/var/lib/strato), and discovering
+    /// unwritability only after registration would leave the agent connected
+    /// but unable to survive a restart — with the join token already spent.
+    public func ensureWritable() throws {
+        let fileManager = FileManager.default
+        let directory = (path as NSString).deletingLastPathComponent
+
+        if !fileManager.fileExists(atPath: directory) {
+            try fileManager.createDirectory(
+                atPath: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        }
+
+        let probePath = directory + "/.agent-state-probe-\(UUID().uuidString).tmp"
+        guard fileManager.createFile(atPath: probePath, contents: Data(), attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: directory])
+        }
+        try? fileManager.removeItem(atPath: probePath)
     }
 }

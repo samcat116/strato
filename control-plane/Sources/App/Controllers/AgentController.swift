@@ -49,11 +49,26 @@ struct AgentController: RouteCollection {
         let isHTTPS = forwardedProto == "https" || (forwardedProto == nil && req.url.scheme == "https")
         let scheme = isHTTPS ? "wss" : "ws"
 
-        let host = Environment.get("EXTERNAL_HOSTNAME")
+        let host = Environment.get("EXTERNAL_HOSTNAME").map(Self.sanitizedHost)
             ?? req.headers["host"].first
             ?? "localhost:8080"
 
         return "\(scheme)://\(host)"
+    }
+
+    /// Reduces an EXTERNAL_HOSTNAME value to bare host[:port]. Operators
+    /// naturally set a full URL ("https://cp.example.com/") here; prepending
+    /// a scheme to that verbatim would emit "ws://https://…", which the agent
+    /// then rejects as an invalid registration URL.
+    static func sanitizedHost(_ raw: String) -> String {
+        var host = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let schemeRange = host.range(of: "://") {
+            host = String(host[schemeRange.upperBound...])
+        }
+        if let slash = host.firstIndex(of: "/") {
+            host = String(host[..<slash])
+        }
+        return host
     }
 
     func createRegistrationToken(req: Request) async throws -> AgentRegistrationTokenResponse {

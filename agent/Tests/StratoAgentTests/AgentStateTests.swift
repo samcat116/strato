@@ -95,6 +95,36 @@ struct AgentStateTests {
         #expect(leftovers.isEmpty)
     }
 
+    @Test("ensureWritable creates the directory and leaves no probe behind")
+    func ensureWritableCreatesDirectory() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let nested = dir + "/a/b"
+        let store = FileAgentStateStore(path: nested + "/agent-state.json")
+
+        try store.ensureWritable()
+
+        var isDirectory: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: nested, isDirectory: &isDirectory))
+        #expect(isDirectory.boolValue)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: nested).isEmpty)
+    }
+
+    @Test("ensureWritable throws when the directory is not writable")
+    func ensureWritableThrowsOnReadOnlyDirectory() throws {
+        let dir = try makeTempDir()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir)
+            try? FileManager.default.removeItem(atPath: dir)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir)
+        let store = FileAgentStateStore(path: dir + "/agent-state.json")
+
+        #expect(throws: (any Error).self) {
+            try store.ensureWritable()
+        }
+    }
+
     @Test("Corrupt state file is moved aside and load returns nil")
     func corruptFileMovedAside() throws {
         let dir = try makeTempDir()

@@ -8,7 +8,12 @@ import StratoAgentCore
 
 enum AgentError: Error, LocalizedError {
     case registrationTimeout
+    /// The control plane explicitly rejected our credentials (`invalid_token`
+    /// code) — retrying with the same token can never succeed.
     case registrationRejected(String)
+    /// Registration failed for an unclassified (potentially transient) reason,
+    /// e.g. a control-plane database blip — safe to retry with backoff.
+    case registrationFailed(String)
     case notRegistered
     case spiffeConfigurationError(String)
 
@@ -18,6 +23,8 @@ enum AgentError: Error, LocalizedError {
             return "Registration timed out waiting for control plane response"
         case .registrationRejected(let reason):
             return "Registration rejected by control plane: \(reason)"
+        case .registrationFailed(let reason):
+            return "Registration failed (control plane error): \(reason)"
         case .notRegistered:
             return "Agent is not registered with control plane"
         case .spiffeConfigurationError(let message):
@@ -79,6 +86,10 @@ actor Agent {
     // of idling disconnected.
     private var terminalError: Error?
     private var shutdownContinuation: CheckedContinuation<Void, Never>?
+    // Set the moment shutdown is signalled, so start() never suspends on a
+    // continuation that no one is left to resume (stop() racing ahead of the
+    // continuation being installed).
+    private var shutdownRequested = false
 
     init(
         agentID: String,
@@ -254,8 +265,13 @@ actor Agent {
         logger.info("Agent started successfully")
 
         // Keep the agent running until stop() or a terminal failure wakes us.
-        await withCheckedContinuation { continuation in
-            self.shutdownContinuation = continuation
+        // If shutdown was already requested (e.g. stop() raced ahead during the
+        // connect/register window, before this continuation existed), skip the
+        // suspension entirely — otherwise nothing would ever resume it.
+        if !shutdownRequested {
+            await withCheckedContinuation { continuation in
+                self.shutdownContinuation = continuation
+            }
         }
 
         if let error = terminalError {
@@ -266,6 +282,7 @@ actor Agent {
     /// Wakes start() out of its run-forever suspension. Called by stop() and
     /// by unrecoverable failures (after setting `terminalError`).
     private func signalShutdown() {
+        shutdownRequested = true
         isRunning = false
         shutdownContinuation?.resume()
         shutdownContinuation = nil
@@ -477,8 +494,17 @@ actor Agent {
 
         if let continuation = registrationContinuation {
             registrationContinuation = nil
-            logger.error("Registration rejected by control plane: \(message.error)\(detailSuffix)")
-            continuation.resume(throwing: AgentError.registrationRejected(message.error))
+            logger.error("Registration failed: \(message.error)\(detailSuffix)")
+            // Only an explicit invalid_token code is a genuine credential
+            // rejection (terminal — retrying the same token can never work).
+            // Anything else, including envelopes from control planes that
+            // predate the code field, is treated as transient so the reconnect
+            // loop keeps backing off instead of exiting.
+            if message.code == ErrorMessage.ErrorCode.invalidToken {
+                continuation.resume(throwing: AgentError.registrationRejected(message.error))
+            } else {
+                continuation.resume(throwing: AgentError.registrationFailed(message.error))
+            }
             return
         }
 

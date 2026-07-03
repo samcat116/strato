@@ -163,6 +163,20 @@ private func launchAgent(
     let statePath = options.stateFile ?? config.stateFilePath ?? FileAgentStateStore.defaultPath
     let stateStore = FileAgentStateStore(path: statePath, logger: logger)
 
+    // Registering consumes the single-use token, so make sure the rotated
+    // replacement can actually be persisted BEFORE dialing. Otherwise a
+    // non-root join would "succeed" but leave nothing on disk, and the first
+    // restart could never reconnect (the join token is already spent).
+    if registrationURL != nil {
+        do {
+            try stateStore.ensureWritable()
+        } catch {
+            logger.error("Cannot write the join state file at \(statePath): \(error)")
+            logger.error("The join state stores the reconnect credential; without it a restart cannot reconnect. Run with sufficient privileges (the default path is \(FileAgentStateStore.defaultPath)), or point --state-file (or state_file in config.toml) at a writable location.")
+            throw ExitCode.failure
+        }
+    }
+
     // Determine the WebSocket URL and registration token, in order of preference:
     // 1. An explicit registration URL (initial join or re-join).
     // 2. Persisted join state (control plane URL + rotated reconnect token).

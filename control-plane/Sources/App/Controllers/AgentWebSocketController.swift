@@ -238,14 +238,17 @@ struct AgentWebSocketController: RouteCollection {
         return query.flatMapThrowing { registrationToken -> Bool in
             guard let registrationToken = registrationToken else {
                 Telemetry.agentRegistrationFailed(reason: "invalid_token")
-                self.sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token")
+                // The explicit code lets the agent tell a hopeless credential apart
+                // from a transient server error, so only the former stops its
+                // reconnect loop.
+                self.sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token", code: ErrorMessage.ErrorCode.invalidToken)
                 _ = ws.close(code: .unacceptableData)
                 return false
             }
 
             guard registrationToken.isValid else {
                 Telemetry.agentRegistrationFailed(reason: "expired_token")
-                self.sendErrorResponse(ws: ws, requestId: "", error: "Registration token is invalid or expired")
+                self.sendErrorResponse(ws: ws, requestId: "", error: "Registration token is invalid or expired", code: ErrorMessage.ErrorCode.invalidToken)
                 _ = ws.close(code: .unacceptableData)
                 return false
             }
@@ -326,6 +329,33 @@ struct AgentWebSocketController: RouteCollection {
                     } catch {
                         Telemetry.agentRegistrationFailed(reason: "register_error")
                         req.logger.error("Failed to register agent: \(error)")
+
+                        // Restore the presented token: it was marked used at connect
+                        // validation, but registration failed before a rotated
+                        // replacement was minted. Without this, a transient failure
+                        // here (e.g. a DB blip) would permanently consume the agent's
+                        // only credential and lock it out until an operator mints a
+                        // new join token.
+                        if isTokenAuthenticated, let bearer = req.headers.bearerAuthorization?.token {
+                            do {
+                                if let presented = try await AgentRegistrationToken.query(on: req.db)
+                                    .filter(\.$token == bearer)
+                                    .filter(\.$agentName == agentName)
+                                    .first() {
+                                    presented.isUsed = false
+                                    presented.usedAt = nil
+                                    try await presented.save(on: req.db)
+                                    req.logger.info("Restored registration token after failed registration", metadata: [
+                                        "agentName": .string(agentName)
+                                    ])
+                                }
+                            } catch {
+                                req.logger.error("Failed to restore registration token for agent \(agentName): \(error)")
+                            }
+                        }
+
+                        // No `code`: the agent treats unclassified errors as
+                        // transient and keeps retrying with backoff.
                         self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to register agent: \(error.localizedDescription)")
                     }
                 }
@@ -444,9 +474,9 @@ struct AgentWebSocketController: RouteCollection {
         }
     }
 
-    private func sendErrorResponse(ws: WebSocket, requestId: String, error: String) {
+    private func sendErrorResponse(ws: WebSocket, requestId: String, error: String, code: String? = nil) {
         do {
-            let response = ErrorMessage(requestId: requestId, error: error)
+            let response = ErrorMessage(requestId: requestId, error: error, code: code)
             let envelope = try MessageEnvelope(message: response)
             let data = try JSONEncoder().encode(envelope)
             ws.send(data)

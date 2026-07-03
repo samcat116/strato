@@ -40,6 +40,14 @@ token is single-use and rotates on every successful registration.
 - A corrupt state file is moved aside to `agent-state.json.corrupt` and
   treated as absent.
 
+### Privileges
+
+The default state and config paths (`/var/lib/strato`, `/etc/strato`) are
+root-owned, so run `strato-agent join` as root on Linux. The join checks that
+the state file is writable **before** consuming the token and exits with
+instructions if it isn't; to run unprivileged, pass `--state-file` (and
+`--config-file`) pointing at writable locations.
+
 ## Running in Docker (Linux)
 
 ```bash
