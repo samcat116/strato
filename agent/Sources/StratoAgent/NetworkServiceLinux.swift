@@ -100,24 +100,13 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         
         // Create logical switch port for the VM
         let portName = "vm-\(vmId)"
-        let macAddress = config.macAddress ?? generateMACAddress()
-        let ipAddress: String
+        var macAddress = config.macAddress ?? generateMACAddress()
+        var ipAddress: String
         if let configIP = config.ipAddress {
             ipAddress = configIP
         } else {
             ipAddress = await allocateIPAddress(for: config.networkName)
         }
-        
-        let logicalPort = OVNLogicalSwitchPort(
-            name: portName,
-            addresses: ["\(macAddress) \(ipAddress)"],
-            port_security: ["\(macAddress) \(ipAddress)"],
-            external_ids: [
-                "vm-id": vmId,
-                "network-name": config.networkName,
-                "description": "VM network interface"
-            ]
-        )
 
         // Find or create the logical switch
         _ = try await findOrCreateLogicalSwitch(name: config.networkName, subnet: config.subnet ?? "10.0.0.0/24")
@@ -126,8 +115,29 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         let portUUID: String?
         if let existingPort = try await ovnManager?.getLogicalSwitchPort(named: portName) {
             portUUID = existingPort.uuid
-            logger.debug("Reusing existing logical switch port", metadata: ["portName": .string(portName)])
+            // Reuse the existing port's allowed addresses so the VM boots with a
+            // MAC/IP that matches OVN's port_security. Otherwise a recovery path
+            // (agent restart, or retry after a failed TAP/OVS step) would launch
+            // QEMU with freshly generated addresses and OVN would drop its traffic.
+            let (existingMAC, existingIP) = Self.parsePortAddress(existingPort.addresses)
+            if !existingMAC.isEmpty { macAddress = existingMAC }
+            if !existingIP.isEmpty { ipAddress = existingIP }
+            logger.debug("Reusing existing logical switch port", metadata: [
+                "portName": .string(portName),
+                "macAddress": .string(macAddress),
+                "ipAddress": .string(ipAddress)
+            ])
         } else {
+            let logicalPort = OVNLogicalSwitchPort(
+                name: portName,
+                addresses: ["\(macAddress) \(ipAddress)"],
+                port_security: ["\(macAddress) \(ipAddress)"],
+                external_ids: [
+                    "vm-id": vmId,
+                    "network-name": config.networkName,
+                    "description": "VM network interface"
+                ]
+            )
             portUUID = try await ovnManager?.createLogicalSwitchPort(logicalPort)
         }
         
