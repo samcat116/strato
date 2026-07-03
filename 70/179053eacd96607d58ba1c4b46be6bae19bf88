@@ -1,0 +1,34 @@
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_5c64fcbeddd3f4::t_5852956a62b14e 285-298
+agent/Sources/StratoAgent/Agent.swift
+  s_5c64fcbeddd3f4::t_af6e7684f7ec34 63-69,297-298,337-343
+  s_5c64fcbeddd3f4::t_55436a6cca45c3 269-272,274,284-287,294
+agent/Package.swift
+  s_5c64fcbeddd3f4::t_af6e7684f7ec34 20,46
+agent/Sources/StratoAgent/SignalHandler.swift
+  s_5c64fcbeddd3f4::t_af6e7684f7ec34 1-55
+docs/architecture/overview.md
+  s_5c64fcbeddd3f4::t_af6e7684f7ec34 25,27,43,45,47-80,84-90,192,208,223-224,230
+agent/Sources/StratoAgent/ImageCacheService.swift
+  s_5c64fcbeddd3f4::t_af6e7684f7ec34 1,164,173
+docs/development/migration-guide.md
+  s_5c64fcbeddd3f4::t_af6e7684f7ec34 5-7
+agent/Package.resolved
+  s_5c64fcbeddd3f4::t_a974066dfb4137 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "70179053eacd96607d58ba1c4b46be6bae19bf88",
+  "prompts": {},
+  "sessions": {
+    "s_5c64fcbeddd3f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "044bae8b-0eca-462e-9009-d461ab5e285b",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
