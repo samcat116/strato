@@ -232,6 +232,12 @@ public actor SPIREService {
         config.enabled
     }
 
+    /// Whether client certificates are mandatory for agent connections.
+    /// When true, the WebSocket handler must not fall back to token authentication.
+    public var requireClientCert: Bool {
+        config.requireClientCert
+    }
+
     /// Get the current trust bundle
     public func getTrustBundle() throws -> SPIRETrustBundle {
         guard let bundle = trustBundle else {

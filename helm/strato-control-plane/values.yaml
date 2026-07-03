@@ -289,14 +289,14 @@ podDisruptionBudget:
 
 # Network policies for security
 networkPolicy:
-  enabled: false
+  enabled: true
   # Ingress rules - allow traffic from specific sources
   ingress:
     - from: []
       ports:
         - protocol: TCP
           port: 8080
-  # Egress rules - allow traffic to specific destinations  
+  # Egress rules - allow traffic to specific destinations
   egress:
     - to: []
       ports:
@@ -306,6 +306,8 @@ networkPolicy:
           port: 50051  # SpiceDB gRPC
         - protocol: TCP
           port: 8080   # SpiceDB HTTP
+        - protocol: TCP
+          port: 6379   # Valkey/Redis
         - protocol: TCP
           port: 53     # DNS
         - protocol: UDP
