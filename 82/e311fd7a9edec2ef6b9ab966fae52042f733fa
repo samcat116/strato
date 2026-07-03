@@ -1,0 +1,20 @@
+control-plane/Sources/App/Controllers/LogsController.swift
+  s_653a2aa7a65719::t_598d4feca6c3e9 16-17,28-39
+  s_653a2aa7a65719::t_79b61079f7602b 40-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "82e311fd7a9edec2ef6b9ab966fae52042f733fa",
+  "prompts": {},
+  "sessions": {
+    "s_653a2aa7a65719": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f820cbc4-549b-4e3c-a559-82052be96f90",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
