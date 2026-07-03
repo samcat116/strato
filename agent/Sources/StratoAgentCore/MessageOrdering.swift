@@ -91,14 +91,21 @@ extension MessageEnvelope {
             // A clone reads a source volume and writes a target volume; serialize against both
             // so it can't race a delete/resize/info on either resource.
             raws = [fields?.sourceVolumeId, fields?.targetVolumeId]
-        case .volumeCreate, .volumeDelete, .volumeAttach, .volumeDetach,
-             .volumeResize, .volumeSnapshot, .volumeInfo, .volumeStatus:
+        case .volumeAttach, .volumeDetach:
+            // Hot-plug/unplug acts on both the volume and the target VM (the handler drives
+            // QEMU with vmId), so serialize against the VM's lifecycle lane too.
+            raws = [fields?.volumeId, fields?.vmId]
+        case .volumeCreate, .volumeDelete, .volumeResize, .volumeSnapshot, .volumeInfo, .volumeStatus:
             raws = [fields?.volumeId]
+        case .networkAttach:
+            // Attaching a VM to a network acts on both the VM and the named network (the
+            // handler may find-or-create the logical switch), so serialize against both.
+            raws = [fields?.vmId, fields?.networkName.map { "network:\($0)" }]
         case .networkCreate, .networkDelete, .networkInfo:
             // Networks are keyed by name; prefix so a name can never collide with a VM/volume id.
             raws = [fields?.networkName.map { "network:\($0)" }]
         default:
-            // VM lifecycle, console, network attach/detach, and info/status queries all carry vmId.
+            // VM lifecycle, console, network detach, and info/status queries all carry vmId.
             raws = [fields?.vmId]
         }
 

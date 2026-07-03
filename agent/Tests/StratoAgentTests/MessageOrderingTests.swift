@@ -160,8 +160,25 @@ struct MessageOrderingTests {
         #expect(a != b)
     }
 
-    @Test("Volume operations are keyed by volume id")
+    @Test("Volume lifecycle operations are keyed by volume id")
     func volumeOperationsKeyedByVolumeId() {
+        let volumeId = UUID().uuidString
+        let createKeys = MessageEnvelope.serializationKeys(
+            type: .volumeCreate, payload: payload(["volumeId": volumeId])
+        )
+        let deleteKeys = MessageEnvelope.serializationKeys(
+            type: .volumeDelete, payload: payload(["volumeId": volumeId])
+        )
+        let resizeKeys = MessageEnvelope.serializationKeys(
+            type: .volumeResize, payload: payload(["volumeId": volumeId])
+        )
+        #expect(createKeys == [volumeId])
+        #expect(deleteKeys == [volumeId])
+        #expect(resizeKeys == [volumeId])
+    }
+
+    @Test("Attach then detach of the same volume share the volume lane")
+    func attachDetachShareVolumeLane() {
         let volumeId = UUID().uuidString
         let attachKeys = MessageEnvelope.serializationKeys(
             type: .volumeAttach,
@@ -171,8 +188,45 @@ struct MessageOrderingTests {
             type: .volumeDetach,
             payload: payload(["vmId": UUID().uuidString, "volumeId": volumeId])
         )
-        // Same volume attached to then detached from different VMs still shares a lane.
-        #expect(attachKeys == detachKeys)
+        // Even attached to / detached from different VMs, they still serialize on the volume.
+        #expect(!Set(attachKeys).isDisjoint(with: detachKeys))
+        #expect(attachKeys.contains(volumeId))
+    }
+
+    @Test("Volume attach/detach also serialize against the target VM's lane")
+    func volumeHotPlugSpansVMLane() {
+        let vmId = UUID().uuidString
+        let volumeId = UUID().uuidString
+        let attachKeys = MessageEnvelope.serializationKeys(
+            type: .volumeAttach,
+            payload: payload(["vmId": vmId, "volumeId": volumeId])
+        )
+        // Hot-plugging must serialize against a delete/shutdown of the same VM.
+        let vmDeleteKeys = MessageEnvelope.serializationKeys(
+            type: .vmDelete, payload: payload(["vmId": vmId])
+        )
+        #expect(Set(attachKeys) == Set([vmId, volumeId]))
+        #expect(!Set(attachKeys).isDisjoint(with: vmDeleteKeys))
+    }
+
+    @Test("Network attach serializes against both the VM and the named network")
+    func networkAttachSpansVMAndNetworkLanes() {
+        let vmId = UUID().uuidString
+        let attachKeys = MessageEnvelope.serializationKeys(
+            type: .networkAttach,
+            payload: payload(["vmId": vmId, "networkName": "net0"])
+        )
+        // Must serialize against an adjacent create/delete of the same network...
+        let netCreateKeys = MessageEnvelope.serializationKeys(
+            type: .networkCreate, payload: payload(["networkName": "net0"])
+        )
+        // ...and against lifecycle of the same VM.
+        let vmDeleteKeys = MessageEnvelope.serializationKeys(
+            type: .vmDelete, payload: payload(["vmId": vmId])
+        )
+        #expect(Set(attachKeys) == Set([vmId, "network:net0"]))
+        #expect(!Set(attachKeys).isDisjoint(with: netCreateKeys))
+        #expect(!Set(attachKeys).isDisjoint(with: vmDeleteKeys))
     }
 
     @Test("Volume clone serializes against both its source and target volume lanes")
