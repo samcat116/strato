@@ -64,12 +64,22 @@ struct VMController: RouteCollection {
         return authorizedVMs
     }
 
-    func show(req: Request) async throws -> VMDetailResponse {
+    /// Fetch a VM by its :vmID route parameter and enforce a SpiceDB permission on it.
+    ///
+    /// Delegates to the shared `Request.authorizedVM(_:permission:)` helper so the
+    /// per-object authorization logic lives in one place (also used by other VM-scoped
+    /// controllers such as `LogsController`).
+    private func fetchVMWithPermission(req: Request, user: User, permission: String) async throws -> VM {
         guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        let vm = try await req.authorizedVM(vmID, permission: "read")
+        return try await req.authorizedVM(vmID, permission: permission)
+    }
+
+    func show(req: Request) async throws -> VMDetailResponse {
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "read")
 
         return VMDetailResponse(from: vm)
     }
@@ -322,11 +332,8 @@ struct VMController: RouteCollection {
     }
 
     func update(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        let existingVM = try await req.authorizedVM(vmID, permission: "update")
+        let user = try req.auth.require(User.self)
+        let existingVM = try await fetchVMWithPermission(req: req, user: user, permission: "update")
 
         struct UpdateVMRequest: Content {
             let name: String?
@@ -350,11 +357,8 @@ struct VMController: RouteCollection {
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        let vm = try await req.authorizedVM(vmID, permission: "delete")
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "delete")
 
         // Stop and delete VM via agent first
         if vm.hypervisorId != nil {
@@ -374,11 +378,8 @@ struct VMController: RouteCollection {
     }
 
     func pause(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        let vm = try await req.authorizedVM(vmID, permission: "pause")
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "pause")
 
         guard vm.canPause else {
             throw Abort(.badRequest, reason: "VM cannot be paused in current state: \(vm.status.rawValue)")
@@ -406,11 +407,8 @@ struct VMController: RouteCollection {
     }
 
     func resume(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        let vm = try await req.authorizedVM(vmID, permission: "resume")
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "resume")
 
         guard vm.canResume else {
             throw Abort(.badRequest, reason: "VM cannot be resumed in current state: \(vm.status.rawValue)")
@@ -438,11 +436,8 @@ struct VMController: RouteCollection {
     }
 
     func status(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        let vm = try await req.authorizedVM(vmID, permission: "read")
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "read")
 
         // Sync status with agent if VM exists there. Transitional states are owned by
         // the dispatch path and confirmed via the agent's statusUpdate; a concurrent
@@ -464,11 +459,8 @@ struct VMController: RouteCollection {
     }
 
     func start(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        let vm = try await req.authorizedVM(vmID, permission: "start")
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "start")
 
         guard vm.canStart else {
             throw Abort(.badRequest, reason: "VM cannot be started in current state: \(vm.status.rawValue)")
@@ -523,11 +515,8 @@ struct VMController: RouteCollection {
     }
 
     func stop(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        let vm = try await req.authorizedVM(vmID, permission: "stop")
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "stop")
 
         guard vm.canStop else {
             throw Abort(.badRequest, reason: "VM cannot be stopped in current state: \(vm.status.rawValue)")
@@ -571,11 +560,8 @@ struct VMController: RouteCollection {
     }
 
     func restart(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        let vm = try await req.authorizedVM(vmID, permission: "restart")
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "restart")
 
         guard vm.isRunning else {
             throw Abort(.badRequest, reason: "VM must be running to restart. Current state: \(vm.status.rawValue)")
