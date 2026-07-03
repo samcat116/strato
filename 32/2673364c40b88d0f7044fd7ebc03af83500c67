@@ -1,0 +1,69 @@
+agent/Sources/StratoAgent/WebSocketClient.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 6,56-61,74,79,90-91,96-101,138-144,156
+control-plane/Sources/App/Extensions/Request+VMAuthorization.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 1-41
+control-plane/Sources/App/Models/AgentRegistrationToken.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 83-109
+agent/Sources/StratoAgentCore/WebSocketURLs.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 4-5,7-13,16-24,27
+control-plane/Sources/App/Controllers/VMController.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 68-71,77
+control-plane/Sources/App/Services/WebAuthnService.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 5,133-141,166-184,187-194,197-213
+control-plane/Sources/App/Controllers/UserController.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 30-38,44-47,52-56,94-97,102-106,120-123,128-131
+  s_6e604f65066d21::t_251275fd4b3e71 132
+agent/Sources/StratoAgentCore/TapInterfaceName.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 1-25
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 26-29,54,133
+agent/Sources/StratoAgent/Agent.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 33-34,36-39,78,95,231,398-400,402-404
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 381-393,397
+control-plane/Tests/AppTests/UserControllerTests.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 1-192
+control-plane/web/src/types/api.ts
+  s_6e604f65066d21::t_a8f7b02db432a1 83-84,86,91-102
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 21-36,40-41,86-88,93-95,99-100,122-123,139-140,156-157,181-182
+agent/Tests/StratoAgentTests/WebSocketURLsTests.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 8-13,18-29,35,40,43,45-48
+control-plane/Tests/AppTests/VMAuthorizationTests.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 1-179
+control-plane/Tests/AppTests/WebAuthnChallengeTests.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 1-104
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 74,76,85-91,94-95,105,158
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_6e604f65066d21::t_da3dd19830aece 79-80
+  s_6e604f65066d21::t_a8f7b02db432a1 134-136,270-271,273,304
+control-plane/Sources/App/Controllers/ConsoleWebSocketController.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 155-160,163-177,180-187,191-197,199-209,214-220,222-223
+control-plane/web/src/lib/api/agents.ts
+  s_6e604f65066d21::t_a8f7b02db432a1 7,29-30
+control-plane/Sources/App/Controllers/LogsController.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 16-17,23-38
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 4,41-47,49,107-108,114,117-146,211-214,216-223,225-239,241,252,255-272,352,355-364,406,409-417,425-426,434-453,456,458-482,484-523,525-531,533,535-545,578,595-596
+agent/Tests/StratoAgentTests/TapInterfaceNameTests.swift
+  s_6e604f65066d21::t_a8f7b02db432a1 1-94
+control-plane/package-lock.json
+  s_6e604f65066d21::t_d6615788730ceb 836-849
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "322673364c40b88d0f7044fd7ebc03af83500c67",
+  "prompts": {},
+  "sessions": {
+    "s_6e604f65066d21": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "935017a0-a2fe-44a4-9dea-ab102b9e7a33",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
