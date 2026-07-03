@@ -1,0 +1,26 @@
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_e7afdbd338abf1::t_8166d372649ef2 172-185
+agent/Sources/StratoAgent/Agent.swift
+  s_e7afdbd338abf1::t_94b301a5314da3 310-316
+  s_e7afdbd338abf1::t_6a19517fad6469 252-264
+  s_e7afdbd338abf1::t_a36401daa418cb 270
+  s_e7afdbd338abf1::t_9319e5d9953ec4 56-62
+agent/Sources/StratoAgent/SignalHandler.swift
+  s_e7afdbd338abf1::t_849fcc3989f469 1-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2af5d8b49a884de5b763457f00ba132e12ec1c4e",
+  "prompts": {},
+  "sessions": {
+    "s_e7afdbd338abf1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dd79f832-e84b-41e4-a796-5c48d012a847",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
