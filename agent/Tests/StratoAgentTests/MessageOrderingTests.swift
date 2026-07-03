@@ -137,6 +137,36 @@ struct MessageOrderingTests {
         #expect(bootKeys == deleteKeys)
     }
 
+    @Test("VM creation serializes against its configured network lanes")
+    func vmCreateSpansConfiguredNetworkLanes() {
+        let vmId = UUID()
+        let createKeys = MessageEnvelope.serializationKeys(
+            type: .vmCreate,
+            payload: payload([
+                "vmData": ["id": vmId.uuidString],
+                "vmConfig": ["net": [["id": "net0"], [String: String]()]],
+                "requestId": "r1"
+            ])
+        )
+        // The VM lane, the named network, and network:default for the unnamed entry.
+        #expect(Set(createKeys) == Set([vmId.uuidString, "network:net0", "network:default"]))
+
+        // Must serialize against an adjacent create/delete of that same network.
+        let netDeleteKeys = MessageEnvelope.serializationKeys(
+            type: .networkDelete, payload: payload(["networkName": "net0"])
+        )
+        #expect(!Set(createKeys).isDisjoint(with: netDeleteKeys))
+    }
+
+    @Test("VM creation without configured networks uses only the VM lane")
+    func vmCreateWithoutNetworksUsesVMLane() {
+        let vmId = UUID()
+        let createKeys = MessageEnvelope.serializationKeys(
+            type: .vmCreate, payload: payload(["vmData": ["id": vmId.uuidString]])
+        )
+        #expect(createKeys == [vmId.uuidString])
+    }
+
     @Test("VM id lane is case-insensitive to UUID formatting")
     func vmIdNormalizedAcrossCasing() {
         let vmId = UUID()

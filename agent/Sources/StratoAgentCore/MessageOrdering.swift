@@ -86,7 +86,14 @@ extension MessageEnvelope {
         let raws: [String?]
         switch type {
         case .vmCreate:
-            raws = [fields?.vmData?.id.uuidString]
+            // Creation also wires up the VM's configured networks (find-or-create of the
+            // logical switch), so serialize against those network lanes too. Mirror the
+            // handler's `id ?? "default"` fallback for an unnamed network.
+            var keys: [String?] = [fields?.vmData?.id.uuidString]
+            for net in fields?.vmConfig?.net ?? [] {
+                keys.append("network:\(net.id ?? "default")")
+            }
+            raws = keys
         case .volumeClone:
             // A clone reads a source volume and writes a target volume; serialize against both
             // so it can't race a delete/resize/info on either resource.
@@ -122,7 +129,10 @@ extension MessageEnvelope {
     /// decoded once for routing without paying for a full message decode.
     private struct RoutingFields: Decodable {
         struct VMDataID: Decodable { let id: UUID }
+        struct NetStub: Decodable { let id: String? }
+        struct VMConfigStub: Decodable { let net: [NetStub]? }
         let vmData: VMDataID?
+        let vmConfig: VMConfigStub?
         let vmId: String?
         let volumeId: String?
         let sourceVolumeId: String?
