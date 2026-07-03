@@ -2,6 +2,9 @@
 
 This guide helps you migrate from the existing docker-compose development workflow to the new Skaffold + Helm setup.
 
+> [!NOTE]
+> This guide predates Strato's switch from Permify to SpiceDB for authorization. References to Permify below (the `permify` service, `PERMIFY_URL`, `http://permify:3476`, `templates/permify/`) reflect the configuration at the time this guide was written and are kept for historical accuracy. The current stack runs a `spicedb` service instead, configured via the `SPICEDB_ENDPOINT` and `SPICEDB_PRESHARED_KEY` environment variables, with the schema in `spicedb/schema.zed`. See `docs/architecture/overview.md` for the current authorization architecture.
+
 ## Overview
 
 **Before**: `docker-compose up` started all services locally

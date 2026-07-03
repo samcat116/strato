@@ -60,6 +60,13 @@ actor Agent {
     private var heartbeatTask: Task<Void, Error>?
     private var reconnectTask: Task<Void, Never>?
     private var isRunning = false
+    // Set once a graceful shutdown has been requested (e.g. by a signal
+    // handler calling stop()). Guards start() against parking if stop() ran
+    // during startup, which would otherwise hang the process on exit.
+    private var shutdownRequested = false
+    // Resumed by stop() to unblock start(), which parks here for the agent's
+    // lifetime instead of busy-sleeping.
+    private var shutdownContinuation: CheckedContinuation<Void, Never>?
     private var registrationContinuation: CheckedContinuation<String, Error>?
     private let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
 
@@ -85,11 +92,6 @@ actor Agent {
     // rejected); start() rethrows it so the process exits non-zero instead
     // of idling disconnected.
     private var terminalError: Error?
-    private var shutdownContinuation: CheckedContinuation<Void, Never>?
-    // Set the moment shutdown is signalled, so start() never suspends on a
-    // continuation that no one is left to resume (stop() racing ahead of the
-    // continuation being installed).
-    private var shutdownRequested = false
 
     init(
         agentID: String,
@@ -264,12 +266,12 @@ actor Agent {
         isRunning = true
         logger.info("Agent started successfully")
 
-        // Keep the agent running until stop() or a terminal failure wakes us.
-        // If shutdown was already requested (e.g. stop() raced ahead during the
-        // connect/register window, before this continuation existed), skip the
-        // suspension entirely — otherwise nothing would ever resume it.
+        // Park until stop() (typically from a SIGINT/SIGTERM handler) or a
+        // terminal failure resumes this continuation. If shutdown was already
+        // requested while we were still starting up, stop() has already torn
+        // everything down — skip parking so the process can exit.
         if !shutdownRequested {
-            await withCheckedContinuation { continuation in
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 self.shutdownContinuation = continuation
             }
         }
@@ -279,18 +281,21 @@ actor Agent {
         }
     }
 
-    /// Wakes start() out of its run-forever suspension. Called by stop() and
-    /// by unrecoverable failures (after setting `terminalError`).
+    /// Wakes start() out of its run-forever suspension after an unrecoverable
+    /// failure (set `terminalError` first). stop() deliberately does NOT use
+    /// this: it resumes the continuation only after teardown completes, so the
+    /// process doesn't exit mid-cleanup.
     private func signalShutdown() {
         shutdownRequested = true
         isRunning = false
         shutdownContinuation?.resume()
         shutdownContinuation = nil
     }
-    
+
     func stop() async {
         logger.info("Stopping agent")
-        signalShutdown()
+        shutdownRequested = true
+        isRunning = false
 
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -329,6 +334,13 @@ actor Agent {
         vmHypervisorMap.removeAll()
 
         logger.info("Agent stopped")
+
+        // Unblock start(), which parks on this continuation for the agent's
+        // lifetime, so the process can exit cleanly.
+        if let continuation = shutdownContinuation {
+            shutdownContinuation = nil
+            continuation.resume()
+        }
     }
 
     // MARK: - SPIFFE Helpers

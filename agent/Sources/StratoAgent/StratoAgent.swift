@@ -282,6 +282,20 @@ private func launchAgent(
         stateStore: stateStore
     )
 
+    // Install signal handlers so `systemctl stop`/Ctrl-C triggers a graceful
+    // shutdown: unregistering from the control plane, disconnecting consoles,
+    // and tearing down networking. Without this the process is simply killed
+    // and every restart looks like an unclean crash. The handler is retained
+    // for the lifetime of this call (which blocks in agent.start()).
+    let signalLogger = logger
+    let signalHandler = SignalHandler { sig in
+        signalLogger.info("Received signal \(sig); shutting down gracefully")
+        Task {
+            await agent.stop()
+        }
+    }
+    signalHandler.install()
+
     do {
         try await agent.start()
     } catch let error as AgentError {
