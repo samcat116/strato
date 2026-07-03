@@ -257,9 +257,10 @@ struct AgentWebSocketController: RouteCollection {
                 try? await registrationToken.save(on: req.db)
             }
 
+            // Never log the raw token value — logs are lower-trust than the token
+            // store and may be shipped off-host. The agent name is sufficient.
             req.logger.info("Agent registration token validated", metadata: [
-                "agentName": .string(agentName),
-                "token": .string(token)
+                "agentName": .string(agentName)
             ])
 
             return true
