@@ -17,6 +17,7 @@ let package = Package(
         .package(url: "https://github.com/vapor/websocket-kit.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
         .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
     ] + platformPackageDependencies,
     targets: [
@@ -42,6 +43,7 @@ let package = Package(
                 .product(name: "WebSocketKit", package: "websocket-kit"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "Crypto", package: "swift-crypto"),
             ] + qemuAndNetworkDependencies,
             swiftSettings: swiftSettings
         ),
