@@ -56,7 +56,7 @@ struct AgentWebSocketController: RouteCollection {
         // Fall back to direct TLS certificate extraction
         guard let peerCertificatePEM = req.peerCertificate else {
             // No client certificate provided - check if we should fall back to token auth
-            if let _ = req.query[String.self, at: "token"],
+            if req.headers.bearerAuthorization != nil,
                let agentName = req.query[String.self, at: "name"] {
                 req.logger.warning("No client certificate or XFCC header provided, falling back to token authentication", metadata: [
                     "agentName": .string(agentName)
@@ -122,8 +122,9 @@ struct AgentWebSocketController: RouteCollection {
     // MARK: - Token Authentication (Legacy)
 
     private func handleTokenAuthentication(req: Request, ws: WebSocket) {
-        // Extract token and agent name from query parameters
-        guard let token = req.query[String.self, at: "token"],
+        // Extract token from the Authorization header (Bearer) and agent name from the
+        // query. The token is kept out of the URL so it never lands in access logs.
+        guard let token = req.headers.bearerAuthorization?.token,
               let agentName = req.query[String.self, at: "name"] else {
             sendErrorResponse(ws: ws, requestId: "", error: "Registration token and agent name are required")
             Task { try? await ws.close(code: .unacceptableData) }
@@ -291,7 +292,7 @@ struct AgentWebSocketController: RouteCollection {
             switch envelope.type {
             case .agentRegister:
                 let message = try envelope.decode(as: AgentRegisterMessage.self)
-                let isTokenAuthenticated = req.query[String.self, at: "token"] != nil
+                let isTokenAuthenticated = req.headers.bearerAuthorization != nil
                 Task {
                     do {
                         let agentUUID = try await req.agentService.registerAgent(message, agentName: agentName)
