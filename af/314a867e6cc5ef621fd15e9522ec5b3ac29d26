@@ -1,0 +1,26 @@
+docs/architecture/overview.md
+  s_a03915f3021e99::t_a115d8e34d09e0 223-224
+  s_a03915f3021e99::t_f6a64bff9c3906 208
+  s_a03915f3021e99::t_74a5b17a748ddc 43,45,47-80,84-90
+  s_a03915f3021e99::t_320eb0d4a2c271 230
+  s_a03915f3021e99::t_6fe3db36c82e49 192
+  s_a03915f3021e99::t_d8972502c9c282 25,27
+docs/development/migration-guide.md
+  s_a03915f3021e99::t_505219c0707f21 5-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "af314a867e6cc5ef621fd15e9522ec5b3ac29d26",
+  "prompts": {},
+  "sessions": {
+    "s_a03915f3021e99": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "33cc13ef-de4e-47eb-abd9-fdc5b93d8df2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
