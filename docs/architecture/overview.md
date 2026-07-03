@@ -22,9 +22,9 @@ The backend is built using Vapor 4, leveraging Swift's performance and safety fe
   - `VM`: Virtual machine specifications and state
 - **Services**: Encapsulate business logic and external integrations
   - `WebAuthnService`: Manages WebAuthn/Passkey authentication flows
-  - `PermifyService`: Interfaces with the Permify authorization service
+  - `SpiceDBService`: Interfaces with the SpiceDB authorization service via its HTTP API
 - **Middleware**: Cross-cutting concerns and request processing
-  - `PermifyAuthMiddleware`: Enforces authorization policies on all requests
+  - `SpiceDBAuthMiddleware`: Enforces authorization policies on all requests
 
 ### Database Layer
 
@@ -40,43 +40,54 @@ The backend is built using Vapor 4, leveraging Swift's performance and safety fe
 - `vms`: Virtual machine specifications and metadata
 - `sessions`: User session data for authentication state
 
-### Authorization System (Permify)
+### Authorization System (SpiceDB)
 
-Strato uses Permify for fine-grained, relationship-based access control:
+Strato uses [SpiceDB](https://authzed.com/spicedb) for fine-grained, relationship-based access control, following the Google Zanzibar model.
 
-**Schema Definition** (`permify/schema.perm`):
-```
-entity user {}
-entity organization {}
-entity vm {}
+**Schema Definition** (`spicedb/schema.zed`):
 
-relation owner of organization
-relation member of organization
-relation owner of vm
-relation organization of vm
+The schema defines `user`, `organization`, `project`, `image`, `volume`, `volume_snapshot`, and `virtual_machine` object types. Abridged excerpt:
 
-action create on vm
-action read on vm
-action update on vm
-action delete on vm
-action start on vm
-action stop on vm
-action restart on vm
+```zed
+definition user {}
 
-permission create on vm = owner(organization.owner) or member(organization.owner)
-permission read on vm = owner or organization.member
-permission update on vm = owner
-permission delete on vm = owner
-permission start on vm = owner or organization.member
-permission stop on vm = owner or organization.member
-permission restart on vm = owner or organization.member
+definition organization {
+    relation admin: user
+    relation member: user
+
+    permission manage_vms = admin + member
+    permission view_organization = admin + member
+    permission manage_members = admin
+}
+
+definition virtual_machine {
+    relation owner: user
+    relation organization: organization
+    relation project: project
+    relation viewer: user
+    relation editor: user
+
+    permission create = organization->manage_vms
+    permission read = owner + viewer + editor + organization->admin
+    permission update = owner + editor + organization->admin
+    permission delete = owner + organization->admin
+    permission start = owner + editor + organization->admin
+    permission stop = owner + editor + organization->admin
+    permission restart = owner + editor + organization->admin
+    permission pause = owner + editor + organization->admin
+    permission resume = owner + editor + organization->admin
+    permission view_console = owner + editor + organization->admin
+}
 ```
 
 **Integration Points:**
-- `PermifyAuthMiddleware`: Intercepts all HTTP requests
-- Authorization checks before VM operations
-- Automatic relationship creation on VM creation
-- Session-based user context
+- `SpiceDBAuthMiddleware` (registered globally in `configure.swift`): Intercepts all HTTP requests
+  - Skips public routes (health checks, `/login`, `/register`, `/auth/*`, static assets, the agent WebSocket)
+  - Requires a session-authenticated user for everything else; system admins bypass permission checks
+  - For `/vms` routes, maps the HTTP method and path to a permission (`read`, `create`, `update`, `delete`, `start`, `stop`, `restart`, `pause`, `resume`) and checks it against the `virtual_machine` resource; collection-level list/create operations check `view_organization` on the user's current organization
+- `SpiceDBService`: Swift wrapper around the SpiceDB HTTP API (`/v1/permissions/check` with full consistency, `/v1/relationships/write`, `/v1/schemas/write`), authenticated with a preshared key; includes helpers for group membership and group-to-project roles
+- Controllers perform additional per-resource `checkPermission` calls and write relationships on resource creation — e.g. creating a VM writes `owner` (user), `project`, and `organization` relationships for the new `virtual_machine`
+- Schema loading: a Helm post-install/post-upgrade Job runs `zed schema write`; for local development, `spicedb/init-schema.sh` posts the schema via the HTTP API
 
 ### Authentication System (WebAuthn/Passkeys)
 
@@ -178,7 +189,7 @@ Vapor's built-in container system provides:
 - **CSRF Protection**: Built into Vapor forms
 
 ### Authorization
-- **Fine-grained Permissions**: Permify relationship-based access
+- **Fine-grained Permissions**: SpiceDB relationship-based access (Zanzibar model)
 - **Middleware Enforcement**: All requests authorized
 - **Principle of Least Privilege**: Minimal required permissions
 
@@ -194,7 +205,7 @@ Vapor's built-in container system provides:
 services:
   app:          # Strato application
   db:           # PostgreSQL database
-  permify:      # Authorization service
+  spicedb:      # SpiceDB authorization service
   migrate:      # Database migration runner
 ```
 
@@ -209,13 +220,14 @@ services:
 
 ### Environment Variables
 - `DATABASE_URL`: PostgreSQL connection string
-- `PERMIFY_ENDPOINT`: Authorization service URL
+- `SPICEDB_ENDPOINT`: SpiceDB HTTP API URL (required)
+- `SPICEDB_PRESHARED_KEY`: SpiceDB preshared authentication key
 - `WEBAUTHN_RELYING_PARTY_*`: WebAuthn configuration
 - `VAPOR_ENV`: Application environment (development/production)
 
 ### Configuration Files
 - `docker-compose.yml`: Development environment
-- `permify/config.yaml`: Permify service configuration
+- `spicedb/schema.zed`: SpiceDB authorization schema
 - `tailwind.config.js`: CSS framework configuration
 
 ## Performance Characteristics
