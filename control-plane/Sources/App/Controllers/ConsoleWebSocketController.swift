@@ -152,69 +152,75 @@ struct ConsoleWebSocketController: RouteCollection {
                 return ws.eventLoop.makeSucceededFuture(nil)
             }
 
+            guard let userId = user.id?.uuidString, !userId.isEmpty else {
+                ws.send("error: Invalid user session")
+                _ = ws.close(code: .policyViolation)
+                return ws.eventLoop.makeSucceededFuture(nil)
+            }
+
             req.logger.debug("Console WebSocket authenticated as user: \(user.username)")
 
-            // Query VM from database
-            return VM.find(vmId, on: req.db).flatMap { vm -> EventLoopFuture<(VM, String, String?)?> in
-                guard let vm = vm else {
-                    ws.send("error: VM not found")
-                    _ = ws.close(code: .unacceptableData)
+            // Authorize before loading the VM, so unauthorized users cannot probe
+            // arbitrary VM UUIDs via distinct "VM not found" / "not running" errors.
+            // Consistent with SpiceDBAuthMiddleware: system admins and the dev-auth
+            // bypass skip the permission check.
+            let devBypass = req.application.environment == .development
+                && Environment.get("DEV_AUTH_BYPASS") == "true"
+            let authorizedFuture: EventLoopFuture<Bool> = (user.isSystemAdmin || devBypass)
+                ? ws.eventLoop.makeSucceededFuture(true)
+                : ws.eventLoop.makeFutureWithTask {
+                    try await req.spicedb.checkPermission(
+                        subject: userId,
+                        permission: "view_console",
+                        resource: "virtual_machine",
+                        resourceId: vmId.uuidString
+                    )
+                }
+
+            return authorizedFuture.flatMap { hasPermission -> EventLoopFuture<(VM, String, String?)?> in
+                guard hasPermission else {
+                    req.logger.warning("Console access denied", metadata: [
+                        "vmId": .string(vmId.uuidString),
+                        "userId": .string(userId)
+                    ])
+                    ws.send("error: You do not have permission to access this VM console")
+                    _ = ws.close(code: .policyViolation)
                     return ws.eventLoop.makeSucceededFuture(nil)
                 }
 
-                // Check if VM is running
-                guard vm.status == .running else {
-                    ws.send("error: VM is not running")
-                    _ = ws.close(code: .unacceptableData)
-                    return ws.eventLoop.makeSucceededFuture(nil)
-                }
+                // Query VM from database
+                return VM.find(vmId, on: req.db).flatMap { vm -> EventLoopFuture<(VM, String, String?)?> in
+                    guard let vm = vm else {
+                        ws.send("error: VM not found")
+                        _ = ws.close(code: .unacceptableData)
+                        return ws.eventLoop.makeSucceededFuture(nil)
+                    }
 
-                // Check if VM has an assigned hypervisor (agent UUID)
-                guard let agentIdString = vm.hypervisorId,
-                      let agentId = UUID(uuidString: agentIdString) else {
-                    ws.send("error: VM has no assigned hypervisor")
-                    _ = ws.close(code: .unexpectedServerError)
-                    return ws.eventLoop.makeSucceededFuture(nil)
-                }
+                    // Check if VM is running
+                    guard vm.status == .running else {
+                        ws.send("error: VM is not running")
+                        _ = ws.close(code: .unacceptableData)
+                        return ws.eventLoop.makeSucceededFuture(nil)
+                    }
 
-                // Look up agent to get the agent name (WebSocket connections are keyed by name)
-                return Agent.find(agentId, on: req.db).flatMap { agent -> EventLoopFuture<(VM, String, String?)?> in
-                    guard let agent = agent else {
-                        ws.send("error: Agent not found for VM")
+                    // Check if VM has an assigned hypervisor (agent UUID)
+                    guard let agentIdString = vm.hypervisorId,
+                          let agentId = UUID(uuidString: agentIdString) else {
+                        ws.send("error: VM has no assigned hypervisor")
                         _ = ws.close(code: .unexpectedServerError)
                         return ws.eventLoop.makeSucceededFuture(nil)
                     }
 
-                    // System admins bypass permission checks (matches SpiceDBAuthMiddleware).
-                    if user.isSystemAdmin {
-                        return ws.eventLoop.makeSucceededFuture((vm, agent.name, user.id?.uuidString))
-                    }
-
-                    // Enforce object-level authorization: the caller must have
-                    // `view_console` on this specific VM. This is stricter than the
-                    // middleware's `read` gate (a viewer has read but not view_console).
-                    let promise = ws.eventLoop.makePromise(of: (VM, String, String?)?.self)
-                    promise.completeWithTask {
-                        let hasPermission = try await req.spicedb.checkPermission(
-                            subject: user.id?.uuidString ?? "",
-                            permission: "view_console",
-                            resource: "virtual_machine",
-                            resourceId: vm.id?.uuidString ?? ""
-                        )
-
-                        guard hasPermission else {
-                            req.logger.warning("Console WebSocket access denied", metadata: [
-                                "vmId": .string(vm.id?.uuidString ?? ""),
-                                "userId": .string(user.id?.uuidString ?? "")
-                            ])
-                            try? await ws.send("error: Access denied")
-                            try? await ws.close(code: .policyViolation)
-                            return nil
+                    // Look up agent to get the agent name (WebSocket connections are keyed by name)
+                    return Agent.find(agentId, on: req.db).flatMap { agent -> EventLoopFuture<(VM, String, String?)?> in
+                        guard let agent = agent else {
+                            ws.send("error: Agent not found for VM")
+                            _ = ws.close(code: .unexpectedServerError)
+                            return ws.eventLoop.makeSucceededFuture(nil)
                         }
 
-                        return (vm, agent.name, user.id?.uuidString)
+                        return ws.eventLoop.makeSucceededFuture((vm, agent.name, userId))
                     }
-                    return promise.futureResult
                 }
             }
         }
