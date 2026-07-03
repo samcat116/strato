@@ -20,6 +20,26 @@ struct AgentController: RouteCollection {
 
     // MARK: - Registration Token Management
 
+    /// Base WebSocket URL agents should dial, embedded in registration URLs.
+    ///
+    /// The Host header only names whatever hop the request came in on — behind
+    /// an ingress or port-forward that can be an address hypervisor hosts
+    /// cannot reach, so an explicitly configured EXTERNAL_HOSTNAME wins. The
+    /// scheme likewise can't come from req.url.scheme alone: behind a
+    /// TLS-terminating proxy the local hop is plain HTTP, so trust
+    /// X-Forwarded-Proto when present.
+    private func webSocketBaseURL(req: Request) -> String {
+        let forwardedProto = req.headers["x-forwarded-proto"].first?.lowercased()
+        let isHTTPS = forwardedProto == "https" || (forwardedProto == nil && req.url.scheme == "https")
+        let scheme = isHTTPS ? "wss" : "ws"
+
+        let host = Environment.get("EXTERNAL_HOSTNAME")
+            ?? req.headers["host"].first
+            ?? "localhost:8080"
+
+        return "\(scheme)://\(host)"
+    }
+
     func createRegistrationToken(req: Request) async throws -> AgentRegistrationTokenResponse {
         let createRequest = try req.content.decode(CreateAgentRegistrationTokenRequest.self)
         try createRequest.validate()
@@ -51,10 +71,7 @@ struct AgentController: RouteCollection {
 
         try await token.save(on: req.db)
 
-        // Get base URL for WebSocket connection
-        let scheme = req.url.scheme == "https" ? "wss" : "ws"
-        let host = req.headers["host"].first ?? "localhost:8080"
-        let baseURL = "\(scheme)://\(host)"
+        let baseURL = webSocketBaseURL(req: req)
 
         req.logger.info("Created agent registration token", metadata: [
             "agentName": .string(createRequest.agentName),
@@ -70,9 +87,7 @@ struct AgentController: RouteCollection {
             .sort(\.$createdAt, .descending)
             .all()
 
-        let scheme = req.url.scheme == "https" ? "wss" : "ws"
-        let host = req.headers["host"].first ?? "localhost:8080"
-        let baseURL = "\(scheme)://\(host)"
+        let baseURL = webSocketBaseURL(req: req)
 
         return try tokens.map { try AgentRegistrationTokenResponse(from: $0, baseURL: baseURL) }
     }

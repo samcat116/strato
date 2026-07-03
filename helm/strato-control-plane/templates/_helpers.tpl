@@ -71,11 +71,14 @@ Get the database host
 {{- end }}
 
 {{/*
-Get the database password secret name
+Get the database password secret name.
+When the bundled PostgreSQL is enabled this is the release credentials secret
+(see credentials-secret.yaml), which the bitnami subchart also reads via
+auth.existingSecret so there is a single source of truth.
 */}}
 {{- define "strato-control-plane.databaseSecretName" -}}
 {{- if .Values.postgresql.enabled }}
-{{- printf "%s-postgresql" .Release.Name }}
+{{- printf "%s-strato-credentials" .Release.Name }}
 {{- else }}
 {{- printf "%s-external-db" (include "strato-control-plane.fullname" .) }}
 {{- end }}
@@ -85,11 +88,7 @@ Get the database password secret name
 Get the database password secret key
 */}}
 {{- define "strato-control-plane.databaseSecretKey" -}}
-{{- if .Values.postgresql.enabled -}}
-password
-{{- else -}}
 db-password
-{{- end -}}
 {{- end }}
 
 {{/*
@@ -178,17 +177,6 @@ Get the WebAuthn origin URL (protocol + domain + port)
 {{- end }}
 {{- else }}
 {{- printf "http://localhost:%d" (int .Values.service.port) }}
-{{- end }}
-{{- end }}
-
-{{/*
-Get the SpiceDB connection string
-*/}}
-{{- define "strato-control-plane.spicedbConnectionString" -}}
-{{- if .Values.postgresql.enabled }}
-{{- printf "postgres://%s:%s@%s:%v/%s?sslmode=disable" .Values.strato.database.username .Values.postgresql.auth.password (include "strato-control-plane.databaseHost" .) .Values.strato.database.port .Values.strato.database.name }}
-{{- else }}
-{{- printf "postgres://%s:%s@%s:%v/%s?sslmode=disable" .Values.strato.database.username .Values.externalDatabase.password (include "strato-control-plane.databaseHost" .) .Values.strato.database.port .Values.strato.database.name }}
 {{- end }}
 {{- end }}
 

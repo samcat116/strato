@@ -36,4 +36,42 @@ struct WebSocketURLsTests {
         let result = WebSocketURLs.replacingTokenQueryParameter(in: url, with: "new")
         #expect(result == "ws://cp:8080/agent/ws?token=new&name=node%20one")
     }
+
+    @Test("Builds a registration URL from a bare base")
+    func buildsRegistrationURL() {
+        let result = WebSocketURLs.registrationURL(
+            base: "ws://control-plane:8080/agent/ws",
+            token: "tok123",
+            name: "agent-1"
+        )
+        #expect(result == "ws://control-plane:8080/agent/ws?token=tok123&name=agent-1")
+    }
+
+    @Test("Registration URL builder replaces stale token and name in the base")
+    func buildReplacesExistingTokenAndName() {
+        let result = WebSocketURLs.registrationURL(
+            base: "ws://cp:8080/agent/ws?token=stale&name=old",
+            token: "fresh",
+            name: "agent-2"
+        )
+        #expect(result == "ws://cp:8080/agent/ws?token=fresh&name=agent-2")
+    }
+
+    @Test("Round-trip: strip query, rebuild, replace token")
+    func roundTrip() {
+        let original = "wss://cp.example.com/agent/ws?token=join-token&name=hv-01"
+        let base = WebSocketURLs.removingQuery(from: original)
+        #expect(base == "wss://cp.example.com/agent/ws")
+
+        let rebuilt = WebSocketURLs.registrationURL(base: base!, token: "rotated", name: "hv-01")
+        #expect(rebuilt == "wss://cp.example.com/agent/ws?token=rotated&name=hv-01")
+
+        let replaced = WebSocketURLs.replacingTokenQueryParameter(in: rebuilt!, with: "rotated-again")
+        #expect(replaced == "wss://cp.example.com/agent/ws?token=rotated-again&name=hv-01")
+    }
+
+    @Test("removingQuery leaves query-less URLs unchanged")
+    func removingQueryNoQuery() {
+        #expect(WebSocketURLs.removingQuery(from: "ws://cp:8080/agent/ws") == "ws://cp:8080/agent/ws")
+    }
 }

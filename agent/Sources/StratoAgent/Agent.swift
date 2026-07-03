@@ -69,6 +69,14 @@ actor Agent {
     private let spiffeConfig: SPIFFEConfig?
     private var svidManager: SVIDManager?
 
+    // Join state persistence (rotated reconnect token survives restarts)
+    private let stateStore: (any AgentStateStore)?
+    // Set when a failure is unrecoverable (e.g. the reconnect token was
+    // rejected); start() rethrows it so the process exits non-zero instead
+    // of idling disconnected.
+    private var terminalError: Error?
+    private var shutdownContinuation: CheckedContinuation<Void, Never>?
+
     init(
         agentID: String,
         webSocketURL: String,
@@ -83,7 +91,8 @@ actor Agent {
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
         firecrackerSocketDir: String = "/tmp/firecracker",
         hypervisorType: HypervisorType = .qemu,
-        spiffeConfig: SPIFFEConfig? = nil
+        spiffeConfig: SPIFFEConfig? = nil,
+        stateStore: (any AgentStateStore)? = nil
     ) {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
@@ -100,6 +109,7 @@ actor Agent {
         self.firecrackerSocketDir = firecrackerSocketDir
         self.hypervisorType = hypervisorType
         self.spiffeConfig = spiffeConfig
+        self.stateStore = stateStore
     }
 
     /// Returns the effective agent ID (assigned UUID if registered, initial ID otherwise)
@@ -237,16 +247,28 @@ actor Agent {
         
         isRunning = true
         logger.info("Agent started successfully")
-        
-        // Keep the agent running indefinitely
-        while isRunning {
-            try await Task.sleep(for: .seconds(3600)) // Sleep for 1 hour at a time
+
+        // Keep the agent running until stop() or a terminal failure wakes us.
+        await withCheckedContinuation { continuation in
+            self.shutdownContinuation = continuation
         }
+
+        if let error = terminalError {
+            throw error
+        }
+    }
+
+    /// Wakes start() out of its run-forever suspension. Called by stop() and
+    /// by unrecoverable failures (after setting `terminalError`).
+    private func signalShutdown() {
+        isRunning = false
+        shutdownContinuation?.resume()
+        shutdownContinuation = nil
     }
     
     func stop() async {
         logger.info("Stopping agent")
-        isRunning = false
+        signalShutdown()
 
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -396,6 +418,7 @@ actor Agent {
                 currentWebSocketURL = updatedURL
                 await websocketClient?.updateURL(updatedURL)
                 logger.info("Adopted rotated reconnect token from control plane")
+                persistJoinState(response: response, reconnectToken: rotatedToken)
             } else {
                 logger.warning("Control plane sent a reconnect token but the WebSocket URL has no token parameter; ignoring")
             }
@@ -407,6 +430,32 @@ actor Agent {
         }
         registrationContinuation = nil
         continuation.resume(returning: response.agentId)
+    }
+
+    /// Persists the join state so a restarted agent can reconnect: the token
+    /// this connection presented has just been consumed, so the rotated one is
+    /// the only credential that will be accepted next time. Failure to persist
+    /// is not fatal for the current run (the in-memory token still works), but
+    /// is loud because a restart would then need a fresh join token.
+    private func persistJoinState(response: AgentRegisterResponseMessage, reconnectToken: String) {
+        guard let store = stateStore else { return }
+        guard let bareURL = WebSocketURLs.removingQuery(from: currentWebSocketURL) else {
+            logger.warning("Cannot derive control plane URL from \(currentWebSocketURL); join state not persisted")
+            return
+        }
+
+        let state = AgentState(
+            agentName: response.name,
+            assignedAgentID: response.agentId,
+            controlPlaneURL: bareURL,
+            reconnectToken: reconnectToken
+        )
+        do {
+            try store.save(state)
+            logger.debug("Persisted join state", metadata: ["stateFile": .string(store.location)])
+        } catch {
+            logger.error("Failed to persist join state to \(store.location): \(error). The agent stays connected, but a restart will need a new join token.")
+        }
     }
 
     /// Handle an `error` envelope from the control plane.
@@ -515,6 +564,19 @@ actor Agent {
                 try await websocketClient?.connect()
                 try await registerWithControlPlane()
                 logger.info("Successfully reconnected and re-registered with control plane")
+                return
+            } catch AgentError.registrationRejected(let reason) {
+                // The control plane explicitly rejected our credentials —
+                // retrying with the same token can never succeed, so exit
+                // with instructions instead of hammering a dead token. Under
+                // systemd/docker restart policies this is also self-healing
+                // for transient rejections: the restart re-reads the state
+                // file and retries once with the same token.
+                logger.error("Registration rejected by control plane: \(reason)")
+                logger.error("If the token expired or was revoked, create a new registration token in the Strato UI (Agents → Create Registration Token) and run: strato-agent join '<registration-url>'")
+                await websocketClient?.disconnect()
+                terminalError = AgentError.registrationRejected(reason)
+                signalShutdown()
                 return
             } catch {
                 logger.error("Reconnection attempt failed, will retry: \(error)")

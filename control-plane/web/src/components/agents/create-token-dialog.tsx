@@ -59,11 +59,18 @@ export function CreateTokenDialog({
     }
   };
 
+  const joinCommand = createdToken
+    ? `strato-agent join '${createdToken.registrationURL}'`
+    : "";
+  const dockerJoinCommand = createdToken
+    ? `docker run -d --name strato-agent --restart unless-stopped --device /dev/kvm -v /var/lib/strato:/var/lib/strato -v /etc/strato:/etc/strato ghcr.io/samcat116/strato-agent:latest join '${createdToken.registrationURL}'`
+    : "";
+
   const handleCopy = async () => {
     if (createdToken) {
-      await navigator.clipboard.writeText(createdToken.token);
+      await navigator.clipboard.writeText(joinCommand);
       setCopied(true);
-      toast.success("Token copied to clipboard");
+      toast.success("Join command copied to clipboard");
       setTimeout(() => setCopied(false), 2000);
     }
   };
@@ -96,10 +103,12 @@ export function CreateTokenDialog({
         {createdToken ? (
           <div className="space-y-4 py-4">
             <div className="p-4 bg-gray-900 rounded-lg border border-gray-700">
-              <Label className="text-gray-400 text-sm">Registration Token</Label>
+              <Label className="text-gray-400 text-sm">
+                Run this command on your hypervisor host:
+              </Label>
               <div className="flex items-center gap-2 mt-2">
-                <code className="flex-1 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono overflow-x-auto">
-                  {createdToken.token}
+                <code className="flex-1 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono overflow-x-auto whitespace-nowrap">
+                  {joinCommand}
                 </code>
                 <Button
                   size="sm"
@@ -114,12 +123,16 @@ export function CreateTokenDialog({
                   )}
                 </Button>
               </div>
+              <p className="text-sm text-gray-400 mt-2">
+                The agent joins, stays running, and reconnects automatically
+                after restarts.
+              </p>
             </div>
 
             <div className="p-4 bg-blue-900/20 rounded-lg border border-blue-700/30">
               <p className="text-sm text-blue-200">
-                <strong>Important:</strong> Save this token now. It will not be
-                shown again.
+                <strong>Important:</strong> The token in this command is
+                single-use and will not be shown again.
               </p>
               <p className="text-sm text-gray-400 mt-2">
                 Expires: {new Date(createdToken.expiresAt).toLocaleString()}
@@ -128,10 +141,10 @@ export function CreateTokenDialog({
 
             <div className="space-y-2">
               <Label className="text-gray-400 text-sm">
-                Run this command on your agent host:
+                Or run the agent in Docker (Linux hosts):
               </Label>
-              <code className="block p-3 bg-gray-950 rounded text-sm text-gray-300 font-mono overflow-x-auto">
-                strato-agent --token {createdToken.token}
+              <code className="block p-3 bg-gray-950 rounded text-sm text-gray-300 font-mono overflow-x-auto whitespace-nowrap">
+                {dockerJoinCommand}
               </code>
             </div>
           </div>
