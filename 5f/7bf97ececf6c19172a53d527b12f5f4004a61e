@@ -1,0 +1,29 @@
+helm/strato-control-plane/templates/networkpolicy.yaml
+  s_6e604f65066d21::t_75088fbd898ab8 22-33
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_6e604f65066d21::t_cc8111933abc2e 35-59,75,78-82,88-91,93-99
+helm/strato-control-plane/templates/deployment.yaml
+  s_6e604f65066d21::t_3b88e217759997 157-168
+helm/strato-control-plane/values.yaml
+  s_6e604f65066d21::t_13895f6056566d 292
+control-plane/Tests/AppTests/SPIREServiceTests.swift
+  s_6e604f65066d21::t_6279d6d532f7e7 1-103
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_6e604f65066d21::t_491d7b1f3c6328 235-240
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "5f7bf97ececf6c19172a53d527b12f5f4004a61e",
+  "prompts": {},
+  "sessions": {
+    "s_6e604f65066d21": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "935017a0-a2fe-44a4-9dea-ab102b9e7a33",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
