@@ -63,6 +63,13 @@ spec:
         - protocol: TCP
           port: 8080
     {{- end }}
+    {{- if or .Values.valkey.enabled .Values.externalValkey.host }}
+    # Allow Valkey/Redis access (wait-for-valkey init container and runtime)
+    - to: []
+      ports:
+        - protocol: TCP
+          port: {{ include "strato-control-plane.valkeyPort" . }}
+    {{- end }}
     {{- end }}
 {{- end }}
 ---
