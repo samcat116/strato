@@ -1,0 +1,26 @@
+control-plane/Sources/App/Controllers/UserController.swift
+  s_7f14dc1b0e4e3a::t_8166771f20cf87 55,105,120-123,128-131
+  s_7f14dc1b0e4e3a::t_696ea76793c26d 94-97,102-104
+  s_7f14dc1b0e4e3a::t_9786503feaa195 30-38,44-47,52-54
+  s_7f14dc1b0e4e3a::t_2813be969a199d 56
+  s_7f14dc1b0e4e3a::t_392d15043820f6 106
+  s_7f14dc1b0e4e3a::t_a09a7a95c21a45 132
+control-plane/Tests/AppTests/UserControllerTests.swift
+  s_7f14dc1b0e4e3a::t_f5ffb6b21bb24a 1-192
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c845596a6038838edc89589d32b282e73129dc5c",
+  "prompts": {},
+  "sessions": {
+    "s_7f14dc1b0e4e3a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "95f6a3f9-353f-403f-ae9f-c0d620808533",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
