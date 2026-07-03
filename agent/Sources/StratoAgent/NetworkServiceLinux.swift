@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import StratoShared
+import StratoAgentCore
 
 #if os(Linux)
 import SwiftOVN
@@ -37,8 +38,11 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         #endif
     }
     
+    /// Bridge that OVN's `ovn-controller` binds VM ports onto.
+    static let ovnIntegrationBridge = "br-int"
+
     // MARK: - Connection Management
-    
+
     func connect() async throws {
         #if os(Linux)
         logger.info("Connecting to OVN/OVS services")
@@ -110,15 +114,22 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             port_security: ["\(macAddress) \(ipAddress)"],
             external_ids: [
                 "vm-id": vmId,
+                "network-name": config.networkName,
                 "description": "VM network interface"
             ]
         )
-        
+
         // Find or create the logical switch
         _ = try await findOrCreateLogicalSwitch(name: config.networkName, subnet: config.subnet ?? "10.0.0.0/24")
-        
-        // Create the logical switch port
-        let portUUID = try await ovnManager?.createLogicalSwitchPort(logicalPort)
+
+        // Create the logical switch port (idempotent: reuse on re-attach)
+        let portUUID: String?
+        if let existingPort = try await ovnManager?.getLogicalSwitchPort(named: portName) {
+            portUUID = existingPort.uuid
+            logger.debug("Reusing existing logical switch port", metadata: ["portName": .string(portName)])
+        } else {
+            portUUID = try await ovnManager?.createLogicalSwitchPort(logicalPort)
+        }
         
         // Create TAP interface and connect to OVS bridge
         let tapInterface = try await createTAPInterface(vmId: vmId)
@@ -183,16 +194,34 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         logger.info("Detaching VM from network", metadata: ["vmId": .string(vmId)])
         
         let portName = "vm-\(vmId)"
-        
-        // Remove logical switch port
+        let tapInterface = tapInterfaceName(for: vmId)
+
+        // Remove logical switch port (OVN northbound). Tolerate absence so a
+        // partially-torn-down VM still has its OVS port and TAP cleaned up.
         if let ovnManager = ovnManager {
-            try await ovnManager.deleteLogicalSwitchPort(named: portName)
+            do {
+                try await ovnManager.deleteLogicalSwitchPort(named: portName)
+            } catch {
+                logger.warning("Failed to delete logical switch port", metadata: [
+                    "portName": .string(portName),
+                    "error": .string(error.localizedDescription)
+                ])
+            }
         }
-        
-        // Remove TAP interface
-        let tapInterface = "tap-\(vmId)"
+
+        // Detach the TAP from the integration bridge (idempotent via --if-exists)
+        do {
+            try run("ovs-vsctl", ["--if-exists", "del-port", Self.ovnIntegrationBridge, tapInterface])
+        } catch {
+            logger.warning("Failed to remove OVS port", metadata: [
+                "tapInterface": .string(tapInterface),
+                "error": .string(error.localizedDescription)
+            ])
+        }
+
+        // Remove the kernel TAP device
         try await removeTAPInterface(tapInterface)
-        
+
         logger.info("VM detached from network successfully", metadata: ["vmId": .string(vmId)])
         #else
         // Development mode
@@ -203,14 +232,27 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     
     func getVMNetworkInfo(vmId: String) async throws -> VMNetworkInfo? {
         #if os(Linux)
-        guard isConnected else {
+        guard isConnected, let ovnManager = ovnManager else {
             throw NetworkError.notConnected("Network service is not connected")
         }
-        
-        // Query OVN for the VM's network configuration
-        // This would involve looking up the logical switch port by VM ID
-        // For now, return nil if not found
-        return nil
+
+        let portName = "vm-\(vmId)"
+        guard let port = try await ovnManager.getLogicalSwitchPort(named: portName) else {
+            return nil
+        }
+
+        // OVN addresses are entries like "<mac> <ip>" (or just "<mac>", or "dynamic").
+        let (macAddress, ipAddress) = Self.parsePortAddress(port.addresses)
+
+        return VMNetworkInfo(
+            vmId: vmId,
+            networkName: port.external_ids?["network-name"] ?? "default",
+            portName: portName,
+            portUUID: port.uuid,
+            tapInterface: tapInterfaceName(for: vmId),
+            macAddress: macAddress,
+            ipAddress: ipAddress
+        )
         #else
         // Development mode
         if let mockAttachment = mockVMNetworks[vmId] {
@@ -290,13 +332,19 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     
     func listLogicalNetworks() async throws -> [NetworkInfo] {
         #if os(Linux)
-        guard ovnManager != nil else {
+        guard let ovnManager = ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
-        
-        // Query OVN for all logical switches
-        // This would involve calling ovnManager to list switches
-        return []
+
+        let switches = try await ovnManager.getLogicalSwitches()
+        return switches.map { logicalSwitch in
+            NetworkInfo(
+                name: logicalSwitch.name,
+                uuid: logicalSwitch.uuid ?? "",
+                subnet: logicalSwitch.external_ids?["subnet"] ?? "",
+                gateway: logicalSwitch.external_ids?["gateway"]
+            )
+        }
         #else
         // Development mode
         return mockNetworks.values.map { mockNetwork in
@@ -338,12 +386,18 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     }
     
     private func findOrCreateLogicalSwitch(name: String, subnet: String) async throws -> UUID {
-        guard ovnManager != nil else {
+        guard let ovnManager = ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
-        
-        // Try to find existing switch first
-        // For now, create new switch - this should be enhanced to check for existing switches
+
+        // Reuse an existing switch to avoid duplicate switches on VM re-attach.
+        if let existing = try await ovnManager.getLogicalSwitch(named: name),
+           let existingUUIDString = existing.uuid,
+           let existingUUID = UUID(uuidString: existingUUIDString) {
+            logger.debug("Reusing existing logical switch", metadata: ["name": .string(name)])
+            return existingUUID
+        }
+
         let logicalSwitch = OVNLogicalSwitch(
             name: name,
             external_ids: [
@@ -351,8 +405,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 "description": "Auto-created network for VM"
             ]
         )
-        
-        let uuidString = try await ovnManager!.createLogicalSwitch(logicalSwitch)
+
+        let uuidString = try await ovnManager.createLogicalSwitch(logicalSwitch)
         guard let uuid = UUID(uuidString: uuidString) else {
             throw NetworkError.invalidConfiguration("Invalid UUID returned from OVN: \(uuidString)")
         }
@@ -360,73 +414,117 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     }
     
     private func createTAPInterface(vmId: String) async throws -> String {
-        let tapName = "tap-\(vmId)"
-        
-        // Create TAP interface using system commands
-        // This is a simplified implementation - production would use more robust interface creation
-        logger.debug("Creating TAP interface", metadata: ["tapName": .string(tapName)])
-        
+        let tapName = tapInterfaceName(for: vmId)
+        logger.debug("Creating TAP interface", metadata: [
+            "tapName": .string(tapName),
+            "vmId": .string(vmId)
+        ])
+
+        // Idempotent: reuse the device if it already exists (crash recovery, re-attach).
+        if tapDeviceExists(tapName) {
+            logger.debug("TAP interface already exists, reusing", metadata: ["tapName": .string(tapName)])
+        } else {
+            // Create a persistent single-queue TAP device. It must exist before QEMU
+            // opens it (QEMU is launched with `script=no,ifname=<tap>`), and persistence
+            // is what lets QEMU attach to the pre-created device.
+            try run("ip", ["tuntap", "add", "dev", tapName, "mode", "tap"])
+            logger.info("Created TAP interface", metadata: ["tapName": .string(tapName)])
+        }
+
+        // Bring the interface up (idempotent).
+        try run("ip", ["link", "set", tapName, "up"])
+
         return tapName
     }
-    
+
     private func attachTAPToBridge(tapInterface: String, portName: String) async throws {
-        guard let ovsManager = ovsManager else {
-            throw NetworkError.notConnected("OVS manager not connected")
-        }
-        
-        // Add TAP interface to OVS bridge
-        let port = OVSPort(
-            name: tapInterface,
-            interfaces: [tapInterface],
-            external_ids: [
-                "ovn-port-name": portName,
-                "description": "TAP interface for VM"
-            ]
-        )
-        
-        // Create the port in OVS
-        let portUUID = try await ovsManager.createPort(port)
-        
-        // Get the bridge and update it to include the new port
-        guard let bridge = try await ovsManager.getBridge(named: "br-int") else {
-            throw NetworkError.bridgeNotFound("br-int")
-        }
-        
-        // Add port UUID to bridge's ports array
-        var updatedPorts = bridge.ports ?? []
-        updatedPorts.append(portUUID)
-        
-        let updatedBridge = OVSBridge(
-            name: bridge.name,
-            ports: updatedPorts,
-            mirrors: bridge.mirrors,
-            netflow: bridge.netflow,
-            sflow: bridge.sflow,
-            ipfix: bridge.ipfix,
-            controller: bridge.controller,
-            protocols: bridge.protocols,
-            fail_mode: bridge.fail_mode,
-            status: bridge.status,
-            other_config: bridge.other_config,
-            external_ids: bridge.external_ids,
-            flood_vlans: bridge.flood_vlans,
-            flow_tables: bridge.flow_tables,
-            mcast_snooping_enable: bridge.mcast_snooping_enable,
-            rstp_enable: bridge.rstp_enable,
-            rstp_status: bridge.rstp_status,
-            stp_enable: bridge.stp_enable
-        )
-        
-        // Update the bridge with the new port
-        if let bridgeUUID = bridge.uuid {
-            try await ovsManager.updateBridge(uuid: bridgeUUID, updatedBridge)
-        }
-        logger.debug("Attached TAP interface to bridge", metadata: ["tap": .string(tapInterface), "port": .string(portName)])
+        // Attach the TAP to the OVN integration bridge and bind it to the logical
+        // switch port. OVN's `ovn-controller` binds a port when the OVS Interface has
+        // `external_ids:iface-id` set to the logical switch port name — the previous
+        // implementation set `ovn-port-name` on the Port, which OVN ignores.
+        // `ovs-vsctl` performs the port + interface insert and the external_ids set
+        // atomically and idempotently (`--may-exist`).
+        try run("ovs-vsctl", [
+            "--may-exist", "add-port", Self.ovnIntegrationBridge, tapInterface,
+            "--", "set", "Interface", tapInterface, "external_ids:iface-id=\(portName)"
+        ])
+        logger.debug("Attached TAP interface to bridge", metadata: [
+            "tap": .string(tapInterface),
+            "port": .string(portName),
+            "bridge": .string(Self.ovnIntegrationBridge)
+        ])
     }
-    
+
     private func removeTAPInterface(_ tapInterface: String) async throws {
-        // Remove TAP interface from system
         logger.debug("Removing TAP interface", metadata: ["tapName": .string(tapInterface)])
+
+        // Tolerate an already-absent device (double cleanup, crash recovery).
+        guard tapDeviceExists(tapInterface) else {
+            logger.debug("TAP interface already absent, nothing to remove", metadata: ["tapName": .string(tapInterface)])
+            return
+        }
+
+        // Best-effort down, then delete.
+        _ = try? runProcess("ip", ["link", "set", tapInterface, "down"])
+        try run("ip", ["tuntap", "del", "dev", tapInterface, "mode", "tap"])
+        logger.info("Removed TAP interface", metadata: ["tapName": .string(tapInterface)])
+    }
+
+    // MARK: - Command Execution
+
+    private struct CommandResult {
+        let status: Int32
+        let output: String
+    }
+
+    /// Runs a command via `/usr/bin/env` (PATH resolution) and returns its exit
+    /// status and combined stdout/stderr. Mirrors the `Process` usage in
+    /// `VolumeService`.
+    private func runProcess(_ command: String, _ arguments: [String]) throws -> CommandResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [command] + arguments
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return CommandResult(status: process.terminationStatus, output: output)
+    }
+
+    /// Runs a command and throws `NetworkError.tapError` on a non-zero exit.
+    @discardableResult
+    private func run(_ command: String, _ arguments: [String]) throws -> String {
+        let result = try runProcess(command, arguments)
+        if result.status != 0 {
+            let detail = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw NetworkError.tapError("`\(command) \(arguments.joined(separator: " "))` failed (exit \(result.status)): \(detail)")
+        }
+        return result.output
+    }
+
+    /// Returns true if a network interface with the given name exists.
+    private func tapDeviceExists(_ name: String) -> Bool {
+        guard let result = try? runProcess("ip", ["link", "show", name]) else {
+            return false
+        }
+        return result.status == 0
+    }
+
+    /// Parses an OVN logical switch port `addresses` entry (`"<mac> <ip>"`, or just
+    /// `"<mac>"`, or `"dynamic"`) into a MAC and IP pair.
+    static func parsePortAddress(_ addresses: [String]?) -> (mac: String, ip: String) {
+        guard let first = addresses?.first(where: { !$0.isEmpty && $0.lowercased() != "dynamic" }) else {
+            return ("", "")
+        }
+        let tokens = first.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        let mac = tokens.first ?? ""
+        let ip = tokens.count > 1 ? tokens[1] : ""
+        return (mac, ip)
     }
     
     private func generateMACAddress() -> String {
@@ -459,6 +557,7 @@ enum NetworkError: Error, LocalizedError, Sendable {
     case invalidConfiguration(String)
     case ovnError(String)
     case ovsError(String)
+    case tapError(String)
     case platformNotSupported(String)
 
     var errorDescription: String? {
@@ -475,6 +574,8 @@ enum NetworkError: Error, LocalizedError, Sendable {
             return "OVN error: \(message)"
         case .ovsError(let message):
             return "OVS error: \(message)"
+        case .tapError(let message):
+            return "TAP interface error: \(message)"
         case .platformNotSupported(let message):
             return "Platform not supported: \(message)"
         }
