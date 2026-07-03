@@ -23,12 +23,16 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
             return try await next.respond(to: request)
         }
 
-        // Skip auth for health checks, public routes, and auth endpoints
+        // Skip auth for health checks, public routes, and auth endpoints.
+        // Note: `/login`, `/register`, and `/onboarding` are public frontend pages
+        // served by FileMiddleware (Public/login/index.html, etc.) in single-service
+        // deployments, so they must stay exempt or direct loads/bookmarks 401.
         if request.url.path.hasPrefix("/health") || request.url.path == "/"
-            || request.url.path == "/hello" || request.url.path == "/api/docs"
+            || request.url.path == "/hello" || request.url.path == "/login"
+            || request.url.path == "/register" || request.url.path == "/api/docs"
             || request.url.path == "/openapi.json" || request.url.path.hasPrefix("/auth")
-            || request.url.path.hasPrefix("/api/users/register")
-            || request.url.path.hasPrefix("/api/onboarding") || request.url.path.hasPrefix("/js/")
+            || request.url.path.hasPrefix("/users/register")
+            || request.url.path.hasPrefix("/onboarding") || request.url.path.hasPrefix("/js/")
             || request.url.path.hasPrefix("/styles/") || request.url.path == "/favicon.ico"
             || request.url.path.hasPrefix("/agent/ws")
         {
