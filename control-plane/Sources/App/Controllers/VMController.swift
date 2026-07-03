@@ -64,7 +64,8 @@ struct VMController: RouteCollection {
         return authorizedVMs
     }
 
-    func show(req: Request) async throws -> VMDetailResponse {
+    /// Fetch a VM by its :vmID route parameter and enforce a SpiceDB permission on it.
+    private func fetchVMWithPermission(req: Request, user: User, permission: String) async throws -> VM {
         guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
@@ -72,6 +73,29 @@ struct VMController: RouteCollection {
         guard let vm = try await VM.find(vmID, on: req.db) else {
             throw Abort(.notFound)
         }
+
+        // System admins bypass permission checks
+        if user.isSystemAdmin {
+            return vm
+        }
+
+        let hasPermission = try await req.spicedb.checkPermission(
+            subject: user.id!.uuidString,
+            permission: permission,
+            resource: "virtual_machine",
+            resourceId: vmID.uuidString
+        )
+
+        guard hasPermission else {
+            throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this VM")
+        }
+
+        return vm
+    }
+
+    func show(req: Request) async throws -> VMDetailResponse {
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "read")
 
         return VMDetailResponse(from: vm)
     }
@@ -324,13 +348,8 @@ struct VMController: RouteCollection {
     }
 
     func update(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        guard let existingVM = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let user = try req.auth.require(User.self)
+        let existingVM = try await fetchVMWithPermission(req: req, user: user, permission: "update")
 
         struct UpdateVMRequest: Content {
             let name: String?
@@ -354,13 +373,8 @@ struct VMController: RouteCollection {
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "delete")
 
         // Stop and delete VM via agent first
         if vm.hypervisorId != nil {
@@ -380,13 +394,8 @@ struct VMController: RouteCollection {
     }
 
     func pause(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "pause")
 
         guard vm.canPause else {
             throw Abort(.badRequest, reason: "VM cannot be paused in current state: \(vm.status.rawValue)")
@@ -414,13 +423,8 @@ struct VMController: RouteCollection {
     }
 
     func resume(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "resume")
 
         guard vm.canResume else {
             throw Abort(.badRequest, reason: "VM cannot be resumed in current state: \(vm.status.rawValue)")
@@ -448,13 +452,8 @@ struct VMController: RouteCollection {
     }
 
     func status(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "read")
 
         // Sync status with agent if VM exists there. Transitional states are owned by
         // the dispatch path and confirmed via the agent's statusUpdate; a concurrent
@@ -476,13 +475,8 @@ struct VMController: RouteCollection {
     }
 
     func start(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "start")
 
         guard vm.canStart else {
             throw Abort(.badRequest, reason: "VM cannot be started in current state: \(vm.status.rawValue)")
@@ -537,13 +531,8 @@ struct VMController: RouteCollection {
     }
 
     func stop(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "stop")
 
         guard vm.canStop else {
             throw Abort(.badRequest, reason: "VM cannot be stopped in current state: \(vm.status.rawValue)")
@@ -587,13 +576,8 @@ struct VMController: RouteCollection {
     }
 
     func restart(req: Request) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        guard let vm = try await VM.find(vmID, on: req.db) else {
-            throw Abort(.notFound)
-        }
+        let user = try req.auth.require(User.self)
+        let vm = try await fetchVMWithPermission(req: req, user: user, permission: "restart")
 
         guard vm.isRunning else {
             throw Abort(.badRequest, reason: "VM must be running to restart. Current state: \(vm.status.rawValue)")
