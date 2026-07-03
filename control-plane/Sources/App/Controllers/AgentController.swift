@@ -18,6 +18,22 @@ struct AgentController: RouteCollection {
         agents.post(":agentId", "actions", "force-offline", use: forceAgentOffline)
     }
 
+    // MARK: - Authorization
+
+    /// Every agent-management operation is privileged: minting or reading a
+    /// registration token lets the caller stand up a rogue agent (which receives
+    /// VM-create dispatches, signed image URLs, and console traffic), and
+    /// force-offlining agents can DoS the fleet. Restrict the entire controller to
+    /// system admins. Defense in depth — do not rely on route-level middleware.
+    private func requireSystemAdmin(_ req: Request) throws {
+        guard let user = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+        guard user.isSystemAdmin else {
+            throw Abort(.forbidden, reason: "System admin access required")
+        }
+    }
+
     // MARK: - Registration Token Management
 
     /// Base WebSocket URL agents should dial, embedded in registration URLs.
@@ -41,6 +57,8 @@ struct AgentController: RouteCollection {
     }
 
     func createRegistrationToken(req: Request) async throws -> AgentRegistrationTokenResponse {
+        try requireSystemAdmin(req)
+
         let createRequest = try req.content.decode(CreateAgentRegistrationTokenRequest.self)
         try createRequest.validate()
 
@@ -82,17 +100,21 @@ struct AgentController: RouteCollection {
         return try AgentRegistrationTokenResponse(from: token, baseURL: baseURL)
     }
 
-    func listRegistrationTokens(req: Request) async throws -> [AgentRegistrationTokenResponse] {
+    func listRegistrationTokens(req: Request) async throws -> [AgentRegistrationTokenListItem] {
+        try requireSystemAdmin(req)
+
         let tokens = try await AgentRegistrationToken.query(on: req.db)
             .sort(\.$createdAt, .descending)
             .all()
 
-        let baseURL = webSocketBaseURL(req: req)
-
-        return try tokens.map { try AgentRegistrationTokenResponse(from: $0, baseURL: baseURL) }
+        // Never echo the raw token (or a registration URL containing it) in a list
+        // response — the plaintext value is shown exactly once, at creation time.
+        return try tokens.map { try AgentRegistrationTokenListItem(from: $0) }
     }
 
     func revokeRegistrationToken(req: Request) async throws -> HTTPStatus {
+        try requireSystemAdmin(req)
+
         guard let tokenId = req.parameters.get("tokenId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid token ID")
         }
@@ -114,6 +136,8 @@ struct AgentController: RouteCollection {
     // MARK: - Agent Management
 
     func listAgents(req: Request) async throws -> [AgentResponse] {
+        try requireSystemAdmin(req)
+
         let agents = try await Agent.query(on: req.db)
             .sort(\.$createdAt, .descending)
             .all()
@@ -129,6 +153,8 @@ struct AgentController: RouteCollection {
     }
 
     func getAgent(req: Request) async throws -> AgentResponse {
+        try requireSystemAdmin(req)
+
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
@@ -144,6 +170,8 @@ struct AgentController: RouteCollection {
     }
 
     func deregisterAgent(req: Request) async throws -> HTTPStatus {
+        try requireSystemAdmin(req)
+
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
@@ -167,6 +195,8 @@ struct AgentController: RouteCollection {
     }
 
     func forceAgentOffline(req: Request) async throws -> HTTPStatus {
+        try requireSystemAdmin(req)
+
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }

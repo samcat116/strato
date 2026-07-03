@@ -30,10 +30,13 @@ actor Agent {
     private let initialAgentID: String  // ID used for registration (hostname or CLI arg)
     private var assignedAgentID: String?  // UUID assigned by control plane after registration
     private let webSocketURL: String
-    // The URL to dial, including any rotated registration token. Registration tokens
-    // are single-use, so the control plane returns a fresh one on each successful
-    // registration and this tracks it for the reconnect loop.
+    // The token-free URL to dial. The registration token is carried separately (see
+    // `currentRegistrationToken`) so it never appears in the request URL.
     private var currentWebSocketURL: String
+    // The single-use registration token to present in the Authorization header.
+    // Registration tokens are consumed on connect, so the control plane returns a fresh
+    // one on each successful registration and this tracks it for the reconnect loop.
+    private var currentRegistrationToken: String?
     private let qemuSocketDir: String
     private let isRegistrationMode: Bool
     private let logger: Logger
@@ -80,6 +83,7 @@ actor Agent {
     init(
         agentID: String,
         webSocketURL: String,
+        registrationToken: String? = nil,
         qemuSocketDir: String,
         networkMode: NetworkMode?,
         isRegistrationMode: Bool,
@@ -97,6 +101,7 @@ actor Agent {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
         self.currentWebSocketURL = webSocketURL
+        self.currentRegistrationToken = registrationToken
         self.qemuSocketDir = qemuSocketDir
         self.networkMode = networkMode
         self.isRegistrationMode = isRegistrationMode
@@ -233,7 +238,7 @@ actor Agent {
         } else {
             logger.info("Connecting to control plane", metadata: ["url": .string(webSocketURL)])
         }
-        websocketClient = WebSocketClient(url: currentWebSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration)
+        websocketClient = WebSocketClient(url: currentWebSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration, registrationToken: currentRegistrationToken)
 
         if let client = websocketClient {
             try await client.connect()
@@ -412,16 +417,14 @@ actor Agent {
     func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) async {
         // Adopt the rotated reconnect token (if any) before resuming registration:
         // the token this connection presented was consumed by the control plane, so
-        // the reconnect loop must dial with the fresh one to be accepted.
+        // the reconnect loop must dial with the fresh one to be accepted. The token
+        // travels in the Authorization header, so rotation is just a value swap — the
+        // dialed URL is unaffected.
         if let rotatedToken = response.reconnectToken {
-            if let updatedURL = WebSocketURLs.replacingTokenQueryParameter(in: currentWebSocketURL, with: rotatedToken) {
-                currentWebSocketURL = updatedURL
-                await websocketClient?.updateURL(updatedURL)
-                logger.info("Adopted rotated reconnect token from control plane")
-                persistJoinState(response: response, reconnectToken: rotatedToken)
-            } else {
-                logger.warning("Control plane sent a reconnect token but the WebSocket URL has no token parameter; ignoring")
-            }
+            currentRegistrationToken = rotatedToken
+            await websocketClient?.updateToken(rotatedToken)
+            logger.info("Adopted rotated reconnect token from control plane")
+            persistJoinState(response: response, reconnectToken: rotatedToken)
         }
 
         guard let continuation = registrationContinuation else {

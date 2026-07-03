@@ -4,6 +4,7 @@ import { api } from "./client";
 import type {
   Agent,
   AgentRegistrationToken,
+  AgentRegistrationTokenListItem,
   CreateAgentRegistrationTokenRequest,
 } from "@/types/api";
 
@@ -25,8 +26,8 @@ export const agentsApi = {
   },
 
   // Registration tokens
-  listTokens(): Promise<AgentRegistrationToken[]> {
-    return api.get<AgentRegistrationToken[]>("/api/agents/registration-tokens");
+  listTokens(): Promise<AgentRegistrationTokenListItem[]> {
+    return api.get<AgentRegistrationTokenListItem[]>("/api/agents/registration-tokens");
   },
 
   createToken(data: CreateAgentRegistrationTokenRequest): Promise<AgentRegistrationToken> {

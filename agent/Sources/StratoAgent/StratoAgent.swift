@@ -163,24 +163,34 @@ private func launchAgent(
     let statePath = options.stateFile ?? config.stateFilePath ?? FileAgentStateStore.defaultPath
     let stateStore = FileAgentStateStore(path: statePath, logger: logger)
 
-    // Determine the WebSocket URL to use, in order of preference:
+    // Determine the WebSocket URL and registration token, in order of preference:
     // 1. An explicit registration URL (initial join or re-join).
     // 2. Persisted join state (control plane URL + rotated reconnect token).
     // 3. The configured control plane URL as-is (SPIFFE/mTLS or dev setups).
+    //
+    // In all cases the token never travels in the dialed URL: it is stripped
+    // out here and presented in an Authorization header, so the plaintext
+    // token can't land in proxy/ingress logs.
     let finalWebSocketURL: String
+    let finalRegistrationToken: String?
     let isRegistrationMode: Bool
 
     if let regURL = registrationURL {
-        finalWebSocketURL = regURL
+        guard let (strippedURL, token) = WebSocketURLs.extractingToken(from: regURL) else {
+            logger.error("Failed to extract registration token from URL")
+            throw ExitCode.failure
+        }
+        finalWebSocketURL = strippedURL
+        finalRegistrationToken = token
         isRegistrationMode = true
         logger.info("Using registration URL for initial agent registration")
     } else if let state = stateStore.load(),
-              let stateURL = WebSocketURLs.registrationURL(
-                  base: state.controlPlaneURL,
-                  token: state.reconnectToken,
+              let stateURL = WebSocketURLs.appendingNameQueryParameter(
+                  to: state.controlPlaneURL,
                   name: state.agentName
               ) {
         finalWebSocketURL = stateURL
+        finalRegistrationToken = state.reconnectToken
         isRegistrationMode = false
         logger.info("Resuming from persisted join state", metadata: [
             "stateFile": .string(statePath),
@@ -188,6 +198,7 @@ private func launchAgent(
         ])
     } else {
         finalWebSocketURL = options.controlPlaneURL ?? config.controlPlaneURL
+        finalRegistrationToken = nil
         isRegistrationMode = false
         logger.info("No join state found; connecting with the configured control plane URL. If the control plane requires token registration, join first with: strato-agent join '<registration-url>'")
     }
@@ -218,6 +229,7 @@ private func launchAgent(
 
     logger.info("Starting Strato Agent", metadata: [
         "agentID": .string(finalAgentID),
+        "webSocketURL": .string(finalWebSocketURL),
         "qemuSocketDir": .string(finalQemuSocketDir),
         "vmStoragePath": .string(finalVMStoragePath),
         "qemuBinaryPath": .string(finalQemuBinaryPath),
@@ -241,6 +253,7 @@ private func launchAgent(
     let agent = Agent(
         agentID: finalAgentID,
         webSocketURL: finalWebSocketURL,
+        registrationToken: finalRegistrationToken,
         qemuSocketDir: finalQemuSocketDir,
         networkMode: config.networkMode,
         isRegistrationMode: isRegistrationMode,

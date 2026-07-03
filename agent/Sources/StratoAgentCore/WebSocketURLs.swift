@@ -1,32 +1,41 @@
 import Foundation
 
 public enum WebSocketURLs {
-    /// Returns `urlString` with the value of its `token` query parameter replaced,
-    /// or nil if the URL is unparseable or has no `token` parameter.
+    /// Removes the `token` query parameter from `urlString`, returning the token-free
+    /// URL together with the extracted token value.
     ///
-    /// Registration tokens are single-use: the control plane consumes the presented
-    /// token on connect and returns a rotated one in the registration response, which
-    /// must replace the token in the URL the reconnect loop dials.
-    public static func replacingTokenQueryParameter(in urlString: String, with token: String) -> String? {
+    /// Registration tokens must not travel in the request URL: even over TLS the
+    /// plaintext token lands in proxy/ingress/load-balancer access logs and any
+    /// intermediary that records URLs. The agent instead dials the returned token-free
+    /// URL and presents the token in an `Authorization: Bearer` header.
+    ///
+    /// Returns nil if the URL is unparseable or has no `token` parameter.
+    public static func extractingToken(from urlString: String) -> (url: String, token: String)? {
         guard var components = URLComponents(string: urlString),
               var items = components.queryItems,
-              let index = items.firstIndex(where: { $0.name == "token" }) else {
+              let index = items.firstIndex(where: { $0.name == "token" }),
+              let token = items[index].value else {
             return nil
         }
-        items[index].value = token
-        components.queryItems = items
-        return components.string
+        items.remove(at: index)
+        // Drop the query entirely if `token` was the only parameter, so the dialed
+        // URL doesn't carry a dangling `?`.
+        components.queryItems = items.isEmpty ? nil : items
+        guard let stripped = components.string else {
+            return nil
+        }
+        return (stripped, token)
     }
 
     /// Builds the URL the agent dials when reconnecting from persisted state:
-    /// the bare control-plane WebSocket URL plus `token` and `name` query
-    /// parameters. Returns nil if `base` is unparseable.
-    public static func registrationURL(base: String, token: String, name: String) -> String? {
+    /// the bare control-plane WebSocket URL plus the `name` query parameter.
+    /// The reconnect token is deliberately NOT part of the URL — it travels in
+    /// the Authorization header. Returns nil if `base` is unparseable.
+    public static func appendingNameQueryParameter(to base: String, name: String) -> String? {
         guard var components = URLComponents(string: base) else {
             return nil
         }
-        var items = (components.queryItems ?? []).filter { $0.name != "token" && $0.name != "name" }
-        items.append(URLQueryItem(name: "token", value: token))
+        var items = (components.queryItems ?? []).filter { $0.name != "name" }
         items.append(URLQueryItem(name: "name", value: name))
         components.queryItems = items
         return components.string
