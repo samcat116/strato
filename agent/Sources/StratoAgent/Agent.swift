@@ -53,6 +53,13 @@ actor Agent {
     private var heartbeatTask: Task<Void, Error>?
     private var reconnectTask: Task<Void, Never>?
     private var isRunning = false
+    // Set once a graceful shutdown has been requested (e.g. by a signal
+    // handler calling stop()). Guards start() against parking if stop() ran
+    // during startup, which would otherwise hang the process on exit.
+    private var shutdownRequested = false
+    // Resumed by stop() to unblock start(), which parks here for the agent's
+    // lifetime instead of busy-sleeping.
+    private var shutdownContinuation: CheckedContinuation<Void, Never>?
     private var registrationContinuation: CheckedContinuation<String, Error>?
     private let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
 
@@ -242,15 +249,25 @@ actor Agent {
         
         isRunning = true
         logger.info("Agent started successfully")
-        
-        // Keep the agent running indefinitely
-        while isRunning {
-            try await Task.sleep(for: .seconds(3600)) // Sleep for 1 hour at a time
+
+        // If a shutdown was requested while we were still starting up, stop()
+        // has already torn everything down; return instead of parking so the
+        // process can exit.
+        guard !shutdownRequested else {
+            return
+        }
+
+        // Park until stop() resumes this continuation (typically from a
+        // SIGINT/SIGTERM handler). Replaces the previous busy sleep loop, which
+        // could never observe a shutdown request.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.shutdownContinuation = continuation
         }
     }
     
     func stop() async {
         logger.info("Stopping agent")
+        shutdownRequested = true
         isRunning = false
 
         reconnectTask?.cancel()
@@ -290,6 +307,13 @@ actor Agent {
         vmHypervisorMap.removeAll()
 
         logger.info("Agent stopped")
+
+        // Unblock start(), which parks on this continuation for the agent's
+        // lifetime, so the process can exit cleanly.
+        if let continuation = shutdownContinuation {
+            shutdownContinuation = nil
+            continuation.resume()
+        }
     }
 
     // MARK: - SPIFFE Helpers
