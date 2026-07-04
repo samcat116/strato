@@ -2,7 +2,7 @@
 
 [![Build Status](https://github.com/samcat116/strato/actions/workflows/build.yaml/badge.svg)](https://github.com/samcat116/strato/actions/workflows/build.yaml)
 [![License: FSL-1.1-MIT](https://img.shields.io/badge/License-FSL--1.1--MIT-blue.svg)](LICENSE.md)
-[![Swift 6.2](https://img.shields.io/badge/Swift-6.2%2B-orange.svg)](https://swift.org)
+[![Swift 6.3](https://img.shields.io/badge/Swift-6.3%2B-orange.svg)](https://swift.org)
 
 Strato is a fast, secure, and easy to deploy private cloud platform based on battle tested technologies and built for modern infrastructure. It enables operators to run efficient, secure, and powerful infrastructure easily.
 

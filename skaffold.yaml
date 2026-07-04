@@ -72,7 +72,7 @@ profiles:
           agent.enabled: false
           ovn.enabled: false
           openvswitch.enabled: false
-      # Deploys only control-plane, PostgreSQL, and Permify
+      # Deploys only control-plane, PostgreSQL, and SpiceDB
 
   - name: production
     activation:

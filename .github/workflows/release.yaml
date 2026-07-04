@@ -306,13 +306,16 @@ jobs:
                 DATABASE_NAME: vapor_database
                 DATABASE_USERNAME: vapor_username
                 DATABASE_PASSWORD: vapor_password
-                PERMIFY_ENDPOINT: http://permify:3476
+                SPICEDB_ENDPOINT: http://spicedb:8080
+                # Development default — change this before exposing the stack.
+                SPICEDB_PRESHARED_KEY: strato-preshared-key-change-me
                 WEBAUTHN_RELYING_PARTY_ID: localhost
                 WEBAUTHN_RELYING_PARTY_NAME: Strato
                 WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost
               depends_on:
                 - db
-                - permify
+                - spicedb
+                - spicedb-schema
               networks:
                 - strato-network
               command: ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]
@@ -347,7 +350,8 @@ jobs:
                 DATABASE_NAME: vapor_database
                 DATABASE_USERNAME: vapor_username
                 DATABASE_PASSWORD: vapor_password
-                PERMIFY_ENDPOINT: http://permify:3476
+                SPICEDB_ENDPOINT: http://spicedb:8080
+                SPICEDB_PRESHARED_KEY: strato-preshared-key-change-me
               depends_on:
                 - db
               networks:
@@ -370,21 +374,63 @@ jobs:
               networks:
                 - strato-network
 
-            permify:
-              image: ghcr.io/permify/permify:latest
-              ports:
-                - "3476:3476"
-                - "3478:3478"
-              command: ["serve", "--config=/config/config.yaml"]
-              volumes:
-                - ./permify:/config
+            # One-shot: bring the SpiceDB datastore schema up to date, then exit.
+            spicedb-migrate:
+              image: authzed/spicedb:v1.35.3
+              command:
+                - migrate
+                - head
+                - --datastore-engine=postgres
+                - --datastore-conn-uri=postgres://vapor_username:vapor_password@db:5432/vapor_database?sslmode=disable
               depends_on:
                 - db
-              environment:
-                - PERMIFY_DATABASE_URI=postgres://vapor_username:vapor_password@db:5432/vapor_database?sslmode=disable
               networks:
                 - strato-network
+              restart: "no"
+
+            # SpiceDB authorization service (Zanzibar-style, persisted to PostgreSQL)
+            spicedb:
+              image: authzed/spicedb:v1.35.3
+              command:
+                - serve
+                # Development default — change this and the control-plane's
+                # SPICEDB_PRESHARED_KEY together before exposing the stack.
+                - --grpc-preshared-key=strato-preshared-key-change-me
+                - --http-enabled
+                - --http-addr=:8080
+                - --datastore-engine=postgres
+                - --datastore-conn-uri=postgres://vapor_username:vapor_password@db:5432/vapor_database?sslmode=disable
+              ports:
+                - "50051:50051"
+                - "8080:8080"
+              depends_on:
+                - spicedb-migrate
+              networks:
+                - strato-network
+
+            # One-shot: load the authorization schema. Safe to re-run on every `up`.
+            spicedb-schema:
+              image: authzed/zed:latest
+              command:
+                - schema
+                - write
+                - /schema/schema.zed
+                - --endpoint
+                - spicedb:50051
+                - --token
+                - strato-preshared-key-change-me
+                - --insecure
+              volumes:
+                - ./schema.zed:/schema/schema.zed:ro
+              depends_on:
+                - spicedb
+              networks:
+                - strato-network
+              restart: "no"
           EOF
+
+      - name: Stage SpiceDB schema file
+        run: cp spicedb/schema.zed schema.zed
 
       - name: Create nginx config file
         run: |
@@ -466,3 +512,13 @@ jobs:
           asset_path: ./docker-compose.release.yml
           asset_name: docker-compose.release.yml
           asset_content_type: text/yaml
+
+      - name: Upload SpiceDB schema file
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./schema.zed
+          asset_name: schema.zed
+          asset_content_type: text/plain
