@@ -71,6 +71,17 @@ Get the database host
 {{- end }}
 
 {{/*
+Get the database port
+*/}}
+{{- define "strato-control-plane.databasePort" -}}
+{{- if .Values.postgresql.enabled }}
+{{- .Values.strato.database.port }}
+{{- else }}
+{{- .Values.externalDatabase.port }}
+{{- end }}
+{{- end }}
+
+{{/*
 Get the database password secret name.
 When the bundled PostgreSQL is enabled this is the release credentials secret
 (see credentials-secret.yaml), which the bitnami subchart also reads via
