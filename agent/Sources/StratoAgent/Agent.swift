@@ -438,7 +438,8 @@ actor Agent {
             version: "1.0.0",
             capabilities: capabilities,
             resources: resources,
-            hypervisorType: hypervisorType
+            hypervisorType: hypervisorType,
+            architecture: CPUArchitecture.current
         )
 
         if let client = websocketClient {
@@ -891,8 +892,11 @@ extension Agent {
             #if os(Linux)
             return firecrackerService
             #else
-            logger.warning("Firecracker is only available on Linux, falling back to QEMU")
-            return qemuService
+            // No silent fallback to QEMU: the scheduler should never place a
+            // Firecracker VM here, so surface the mismatch as an error instead
+            // of booting the VM under a different hypervisor than requested.
+            logger.error("Firecracker is only available on Linux; rejecting request for unsupported hypervisor")
+            return nil
             #endif
         }
     }

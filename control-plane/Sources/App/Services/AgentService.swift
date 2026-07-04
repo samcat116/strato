@@ -137,6 +137,7 @@ actor AgentService {
             hostname: message.hostname,
             version: message.version,
             capabilities: message.capabilities,
+            architecture: message.architecture,
             resources: message.resources,
             lastHeartbeat: Date(),
             status: .online
@@ -505,7 +506,10 @@ actor AgentService {
             )
         } catch let error as SchedulerError {
             app.logger.error("Scheduler failed to find suitable agent: \(error)")
-            throw AgentServiceError.noAvailableAgent
+            // Preserve the scheduler's reason (unsupported hypervisor, arch
+            // mismatch, insufficient resources, ...) instead of collapsing
+            // every placement failure into a generic "no agent available".
+            throw AgentServiceError.schedulingFailed(error.description)
         }
 
         guard agents[agentId] != nil else {
@@ -626,7 +630,10 @@ actor AgentService {
                 totalDisk: agentInfo.resources.totalDisk,
                 availableDisk: agentInfo.resources.availableDisk,
                 status: agentInfo.status,
-                runningVMCount: vmToAgentMapping.values.filter { $0 == agentInfo.id }.count
+                runningVMCount: vmToAgentMapping.values.filter { $0 == agentInfo.id }.count,
+                supportedHypervisors: agentInfo.supportedHypervisors,
+                architecture: agentInfo.architecture,
+                supportsInterVMNetworking: agentInfo.supportsInterVMNetworking
             )
         }
     }
@@ -861,9 +868,25 @@ struct AgentInfo: Sendable {
     let hostname: String
     let version: String
     let capabilities: [String]
+    /// Host CPU architecture; nil for agents that predate architecture reporting
+    let architecture: CPUArchitecture?
     var resources: AgentResources
     var lastHeartbeat: Date
     var status: AgentStatus
+
+    /// Hypervisor backends advertised in the agent's capabilities. Every agent
+    /// version advertises "qemu", so an empty result only occurs for a
+    /// malformed registration — treated as QEMU-only rather than unschedulable.
+    var supportedHypervisors: [HypervisorType] {
+        let advertised = capabilities.compactMap(HypervisorType.init(rawValue:))
+        return advertised.isEmpty ? [.qemu] : advertised
+    }
+
+    /// Only OVN-backed agents can provide VM-to-VM networking; user-mode
+    /// (SLIRP) agents cannot.
+    var supportsInterVMNetworking: Bool {
+        capabilities.contains("ovn_networking")
+    }
 }
 
 enum AgentServiceResponse: Sendable {
@@ -873,6 +896,7 @@ enum AgentServiceResponse: Sendable {
 
 enum AgentServiceError: Error, LocalizedError, Sendable {
     case noAvailableAgent
+    case schedulingFailed(String)
     case agentNotFound(String)
     case vmNotMapped(String)
     case requestTimeout
@@ -883,6 +907,8 @@ enum AgentServiceError: Error, LocalizedError, Sendable {
         switch self {
         case .noAvailableAgent:
             return "No available agent found for VM deployment"
+        case .schedulingFailed(let reason):
+            return "VM placement failed: \(reason)"
         case .agentNotFound(let agentId):
             return "Agent not found: \(agentId)"
         case .vmNotMapped(let vmId):
