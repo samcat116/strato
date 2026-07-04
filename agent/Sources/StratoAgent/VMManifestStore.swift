@@ -18,11 +18,21 @@ struct VMManifestStore {
 
     /// Loads the previously-persisted VM manifest, or an empty map if none exists
     /// or it cannot be read.
-    func load() -> [String: VmConfig] {
+    func load() -> [String: VMSpec] {
         guard FileManager.default.fileExists(atPath: path) else { return [:] }
         do {
             let data = try Data(contentsOf: URL(fileURLWithPath: path))
-            return try JSONDecoder().decode([String: VmConfig].self, from: data)
+            do {
+                return try JSONDecoder().decode([String: VMSpec].self, from: data)
+            } catch {
+                // Manifests written before the hypervisor-neutral VMSpec stored the
+                // QEMU-flavored VmConfig. Salvage the resource reservations (all the
+                // orphan-tracking needs) so an upgrade doesn't hand orphaned VMs'
+                // capacity to new placements.
+                let legacy = try JSONDecoder().decode([String: LegacyVmConfig].self, from: data)
+                logger.warning("Migrated \(legacy.count) VM manifest entr(ies) from legacy VmConfig format")
+                return legacy.mapValues { $0.toSpec() }
+            }
         } catch {
             logger.error("Failed to read VM manifest at \(path): \(error)")
             return [:]
@@ -30,7 +40,7 @@ struct VMManifestStore {
     }
 
     /// Atomically writes the current manifest to disk.
-    func save(_ manifest: [String: VmConfig]) {
+    func save(_ manifest: [String: VMSpec]) {
         do {
             let directory = (path as NSString).deletingLastPathComponent
             if !directory.isEmpty {
@@ -42,5 +52,36 @@ struct VMManifestStore {
         } catch {
             logger.error("Failed to write VM manifest at \(path): \(error)")
         }
+    }
+}
+
+/// Minimal projection of the pre-VMSpec manifest format, kept only to migrate
+/// existing on-disk manifests. Decodes just the fields that matter for resource
+/// reservation of orphaned VMs.
+private struct LegacyVmConfig: Decodable {
+    struct Cpus: Decodable {
+        let bootVcpus: Int
+        let maxVcpus: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case bootVcpus = "boot_vcpus"
+            case maxVcpus = "max_vcpus"
+        }
+    }
+
+    struct Memory: Decodable {
+        let size: Int64
+    }
+
+    let cpus: Cpus?
+    let memory: Memory?
+
+    func toSpec() -> VMSpec {
+        VMSpec(
+            cpus: cpus?.bootVcpus ?? 0,
+            maxCpus: cpus?.maxVcpus,
+            memoryBytes: memory?.size ?? 0,
+            boot: .disk(firmware: nil)
+        )
     }
 }

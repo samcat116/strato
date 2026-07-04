@@ -8,12 +8,13 @@ public protocol HypervisorService: Actor, Sendable {
     /// The type of hypervisor
     var hypervisorType: HypervisorType { get }
 
-    /// Creates a VM with the given configuration
+    /// Creates a VM from a hypervisor-neutral spec. The service translates the
+    /// spec into its driver-native configuration (paths, sockets, machine types).
     /// - Parameters:
     ///   - vmId: Unique identifier for the VM
-    ///   - config: VM configuration
+    ///   - spec: Hypervisor-neutral VM specification
     ///   - imageInfo: Optional image info for disk caching
-    func createVM(vmId: String, config: VmConfig, imageInfo: ImageInfo?) async throws
+    func createVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo?) async throws
 
     /// Boots (starts) a VM
     /// - Parameter vmId: The VM identifier
@@ -58,8 +59,8 @@ public protocol HypervisorService: Actor, Sendable {
 
 public extension HypervisorService {
     /// Creates and starts a VM in a single operation
-    func createAndStartVM(vmId: String, config: VmConfig, imageInfo: ImageInfo? = nil) async throws {
-        try await createVM(vmId: vmId, config: config, imageInfo: imageInfo)
+    func createAndStartVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil) async throws {
+        try await createVM(vmId: vmId, spec: spec, imageInfo: imageInfo)
         try await bootVM(vmId: vmId)
     }
 

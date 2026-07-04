@@ -935,7 +935,7 @@ extension Agent {
         do {
             try await service.createVM(
                 vmId: vmId,
-                config: message.vmConfig,
+                spec: message.vmSpec,
                 imageInfo: message.imageInfo
             )
             // Record the hypervisor type for this VM
