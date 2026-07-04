@@ -313,9 +313,12 @@ jobs:
                 WEBAUTHN_RELYING_PARTY_NAME: Strato
                 WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost
               depends_on:
-                - db
-                - spicedb
-                - spicedb-schema
+                db:
+                  condition: service_healthy
+                spicedb:
+                  condition: service_healthy
+                spicedb-schema:
+                  condition: service_completed_successfully
               networks:
                 - strato-network
               command: ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]
@@ -353,7 +356,8 @@ jobs:
                 SPICEDB_ENDPOINT: http://spicedb:8080
                 SPICEDB_PRESHARED_KEY: strato-preshared-key-change-me
               depends_on:
-                - db
+                db:
+                  condition: service_healthy
               networks:
                 - strato-network
               command: ["migrate", "--yes"]
@@ -369,6 +373,11 @@ jobs:
                 POSTGRES_PASSWORD: vapor_password
                 POSTGRES_DB: vapor_database
                 PGDATA: /var/lib/postgresql/data/strato
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U vapor_username -d vapor_database"]
+                interval: 5s
+                timeout: 5s
+                retries: 5
               ports:
                 - "5432:5432"
               networks:
@@ -383,7 +392,8 @@ jobs:
                 - --datastore-engine=postgres
                 - --datastore-conn-uri=postgres://vapor_username:vapor_password@db:5432/vapor_database?sslmode=disable
               depends_on:
-                - db
+                db:
+                  condition: service_healthy
               networks:
                 - strato-network
               restart: "no"
@@ -404,7 +414,13 @@ jobs:
                 - "50051:50051"
                 - "8080:8080"
               depends_on:
-                - spicedb-migrate
+                spicedb-migrate:
+                  condition: service_completed_successfully
+              healthcheck:
+                test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
+                interval: 5s
+                timeout: 5s
+                retries: 5
               networks:
                 - strato-network
 
@@ -423,7 +439,8 @@ jobs:
               volumes:
                 - ./schema.zed:/schema/schema.zed:ro
               depends_on:
-                - spicedb
+                spicedb:
+                  condition: service_healthy
               networks:
                 - strato-network
               restart: "no"
