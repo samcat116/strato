@@ -2,6 +2,8 @@ import Foundation
 import Vapor
 
 protocol SpiceDBServiceProtocol {
+    func readSchema() async throws -> String?
+    func writeSchema(_ schema: String) async throws
     func checkPermission(subject: String, permission: String, resource: String, resourceId: String) async throws -> Bool
     func writeRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String) async throws
     func deleteRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String) async throws
@@ -68,8 +70,31 @@ struct SpiceDBService: SpiceDBServiceProtocol {
 
     // MARK: - Schema Management
 
+    /// Returns the currently loaded schema, or nil if SpiceDB has no schema yet
+    /// (a fresh in-memory datastore).
+    func readSchema() async throws -> String? {
+        let url = URI(string: "\(endpoint)/v1/schema/read")
+
+        let response = try await client.post(url) { req in
+            req.headers.add(name: .contentType, value: "application/json")
+            req.headers.add(name: .authorization, value: "Bearer \(presharedKey)")
+            req.body = ByteBuffer(string: "{}")
+        }
+
+        if response.status == .notFound {
+            return nil
+        }
+
+        guard response.status == .ok else {
+            throw SpiceDBError.schemaReadFailed(response.status)
+        }
+
+        let result = try response.content.decode(ReadSchemaResponse.self)
+        return result.schemaText
+    }
+
     func writeSchema(_ schema: String) async throws {
-        let url = URI(string: "\(endpoint)/v1/schemas/write")
+        let url = URI(string: "\(endpoint)/v1/schema/write")
 
         let payload = WriteSchemaRequest(schema: schema)
 
@@ -236,6 +261,10 @@ struct WriteSchemaRequest: Content {
     let schema: String
 }
 
+struct ReadSchemaResponse: Content {
+    let schemaText: String
+}
+
 struct WriteRelationshipsRequest: Content {
     let updates: [RelationshipUpdate]
 }
@@ -331,6 +360,7 @@ enum GroupProjectRole: String, Content {
 
 enum SpiceDBError: Error, Sendable {
     case permissionCheckFailed(HTTPStatus)
+    case schemaReadFailed(HTTPStatus)
     case schemaWriteFailed(HTTPStatus)
     case relationshipWriteFailed(HTTPStatus)
     case relationshipDeleteFailed(HTTPStatus)
@@ -343,6 +373,14 @@ enum SpiceDBError: Error, Sendable {
 
 struct MockSpiceDBService: SpiceDBServiceProtocol {
     var checkPermissionResult: Bool = true
+
+    func readSchema() async throws -> String? {
+        return "mock schema"
+    }
+
+    func writeSchema(_ schema: String) async throws {
+        // Mock implementation - do nothing
+    }
 
     func checkPermission(subject: String, permission: String, resource: String, resourceId: String) async throws -> Bool {
         return checkPermissionResult
