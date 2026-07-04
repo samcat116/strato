@@ -265,6 +265,26 @@ struct AgentModelTests {
         #expect(agent.hypervisors.first?.capabilities == .firecracker)
     }
 
+    @Test("Agent.from includes hypervisors advertised in legacy capability strings")
+    func testFromLegacyRegistrationDerivesHypervisorsFromCapabilities() {
+        // Old Linux agent: scalar is the configured default (qemu), but the
+        // hardcoded legacy capability list also advertised firecracker.
+        let message = AgentRegisterMessage(
+            agentId: "legacy-linux-agent",
+            hostname: "legacy-host",
+            version: "1.0.0",
+            capabilities: ["vm_management", "qemu", "kvm", "ovn_networking", "firecracker"],
+            resources: createTestAgentResources(),
+            hypervisorType: .qemu
+        )
+
+        let agent = Agent.from(registration: message, name: "legacy-linux-agent")
+
+        #expect(agent.hypervisors.count == 2)
+        #expect(agent.hypervisors.first?.type == .qemu)
+        #expect(agent.hypervisors.contains { $0.type == .firecracker && $0.available })
+    }
+
     @Test("Agent.from stores probed capability data from the registration message")
     func testFromRegistrationStoresCapabilityData() {
         let hypervisors = [

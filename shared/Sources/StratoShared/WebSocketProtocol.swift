@@ -89,7 +89,8 @@ public struct AgentRegisterMessage: WebSocketMessage {
     public let architecture: HostArchitecture?
     /// Every hypervisor on this host with probed availability and capabilities.
     /// Optional so registrations from older agents still decode; readers fall
-    /// back to deriving a single entry from `hypervisorType`.
+    /// back to deriving entries from the legacy `hypervisorType` scalar and
+    /// `capabilities` strings (see `effectiveHypervisors`).
     public let hypervisors: [HypervisorSupport]?
     /// Networking capability of this host. Optional for the same reason.
     public let networkCapability: NetworkCapability?
@@ -121,19 +122,30 @@ public struct AgentRegisterMessage: WebSocketMessage {
     }
 
     /// The hypervisor list to act on: the probed report when the agent sent one,
-    /// otherwise a single entry derived from the legacy `hypervisorType` scalar.
-    /// The legacy entry is assumed available (the agent registered claiming to
-    /// run it) but not accelerated, since older agents never probed KVM/HVF.
+    /// otherwise entries derived from the legacy fields. The legacy scalar
+    /// `hypervisorType` only holds the configured default, so hypervisor types
+    /// advertised in the legacy `capabilities` strings (e.g. "firecracker" on
+    /// old Linux agents) are included as well — collapsing to the scalar alone
+    /// would make the scheduler filter old agents out of placements they can
+    /// serve. Legacy entries are assumed available (the agent registered
+    /// claiming to run them) but not accelerated, since older agents never
+    /// probed KVM/HVF.
     public var effectiveHypervisors: [HypervisorSupport] {
         if let hypervisors, !hypervisors.isEmpty {
             return hypervisors
         }
-        return [HypervisorSupport(
-            type: hypervisorType,
-            available: true,
-            accelerated: false,
-            capabilities: .capabilities(for: hypervisorType)
-        )]
+        var types = [hypervisorType]
+        for type in HypervisorType.allCases where type != hypervisorType && capabilities.contains(type.rawValue) {
+            types.append(type)
+        }
+        return types.map { type in
+            HypervisorSupport(
+                type: type,
+                available: true,
+                accelerated: false,
+                capabilities: .capabilities(for: type)
+            )
+        }
     }
 }
 
