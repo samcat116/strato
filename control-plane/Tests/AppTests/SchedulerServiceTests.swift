@@ -406,12 +406,64 @@ struct SchedulerServiceTests {
             _ = try scheduler.selectAgent(for: vm, from: agents)
             Issue.record("Expected unsupportedHypervisor error")
         } catch let error as SchedulerError {
-            guard case .unsupportedHypervisor(let required, let onlineAgents) = error else {
+            guard case .unsupportedHypervisor(let required, let onlineAgents, let agentsWithoutHypervisors) = error else {
                 Issue.record("Expected unsupportedHypervisor, got \(error)")
                 return
             }
             #expect(required == .firecracker)
             #expect(onlineAgents == 2)
+            #expect(agentsWithoutHypervisors == 0)
+        }
+    }
+
+    @Test("Agents advertising no hypervisors are counted in the mismatch error")
+    func testUnsupportedHypervisorCountsBrokenAgents() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "healthy", name: "healthy", supportedHypervisors: [.qemu]),
+            createTestAgent(id: "broken", name: "broken", supportedHypervisors: [])
+        ]
+
+        let vm = createTestVM(hypervisorType: .firecracker)
+
+        do {
+            _ = try scheduler.selectAgent(for: vm, from: agents)
+            Issue.record("Expected unsupportedHypervisor error")
+        } catch let error as SchedulerError {
+            guard case .unsupportedHypervisor(_, _, let agentsWithoutHypervisors) = error else {
+                Issue.record("Expected unsupportedHypervisor, got \(error)")
+                return
+            }
+            #expect(agentsWithoutHypervisors == 1)
+            #expect(error.description.contains("advertise no usable hypervisor backend"))
+        }
+    }
+
+    @Test("Fleet with no usable hypervisors fails with a configuration-pointing error")
+    func testNoUsableHypervisors() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        // e.g. agents whose QEMU binary probe failed at registration
+        let agents = [
+            createTestAgent(id: "broken1", name: "broken1", supportedHypervisors: []),
+            createTestAgent(id: "broken2", name: "broken2", supportedHypervisors: [])
+        ]
+
+        let vm = createTestVM(hypervisorType: .qemu)
+
+        do {
+            _ = try scheduler.selectAgent(for: vm, from: agents)
+            Issue.record("Expected noUsableHypervisors error")
+        } catch let error as SchedulerError {
+            guard case .noUsableHypervisors(let onlineAgents) = error else {
+                Issue.record("Expected noUsableHypervisors, got \(error)")
+                return
+            }
+            #expect(onlineAgents == 2)
+            #expect(error.description.contains("binary path"))
         }
     }
 

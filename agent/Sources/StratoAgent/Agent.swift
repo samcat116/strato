@@ -572,7 +572,10 @@ actor Agent {
         if FileManager.default.isExecutableFile(atPath: qemuBinaryPath) {
             capabilities.append("qemu")
         } else {
-            logger.warning("QEMU binary not executable; not advertising qemu capability", metadata: [
+            // Error, not warning: without QEMU the agent is unusable for most
+            // placements, and the scheduler will only report "unsupported
+            // hypervisor" — this log is what points at the actual cause.
+            logger.error("QEMU binary not executable; not advertising qemu capability", metadata: [
                 "qemuBinaryPath": .string(qemuBinaryPath)
             ])
         }
@@ -612,6 +615,12 @@ actor Agent {
             // User-mode (SLIRP) networking is built into QEMU and needs no
             // external service, so it is not gated on connection state.
             capabilities.append("user_networking")
+        }
+
+        if !HypervisorType.allCases.contains(where: { capabilities.contains($0.rawValue) }) {
+            logger.error("No usable hypervisor backend on this host; the agent will register but never be eligible for VM placement. Check qemu_binary_path (and firecracker_binary_path on Linux) in the agent configuration.", metadata: [
+                "qemuBinaryPath": .string(qemuBinaryPath)
+            ])
         }
 
         return capabilities

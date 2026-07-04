@@ -137,7 +137,8 @@ struct VMPlacementRequirements: Sendable {
 /// Scheduler service errors
 enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case noAvailableAgents
-    case unsupportedHypervisor(required: HypervisorType, onlineAgents: Int)
+    case unsupportedHypervisor(required: HypervisorType, onlineAgents: Int, agentsWithoutHypervisors: Int)
+    case noUsableHypervisors(onlineAgents: Int)
     case architectureMismatch(required: CPUArchitecture)
     case networkCapabilityUnsatisfied
     case insufficientResources(required: VMPlacementRequirements, available: [SchedulableAgent])
@@ -148,8 +149,14 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
         switch self {
         case .noAvailableAgents:
             return "No online agents available for VM placement"
-        case .unsupportedHypervisor(let required, let onlineAgents):
-            return "No online agent supports the \(required.displayName) hypervisor (\(onlineAgents) online agent(s) checked)"
+        case .unsupportedHypervisor(let required, let onlineAgents, let agentsWithoutHypervisors):
+            var message = "No online agent supports the \(required.displayName) hypervisor (\(onlineAgents) online agent(s) checked)"
+            if agentsWithoutHypervisors > 0 {
+                message += "; \(agentsWithoutHypervisors) of them advertise no usable hypervisor backend at all — check their configured binary paths"
+            }
+            return message
+        case .noUsableHypervisors(let onlineAgents):
+            return "All \(onlineAgents) online agent(s) advertise no usable hypervisor backend — check each agent's QEMU/Firecracker binary path configuration and its logs"
         case .architectureMismatch(let required):
             return "No eligible agent has a \(required.displayName) host architecture (required for hardware-accelerated guests)"
         case .networkCapabilityUnsatisfied:
@@ -261,7 +268,19 @@ final class SchedulerService: @unchecked Sendable {
 
         let hypervisorCapable = online.filter { $0.supportedHypervisors.contains(requirements.hypervisorType) }
         guard !hypervisorCapable.isEmpty else {
-            throw SchedulerError.unsupportedHypervisor(required: requirements.hypervisorType, onlineAgents: online.count)
+            // Distinguish a genuine backend mismatch from agents that
+            // advertise no hypervisor at all (failed binary probes at
+            // registration) so the operator is pointed at the agent's
+            // configuration rather than the VM's hypervisor type.
+            let agentsWithoutHypervisors = online.count(where: { $0.supportedHypervisors.isEmpty })
+            if agentsWithoutHypervisors == online.count {
+                throw SchedulerError.noUsableHypervisors(onlineAgents: online.count)
+            }
+            throw SchedulerError.unsupportedHypervisor(
+                required: requirements.hypervisorType,
+                onlineAgents: online.count,
+                agentsWithoutHypervisors: agentsWithoutHypervisors
+            )
         }
 
         // An agent with unknown architecture cannot prove it satisfies an
