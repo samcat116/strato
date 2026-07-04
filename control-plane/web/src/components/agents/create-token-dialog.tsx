@@ -32,7 +32,7 @@ export function CreateTokenDialog({
   const [agentName, setAgentName] = useState("");
   const [expirationHours, setExpirationHours] = useState("24");
   const [createdToken, setCreatedToken] = useState<AgentRegistrationToken | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copiedCommand, setCopiedCommand] = useState<"join" | "docker" | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,13 +66,17 @@ export function CreateTokenDialog({
     ? `docker run -d --name strato-agent --restart unless-stopped --device /dev/kvm -v /var/lib/strato:/var/lib/strato -v /etc/strato:/etc/strato ghcr.io/samcat116/strato-agent:latest join '${createdToken.registrationURL}'`
     : "";
 
-  const handleCopy = async () => {
-    if (createdToken) {
-      await navigator.clipboard.writeText(joinCommand);
-      setCopied(true);
-      toast.success("Join command copied to clipboard");
-      setTimeout(() => setCopied(false), 2000);
-    }
+  const handleCopy = async (command: "join" | "docker") => {
+    const text = command === "join" ? joinCommand : dockerJoinCommand;
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    setCopiedCommand(command);
+    toast.success(
+      command === "join"
+        ? "Join command copied to clipboard"
+        : "Docker command copied to clipboard"
+    );
+    setTimeout(() => setCopiedCommand(null), 2000);
   };
 
   const handleClose = () => {
@@ -82,13 +86,13 @@ export function CreateTokenDialog({
       setAgentName("");
       setExpirationHours("24");
       setCreatedToken(null);
-      setCopied(false);
+      setCopiedCommand(null);
     }, 200);
   };
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100 max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {createdToken ? "Registration Token Created" : "Add Compute Agent"}
@@ -107,16 +111,16 @@ export function CreateTokenDialog({
                 Run this command on your hypervisor host:
               </Label>
               <div className="flex items-center gap-2 mt-2">
-                <code className="flex-1 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono overflow-x-auto whitespace-nowrap">
+                <code className="flex-1 min-w-0 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono overflow-x-auto whitespace-nowrap">
                   {joinCommand}
                 </code>
                 <Button
                   size="sm"
                   variant="outline"
-                  className="border-gray-600"
-                  onClick={handleCopy}
+                  className="border-gray-600 shrink-0"
+                  onClick={() => handleCopy("join")}
                 >
-                  {copied ? (
+                  {copiedCommand === "join" ? (
                     <Check className="h-4 w-4 text-green-400" />
                   ) : (
                     <Copy className="h-4 w-4" />
@@ -143,9 +147,23 @@ export function CreateTokenDialog({
               <Label className="text-gray-400 text-sm">
                 Or run the agent in Docker (Linux hosts):
               </Label>
-              <code className="block p-3 bg-gray-950 rounded text-sm text-gray-300 font-mono overflow-x-auto whitespace-nowrap">
-                {dockerJoinCommand}
-              </code>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 min-w-0 p-3 bg-gray-950 rounded text-sm text-gray-300 font-mono overflow-x-auto whitespace-nowrap">
+                  {dockerJoinCommand}
+                </code>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-gray-600 shrink-0"
+                  onClick={() => handleCopy("docker")}
+                >
+                  {copiedCommand === "docker" ? (
+                    <Check className="h-4 w-4 text-green-400" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
             </div>
           </div>
         ) : (
