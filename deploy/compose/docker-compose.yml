@@ -1,0 +1,159 @@
+# Strato single-host deployment.
+#
+# Quick start:
+#   ./setup.sh                 # generates .env with strong secrets (idempotent)
+#   docker compose up -d
+#   open http://localhost      # first registered user becomes system admin
+#
+# All credentials come from .env (created by setup.sh, mode 0600); nothing is
+# hardcoded here. The one-shot services (spicedb-migrate, spicedb-schema) exit
+# 0 after doing their job — that is expected in `docker compose ps`.
+#
+# For local development from source, use the docker-compose.yml at the
+# repository root instead.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vapor_username
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./setup.sh to generate .env}
+      POSTGRES_DB: vapor_database
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Creates the separate spicedb database on first initialization.
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vapor_username -d vapor_database"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # One-shot: bring the SpiceDB datastore schema up to date.
+  spicedb-migrate:
+    image: authzed/spicedb:v1.35.3
+    command:
+      - migrate
+      - head
+      - --datastore-engine=postgres
+      - --datastore-conn-uri=postgres://vapor_username:${POSTGRES_PASSWORD}@db:5432/spicedb?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  spicedb:
+    image: authzed/spicedb:v1.35.3
+    command:
+      - serve
+      - --grpc-preshared-key=${SPICEDB_PRESHARED_KEY}
+      - --http-enabled
+      - --datastore-engine=postgres
+      - --datastore-conn-uri=postgres://vapor_username:${POSTGRES_PASSWORD}@db:5432/spicedb?sslmode=disable
+    depends_on:
+      spicedb-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # One-shot: load the authorization schema. Safe to re-run on every `up`.
+  spicedb-schema:
+    image: authzed/zed:latest
+    command:
+      - schema
+      - write
+      - /schema/schema.zed
+      - --endpoint
+      - spicedb:50051
+      - --token
+      - ${SPICEDB_PRESHARED_KEY}
+      - --insecure
+    volumes:
+      - ../../spicedb/schema.zed:/schema/schema.zed:ro
+    depends_on:
+      spicedb:
+        condition: service_healthy
+    restart: "no"
+
+  valkey:
+    image: valkey/valkey:8.0-alpine
+    command: ["valkey-server", "--requirepass", "${VALKEY_PASSWORD}"]
+    environment:
+      VALKEY_PASSWORD: ${VALKEY_PASSWORD}
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -a \"$$VALKEY_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  control-plane:
+    image: ghcr.io/samcat116/strato-control-plane:${STRATO_VERSION:-latest}
+    # To run from source instead of the published image, comment out `image:`
+    # above and uncomment:
+    # build:
+    #   context: ../..
+    #   dockerfile: control-plane/Dockerfile
+    environment:
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: vapor_database
+      DATABASE_USERNAME: vapor_username
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPICEDB_ENDPOINT: http://spicedb:8080
+      SPICEDB_PRESHARED_KEY: ${SPICEDB_PRESHARED_KEY}
+      VALKEY_HOST: valkey
+      VALKEY_PORT: 6379
+      VALKEY_PASSWORD: ${VALKEY_PASSWORD}
+      WEBAUTHN_RELYING_PARTY_ID: ${WEBAUTHN_RELYING_PARTY_ID}
+      WEBAUTHN_RELYING_PARTY_NAME: ${WEBAUTHN_RELYING_PARTY_NAME:-Strato}
+      WEBAUTHN_RELYING_PARTY_ORIGIN: ${WEBAUTHN_RELYING_PARTY_ORIGIN}
+      EXTERNAL_HOSTNAME: ${EXTERNAL_HOSTNAME:-${STRATO_HOSTNAME}}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      OTEL_METRICS_ENABLED: "false"
+      OTEL_LOGS_ENABLED: "false"
+      OTEL_TRACES_ENABLED: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      spicedb:
+        condition: service_healthy
+      spicedb-schema:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    image: ghcr.io/samcat116/strato-frontend:${STRATO_VERSION:-latest}
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    depends_on:
+      - control-plane
+    restart: unless-stopped
+
+  # Only the proxy publishes a port; everything else stays on the internal
+  # network. Routes /api, /auth, /agent, /health, /organizations to the
+  # control plane and everything else to the frontend.
+  proxy:
+    image: nginx:alpine
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - control-plane
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  valkey_data:

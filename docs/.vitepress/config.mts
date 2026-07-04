@@ -45,6 +45,9 @@ export default defineConfig({
         text: 'Deployment',
         items: [
           { text: 'Overview', link: '/deployment/overview' },
+          { text: 'Docker Compose', link: '/deployment/docker-compose' },
+          { text: 'Kubernetes (Helm)', link: '/deployment/kubernetes' },
+          { text: 'Agents', link: '/deployment/agents' },
           { text: 'IAM & Permissions', link: '/deployment/iam' }
         ]
       },

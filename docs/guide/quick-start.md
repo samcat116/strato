@@ -1,104 +1,88 @@
 # Quick Start
 
-Get Strato running in under 5 minutes.
+Get Strato running in under 5 minutes. Both paths are secure by default:
+strong secrets are generated automatically on first run — there is nothing to
+change before going to production except your hostname.
 
-## Prerequisites
+## Choose a path
 
-- Docker
-- Kubernetes (minikube recommended)
-- Helm
-- Skaffold
+| | Best for | Guide |
+|---|---|---|
+| **Docker Compose** | A single host, trying Strato out | this page + [details](/deployment/docker-compose) |
+| **Kubernetes (Helm)** | Clusters, HA control plane | this page + [details](/deployment/kubernetes) |
 
-## Installation
+(For hacking on Strato itself, see the [development guide](/development/skaffold) instead.)
+
+## Docker Compose
 
 ```bash
-# 1. Start minikube
-minikube start --memory=4096 --cpus=2
-
-# 2. Clone repository
 git clone https://github.com/samcat116/strato.git
-cd strato
-
-# 3. Build Helm dependencies
-cd helm/strato && helm dependency build && cd ../..
-
-# 4. Start Strato
-skaffold dev
+cd strato/deploy/compose
+./setup.sh            # generates .env with strong random secrets
+docker compose up -d
 ```
 
-## Access the Application
+Visit `http://localhost`. Database migrations and authorization schema
+loading run automatically.
+
+For a real hostname, run `./setup.sh --hostname strato.example.com` instead
+and terminate TLS in front of the proxy — WebAuthn requires HTTPS for
+anything other than localhost. See the
+[Docker Compose guide](/deployment/docker-compose).
+
+## Kubernetes (Helm)
 
 ```bash
-# Port forward to localhost
-kubectl port-forward service/strato-control-plane 8080:8080
+git clone https://github.com/samcat116/strato.git
+cd strato/helm/strato-control-plane
+helm dependency build
+helm install strato .
+
+# In another terminal:
+kubectl port-forward service/strato-strato-control-plane 8080:8080
 ```
 
-Visit `http://localhost:8080`
+Visit `http://localhost:8080`. Credentials are auto-generated into the
+`strato-strato-credentials` secret and reused across upgrades. For production
+(ingress, TLS, WebAuthn hostname), see the
+[Kubernetes guide](/deployment/kubernetes).
 
-## Create Your First VM
+## First login
 
-1. **Register**: Click "Register" and create an account with a passkey
-2. **Login**: Authenticate with your passkey
-3. **Create VM**:
-   - Click "Create VM"
-   - Enter a name
-   - Set CPU: 2 cores, Memory: 2GB
-   - Choose an OS image
-   - Click "Create"
-4. **Start VM**: Click "Start" on your new VM
-5. **Connect**: Use the web console to access your VM
+1. Click **Register** and create an account with a passkey (Touch ID,
+   security key, etc.).
+2. **The first registered user automatically becomes the system
+   administrator** — register yourself before exposing the URL to others.
+3. Complete the onboarding flow to create your organization.
 
-## Common Commands
+## Add a hypervisor
 
-```bash
-# View logs
-kubectl logs -f deployment/strato-control-plane
+VMs run on agents — Linux hosts with KVM (or macOS hosts with HVF, for
+development).
 
-# Check pods
-kubectl get pods
+1. In the web UI, go to **Agents → Create Registration Token** and enter a
+   name for the host.
+2. Copy the generated command and run it on the hypervisor host:
 
-# Restart deployment
-kubectl rollout restart deployment/strato-control-plane
+   ```bash
+   strato-agent join 'ws://your-control-plane/agent/ws?token=...&name=...'
+   ```
 
-# Stop Strato
-# Press Ctrl+C in the skaffold dev terminal
+The token is single-use and expires; the agent stores its rotated reconnect
+credential in a state file, so plain `strato-agent` restarts reconnect
+automatically. See [Deploying agents](/deployment/agents) for details,
+including running the agent in Docker.
 
-# Clean up
-skaffold delete
-minikube stop
-```
+## Create your first VM
+
+1. Click **Create VM**
+2. Enter a name, set CPU and memory, choose an OS image
+3. Click **Create**, then **Start**
+4. Use the web console to access your VM
 
 ## What's Next?
 
-- [Complete Getting Started Guide](/guide/getting-started)
+- [Docker Compose deployment](/deployment/docker-compose)
+- [Kubernetes deployment](/deployment/kubernetes)
+- [Deploying agents](/deployment/agents)
 - [Architecture Overview](/architecture/overview)
-- [Development Guide](/development/skaffold)
-
-## Troubleshooting
-
-### Pods not starting?
-
-```bash
-kubectl describe pod <pod-name>
-kubectl logs <pod-name>
-```
-
-### Database issues?
-
-```bash
-# Restart database
-kubectl delete pod -l app=postgresql
-
-# Check database logs
-kubectl logs -l app=postgresql
-```
-
-### Need to reset everything?
-
-```bash
-skaffold delete
-minikube delete
-minikube start --memory=4096 --cpus=2
-```
-
-See [Troubleshooting Guide](/development/troubleshooting-k8s) for more help.

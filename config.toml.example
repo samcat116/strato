@@ -10,7 +10,19 @@
 
 # WebSocket URL for connecting to the Control Plane
 # Required field - agent cannot start without this
+#
+# Tip: on a fresh host you usually don't write this file by hand. Run
+# `strato-agent join '<registration-url>'` with the URL from the Strato UI
+# (Agents -> Create Registration Token); the agent writes a minimal config
+# and persists its join state so plain restarts reconnect automatically.
 control_plane_url = "ws://localhost:8080/agent/ws"
+
+# Path of the join state file, which stores the rotated reconnect token the
+# control plane issues after each successful registration (written mode 0600)
+# Optional - platform-specific defaults:
+#   macOS: ~/Library/Application Support/strato/agent-state.json
+#   Linux: /var/lib/strato/agent-state.json
+# state_file = "/var/lib/strato/agent-state.json"
 
 # Directory where QEMU will create domain sockets for VM communication
 # Optional - platform-specific defaults:

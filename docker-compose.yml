@@ -1,3 +1,10 @@
+# LOCAL DEVELOPMENT ONLY.
+#
+# This file uses fixed dev credentials, an in-memory SpiceDB datastore, and
+# DEV_AUTH_BYPASS — never expose it beyond localhost. To deploy Strato on a
+# single host, use deploy/compose/ instead (generated secrets, persistent
+# authorization data, no auth bypass).
+
 version: '3.8'
 
 services:

@@ -36,6 +36,41 @@ struct AgentController: RouteCollection {
 
     // MARK: - Registration Token Management
 
+    /// Base WebSocket URL agents should dial, embedded in registration URLs.
+    ///
+    /// The Host header only names whatever hop the request came in on — behind
+    /// an ingress or port-forward that can be an address hypervisor hosts
+    /// cannot reach, so an explicitly configured EXTERNAL_HOSTNAME wins. The
+    /// scheme likewise can't come from req.url.scheme alone: behind a
+    /// TLS-terminating proxy the local hop is plain HTTP, so trust
+    /// X-Forwarded-Proto when present.
+    private func webSocketBaseURL(req: Request) -> String {
+        let forwardedProto = req.headers["x-forwarded-proto"].first?.lowercased()
+        let isHTTPS = forwardedProto == "https" || (forwardedProto == nil && req.url.scheme == "https")
+        let scheme = isHTTPS ? "wss" : "ws"
+
+        let host = Environment.get("EXTERNAL_HOSTNAME").map(Self.sanitizedHost)
+            ?? req.headers["host"].first
+            ?? "localhost:8080"
+
+        return "\(scheme)://\(host)"
+    }
+
+    /// Reduces an EXTERNAL_HOSTNAME value to bare host[:port]. Operators
+    /// naturally set a full URL ("https://cp.example.com/") here; prepending
+    /// a scheme to that verbatim would emit "ws://https://…", which the agent
+    /// then rejects as an invalid registration URL.
+    static func sanitizedHost(_ raw: String) -> String {
+        var host = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let schemeRange = host.range(of: "://") {
+            host = String(host[schemeRange.upperBound...])
+        }
+        if let slash = host.firstIndex(of: "/") {
+            host = String(host[..<slash])
+        }
+        return host
+    }
+
     func createRegistrationToken(req: Request) async throws -> AgentRegistrationTokenResponse {
         try requireSystemAdmin(req)
 
@@ -69,10 +104,7 @@ struct AgentController: RouteCollection {
 
         try await token.save(on: req.db)
 
-        // Get base URL for WebSocket connection
-        let scheme = req.url.scheme == "https" ? "wss" : "ws"
-        let host = req.headers["host"].first ?? "localhost:8080"
-        let baseURL = "\(scheme)://\(host)"
+        let baseURL = webSocketBaseURL(req: req)
 
         req.logger.info("Created agent registration token", metadata: [
             "agentName": .string(createRequest.agentName),

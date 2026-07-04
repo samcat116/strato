@@ -47,4 +47,45 @@ struct WebSocketURLsTests {
         #expect(result?.token == "abc123")
         #expect(result?.url == "ws://cp:8080/agent/ws?name=node%20one")
     }
+
+    @Test("Builds a token-free dial URL from a bare base")
+    func buildsDialURL() {
+        let result = WebSocketURLs.appendingNameQueryParameter(
+            to: "ws://control-plane:8080/agent/ws",
+            name: "agent-1"
+        )
+        #expect(result == "ws://control-plane:8080/agent/ws?name=agent-1")
+    }
+
+    @Test("Dial URL builder replaces a stale name in the base")
+    func buildReplacesExistingName() {
+        let result = WebSocketURLs.appendingNameQueryParameter(
+            to: "ws://cp:8080/agent/ws?name=old",
+            name: "agent-2"
+        )
+        #expect(result == "ws://cp:8080/agent/ws?name=agent-2")
+    }
+
+    @Test("Round-trip: registration URL → persisted base → reconnect dial URL")
+    func roundTrip() {
+        // First join: the UI-provided URL carries token+name; the token is
+        // extracted into the Authorization header, name stays in the URL.
+        let original = "wss://cp.example.com/agent/ws?token=join-token&name=hv-01"
+        let extracted = WebSocketURLs.extractingToken(from: original)
+        #expect(extracted?.token == "join-token")
+        #expect(extracted?.url == "wss://cp.example.com/agent/ws?name=hv-01")
+
+        // Persistence stores the fully bare control plane URL.
+        let base = WebSocketURLs.removingQuery(from: original)
+        #expect(base == "wss://cp.example.com/agent/ws")
+
+        // Restart: rebuild the token-free dial URL from the persisted state.
+        let rebuilt = WebSocketURLs.appendingNameQueryParameter(to: base!, name: "hv-01")
+        #expect(rebuilt == "wss://cp.example.com/agent/ws?name=hv-01")
+    }
+
+    @Test("removingQuery leaves query-less URLs unchanged")
+    func removingQueryNoQuery() {
+        #expect(WebSocketURLs.removingQuery(from: "ws://cp:8080/agent/ws") == "ws://cp:8080/agent/ws")
+    }
 }
