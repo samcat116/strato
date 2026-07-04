@@ -298,18 +298,13 @@ private struct SHA256Hasher {
 // MARK: - Application Extension
 
 extension Application {
-    private struct ImageFetchServiceKey: StorageKey {
+    private struct ImageFetchServiceKey: StorageKey, LockKey {
         typealias Value = ImageFetchServiceProtocol
     }
 
     var imageFetchService: ImageFetchServiceProtocol {
         get {
-            if let existing = storage[ImageFetchServiceKey.self] {
-                return existing
-            }
-            let service = ImageFetchService(app: self)
-            storage[ImageFetchServiceKey.self] = service
-            return service
+            lazyService(ImageFetchServiceKey.self) { ImageFetchService(app: self) }
         }
         set {
             storage[ImageFetchServiceKey.self] = newValue

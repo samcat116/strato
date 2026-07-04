@@ -221,19 +221,14 @@ extension Application {
     /// In-memory cache for the signing key
     var signingKeyCache: SigningKeyCache {
         get {
-            if let existing = storage[SigningKeyCacheKey.self] {
-                return existing
-            }
-            let new = SigningKeyCache()
-            storage[SigningKeyCacheKey.self] = new
-            return new
+            lazyService(SigningKeyCacheKey.self) { SigningKeyCache() }
         }
         set {
             storage[SigningKeyCacheKey.self] = newValue
         }
     }
 
-    private struct SigningKeyCacheKey: StorageKey {
+    private struct SigningKeyCacheKey: StorageKey, LockKey {
         typealias Value = SigningKeyCache
     }
 }

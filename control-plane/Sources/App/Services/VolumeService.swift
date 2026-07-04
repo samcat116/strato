@@ -386,18 +386,13 @@ enum VolumeServiceError: Error, LocalizedError {
 // MARK: - Application Extension
 
 extension Application {
-    private struct VolumeServiceKey: StorageKey {
+    private struct VolumeServiceKey: StorageKey, LockKey {
         typealias Value = VolumeService
     }
 
     var volumeService: VolumeService {
         get {
-            if let existing = storage[VolumeServiceKey.self] {
-                return existing
-            }
-            let service = VolumeService(app: self)
-            storage[VolumeServiceKey.self] = service
-            return service
+            lazyService(VolumeServiceKey.self) { VolumeService(app: self) }
         }
         set {
             storage[VolumeServiceKey.self] = newValue
