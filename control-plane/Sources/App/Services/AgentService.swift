@@ -900,36 +900,26 @@ enum AgentServiceError: Error, LocalizedError, Sendable {
 // MARK: - Application Extension
 
 extension Application {
-    private struct WebSocketManagerKey: StorageKey {
+    private struct WebSocketManagerKey: StorageKey, LockKey {
         typealias Value = WebSocketManager
     }
 
     var websocketManager: WebSocketManager {
         get {
-            if let existing = storage[WebSocketManagerKey.self] {
-                return existing
-            }
-            let new = WebSocketManager()
-            storage[WebSocketManagerKey.self] = new
-            return new
+            lazyService(WebSocketManagerKey.self) { WebSocketManager() }
         }
         set {
             storage[WebSocketManagerKey.self] = newValue
         }
     }
 
-    private struct AgentServiceKey: StorageKey {
+    private struct AgentServiceKey: StorageKey, LockKey {
         typealias Value = AgentService
     }
 
     var agentService: AgentService {
         get {
-            if let existing = storage[AgentServiceKey.self] {
-                return existing
-            }
-            let new = AgentService(app: self)
-            storage[AgentServiceKey.self] = new
-            return new
+            lazyService(AgentServiceKey.self) { AgentService(app: self) }
         }
         set {
             storage[AgentServiceKey.self] = newValue
