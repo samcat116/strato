@@ -1,0 +1,43 @@
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_2380b6feb5f57e::t_5777c11eba3a2a 85-89,99-100,110
+agent/Sources/StratoAgent/Agent.swift
+  s_2380b6feb5f57e::t_0008334ea7c7e2 895-899
+  s_2380b6feb5f57e::t_afe20ae10be93b 441-442
+shared/Sources/StratoShared/CPUArchitecture.swift
+  s_2380b6feb5f57e::t_50cfdf021ee016 1-33
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_2380b6feb5f57e::t_f150f0eaf939b2 33-69
+  s_2380b6feb5f57e::t_e0737b18a824fc 235,242-245,248-279,284-288
+  s_2380b6feb5f57e::t_85f365f599ff61 4
+  s_2380b6feb5f57e::t_dd9487eb892eb0 102-104,108-134,140-143,151-156
+  s_2380b6feb5f57e::t_5ab87d559b704e 193-196,199-200,203-204,206-220
+control-plane/Tests/AppTests/SchedulerServiceTests.swift
+  s_2380b6feb5f57e::t_576eb0b840efb6 11-16,25-26,40-43,55-58
+  s_2380b6feb5f57e::t_e57dffe2d682c3 3
+  s_2380b6feb5f57e::t_f350bf7dd99650 374-522
+docs/architecture/scheduler.md
+  s_2380b6feb5f57e::t_628cda81dc122f 113,115-116,119-125,129-147,152-153,155-157,171-173
+control-plane/Sources/App/Services/AgentService.swift
+  s_2380b6feb5f57e::t_784e5bebef9e0d 509-512
+  s_2380b6feb5f57e::t_6d7ad60e2c5224 140
+  s_2380b6feb5f57e::t_4431a5b82c6905 871-872,876-889
+  s_2380b6feb5f57e::t_25e6917a1a3827 633-636
+  s_2380b6feb5f57e::t_2b002947fc97e8 899
+  s_2380b6feb5f57e::t_dcf5a97bce1dd8 910-911
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2eda9244ff1596745f9e110270c002856b205755",
+  "prompts": {},
+  "sessions": {
+    "s_2380b6feb5f57e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e8ff1cb4-c797-4227-a659-a38402502833",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
