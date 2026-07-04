@@ -66,6 +66,10 @@ actor AgentService {
     private struct PendingRequest {
         let agentId: String
         let continuation: CheckedContinuation<AgentServiceResponse, Error>
+        /// The 30s timeout armed for this request, cancelled whenever the request
+        /// is removed (normal response, disconnect, or the timeout firing itself)
+        /// so a completed request never leaves a timer sleeping to no purpose.
+        var timeoutTask: Task<Void, Never>?
     }
 
     init(app: Application) {
@@ -681,11 +685,15 @@ actor AgentService {
                     // Send message
                     try await self.sendMessageToAgent(message, agentId: agentId)
 
-                    // Set timeout
-                    Task {
-                        try await Task.sleep(for: .seconds(30))
-                        self.timeoutRequest(message.requestId)
+                    // Arm a timeout, tracking its handle so a normal response can
+                    // cancel it instead of leaving a 30s task dangling per request.
+                    let requestId = message.requestId
+                    let timeoutTask = Task {
+                        try? await Task.sleep(for: .seconds(30))
+                        guard !Task.isCancelled else { return }
+                        self.timeoutRequest(requestId)
                     }
+                    self.attachTimeout(timeoutTask, to: requestId)
                 } catch {
                     _ = self.removePendingRequest(message.requestId)
                     continuation.resume(throwing: error)
@@ -698,8 +706,21 @@ actor AgentService {
         pendingRequests[requestId] = PendingRequest(agentId: agentId, continuation: continuation)
     }
 
+    /// Associates a timeout task with a still-pending request. If the request has
+    /// already resolved (a fast response beat the timeout being armed), the task is
+    /// cancelled immediately so it doesn't linger.
+    private func attachTimeout(_ task: Task<Void, Never>, to requestId: String) {
+        guard pendingRequests[requestId] != nil else {
+            task.cancel()
+            return
+        }
+        pendingRequests[requestId]?.timeoutTask = task
+    }
+
     private func removePendingRequest(_ requestId: String) -> CheckedContinuation<AgentServiceResponse, Error>? {
-        return pendingRequests.removeValue(forKey: requestId)?.continuation
+        guard let request = pendingRequests.removeValue(forKey: requestId) else { return nil }
+        request.timeoutTask?.cancel()
+        return request.continuation
     }
 
     private func timeoutRequest(_ requestId: String) {
@@ -716,6 +737,7 @@ actor AgentService {
 
         for (requestId, request) in affected {
             pendingRequests.removeValue(forKey: requestId)
+            request.timeoutTask?.cancel()
             request.continuation.resume(throwing: reason)
         }
 

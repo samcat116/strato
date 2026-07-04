@@ -387,7 +387,6 @@ struct AgentModelTests {
         #expect(fetched.networkCapability == "overlay")
 
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 

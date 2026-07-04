@@ -14,6 +14,10 @@ enum AgentError: Error, LocalizedError {
     /// Registration failed for an unclassified (potentially transient) reason,
     /// e.g. a control-plane database blip — safe to retry with backoff.
     case registrationFailed(String)
+    /// A newer registration attempt replaced this one before it resolved (e.g. a
+    /// reconnect fired while an earlier attempt was still parked). Fails the stale
+    /// attempt so it doesn't leak its awaiter.
+    case registrationSuperseded
     case notRegistered
     case spiffeConfigurationError(String)
 
@@ -25,6 +29,8 @@ enum AgentError: Error, LocalizedError {
             return "Registration rejected by control plane: \(reason)"
         case .registrationFailed(let reason):
             return "Registration failed (control plane error): \(reason)"
+        case .registrationSuperseded:
+            return "Registration attempt was superseded by a newer attempt"
         case .notRegistered:
             return "Agent is not registered with control plane"
         case .spiffeConfigurationError(let message):
@@ -57,7 +63,6 @@ actor Agent {
     private var imageCacheService: ImageCacheService?
     private var volumeService: VolumeService?
     private var consoleSocketManager: ConsoleSocketManager?
-    private var heartbeatTask: Task<Void, Error>?
     private var reconnectTask: Task<Void, Never>?
     private var isRunning = false
     // Set once a graceful shutdown has been requested (e.g. by a signal
@@ -68,6 +73,12 @@ actor Agent {
     // lifetime instead of busy-sleeping.
     private var shutdownContinuation: CheckedContinuation<Void, Never>?
     private var registrationContinuation: CheckedContinuation<String, Error>?
+    // Bound to `registrationContinuation`: cancelled the moment the continuation
+    // is resolved so a resolved registration never leaves a 30s timer dangling.
+    private var registrationTimeoutTask: Task<Void, Never>?
+    // Incremented per registration attempt so a timeout fired by a superseded
+    // attempt can be told apart from — and can't fail — the current one.
+    private var registrationGeneration: UInt64 = 0
     private let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
 
     // Ordered inbound-message pipeline. The WebSocket client yields decoded frames into
@@ -290,10 +301,11 @@ actor Agent {
         
         // Register with control plane
         try await registerWithControlPlane()
-        
-        // Start heartbeat
-        startHeartbeat()
-        
+
+        // Heartbeats are driven by the WebSocket client's connection-scoped loop
+        // (see WebSocketClient.startHeartbeat), so it stops firing while
+        // disconnected and restarts on reconnect — no separate agent-side loop.
+
         isRunning = true
         logger.info("Agent started successfully")
 
@@ -331,8 +343,11 @@ actor Agent {
         reconnectTask?.cancel()
         reconnectTask = nil
 
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
+        // Fail any in-flight registration wait so a caller parked on it (and its
+        // timeout timer) doesn't linger past shutdown.
+        if let continuation = takeRegistrationContinuation() {
+            continuation.resume(throwing: AgentError.registrationSuperseded)
+        }
 
         // Stop draining inbound frames; finishing the stream ends the consumer loop.
         inboundContinuation.finish()
@@ -474,20 +489,54 @@ actor Agent {
 
         // Wait for registration response with timeout
         let assignedId = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-            self.registrationContinuation = continuation
-
-            // Set up timeout
-            Task {
-                try? await Task.sleep(for: .seconds(30))
-                if self.registrationContinuation != nil {
-                    self.registrationContinuation?.resume(throwing: AgentError.registrationTimeout)
-                    self.registrationContinuation = nil
-                }
-            }
+            self.armRegistrationWait(continuation)
         }
 
         self.assignedAgentID = assignedId
         logger.info("Registration complete, assigned ID: \(assignedId)")
+    }
+
+    /// Parks the given continuation as the pending registration wait and arms a
+    /// 30s timeout bound to *this* attempt. Each attempt gets its own generation
+    /// so a timeout from a superseded attempt can't fail a newer one, and the
+    /// timeout task is tracked so resolving the registration cancels it instead of
+    /// leaving it to fire (and leak) later.
+    private func armRegistrationWait(_ continuation: CheckedContinuation<String, Error>) {
+        // A prior attempt's continuation may still be parked — e.g. a reconnect
+        // fired before the last attempt resolved. Fail it now (cancelling its
+        // timeout) so it neither leaks its awaiter nor lets a stale timeout fire.
+        if let stale = takeRegistrationContinuation() {
+            stale.resume(throwing: AgentError.registrationSuperseded)
+        }
+
+        registrationGeneration &+= 1
+        let generation = registrationGeneration
+        registrationContinuation = continuation
+        registrationTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled else { return }
+            await self?.failRegistrationOnTimeout(generation: generation)
+        }
+    }
+
+    /// Fails the registration attempt identified by `generation`, but only if it
+    /// is still the current one — a timeout inherited from a superseded attempt is
+    /// ignored.
+    private func failRegistrationOnTimeout(generation: UInt64) {
+        guard generation == registrationGeneration else { return }
+        guard let continuation = takeRegistrationContinuation() else { return }
+        continuation.resume(throwing: AgentError.registrationTimeout)
+    }
+
+    /// Clears the pending registration continuation and cancels its bound timeout,
+    /// returning the continuation so the caller can resume it exactly once. Returns
+    /// nil when no registration is currently pending.
+    private func takeRegistrationContinuation() -> CheckedContinuation<String, Error>? {
+        guard let continuation = registrationContinuation else { return nil }
+        registrationContinuation = nil
+        registrationTimeoutTask?.cancel()
+        registrationTimeoutTask = nil
+        return continuation
     }
 
     /// Handle registration response from control plane
@@ -504,11 +553,10 @@ actor Agent {
             persistJoinState(response: response, reconnectToken: rotatedToken)
         }
 
-        guard let continuation = registrationContinuation else {
+        guard let continuation = takeRegistrationContinuation() else {
             logger.warning("Received registration response but no continuation waiting")
             return
         }
-        registrationContinuation = nil
         continuation.resume(returning: response.agentId)
     }
 
@@ -552,8 +600,7 @@ actor Agent {
     func handleErrorResponse(_ message: ErrorMessage) async {
         let detailSuffix = message.details.map { " (\($0))" } ?? ""
 
-        if let continuation = registrationContinuation {
-            registrationContinuation = nil
+        if let continuation = takeRegistrationContinuation() {
             logger.error("Registration failed: \(message.error)\(detailSuffix)")
             // Only an explicit invalid_token code is a genuine credential
             // rejection (terminal — retrying the same token can never work).
@@ -664,20 +711,6 @@ actor Agent {
         logger.info("Unregistration message sent to control plane")
     }
     
-    private func startHeartbeat() {
-        heartbeatTask = Task { [weak self] in
-            while !Task.isCancelled {
-                do {
-                    try await self?._sendHeartbeat()
-                    try await Task.sleep(for: .seconds(30)) // Heartbeat every 30 seconds
-                } catch {
-                    self?.logger.error("Heartbeat failed: \(error)")
-                    try await Task.sleep(for: .seconds(10)) // Retry after 10 seconds
-                }
-            }
-        }
-    }
-
     // MARK: - Reconnection
 
     /// Called by the WebSocket client when the connection to the control plane drops

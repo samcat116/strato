@@ -25,17 +25,15 @@ class BaseTestCase {
         } catch {
             try? await app.autoRevert()
             await app.dropTestSchemaIfNeeded()
+            // asyncShutdown() awaits full teardown (event loops, thread pool, DB
+            // connection pool), so the database file is safe to remove immediately.
             try await app.asyncShutdown()
-            // Give time for shutdown to complete
-            try? await Task.sleep(for: .seconds(2))
             app.cleanupTestDatabase()
             throw error
         }
 
         await app.dropTestSchemaIfNeeded()
         try await app.asyncShutdown()
-        // Give time for shutdown to complete before deallocation
-        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
