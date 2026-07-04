@@ -22,15 +22,12 @@ struct MessageTypeTests {
         case .vmDelete: return "vm_delete"
         case .vmInfo: return "vm_info"
         case .vmStatus: return "vm_status"
-        case .vmCounters: return "vm_counters"
         case .networkCreate: return "network_create"
         case .networkDelete: return "network_delete"
         case .networkList: return "network_list"
         case .networkInfo: return "network_info"
         case .networkAttach: return "network_attach"
         case .networkDetach: return "network_detach"
-        case .imageInfo: return "image_info"
-        case .imageInfoResponse: return "image_info_response"
         case .volumeCreate: return "volume_create"
         case .volumeDelete: return "volume_delete"
         case .volumeAttach: return "volume_attach"
@@ -39,7 +36,6 @@ struct MessageTypeTests {
         case .volumeSnapshot: return "volume_snapshot"
         case .volumeClone: return "volume_clone"
         case .volumeInfo: return "volume_info"
-        case .volumeStatus: return "volume_status"
         case .consoleConnect: return "console_connect"
         case .consoleDisconnect: return "console_disconnect"
         case .consoleData: return "console_data"
@@ -55,11 +51,10 @@ struct MessageTypeTests {
     private static let allTypes: [MessageType] = [
         .agentRegister, .agentRegisterResponse, .agentHeartbeat, .agentUnregister,
         .vmCreate, .vmBoot, .vmShutdown, .vmReboot, .vmPause, .vmResume, .vmDelete,
-        .vmInfo, .vmStatus, .vmCounters,
+        .vmInfo, .vmStatus,
         .networkCreate, .networkDelete, .networkList, .networkInfo, .networkAttach, .networkDetach,
-        .imageInfo, .imageInfoResponse,
         .volumeCreate, .volumeDelete, .volumeAttach, .volumeDetach, .volumeResize,
-        .volumeSnapshot, .volumeClone, .volumeInfo, .volumeStatus,
+        .volumeSnapshot, .volumeClone, .volumeInfo,
         .consoleConnect, .consoleDisconnect, .consoleData, .consoleConnected, .consoleDisconnected,
         .success, .error, .statusUpdate, .vmLog,
     ]

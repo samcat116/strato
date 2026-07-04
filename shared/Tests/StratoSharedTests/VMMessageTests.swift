@@ -80,7 +80,7 @@ struct VMMessageTests {
 
     /// All plain lifecycle operations share VMOperationMessage; the carried
     /// type must survive so the agent dispatches the right operation.
-    @Test(arguments: [MessageType.vmBoot, .vmShutdown, .vmReboot, .vmPause, .vmResume, .vmDelete, .vmStatus, .vmCounters])
+    @Test(arguments: [MessageType.vmBoot, .vmShutdown, .vmReboot, .vmPause, .vmResume, .vmDelete, .vmStatus])
     func vmOperationRoundTrip(type: MessageType) throws {
         let message = VMOperationMessage(
             type: type,
@@ -100,38 +100,5 @@ struct VMMessageTests {
         )
         #expect(decoded.type == .vmInfo)
         #expect(decoded.vmId == "vm-3")
-    }
-
-    @Test func imageInfoRequestRoundTrip() throws {
-        let decoded = try throughEnvelope(
-            ImageInfoRequestMessage(requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, imageId: Fixtures.uuidA)
-        )
-        #expect(decoded.type == .imageInfo)
-        #expect(decoded.imageId == Fixtures.uuidA)
-    }
-
-    @Test func imageInfoResponseRoundTrip() throws {
-        let decoded = try throughEnvelope(
-            ImageInfoResponseMessage(
-                requestId: Fixtures.requestId,
-                timestamp: Fixtures.timestamp,
-                imageInfo: Fixtures.imageInfo,
-                error: nil
-            )
-        )
-        #expect(decoded.type == .imageInfoResponse)
-        #expect(decoded.imageInfo?.filename == "debian-12.qcow2")
-        #expect(decoded.imageInfo?.checksum == "sha256:abcdef")
-        #expect(decoded.imageInfo?.size == 2_147_483_648)
-        #expect(decoded.imageInfo?.expiresAt == Fixtures.laterDate)
-        #expect(decoded.error == nil)
-    }
-
-    @Test func imageInfoResponseErrorRoundTrip() throws {
-        let decoded = try throughEnvelope(
-            ImageInfoResponseMessage(requestId: Fixtures.requestId, error: "image not found")
-        )
-        #expect(decoded.imageInfo == nil)
-        #expect(decoded.error == "image not found")
     }
 }

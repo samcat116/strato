@@ -115,14 +115,6 @@ struct VolumeMessageTests {
         #expect(decoded.volumeId == "vol-1")
     }
 
-    @Test func volumeStatusRoundTrip() throws {
-        let decoded = try throughEnvelope(
-            VolumeStatusMessage(requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, volumeId: "vol-1")
-        )
-        #expect(decoded.type == .volumeStatus)
-        #expect(decoded.volumeId == "vol-1")
-    }
-
     @Test func volumeInfoResponseRoundTrip() throws {
         let decoded = try roundTrip(
             VolumeInfoResponse(volumeId: "vol-1", actualSize: 1_234_567, virtualSize: 10_737_418_240, format: "qcow2", dirty: true, encrypted: true)
