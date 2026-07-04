@@ -42,16 +42,17 @@ struct FixVMColumnNames: AsyncMigration {
                 // try await sql.raw("ALTER TABLE vms RENAME COLUMN disk_new TO disk").run()
             }
         } else {
-            // PostgreSQL version - use information_schema
-            let hasMemoryNew = try await sql.raw("SELECT column_name FROM information_schema.columns WHERE table_name = 'vms' AND column_name = 'memory_new'").all()
-            let hasMemory = try await sql.raw("SELECT column_name FROM information_schema.columns WHERE table_name = 'vms' AND column_name = 'memory'").all()
+            // PostgreSQL version - use information_schema, scoped to current_schema()
+            // so parallel per-schema test runs each only see their own `vms` table.
+            let hasMemoryNew = try await sql.raw("SELECT column_name FROM information_schema.columns WHERE table_name = 'vms' AND table_schema = current_schema() AND column_name = 'memory_new'").all()
+            let hasMemory = try await sql.raw("SELECT column_name FROM information_schema.columns WHERE table_name = 'vms' AND table_schema = current_schema() AND column_name = 'memory'").all()
 
             if !hasMemoryNew.isEmpty && hasMemory.isEmpty {
                 try await sql.raw("ALTER TABLE vms RENAME COLUMN memory_new TO memory").run()
             }
 
-            let hasDiskNew = try await sql.raw("SELECT column_name FROM information_schema.columns WHERE table_name = 'vms' AND column_name = 'disk_new'").all()
-            let hasDisk = try await sql.raw("SELECT column_name FROM information_schema.columns WHERE table_name = 'vms' AND column_name = 'disk'").all()
+            let hasDiskNew = try await sql.raw("SELECT column_name FROM information_schema.columns WHERE table_name = 'vms' AND table_schema = current_schema() AND column_name = 'disk_new'").all()
+            let hasDisk = try await sql.raw("SELECT column_name FROM information_schema.columns WHERE table_name = 'vms' AND table_schema = current_schema() AND column_name = 'disk'").all()
 
             if !hasDiskNew.isEmpty && hasDisk.isEmpty {
                 try await sql.raw("ALTER TABLE vms RENAME COLUMN disk_new TO disk").run()
