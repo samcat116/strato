@@ -77,6 +77,37 @@ jobs:
           helm template strato-test helm/strato-control-plane/ > /tmp/default-template.yaml
           echo "Default template generated successfully"
 
+      - name: Assert no dev secrets in default render
+        run: |
+          # A bare install must never ship the historical dev credentials;
+          # empty values auto-generate strong ones (credentials-secret.yaml).
+          for needle in vapor_password strato-dev-key postgres_password; do
+            if grep -q "$needle" /tmp/default-template.yaml; then
+              echo "❌ Default render contains dev secret: $needle"
+              exit 1
+            fi
+            if grep -q "$(echo -n "$needle" | base64)" /tmp/default-template.yaml; then
+              echo "❌ Default render contains base64-encoded dev secret: $needle"
+              exit 1
+            fi
+          done
+          echo "✅ No dev secrets in default render"
+
+      - name: Assert generated credentials are consistent
+        run: |
+          python3 - <<'EOF'
+          import base64, re, sys
+          r = open('/tmp/default-template.yaml').read()
+          pw = base64.b64decode(re.search(r'db-password: "([^"]+)"', r).group(1)).decode()
+          uri = base64.b64decode(re.search(r'datastore-conn-uri: "([^"]+)"', r).group(1)).decode()
+          psk = base64.b64decode(re.search(r'spicedb-preshared-key: "([^"]+)"', r).group(1)).decode()
+          cfg = base64.b64decode(re.search(r'\n  preshared-key: "([^"]+)"', r).group(1)).decode()
+          assert pw in uri, "SpiceDB datastore-conn-uri does not use the generated db password"
+          assert psk == cfg, "credentials secret and spicedb config secret disagree on preshared key"
+          assert len(pw) >= 32 and len(psk) >= 32, "generated credentials too short"
+          print("✅ Generated credentials are internally consistent")
+          EOF
+
       - name: Template with production values
         run: |
           helm template strato-prod helm/strato-control-plane/ \

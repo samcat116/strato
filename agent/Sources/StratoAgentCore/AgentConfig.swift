@@ -84,6 +84,7 @@ public struct AgentConfig: Codable {
     public let firecrackerBinaryPath: String?
     public let firecrackerSocketDir: String?
     public let hypervisorType: HypervisorType?
+    public let stateFilePath: String?
 
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
@@ -100,6 +101,7 @@ public struct AgentConfig: Codable {
         case firecrackerBinaryPath = "firecracker_binary_path"
         case firecrackerSocketDir = "firecracker_socket_dir"
         case hypervisorType = "hypervisor_type"
+        case stateFilePath = "state_file"
     }
 
     public init(
@@ -116,7 +118,8 @@ public struct AgentConfig: Codable {
         spiffe: SPIFFEConfig? = nil,
         firecrackerBinaryPath: String? = nil,
         firecrackerSocketDir: String? = nil,
-        hypervisorType: HypervisorType? = nil
+        hypervisorType: HypervisorType? = nil,
+        stateFilePath: String? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
         self.qemuSocketDir = qemuSocketDir
@@ -132,6 +135,7 @@ public struct AgentConfig: Codable {
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.firecrackerSocketDir = firecrackerSocketDir
         self.hypervisorType = hypervisorType
+        self.stateFilePath = stateFilePath
     }
 
     public static func load(from path: String, logger: Logger? = nil) throws -> AgentConfig {
@@ -161,6 +165,7 @@ public struct AgentConfig: Codable {
         let firecrackerBinaryPath = tomlData.string("firecracker_binary_path")
         let firecrackerSocketDir = tomlData.string("firecracker_socket_dir")
         let hypervisorTypeString = tomlData.string("hypervisor_type")
+        let stateFilePath = tomlData.string("state_file")
 
         // Validate and parse network mode
         let networkMode: NetworkMode?
@@ -241,8 +246,29 @@ public struct AgentConfig: Codable {
             spiffe: spiffeConfig,
             firecrackerBinaryPath: firecrackerBinaryPath,
             firecrackerSocketDir: firecrackerSocketDir,
-            hypervisorType: hypervisorType
+            hypervisorType: hypervisorType,
+            stateFilePath: stateFilePath
         )
+    }
+
+    /// Writes a minimal config file containing just the control plane URL,
+    /// used by `strato-agent join` so a joined host works on plain restarts
+    /// without any hand-written configuration. All other settings fall back
+    /// to platform defaults and can be added to the file later.
+    public static func writeMinimalConfig(controlPlaneURL: String, to path: String) throws {
+        let contents = """
+        # Written by `strato-agent join`. All other settings use platform
+        # defaults; see config.toml.example in the Strato repository for the
+        # full list of options.
+        control_plane_url = "\(controlPlaneURL)"
+        """
+
+        let fileManager = FileManager.default
+        let directory = (path as NSString).deletingLastPathComponent
+        if !fileManager.fileExists(atPath: directory) {
+            try fileManager.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        }
+        try contents.write(toFile: path, atomically: true, encoding: .utf8)
     }
 
     /// Default config file path (platform-specific)

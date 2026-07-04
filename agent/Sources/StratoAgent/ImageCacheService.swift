@@ -1,11 +1,9 @@
+import Crypto
 import Foundation
 import Logging
 import StratoShared
 #if canImport(FoundationNetworking)
 import FoundationNetworking
-#endif
-#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
-import CommonCrypto
 #endif
 
 /// Service for managing local image cache on the agent
@@ -163,7 +161,7 @@ actor ImageCacheService {
         }
         defer { try? fileHandle.close() }
 
-        var hasher = SHA256Hasher()
+        var hasher = SHA256()
         let bufferSize = 1024 * 1024 // 1MB chunks
 
         while true {
@@ -172,7 +170,7 @@ actor ImageCacheService {
             hasher.update(data: data)
         }
 
-        return hasher.finalize()
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// Deletes a cached image
@@ -238,66 +236,6 @@ actor ImageCacheService {
         return totalSize
     }
 }
-
-// MARK: - SHA256 Hasher (Platform-agnostic)
-
-/// A simple SHA256 hasher that works on both macOS and Linux
-#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
-private struct SHA256Hasher {
-    private var context: CC_SHA256_CTX
-
-    init() {
-        context = CC_SHA256_CTX()
-        CC_SHA256_Init(&context)
-    }
-
-    mutating func update(data: Data) {
-        data.withUnsafeBytes { bytes in
-            _ = CC_SHA256_Update(&context, bytes.baseAddress, CC_LONG(data.count))
-        }
-    }
-
-    mutating func finalize() -> String {
-        var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        CC_SHA256_Final(&digest, &context)
-        return digest.map { String(format: "%02x", $0) }.joined()
-    }
-}
-#else
-private struct SHA256Hasher {
-    // Fallback implementation for Linux using command-line sha256sum
-    private var data = Data()
-
-    init() {}
-
-    mutating func update(data: Data) {
-        self.data.append(data)
-    }
-
-    mutating func finalize() -> String {
-        // Use command-line sha256sum for Linux
-        let tempFile = "/tmp/strato-sha256-\(UUID().uuidString)"
-        try? data.write(to: URL(fileURLWithPath: tempFile))
-        defer { try? FileManager.default.removeItem(atPath: tempFile) }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/sha256sum")
-        process.arguments = [tempFile]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-
-        try? process.run()
-        process.waitUntilExit()
-
-        let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
-        if let output = String(data: outputData, encoding: .utf8) {
-            return String(output.prefix(64))
-        }
-        return ""
-    }
-}
-#endif
 
 // MARK: - Errors
 

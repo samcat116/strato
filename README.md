@@ -3,79 +3,80 @@
 [![Build Status](https://github.com/samcat116/strato/actions/workflows/build.yaml/badge.svg)](https://github.com/samcat116/strato/actions/workflows/build.yaml)
 [![License: FSL-1.1-MIT](https://img.shields.io/badge/License-FSL--1.1--MIT-blue.svg)](LICENSE.md)
 [![Swift 6.2](https://img.shields.io/badge/Swift-6.2%2B-orange.svg)](https://swift.org)
-[![Platform](https://img.shields.io/badge/Platform-macOS%2013%2B-lightgrey.svg)](https://www.apple.com/macos/)
 
 Strato is a fast, secure, and easy to deploy private cloud platform based on battle tested technologies and built for modern infrastructure. It enables operators to run efficient, secure, and powerful infrastructure easily.
 
 ## Features
 
-- 🚀 **High Performance**: Built with Swift and Vapor for exceptional performance
+- 🚀 **High Performance**: Swift control plane and agent, QEMU with KVM/HVF acceleration
 - 🔒 **WebAuthn/Passkey Authentication**: Modern passwordless authentication
-- 🏗️ **VM Management**: Full lifecycle management through Cloud Hypervisor integration
-- 🌐 **Modern Web Interface**: Dynamic HTMX-powered frontend with TailwindCSS
-- 🔐 **Fine-grained Authorization**: Powered by Permify for role-based access control
-- 🐳 **Container Ready**: Docker and Docker Compose support for easy deployment
+- 🏗️ **VM Management**: Full lifecycle management via QEMU (and Firecracker on Linux)
+- 🔐 **Fine-grained Authorization**: SpiceDB-backed relationship-based access control
+- 🛡️ **Secure by Default**: Deployments generate strong secrets on first run — no baked-in credentials
+- 🌐 **Software-defined Networking**: OVN/OVS integration on Linux hypervisors
 - 📊 **PostgreSQL Backend**: Reliable data persistence with Fluent ORM
 
 ## Quick Start
 
-### Prerequisites
+Secrets (database password, authorization keys) are generated automatically in
+both paths — a fresh install is secure by default with zero secret
+configuration.
 
-- Swift 6.2 or later
-- Docker and Docker Compose
-- PostgreSQL (if running locally)
+### Single host (Docker Compose)
 
-### Using Docker Compose (Recommended)
+```bash
+git clone https://github.com/samcat116/strato.git
+cd strato/deploy/compose
+./setup.sh            # generates .env with strong random secrets
+docker compose up -d
+```
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/samcat116/strato.git
-   cd strato
-   ```
+Open `http://localhost` and register — the first user automatically becomes
+the system administrator. Database migrations and authorization schema loading
+happen automatically. See [deploy/compose/README.md](deploy/compose/README.md)
+for real-hostname/TLS deployments.
 
-2. Start all services:
-   ```bash
-   docker compose up app
-   ```
+### Kubernetes (Helm)
 
-3. Run database migrations:
-   ```bash
-   docker compose run migrate
-   ```
+```bash
+git clone https://github.com/samcat116/strato.git
+cd strato/helm/strato-control-plane
+helm dependency build
+helm install strato .
+```
 
-4. Access the application at `http://localhost:8080`
+Strong credentials are auto-generated on first install and reused across
+upgrades (stored in the `<release>-strato-credentials` secret). See
+[helm/strato-control-plane/README.md](helm/strato-control-plane/README.md)
+for production values (ingress, TLS, WebAuthn hostname).
 
-### Local Development
+### Adding a hypervisor
 
-1. Install dependencies:
-   ```bash
-   swift package resolve
-   ```
+In the web UI: **Agents → Create Registration Token**, then run the shown
+command on the hypervisor host:
 
-2. Start supporting services:
-   ```bash
-   docker compose up db permify
-   ```
+```bash
+strato-agent join 'ws://your-control-plane/agent/ws?token=...&name=...'
+```
 
-3. Run migrations:
-   ```bash
-   swift run App migrate
-   ```
+The agent registers, persists its rotated reconnect token, and reconnects
+automatically after restarts.
 
-4. Start the development server:
-   ```bash
-   swift run
-   ```
+### Local development
+
+For hacking on Strato itself, use the Taskfile-based dev environment
+(`task dev`) or the root `docker-compose.yml` (dev credentials, localhost
+only). See [DEV-SETUP.md](DEV-SETUP.md).
 
 ## Core Technologies
 
 - **[Swift](https://swift.org)** - Modern, safe, and performant programming language
 - **[Vapor](https://vapor.codes)** - Server-side Swift web framework
-- **[Cloud Hypervisor](https://www.cloudhypervisor.org/)** - Modern VMM for VM management
+- **[QEMU](https://www.qemu.org)** - VM execution with KVM (Linux) / HVF (macOS) acceleration
 - **[PostgreSQL](https://www.postgresql.org)** - Advanced open source database
-- **[Permify](https://permify.co)** - Authorization service for fine-grained access control
-- **[HTMX](https://htmx.org)** - Dynamic web interfaces without complex JavaScript
-- **[TailwindCSS](https://tailwindcss.com)** - Utility-first CSS framework
+- **[SpiceDB](https://authzed.com/spicedb)** - Zanzibar-style fine-grained authorization
+- **[OVN/OVS](https://www.ovn.org)** - Software-defined networking (Linux)
+- **[Next.js](https://nextjs.org)** - Web frontend
 
 ## Authentication
 
@@ -85,45 +86,27 @@ Strato uses WebAuthn/Passkeys for secure, passwordless authentication. Users can
 - Platform authenticators (Touch ID, Face ID, Windows Hello)
 - Cross-platform authenticators
 
+The WebAuthn origin must exactly match the URL users visit; both deployment
+paths configure it from your hostname (see the deployment docs).
+
 ## Project Structure
 
 ```
 strato/
-├── Sources/App/           # Swift application source
-│   ├── Controllers/       # HTTP request handlers
-│   ├── Models/           # Database models
-│   ├── Services/         # Business logic services
-│   └── configure.swift   # Application configuration
-├── Resources/Views/      # Leaf templates
-├── Public/              # Static assets
-├── web/                 # HTMX templates and components
-├── permify/             # Authorization schema and config
-└── docker-compose.yml   # Development environment
+├── control-plane/       # Web UI, API, database, user management (Vapor)
+│   └── web/             # Next.js frontend
+├── agent/               # Hypervisor node agent (QEMU/Firecracker)
+├── shared/              # Common models and WebSocket protocol
+├── deploy/compose/      # Single-host Docker Compose deployment
+├── helm/                # Kubernetes Helm chart
+├── spicedb/             # Authorization schema
+└── docker-compose.yml   # Local development environment
 ```
 
-## Architecture
+## Documentation
 
-For detailed technical architecture information, see [ARCHITECTURE.md](ARCHITECTURE.md).
-
-## Development
-
-### Available Commands
-
-- `swift build` - Build the application
-- `swift test` - Run tests
-- `swift run` - Start the application
-- `docker compose build` - Build Docker images
-- `docker compose up app` - Start with all dependencies
-- `docker compose run migrate` - Run database migrations
-
-### Environment Variables
-
-Key configuration options:
-
-- `DATABASE_URL` - PostgreSQL connection string
-- `PERMIFY_ENDPOINT` - Permify service endpoint
-- `WEBAUTHN_RELYING_PARTY_ID` - WebAuthn relying party identifier
-- `WEBAUTHN_RELYING_PARTY_ORIGIN` - WebAuthn origin URL
+Full documentation lives in [docs/](docs/) (VitePress site), including
+architecture, deployment guides, and troubleshooting.
 
 ## Contributing
 
@@ -139,6 +122,6 @@ This project is licensed under the Functional Source License 1.1 with MIT Future
 
 ## Support
 
-- 📖 [Documentation](ARCHITECTURE.md)
+- 📖 [Documentation](docs/)
 - 🐛 [Report Issues](https://github.com/samcat116/strato/issues)
 - 💬 [Discussions](https://github.com/samcat116/strato/discussions)

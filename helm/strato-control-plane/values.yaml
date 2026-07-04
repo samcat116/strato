@@ -212,8 +212,12 @@ spicedb:
       cpu: 250m
       memory: 256Mi
     
-  # Pre-shared key for authentication - CHANGE THIS IN PRODUCTION!
-  presharedKey: "strato-dev-key"
+  # Pre-shared key for authentication.
+  # Leave empty to auto-generate a strong key on first install; it is stored
+  # in the <release>-strato-credentials secret and reused across upgrades.
+  # Retrieve it with:
+  #   kubectl get secret <release>-strato-credentials -o jsonpath='{.data.spicedb-preshared-key}' | base64 -d
+  presharedKey: ""
   
   # Network policies
   networkPolicy:
@@ -237,8 +241,20 @@ postgresql:
   auth:
     database: vapor_database
     username: vapor_username
-    password: vapor_password  # Change this in production!
-    postgresPassword: postgres_password  # Change this in production!
+    # Leave passwords empty to auto-generate strong values on first install;
+    # they are stored in the <release>-strato-credentials secret and reused
+    # across upgrades. Retrieve with:
+    #   kubectl get secret <release>-strato-credentials -o jsonpath='{.data.db-password}' | base64 -d
+    password: ""
+    postgresPassword: ""
+    # The bitnami subchart reads all passwords from the release credentials
+    # secret owned by this chart (see templates/credentials-secret.yaml), so
+    # the database, the SpiceDB datastore URI, and DATABASE_PASSWORD always
+    # stay in sync. Do not change these unless you manage the secret yourself.
+    existingSecret: '{{ printf "%s-strato-credentials" .Release.Name }}'
+    secretKeys:
+      adminPasswordKey: postgres-admin-password
+      userPasswordKey: db-password
     # Create the database if it doesn't exist
     createDatabase: true
   
@@ -289,14 +305,14 @@ podDisruptionBudget:
 
 # Network policies for security
 networkPolicy:
-  enabled: false
+  enabled: true
   # Ingress rules - allow traffic from specific sources
   ingress:
     - from: []
       ports:
         - protocol: TCP
           port: 8080
-  # Egress rules - allow traffic to specific destinations  
+  # Egress rules - allow traffic to specific destinations
   egress:
     - to: []
       ports:
@@ -306,6 +322,8 @@ networkPolicy:
           port: 50051  # SpiceDB gRPC
         - protocol: TCP
           port: 8080   # SpiceDB HTTP
+        - protocol: TCP
+          port: 6379   # Valkey/Redis
         - protocol: TCP
           port: 53     # DNS
         - protocol: UDP

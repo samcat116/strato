@@ -164,7 +164,7 @@ SKAFFOLD_PROFILE=debug skaffold dev
 SKAFFOLD_PROFILE=minimal skaffold dev
 ```
 
-- Deploys only Control Plane, PostgreSQL, and Permify
+- Deploys only Control Plane, PostgreSQL, and SpiceDB
 - Disables Agent and networking services
 - Faster startup for frontend/API development
 

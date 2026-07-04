@@ -35,7 +35,7 @@ macOS uses user-mode (SLIRP) networking for development.
 Enterprise-grade security:
 
 - **WebAuthn/Passkeys**: Modern passwordless authentication
-- **Permify**: Fine-grained authorization and permissions
+- **SpiceDB**: Fine-grained authorization and permissions
 - **RBAC**: Role-based access control for users and organizations
 
 ### Intelligent VM Scheduling
@@ -88,7 +88,7 @@ Built with modern technologies:
 ### Security
 
 - Modern authentication (WebAuthn/Passkeys)
-- Fine-grained authorization (Permify)
+- Fine-grained authorization (SpiceDB)
 - Network isolation (OVN/OVS)
 
 ### Developer Experience

@@ -45,30 +45,31 @@ helm install strato-control-plane ./helm/strato-control-plane -f my-values.yaml
 
 ### Required Configuration
 
-Before deploying to production, you must configure these values:
+Secrets are generated automatically: on first install the chart creates strong
+random credentials (PostgreSQL passwords and the SpiceDB preshared key) in the
+`<release>-strato-credentials` secret and reuses them on every upgrade. The
+secret is kept on uninstall so a reinstall keeps matching a retained database
+volume. A bare `helm install` is secure by default — you only need to set the
+values below when deploying to production behind a real hostname:
 
 ```yaml
 # Image configuration
 image:
   repository: your-registry/strato-control-plane
   tag: "latest"
-  
-# Security - CHANGE THESE IN PRODUCTION!
-postgresql:
-  auth:
-    password: "secure-database-password"
-    postgresPassword: "secure-postgres-admin-password"
-    
-spicedb:
-  presharedKey: "secure-spicedb-preshared-key"
-  
-# WebAuthn configuration
+
+# WebAuthn configuration — must match the URL users visit
 strato:
   webauthn:
     relyingPartyId: "your-domain.com"
     relyingPartyName: "Your Strato Instance"
     relyingPartyOrigin: "https://your-domain.com"
 ```
+
+To supply your own secrets instead of the generated ones, set
+`postgresql.auth.password`, `postgresql.auth.postgresPassword`, and/or
+`spicedb.presharedKey`; explicit values always win and are stored in the same
+credentials secret so every consumer stays in sync.
 
 ### Common Configuration Options
 
@@ -155,10 +156,10 @@ spicedb:
 | `postgresql.enabled` | bool | `true` | Enable PostgreSQL subchart |
 | `postgresql.auth.database` | string | `"vapor_database"` | PostgreSQL database name |
 | `postgresql.auth.username` | string | `"vapor_username"` | PostgreSQL username |
-| `postgresql.auth.password` | string | `""` | PostgreSQL password (required) |
+| `postgresql.auth.password` | string | `""` | PostgreSQL password (auto-generated when empty) |
 | `spicedb.enabled` | bool | `true` | Enable SpiceDB authorization |
 | `spicedb.operator.enabled` | bool | `true` | Install the SpiceDB Operator dependency |
-| `spicedb.presharedKey` | string | `"strato-dev-key"` | SpiceDB preshared key (change in production) |
+| `spicedb.presharedKey` | string | `""` | SpiceDB preshared key (auto-generated when empty) |
 | `spicedb.resources.limits.cpu` | string | `"500m"` | SpiceDB CPU limit |
 | `spicedb.resources.limits.memory` | string | `"512Mi"` | SpiceDB memory limit |
 | `ingress.enabled` | bool | `false` | Enable ingress |
@@ -221,8 +222,8 @@ This usually indicates connectivity issues between services.
 Check the database connection:
 
 ```bash
-# Get database password
-kubectl get secret <release-name>-postgresql -o jsonpath="{.data.password}" | base64 -d
+# Get database password (auto-generated on first install)
+kubectl get secret <release-name>-strato-credentials -o jsonpath="{.data.db-password}" | base64 -d
 
 # Test connection
 kubectl run postgresql-client --rm --tty -i --restart='Never' \
@@ -238,6 +239,9 @@ Check SpiceDB logs and schema:
 ```bash
 # Check SpiceDB logs
 kubectl logs -l app.kubernetes.io/component=spicedb
+
+# Get the SpiceDB preshared key (auto-generated on first install)
+kubectl get secret <release-name>-strato-credentials -o jsonpath="{.data.spicedb-preshared-key}" | base64 -d
 
 # Verify schema is loaded
 kubectl port-forward svc/<release-name>-spicedb 8080:8080 &
@@ -269,8 +273,6 @@ kubectl logs <pod-name> --all-containers=true
 
 ### Production Security Checklist
 
-- [ ] Change default passwords for PostgreSQL
-- [ ] Change SpiceDB preshared key
 - [ ] Configure proper WebAuthn relying party settings
 - [ ] Enable NetworkPolicy for network security
 - [ ] Set appropriate resource limits

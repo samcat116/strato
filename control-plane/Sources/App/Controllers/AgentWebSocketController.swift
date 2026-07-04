@@ -32,8 +32,31 @@ struct AgentWebSocketController: RouteCollection {
     // MARK: - mTLS Authentication (SPIFFE/SPIRE)
 
     private func handleMTLSAuthentication(req: Request, ws: WebSocket, spireService: SPIREService) async {
-        // Try to extract SPIFFE ID from X-Forwarded-Client-Cert header (set by Envoy proxy)
-        if let spiffeID = extractSPIFFEIDFromXFCC(req: req) {
+        let requireClientCert = await spireService.requireClientCert
+
+        // The X-Forwarded-Client-Cert (XFCC) header is only trustworthy when the
+        // request provably arrived through the pod-local Envoy sidecar. Envoy
+        // terminates mTLS, applies SANITIZE_SET (stripping any client-supplied XFCC),
+        // injects the verified client identity, and then dials the control plane over
+        // loopback (127.0.0.1). A request carrying XFCC from any other peer never
+        // passed through Envoy's certificate verification and is a spoofing attempt.
+        if req.headers.contains(name: "X-Forwarded-Client-Cert") {
+            guard requestArrivedViaLocalSidecar(req) else {
+                req.logger.warning("Rejecting X-Forwarded-Client-Cert from non-loopback peer (possible mTLS spoofing)", metadata: [
+                    "remoteAddress": .string(req.remoteAddress?.ipAddress ?? "unknown")
+                ])
+                sendErrorResponse(ws: ws, requestId: "", error: "Client certificate header not accepted from this source")
+                Task { try? await ws.close(code: .policyViolation) }
+                return
+            }
+
+            guard let spiffeID = extractSPIFFEIDFromXFCC(req: req) else {
+                req.logger.error("XFCC header present but contained no valid SPIFFE URI")
+                sendErrorResponse(ws: ws, requestId: "", error: "Invalid client certificate identity")
+                Task { try? await ws.close(code: .unacceptableData) }
+                return
+            }
+
             do {
                 let agentID = try await spireService.validateAgentIdentity(spiffeID)
 
@@ -44,50 +67,36 @@ struct AgentWebSocketController: RouteCollection {
 
                 // Continue with WebSocket setup using the validated agent ID
                 setupWebSocketConnection(req: req, ws: ws, agentName: agentID, authMethod: "mTLS-XFCC")
-                return
             } catch {
                 req.logger.error("SPIFFE ID validation failed: \(error)")
                 sendErrorResponse(ws: ws, requestId: "", error: "SPIFFE identity validation failed: \(error.localizedDescription)")
                 Task { try? await ws.close(code: .unacceptableData) }
-                return
             }
+            return
         }
 
-        // Fall back to direct TLS certificate extraction
-        guard let peerCertificatePEM = req.peerCertificate else {
-            // No client certificate provided - check if we should fall back to token auth
-            if req.headers.bearerAuthorization != nil,
-               let agentName = req.query[String.self, at: "name"] {
-                req.logger.warning("No client certificate or XFCC header provided, falling back to token authentication", metadata: [
-                    "agentName": .string(agentName)
-                ])
-                handleTokenAuthentication(req: req, ws: ws)
-                return
-            }
-
-            req.logger.error("mTLS required but no client certificate or XFCC header provided")
+        // No client certificate was presented. When SPIRE requires client certs,
+        // mTLS is mandatory — never silently downgrade to token auth, which would
+        // let any caller that can reach the port authenticate as an agent.
+        if requireClientCert {
+            req.logger.error("mTLS required but no client certificate (X-Forwarded-Client-Cert) was presented")
             sendErrorResponse(ws: ws, requestId: "", error: "Client certificate required for agent authentication")
             Task { try? await ws.close(code: .unacceptableData) }
             return
         }
 
-        // Validate certificate and extract SPIFFE ID
-        do {
-            let spiffeID = try await spireService.validateCertificate(peerCertificatePEM)
-            let agentID = try await spireService.validateAgentIdentity(spiffeID)
+        // requireClientCert is explicitly disabled: permit legacy token authentication.
+        req.logger.warning("SPIRE enabled without requireClientCert; falling back to token authentication")
+        handleTokenAuthentication(req: req, ws: ws)
+    }
 
-            req.logger.info("Agent authenticated via direct mTLS", metadata: [
-                "spiffeID": .string(spiffeID.uri),
-                "agentID": .string(agentID)
-            ])
-
-            // Continue with WebSocket setup using the validated agent ID
-            setupWebSocketConnection(req: req, ws: ws, agentName: agentID, authMethod: "mTLS-direct")
-        } catch {
-            req.logger.error("mTLS certificate validation failed: \(error)")
-            sendErrorResponse(ws: ws, requestId: "", error: "Certificate validation failed: \(error.localizedDescription)")
-            Task { try? await ws.close(code: .unacceptableData) }
-        }
+    /// Whether the request arrived over the pod-local loopback interface, i.e. from
+    /// the co-located Envoy sidecar that terminates mTLS, rather than directly over
+    /// the pod network. Envoy forwards to the control plane on 127.0.0.1, so only
+    /// loopback peers may be trusted to have passed through certificate verification.
+    private func requestArrivedViaLocalSidecar(_ req: Request) -> Bool {
+        guard let ip = req.remoteAddress?.ipAddress else { return false }
+        return ip == "127.0.0.1" || ip == "::1" || ip == "::ffff:127.0.0.1"
     }
 
     // MARK: - XFCC Header Parsing
@@ -238,14 +247,17 @@ struct AgentWebSocketController: RouteCollection {
         return query.flatMapThrowing { registrationToken -> Bool in
             guard let registrationToken = registrationToken else {
                 Telemetry.agentRegistrationFailed(reason: "invalid_token")
-                self.sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token")
+                // The explicit code lets the agent tell a hopeless credential apart
+                // from a transient server error, so only the former stops its
+                // reconnect loop.
+                self.sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token", code: ErrorMessage.ErrorCode.invalidToken)
                 _ = ws.close(code: .unacceptableData)
                 return false
             }
 
             guard registrationToken.isValid else {
                 Telemetry.agentRegistrationFailed(reason: "expired_token")
-                self.sendErrorResponse(ws: ws, requestId: "", error: "Registration token is invalid or expired")
+                self.sendErrorResponse(ws: ws, requestId: "", error: "Registration token is invalid or expired", code: ErrorMessage.ErrorCode.invalidToken)
                 _ = ws.close(code: .unacceptableData)
                 return false
             }
@@ -326,6 +338,33 @@ struct AgentWebSocketController: RouteCollection {
                     } catch {
                         Telemetry.agentRegistrationFailed(reason: "register_error")
                         req.logger.error("Failed to register agent: \(error)")
+
+                        // Restore the presented token: it was marked used at connect
+                        // validation, but registration failed before a rotated
+                        // replacement was minted. Without this, a transient failure
+                        // here (e.g. a DB blip) would permanently consume the agent's
+                        // only credential and lock it out until an operator mints a
+                        // new join token.
+                        if isTokenAuthenticated, let bearer = req.headers.bearerAuthorization?.token {
+                            do {
+                                if let presented = try await AgentRegistrationToken.query(on: req.db)
+                                    .filter(\.$token == bearer)
+                                    .filter(\.$agentName == agentName)
+                                    .first() {
+                                    presented.isUsed = false
+                                    presented.usedAt = nil
+                                    try await presented.save(on: req.db)
+                                    req.logger.info("Restored registration token after failed registration", metadata: [
+                                        "agentName": .string(agentName)
+                                    ])
+                                }
+                            } catch {
+                                req.logger.error("Failed to restore registration token for agent \(agentName): \(error)")
+                            }
+                        }
+
+                        // No `code`: the agent treats unclassified errors as
+                        // transient and keeps retrying with backoff.
                         self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to register agent: \(error.localizedDescription)")
                     }
                 }
@@ -444,9 +483,9 @@ struct AgentWebSocketController: RouteCollection {
         }
     }
 
-    private func sendErrorResponse(ws: WebSocket, requestId: String, error: String) {
+    private func sendErrorResponse(ws: WebSocket, requestId: String, error: String, code: String? = nil) {
         do {
-            let response = ErrorMessage(requestId: requestId, error: error)
+            let response = ErrorMessage(requestId: requestId, error: error, code: code)
             let envelope = try MessageEnvelope(message: response)
             let data = try JSONEncoder().encode(envelope)
             ws.send(data)
@@ -521,29 +560,5 @@ struct AgentWebSocketController: RouteCollection {
                 "agentName": .string(agentName)
             ])
         }
-    }
-}
-
-// MARK: - Request Extension for Peer Certificate Access
-
-extension Request {
-    /// Get the peer certificate from the TLS connection (if available)
-    /// Returns the certificate in PEM format, or nil if no certificate is available
-    var peerCertificate: String? {
-        // Note: This requires the server to be configured with TLS and client certificate verification
-        // The actual implementation depends on how Vapor/NIO exposes client certificates
-        // In production, this would extract the certificate from the TLS connection
-
-        // Placeholder: In a real implementation, you would access the TLS session info
-        // through Vapor's Request object or NIO's channel pipeline
-        //
-        // For example, with NIO SSL:
-        // if let sslHandler = request.channel.pipeline.handler(type: NIOSSLHandler.self),
-        //    let peerCert = try? sslHandler.peerCertificate {
-        //     return peerCert.pemEncoded
-        // }
-
-        // For now, return nil - this needs to be implemented when TLS is configured
-        return nil
     }
 }

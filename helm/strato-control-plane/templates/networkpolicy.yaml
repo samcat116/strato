@@ -19,7 +19,18 @@ spec:
     - from: []
       ports:
         - protocol: TCP
-          port: 8080
+          port: {{ .Values.service.port }}
+    {{- end }}
+    {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
+    # Envoy sidecar terminates agent mTLS on these ports. The mTLS port is
+    # self-authenticating (client cert required), so allowing all sources is safe;
+    # without this rule an enabled NetworkPolicy would block all agent connections.
+    - from: []
+      ports:
+        - protocol: TCP
+          port: {{ .Values.spire.envoy.agentPort }}
+        - protocol: TCP
+          port: {{ .Values.spire.envoy.healthPort }}
     {{- end }}
   egress:
     {{- with .Values.networkPolicy.egress }}
@@ -51,6 +62,13 @@ spec:
           port: 50051
         - protocol: TCP
           port: 8080
+    {{- end }}
+    {{- if or .Values.valkey.enabled .Values.externalValkey.host }}
+    # Allow Valkey/Redis access (wait-for-valkey init container and runtime)
+    - to: []
+      ports:
+        - protocol: TCP
+          port: {{ include "strato-control-plane.valkeyPort" . }}
     {{- end }}
     {{- end }}
 {{- end }}

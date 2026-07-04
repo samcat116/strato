@@ -42,9 +42,9 @@ The agent uses TOML configuration files to set connection and operational parame
 
 ### Skaffold + Helm Development (Recommended)
 - `minikube start --memory=4096 --cpus=2` - Start local Kubernetes cluster
-- `cd helm/strato && helm dependency build` - Build Helm chart dependencies (run once)
+- `cd helm/strato-control-plane && helm dependency build` - Build Helm chart dependencies (run once)
 - `skaffold dev` - Start full development environment with hot reload
-- `skaffold dev --profile=minimal` - Start minimal environment (Control Plane, PostgreSQL, Permify only)
+- `skaffold dev --profile=minimal` - Start minimal environment (Control Plane, PostgreSQL, SpiceDB only)
 - `skaffold dev --profile=debug` - Start with debug logging and Swift debug builds
 - `skaffold build` - Build container images locally
 - `skaffold delete` - Stop and clean up development environment
@@ -55,30 +55,10 @@ The agent uses TOML configuration files to set connection and operational parame
 - `minikube service strato-control-plane --url` - Get external URL for Control Plane
 - `minikube stop` - Stop Kubernetes cluster
 
-### NixOS Deployment (Agent)
-Strato Agent can be deployed on NixOS using the provided Nix flake. See [NIXOS.md](./NIXOS.md) for detailed documentation.
-
-**Quick start:**
-- `nix build` - Build the agent package
-- `nix develop` - Enter development shell with all dependencies
-- `nix run` - Run the agent directly
-
-**NixOS module:**
-Add to your NixOS configuration to run the agent as a systemd service with automatic dependency management (QEMU, KVM, OVN/OVS).
-
-**Direnv integration:**
-The repository includes `.envrc` for automatic environment loading with direnv.
-
-### Docker Development (Legacy - being phased out)
-- `./scripts/prepare-build.sh` - Prepare build context (run before first Docker build)
-- `docker compose build` - Build Docker images for both control plane and agent
-- `docker compose up control-plane` - Start the control plane with database and Permify
-- `docker compose up agent` - Start the agent (requires control plane and networking services to be running)
-- `docker compose up db` - Start only the PostgreSQL database
-- `docker compose up permify` - Start only the Permify authorization service
-- `docker compose up ovn-northd ovn-nb-db ovn-sb-db openvswitch` - Start OVN/OVS networking services
-- `docker compose run migrate` - Run database migrations
-- `docker compose down` - Stop all services (add `-v` to wipe database and networking state)
+### Docker Compose
+Two compose files with different purposes:
+- **Root `docker-compose.yml`**: local development only (fixed dev credentials, in-memory SpiceDB, `DEV_AUTH_BYPASS`). `docker compose up control-plane` starts the control plane with its dependencies. Database migrations run automatically at control-plane startup — there is no separate migrate step.
+- **`deploy/compose/`**: the supported single-host deployment. `./setup.sh` generates a `.env` with strong random secrets, then `docker compose up -d`. Uses published images, persistent SpiceDB (PostgreSQL datastore), automatic SpiceDB migration/schema loading, and no auth bypass.
 
 ### Frontend/Styling (Control Plane)
 - TailwindCSS is integrated via SwiftyTailwind and runs automatically during app startup
@@ -95,7 +75,7 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 - **Agent**: Swift command-line application that manages VMs on hypervisor nodes (supports both Linux and macOS)
 - **Shared Package**: Common models, DTOs, and WebSocket protocols used by both Control Plane and Agent
 - **Database**: PostgreSQL with Fluent migrations (Control Plane only)
-- **Authorization**: Permify for fine-grained access control and permissions (Control Plane only)
+- **Authorization**: SpiceDB for fine-grained access control and permissions (Control Plane only)
 - **Scheduler**: Intelligent VM placement service with multiple strategies (least-loaded, best-fit, round-robin, random) (Control Plane only)
 - **Frontend**: Leaf templates + HTMX for dynamic interactions (Control Plane only)
 - **Styling**: TailwindCSS integrated via SwiftyTailwind (Control Plane only)
@@ -110,7 +90,7 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 - **WebSocket Communication**: Real-time bidirectional communication between Control Plane and Agents
 - **MVC Structure**: Controllers handle HTTP requests, Models define data structures, Views use Leaf templating (Control Plane)
 - **Database Integration**: Uses Fluent ORM with PostgreSQL driver and automatic migrations (Control Plane)
-- **Authorization**: Permify middleware intercepts all requests, checks permissions via REST API, enforces role-based access control (Control Plane)
+- **Authorization**: SpiceDB middleware intercepts all requests, checks permissions via REST API, enforces relationship-based access control (Control Plane)
 - **Agent Management**: Dynamic agent registration, heartbeat monitoring, and VM-to-agent mapping
 - **VM Scheduling**: Intelligent hypervisor selection using configurable strategies (least-loaded, best-fit, round-robin, random) with automatic mapping persistence and recovery (Control Plane)
 - **Frontend**: Dual templating approach - Leaf templates in `control-plane/Resources/Views/` for server-rendered content, HTML templates in `control-plane/web/templates/` for HTMX components
@@ -122,7 +102,7 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 - Database connection configured via environment variables (see docker-compose.yml)
 
 ### External Integrations
-- **Control Plane**: Permify authorization service, HTMX for frontend interactions, xterm.js for terminal interfaces
+- **Control Plane**: SpiceDB authorization service, HTMX for frontend interactions, xterm.js for terminal interfaces
 - **Agent**:
   - **VM Management**: QEMU via SwiftQEMU library for VM lifecycle management
   - **Networking (Linux)**: OVN/OVS via SwiftOVN for software-defined networking
@@ -132,9 +112,9 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 - **Communication**: WebSocket protocol for Control Plane ↔ Agent messaging
 
 ### Authorization System
-- **Schema**: Defined in `permify/schema.perm` with entities (user, organization, vm) and permissions (create, read, update, delete, start, stop, restart)
-- **Middleware**: `PermifyAuthMiddleware` intercepts requests and validates permissions
-- **Service**: `PermifyService` provides Swift wrapper around Permify REST API
+- **Schema**: Defined in `spicedb/schema.zed` with entities (user, organization, project, vm, ...) and their permissions
+- **Middleware**: `SpiceDBAuthMiddleware` intercepts requests and validates permissions
+- **Service**: `SpiceDBService` provides Swift wrapper around the SpiceDB HTTP API
 - **Authentication**: Session-based authentication with WebAuthn/Passkeys
 - **Relationships**: Automatically creates ownership relationships when VMs are created
 
@@ -146,7 +126,7 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 - **Session Management**: Vapor session-based authentication with Fluent session storage
 - **Frontend Integration**: JavaScript WebAuthn client (`/js/webauthn.js`) handles browser API calls
 - **UI Components**: Registration (`/register`) and login (`/login`) pages with Passkey flows
-- **Middleware Integration**: `PermifyAuthMiddleware` now uses session-authenticated users
+- **Middleware Integration**: `SpiceDBAuthMiddleware` uses session-authenticated users
 - **Environment Configuration**: WebAuthn relying party settings via environment variables:
   - `WEBAUTHN_RELYING_PARTY_ID` (default: localhost)
   - `WEBAUTHN_RELYING_PARTY_NAME` (default: Strato)

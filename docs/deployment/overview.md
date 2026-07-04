@@ -1,110 +1,36 @@
-# Strato Deployment Guide
+# Deployment Overview
 
-## WebAuthn/Passkeys Remote Deployment
+Strato has two supported deployment paths, both secure by default — strong
+secrets are generated on first run, with no insecure fallbacks to remember to
+turn off:
 
-When deploying Strato to a remote server, WebAuthn/Passkeys have strict security requirements that must be properly configured.
+- **[Docker Compose](/deployment/docker-compose)** — a single host, the
+  fastest way to a real deployment.
+- **[Kubernetes (Helm)](/deployment/kubernetes)** — clusters and HA.
 
-### The Problem
+VMs run on **[agents](/deployment/agents)** — hypervisor hosts joined with a
+one-line command.
 
-The "Passkeys not supported" error occurs because:
+## WebAuthn hostname requirements
 
-1. **HTTPS Requirement**: WebAuthn only works over HTTPS (except for localhost)
-2. **Origin Mismatch**: The relying party ID must match the domain/IP you're accessing
-3. **Browser Security**: Browsers enforce strict origin policies for WebAuthn
+Strato authenticates users exclusively with WebAuthn/Passkeys, which browsers
+gate behind strict origin rules. Misconfiguring this is the most common
+first-run problem ("Passkeys not supported"):
 
-### Solutions
-
-#### Option 1: Development with IP Access (Quick Fix)
-
-1. Copy the environment file:
-```bash
-cp .env.production.example .env
-```
-
-2. Edit `.env` and set your server's IP:
-```bash
-WEBAUTHN_RELYING_PARTY_ID=YOUR_SERVER_IP
-WEBAUTHN_RELYING_PARTY_ORIGIN=http://YOUR_SERVER_IP:8080
-```
-
-3. Restart the application:
-```bash
-docker compose down
-docker compose up app
-```
-
-**Note**: This works but is not recommended for production as it exposes credentials over HTTP.
-
-#### Option 2: Production with Domain Name (Recommended)
-
-1. Set up a domain pointing to your server
-2. Configure HTTPS (use nginx, Caddy, or similar)
-3. Update `.env`:
-```bash
-WEBAUTHN_RELYING_PARTY_ID=strato.yourdomain.com
-WEBAUTHN_RELYING_PARTY_ORIGIN=https://strato.yourdomain.com
-```
-
-#### Option 3: Development with Custom Hostname
-
-1. Add an entry to your local `/etc/hosts` (on your client machine):
-```bash
-192.168.1.100 strato.local
-```
-
-2. Update `.env`:
-```bash
-WEBAUTHN_RELYING_PARTY_ID=strato.local
-WEBAUTHN_RELYING_PARTY_ORIGIN=http://strato.local:8080
-```
-
-3. Access the application via `http://strato.local:8080`
-
-### Example Nginx Configuration (Option 2)
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name strato.yourdomain.com;
-    
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-    
-    location / {
-        proxy_pass http://localhost:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-
-server {
-    listen 80;
-    server_name strato.yourdomain.com;
-    return 301 https://$server_name$request_uri;
-}
-```
-
-### Testing WebAuthn Configuration
-
-After updating the configuration, test by:
-
-1. Clear browser data for the site
-2. Navigate to your configured URL
-3. Try to register a new account
-4. The Passkey registration should work without errors
+1. **HTTPS is required** for any hostname except `localhost`.
+2. **The configured origin must exactly match the URL in the browser** —
+   scheme, host, and port. Both deployment paths configure
+   `WEBAUTHN_RELYING_PARTY_ID` and `WEBAUTHN_RELYING_PARTY_ORIGIN` from your
+   hostname; change them (and re-register users) if the hostname changes.
+3. **Credentials are bound to the origin**: users registered under one
+   hostname cannot log in under another.
 
 ### Troubleshooting
 
-- **"Passkeys not supported"**: Origin mismatch or HTTPS requirement
-- **"Invalid domain"**: Relying party ID doesn't match the URL domain
-- **Registration fails silently**: Check browser console for WebAuthn errors
-- **Existing users can't login**: WebAuthn credentials are tied to the origin
-
-### Security Notes
-
-- Always use HTTPS in production
-- Never expose WebAuthn over HTTP except for localhost development
-- Consider implementing fallback authentication for critical deployments
-- Test thoroughly after any domain/origin changes
+- **"Passkeys not supported"** — origin mismatch or HTTP on a non-localhost
+  hostname.
+- **"Invalid domain"** — relying party ID doesn't match the URL's domain.
+- **Registration fails silently** — check the browser console for WebAuthn
+  errors, and see [WebAuthn Debugging](/debugging/webauthn).
+- **Existing users can't log in after a hostname change** — expected;
+  credentials are origin-bound.

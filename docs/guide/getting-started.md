@@ -51,7 +51,7 @@ cd strato
 3. **Build Helm dependencies:**
 
 ```bash
-cd helm/strato
+cd helm/strato-control-plane
 helm dependency build
 cd ../..
 ```
@@ -62,7 +62,7 @@ cd ../..
 # Full environment
 skaffold dev
 
-# Or minimal environment (Control Plane + PostgreSQL + Permify only)
+# Or minimal environment (Control Plane + PostgreSQL + SpiceDB only)
 skaffold dev --profile=minimal
 
 # Or with debug logging
@@ -72,7 +72,7 @@ skaffold dev --profile=debug
 The development environment includes:
 - Control Plane (web UI and API)
 - PostgreSQL database
-- Permify authorization service
+- SpiceDB authorization service
 - Agents (in full mode)
 - OVN/OVS networking (Linux only, in full mode)
 

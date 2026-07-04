@@ -26,6 +26,10 @@
    - PostgreSQL is deployed as part of this release
    - Database: {{ .Values.strato.database.name }}
    - Username: {{ .Values.strato.database.username }}
+{{- if not .Values.postgresql.auth.password }}
+   - Password (auto-generated on first install):
+     kubectl get secret --namespace {{ .Release.Namespace }} {{ .Release.Name }}-strato-credentials -o jsonpath='{.data.db-password}' | base64 -d
+{{- end }}
 {{- else }}
    - Using external PostgreSQL database
    - Host: {{ .Values.externalDatabase.host }}
@@ -37,6 +41,10 @@
    - SpiceDB is deployed as part of this release
    - HTTP endpoint: http://{{ include "strato-control-plane.spicedb.fullname" . }}:{{ .Values.spicedb.service.httpPort }}
    - gRPC endpoint: {{ include "strato-control-plane.spicedb.fullname" . }}:{{ .Values.spicedb.service.grpcPort }}
+{{- if not .Values.spicedb.presharedKey }}
+   - Preshared key (auto-generated on first install):
+     kubectl get secret --namespace {{ .Release.Namespace }} {{ .Release.Name }}-strato-credentials -o jsonpath='{.data.spicedb-preshared-key}' | base64 -d
+{{- end }}
 {{- else }}
    - SpiceDB is disabled. Authorization features will not be available.
 {{- end }}
@@ -88,7 +96,12 @@
 
 For more information about Strato, visit: https://github.com/samcat116/strato
 
-⚠️  SECURITY NOTICE: 
-   - Change default passwords in production
-   - Update SpiceDB preshared key: {{ .Values.spicedb.presharedKey }}
+🔐 Credentials:
+   - Database and SpiceDB credentials are auto-generated on first install
+     (unless provided via values) and stored in the
+     {{ .Release.Name }}-strato-credentials secret. The secret is kept on
+     uninstall so a reinstall keeps matching any retained database volume.
+
+⚠️  SECURITY NOTICE:
    - Configure proper ingress/TLS for external access
+   - Set strato.webauthn.relyingPartyOrigin to the exact URL users will visit
