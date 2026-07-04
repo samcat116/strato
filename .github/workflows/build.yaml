@@ -9,11 +9,67 @@ permissions:
   contents: read
   security-events: write
   actions: read
+  pull-requests: read # dorny/paths-filter reads changed files via the PR API
+
+# Cancel any in-progress run for the same PR when a new commit is pushed,
+# so stale runs stop hogging the single self-hosted runner.
+concurrency:
+  group: pr-validation-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # Detect which parts of the repo changed so we can skip heavy jobs on
+  # e.g. docs-only PRs. Jobs are gated with `if:` (not workflow-level
+  # `on.paths`) so a skipped job still reports as a passing check — this
+  # keeps them safe to use as required status checks in branch protection.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      cp_backend: ${{ steps.filter.outputs.cp_backend }}
+      agent: ${{ steps.filter.outputs.agent }}
+      shared: ${{ steps.filter.outputs.shared }}
+      workflow: ${{ steps.filter.outputs.workflow }}
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # `every`: a changed file matches a filter only if it matches ALL of
+          # that filter's patterns, which is what makes the `!` exclusions
+          # actually take effect. (With the default `some`, a file matching any
+          # single positive pattern matches the filter and negations are
+          # ignored — so `!control-plane/web/**` and the docs exclusions below
+          # would be no-ops.) OR across directories is therefore expressed in
+          # each job's `if:` rather than inside a single filter.
+          predicate-quantifier: "every"
+          filters: |
+            web:
+              - 'control-plane/web/**'
+            cp_backend:
+              - 'control-plane/**'
+              - '!control-plane/web/**'
+            agent:
+              - 'agent/**'
+            shared:
+              - 'shared/**'
+            workflow:
+              - '.github/workflows/build.yaml'
+            code:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!**/*.mdx'
+              - '!LICENSE'
+
   lint-and-build-frontend:
     name: Frontend Lint & Build
-    runs-on: self-hosted
+    needs: changes
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.workflow == 'true'
+    # Lightweight Bun job — runs on GitHub-hosted runners to keep the
+    # self-hosted runner free for the heavy Swift build+test job.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -37,6 +93,8 @@ jobs:
 
   test:
     name: Build and Test Swift Packages
+    needs: changes
+    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: self-hosted
     services:
       postgres:
@@ -84,7 +142,10 @@ jobs:
 
   security:
     name: Security Scan
-    runs-on: self-hosted
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    # Trivy filesystem scan is light and needs no warm cache — offload it.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4

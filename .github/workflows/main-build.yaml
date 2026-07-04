@@ -10,6 +10,12 @@ permissions:
   packages: write
   actions: read
 
+# Rapid merges to main can stack builds on the single self-hosted x64 runner.
+# This build only validates (Docker push: false), so keep just the latest.
+concurrency:
+  group: main-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-swift-release:
     name: Build Swift Release Binaries
