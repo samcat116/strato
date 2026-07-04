@@ -180,7 +180,7 @@ jobs:
   # NOTE: Integration tests are unreliable in GitHub Actions due to Kind resource constraints
   # They frequently timeout even with minimal nginx deployments. For reliable testing:
   # - Use the lint, security, and template validation jobs above
-  # - Run integration tests locally with: scripts/test-helm-chart.sh
+  # - Run `helm lint` / `helm template` locally against the ci/*.yaml values files
   # - Test in dedicated Kubernetes environments, not CI
   integration-test:
     runs-on: ubuntu-latest

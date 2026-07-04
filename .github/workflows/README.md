@@ -42,6 +42,10 @@ Triggers Claude Code assistant when `@claude` is mentioned in issues or PRs.
 ### Claude Code Review (`claude-code-review.yml`)
 Automatically reviews pull requests using Claude Code.
 
+### Docs Deployment (`deploy-docs.yml`)
+Builds the VitePress documentation site (`npm run docs:build`) and deploys it
+when docs change on the main branch.
+
 ## Runner Configuration
 
 Workflows use a hybrid approach with both self-hosted and GitHub-hosted runners.
