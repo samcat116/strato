@@ -445,7 +445,16 @@ actor Agent {
 
     private func registerWithControlPlane() async throws {
         let resources = await getAgentResources()
-        let capabilities = getAgentCapabilities()
+        // Probe on every registration (initial and reconnect) so the control
+        // plane sees the host as it is now, not as it was at process start —
+        // e.g. Firecracker installed or /dev/kvm permissions fixed since then.
+        let hypervisors = HypervisorProbe.probeAll(
+            qemuBinaryPath: qemuBinaryPath,
+            firecrackerBinaryPath: firecrackerBinaryPath
+        )
+        let networkCapability = currentNetworkCapability()
+        let capabilities = getAgentCapabilities(hypervisors: hypervisors, networkCapability: networkCapability)
+
         let message = AgentRegisterMessage(
             agentId: initialAgentID,
             hostname: ProcessInfo.processInfo.hostName,
@@ -453,7 +462,9 @@ actor Agent {
             capabilities: capabilities,
             resources: resources,
             hypervisorType: hypervisorType,
-            architecture: CPUArchitecture.current
+            architecture: CPUArchitecture.current,
+            hypervisors: hypervisors,
+            networkCapability: networkCapability
         )
 
         if let client = websocketClient {
@@ -562,59 +573,74 @@ actor Agent {
         ])
     }
 
-    private func getAgentCapabilities() -> [String] {
-        var capabilities = ["vm_management"]
-
-        // Advertised hypervisors are hard placement constraints, so each one
-        // is gated on its configured binary actually being executable on this
-        // host — the scheduler must not route VMs here that create would
-        // reject.
-        if FileManager.default.isExecutableFile(atPath: qemuBinaryPath) {
-            capabilities.append("qemu")
-        } else {
-            // Error, not warning: without QEMU the agent is unusable for most
-            // placements, and the scheduler will only report "unsupported
-            // hypervisor" — this log is what points at the actual cause.
-            logger.error("QEMU binary not executable; not advertising qemu capability", metadata: [
-                "qemuBinaryPath": .string(qemuBinaryPath)
-            ])
-        }
-
-        #if canImport(SwiftQEMU)
-        #if os(Linux)
-        capabilities.append("kvm")
-        #elseif os(macOS)
-        capabilities.append("hvf")
-        #endif
-        #endif
-
-        #if os(Linux)
-        if FileManager.default.isExecutableFile(atPath: firecrackerBinaryPath) {
-            capabilities.append("firecracker")
-        } else {
-            logger.warning("Firecracker binary not executable; not advertising firecracker capability", metadata: [
-                "firecrackerBinaryPath": .string(firecrackerBinaryPath)
-            ])
-        }
-        #endif
-
-        // The networking capability reflects the backend selected at startup,
-        // not the platform: a Linux agent configured for user-mode networking
-        // cannot provide OVN/VM-to-VM networking, and the scheduler relies on
-        // this to enforce the inter-VM-networking placement constraint.
+    /// The networking capability to report at registration, reflecting the
+    /// backend selected at startup rather than the platform: a Linux agent
+    /// configured for user-mode networking cannot provide OVN/VM-to-VM
+    /// networking, and the scheduler relies on this to enforce the
+    /// inter-VM-networking placement constraint.
+    private func currentNetworkCapability() -> NetworkCapability? {
         switch (effectiveNetworkMode, networkServiceConnected) {
         case (.ovn, true):
-            capabilities.append("ovn_networking")
+            return .overlay
         case (.ovn, false):
             // OVN was selected but the OVN/OVS connection failed at startup:
-            // advertise no networking capability rather than claiming VM-to-VM
+            // report no networking capability rather than claiming VM-to-VM
             // support the backend cannot currently provide (and user-mode
             // would be a lie — the agent is not running SLIRP either).
             logger.warning("OVN network service not connected; not advertising ovn_networking capability")
+            return nil
         case (.user, _):
             // User-mode (SLIRP) networking is built into QEMU and needs no
             // external service, so it is not gated on connection state.
+            return .userMode
+        }
+    }
+
+    /// Legacy string capability list, derived from the same probes that back
+    /// the structured `hypervisors` report instead of hardcoded platform
+    /// lists. Advertised hypervisors are hard placement constraints, so each
+    /// one is gated on its probe (binary executable, and KVM for Firecracker)
+    /// — the scheduler must not route VMs here that create would reject.
+    private func getAgentCapabilities(hypervisors: [HypervisorSupport], networkCapability: NetworkCapability?) -> [String] {
+        var capabilities = ["vm_management"]
+
+        for hypervisor in hypervisors {
+            if hypervisor.available {
+                capabilities.append(hypervisor.type.rawValue)
+            } else if hypervisor.type == .qemu {
+                // Error, not warning: without QEMU the agent is unusable for
+                // most placements, and the scheduler will only report
+                // "unsupported hypervisor" — this log points at the cause.
+                logger.error("QEMU unusable; not advertising qemu capability", metadata: [
+                    "reason": .string(hypervisor.unavailabilityReason ?? "unknown"),
+                    "qemuBinaryPath": .string(qemuBinaryPath)
+                ])
+            } else {
+                #if os(Linux)
+                // Not worth a log on platforms where the backend can never
+                // exist (e.g. Firecracker on macOS).
+                logger.warning("\(hypervisor.type.displayName) unusable; not advertising \(hypervisor.type.rawValue) capability", metadata: [
+                    "reason": .string(hypervisor.unavailabilityReason ?? "unknown")
+                ])
+                #endif
+            }
+        }
+
+        if hypervisors.contains(where: { $0.accelerated }) {
+            #if os(Linux)
+            capabilities.append("kvm")
+            #elseif os(macOS)
+            capabilities.append("hvf")
+            #endif
+        }
+
+        switch networkCapability {
+        case .overlay:
+            capabilities.append("ovn_networking")
+        case .userMode:
             capabilities.append("user_networking")
+        case nil:
+            break // backend selected but not connected; advertise nothing
         }
 
         if !HypervisorType.allCases.contains(where: { capabilities.contains($0.rawValue) }) {

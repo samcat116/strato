@@ -116,6 +116,9 @@ actor AgentService {
             agent.hostname = message.hostname
             agent.version = message.version
             agent.capabilities = message.capabilities
+            agent.architecture = message.architecture?.rawValue
+            agent.hypervisors = message.effectiveHypervisors
+            agent.networkCapability = message.networkCapability?.rawValue
             agent.updateResources(message.resources)
             agent.status = .online
         } else {
@@ -138,6 +141,8 @@ actor AgentService {
             version: message.version,
             capabilities: message.capabilities,
             architecture: message.architecture,
+            hypervisors: message.effectiveHypervisors,
+            networkCapability: message.networkCapability,
             resources: message.resources,
             lastHeartbeat: Date(),
             status: .online
@@ -870,24 +875,35 @@ struct AgentInfo: Sendable {
     let capabilities: [String]
     /// Host CPU architecture; nil for agents that predate architecture reporting
     let architecture: CPUArchitecture?
+    /// Hypervisors on the host with probed availability, capabilities, and
+    /// unavailability reasons. For agents that predate the structured report
+    /// this is derived from their legacy capability strings
+    /// (`AgentRegisterMessage.effectiveHypervisors`).
+    let hypervisors: [HypervisorSupport]
+    /// Host networking capability; nil when the agent reported none (older
+    /// agent, or an OVN backend that failed to connect at startup).
+    let networkCapability: NetworkCapability?
     var resources: AgentResources
     var lastHeartbeat: Date
     var status: AgentStatus
 
-    /// Hypervisor backends advertised in the agent's capabilities. Agents
-    /// probe each backend's binary before advertising it, so an empty list
-    /// means the agent cannot run VMs at all — it stays registered but is
-    /// never eligible for placement. No QEMU fallback here: assuming QEMU
-    /// for an empty list would defeat the agent-side probe in exactly the
-    /// case it exists for.
+    /// Hypervisor backends this agent can actually run. Agents probe each
+    /// backend before reporting it, so an empty list means the agent cannot
+    /// run VMs at all — it stays registered but is never eligible for
+    /// placement. No QEMU fallback here: assuming QEMU for an empty list
+    /// would defeat the agent-side probe in exactly the case it exists for.
     var supportedHypervisors: [HypervisorType] {
-        capabilities.compactMap(HypervisorType.init(rawValue:))
+        hypervisors.filter(\.available).map(\.type)
     }
 
     /// Only OVN-backed agents can provide VM-to-VM networking; user-mode
-    /// (SLIRP) agents cannot.
+    /// (SLIRP) agents cannot. Agents that predate structured network
+    /// capability reporting are judged by their legacy capability strings.
     var supportsInterVMNetworking: Bool {
-        capabilities.contains("ovn_networking")
+        if let networkCapability {
+            return networkCapability == .overlay
+        }
+        return capabilities.contains("ovn_networking")
     }
 }
 

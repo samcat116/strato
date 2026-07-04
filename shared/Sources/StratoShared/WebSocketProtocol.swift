@@ -75,12 +75,21 @@ public struct AgentRegisterMessage: WebSocketMessage {
     public let version: String
     public let capabilities: [String]
     public let resources: AgentResources
+    /// Legacy single hypervisor type. Still sent so control planes that predate
+    /// `hypervisors` can register this agent; readers should prefer `hypervisors`.
     public let hypervisorType: HypervisorType
     /// Host CPU architecture. Optional so messages from agents that predate
     /// this field decode fine; absent means unknown, and the scheduler treats
     /// unknown-architecture agents as ineligible for any VM that pins an
     /// architecture.
     public let architecture: CPUArchitecture?
+    /// Every hypervisor on this host with probed availability and capabilities.
+    /// Optional so registrations from older agents still decode; readers fall
+    /// back to deriving entries from the legacy `capabilities` strings
+    /// (see `effectiveHypervisors`).
+    public let hypervisors: [HypervisorSupport]?
+    /// Networking capability of this host. Optional for the same reason.
+    public let networkCapability: NetworkCapability?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -91,7 +100,9 @@ public struct AgentRegisterMessage: WebSocketMessage {
         capabilities: [String],
         resources: AgentResources,
         hypervisorType: HypervisorType = .qemu,
-        architecture: CPUArchitecture? = nil
+        architecture: CPUArchitecture? = nil,
+        hypervisors: [HypervisorSupport]? = nil,
+        networkCapability: NetworkCapability? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -102,6 +113,34 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.resources = resources
         self.hypervisorType = hypervisorType
         self.architecture = architecture
+        self.hypervisors = hypervisors
+        self.networkCapability = networkCapability
+    }
+
+    /// The hypervisor list to act on: the probed report when the agent sent
+    /// one, otherwise entries derived from the hypervisor types named in the
+    /// legacy `capabilities` strings. Agents have always advertised the
+    /// backends they can run there (older builds hardcoded them per platform,
+    /// newer ones gate each on a binary probe), so deriving from capabilities
+    /// both preserves multi-hypervisor legacy agents and respects failed
+    /// probes — an agent advertising no backend stays unschedulable rather
+    /// than being resurrected by the configured-default `hypervisorType`
+    /// scalar. Derived entries are assumed available but not accelerated,
+    /// since such agents never probed KVM/HVF.
+    public var effectiveHypervisors: [HypervisorSupport] {
+        if let hypervisors, !hypervisors.isEmpty {
+            return hypervisors
+        }
+        return HypervisorType.allCases
+            .filter { capabilities.contains($0.rawValue) }
+            .map { type in
+                HypervisorSupport(
+                    type: type,
+                    available: true,
+                    accelerated: false,
+                    capabilities: .capabilities(for: type)
+                )
+            }
     }
 }
 

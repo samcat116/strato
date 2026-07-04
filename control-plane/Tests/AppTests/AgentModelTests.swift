@@ -33,6 +33,18 @@ struct AgentModelTests {
         capabilities: [String] = ["kvm", "ovn"],
         status: AgentStatus = .online,
         resources: AgentResources? = nil,
+        architecture: CPUArchitecture? = .x86_64,
+        hypervisors: [HypervisorSupport] = [
+            HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu),
+            HypervisorSupport(
+                type: .firecracker,
+                available: false,
+                accelerated: false,
+                unavailabilityReason: "firecracker binary not found",
+                capabilities: .firecracker
+            )
+        ],
+        networkCapability: NetworkCapability? = .overlay,
         lastHeartbeat: Date? = Date()
     ) -> Agent {
         let agentResources = resources ?? createTestAgentResources()
@@ -43,6 +55,9 @@ struct AgentModelTests {
             capabilities: capabilities,
             status: status,
             resources: agentResources,
+            architecture: architecture,
+            hypervisors: hypervisors,
+            networkCapability: networkCapability,
             lastHeartbeat: lastHeartbeat
         )
     }
@@ -226,6 +241,78 @@ struct AgentModelTests {
         #expect(agent.lastHeartbeat != nil)
     }
 
+    @Test("Agent.from derives hypervisors from legacy capability strings when no report is sent")
+    func testFromLegacyRegistrationDerivesHypervisorsFromCapabilities() {
+        // Message shaped like one from an agent that predates the structured
+        // report: hypervisor backends only appear as capability strings.
+        let message = AgentRegisterMessage(
+            agentId: "legacy-linux-agent",
+            hostname: "legacy-host",
+            version: "1.0.0",
+            capabilities: ["vm_management", "qemu", "kvm", "ovn_networking", "firecracker"],
+            resources: createTestAgentResources(),
+            hypervisorType: .qemu
+        )
+
+        let agent = Agent.from(registration: message, name: "legacy-linux-agent")
+
+        #expect(agent.architecture == nil)
+        #expect(agent.networkCapability == nil)
+        #expect(agent.hypervisors.count == 2)
+        #expect(agent.hypervisors.contains { $0.type == .qemu && $0.available && !$0.accelerated })
+        #expect(agent.hypervisors.contains { $0.type == .firecracker && $0.available })
+    }
+
+    @Test("Agent.from does not resurrect probe-failed backends from the hypervisorType scalar")
+    func testFromLegacyRegistrationRespectsFailedProbes() {
+        // An agent whose binary probes all failed advertises no hypervisor
+        // capability strings. The configured-default scalar must not put a
+        // backend back — the agent registers but stays unschedulable.
+        let message = AgentRegisterMessage(
+            agentId: "probeless-agent",
+            hostname: "probeless-host",
+            version: "1.0.0",
+            capabilities: ["vm_management", "kvm", "user_networking"],
+            resources: createTestAgentResources(),
+            hypervisorType: .qemu
+        )
+
+        let agent = Agent.from(registration: message, name: "probeless-agent")
+
+        #expect(agent.hypervisors.isEmpty)
+    }
+
+    @Test("Agent.from stores probed capability data from the registration message")
+    func testFromRegistrationStoresCapabilityData() {
+        let hypervisors = [
+            HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu),
+            HypervisorSupport(
+                type: .firecracker,
+                available: false,
+                accelerated: false,
+                unavailabilityReason: "/dev/kvm not present",
+                capabilities: .firecracker
+            )
+        ]
+        let message = AgentRegisterMessage(
+            agentId: "probed-agent",
+            hostname: "probed-host",
+            version: "1.0.0",
+            capabilities: ["vm_management", "qemu", "kvm"],
+            resources: createTestAgentResources(),
+            hypervisorType: .qemu,
+            architecture: .arm64,
+            hypervisors: hypervisors,
+            networkCapability: .overlay
+        )
+
+        let agent = Agent.from(registration: message, name: "probed-agent")
+
+        #expect(agent.architecture == "arm64")
+        #expect(agent.networkCapability == "overlay")
+        #expect(agent.hypervisors == hypervisors)
+    }
+
     @Test("Agent.from sets status to connecting by default")
     func testFromRegistrationSetsConnectingStatus() {
         let resources = createTestAgentResources()
@@ -284,6 +371,20 @@ struct AgentModelTests {
         #expect(response.status == .online)
         #expect(response.resources.totalCPU == 8)
         #expect(response.isOnline == true)
+        #expect(response.architecture == .x86_64)
+        #expect(response.networkCapability == .overlay)
+        #expect(response.hypervisors.count == 2)
+        #expect(response.hypervisors.first?.type == .qemu)
+        #expect(response.hypervisors.first?.available == true)
+        #expect(response.hypervisors.last?.type == .firecracker)
+        #expect(response.hypervisors.last?.available == false)
+        #expect(response.hypervisors.last?.unavailabilityReason == "firecracker binary not found")
+
+        // Read back from the database to verify the JSON-stored hypervisor list round-trips
+        let fetched = try #require(try await Agent.find(agent.id, on: app.db))
+        #expect(fetched.hypervisors == agent.hypervisors)
+        #expect(fetched.architecture == "x86_64")
+        #expect(fetched.networkCapability == "overlay")
 
         try await app.asyncShutdown()
         try? await Task.sleep(for: .seconds(2))

@@ -143,6 +143,9 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateVolume())
     app.migrations.add(MigrateVMDisksToVolumes())
 
+    // Multi-hypervisor capability reporting (issue #208)
+    app.migrations.add(ReplaceAgentHypervisorTypeWithHypervisors())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen

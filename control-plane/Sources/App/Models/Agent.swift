@@ -50,11 +50,20 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Timestamp(key: "updated_at", on: .update)
     var updatedAt: Date?
 
-    @Field(key: "hypervisor_type")
-    var hypervisorType: String
+    /// Host CPU architecture, nil for agents that registered before it was reported
+    @OptionalField(key: "architecture")
+    var architecture: String?
+
+    /// Every hypervisor on the host with probed availability and capabilities
+    @Field(key: "hypervisors")
+    var hypervisors: [HypervisorSupport]
+
+    /// Host networking capability, nil for agents that registered before it was reported
+    @OptionalField(key: "network_capability")
+    var networkCapability: String?
 
     init() { }
-    
+
     init(
         id: UUID? = nil,
         name: String,
@@ -63,7 +72,9 @@ final class Agent: Model, Content, @unchecked Sendable {
         capabilities: [String],
         status: AgentStatus = .offline,
         resources: AgentResources,
-        hypervisorType: HypervisorType = .qemu,
+        architecture: CPUArchitecture? = nil,
+        hypervisors: [HypervisorSupport] = [],
+        networkCapability: NetworkCapability? = nil,
         lastHeartbeat: Date? = nil
     ) {
         self.id = id
@@ -78,7 +89,9 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.availableCPU = resources.availableCPU
         self.availableMemory = resources.availableMemory
         self.availableDisk = resources.availableDisk
-        self.hypervisorType = hypervisorType.rawValue
+        self.architecture = architecture?.rawValue
+        self.hypervisors = hypervisors
+        self.networkCapability = networkCapability?.rawValue
         self.lastHeartbeat = lastHeartbeat
     }
     
@@ -120,7 +133,9 @@ extension Agent {
             capabilities: registration.capabilities,
             status: .connecting,
             resources: registration.resources,
-            hypervisorType: registration.hypervisorType,
+            architecture: registration.architecture,
+            hypervisors: registration.effectiveHypervisors,
+            networkCapability: registration.networkCapability,
             lastHeartbeat: Date()
         )
     }
@@ -151,7 +166,9 @@ struct AgentResponse: Content {
     let capabilities: [String]
     let status: AgentStatus
     let resources: AgentResources
-    let hypervisorType: HypervisorType
+    let architecture: CPUArchitecture?
+    let hypervisors: [HypervisorSupport]
+    let networkCapability: NetworkCapability?
     let lastHeartbeat: Date?
     let createdAt: Date?
     let isOnline: Bool
@@ -168,7 +185,9 @@ struct AgentResponse: Content {
         self.capabilities = agent.capabilities
         self.status = agent.status
         self.resources = agent.resources
-        self.hypervisorType = HypervisorType(rawValue: agent.hypervisorType) ?? .qemu
+        self.architecture = agent.architecture.flatMap(CPUArchitecture.init(rawValue:))
+        self.hypervisors = agent.hypervisors
+        self.networkCapability = agent.networkCapability.flatMap(NetworkCapability.init(rawValue:))
         self.lastHeartbeat = agent.lastHeartbeat
         self.createdAt = agent.createdAt
         self.isOnline = agent.isOnline
