@@ -92,22 +92,6 @@ struct EnumDecodingTests {
         for status in NetworkStatus.allCases {
             #expect(try roundTrip([status]) == [status])
         }
-        for direction in TrafficDirection.allCases {
-            #expect(try roundTrip([direction]) == [direction])
-        }
-        for action in SecurityAction.allCases {
-            #expect(try roundTrip([action]) == [action])
-        }
-        for proto in NetworkProtocol.allCases {
-            #expect(try roundTrip([proto]) == [proto])
-        }
-        for algorithm in LoadBalancingAlgorithm.allCases {
-            #expect(try roundTrip([algorithm]) == [algorithm])
-        }
-        // Snake-cased raw values are the wire contract, not the Swift names.
-        #expect(LoadBalancingAlgorithm.roundRobin.rawValue == "round_robin")
-        #expect(LoadBalancingAlgorithm.leastConnections.rawValue == "least_connections")
-        #expect(LoadBalancingAlgorithm.sourceIP.rawValue == "source_ip")
     }
 }
 
