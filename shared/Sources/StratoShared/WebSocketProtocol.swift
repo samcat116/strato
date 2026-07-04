@@ -208,20 +208,20 @@ public struct VMCreateMessage: WebSocketMessage {
     public let requestId: String
     public let timestamp: Date
     public let vmData: VMData
-    public let vmConfig: VmConfig
+    public let vmSpec: VMSpec
     public let imageInfo: ImageInfo?
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         vmData: VMData,
-        vmConfig: VmConfig,
+        vmSpec: VMSpec,
         imageInfo: ImageInfo? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.vmData = vmData
-        self.vmConfig = vmConfig
+        self.vmSpec = vmSpec
         self.imageInfo = imageInfo
     }
 }

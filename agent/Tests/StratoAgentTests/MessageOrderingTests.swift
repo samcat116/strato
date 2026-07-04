@@ -144,7 +144,7 @@ struct MessageOrderingTests {
             type: .vmCreate,
             payload: payload([
                 "vmData": ["id": vmId.uuidString],
-                "vmConfig": ["net": [["id": "net0"], [String: String]()]],
+                "vmSpec": ["networks": [["network": "net0"], [String: String]()]],
                 "requestId": "r1"
             ])
         )

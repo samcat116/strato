@@ -487,11 +487,11 @@ actor AgentService {
     /// Creates a VM on an agent selected by the scheduler
     /// - Parameters:
     ///   - vm: The VM to create
-    ///   - vmConfig: VM configuration for QEMU
+    ///   - vmSpec: Hypervisor-neutral VM specification
     ///   - db: Database connection
     ///   - strategy: Optional scheduling strategy override
     ///   - image: Optional image for image-based VM creation (will generate signed download URL)
-    func createVM(vm: VM, vmConfig: VmConfig, db: Database, strategy: SchedulingStrategy? = nil, image: Image? = nil) async throws {
+    func createVM(vm: VM, vmSpec: VMSpec, db: Database, strategy: SchedulingStrategy? = nil, image: Image? = nil) async throws {
         // Convert agents to schedulable format
         let schedulableAgents = getSchedulableAgents()
 
@@ -518,7 +518,7 @@ actor AgentService {
             do {
                 let controlPlaneURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
                 let signingKey = try URLSigningService.getSigningKey(from: app)
-                imageInfo = try VMConfigBuilder.buildImageInfo(
+                imageInfo = try VMSpecBuilder.buildImageInfo(
                     from: image,
                     controlPlaneURL: controlPlaneURL,
                     agentName: agentId,
@@ -532,7 +532,7 @@ actor AgentService {
 
         let message = VMCreateMessage(
             vmData: vm.toVMData(),
-            vmConfig: vmConfig,
+            vmSpec: vmSpec,
             imageInfo: imageInfo
         )
 
