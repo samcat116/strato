@@ -10,6 +10,12 @@ export interface User {
   isSystemAdmin: boolean;
 }
 
+export interface CreateUserRequest {
+  username: string;
+  email: string;
+  displayName: string;
+}
+
 export type VMStatus =
   | "Running"
   | "Shutdown"

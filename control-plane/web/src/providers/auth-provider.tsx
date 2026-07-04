@@ -11,7 +11,7 @@ import {
 import { useRouter } from "next/navigation";
 import { authApi } from "@/lib/api/auth";
 import { webAuthnClient, WebAuthnClient } from "@/lib/webauthn";
-import type { User } from "@/types/api";
+import type { CreateUserRequest, User } from "@/types/api";
 
 interface AuthContextType {
   user: User | null;
@@ -19,7 +19,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isWebAuthnSupported: boolean;
   login: (username?: string | null) => Promise<void>;
-  register: (username: string) => Promise<void>;
+  register: (data: CreateUserRequest) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -58,8 +58,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const register = async (username: string) => {
-    const result = await webAuthnClient.register(username);
+  const register = async (data: CreateUserRequest) => {
+    const result = await webAuthnClient.register(data);
     if (result.success) {
       setUser(result.user);
       router.push("/dashboard");
