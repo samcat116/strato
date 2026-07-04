@@ -6,7 +6,9 @@ import type {
   PublicKeyCredentialRequestOptionsJSON,
 } from "./types";
 import { authApi } from "@/lib/api/auth";
-import type { User } from "@/types/api";
+import { usersApi } from "@/lib/api/users";
+import { ApiError } from "@/lib/api/client";
+import type { CreateUserRequest, User } from "@/types/api";
 
 export class WebAuthnClient {
   /**
@@ -115,12 +117,26 @@ export class WebAuthnClient {
   /**
    * Register a new passkey
    */
-  async register(username: string): Promise<{ success: boolean; user: User }> {
-    // Step 1: Begin registration
-    const { options } = await authApi.registerBegin(username);
+  async register(
+    data: CreateUserRequest
+  ): Promise<{ success: boolean; user: User }> {
+    // Step 1: Create the user record so the passkey ceremony has something to
+    // attach the credential to. A 409 means the account already exists (e.g. an
+    // earlier passkey attempt was cancelled after the record was created), so we
+    // fall through and let them complete the ceremony rather than dead-ending.
+    try {
+      await usersApi.register(data);
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 409)) {
+        throw error;
+      }
+    }
+
+    // Step 2: Begin registration
+    const { options } = await authApi.registerBegin(data.username);
     const challenge = options.challenge;
 
-    // Step 2: Create credential with browser API
+    // Step 3: Create credential with browser API
     const credential = (await navigator.credentials.create({
       publicKey: this.prepareCreationOptions(options),
     })) as PublicKeyCredential | null;
@@ -129,7 +145,7 @@ export class WebAuthnClient {
       throw new Error("Failed to create credential");
     }
 
-    // Step 3: Finish registration
+    // Step 4: Finish registration
     const result = await authApi.registerFinish(
       this.prepareCreationResponse(credential, challenge) as {
         challenge: string;

@@ -23,6 +23,8 @@ type Step = "username" | "passkey" | "complete";
 export function RegisterForm() {
   const [step, setStep] = useState<Step>("username");
   const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const { register, isWebAuthnSupported } = useAuth();
   const router = useRouter();
@@ -31,6 +33,14 @@ export function RegisterForm() {
     e.preventDefault();
     if (!username.trim()) {
       toast.error("Please enter a username");
+      return;
+    }
+    if (!email.trim()) {
+      toast.error("Please enter an email address");
+      return;
+    }
+    if (!displayName.trim()) {
+      toast.error("Please enter a display name");
       return;
     }
     setStep("passkey");
@@ -44,7 +54,11 @@ export function RegisterForm() {
 
     setIsLoading(true);
     try {
-      await register(username);
+      await register({
+        username: username.trim(),
+        email: email.trim(),
+        displayName: displayName.trim(),
+      });
       setStep("complete");
       toast.success("Account created successfully");
       // Redirect after a short delay
@@ -67,7 +81,7 @@ export function RegisterForm() {
           Create an account
         </CardTitle>
         <CardDescription className="text-gray-400">
-          {step === "username" && "Choose a username to get started"}
+          {step === "username" && "Tell us a bit about yourself to get started"}
           {step === "passkey" && "Create a passkey for secure authentication"}
           {step === "complete" && "Your account has been created"}
         </CardDescription>
@@ -140,10 +154,36 @@ export function RegisterForm() {
                 autoFocus
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="email" className="text-gray-200">
+                Email
+              </Label>
+              <Input
+                id="email"
+                type="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="bg-gray-900 border-gray-700 text-gray-100 placeholder:text-gray-500"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="displayName" className="text-gray-200">
+                Display name
+              </Label>
+              <Input
+                id="displayName"
+                type="text"
+                placeholder="How should we address you?"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                className="bg-gray-900 border-gray-700 text-gray-100 placeholder:text-gray-500"
+              />
+            </div>
             <Button
               type="submit"
               className="w-full bg-blue-600 hover:bg-blue-700"
-              disabled={!username.trim()}
+              disabled={!username.trim() || !email.trim() || !displayName.trim()}
             >
               Continue
             </Button>
