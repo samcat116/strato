@@ -45,12 +45,18 @@ export async function apiClient<T>(
     throw new ApiError(response.status, message);
   }
 
-  // Handle 204 No Content
+  // Handle empty responses (204 No Content, or 200 with an empty body,
+  // e.g. Vapor DELETE endpoints that return 200 with content-length: 0)
   if (response.status === 204) {
     return undefined as T;
   }
 
-  return response.json();
+  const text = await response.text();
+  if (text.length === 0) {
+    return undefined as T;
+  }
+
+  return JSON.parse(text);
 }
 
 // Convenience methods
