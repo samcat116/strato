@@ -17,5 +17,5 @@
   },
   "keywords": ["strato", "cloud", "virtualization", "qemu", "swift"],
   "author": "",
-  "license": "ISC"
+  "license": "FSL-1.1-MIT"
 }

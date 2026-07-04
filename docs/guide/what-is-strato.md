@@ -99,7 +99,7 @@ Built with modern technologies:
 
 ### Open Source
 
-- ISC License
+- Functional Source License (FSL-1.1-MIT)
 - Community-driven
 - Transparent development
 

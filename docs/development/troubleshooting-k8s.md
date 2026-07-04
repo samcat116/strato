@@ -419,8 +419,8 @@ skaffold dev -v debug | grep sync
 
 **Diagnosis**:
 ```bash
-helm template strato helm/strato --values helm/strato/values-dev.yaml
-helm lint helm/strato
+helm template strato helm/strato-control-plane --values helm-test-values.yaml
+helm lint helm/strato-control-plane
 ```
 
 **Solutions**:
@@ -428,12 +428,12 @@ helm lint helm/strato
 1. **Check Values Syntax**
    ```bash
    # Validate YAML syntax
-   yamllint helm/strato/values-dev.yaml
+   yamllint helm-test-values.yaml
    ```
 
 2. **Debug Template Rendering**
    ```bash
-   helm template strato helm/strato --values helm/strato/values-dev.yaml --debug
+   helm template strato helm/strato-control-plane --values helm-test-values.yaml --debug
    ```
 
 3. **Check Dependencies**

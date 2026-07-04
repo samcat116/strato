@@ -21,8 +21,7 @@ public enum MessageType: String, Codable, Sendable {
     // VM information queries
     case vmInfo = "vm_info"
     case vmStatus = "vm_status"
-    case vmCounters = "vm_counters"
-    
+
     // Network management operations
     case networkCreate = "network_create"
     case networkDelete = "network_delete"
@@ -31,10 +30,6 @@ public enum MessageType: String, Codable, Sendable {
     case networkAttach = "network_attach"
     case networkDetach = "network_detach"
     
-    // Image operations
-    case imageInfo = "image_info"
-    case imageInfoResponse = "image_info_response"
-
     // Volume operations (QEMU only - not supported for Firecracker)
     case volumeCreate = "volume_create"
     case volumeDelete = "volume_delete"
@@ -44,7 +39,6 @@ public enum MessageType: String, Codable, Sendable {
     case volumeSnapshot = "volume_snapshot"
     case volumeClone = "volume_clone"
     case volumeInfo = "volume_info"
-    case volumeStatus = "volume_status"
 
     // Console operations
     case consoleConnect = "console_connect"
@@ -262,43 +256,6 @@ public struct ImageInfo: Codable, Sendable {
         self.size = size
         self.downloadURL = downloadURL
         self.expiresAt = expiresAt
-    }
-}
-
-public struct ImageInfoRequestMessage: WebSocketMessage {
-    public var type: MessageType { .imageInfo }
-    public let requestId: String
-    public let timestamp: Date
-    public let imageId: UUID
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        imageId: UUID
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.imageId = imageId
-    }
-}
-
-public struct ImageInfoResponseMessage: WebSocketMessage {
-    public var type: MessageType { .imageInfoResponse }
-    public let requestId: String
-    public let timestamp: Date
-    public let imageInfo: ImageInfo?
-    public let error: String?
-
-    public init(
-        requestId: String,
-        timestamp: Date = Date(),
-        imageInfo: ImageInfo? = nil,
-        error: String? = nil
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.imageInfo = imageInfo
-        self.error = error
     }
 }
 
@@ -992,24 +949,6 @@ public struct VolumeStatusResponse: Codable, Sendable {
         self.volumeId = volumeId
         self.status = status
         self.storagePath = storagePath
-    }
-}
-
-/// Message to get volume status
-public struct VolumeStatusMessage: WebSocketMessage {
-    public var type: MessageType { .volumeStatus }
-    public let requestId: String
-    public let timestamp: Date
-    public let volumeId: String
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        volumeId: String
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.volumeId = volumeId
     }
 }
 

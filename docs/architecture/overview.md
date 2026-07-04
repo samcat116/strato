@@ -7,7 +7,7 @@ This document provides a comprehensive overview of Strato's architecture, design
 
 ## Overview
 
-Strato is a private cloud platform built with Vapor that manages virtual machines, storage, and networking components. The project uses HTMX for its frontend framework. Strato runs as both a control plane service, as well as a service on different hypervisors.
+Strato is a private cloud platform built with Vapor that manages virtual machines, storage, and networking components. The control plane exposes a JSON/REST API consumed by a Next.js frontend. Strato runs as both a control plane service, as well as a service on different hypervisors.
 
 ## Core Components
 
@@ -112,29 +112,22 @@ Modern passwordless authentication using the WebAuthn standard:
 
 ### Frontend Architecture
 
-**Hybrid Templating Approach:**
+**Next.js single-page app** (`control-plane/web/`):
 
-1. **Leaf Templates** (`Resources/Views/`):
-   - Server-rendered HTML pages
-   - Traditional form-based interactions
-   - SEO-friendly content delivery
-
-2. **HTMX Components** (`web/templates/`):
-   - Dynamic partial updates
-   - AJAX-like interactions without JavaScript
-   - Real-time UI updates
+- **App Router**: Route groups under `src/app/` (`(auth)`, `(dashboard)`)
+- **Components**: Feature components under `src/components/` (vms, agents, images, terminal) built on shadcn/ui + Radix primitives
+- **Data layer**: TanStack Query for server state and a typed API client in `src/lib/api`; Zustand for client state
+- **Terminal**: xterm.js for interactive VM consoles
 
 **Styling System:**
-- **TailwindCSS**: Utility-first CSS framework
-- **SwiftyTailwind**: Swift integration for automatic CSS processing
-- **Build Process**: Scans both Leaf and HTMX templates for classes
-- **Output**: Generates optimized CSS bundle
+- **TailwindCSS v4**: Utility-first CSS framework
+- **PostCSS**: Processes Tailwind via `@tailwindcss/postcss` as part of the Next.js build
 
 ### Virtual Machine Management
 
-**Cloud Hypervisor Integration:**
-- **OpenAPI Specification**: `cloud-hypervisor-openapi.yaml`
-- **REST API**: HTTP calls to Cloud Hypervisor daemon
+**QEMU Integration (via the Agent):**
+- **SwiftQEMU**: Swift wrapper over the QEMU Monitor Protocol (QMP) and guest agent
+- **Acceleration**: KVM on Linux, Hypervisor.framework (HVF) on macOS
 - **VM Lifecycle**: Create, start, stop, restart, delete operations
 - **Resource Management**: CPU, memory, and disk allocation
 
@@ -158,8 +151,8 @@ final class VM: Model, Content {
 ### MVC Architecture
 
 - **Models**: Data layer with database integration
-- **Views**: Presentation layer using Leaf and HTMX
-- **Controllers**: Business logic and HTTP request handling
+- **API Controllers**: Business logic and HTTP request handling, serving JSON to the Next.js frontend
+- **Frontend**: Next.js presentation layer (see Frontend Architecture above)
 
 ### Dependency Injection
 
@@ -228,7 +221,7 @@ services:
 ### Configuration Files
 - `docker-compose.yml`: Development environment
 - `spicedb/schema.zed`: SpiceDB authorization schema
-- `tailwind.config.js`: CSS framework configuration
+- `control-plane/web/postcss.config.mjs`: TailwindCSS/PostCSS configuration for the frontend
 
 ## Performance Characteristics
 
@@ -245,10 +238,10 @@ services:
 - **Migration Strategy**: Zero-downtime schema changes
 
 ### Frontend Performance
-- **HTMX**: Minimal JavaScript overhead
+- **Next.js**: Code-splitting and optimized production builds
+- **TanStack Query**: Client-side caching and request deduplication
 - **TailwindCSS**: Optimized CSS bundle
 - **Static Assets**: Efficient caching and delivery
-- **Progressive Enhancement**: Graceful degradation
 
 ## Future Architecture Considerations
 

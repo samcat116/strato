@@ -165,30 +165,21 @@ SKAFFOLD_PROFILE=minimal skaffold dev
 ```
 
 - Deploys only Control Plane, PostgreSQL, and SpiceDB
-- Disables Agent and networking services
+- Turns off the observability stack (OTel collector + Prometheus), which is on by default
 - Faster startup for frontend/API development
-
-### Production Profile
-
-```bash
-SKAFFOLD_PROFILE=production skaffold run
-```
-
-- Uses production values.yaml
-- Deploys to `strato` namespace
-- Production-ready resource limits
 
 ## Configuration
 
 ### Environment Variables
 
-Override development values by modifying `helm/strato/values-dev.yaml`:
+Override development values by modifying `helm-test-values.yaml` (the values file
+consumed by the default skaffold flow):
 
 ```yaml
-controlPlane:
-  env:
-    LOG_LEVEL: "trace"
-    WEBAUTHN_RELYING_PARTY_ORIGIN: "http://localhost:3000"
+strato:
+  logLevel: "trace"
+  webauthn:
+    relyingPartyOrigin: "http://localhost:3000"
 ```
 
 ### Resource Limits
@@ -196,24 +187,21 @@ controlPlane:
 Adjust resources for your development machine:
 
 ```yaml
-# helm/strato/values-dev.yaml
-controlPlane:
-  resources:
-    requests:
-      memory: 128Mi  # Reduce for slower machines
-      cpu: 50m
+# helm-test-values.yaml
+resources:
+  requests:
+    memory: 128Mi  # Reduce for slower machines
+    cpu: 50m
 ```
 
 ### Service Selection
 
-Enable/disable services as needed:
+Toggle optional services via their values keys, e.g. the observability stack:
 
 ```yaml
-# helm/strato/values-dev.yaml
-agent:
-  enabled: false        # Disable agent for API-only development
-ovn:
-  enabled: false        # Disable networking for simple testing
+# helm-test-values.yaml
+opentelemetry:
+  enabled: false        # Disable OTel collector + Prometheus
 ```
 
 ## Troubleshooting

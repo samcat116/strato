@@ -48,7 +48,9 @@ export default defineConfig({
           { text: 'Docker Compose', link: '/deployment/docker-compose' },
           { text: 'Kubernetes (Helm)', link: '/deployment/kubernetes' },
           { text: 'Agents', link: '/deployment/agents' },
-          { text: 'IAM & Permissions', link: '/deployment/iam' }
+          { text: 'IAM & Permissions', link: '/deployment/iam' },
+          { text: 'Logging', link: '/deployment/logging' },
+          { text: 'Observability', link: '/deployment/observability' }
         ]
       },
       {
@@ -73,7 +75,7 @@ export default defineConfig({
     },
 
     footer: {
-      message: 'Released under the ISC License.',
+      message: 'Released under the Functional Source License (FSL-1.1-MIT).',
       copyright: 'Copyright © 2025 Strato Contributors'
     }
   }
