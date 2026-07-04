@@ -132,11 +132,34 @@ jobs:
             --set externalDatabase.password=external-db-password > /tmp/external-db-template.yaml
           echo "External database template generated successfully"
 
+      - name: Template with SPIRE enabled
+        run: |
+          helm template strato-spire helm/strato-control-plane/ \
+            --set spire.enabled=true > /tmp/spire-template.yaml
+          echo "SPIRE template generated successfully"
+
+      - name: Assert SPIRE ships no dev secret and auto-generates a strong one
+        run: |
+          # A default SPIRE install must never ship the historical hardcoded
+          # password; an empty value auto-generates a strong one (spire-secret.yaml).
+          if grep -q "spire_password" /tmp/spire-template.yaml \
+             || grep -q "$(echo -n spire_password | base64)" /tmp/spire-template.yaml; then
+            echo "❌ SPIRE render contains dev secret: spire_password"
+            exit 1
+          fi
+          python3 - <<'EOF'
+          import base64, re, sys
+          r = open('/tmp/spire-template.yaml').read()
+          pw = base64.b64decode(re.search(r'database-password: "([^"]+)"', r).group(1)).decode()
+          assert len(pw) >= 32, "generated SPIRE database password too short"
+          print("✅ SPIRE database password auto-generated and strong")
+          EOF
+
       - name: Validate generated YAML
         run: |
           # Validate templates using basic YAML syntax check
           echo "Validating YAML syntax..."
-          for file in /tmp/default-template.yaml /tmp/production-template.yaml /tmp/external-db-template.yaml; do
+          for file in /tmp/default-template.yaml /tmp/production-template.yaml /tmp/external-db-template.yaml /tmp/spire-template.yaml; do
             echo "Checking $file..."
             python3 -c "import yaml; yaml.safe_load(open('$file'))" && echo "✅ $file is valid YAML" || echo "❌ $file has YAML syntax errors"
           done

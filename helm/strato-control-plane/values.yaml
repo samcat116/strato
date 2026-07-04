@@ -488,7 +488,12 @@ spire:
   # Database configuration (uses the same PostgreSQL as control plane)
   database:
     username: spire
-    password: spire_password  # Change in production!
+    # Leave empty to auto-generate a strong password on first install; it is
+    # stored in the <release>-spire secret and reused across upgrades. When you
+    # provision the `spire` PostgreSQL role, set its password to this value.
+    # Retrieve it with:
+    #   kubectl get secret <release>-spire -o jsonpath='{.data.database-password}' | base64 -d
+    password: ""
 
   # Service configuration
   service:
