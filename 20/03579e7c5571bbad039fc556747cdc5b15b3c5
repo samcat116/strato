@@ -1,0 +1,22 @@
+control-plane/Sources/App/Migrations/FixVMColumnNames.swift
+  s_6b79f3234a0fa6::t_7aff0749e4b60a 45-46
+  s_6b79f3234a0fa6::t_3ebf3264f42d26 47-48,54-55
+control-plane/Sources/App/Migrations/FixUserCredentialsTransports.swift
+  s_6b79f3234a0fa6::t_41fa8bbcf1dbc6 16-19,24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2003579e7c5571bbad039fc556747cdc5b15b3c5",
+  "prompts": {},
+  "sessions": {
+    "s_6b79f3234a0fa6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ee0b4a12-ecbf-4742-92d3-87fdc50825fa",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
