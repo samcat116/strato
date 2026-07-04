@@ -136,6 +136,10 @@ jobs:
         working-directory: shared
         run: swift build --build-tests
 
+      - name: Test Shared Package
+        working-directory: shared
+        run: swift test --skip-build --parallel
+
       - name: Build Control Plane
         working-directory: control-plane
         run: swift build --build-tests
