@@ -88,6 +88,11 @@ actor Agent {
     // registration: a Linux agent configured for user-mode networking must not
     // claim OVN/VM-to-VM support.
     private var effectiveNetworkMode: NetworkMode = .user
+    // Whether the selected network service connected successfully at startup.
+    // An OVN agent whose OVN/OVS connection failed must not advertise
+    // ovn_networking, or the scheduler would place VM-to-VM workloads on a
+    // backend that will throw notConnected.
+    private var networkServiceConnected = false
     private let imageCachePath: String?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
@@ -190,6 +195,7 @@ actor Agent {
         do {
             if let service = networkService {
                 try await service.connect()
+                networkServiceConnected = true
                 logger.info("Network service connected successfully")
             }
         } catch {
@@ -561,17 +567,43 @@ actor Agent {
 
         #if canImport(SwiftQEMU)
         #if os(Linux)
-        capabilities.append(contentsOf: ["kvm", "firecracker"])
+        capabilities.append("kvm")
         #elseif os(macOS)
         capabilities.append("hvf")
         #endif
+        #endif
+
+        #if os(Linux)
+        // Advertised hypervisors are hard placement constraints, so only
+        // advertise Firecracker when the configured binary is actually
+        // present and executable on this host.
+        if FileManager.default.isExecutableFile(atPath: firecrackerBinaryPath) {
+            capabilities.append("firecracker")
+        } else {
+            logger.warning("Firecracker binary not executable; not advertising firecracker capability", metadata: [
+                "firecrackerBinaryPath": .string(firecrackerBinaryPath)
+            ])
+        }
         #endif
 
         // The networking capability reflects the backend selected at startup,
         // not the platform: a Linux agent configured for user-mode networking
         // cannot provide OVN/VM-to-VM networking, and the scheduler relies on
         // this to enforce the inter-VM-networking placement constraint.
-        capabilities.append(effectiveNetworkMode == .ovn ? "ovn_networking" : "user_networking")
+        switch (effectiveNetworkMode, networkServiceConnected) {
+        case (.ovn, true):
+            capabilities.append("ovn_networking")
+        case (.ovn, false):
+            // OVN was selected but the OVN/OVS connection failed at startup:
+            // advertise no networking capability rather than claiming VM-to-VM
+            // support the backend cannot currently provide (and user-mode
+            // would be a lie — the agent is not running SLIRP either).
+            logger.warning("OVN network service not connected; not advertising ovn_networking capability")
+        case (.user, _):
+            // User-mode (SLIRP) networking is built into QEMU and needs no
+            // external service, so it is not gated on connection state.
+            capabilities.append("user_networking")
+        }
 
         return capabilities
     }
