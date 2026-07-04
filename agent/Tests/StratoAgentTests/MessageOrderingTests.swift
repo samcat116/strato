@@ -286,16 +286,34 @@ struct MessageOrderingTests {
         #expect(!cloneKeys.contains(MessageEnvelope.unkeyedSerializationLane))
     }
 
-    @Test("Network operations are keyed by name and never collide with ids")
-    func networkOperationsKeyedByName() {
+    @Test("Named network create/delete share the per-name lane and the visibility lane")
+    func networkMutationsKeyedByNameAndVisibility() {
         let createKeys = MessageEnvelope.serializationKeys(
             type: .networkCreate, payload: payload(["networkName": "net0"])
         )
         let deleteKeys = MessageEnvelope.serializationKeys(
             type: .networkDelete, payload: payload(["networkName": "net0"])
         )
-        #expect(createKeys == deleteKeys)
-        #expect(createKeys.allSatisfy { $0.hasPrefix("network:") })
+        #expect(Set(createKeys) == Set(deleteKeys))
+        #expect(createKeys.contains("network:net0"))
+        #expect(createKeys.contains(MessageEnvelope.networkVisibilityLane))
+    }
+
+    @Test("Network list shares the visibility lane with create/delete so it can't read stale state")
+    func networkListSharesVisibilityLane() {
+        let listKeys = MessageEnvelope.serializationKeys(
+            type: .networkList, payload: payload(["requestId": "r1"])
+        )
+        let createKeys = MessageEnvelope.serializationKeys(
+            type: .networkCreate, payload: payload(["networkName": "net0"])
+        )
+        let deleteKeys = MessageEnvelope.serializationKeys(
+            type: .networkDelete, payload: payload(["networkName": "net9"])
+        )
+        #expect(listKeys == [MessageEnvelope.networkVisibilityLane])
+        // A list serializes after a create/delete of *any* network via the shared lane.
+        #expect(!Set(listKeys).isDisjoint(with: createKeys))
+        #expect(!Set(listKeys).isDisjoint(with: deleteKeys))
     }
 
     @Test("Frames without a resource id fall back to the shared unkeyed lane")
@@ -303,11 +321,11 @@ struct MessageOrderingTests {
         let successKeys = MessageEnvelope.serializationKeys(
             type: .success, payload: payload(["requestId": "r1"])
         )
-        let listKeys = MessageEnvelope.serializationKeys(
-            type: .networkList, payload: payload(["requestId": "r2"])
+        let errorKeys = MessageEnvelope.serializationKeys(
+            type: .error, payload: payload(["requestId": "r2"])
         )
         #expect(successKeys == [MessageEnvelope.unkeyedSerializationLane])
-        #expect(listKeys == [MessageEnvelope.unkeyedSerializationLane])
+        #expect(errorKeys == [MessageEnvelope.unkeyedSerializationLane])
     }
 
     @Test("Public serializationKeys works end-to-end on a real encoded envelope")

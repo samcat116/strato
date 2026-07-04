@@ -63,9 +63,15 @@ public actor SerialTaskQueue {
 // MARK: - Inbound frame routing
 
 extension MessageEnvelope {
-    /// Shared lane for frames that don't act on a specific resource (registration, acks,
-    /// list queries). They still run in arrival order relative to one another.
+    /// Shared lane for frames that don't act on a specific resource (registration, acks).
+    /// They still run in arrival order relative to one another.
     public static let unkeyedSerializationLane = "__strato_unkeyed__"
+
+    /// Shared lane joined by every operation that reads or mutates the *set* of networks
+    /// (create/delete and the global list query), so a `network_list` observes any
+    /// create/delete that arrived before it. Distinct from the `network:<name>` namespace so
+    /// it can't collide with a real network name.
+    public static let networkVisibilityLane = "__strato_networks__"
 
     /// The serial lanes used to order this inbound frame relative to others.
     ///
@@ -108,8 +114,16 @@ extension MessageEnvelope {
             // Attaching a VM to a network acts on both the VM and the named network (the
             // handler may find-or-create the logical switch), so serialize against both.
             raws = [fields?.vmId, fields?.networkName.map { "network:\($0)" }]
-        case .networkCreate, .networkDelete, .networkInfo:
-            // Networks are keyed by name; prefix so a name can never collide with a VM/volume id.
+        case .networkCreate, .networkDelete:
+            // Named-network lane orders same-network operations; the shared visibility lane
+            // orders these mutations against a global `network_list` read (and each other).
+            raws = [fields?.networkName.map { "network:\($0)" }, Self.networkVisibilityLane]
+        case .networkList:
+            // Reads the whole set of networks, so serialize after any pending create/delete.
+            raws = [Self.networkVisibilityLane]
+        case .networkInfo:
+            // Reads a single named network; the per-name lane already orders it after that
+            // network's create/delete.
             raws = [fields?.networkName.map { "network:\($0)" }]
         default:
             // VM lifecycle, console, network detach, and info/status queries all carry vmId.
