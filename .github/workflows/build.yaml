@@ -10,10 +10,52 @@ permissions:
   security-events: write
   actions: read
 
+# Cancel any in-progress run for the same PR when a new commit is pushed,
+# so stale runs stop hogging the single self-hosted runner.
+concurrency:
+  group: pr-validation-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Detect which parts of the repo changed so we can skip heavy jobs on
+  # e.g. docs-only PRs. Jobs are gated with `if:` (not workflow-level
+  # `on.paths`) so a skipped job still reports as a passing check — this
+  # keeps them safe to use as required status checks in branch protection.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      swift: ${{ steps.filter.outputs.swift }}
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - 'control-plane/web/**'
+              - '.github/workflows/build.yaml'
+            swift:
+              - 'control-plane/**'
+              - '!control-plane/web/**'
+              - 'agent/**'
+              - 'shared/**'
+              - '.github/workflows/build.yaml'
+            code:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!**/*.mdx'
+              - '!LICENSE'
+
   lint-and-build-frontend:
     name: Frontend Lint & Build
-    runs-on: self-hosted
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    # Lightweight Bun job — runs on GitHub-hosted runners to keep the
+    # self-hosted runner free for the heavy Swift build+test job.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -37,6 +79,8 @@ jobs:
 
   test:
     name: Build and Test Swift Packages
+    needs: changes
+    if: needs.changes.outputs.swift == 'true'
     runs-on: self-hosted
     services:
       postgres:
@@ -84,7 +128,10 @@ jobs:
 
   security:
     name: Security Scan
-    runs-on: self-hosted
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    # Trivy filesystem scan is light and needs no warm cache — offload it.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4

@@ -21,9 +21,14 @@ env:
   KIND_VERSION: v0.20.0
   KUBERNETES_VERSION: v1.27.3
 
+# Supersede in-progress runs on new pushes to the same ref.
+concurrency:
+  group: helm-test-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     name: Helm Chart Linting
     steps:
       - name: Checkout
@@ -50,7 +55,7 @@ jobs:
           helm dependency update
 
   template-validation:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     name: Template Validation
     needs: lint
     steps:
@@ -124,7 +129,7 @@ jobs:
   # - Run integration tests locally with: scripts/test-helm-chart.sh
   # - Test in dedicated Kubernetes environments, not CI
   integration-test:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     name: Kubernetes Integration Test (Experimental)
     needs: [lint, template-validation]
     if: false # Disabled due to CI resource constraints
@@ -275,7 +280,7 @@ jobs:
           helm uninstall strato-ci-test || true
 
   security-scan:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     name: Security Scanning
     needs: lint
     steps:
@@ -333,7 +338,7 @@ jobs:
           fi
 
   upgrade-test:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     name: Chart Upgrade Test (Experimental)
     needs: [lint, template-validation]
     if: false # Disabled due to CI resource constraints

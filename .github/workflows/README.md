@@ -1,14 +1,21 @@
 # GitHub Actions Workflows
 
-This directory contains GitHub Actions workflows for the Strato project. All workflows are configured to run on self-hosted runners for security and performance.
+This directory contains GitHub Actions workflows for the Strato project. Workflows use a **hybrid runner strategy**: only the heavy Swift build/test and release binary jobs run on the (single) self-hosted runner, where they benefit from a warm build cache. Lightweight jobs — frontend lint/build, Trivy scans, Helm tests, ARM64/macOS builds — run on GitHub-hosted runners so they don't queue behind Swift work. PR and main-branch workflows also use `concurrency` groups to cancel superseded runs on new pushes.
 
 ## Workflows
 
 ### PR Validation (`build.yaml`)
 Runs on pull requests to validate code quality:
-- JavaScript linting
-- Swift package building and testing
-- Security scanning with Trivy
+- Frontend lint & build (GitHub-hosted)
+- Swift package building and testing (self-hosted, warm cache)
+- Security scanning with Trivy (GitHub-hosted)
+
+A `changes` job (via `dorny/paths-filter`) detects which parts of the repo
+changed and gates each job with `if:`, so docs-only PRs skip the Swift build,
+frontend-only PRs skip Swift, etc. Because the jobs are skipped via `if:`
+(not workflow-level `on.paths`), a skipped job still reports as a passing
+check and remains safe to use as a required status check. In-progress runs are
+cancelled when a new commit is pushed to the same PR.
 
 ### Main Branch Build (`main-build.yaml`)
 Builds release binaries and Docker images when code is pushed to the main branch:
@@ -37,32 +44,36 @@ Automatically reviews pull requests using Claude Code.
 
 ## Runner Configuration
 
-Workflows use a hybrid approach with both self-hosted and GitHub-hosted runners:
+Workflows use a hybrid approach with both self-hosted and GitHub-hosted runners.
+The self-hosted runner is a single fast machine, so only jobs that genuinely
+benefit from it (Swift builds with a warm `.build` cache) are pinned there;
+everything else is offloaded to GitHub-hosted runners to avoid queueing.
 
 ### Self-Hosted Runners (x64/AMD64)
 Used for:
-- PR validation (build.yaml)
-- Main branch x64 builds (main-build.yaml)
-- Release x64 builds (release.yaml)
-- Helm tests (helm-test.yml)
-- Claude Code workflows (claude.yml, claude-code-review.yml)
+- PR validation — **Swift build & test only** (build.yaml)
+- Main branch x64 Swift release + Docker builds (main-build.yaml)
+- Release x64 Swift binary + Docker builds (release.yaml)
 
 Requirements for self-hosted runners:
-- Swift 6.0+
+- Swift 6.3+
 - Docker
-- Node.js 20+
-- Helm (for helm tests)
 - QEMU dependencies (for agent builds)
 
-### GitHub-Hosted Runners (ARM64)
+### GitHub-Hosted Runners
 Used for:
+- PR validation — frontend lint/build and Trivy scan (`ubuntu-latest`)
+- All Helm chart tests (`ubuntu-latest`)
+- Claude Code workflows (`ubuntu-latest`)
+- Docs deployment (`ubuntu-latest`)
 - Main branch ARM64 builds (`ubuntu-24.04-arm`)
 - Release ARM64 Docker images (`ubuntu-latest-arm`)
 - macOS binary builds (`macos-latest`)
 
 This hybrid approach:
-- Reduces load on self-hosted infrastructure
-- Provides ARM64 build capability without ARM64 self-hosted runners
+- Keeps the single self-hosted runner free for the heavy Swift work
+- Runs lightweight jobs in parallel on GitHub's cloud instead of queueing
+- Provides ARM64/macOS build capability without dedicated runners
 - Maintains security controls via PR approval for self-hosted jobs
 
 ## PR Approval Requirement
