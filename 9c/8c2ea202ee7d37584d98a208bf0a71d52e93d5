@@ -1,0 +1,124 @@
+README.md
+  s_06bf323f5520ac::t_7d15d7382da7e0 5
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 5-6,73-95,97,264-267,363,377-383
+  s_06bf323f5520ac::t_bcc6209cd3c58c 384
+control-plane/web/src/types/api.ts
+  s_06bf323f5520ac::t_67d83ddc52b00f 72,103
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 223-224,251-252,283-284,341-342,366-367,377-378
+control-plane/Tests/AppTests/MigrationRoundTripTests.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 1-34
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 363-366,368-369,371-372,374-375
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 4-5,9-30,41-67,69-77,83,88-92,94-104,125,133,149,156
+agent/Sources/StratoAgent/QEMUService.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 21,25,28,36,64,85-86,94-97,130,132,136,140-145,190-191,194-195,225,228,363,383,412,420,422,429-433,437,439,506-515,571-573,576-578,585,588,626-627,764-770,774-783,788,798-799,802-803,806-812,816-827,829,833,836-842,847,849-850,852,870,876,956,961,963,969-970,972-974
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 96-97,99-100,146-147,149
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_06bf323f5520ac::t_5e39de2ffbcf2f 109
+  s_06bf323f5520ac::t_904e6521b5decc 94-95
+  s_06bf323f5520ac::t_7d15d7382da7e0 87-91,257,264,270
+  s_06bf323f5520ac::t_9cd659df050faf 126-135,140-149
+shared/Sources/StratoShared/CPUArchitecture.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 1-33
+skaffold.yaml
+  s_06bf323f5520ac::t_7d15d7382da7e0 75
+.gitignore
+  s_06bf323f5520ac::t_7d15d7382da7e0 25-28,38-44
+spicedb/init-schema.sh
+  s_06bf323f5520ac::t_7d15d7382da7e0 21
+deploy/compose/docker-compose.yml
+  s_06bf323f5520ac::t_7d15d7382da7e0 52-56
+agent/Sources/StratoAgent/VMManifestStore.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 21,25-35,43,57-86
+  s_06bf323f5520ac::t_a42952c32e7a15 87
+control-plane/Tests/AppTests/SCIMFilterTests.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 1-216
+docker-compose.yml
+  s_06bf323f5520ac::t_7d15d7382da7e0 35-38,42,73-75,91-92,97
+control-plane/Tests/AppTests/SchedulerServiceTests.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 41-43,56-58,374-573
+  s_06bf323f5520ac::t_6841cf462c6c55 574
+control-plane/Sources/App/Controllers/VMController.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 302,306,309,316
+agent/Sources/StratoAgent/Agent.swift
+  s_06bf323f5520ac::t_a7e1f4532f37a1 576-598,600-604,607-618,622-624,626,642-643
+  s_06bf323f5520ac::t_61f5a9da659ce4 455,465
+  s_06bf323f5520ac::t_14cc7eb548527d 619-621,625
+  s_06bf323f5520ac::t_7d15d7382da7e0 86-95,183,187,192,198,644-649,788-789,819-821,824-835,838,841,985-989,1032,1423-1425,1430-1444,1669-1670,1675,1712-1713,1718
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 33-39,52-54,66,68,102-104,108-134,140-144,152-163,200-210,213-214,217-218,220-234,249,256-259,262-305,310-314
+control-plane/Sources/App/Services/SCIM/UserSCIMHandler.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 363,366,369,389,400,402,404
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_06bf323f5520ac::t_7d15d7382da7e0 15-21,41,73,191,199-232
+  s_06bf323f5520ac::t_fc2f893909c2f5 14
+control-plane/web/src/lib/api/client.ts
+  s_06bf323f5520ac::t_7d15d7382da7e0 48-49,54-59
+docs/architecture/scheduler.md
+  s_06bf323f5520ac::t_c25f24b308c781 11
+  s_06bf323f5520ac::t_7d15d7382da7e0 114,116-117,120-126,130-148,153-154,156-158,172-174
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 5-25,32-33,36,38,77-97,104-105
+control-plane/Sources/App/Services/SCIM/GroupSCIMHandler.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 512,525,536,538,540
+control-plane/Tests/AppTests/AgentModelTests.swift
+  s_06bf323f5520ac::t_fc31fcd9c97dc0 244-247,249,252,254,257,261-263,266-270,272-273,275,280,282
+  s_06bf323f5520ac::t_bbc0e196054f46 36
+control-plane/Sources/App/Migrations/FixVMColumnNames.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 45-48,54-55
+control-plane/Tests/AppTests/BaseTestCase.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 27,35
+.github/workflows/build.yaml
+  s_06bf323f5520ac::t_7d15d7382da7e0 111-114,116,143-149,151-165
+.github/workflows/release.yaml
+  s_06bf323f5520ac::t_7d15d7382da7e0 309-311,316-321,356-357,359-360,376-380,386-437,439,441-442,445,448-450,531-540
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 1-240
+control-plane/Sources/App/configure.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 151-157
+agent/Tests/StratoAgentTests/MessageOrderingTests.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 147
+control-plane/Sources/App/Services/AgentService.swift
+  s_06bf323f5520ac::t_7bbe12a3ed7541 878-881,883-884,890-894,896,900-901,903-906
+  s_06bf323f5520ac::t_7d15d7382da7e0 496,500,514-517,530,544,639,641,876-877,889,895,897-899,902,907,917,928-929
+control-plane/Sources/App/Services/SpiceDBSchemaBootstrap.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 1-56
+control-plane/web/src/components/layout/sidebar.tsx
+  s_06bf323f5520ac::t_7d15d7382da7e0 72-92,156-161
+shared/Sources/StratoShared/VMSpec.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 1-157
+SwiftFirecracker/Package.resolved
+  s_06bf323f5520ac::t_7d15d7382da7e0 1-15
+control-plane/Tests/AppTests/VMSpecBuilderTests.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 1-428
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 24,50,54,71-73,101,110-115,117-118,126-127,131-132,134-135,140,142-144,161,230,238,245,247,279-281,286-310,313,326-328,384,423-438
+control-plane/Sources/App/Migrations/FixUserCredentialsTransports.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 16-19,24
+control-plane/web/src/components/vms/vm-table.tsx
+  s_06bf323f5520ac::t_7d15d7382da7e0 81-82
+control-plane/Sources/App/Extensions/DatabaseQuery+CaseInsensitiveSearch.swift
+  s_06bf323f5520ac::t_7d15d7382da7e0 1-51
+control-plane/Sources/App/Models/Agent.swift
+  s_06bf323f5520ac::t_bbc0e196054f46 75,169,188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9c8c2ea202ee7d37584d98a208bf0a71d52e93d5",
+  "prompts": {},
+  "sessions": {
+    "s_06bf323f5520ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "432e2f03-c5be-44b6-b08c-3f8845c22fbd",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
