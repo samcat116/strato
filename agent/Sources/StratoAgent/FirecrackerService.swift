@@ -21,7 +21,7 @@ actor FirecrackerService: HypervisorService {
     // Track running VMs
     private var firecrackerClient: FirecrackerClient?
     private var vmManagers: [String: FirecrackerManager] = [:]
-    private var vmConfigs: [String: VmConfig] = [:]
+    private var vmSpecs: [String: VMSpec] = [:]
     private var vmNetworkInfo: [String: VMNetworkInfo] = [:]
 
     init(
@@ -47,11 +47,11 @@ actor FirecrackerService: HypervisorService {
 
     // MARK: - HypervisorService Protocol Implementation
 
-    func createVM(vmId: String, config: VmConfig, imageInfo: ImageInfo? = nil) async throws {
+    func createVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil) async throws {
         logger.info("Creating Firecracker VM", metadata: ["vmId": .string(vmId)])
 
         // Validate Firecracker requirements
-        guard config.payload.kernel != nil else {
+        guard case .directKernel(let kernelPath, let initramfsPath, let cmdline) = spec.boot else {
             throw HypervisorServiceError.invalidConfiguration("Firecracker requires direct kernel boot - kernel path must be specified")
         }
 
@@ -68,8 +68,9 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.hypervisorNotInstalled(firecrackerBinaryPath)
         }
 
-        // Handle disk image from cache if imageInfo is provided
-        var effectiveConfig = config
+        // Realize the root drive: materialize from the cached image when imageInfo
+        // is provided, otherwise use the spec's first volume reference.
+        var rootDrive: (id: String, path: String, readOnly: Bool)?
         if let imageInfo = imageInfo, let cacheService = imageCacheService {
             logger.info("Using cached image for VM", metadata: [
                 "vmId": .string(vmId),
@@ -97,21 +98,7 @@ actor FirecrackerService: HypervisorService {
                     ])
                 }
 
-                // Update config with new disk path
-                let newDisk = DiskConfig(path: vmDiskPath, readonly: false, direct: false, id: "rootfs")
-                effectiveConfig = VmConfig(
-                    cpus: config.cpus,
-                    memory: config.memory,
-                    payload: config.payload,
-                    disks: [newDisk],
-                    net: config.net,
-                    rng: config.rng,
-                    serial: config.serial,
-                    console: config.console,
-                    iommu: config.iommu,
-                    watchdog: config.watchdog,
-                    pvpanic: config.pvpanic
-                )
+                rootDrive = (id: "rootfs", path: vmDiskPath, readOnly: false)
             } catch {
                 logger.error("Failed to get cached image", metadata: [
                     "vmId": .string(vmId),
@@ -120,43 +107,41 @@ actor FirecrackerService: HypervisorService {
             }
         }
 
+        if rootDrive == nil,
+           let volume = spec.volumes.first,
+           let storagePath = volume.storagePath {
+            rootDrive = (id: volume.deviceName, path: storagePath, readOnly: volume.readonly)
+        }
+
         // Setup networking if configured
-        if let networks = effectiveConfig.net, !networks.isEmpty {
-            try await setupVMNetworking(vmId: vmId, networks: networks)
+        if !spec.networks.isEmpty {
+            try await setupVMNetworking(vmId: vmId, networks: spec.networks)
         }
 
         // Create Firecracker VM
         let manager = try await client.createVM(vmId: vmId)
 
         // Configure machine
-        let vcpuCount = effectiveConfig.cpus?.bootVcpus ?? 1
-        let memorySizeBytes: Int64 = effectiveConfig.memory?.size ?? (512 * 1024 * 1024)
-        let memoryMB = Int(memorySizeBytes / (1024 * 1024))
-
         let machineConfig = MachineConfig(
-            vcpuCount: Int(vcpuCount),
-            memSizeMib: memoryMB
+            vcpuCount: spec.cpus,
+            memSizeMib: Int(spec.memoryBytes / (1024 * 1024))
         )
         try await manager.configureMachine(machineConfig)
 
-        // Configure boot source
-        guard let kernelPath = effectiveConfig.payload.kernel else {
-            throw HypervisorServiceError.invalidConfiguration("Kernel path is required for Firecracker")
-        }
-
-        let bootSource = BootSource(
+        // Configure boot source (qualified: StratoShared also declares a BootSource)
+        let bootSource = SwiftFirecracker.BootSource(
             kernelImagePath: kernelPath,
-            initrdPath: effectiveConfig.payload.initramfs,
-            bootArgs: effectiveConfig.payload.cmdline ?? "console=ttyS0 reboot=k panic=1 pci=off"
+            initrdPath: initramfsPath,
+            bootArgs: cmdline ?? "console=ttyS0 reboot=k panic=1 pci=off"
         )
         try await manager.configureBootSource(bootSource)
 
         // Configure root drive
-        if let disks = effectiveConfig.disks, let rootDisk = disks.first {
+        if let rootDrive {
             let drive = Drive.rootDrive(
-                id: rootDisk.id ?? "rootfs",
-                path: rootDisk.path,
-                readOnly: rootDisk.readonly ?? false
+                id: rootDrive.id,
+                path: rootDrive.path,
+                readOnly: rootDrive.readOnly
             )
             try await manager.configureDrive(drive)
         }
@@ -173,7 +158,7 @@ actor FirecrackerService: HypervisorService {
 
         // Store references
         vmManagers[vmId] = manager
-        vmConfigs[vmId] = effectiveConfig
+        vmSpecs[vmId] = spec
 
         logger.info("Firecracker VM created successfully", metadata: ["vmId": .string(vmId)])
     }
@@ -242,7 +227,7 @@ actor FirecrackerService: HypervisorService {
 
         // Clean up local state
         vmManagers.removeValue(forKey: vmId)
-        vmConfigs.removeValue(forKey: vmId)
+        vmSpecs.removeValue(forKey: vmId)
         vmNetworkInfo.removeValue(forKey: vmId)
 
         logger.info("Firecracker VM deleted", metadata: ["vmId": .string(vmId)])
@@ -250,16 +235,16 @@ actor FirecrackerService: HypervisorService {
 
     func getVMInfo(vmId: String) async throws -> VmInfo {
         guard let manager = vmManagers[vmId],
-              let config = vmConfigs[vmId] else {
+              let spec = vmSpecs[vmId] else {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
         let instanceInfo = try await manager.getInstanceInfo()
 
         return VmInfo(
-            config: config,
+            spec: spec,
             state: instanceInfo.state.rawValue,
-            memoryActualSize: config.memory?.size
+            memoryActualSize: spec.memoryBytes
         )
     }
 
@@ -291,16 +276,16 @@ actor FirecrackerService: HypervisorService {
     func reservedResources() -> (vcpus: Int, memoryBytes: Int64) {
         var vcpus = 0
         var memoryBytes: Int64 = 0
-        for config in vmConfigs.values {
-            vcpus += config.cpus?.bootVcpus ?? 0
-            memoryBytes += config.memory?.size ?? 0
+        for spec in vmSpecs.values {
+            vcpus += spec.cpus
+            memoryBytes += spec.memoryBytes
         }
         return (vcpus, memoryBytes)
     }
 
     // MARK: - Private Methods
 
-    private func setupVMNetworking(vmId: String, networks: [NetConfig]) async throws {
+    private func setupVMNetworking(vmId: String, networks: [NetworkSpec]) async throws {
         guard let networkService = networkService else {
             logger.warning("Network service not available, skipping network setup")
             return
@@ -313,9 +298,9 @@ actor FirecrackerService: HypervisorService {
         }
 
         let networkConfig = VMNetworkConfig(
-            networkName: firstNetwork.id ?? "default",
-            macAddress: firstNetwork.mac,
-            ipAddress: firstNetwork.ip,
+            networkName: firstNetwork.network,
+            macAddress: firstNetwork.macAddress,
+            ipAddress: firstNetwork.ipAddress,
             subnet: "192.168.1.0/24",
             gateway: "192.168.1.1"
         )
@@ -371,7 +356,7 @@ actor FirecrackerService: HypervisorService {
         // No-op for non-Linux
     }
 
-    func createVM(vmId: String, config: VmConfig, imageInfo: ImageInfo? = nil) async throws {
+    func createVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil) async throws {
         throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
     }
 

@@ -1,8 +1,32 @@
 import Vapor
 import Fluent
 import FluentSQLiteDriver
+import FluentPostgresDriver
+import SQLKit
 import VaporTesting
 @testable import App
+
+// MARK: - Test Database Backend
+
+/// Which database engine the test suite runs against.
+///
+/// Defaults to SQLite for a fast, zero-dependency local inner loop. Set
+/// `STRATO_TEST_DATABASE=postgres` (as CI does) to run the exact same tests
+/// against a real Postgres, so migrations and Postgres-specific SQL are
+/// validated against the engine production actually uses (see issue #195).
+enum TestDatabaseBackend {
+    case sqlite
+    case postgres
+
+    static var current: TestDatabaseBackend {
+        switch Environment.get("STRATO_TEST_DATABASE")?.lowercased() {
+        case "postgres", "postgresql", "psql":
+            return .postgres
+        default:
+            return .sqlite
+        }
+    }
+}
 
 // MARK: - Test Extensions
 
@@ -14,25 +38,70 @@ extension Application {
         let app = try await Application.make(env)
         app.logger.logLevel = .debug
 
-        // Use file-based SQLite with unique names for better isolation
-        // Generate a unique database file for each test
-        let testDBPath = "/tmp/strato-test-\(UUID().uuidString).db"
-        app.databases.use(.sqlite(.file(testDBPath)), as: .sqlite)
+        switch TestDatabaseBackend.current {
+        case .sqlite:
+            // Use file-based SQLite with unique names for better isolation.
+            // Generate a unique database file for each test.
+            let testDBPath = "/tmp/strato-test-\(UUID().uuidString).db"
+            app.databases.use(.sqlite(.file(testDBPath)), as: .sqlite)
+            app.storage[TestDatabasePathKey.self] = testDBPath
 
-        // Store the path so we can clean it up later
-        app.storage[TestDatabasePathKey.self] = testDBPath
+        case .postgres:
+            // Isolate each test in its own Postgres schema on a shared database.
+            // This mirrors the per-file isolation SQLite gets while running the
+            // suite in parallel against a single Postgres instance. The schema is
+            // created here (before configure()/autoMigrate) and dropped on teardown.
+            let schema = "test_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+
+            var configuration = SQLPostgresConfiguration(
+                hostname: Environment.get("DATABASE_HOST") ?? "localhost",
+                port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
+                    ?? SQLPostgresConfiguration.ianaPortNumber,
+                username: Environment.get("DATABASE_USERNAME") ?? "strato",
+                password: Environment.get("DATABASE_PASSWORD") ?? "strato_password",
+                database: Environment.get("DATABASE_NAME") ?? "strato_test",
+                tls: .disable
+            )
+            // All unqualified DDL/DML from migrations and models lands in this
+            // per-test schema, keeping parallel tests from colliding.
+            configuration.searchPath = [schema]
+
+            app.databases.use(.postgres(configuration: configuration), as: .psql)
+            app.storage[TestDatabaseSchemaKey.self] = schema
+
+            // CREATE SCHEMA is search_path-independent, so it succeeds even though
+            // the schema in the configured search_path does not exist yet.
+            try await (app.db(.psql) as! SQLDatabase)
+                .raw("CREATE SCHEMA IF NOT EXISTS \(ident: schema)")
+                .run()
+        }
 
         return app
     }
 }
 
-// Storage key for test database path
+// Storage key for test database path (SQLite)
 struct TestDatabasePathKey: StorageKey {
     typealias Value = String
 }
 
-// Extension to clean up test database file
+// Storage key for per-test Postgres schema name
+struct TestDatabaseSchemaKey: StorageKey {
+    typealias Value = String
+}
+
 extension Application {
+    /// Drop the per-test Postgres schema. Must run while the database connection
+    /// is still live, i.e. *before* `asyncShutdown()`. No-op for SQLite.
+    func dropTestSchemaIfNeeded() async {
+        guard let schema = self.storage[TestDatabaseSchemaKey.self] else { return }
+        try? await (self.db(.psql) as! SQLDatabase)
+            .raw("DROP SCHEMA IF EXISTS \(ident: schema) CASCADE")
+            .run()
+    }
+
+    /// Remove the SQLite database file. Safe to call after `asyncShutdown()`.
+    /// No-op when running against Postgres.
     func cleanupTestDatabase() {
         if let dbPath = self.storage[TestDatabasePathKey.self] {
             try? FileManager.default.removeItem(atPath: dbPath)
@@ -53,6 +122,7 @@ func withTestApp(_ test: (Application) async throws -> Void) async throws {
         try await app.autoRevert()
     } catch {
         try? await app.autoRevert()
+        await app.dropTestSchemaIfNeeded()
         try await app.asyncShutdown()
         // Give time for shutdown to complete
         try? await Task.sleep(for: .seconds(2))
@@ -60,6 +130,7 @@ func withTestApp(_ test: (Application) async throws -> Void) async throws {
         throw error
     }
 
+    await app.dropTestSchemaIfNeeded()
     try await app.asyncShutdown()
     // Give time for shutdown to complete before deallocation
     try? await Task.sleep(for: .seconds(2))
@@ -75,12 +146,14 @@ func withApp(_ test: (Application) async throws -> Void) async throws {
         try await app.autoMigrate()
         try await test(app)
     } catch {
+        await app.dropTestSchemaIfNeeded()
         try await app.asyncShutdown()
         try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
         throw error
     }
 
+    await app.dropTestSchemaIfNeeded()
     try await app.asyncShutdown()
     try? await Task.sleep(for: .seconds(2))
     app.cleanupTestDatabase()

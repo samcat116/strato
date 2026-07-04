@@ -24,6 +24,7 @@ class BaseTestCase {
             try await app.autoRevert()
         } catch {
             try? await app.autoRevert()
+            await app.dropTestSchemaIfNeeded()
             try await app.asyncShutdown()
             // Give time for shutdown to complete
             try? await Task.sleep(for: .seconds(2))
@@ -31,6 +32,7 @@ class BaseTestCase {
             throw error
         }
 
+        await app.dropTestSchemaIfNeeded()
         try await app.asyncShutdown()
         // Give time for shutdown to complete before deallocation
         try? await Task.sleep(for: .seconds(2))
