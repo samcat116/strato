@@ -398,21 +398,20 @@ jobs:
                 - strato-network
               restart: "no"
 
-            # SpiceDB authorization service (Zanzibar-style, persisted to PostgreSQL)
+            # SpiceDB authorization service (Zanzibar-style, persisted to PostgreSQL).
+            # Not published to the host: only the control-plane and schema loader
+            # reach it over the internal network, so the preshared key below is
+            # never exposed off-host. Change it (and the control-plane's
+            # SPICEDB_PRESHARED_KEY) anyway before adding any host port mapping.
             spicedb:
               image: authzed/spicedb:v1.35.3
               command:
                 - serve
-                # Development default — change this and the control-plane's
-                # SPICEDB_PRESHARED_KEY together before exposing the stack.
                 - --grpc-preshared-key=strato-preshared-key-change-me
                 - --http-enabled
                 - --http-addr=:8080
                 - --datastore-engine=postgres
                 - --datastore-conn-uri=postgres://vapor_username:vapor_password@db:5432/vapor_database?sslmode=disable
-              ports:
-                - "50051:50051"
-                - "8080:8080"
               depends_on:
                 spicedb-migrate:
                   condition: service_completed_successfully
