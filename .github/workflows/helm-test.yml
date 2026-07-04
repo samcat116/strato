@@ -308,12 +308,18 @@ jobs:
             --set networkPolicy.enabled=true \
             --set podDisruptionBudget.enabled=true > /tmp/security-template.yaml
 
+      - name: Install Checkov
+        # Not present on GitHub-hosted runners; install it explicitly.
+        run: pipx install checkov
+
       - name: Run Checkov security scan
+        # --soft-fail keeps findings non-blocking; a missing/broken checkov
+        # now surfaces instead of being silently masked by `|| true`.
         run: |
           checkov -f /tmp/security-template.yaml \
             --framework kubernetes \
             --output cli \
-            --soft-fail || true
+            --soft-fail
 
       - name: Check for hardcoded secrets
         run: |
