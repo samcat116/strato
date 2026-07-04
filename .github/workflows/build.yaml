@@ -36,8 +36,12 @@ jobs:
         run: bun run build
 
   test:
-    name: Build and Test Swift Packages
+    name: Build and Test Swift Packages (${{ matrix.db }})
     runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
     services:
       postgres:
         image: postgres:15
@@ -80,6 +84,16 @@ jobs:
 
       - name: Test Control Plane
         working-directory: control-plane
+        env:
+          # sqlite leg: fast, engine-independent coverage.
+          # postgres leg: same suite against the real engine production uses,
+          # validating migrations and Postgres-specific SQL (issue #195).
+          STRATO_TEST_DATABASE: ${{ matrix.db }}
+          DATABASE_HOST: localhost
+          DATABASE_PORT: "5432"
+          DATABASE_NAME: strato_test
+          DATABASE_USERNAME: strato
+          DATABASE_PASSWORD: strato_password
         run: swift test --skip-build --parallel
 
   security:

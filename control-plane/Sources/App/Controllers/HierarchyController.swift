@@ -220,8 +220,8 @@ struct HierarchyController: RouteCollection {
             let ous = try await OrganizationalUnit.query(on: req.db)
                 .filter(\.$organization.$id == organizationID)
                 .group(.or) { or in
-                    or.filter(\.$name ~~ query)
-                    or.filter(\.$description ~~ query)
+                    or.filter(.caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "name", value: query))
+                    or.filter(.caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "description", value: query))
                 }
                 .limit(10)
                 .all()
@@ -248,8 +248,8 @@ struct HierarchyController: RouteCollection {
                         .filter(OrganizationalUnit.self, \.$organization.$id == organizationID)
                 }
                 .group(.or) { or in
-                    or.filter(\.$name ~~ query)
-                    or.filter(\.$description ~~ query)
+                    or.filter(.caseInsensitiveContains(schema: Project.schema, column: "name", value: query))
+                    or.filter(.caseInsensitiveContains(schema: Project.schema, column: "description", value: query))
                 }
                 .limit(10)
                 .all()
@@ -280,8 +280,8 @@ struct HierarchyController: RouteCollection {
                         .filter(OrganizationalUnit.self, \.$organization.$id == organizationID)
                 }
                 .group(.or) { or in
-                    or.filter(\.$name ~~ query)
-                    or.filter(\.$description ~~ query)
+                    or.filter(.caseInsensitiveContains(schema: VM.schema, column: "name", value: query))
+                    or.filter(.caseInsensitiveContains(schema: VM.schema, column: "description", value: query))
                 }
                 .limit(10)
                 .all()
@@ -338,8 +338,8 @@ struct HierarchyController: RouteCollection {
             let ous = try await OrganizationalUnit.query(on: req.db)
                 .filter(\.$organization.$id ~~ organizationIDs)
                 .group(.or) { or in
-                    or.filter(\.$name ~~ query)
-                    or.filter(\.$description ~~ query)
+                    or.filter(.caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "name", value: query))
+                    or.filter(.caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "description", value: query))
                 }
                 .limit(10)
                 .all()
@@ -363,8 +363,8 @@ struct HierarchyController: RouteCollection {
             let directProjects = try await Project.query(on: req.db)
                 .filter(\.$organization.$id ~~ organizationIDs)
                 .group(.or) { or in
-                    or.filter(\.$name ~~ query)
-                    or.filter(\.$description ~~ query)
+                    or.filter(.caseInsensitiveContains(schema: Project.schema, column: "name", value: query))
+                    or.filter(.caseInsensitiveContains(schema: Project.schema, column: "description", value: query))
                 }
                 .limit(10)
                 .all()
@@ -374,8 +374,8 @@ struct HierarchyController: RouteCollection {
                 .join(OrganizationalUnit.self, on: \Project.$organizationalUnit.$id == \OrganizationalUnit.$id)
                 .filter(OrganizationalUnit.self, \.$organization.$id ~~ organizationIDs)
                 .group(.or) { or in
-                    or.filter(\.$name ~~ query)
-                    or.filter(\.$description ~~ query)
+                    or.filter(.caseInsensitiveContains(schema: Project.schema, column: "name", value: query))
+                    or.filter(.caseInsensitiveContains(schema: Project.schema, column: "description", value: query))
                 }
                 .limit(10)
                 .all()
