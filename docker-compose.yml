@@ -32,10 +32,14 @@ services:
       - serve
       - --grpc-preshared-key=strato-dev-key
       - --http-enabled
+      # Serve the HTTP gateway on 8080 to match SPICEDB_ENDPOINT below (and the
+      # Helm chart). Without this flag SpiceDB defaults HTTP to :8443, so the
+      # control plane's REST calls would hit a dead port.
+      - --http-addr=:8080
       - --datastore-engine=memory
     ports:
       - "50051:50051"
-      - "8081:8443"
+      - "8081:8080"
     healthcheck:
       test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
       interval: 5s
@@ -66,6 +70,9 @@ services:
       DATABASE_PASSWORD: vapor_password
       SPICEDB_ENDPOINT: http://spicedb:8080
       SPICEDB_PRESHARED_KEY: strato-dev-key
+      # In-memory SpiceDB starts with no schema; the control plane loads this
+      # one at startup (see ensureSpiceDBSchema).
+      SPICEDB_SCHEMA_PATH: /app/spicedb/schema.zed
       VALKEY_HOST: valkey
       VALKEY_PORT: 6379
       WEBAUTHN_RELYING_PARTY_ID: localhost
@@ -81,11 +88,13 @@ services:
       OTEL_TRACES_ENABLED: "false"
     ports:
       - "8080:8080"
+    volumes:
+      - ./spicedb/schema.zed:/app/spicedb/schema.zed:ro
     depends_on:
       db:
         condition: service_healthy
       spicedb:
-        condition: service_started
+        condition: service_healthy
       valkey:
         condition: service_healthy
 

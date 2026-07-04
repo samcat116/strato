@@ -2,18 +2,40 @@ import Foundation
 import Logging
 import StratoShared
 
+/// Console access points a hypervisor exposes for a VM.
+/// A backend may offer a serial socket, a virtio-console socket, both, or neither.
+/// Consumers should try `serialSocketPath` first and fall back to `consoleSocketPath`.
+public struct ConsoleEndpoint: Sendable {
+    /// Unix socket path for the VM's serial console, if available
+    public let serialSocketPath: String?
+
+    /// Unix socket path for the VM's virtio-console, if available
+    public let consoleSocketPath: String?
+
+    public init(serialSocketPath: String?, consoleSocketPath: String?) {
+        self.serialSocketPath = serialSocketPath
+        self.consoleSocketPath = consoleSocketPath
+    }
+
+    /// True when neither socket is available
+    public var isEmpty: Bool {
+        serialSocketPath == nil && consoleSocketPath == nil
+    }
+}
+
 /// Protocol defining the interface for hypervisor services
 /// Both QEMUService and FirecrackerService conform to this protocol
 public protocol HypervisorService: Actor, Sendable {
     /// The type of hypervisor
     var hypervisorType: HypervisorType { get }
 
-    /// Creates a VM with the given configuration
+    /// Creates a VM from a hypervisor-neutral spec. The service translates the
+    /// spec into its driver-native configuration (paths, sockets, machine types).
     /// - Parameters:
     ///   - vmId: Unique identifier for the VM
-    ///   - config: VM configuration
+    ///   - spec: Hypervisor-neutral VM specification
     ///   - imageInfo: Optional image info for disk caching
-    func createVM(vmId: String, config: VmConfig, imageInfo: ImageInfo?) async throws
+    func createVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo?) async throws
 
     /// Boots (starts) a VM
     /// - Parameter vmId: The VM identifier
@@ -52,14 +74,35 @@ public protocol HypervisorService: Actor, Sendable {
     /// Lists all VM IDs managed by this service
     /// - Returns: Array of VM identifiers
     func listVMs() async -> [String]
+
+    /// Returns the console access points for a VM, or nil if none exist yet
+    /// (e.g. the VM is not running).
+    /// - Parameter vmId: The VM identifier
+    /// - Throws: `HypervisorServiceError.notSupported` if this backend has no
+    ///   console mechanism at all
+    func consoleEndpoint(vmId: String) async throws -> ConsoleEndpoint?
+
+    /// Attaches a disk to a running VM (hot-plug)
+    /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
+    ///   hot-plug disks
+    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool) async throws
+
+    /// Detaches a disk from a running VM (hot-unplug)
+    /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
+    ///   hot-unplug disks
+    func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws
+
+    /// Sum of vCPUs and memory (in bytes) committed to VMs this service manages.
+    /// Used to compute accurate available-resource figures for the scheduler.
+    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)
 }
 
 // MARK: - Default Implementations
 
 public extension HypervisorService {
     /// Creates and starts a VM in a single operation
-    func createAndStartVM(vmId: String, config: VmConfig, imageInfo: ImageInfo? = nil) async throws {
-        try await createVM(vmId: vmId, config: config, imageInfo: imageInfo)
+    func createAndStartVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil) async throws {
+        try await createVM(vmId: vmId, spec: spec, imageInfo: imageInfo)
         try await bootVM(vmId: vmId)
     }
 

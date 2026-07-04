@@ -72,7 +72,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         capabilities: [String],
         status: AgentStatus = .offline,
         resources: AgentResources,
-        architecture: HostArchitecture? = nil,
+        architecture: CPUArchitecture? = nil,
         hypervisors: [HypervisorSupport] = [],
         networkCapability: NetworkCapability? = nil,
         lastHeartbeat: Date? = nil
@@ -166,7 +166,7 @@ struct AgentResponse: Content {
     let capabilities: [String]
     let status: AgentStatus
     let resources: AgentResources
-    let architecture: HostArchitecture?
+    let architecture: CPUArchitecture?
     let hypervisors: [HypervisorSupport]
     let networkCapability: NetworkCapability?
     let lastHeartbeat: Date?
@@ -185,7 +185,7 @@ struct AgentResponse: Content {
         self.capabilities = agent.capabilities
         self.status = agent.status
         self.resources = agent.resources
-        self.architecture = agent.architecture.flatMap(HostArchitecture.init(rawValue:))
+        self.architecture = agent.architecture.flatMap(CPUArchitecture.init(rawValue:))
         self.hypervisors = agent.hypervisors
         self.networkCapability = agent.networkCapability.flatMap(NetworkCapability.init(rawValue:))
         self.lastHeartbeat = agent.lastHeartbeat

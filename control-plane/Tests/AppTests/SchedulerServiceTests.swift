@@ -38,7 +38,9 @@ struct SchedulerServiceTests {
         availableDisk: Int64 = 80000,
         status: AgentStatus = .online,
         runningVMCount: Int = 0,
-        hypervisors: [HypervisorSupport] = []
+        supportedHypervisors: [HypervisorType] = [.qemu],
+        architecture: CPUArchitecture? = nil,
+        supportsInterVMNetworking: Bool = false
     ) -> SchedulableAgent {
         return SchedulableAgent(
             id: id,
@@ -51,17 +53,9 @@ struct SchedulerServiceTests {
             availableDisk: availableDisk,
             status: status,
             runningVMCount: runningVMCount,
-            hypervisors: hypervisors
-        )
-    }
-
-    func hypervisorSupport(_ type: HypervisorType, available: Bool) -> HypervisorSupport {
-        return HypervisorSupport(
-            type: type,
-            available: available,
-            accelerated: available,
-            unavailabilityReason: available ? nil : "not available in test",
-            capabilities: .capabilities(for: type)
+            supportedHypervisors: supportedHypervisors,
+            architecture: architecture,
+            supportsInterVMNetworking: supportsInterVMNetworking
         )
     }
 
@@ -272,72 +266,6 @@ struct SchedulerServiceTests {
         #expect(selectedId == "agent2")
     }
 
-    // MARK: - Hypervisor Filtering Tests
-
-    @Test("Scheduler filters out agents that do not support the VM's hypervisor")
-    func testFiltersUnsupportedHypervisor() throws {
-        let logger = Logger(label: "test")
-        let scheduler = SchedulerService(logger: logger)
-
-        let agents = [
-            createTestAgent(
-                id: "qemu-only", name: "qemu-only",
-                hypervisors: [
-                    hypervisorSupport(.qemu, available: true),
-                    hypervisorSupport(.firecracker, available: false)
-                ]
-            ),
-            createTestAgent(
-                id: "full-host", name: "full-host",
-                hypervisors: [
-                    hypervisorSupport(.qemu, available: true),
-                    hypervisorSupport(.firecracker, available: true)
-                ]
-            )
-        ]
-
-        let vm = createTestVM(hypervisorType: .firecracker)
-        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
-
-        #expect(selectedId == "full-host")
-    }
-
-    @Test("Scheduler treats agents without a hypervisor report as supporting everything")
-    func testLegacyAgentWithoutHypervisorReport() throws {
-        let logger = Logger(label: "test")
-        let scheduler = SchedulerService(logger: logger)
-
-        // Legacy agent: registered before capability reporting, empty list
-        let agents = [createTestAgent(id: "legacy", name: "legacy", hypervisors: [])]
-
-        let vm = createTestVM(hypervisorType: .firecracker)
-        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
-
-        #expect(selectedId == "legacy")
-    }
-
-    @Test("Scheduler throws when no agent supports the VM's hypervisor")
-    func testNoAgentSupportsHypervisor() throws {
-        let logger = Logger(label: "test")
-        let scheduler = SchedulerService(logger: logger)
-
-        let agents = [
-            createTestAgent(
-                id: "qemu-only", name: "qemu-only",
-                hypervisors: [
-                    hypervisorSupport(.qemu, available: true),
-                    hypervisorSupport(.firecracker, available: false)
-                ]
-            )
-        ]
-
-        let vm = createTestVM(hypervisorType: .firecracker)
-
-        #expect(throws: SchedulerError.self) {
-            try scheduler.selectAgent(for: vm, from: agents)
-        }
-    }
-
     // MARK: - Error Handling Tests
 
     @Test("Scheduler throws error when no agents available")
@@ -441,6 +369,207 @@ struct SchedulerServiceTests {
         let selectedId = try scheduler.selectAgent(for: vm, from: agents)
 
         #expect(selectedId == "agent1")
+    }
+
+    // MARK: - Hard Placement Constraint Tests
+
+    @Test("Firecracker VM only lands on a Firecracker-capable agent")
+    func testHypervisorConstraintSelectsCapableAgent() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            // More attractive by utilization, but QEMU-only (e.g. a macOS agent)
+            createTestAgent(id: "qemu-only", name: "qemu-only", availableCPU: 8, supportedHypervisors: [.qemu]),
+            createTestAgent(id: "linux-agent", name: "linux-agent", availableCPU: 2, supportedHypervisors: [.qemu, .firecracker])
+        ]
+
+        let vm = createTestVM(cpu: 1, memory: 1000, disk: 10000, hypervisorType: .firecracker)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
+
+        #expect(selectedId == "linux-agent")
+    }
+
+    @Test("Firecracker VM fails placement when no agent supports it")
+    func testHypervisorConstraintFailsWithoutCapableAgent() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "mac1", name: "mac1", supportedHypervisors: [.qemu]),
+            createTestAgent(id: "mac2", name: "mac2", supportedHypervisors: [.qemu])
+        ]
+
+        let vm = createTestVM(hypervisorType: .firecracker)
+
+        do {
+            _ = try scheduler.selectAgent(for: vm, from: agents)
+            Issue.record("Expected unsupportedHypervisor error")
+        } catch let error as SchedulerError {
+            guard case .unsupportedHypervisor(let required, let onlineAgents, let agentsWithoutHypervisors) = error else {
+                Issue.record("Expected unsupportedHypervisor, got \(error)")
+                return
+            }
+            #expect(required == .firecracker)
+            #expect(onlineAgents == 2)
+            #expect(agentsWithoutHypervisors == 0)
+        }
+    }
+
+    @Test("Agents advertising no hypervisors are counted in the mismatch error")
+    func testUnsupportedHypervisorCountsBrokenAgents() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "healthy", name: "healthy", supportedHypervisors: [.qemu]),
+            createTestAgent(id: "broken", name: "broken", supportedHypervisors: [])
+        ]
+
+        let vm = createTestVM(hypervisorType: .firecracker)
+
+        do {
+            _ = try scheduler.selectAgent(for: vm, from: agents)
+            Issue.record("Expected unsupportedHypervisor error")
+        } catch let error as SchedulerError {
+            guard case .unsupportedHypervisor(_, _, let agentsWithoutHypervisors) = error else {
+                Issue.record("Expected unsupportedHypervisor, got \(error)")
+                return
+            }
+            #expect(agentsWithoutHypervisors == 1)
+            #expect(error.description.contains("advertise no usable hypervisor backend"))
+        }
+    }
+
+    @Test("Fleet with no usable hypervisors fails with a configuration-pointing error")
+    func testNoUsableHypervisors() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        // e.g. agents whose QEMU binary probe failed at registration
+        let agents = [
+            createTestAgent(id: "broken1", name: "broken1", supportedHypervisors: []),
+            createTestAgent(id: "broken2", name: "broken2", supportedHypervisors: [])
+        ]
+
+        let vm = createTestVM(hypervisorType: .qemu)
+
+        do {
+            _ = try scheduler.selectAgent(for: vm, from: agents)
+            Issue.record("Expected noUsableHypervisors error")
+        } catch let error as SchedulerError {
+            guard case .noUsableHypervisors(let onlineAgents) = error else {
+                Issue.record("Expected noUsableHypervisors, got \(error)")
+                return
+            }
+            #expect(onlineAgents == 2)
+            #expect(error.description.contains("binary path"))
+        }
+    }
+
+    @Test("Architecture requirement excludes mismatched and unknown-arch agents")
+    func testArchitectureConstraint() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "intel", name: "intel", availableCPU: 8, architecture: .x86_64),
+            createTestAgent(id: "unknown-arch", name: "unknown-arch", availableCPU: 8, architecture: nil),
+            createTestAgent(id: "arm", name: "arm", availableCPU: 2, architecture: .arm64)
+        ]
+
+        let requirements = VMPlacementRequirements(cpu: 1, memory: 1000, disk: 10000, architecture: .arm64)
+        let selectedId = try scheduler.selectAgent(requirements: requirements, from: agents)
+
+        #expect(selectedId == "arm")
+    }
+
+    @Test("Architecture requirement fails placement when no host matches")
+    func testArchitectureConstraintFails() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "intel", name: "intel", architecture: .x86_64),
+            createTestAgent(id: "unknown-arch", name: "unknown-arch", architecture: nil)
+        ]
+
+        let requirements = VMPlacementRequirements(cpu: 1, memory: 1000, disk: 10000, architecture: .arm64)
+
+        do {
+            _ = try scheduler.selectAgent(requirements: requirements, from: agents)
+            Issue.record("Expected architectureMismatch error")
+        } catch let error as SchedulerError {
+            guard case .architectureMismatch(let required) = error else {
+                Issue.record("Expected architectureMismatch, got \(error)")
+                return
+            }
+            #expect(required == .arm64)
+        }
+    }
+
+    @Test("Inter-VM networking requirement excludes user-mode-only agents")
+    func testNetworkCapabilityConstraint() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "slirp", name: "slirp", availableCPU: 8, supportsInterVMNetworking: false),
+            createTestAgent(id: "ovn", name: "ovn", availableCPU: 2, supportsInterVMNetworking: true)
+        ]
+
+        let requirements = VMPlacementRequirements(cpu: 1, memory: 1000, disk: 10000, requiresInterVMNetworking: true)
+        let selectedId = try scheduler.selectAgent(requirements: requirements, from: agents)
+
+        #expect(selectedId == "ovn")
+    }
+
+    @Test("Inter-VM networking requirement fails placement on user-mode-only fleet")
+    func testNetworkCapabilityConstraintFails() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "slirp", name: "slirp", supportsInterVMNetworking: false)
+        ]
+
+        let requirements = VMPlacementRequirements(cpu: 1, memory: 1000, disk: 10000, requiresInterVMNetworking: true)
+
+        do {
+            _ = try scheduler.selectAgent(requirements: requirements, from: agents)
+            Issue.record("Expected networkCapabilityUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .networkCapabilityUnsatisfied = error else {
+                Issue.record("Expected networkCapabilityUnsatisfied, got \(error)")
+                return
+            }
+        }
+    }
+
+    @Test("Hypervisor constraint is checked before resources")
+    func testConstraintErrorPrecedence() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        // The only Firecracker-capable agent is also resource-starved: the
+        // failure should still be reported as insufficient resources, not as
+        // unsupported hypervisor, because a capable agent exists.
+        let agents = [
+            createTestAgent(id: "starved", name: "starved", availableCPU: 0, supportedHypervisors: [.qemu, .firecracker]),
+            createTestAgent(id: "qemu-only", name: "qemu-only", availableCPU: 8, supportedHypervisors: [.qemu])
+        ]
+
+        let vm = createTestVM(cpu: 2, hypervisorType: .firecracker)
+
+        do {
+            _ = try scheduler.selectAgent(for: vm, from: agents)
+            Issue.record("Expected insufficientResources error")
+        } catch let error as SchedulerError {
+            guard case .insufficientResources = error else {
+                Issue.record("Expected insufficientResources, got \(error)")
+                return
+            }
+        }
     }
 
     // MARK: - Utility Method Tests

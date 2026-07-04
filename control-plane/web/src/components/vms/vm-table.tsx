@@ -78,8 +78,8 @@ export function VMTable({ vms, isLoading, onRefresh }: VMTableProps) {
             <TableCell className="text-gray-300">
               {vm.cpu} / {vm.maxCpu} cores
             </TableCell>
-            <TableCell className="text-gray-300">{vm.memory} GB</TableCell>
-            <TableCell className="text-gray-300">{vm.disk} GB</TableCell>
+            <TableCell className="text-gray-300">{vm.memoryFormatted}</TableCell>
+            <TableCell className="text-gray-300">{vm.diskFormatted}</TableCell>
             <TableCell className="text-right">
               <VMActions vm={vm} onActionComplete={onRefresh} />
             </TableCell>

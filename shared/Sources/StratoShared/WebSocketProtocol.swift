@@ -84,13 +84,15 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// Legacy single hypervisor type. Still sent so control planes that predate
     /// `hypervisors` can register this agent; readers should prefer `hypervisors`.
     public let hypervisorType: HypervisorType
-    /// Host CPU architecture. Optional so registrations from older agents
-    /// (which never sent it) still decode.
-    public let architecture: HostArchitecture?
+    /// Host CPU architecture. Optional so messages from agents that predate
+    /// this field decode fine; absent means unknown, and the scheduler treats
+    /// unknown-architecture agents as ineligible for any VM that pins an
+    /// architecture.
+    public let architecture: CPUArchitecture?
     /// Every hypervisor on this host with probed availability and capabilities.
     /// Optional so registrations from older agents still decode; readers fall
-    /// back to deriving entries from the legacy `hypervisorType` scalar and
-    /// `capabilities` strings (see `effectiveHypervisors`).
+    /// back to deriving entries from the legacy `capabilities` strings
+    /// (see `effectiveHypervisors`).
     public let hypervisors: [HypervisorSupport]?
     /// Networking capability of this host. Optional for the same reason.
     public let networkCapability: NetworkCapability?
@@ -104,7 +106,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         capabilities: [String],
         resources: AgentResources,
         hypervisorType: HypervisorType = .qemu,
-        architecture: HostArchitecture? = nil,
+        architecture: CPUArchitecture? = nil,
         hypervisors: [HypervisorSupport]? = nil,
         networkCapability: NetworkCapability? = nil
     ) {
@@ -121,31 +123,30 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.networkCapability = networkCapability
     }
 
-    /// The hypervisor list to act on: the probed report when the agent sent one,
-    /// otherwise entries derived from the legacy fields. The legacy scalar
-    /// `hypervisorType` only holds the configured default, so hypervisor types
-    /// advertised in the legacy `capabilities` strings (e.g. "firecracker" on
-    /// old Linux agents) are included as well — collapsing to the scalar alone
-    /// would make the scheduler filter old agents out of placements they can
-    /// serve. Legacy entries are assumed available (the agent registered
-    /// claiming to run them) but not accelerated, since older agents never
-    /// probed KVM/HVF.
+    /// The hypervisor list to act on: the probed report when the agent sent
+    /// one, otherwise entries derived from the hypervisor types named in the
+    /// legacy `capabilities` strings. Agents have always advertised the
+    /// backends they can run there (older builds hardcoded them per platform,
+    /// newer ones gate each on a binary probe), so deriving from capabilities
+    /// both preserves multi-hypervisor legacy agents and respects failed
+    /// probes — an agent advertising no backend stays unschedulable rather
+    /// than being resurrected by the configured-default `hypervisorType`
+    /// scalar. Derived entries are assumed available but not accelerated,
+    /// since such agents never probed KVM/HVF.
     public var effectiveHypervisors: [HypervisorSupport] {
         if let hypervisors, !hypervisors.isEmpty {
             return hypervisors
         }
-        var types = [hypervisorType]
-        for type in HypervisorType.allCases where type != hypervisorType && capabilities.contains(type.rawValue) {
-            types.append(type)
-        }
-        return types.map { type in
-            HypervisorSupport(
-                type: type,
-                available: true,
-                accelerated: false,
-                capabilities: .capabilities(for: type)
-            )
-        }
+        return HypervisorType.allCases
+            .filter { capabilities.contains($0.rawValue) }
+            .map { type in
+                HypervisorSupport(
+                    type: type,
+                    available: true,
+                    accelerated: false,
+                    capabilities: .capabilities(for: type)
+                )
+            }
     }
 }
 
@@ -253,20 +254,20 @@ public struct VMCreateMessage: WebSocketMessage {
     public let requestId: String
     public let timestamp: Date
     public let vmData: VMData
-    public let vmConfig: VmConfig
+    public let vmSpec: VMSpec
     public let imageInfo: ImageInfo?
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         vmData: VMData,
-        vmConfig: VmConfig,
+        vmSpec: VMSpec,
         imageInfo: ImageInfo? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.vmData = vmData
-        self.vmConfig = vmConfig
+        self.vmSpec = vmSpec
         self.imageInfo = imageInfo
     }
 }

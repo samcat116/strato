@@ -299,21 +299,21 @@ struct VMController: RouteCollection {
 
         // Create VM via agent (scheduler will select best hypervisor and set hypervisorId)
         do {
-            let vmConfig: VmConfig
+            let vmSpec: VMSpec
 
             if let template = template {
                 // Template-based creation
-                vmConfig = try await VMConfigBuilder.buildVMConfig(from: vm, template: template)
+                vmSpec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
             } else if let image = image {
                 // Image-based creation
-                vmConfig = try await VMConfigBuilder.buildVMConfig(from: vm, image: image)
+                vmSpec = VMSpecBuilder.buildVMSpec(from: vm, image: image)
             } else {
                 throw Abort(.internalServerError, reason: "Neither template nor image available")
             }
 
             // Pass the Image object to AgentService - it will build ImageInfo with signed URL
             // after the scheduler selects the target agent
-            try await req.agentService.createVM(vm: vm, vmConfig: vmConfig, db: req.db, image: image)
+            try await req.agentService.createVM(vm: vm, vmSpec: vmSpec, db: req.db, image: image)
 
             // hypervisorId is set and saved by AgentService via scheduler
             req.logger.info("VM created successfully via agent", metadata: [

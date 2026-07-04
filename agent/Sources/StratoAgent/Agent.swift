@@ -83,9 +83,16 @@ actor Agent {
     private var vmHypervisorMap: [String: HypervisorType] = [:]
 
     private let networkMode: NetworkMode?
-    // The network mode actually in effect after platform fallbacks, resolved in
-    // start(); registration reports it as the host's network capability.
-    private var resolvedNetworkMode: NetworkMode?
+    // The networking backend actually selected at startup (config value plus
+    // platform fallbacks). Drives the networking capability advertised at
+    // registration: a Linux agent configured for user-mode networking must not
+    // claim OVN/VM-to-VM support.
+    private var effectiveNetworkMode: NetworkMode = .user
+    // Whether the selected network service connected successfully at startup.
+    // An OVN agent whose OVN/OVS connection failed must not advertise
+    // ovn_networking, or the scheduler would place VM-to-VM workloads on a
+    // backend that will throw notConnected.
+    private var networkServiceConnected = false
     private let imageCachePath: String?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
@@ -173,21 +180,22 @@ actor Agent {
             #if os(Linux)
             logger.info("Network service initialized with SwiftOVN support")
             networkService = NetworkServiceLinux(logger: logger)
-            resolvedNetworkMode = .ovn
+            effectiveNetworkMode = .ovn
             #else
             logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
             networkService = NetworkServiceMacOS(logger: logger)
-            resolvedNetworkMode = .user
+            effectiveNetworkMode = .user
             #endif
         case .user:
             logger.info("Network service initialized with user-mode networking")
             networkService = NetworkServiceMacOS(logger: logger)
-            resolvedNetworkMode = .user
+            effectiveNetworkMode = .user
         }
 
         do {
             if let service = networkService {
                 try await service.connect()
+                networkServiceConnected = true
                 logger.info("Network service connected successfully")
             }
         } catch {
@@ -444,15 +452,8 @@ actor Agent {
             qemuBinaryPath: qemuBinaryPath,
             firecrackerBinaryPath: firecrackerBinaryPath
         )
-        let networkCapability: NetworkCapability = resolvedNetworkMode == .ovn ? .overlay : .userMode
+        let networkCapability = currentNetworkCapability()
         let capabilities = getAgentCapabilities(hypervisors: hypervisors, networkCapability: networkCapability)
-
-        for hypervisor in hypervisors where !hypervisor.available {
-            logger.info("Hypervisor unavailable on this host", metadata: [
-                "hypervisor": .string(hypervisor.type.rawValue),
-                "reason": .string(hypervisor.unavailabilityReason ?? "unknown")
-            ])
-        }
 
         let message = AgentRegisterMessage(
             agentId: initialAgentID,
@@ -461,7 +462,7 @@ actor Agent {
             capabilities: capabilities,
             resources: resources,
             hypervisorType: hypervisorType,
-            architecture: .current,
+            architecture: CPUArchitecture.current,
             hypervisors: hypervisors,
             networkCapability: networkCapability
         )
@@ -572,13 +573,57 @@ actor Agent {
         ])
     }
 
+    /// The networking capability to report at registration, reflecting the
+    /// backend selected at startup rather than the platform: a Linux agent
+    /// configured for user-mode networking cannot provide OVN/VM-to-VM
+    /// networking, and the scheduler relies on this to enforce the
+    /// inter-VM-networking placement constraint.
+    private func currentNetworkCapability() -> NetworkCapability? {
+        switch (effectiveNetworkMode, networkServiceConnected) {
+        case (.ovn, true):
+            return .overlay
+        case (.ovn, false):
+            // OVN was selected but the OVN/OVS connection failed at startup:
+            // report no networking capability rather than claiming VM-to-VM
+            // support the backend cannot currently provide (and user-mode
+            // would be a lie — the agent is not running SLIRP either).
+            logger.warning("OVN network service not connected; not advertising ovn_networking capability")
+            return nil
+        case (.user, _):
+            // User-mode (SLIRP) networking is built into QEMU and needs no
+            // external service, so it is not gated on connection state.
+            return .userMode
+        }
+    }
+
     /// Legacy string capability list, derived from the same probes that back
-    /// the structured `hypervisors` report instead of hardcoded platform lists.
-    private func getAgentCapabilities(hypervisors: [HypervisorSupport], networkCapability: NetworkCapability) -> [String] {
+    /// the structured `hypervisors` report instead of hardcoded platform
+    /// lists. Advertised hypervisors are hard placement constraints, so each
+    /// one is gated on its probe (binary executable, and KVM for Firecracker)
+    /// — the scheduler must not route VMs here that create would reject.
+    private func getAgentCapabilities(hypervisors: [HypervisorSupport], networkCapability: NetworkCapability?) -> [String] {
         var capabilities = ["vm_management"]
 
-        for hypervisor in hypervisors where hypervisor.available {
-            capabilities.append(hypervisor.type.rawValue)
+        for hypervisor in hypervisors {
+            if hypervisor.available {
+                capabilities.append(hypervisor.type.rawValue)
+            } else if hypervisor.type == .qemu {
+                // Error, not warning: without QEMU the agent is unusable for
+                // most placements, and the scheduler will only report
+                // "unsupported hypervisor" — this log points at the cause.
+                logger.error("QEMU unusable; not advertising qemu capability", metadata: [
+                    "reason": .string(hypervisor.unavailabilityReason ?? "unknown"),
+                    "qemuBinaryPath": .string(qemuBinaryPath)
+                ])
+            } else {
+                #if os(Linux)
+                // Not worth a log on platforms where the backend can never
+                // exist (e.g. Firecracker on macOS).
+                logger.warning("\(hypervisor.type.displayName) unusable; not advertising \(hypervisor.type.rawValue) capability", metadata: [
+                    "reason": .string(hypervisor.unavailabilityReason ?? "unknown")
+                ])
+                #endif
+            }
         }
 
         if hypervisors.contains(where: { $0.accelerated }) {
@@ -594,6 +639,14 @@ actor Agent {
             capabilities.append("ovn_networking")
         case .userMode:
             capabilities.append("user_networking")
+        case nil:
+            break // backend selected but not connected; advertise nothing
+        }
+
+        if !HypervisorType.allCases.contains(where: { capabilities.contains($0.rawValue) }) {
+            logger.error("No usable hypervisor backend on this host; the agent will register but never be eligible for VM placement. Check qemu_binary_path (and firecracker_binary_path on Linux) in the agent configuration.", metadata: [
+                "qemuBinaryPath": .string(qemuBinaryPath)
+            ])
         }
 
         return capabilities
@@ -732,19 +785,11 @@ actor Agent {
         var reservedCPU = 0
         var reservedMemory: Int64 = 0
 
-        if let qemu = qemuService {
-            let reserved = await qemu.reservedResources()
+        for service in hypervisorServices {
+            let reserved = await service.reservedResources()
             reservedCPU += reserved.vcpus
             reservedMemory += reserved.memoryBytes
         }
-
-        #if os(Linux)
-        if let firecracker = firecrackerService {
-            let reserved = await firecracker.reservedResources()
-            reservedCPU += reserved.vcpus
-            reservedMemory += reserved.memoryBytes
-        }
-        #endif
 
         let availableCPU = max(0, totalCPU - reservedCPU)
         let availableMemory = max(0, totalMemory - reservedMemory)
@@ -771,21 +816,29 @@ actor Agent {
     private func getRunningVMList() async -> [String] {
         var vmList: [String] = []
 
-        // Get VMs from QEMU service
-        if let qemu = qemuService {
-            let qemuVMs = await qemu.listVMs()
-            vmList.append(contentsOf: qemuVMs)
+        for service in hypervisorServices {
+            let vms = await service.listVMs()
+            vmList.append(contentsOf: vms)
         }
-
-        // Get VMs from Firecracker service (Linux only)
-        #if os(Linux)
-        if let firecracker = firecrackerService {
-            let firecrackerVMs = await firecracker.listVMs()
-            vmList.append(contentsOf: firecrackerVMs)
-        }
-        #endif
 
         return vmList
+    }
+
+    /// All hypervisor backends this agent is running. Together with
+    /// `getHypervisorService(for:)`, this is the only place message handling
+    /// may reach the concrete services — everything else goes through the
+    /// `HypervisorService` protocol so new backends get honest behavior.
+    private var hypervisorServices: [any HypervisorService] {
+        var services: [any HypervisorService] = []
+        if let qemu = qemuService {
+            services.append(qemu)
+        }
+        #if os(Linux)
+        if let firecracker = firecrackerService {
+            services.append(firecracker)
+        }
+        #endif
+        return services
     }
 }
 
@@ -929,8 +982,11 @@ extension Agent {
             #if os(Linux)
             return firecrackerService
             #else
-            logger.warning("Firecracker is only available on Linux, falling back to QEMU")
-            return qemuService
+            // No silent fallback to QEMU: the scheduler should never place a
+            // Firecracker VM here, so surface the mismatch as an error instead
+            // of booting the VM under a different hypervisor than requested.
+            logger.error("Firecracker is only available on Linux; rejecting request for unsupported hypervisor")
+            return nil
             #endif
         }
     }
@@ -973,7 +1029,7 @@ extension Agent {
         do {
             try await service.createVM(
                 vmId: vmId,
-                config: message.vmConfig,
+                spec: message.vmSpec,
                 imageInfo: message.imageInfo
             )
             // Record the hypervisor type for this VM
@@ -1364,16 +1420,28 @@ extension Agent {
             "requestId": .string(message.requestId)
         ])
 
-        guard let qemuService = qemuService else {
-            logger.error("QEMU service not available for console connect")
-            await sendError(for: message.requestId, error: "QEMU service not available")
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            logger.error("Hypervisor service not available for console connect", metadata: ["vmId": .string(message.vmId)])
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
             return
         }
 
         // Try serial socket first, then fall back to virtio-console if connect fails.
-        logger.debug("Looking up serial socket path", metadata: ["vmId": .string(message.vmId)])
-        let serialPath = await qemuService.getSerialSocketPath(vmId: message.vmId)
-        let consolePath = await qemuService.getConsoleSocketPath(vmId: message.vmId)
+        logger.debug("Looking up console endpoint", metadata: ["vmId": .string(message.vmId)])
+        let endpoint: ConsoleEndpoint?
+        do {
+            endpoint = try await service.consoleEndpoint(vmId: message.vmId)
+        } catch {
+            logger.error("Console not available", metadata: [
+                "vmId": .string(message.vmId),
+                "error": .string(error.localizedDescription)
+            ])
+            await sendError(for: message.requestId, error: "Console not available for VM \(message.vmId): \(error.localizedDescription)")
+            return
+        }
+
+        let serialPath = endpoint?.serialSocketPath
+        let consolePath = endpoint?.consoleSocketPath
 
         guard serialPath != nil || consolePath != nil else {
             logger.error("No console socket found (tried serial and virtio-console)", metadata: ["vmId": .string(message.vmId)])
@@ -1598,13 +1666,13 @@ extension Agent {
             "volumePath": .string(message.volumePath)
         ])
 
-        guard let qemuService = qemuService else {
-            await sendError(for: message.requestId, error: "QEMU service not available")
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
             return
         }
 
         do {
-            try await qemuService.attachDisk(
+            try await service.attachDisk(
                 vmId: message.vmId,
                 volumeId: message.volumeId,
                 volumePath: message.volumePath,
@@ -1641,13 +1709,13 @@ extension Agent {
             "deviceName": .string(message.deviceName)
         ])
 
-        guard let qemuService = qemuService else {
-            await sendError(for: message.requestId, error: "QEMU service not available")
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
             return
         }
 
         do {
-            try await qemuService.detachDisk(
+            try await service.detachDisk(
                 vmId: message.vmId,
                 volumeId: message.volumeId,
                 deviceName: message.deviceName

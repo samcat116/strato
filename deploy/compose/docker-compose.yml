@@ -49,6 +49,11 @@ services:
       - serve
       - --grpc-preshared-key=${SPICEDB_PRESHARED_KEY}
       - --http-enabled
+      # Serve the HTTP gateway on 8080 to match the control plane's
+      # SPICEDB_ENDPOINT (and the Helm chart). Without this flag SpiceDB
+      # defaults HTTP to :8443, so the control plane's REST calls hit a dead
+      # port. (Schema loading here still uses gRPC via the spicedb-schema job.)
+      - --http-addr=:8080
       - --datastore-engine=postgres
       - --datastore-conn-uri=postgres://vapor_username:${POSTGRES_PASSWORD}@db:5432/spicedb?sslmode=disable
     depends_on:

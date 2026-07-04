@@ -360,13 +360,13 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
 
         switch lowercasePath {
         case "username":
-            return applyStringFilter(keyPath: \User.$username, op: op, value: value, to: query)
+            return applyStringFilter(keyPath: \User.$username, column: "username", op: op, value: value, to: query)
 
         case "displayname":
-            return applyStringFilter(keyPath: \User.$displayName, op: op, value: value, to: query)
+            return applyStringFilter(keyPath: \User.$displayName, column: "display_name", op: op, value: value, to: query)
 
         case "emails.value", "emails[type eq \"work\"].value":
-            return applyStringFilter(keyPath: \User.$email, op: op, value: value, to: query)
+            return applyStringFilter(keyPath: \User.$email, column: "email", op: op, value: value, to: query)
 
         case "active":
             if let boolValue = Bool(value.lowercased()) {
@@ -384,20 +384,9 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         }
     }
 
-    /// Escape special characters used in SQL LIKE/ILIKE patterns.
-    /// This prevents user input from injecting unintended wildcards.
-    private func escapeLikePattern(_ value: String) -> String {
-        var escaped = value
-        // First escape the escape character itself
-        escaped = escaped.replacingOccurrences(of: "\\", with: "\\\\")
-        // Then escape wildcard characters
-        escaped = escaped.replacingOccurrences(of: "%", with: "\\%")
-        escaped = escaped.replacingOccurrences(of: "_", with: "\\_")
-        return escaped
-    }
-
     private func applyStringFilter(
         keyPath: KeyPath<User, FieldProperty<User, String>>,
+        column: String,
         op: SCIMFilterOperator,
         value: String,
         to query: QueryBuilder<User>
@@ -408,14 +397,11 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         case .notEqual:
             return query.filter(keyPath != value)
         case .contains:
-            let escapedValue = escapeLikePattern(value)
-            return query.filter(keyPath, .custom("ILIKE"), "%\(escapedValue)%")
+            return query.filter(.caseInsensitiveContains(schema: User.schema, column: column, value: value))
         case .startsWith:
-            let escapedValue = escapeLikePattern(value)
-            return query.filter(keyPath, .custom("ILIKE"), "\(escapedValue)%")
+            return query.filter(.caseInsensitiveStartsWith(schema: User.schema, column: column, value: value))
         case .endsWith:
-            let escapedValue = escapeLikePattern(value)
-            return query.filter(keyPath, .custom("ILIKE"), "%\(escapedValue)")
+            return query.filter(.caseInsensitiveEndsWith(schema: User.schema, column: column, value: value))
         case .greaterThan, .greaterThanOrEqual, .lessThan, .lessThanOrEqual, .present:
             // These don't make sense for strings, just return unchanged
             return query

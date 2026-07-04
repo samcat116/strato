@@ -52,25 +52,6 @@ public enum HypervisorType: String, Codable, CaseIterable, Sendable {
     }
 }
 
-/// CPU architecture of an agent host.
-///
-/// KVM and HVF only accelerate same-architecture guests, so the scheduler needs
-/// to know each host's architecture to place VMs where they can run accelerated.
-public enum HostArchitecture: String, Codable, CaseIterable, Sendable {
-    case x86_64 = "x86_64"
-    case arm64 = "arm64"
-
-    /// The architecture this binary was compiled for. Agents run natively on
-    /// their host, so the compile-time architecture is the host architecture.
-    public static var current: HostArchitecture {
-        #if arch(arm64)
-        return .arm64
-        #else
-        return .x86_64
-        #endif
-    }
-}
-
 /// Networking capability of an agent host, as reported at registration.
 public enum NetworkCapability: String, Codable, CaseIterable, Sendable {
     /// Software-defined overlay networking (OVN/OVS): inter-VM traffic,

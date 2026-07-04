@@ -33,7 +33,7 @@ struct AgentModelTests {
         capabilities: [String] = ["kvm", "ovn"],
         status: AgentStatus = .online,
         resources: AgentResources? = nil,
-        architecture: HostArchitecture? = .x86_64,
+        architecture: CPUArchitecture? = .x86_64,
         hypervisors: [HypervisorSupport] = [
             HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu),
             HypervisorSupport(
@@ -241,34 +241,10 @@ struct AgentModelTests {
         #expect(agent.lastHeartbeat != nil)
     }
 
-    @Test("Agent.from derives a hypervisor entry from the legacy scalar when no report is sent")
-    func testFromLegacyRegistrationDerivesHypervisors() {
-        // Message shaped like one from an older agent: scalar hypervisorType,
-        // no architecture / hypervisors / networkCapability.
-        let message = AgentRegisterMessage(
-            agentId: "legacy-agent",
-            hostname: "legacy-host",
-            version: "1.0.0",
-            capabilities: ["kvm"],
-            resources: createTestAgentResources(),
-            hypervisorType: .firecracker
-        )
-
-        let agent = Agent.from(registration: message, name: "legacy-agent")
-
-        #expect(agent.architecture == nil)
-        #expect(agent.networkCapability == nil)
-        #expect(agent.hypervisors.count == 1)
-        #expect(agent.hypervisors.first?.type == .firecracker)
-        #expect(agent.hypervisors.first?.available == true)
-        #expect(agent.hypervisors.first?.accelerated == false)
-        #expect(agent.hypervisors.first?.capabilities == .firecracker)
-    }
-
-    @Test("Agent.from includes hypervisors advertised in legacy capability strings")
+    @Test("Agent.from derives hypervisors from legacy capability strings when no report is sent")
     func testFromLegacyRegistrationDerivesHypervisorsFromCapabilities() {
-        // Old Linux agent: scalar is the configured default (qemu), but the
-        // hardcoded legacy capability list also advertised firecracker.
+        // Message shaped like one from an agent that predates the structured
+        // report: hypervisor backends only appear as capability strings.
         let message = AgentRegisterMessage(
             agentId: "legacy-linux-agent",
             hostname: "legacy-host",
@@ -280,9 +256,30 @@ struct AgentModelTests {
 
         let agent = Agent.from(registration: message, name: "legacy-linux-agent")
 
+        #expect(agent.architecture == nil)
+        #expect(agent.networkCapability == nil)
         #expect(agent.hypervisors.count == 2)
-        #expect(agent.hypervisors.first?.type == .qemu)
+        #expect(agent.hypervisors.contains { $0.type == .qemu && $0.available && !$0.accelerated })
         #expect(agent.hypervisors.contains { $0.type == .firecracker && $0.available })
+    }
+
+    @Test("Agent.from does not resurrect probe-failed backends from the hypervisorType scalar")
+    func testFromLegacyRegistrationRespectsFailedProbes() {
+        // An agent whose binary probes all failed advertises no hypervisor
+        // capability strings. The configured-default scalar must not put a
+        // backend back — the agent registers but stays unschedulable.
+        let message = AgentRegisterMessage(
+            agentId: "probeless-agent",
+            hostname: "probeless-host",
+            version: "1.0.0",
+            capabilities: ["vm_management", "kvm", "user_networking"],
+            resources: createTestAgentResources(),
+            hypervisorType: .qemu
+        )
+
+        let agent = Agent.from(registration: message, name: "probeless-agent")
+
+        #expect(agent.hypervisors.isEmpty)
     }
 
     @Test("Agent.from stores probed capability data from the registration message")

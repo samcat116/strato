@@ -69,7 +69,7 @@ export interface AgentResources {
 
 export type HypervisorType = "qemu" | "firecracker";
 
-export type HostArchitecture = "x86_64" | "arm64";
+export type CPUArchitecture = "x86_64" | "arm64";
 
 export type NetworkCapability = "overlay" | "user_mode";
 
@@ -100,7 +100,7 @@ export interface Agent {
   capabilities: string[];
   status: AgentStatus;
   resources: AgentResources;
-  architecture?: HostArchitecture;
+  architecture?: CPUArchitecture;
   hypervisors: HypervisorSupport[];
   networkCapability?: NetworkCapability;
   lastHeartbeat?: string;

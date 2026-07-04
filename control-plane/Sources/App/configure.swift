@@ -148,6 +148,13 @@ public func configure(_ app: Application) async throws {
 
     try await app.autoMigrate()
 
+    // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen
+    // before anything writes relationships — the dev auth bypass below is the
+    // first writer on a fresh stack and crashes with a 400 without a schema.
+    if app.environment != .testing {
+        try await ensureSpiceDBSchema(app)
+    }
+
     // Initialize the image download signing key (generates if not exists)
     _ = try await URLSigningService.getSigningKeyAsync(from: app)
 

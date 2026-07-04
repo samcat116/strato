@@ -18,14 +18,14 @@ actor QEMUService: HypervisorService {
     // Durable record of managed VMs, used to detect VMs orphaned by an agent restart.
     private let manifestStore: VMManifestStore
     /// VMs this agent was managing before the current process started. They are not
-    /// under active management (no QEMU re-adoption in Option A), but their configs
+    /// under active management (no QEMU re-adoption in Option A), but their specs
     /// are retained: the orphaned QEMU processes may still be running and consuming
     /// CPU/memory, so their reservations must keep counting against host capacity
     /// until the VM is deleted or re-created.
-    private var orphanedVMConfigs: [String: VmConfig] = [:]
+    private var orphanedVMSpecs: [String: VMSpec] = [:]
 
     var orphanedVMIDs: Set<String> {
-        Set(orphanedVMConfigs.keys)
+        Set(orphanedVMSpecs.keys)
     }
 
     // HypervisorService protocol requirement
@@ -33,7 +33,7 @@ actor QEMUService: HypervisorService {
 
     #if canImport(SwiftQEMU)
     private var activeVMs: [String: QEMUManager] = [:]
-    private var vmConfigs: [String: VmConfig] = [:]
+    private var vmSpecs: [String: VMSpec] = [:]
     private var vmNetworkInfo: [String: VMNetworkInfo] = [:]
     private var vmConsoleSocketPaths: [String: String] = [:]
     private var vmSerialSocketPaths: [String: String] = [:]
@@ -61,7 +61,7 @@ actor QEMUService: HypervisorService {
         // and warn — the control plane will mark them for attention via reconciliation.
         let previousManifest = manifestStore.load()
         if !previousManifest.isEmpty {
-            orphanedVMConfigs = previousManifest
+            orphanedVMSpecs = previousManifest
             logger.warning("Found \(previousManifest.count) VM(s) managed before restart; their QEMU processes are now unmanaged but their resources stay reserved", metadata: [
                 "vmIds": .string(previousManifest.keys.sorted().joined(separator: ","))
             ])
@@ -82,8 +82,8 @@ actor QEMUService: HypervisorService {
     
     // MARK: - VM Lifecycle Operations
 
-    /// Creates a VM with optional image info for disk caching
-    func createVM(vmId: String, config: VmConfig, imageInfo: ImageInfo? = nil) async throws {
+    /// Creates a VM from a hypervisor-neutral spec with optional image info for disk caching
+    func createVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil) async throws {
         // Mark VM as pending to handle concurrent boot requests
         pendingVMs.insert(vmId)
         defer { pendingVMs.remove(vmId) }
@@ -91,8 +91,10 @@ actor QEMUService: HypervisorService {
         #if canImport(SwiftQEMU)
         logger.info("Creating QEMU VM", metadata: ["vmId": .string(vmId)])
 
-        // If imageInfo is provided, use cached image
-        var effectiveConfig = config
+        // Realize the VM's disks. The boot disk is materialized here from the cached
+        // image when imageInfo is provided; otherwise the spec's volume references
+        // (with agent-reported paths) are used.
+        var disks: [ResolvedDisk] = []
         if let imageInfo = imageInfo, let cacheService = imageCacheService {
             logger.info("Using cached image for VM", metadata: [
                 "vmId": .string(vmId),
@@ -125,37 +127,22 @@ actor QEMUService: HypervisorService {
                     ])
                 }
 
-                // Update config with the new disk path
-                let newDisk = DiskConfig(
-                    path: vmDiskPath,
-                    readonly: false,
-                    direct: false,
-                    id: "disk0"
-                )
-                effectiveConfig = VmConfig(
-                    cpus: config.cpus,
-                    memory: config.memory,
-                    payload: config.payload,
-                    disks: [newDisk],
-                    net: config.net,
-                    rng: config.rng,
-                    serial: config.serial,
-                    console: config.console,
-                    iommu: config.iommu,
-                    watchdog: config.watchdog,
-                    pvpanic: config.pvpanic
-                )
+                disks = [ResolvedDisk(path: vmDiskPath, readonly: false)]
             } catch {
-                logger.error("Failed to get cached image, falling back to original config", metadata: [
+                logger.error("Failed to get cached image, falling back to spec volumes", metadata: [
                     "vmId": .string(vmId),
                     "error": .string(error.localizedDescription)
                 ])
-                // Continue with original config
+                // Continue with the spec's volume references
             }
         }
 
-        // Create disk images from base if they don't exist (only if not using cached image)
-        if let disks = effectiveConfig.disks {
+        if disks.isEmpty {
+            disks = spec.volumes.compactMap { volume in
+                volume.storagePath.map { ResolvedDisk(path: $0, readonly: volume.readonly) }
+            }
+
+            // Create disk images from base if they don't exist
             for disk in disks {
                 let diskPath = disk.path
                 let fileManager = FileManager.default
@@ -200,12 +187,12 @@ actor QEMUService: HypervisorService {
         let qemuManager = QEMUManager(qemuPath: qemuBinaryPath, logger: logger)
 
         // Set up VM networking first
-        if let networks = effectiveConfig.net, !networks.isEmpty {
-            try await setupVMNetworking(vmId: vmId, networks: networks)
+        if !spec.networks.isEmpty {
+            try await setupVMNetworking(vmId: vmId, networks: spec.networks)
         }
 
-        // Configure and create VM
-        let qemuConfig = convertToQEMUConfiguration(effectiveConfig, vmId: vmId)
+        // Translate the neutral spec into QEMU's native configuration
+        let qemuConfig = convertToQEMUConfiguration(spec, disks: disks, vmId: vmId)
 
         // Create VM with timeout - QMP connection can hang indefinitely
         logger.info("Starting QEMU VM creation with 30 second timeout", metadata: ["vmId": .string(vmId)])
@@ -235,10 +222,10 @@ actor QEMUService: HypervisorService {
         }
 
         activeVMs[vmId] = qemuManager
-        vmConfigs[vmId] = effectiveConfig
+        vmSpecs[vmId] = spec
         // A re-created VM is actively managed again; drop any orphan record so its
         // resources are not double-counted.
-        orphanedVMConfigs.removeValue(forKey: vmId)
+        orphanedVMSpecs.removeValue(forKey: vmId)
         persistManifest()
 
         logger.info("QEMU VM created successfully", metadata: ["vmId": .string(vmId)])
@@ -373,7 +360,7 @@ actor QEMUService: HypervisorService {
             // the control plane can remove the record. The unmanaged QEMU process
             // (if still alive) cannot be stopped from here — that needs operator
             // cleanup (or Option B re-adoption).
-            if orphanedVMConfigs.removeValue(forKey: vmId) != nil {
+            if orphanedVMSpecs.removeValue(forKey: vmId) != nil {
                 persistManifest()
                 logger.warning("Deleted orphaned VM from manifest; any surviving QEMU process must be cleaned up manually", metadata: [
                     "vmId": .string(vmId)
@@ -393,7 +380,7 @@ actor QEMUService: HypervisorService {
 
         // Clean up VM resources
         activeVMs.removeValue(forKey: vmId)
-        vmConfigs.removeValue(forKey: vmId)
+        vmSpecs.removeValue(forKey: vmId)
         persistManifest()
         vmNetworkInfo.removeValue(forKey: vmId)
 
@@ -422,7 +409,7 @@ actor QEMUService: HypervisorService {
     func getVMInfo(vmId: String) async throws -> VmInfo {
         #if canImport(SwiftQEMU)
         guard let qemuManager = activeVMs[vmId],
-              let config = vmConfigs[vmId] else {
+              let spec = vmSpecs[vmId] else {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
 
@@ -430,25 +417,26 @@ actor QEMUService: HypervisorService {
         let status = try await qemuManager.getStatus()
 
         return VmInfo(
-            config: config,
+            spec: spec,
             state: status.rawValue,
-            memoryActualSize: config.memory?.size
+            memoryActualSize: spec.memoryBytes
         )
         #else
         // Mock mode - return mock info
         guard mockVMs[vmId] != nil else {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
-        let mockConfig = VmConfig(
-            cpus: CpusConfig(bootVcpus: 2, maxVcpus: 4),
-            memory: MemoryConfig(size: 2 * 1024 * 1024 * 1024), // 2GB
-            payload: PayloadConfig(kernel: "/boot/vmlinuz")
+        let mockSpec = VMSpec(
+            cpus: 2,
+            maxCpus: 4,
+            memoryBytes: 2 * 1024 * 1024 * 1024, // 2GB
+            boot: .directKernel(kernel: "/boot/vmlinuz", initramfs: nil, cmdline: nil)
         )
 
         return VmInfo(
-            config: mockConfig,
+            spec: mockSpec,
             state: "running",
-            memoryActualSize: mockConfig.memory?.size
+            memoryActualSize: mockSpec.memoryBytes
         )
         #endif
     }
@@ -515,6 +503,16 @@ actor QEMUService: HypervisorService {
         #endif
     }
 
+    /// Console access for QEMU VMs: the serial and/or virtio-console Unix sockets.
+    /// Returns nil when neither socket exists (VM not running or console not enabled).
+    func consoleEndpoint(vmId: String) async throws -> ConsoleEndpoint? {
+        let endpoint = ConsoleEndpoint(
+            serialSocketPath: getSerialSocketPath(vmId: vmId),
+            consoleSocketPath: getConsoleSocketPath(vmId: vmId)
+        )
+        return endpoint.isEmpty ? nil : endpoint
+    }
+
     func getVMStatus(vmId: String) async throws -> VMStatus {
         #if canImport(SwiftQEMU)
         // Shut-down VMs stay in activeVMs until deleted, so an absent entry means
@@ -570,24 +568,24 @@ actor QEMUService: HypervisorService {
         var vcpus = 0
         var memoryBytes: Int64 = 0
         #if canImport(SwiftQEMU)
-        for config in vmConfigs.values {
-            vcpus += config.cpus?.bootVcpus ?? 0
-            memoryBytes += config.memory?.size ?? 0
+        for spec in vmSpecs.values {
+            vcpus += spec.cpus
+            memoryBytes += spec.memoryBytes
         }
         #endif
-        for config in orphanedVMConfigs.values {
-            vcpus += config.cpus?.bootVcpus ?? 0
-            memoryBytes += config.memory?.size ?? 0
+        for spec in orphanedVMSpecs.values {
+            vcpus += spec.cpus
+            memoryBytes += spec.memoryBytes
         }
         return (vcpus, memoryBytes)
     }
 
     /// Persists the current set of managed VMs to the on-disk manifest so they can be
     /// detected as orphaned after an agent restart. Orphaned entries are carried over
-    /// (active configs win on ID collision) so a second restart still knows about them.
+    /// (active specs win on ID collision) so a second restart still knows about them.
     private func persistManifest() {
         #if canImport(SwiftQEMU)
-        manifestStore.save(orphanedVMConfigs.merging(vmConfigs) { _, active in active })
+        manifestStore.save(orphanedVMSpecs.merging(vmSpecs) { _, active in active })
         #endif
     }
 
@@ -625,8 +623,8 @@ actor QEMUService: HypervisorService {
 
     // MARK: - VM Management Helpers
 
-    func createAndStartVM(vmId: String, config: VmConfig) async throws {
-        try await createVM(vmId: vmId, config: config)
+    func createAndStartVM(vmId: String, spec: VMSpec) async throws {
+        try await createVM(vmId: vmId, spec: spec)
         try await bootVM(vmId: vmId)
     }
 
@@ -763,17 +761,31 @@ actor QEMUService: HypervisorService {
         return path
     }
 
-    private func convertToQEMUConfiguration(_ config: VmConfig, vmId: String) -> QEMUConfiguration {
+    /// A disk realized on this host: the agent-resolved path plus attach options.
+    private struct ResolvedDisk {
+        let path: String
+        let readonly: Bool
+    }
+
+    private func convertToQEMUConfiguration(_ spec: VMSpec, disks: [ResolvedDisk], vmId: String) -> QEMUConfiguration {
         var qemuConfig = QEMUConfiguration()
 
         // Determine boot mode: direct kernel boot or UEFI firmware boot
-        let payload = config.payload
-        let hasKernelBoot = payload.kernel != nil && !payload.kernel!.isEmpty
+        let kernelBoot: (kernel: String, initramfs: String?, cmdline: String?)?
+        let firmware: String?
+        switch spec.boot {
+        case .directKernel(let kernel, let initramfs, let cmdline):
+            kernelBoot = (kernel, initramfs, cmdline)
+            firmware = nil
+        case .disk(let specFirmware):
+            kernelBoot = nil
+            firmware = specFirmware
+        }
 
         // Configure machine type based on architecture and boot mode
         #if arch(arm64)
         // For ARM64 UEFI boot, we need gic-version=3 for EDK2 firmware compatibility
-        qemuConfig.machineType = hasKernelBoot ? "virt" : "virt,gic-version=3"
+        qemuConfig.machineType = kernelBoot != nil ? "virt" : "virt,gic-version=3"
         qemuConfig.cpuType = "host"
         logger.debug("Configuring ARM64 machine type: \(qemuConfig.machineType)")
         #else
@@ -783,69 +795,61 @@ actor QEMUService: HypervisorService {
         #endif
 
         // Configure CPU
-        if let cpuConfig = config.cpus {
-            qemuConfig.cpuCount = Int(cpuConfig.bootVcpus)
-            logger.debug("Configuring CPU: \(cpuConfig.bootVcpus) cores")
-        }
+        qemuConfig.cpuCount = spec.cpus
+        logger.debug("Configuring CPU: \(spec.cpus) cores")
 
         // Configure Memory (convert bytes to MB)
-        if let memoryConfig = config.memory {
-            qemuConfig.memoryMB = Int(memoryConfig.size / (1024 * 1024))
-            logger.debug("Configuring memory: \(memoryConfig.size) bytes (\(qemuConfig.memoryMB) MB)")
-        }
+        qemuConfig.memoryMB = Int(spec.memoryBytes / (1024 * 1024))
+        logger.debug("Configuring memory: \(spec.memoryBytes) bytes (\(qemuConfig.memoryMB) MB)")
 
         // Configure disks
-        if let disks = config.disks {
-            qemuConfig.disks = disks.map { disk in
-                QEMUDisk(
-                    path: disk.path,
-                    format: "qcow2",
-                    interface: "virtio",
-                    readonly: disk.readonly ?? false
+        qemuConfig.disks = disks.map { disk in
+            QEMUDisk(
+                path: disk.path,
+                format: "qcow2",
+                interface: "virtio",
+                readonly: disk.readonly
+            )
+        }
+
+        // Configure networking
+        qemuConfig.networks = spec.networks.map { network in
+            // Get network info for this VM if available
+            if let networkInfo = vmNetworkInfo[vmId] {
+                // Check if we have a real TAP interface or using user-mode
+                if networkInfo.tapInterface != "n/a" {
+                    // Use TAP interface for OVN integration
+                    return QEMUNetwork(
+                        backend: "tap",
+                        model: "virtio-net-pci",
+                        macAddress: networkInfo.macAddress,
+                        options: "ifname=\(networkInfo.tapInterface),script=no,downscript=no"
+                    )
+                } else {
+                    // Use user-mode networking
+                    return QEMUNetwork(
+                        backend: "user",
+                        model: "virtio-net-pci",
+                        macAddress: networkInfo.macAddress
+                    )
+                }
+            } else {
+                // Fallback to user networking
+                return QEMUNetwork(
+                    backend: "user",
+                    model: "virtio-net-pci",
+                    macAddress: network.macAddress
                 )
             }
         }
 
-        // Configure networking
-        if let networks = config.net {
-            qemuConfig.networks = networks.compactMap { network in
-                // Get network info for this VM if available
-                if let networkInfo = vmNetworkInfo[vmId] {
-                    // Check if we have a real TAP interface or using user-mode
-                    if networkInfo.tapInterface != "n/a" {
-                        // Use TAP interface for OVN integration
-                        return QEMUNetwork(
-                            backend: "tap",
-                            model: "virtio-net-pci",
-                            macAddress: networkInfo.macAddress,
-                            options: "ifname=\(networkInfo.tapInterface),script=no,downscript=no"
-                        )
-                    } else {
-                        // Use user-mode networking
-                        return QEMUNetwork(
-                            backend: "user",
-                            model: "virtio-net-pci",
-                            macAddress: networkInfo.macAddress
-                        )
-                    }
-                } else {
-                    // Fallback to user networking
-                    return QEMUNetwork(
-                        backend: "user",
-                        model: "virtio-net-pci",
-                        macAddress: network.mac
-                    )
-                }
-            }
-        }
-
         // Configure boot mode: direct kernel boot or UEFI firmware boot
-        if hasKernelBoot {
+        if let kernelBoot {
             // Direct kernel boot
-            qemuConfig.kernel = payload.kernel
-            qemuConfig.initrd = payload.initramfs
+            qemuConfig.kernel = kernelBoot.kernel
+            qemuConfig.initrd = kernelBoot.initramfs
             // Ensure serial console is in kernel args
-            var cmdline = payload.cmdline ?? ""
+            var cmdline = kernelBoot.cmdline ?? ""
             let consoleArgs = [
                 "console=tty0",
                 "console=ttyS0,115200",
@@ -863,13 +867,13 @@ actor QEMUService: HypervisorService {
             }
             qemuConfig.kernelArgs = cmdline
             logger.info("Direct kernel boot configured", metadata: [
-                "kernel": .string(payload.kernel!),
+                "kernel": .string(kernelBoot.kernel),
                 "cmdline": .string(cmdline)
             ])
         } else {
             // UEFI firmware boot (disk-based)
             // Resolve firmware path: explicit config > platform default
-            if let firmwarePath = resolveFirmwarePath(payload.firmware) {
+            if let firmwarePath = resolveFirmwarePath(firmware) {
                 qemuConfig.additionalArgs.append(contentsOf: ["-bios", firmwarePath])
                 logger.info("UEFI firmware boot configured", metadata: [
                     "firmware": .string(firmwarePath),
@@ -949,25 +953,25 @@ actor QEMUService: HypervisorService {
     
     // MARK: - VM Network Management
     
-    private func setupVMNetworking(vmId: String, networks: [NetConfig]) async throws {
+    private func setupVMNetworking(vmId: String, networks: [NetworkSpec]) async throws {
         guard let networkService = networkService else {
             logger.warning("Network service not available, skipping network setup")
             return
         }
-        
+
         logger.info("Setting up VM networking", metadata: ["vmId": .string(vmId)])
-        
+
         // For now, handle only the first network configuration
         // In production, this could be expanded to handle multiple networks
         guard let firstNetwork = networks.first else {
             return
         }
-        
-        // Create network configuration from NetConfig
+
+        // Create network configuration from the spec's network reference
         let networkConfig = VMNetworkConfig(
-            networkName: firstNetwork.id ?? "default",
-            macAddress: firstNetwork.mac,
-            ipAddress: firstNetwork.ip,
+            networkName: firstNetwork.network,
+            macAddress: firstNetwork.macAddress,
+            ipAddress: firstNetwork.ipAddress,
             subnet: "192.168.1.0/24", // Default subnet - should be configurable
             gateway: "192.168.1.1"
         )

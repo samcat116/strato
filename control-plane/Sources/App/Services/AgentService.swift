@@ -493,11 +493,11 @@ actor AgentService {
     /// Creates a VM on an agent selected by the scheduler
     /// - Parameters:
     ///   - vm: The VM to create
-    ///   - vmConfig: VM configuration for QEMU
+    ///   - vmSpec: Hypervisor-neutral VM specification
     ///   - db: Database connection
     ///   - strategy: Optional scheduling strategy override
     ///   - image: Optional image for image-based VM creation (will generate signed download URL)
-    func createVM(vm: VM, vmConfig: VmConfig, db: Database, strategy: SchedulingStrategy? = nil, image: Image? = nil) async throws {
+    func createVM(vm: VM, vmSpec: VMSpec, db: Database, strategy: SchedulingStrategy? = nil, image: Image? = nil) async throws {
         // Convert agents to schedulable format
         let schedulableAgents = getSchedulableAgents()
 
@@ -511,7 +511,10 @@ actor AgentService {
             )
         } catch let error as SchedulerError {
             app.logger.error("Scheduler failed to find suitable agent: \(error)")
-            throw AgentServiceError.noAvailableAgent
+            // Preserve the scheduler's reason (unsupported hypervisor, arch
+            // mismatch, insufficient resources, ...) instead of collapsing
+            // every placement failure into a generic "no agent available".
+            throw AgentServiceError.schedulingFailed(error.description)
         }
 
         guard agents[agentId] != nil else {
@@ -524,7 +527,7 @@ actor AgentService {
             do {
                 let controlPlaneURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
                 let signingKey = try URLSigningService.getSigningKey(from: app)
-                imageInfo = try VMConfigBuilder.buildImageInfo(
+                imageInfo = try VMSpecBuilder.buildImageInfo(
                     from: image,
                     controlPlaneURL: controlPlaneURL,
                     agentName: agentId,
@@ -538,7 +541,7 @@ actor AgentService {
 
         let message = VMCreateMessage(
             vmData: vm.toVMData(),
-            vmConfig: vmConfig,
+            vmSpec: vmSpec,
             imageInfo: imageInfo
         )
 
@@ -633,9 +636,9 @@ actor AgentService {
                 availableDisk: agentInfo.resources.availableDisk,
                 status: agentInfo.status,
                 runningVMCount: vmToAgentMapping.values.filter { $0 == agentInfo.id }.count,
+                supportedHypervisors: agentInfo.supportedHypervisors,
                 architecture: agentInfo.architecture,
-                hypervisors: agentInfo.hypervisors,
-                networkCapability: agentInfo.networkCapability
+                supportsInterVMNetworking: agentInfo.supportsInterVMNetworking
             )
         }
     }
@@ -870,12 +873,38 @@ struct AgentInfo: Sendable {
     let hostname: String
     let version: String
     let capabilities: [String]
-    let architecture: HostArchitecture?
+    /// Host CPU architecture; nil for agents that predate architecture reporting
+    let architecture: CPUArchitecture?
+    /// Hypervisors on the host with probed availability, capabilities, and
+    /// unavailability reasons. For agents that predate the structured report
+    /// this is derived from their legacy capability strings
+    /// (`AgentRegisterMessage.effectiveHypervisors`).
     let hypervisors: [HypervisorSupport]
+    /// Host networking capability; nil when the agent reported none (older
+    /// agent, or an OVN backend that failed to connect at startup).
     let networkCapability: NetworkCapability?
     var resources: AgentResources
     var lastHeartbeat: Date
     var status: AgentStatus
+
+    /// Hypervisor backends this agent can actually run. Agents probe each
+    /// backend before reporting it, so an empty list means the agent cannot
+    /// run VMs at all — it stays registered but is never eligible for
+    /// placement. No QEMU fallback here: assuming QEMU for an empty list
+    /// would defeat the agent-side probe in exactly the case it exists for.
+    var supportedHypervisors: [HypervisorType] {
+        hypervisors.filter(\.available).map(\.type)
+    }
+
+    /// Only OVN-backed agents can provide VM-to-VM networking; user-mode
+    /// (SLIRP) agents cannot. Agents that predate structured network
+    /// capability reporting are judged by their legacy capability strings.
+    var supportsInterVMNetworking: Bool {
+        if let networkCapability {
+            return networkCapability == .overlay
+        }
+        return capabilities.contains("ovn_networking")
+    }
 }
 
 enum AgentServiceResponse: Sendable {
@@ -885,6 +914,7 @@ enum AgentServiceResponse: Sendable {
 
 enum AgentServiceError: Error, LocalizedError, Sendable {
     case noAvailableAgent
+    case schedulingFailed(String)
     case agentNotFound(String)
     case vmNotMapped(String)
     case requestTimeout
@@ -895,6 +925,8 @@ enum AgentServiceError: Error, LocalizedError, Sendable {
         switch self {
         case .noAvailableAgent:
             return "No available agent found for VM deployment"
+        case .schedulingFailed(let reason):
+            return "VM placement failed: \(reason)"
         case .agentNotFound(let agentId):
             return "Agent not found: \(agentId)"
         case .vmNotMapped(let vmId):

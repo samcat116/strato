@@ -108,8 +108,12 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+        # Bind container port 5432 to an ephemeral host port (read back below
+        # via the job.services context) rather than a fixed 5432:5432. On the
+        # shared self-hosted runner a fixed mapping collides with anything else
+        # already bound to 5432; a dynamic port avoids that.
         ports:
-          - 5432:5432
+          - 5432
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -136,8 +140,29 @@ jobs:
         working-directory: control-plane
         run: swift build --build-tests
 
-      - name: Test Control Plane
+      # Two legs, one build: fast engine-independent coverage on SQLite, then
+      # the identical suite against the real engine production uses, validating
+      # migrations and Postgres-specific SQL (issue #195). Kept as sequential
+      # steps in one job rather than a matrix so only a single Postgres service
+      # container starts — a matrix would fan out two containers that both try
+      # to bind the port on this shared self-hosted runner.
+      - name: Test Control Plane (SQLite)
         working-directory: control-plane
+        env:
+          STRATO_TEST_DATABASE: sqlite
+        run: swift test --skip-build --parallel
+
+      - name: Test Control Plane (Postgres)
+        # Run even if the SQLite leg failed, so both engines always report.
+        if: ${{ !cancelled() }}
+        working-directory: control-plane
+        env:
+          STRATO_TEST_DATABASE: postgres
+          DATABASE_HOST: localhost
+          DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}
+          DATABASE_NAME: strato_test
+          DATABASE_USERNAME: strato
+          DATABASE_PASSWORD: strato_password
         run: swift test --skip-build --parallel
 
   security:

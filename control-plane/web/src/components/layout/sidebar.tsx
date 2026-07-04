@@ -8,7 +8,6 @@ import {
   LayoutDashboard,
   Monitor,
   HardDrive,
-  Network,
   Server,
   Settings,
   Plus,
@@ -68,6 +67,27 @@ interface SidebarLinkProps {
   href: string;
   children: React.ReactNode;
   onClick?: () => void;
+}
+
+function SidebarDisabledLink({
+  children,
+  tooltip,
+}: {
+  children: React.ReactNode;
+  tooltip: string;
+}) {
+  return (
+    <span
+      title={tooltip}
+      aria-disabled="true"
+      className="flex items-center justify-between px-3 py-2 text-sm rounded-md text-gray-500 cursor-not-allowed"
+    >
+      {children}
+      <span className="ml-2 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide rounded bg-gray-700 text-gray-400">
+        Soon
+      </span>
+    </span>
+  );
 }
 
 function SidebarLink({ href, children, onClick }: SidebarLinkProps) {
@@ -133,18 +153,12 @@ export function Sidebar({ onCreateVM, onAddAgent, onManageAPIKeys }: SidebarProp
           defaultOpen
         >
           <SidebarLink href="/images">Images</SidebarLink>
-          <SidebarLink href="/storage/volumes">Volumes</SidebarLink>
-          <SidebarLink href="/storage/snapshots">Snapshots</SidebarLink>
-        </SidebarSection>
-
-        {/* Networking Section */}
-        <SidebarSection
-          id="networking-section"
-          title="Networking"
-          icon={<Network className="h-4 w-4" />}
-        >
-          <SidebarLink href="/networking/networks">Networks</SidebarLink>
-          <SidebarLink href="/networking/load-balancers">Load Balancers</SidebarLink>
+          <SidebarDisabledLink tooltip="Volume management is coming soon">
+            Volumes
+          </SidebarDisabledLink>
+          <SidebarDisabledLink tooltip="Volume snapshots are coming soon">
+            Snapshots
+          </SidebarDisabledLink>
         </SidebarSection>
 
         {/* Nodes Section */}

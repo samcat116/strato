@@ -1,0 +1,240 @@
+import Foundation
+import Vapor
+import StratoShared
+
+/// Builds the hypervisor-neutral `VMSpec` sent to agents. The spec deliberately
+/// carries no device-level realization (host paths the control plane cannot know,
+/// tap names, queue sizing, machine types) — agents derive those when translating
+/// the spec into their driver-native configuration.
+struct VMSpecBuilder {
+    private static func ensureSerialConsole(_ cmdline: String?) -> String {
+        let trimmed = (cmdline ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0"
+        }
+        var parts = trimmed.split(whereSeparator: \.isWhitespace).map(String.init)
+        var seen: Set<String> = []
+        for index in parts.indices {
+            if parts[index].hasPrefix("console=tty0") {
+                parts[index] = "console=tty0"
+                seen.insert("tty0")
+            } else if parts[index].hasPrefix("console=ttyS0") {
+                parts[index] = "console=ttyS0,115200"
+                seen.insert("ttyS0")
+            } else if parts[index].hasPrefix("console=ttyAMA0") {
+                parts[index] = "console=ttyAMA0,115200"
+                seen.insert("ttyAMA0")
+            } else if parts[index].hasPrefix("console=hvc0") {
+                parts[index] = "console=hvc0"
+                seen.insert("hvc0")
+            }
+        }
+        if !seen.contains("tty0") { parts.append("console=tty0") }
+        if !seen.contains("ttyS0") { parts.append("console=ttyS0,115200") }
+        if !seen.contains("ttyAMA0") { parts.append("console=ttyAMA0,115200") }
+        if !seen.contains("hvc0") { parts.append("console=hvc0") }
+        return parts.joined(separator: " ")
+    }
+
+    /// Direct kernel boot when a kernel is specified, firmware (disk) boot otherwise.
+    private static func bootSource(
+        kernel: String?,
+        initramfs: String?,
+        cmdline: String?,
+        firmware: String?
+    ) -> BootSource {
+        if let kernel, !kernel.isEmpty {
+            return .directKernel(
+                kernel: kernel,
+                initramfs: initramfs,
+                cmdline: ensureSerialConsole(cmdline)
+            )
+        }
+        return .disk(firmware: firmware)
+    }
+
+    /// Single NIC on the default network, when the VM has a MAC assigned.
+    private static func networkSpecs(from vm: VM) -> [NetworkSpec] {
+        guard let macAddress = vm.macAddress else { return [] }
+        return [
+            NetworkSpec(
+                network: "default",
+                macAddress: macAddress,
+                ipAddress: vm.ipAddress,
+                netmask: vm.networkMask
+            )
+        ]
+    }
+
+    /// Legacy single-disk volume list from `vm.diskPath`.
+    private static func legacyVolumeSpecs(from vm: VM) -> [VolumeSpec] {
+        guard let diskPath = vm.diskPath else { return [] }
+        return [
+            VolumeSpec(
+                deviceName: "disk0",
+                storagePath: diskPath,
+                readonly: vm.readonlyDisk
+            )
+        ]
+    }
+
+    /// Builds a VM spec from VM and template (legacy method)
+    /// - Note: This method is deprecated. Use `buildVMSpec(from:image:)` instead.
+    @available(*, deprecated, message: "Use buildVMSpec(from:image:) instead")
+    static func buildVMSpec(from vm: VM, template: VMTemplate) -> VMSpec {
+        VMSpec(
+            cpus: vm.cpu,
+            maxCpus: vm.maxCpu,
+            memoryBytes: vm.memory,
+            sharedMemory: vm.sharedMemory,
+            hugepages: vm.hugepages,
+            boot: bootSource(
+                kernel: vm.kernelPath ?? template.kernelPath,
+                initramfs: vm.initramfsPath ?? template.initramfsPath,
+                cmdline: vm.cmdline ?? template.defaultCmdline,
+                firmware: vm.firmwarePath ?? template.firmwarePath
+            ),
+            volumes: legacyVolumeSpecs(from: vm),
+            networks: networkSpecs(from: vm),
+            console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode)
+        )
+    }
+
+    /// Builds a VM spec from VM and Image. The boot volume is materialized by the
+    /// agent from the cached image (see `buildImageInfo`), so no volume entry is
+    /// sent unless the VM carries a legacy disk path.
+    static func buildVMSpec(from vm: VM, image: Image) -> VMSpec {
+        let cpuCount = vm.cpu > 0 ? vm.cpu : (image.defaultCpu ?? 1)
+        let memorySize = vm.memory > 0 ? vm.memory : (image.defaultMemory ?? 1024 * 1024 * 1024) // 1GB default
+
+        return VMSpec(
+            cpus: cpuCount,
+            maxCpus: vm.maxCpu > 0 ? vm.maxCpu : cpuCount,
+            memoryBytes: memorySize,
+            sharedMemory: vm.sharedMemory,
+            hugepages: vm.hugepages,
+            boot: bootSource(
+                kernel: vm.kernelPath,
+                initramfs: vm.initramfsPath,
+                cmdline: vm.cmdline ?? image.defaultCmdline,
+                firmware: vm.firmwarePath
+            ),
+            volumes: legacyVolumeSpecs(from: vm),
+            networks: networkSpecs(from: vm),
+            console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode)
+        )
+    }
+
+    /// Builds a VM spec from VM and Image, with attached volumes
+    /// - Parameters:
+    ///   - vm: The VM to build the spec for (must have volumes eager-loaded with .with(\.$volumes))
+    ///   - image: The image used for the boot volume (if no boot volume attached)
+    ///   - volumes: Attached volumes (sorted by boot order, then device name)
+    static func buildVMSpecWithVolumes(from vm: VM, image: Image?, volumes: [Volume]) -> VMSpec {
+        let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
+        let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024) // 1GB default
+
+        var volumes = volumeSpecs(from: volumes)
+        if volumes.isEmpty {
+            volumes = legacyVolumeSpecs(from: vm)
+        }
+
+        return VMSpec(
+            cpus: cpuCount,
+            maxCpus: vm.maxCpu > 0 ? vm.maxCpu : cpuCount,
+            memoryBytes: memorySize,
+            sharedMemory: vm.sharedMemory,
+            hugepages: vm.hugepages,
+            boot: bootSource(
+                kernel: vm.kernelPath,
+                initramfs: vm.initramfsPath,
+                cmdline: vm.cmdline ?? image?.defaultCmdline,
+                firmware: vm.firmwarePath
+            ),
+            volumes: volumes,
+            networks: networkSpecs(from: vm),
+            console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode)
+        )
+    }
+
+    /// Builds volume specs from attached volumes, sorted by boot order (explicit
+    /// orders first), then device name.
+    static func volumeSpecs(from volumes: [Volume]) -> [VolumeSpec] {
+        let sortedVolumes = volumes.sorted { v1, v2 in
+            switch (v1.bootOrder, v2.bootOrder) {
+            case (let o1?, let o2?):
+                return o1 < o2
+            case (nil, _?):
+                return false
+            case (_?, nil):
+                return true
+            case (nil, nil):
+                return (v1.deviceName ?? "") < (v2.deviceName ?? "")
+            }
+        }
+
+        var specs: [VolumeSpec] = []
+        for volume in sortedVolumes where volume.status == .attached {
+            guard let storagePath = volume.storagePath else { continue }
+            specs.append(VolumeSpec(
+                volumeId: volume.id,
+                deviceName: volume.deviceName ?? "disk\(specs.count)",
+                storagePath: storagePath,
+                readonly: false, // Could be enhanced to track readonly per-volume
+                bootOrder: volume.bootOrder
+            ))
+        }
+        return specs
+    }
+
+    /// Builds ImageInfo for agent to download and cache the image
+    /// - Parameters:
+    ///   - image: The image to build info for
+    ///   - controlPlaneURL: Base URL of the control plane
+    ///   - agentName: Name of the agent that will download the image
+    ///   - signingKey: Secret key for signing the download URL
+    ///   - expiresIn: Time until the URL expires (default: 1 hour)
+    /// - Returns: ImageInfo with a signed download URL
+    static func buildImageInfo(
+        from image: Image,
+        controlPlaneURL: String,
+        agentName: String,
+        signingKey: String,
+        expiresIn: TimeInterval = URLSigningService.defaultExpiration
+    ) throws -> ImageInfo {
+        guard let imageId = image.id else {
+            throw Abort(.internalServerError, reason: "Image ID is required")
+        }
+
+        guard let checksum = image.checksum else {
+            throw Abort(.internalServerError, reason: "Image checksum is required")
+        }
+
+        guard image.status == .ready else {
+            throw Abort(.badRequest, reason: "Image is not ready for use")
+        }
+
+        // Generate signed URL for agent download
+        let downloadURL = URLSigningService.signImageDownloadURL(
+            imageId: imageId,
+            projectId: image.$project.id,
+            agentName: agentName,
+            baseURL: controlPlaneURL,
+            expiresIn: expiresIn,
+            signingKey: signingKey
+        )
+
+        // Calculate expiration date for agent awareness
+        let expiresAt = Date().addingTimeInterval(expiresIn)
+
+        return ImageInfo(
+            imageId: imageId,
+            projectId: image.$project.id,
+            filename: image.filename,
+            checksum: checksum,
+            size: image.size,
+            downloadURL: downloadURL,
+            expiresAt: expiresAt
+        )
+    }
+}
