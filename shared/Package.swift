@@ -28,6 +28,14 @@ let package = Package(
                 .enableUpcomingFeature("InferIsolatedConformances"),
                 .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
             ]
+        ),
+        .testTarget(
+            name: "StratoSharedTests",
+            dependencies: ["StratoShared"],
+            swiftSettings: [
+                .enableUpcomingFeature("InferIsolatedConformances"),
+                .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
+            ]
         )
     ],
     swiftLanguageModes: [.v6]
