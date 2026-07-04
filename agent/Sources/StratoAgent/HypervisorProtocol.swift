@@ -2,6 +2,27 @@ import Foundation
 import Logging
 import StratoShared
 
+/// Console access points a hypervisor exposes for a VM.
+/// A backend may offer a serial socket, a virtio-console socket, both, or neither.
+/// Consumers should try `serialSocketPath` first and fall back to `consoleSocketPath`.
+public struct ConsoleEndpoint: Sendable {
+    /// Unix socket path for the VM's serial console, if available
+    public let serialSocketPath: String?
+
+    /// Unix socket path for the VM's virtio-console, if available
+    public let consoleSocketPath: String?
+
+    public init(serialSocketPath: String?, consoleSocketPath: String?) {
+        self.serialSocketPath = serialSocketPath
+        self.consoleSocketPath = consoleSocketPath
+    }
+
+    /// True when neither socket is available
+    public var isEmpty: Bool {
+        serialSocketPath == nil && consoleSocketPath == nil
+    }
+}
+
 /// Protocol defining the interface for hypervisor services
 /// Both QEMUService and FirecrackerService conform to this protocol
 public protocol HypervisorService: Actor, Sendable {
@@ -52,6 +73,27 @@ public protocol HypervisorService: Actor, Sendable {
     /// Lists all VM IDs managed by this service
     /// - Returns: Array of VM identifiers
     func listVMs() async -> [String]
+
+    /// Returns the console access points for a VM, or nil if none exist yet
+    /// (e.g. the VM is not running).
+    /// - Parameter vmId: The VM identifier
+    /// - Throws: `HypervisorServiceError.notSupported` if this backend has no
+    ///   console mechanism at all
+    func consoleEndpoint(vmId: String) async throws -> ConsoleEndpoint?
+
+    /// Attaches a disk to a running VM (hot-plug)
+    /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
+    ///   hot-plug disks
+    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool) async throws
+
+    /// Detaches a disk from a running VM (hot-unplug)
+    /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
+    ///   hot-unplug disks
+    func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws
+
+    /// Sum of vCPUs and memory (in bytes) committed to VMs this service manages.
+    /// Used to compute accurate available-resource figures for the scheduler.
+    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)
 }
 
 // MARK: - Default Implementations

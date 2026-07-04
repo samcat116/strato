@@ -694,19 +694,11 @@ actor Agent {
         var reservedCPU = 0
         var reservedMemory: Int64 = 0
 
-        if let qemu = qemuService {
-            let reserved = await qemu.reservedResources()
+        for service in hypervisorServices {
+            let reserved = await service.reservedResources()
             reservedCPU += reserved.vcpus
             reservedMemory += reserved.memoryBytes
         }
-
-        #if os(Linux)
-        if let firecracker = firecrackerService {
-            let reserved = await firecracker.reservedResources()
-            reservedCPU += reserved.vcpus
-            reservedMemory += reserved.memoryBytes
-        }
-        #endif
 
         let availableCPU = max(0, totalCPU - reservedCPU)
         let availableMemory = max(0, totalMemory - reservedMemory)
@@ -733,21 +725,29 @@ actor Agent {
     private func getRunningVMList() async -> [String] {
         var vmList: [String] = []
 
-        // Get VMs from QEMU service
-        if let qemu = qemuService {
-            let qemuVMs = await qemu.listVMs()
-            vmList.append(contentsOf: qemuVMs)
+        for service in hypervisorServices {
+            let vms = await service.listVMs()
+            vmList.append(contentsOf: vms)
         }
-
-        // Get VMs from Firecracker service (Linux only)
-        #if os(Linux)
-        if let firecracker = firecrackerService {
-            let firecrackerVMs = await firecracker.listVMs()
-            vmList.append(contentsOf: firecrackerVMs)
-        }
-        #endif
 
         return vmList
+    }
+
+    /// All hypervisor backends this agent is running. Together with
+    /// `getHypervisorService(for:)`, this is the only place message handling
+    /// may reach the concrete services — everything else goes through the
+    /// `HypervisorService` protocol so new backends get honest behavior.
+    private var hypervisorServices: [any HypervisorService] {
+        var services: [any HypervisorService] = []
+        if let qemu = qemuService {
+            services.append(qemu)
+        }
+        #if os(Linux)
+        if let firecracker = firecrackerService {
+            services.append(firecracker)
+        }
+        #endif
+        return services
     }
 }
 
@@ -1326,16 +1326,28 @@ extension Agent {
             "requestId": .string(message.requestId)
         ])
 
-        guard let qemuService = qemuService else {
-            logger.error("QEMU service not available for console connect")
-            await sendError(for: message.requestId, error: "QEMU service not available")
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            logger.error("Hypervisor service not available for console connect", metadata: ["vmId": .string(message.vmId)])
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
             return
         }
 
         // Try serial socket first, then fall back to virtio-console if connect fails.
-        logger.debug("Looking up serial socket path", metadata: ["vmId": .string(message.vmId)])
-        let serialPath = await qemuService.getSerialSocketPath(vmId: message.vmId)
-        let consolePath = await qemuService.getConsoleSocketPath(vmId: message.vmId)
+        logger.debug("Looking up console endpoint", metadata: ["vmId": .string(message.vmId)])
+        let endpoint: ConsoleEndpoint?
+        do {
+            endpoint = try await service.consoleEndpoint(vmId: message.vmId)
+        } catch {
+            logger.error("Console not available", metadata: [
+                "vmId": .string(message.vmId),
+                "error": .string(error.localizedDescription)
+            ])
+            await sendError(for: message.requestId, error: "Console not available for VM \(message.vmId): \(error.localizedDescription)")
+            return
+        }
+
+        let serialPath = endpoint?.serialSocketPath
+        let consolePath = endpoint?.consoleSocketPath
 
         guard serialPath != nil || consolePath != nil else {
             logger.error("No console socket found (tried serial and virtio-console)", metadata: ["vmId": .string(message.vmId)])
@@ -1560,13 +1572,13 @@ extension Agent {
             "volumePath": .string(message.volumePath)
         ])
 
-        guard let qemuService = qemuService else {
-            await sendError(for: message.requestId, error: "QEMU service not available")
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
             return
         }
 
         do {
-            try await qemuService.attachDisk(
+            try await service.attachDisk(
                 vmId: message.vmId,
                 volumeId: message.volumeId,
                 volumePath: message.volumePath,
@@ -1603,13 +1615,13 @@ extension Agent {
             "deviceName": .string(message.deviceName)
         ])
 
-        guard let qemuService = qemuService else {
-            await sendError(for: message.requestId, error: "QEMU service not available")
+        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
             return
         }
 
         do {
-            try await qemuService.detachDisk(
+            try await service.detachDisk(
                 vmId: message.vmId,
                 volumeId: message.volumeId,
                 deviceName: message.deviceName
