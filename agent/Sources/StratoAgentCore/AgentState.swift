@@ -1,5 +1,10 @@
 import Foundation
 import Logging
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 
 /// Join state persisted across agent restarts.
 ///
@@ -115,30 +120,33 @@ public struct FileAgentStateStore: AgentStateStore {
 
         // Atomic replace: write a temp file in the same directory, then rename
         // over the destination, so a crash mid-write never truncates the state.
+        //
+        // Use POSIX rename(2) directly rather than FileManager. rename(2)
+        // atomically replaces an existing destination on the same filesystem,
+        // whether or not it already exists — so there is no separate
+        // create-vs-overwrite branch. FileManager's alternatives are both
+        // unsuitable on Linux: moveItem throws if the destination exists, and
+        // replaceItemAt on swift-corelibs-foundation fails against an existing
+        // file with "The file doesn't exist" (NSCocoaError 4), which is exactly
+        // the reconnect-time persistence failure this avoids.
         let tempPath = directory + "/.agent-state-\(UUID().uuidString).tmp"
-        fileManager.createFile(
+        guard fileManager.createFile(
             atPath: tempPath,
             contents: data,
             attributes: [.posixPermissions: 0o600]
-        )
-        do {
-            if fileManager.fileExists(atPath: path) {
-                _ = try fileManager.replaceItemAt(
-                    URL(fileURLWithPath: path),
-                    withItemAt: URL(fileURLWithPath: tempPath)
-                )
-            } else {
-                // First save: replaceItemAt requires an existing destination on
-                // swift-corelibs-foundation (Linux), so create via plain rename.
-                try fileManager.moveItem(atPath: tempPath, toPath: path)
-            }
-        } catch {
-            try? fileManager.removeItem(atPath: tempPath)
-            throw error
+        ) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: tempPath])
         }
-        // replaceItemAt can carry over the destination's old attributes;
-        // re-assert the restrictive mode.
-        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        if rename(tempPath, path) != 0 {
+            let code = errno
+            try? fileManager.removeItem(atPath: tempPath)
+            throw CocoaError(.fileWriteUnknown, userInfo: [
+                NSFilePathErrorKey: path,
+                NSLocalizedDescriptionKey: "rename to \(path) failed: \(String(cString: strerror(code)))"
+            ])
+        }
+        // The temp file was created 0600 and rename preserves the inode's mode,
+        // so the destination already carries the restrictive permissions.
     }
 
     /// Verifies the store can actually persist state, creating the directory

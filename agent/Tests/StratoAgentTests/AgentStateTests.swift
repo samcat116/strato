@@ -95,6 +95,32 @@ struct AgentStateTests {
         #expect(leftovers.isEmpty)
     }
 
+    @Test("Repeated overwrites succeed against an existing file (reconnect token rotation)")
+    func repeatedOverwrite() throws {
+        // Reproduces the run-mode reconnect path: the state file already exists
+        // from the initial join, and each rotated token must overwrite it in
+        // place. This is where replaceItemAt failed on Linux with "The file
+        // doesn't exist".
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = dir + "/agent-state.json"
+        let store = FileAgentStateStore(path: path)
+
+        try store.save(makeState(token: "join"))
+        try store.save(makeState(token: "rotated-1"))
+        try store.save(makeState(token: "rotated-2"))
+
+        #expect(store.load()?.reconnectToken == "rotated-2")
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
+        #expect(permissions == 0o600)
+
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir)
+            .filter { $0.hasSuffix(".tmp") }
+        #expect(leftovers.isEmpty)
+    }
+
     @Test("ensureWritable creates the directory and leaves no probe behind")
     func ensureWritableCreatesDirectory() throws {
         let dir = try makeTempDir()
