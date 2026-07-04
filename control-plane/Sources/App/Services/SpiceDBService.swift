@@ -17,7 +17,7 @@ struct SpiceDBService: SpiceDBServiceProtocol {
     private let endpoint: String
     private let presharedKey: String
 
-    init(client: Client, endpoint: String, presharedKey: String = "strato-dev-key") {
+    init(client: Client, endpoint: String, presharedKey: String) {
         self.client = client
         self.endpoint = endpoint
         self.presharedKey = presharedKey
@@ -400,7 +400,15 @@ extension Application {
         guard let endpoint = Environment.get("SPICEDB_ENDPOINT") else {
             fatalError("SPICEDB_ENDPOINT environment variable is required")
         }
-        let presharedKey = Environment.get("SPICEDB_PRESHARED_KEY") ?? "strato-dev-key"
+        // Require the preshared key to be provided explicitly. There is no
+        // in-code fallback: a hardcoded default would ship a known secret that
+        // authenticates against SpiceDB in any deployment that forgets to set
+        // this variable.
+        guard let presharedKey = Environment.get("SPICEDB_PRESHARED_KEY"),
+              !presharedKey.isEmpty
+        else {
+            fatalError("SPICEDB_PRESHARED_KEY environment variable is required and must not be empty")
+        }
         return SpiceDBService(client: self.client, endpoint: endpoint, presharedKey: presharedKey)
     }
 }

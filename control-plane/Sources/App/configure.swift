@@ -150,7 +150,14 @@ public func configure(_ app: Application) async throws {
 
     // Dev auth bypass - create dev user for local development
     if app.environment == .development, Environment.get("DEV_AUTH_BYPASS") == "true" {
-        app.logger.warning("⚠️ DEV_AUTH_BYPASS enabled - authentication is disabled!")
+        app.logger.critical("""
+        ============================================================
+        ⚠️  DEV_AUTH_BYPASS ENABLED — AUTHENTICATION IS DISABLED  ⚠️
+        Every request is served as a system-admin 'dev' user with no
+        credentials required. This is for LOCAL DEVELOPMENT ONLY.
+        Never enable DEV_AUTH_BYPASS on a host reachable by anyone else.
+        ============================================================
+        """)
         let devUser: User
         if let existingUser = try await User.query(on: app.db)
             .filter(\.$username == "dev")
