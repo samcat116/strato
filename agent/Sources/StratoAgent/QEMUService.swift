@@ -503,6 +503,16 @@ actor QEMUService: HypervisorService {
         #endif
     }
 
+    /// Console access for QEMU VMs: the serial and/or virtio-console Unix sockets.
+    /// Returns nil when neither socket exists (VM not running or console not enabled).
+    func consoleEndpoint(vmId: String) async throws -> ConsoleEndpoint? {
+        let endpoint = ConsoleEndpoint(
+            serialSocketPath: getSerialSocketPath(vmId: vmId),
+            consoleSocketPath: getConsoleSocketPath(vmId: vmId)
+        )
+        return endpoint.isEmpty ? nil : endpoint
+    }
+
     func getVMStatus(vmId: String) async throws -> VMStatus {
         #if canImport(SwiftQEMU)
         // Shut-down VMs stay in activeVMs until deleted, so an absent entry means

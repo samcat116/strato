@@ -283,6 +283,31 @@ actor FirecrackerService: HypervisorService {
         return (vcpus, memoryBytes)
     }
 
+    /// Firecracker exposes the guest serial console on the firecracker process's
+    /// stdio, not a Unix socket, so socket-based console access is not available yet.
+    func consoleEndpoint(vmId: String) async throws -> ConsoleEndpoint? {
+        guard vmManagers[vmId] != nil else {
+            throw HypervisorServiceError.vmNotFound(vmId)
+        }
+        throw HypervisorServiceError.notSupported("console access for Firecracker VMs")
+    }
+
+    /// Firecracker does not support hot-plugging drives into a running microVM.
+    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool) async throws {
+        guard vmManagers[vmId] != nil else {
+            throw HypervisorServiceError.vmNotFound(vmId)
+        }
+        throw HypervisorServiceError.notSupported("disk hot-plug for Firecracker VMs")
+    }
+
+    /// Firecracker does not support hot-unplugging drives from a running microVM.
+    func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws {
+        guard vmManagers[vmId] != nil else {
+            throw HypervisorServiceError.vmNotFound(vmId)
+        }
+        throw HypervisorServiceError.notSupported("disk hot-unplug for Firecracker VMs")
+    }
+
     // MARK: - Private Methods
 
     private func setupVMNetworking(vmId: String, networks: [NetworkSpec]) async throws {
@@ -394,6 +419,22 @@ actor FirecrackerService: HypervisorService {
 
     func listVMs() async -> [String] {
         return []
+    }
+
+    func consoleEndpoint(vmId: String) async throws -> ConsoleEndpoint? {
+        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
+    }
+
+    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool) async throws {
+        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
+    }
+
+    func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws {
+        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
+    }
+
+    func reservedResources() -> (vcpus: Int, memoryBytes: Int64) {
+        return (0, 0)
     }
 }
 #endif
