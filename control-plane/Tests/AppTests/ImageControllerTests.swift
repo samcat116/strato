@@ -162,7 +162,6 @@ final class ImageControllerTests {
         } catch {
             try? await app.autoRevert()
             try await app.asyncShutdown()
-            try? await Task.sleep(for: .seconds(2))
             app.cleanupTestDatabase()
             unsetenv("IMAGE_STORAGE_PATH")
             Self.cleanupTempStorageDirectory(tempStoragePath)
@@ -170,7 +169,6 @@ final class ImageControllerTests {
         }
 
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
         unsetenv("IMAGE_STORAGE_PATH")
         Self.cleanupTempStorageDirectory(tempStoragePath)

@@ -45,13 +45,11 @@ final class OrganizationalUnitTests {
         } catch {
             try? await app.autoRevert()
             try await app.asyncShutdown()
-            try? await Task.sleep(for: .seconds(2))
             app.cleanupTestDatabase()
             throw error
         }
 
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 

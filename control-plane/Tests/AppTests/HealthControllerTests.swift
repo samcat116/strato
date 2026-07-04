@@ -18,7 +18,6 @@ struct HealthControllerTests {
             #expect(res.status == .ok)
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -43,7 +42,6 @@ struct HealthControllerTests {
             #expect(appCheck?.error == nil)
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -62,7 +60,6 @@ struct HealthControllerTests {
             #expect(timeDifference < 60)
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -87,7 +84,6 @@ struct HealthControllerTests {
             #expect(dbCheck?.error == nil)
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -107,7 +103,6 @@ struct HealthControllerTests {
             #expect(timeDifference < 60)
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -133,7 +128,6 @@ struct HealthControllerTests {
             }
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -160,7 +154,6 @@ struct HealthControllerTests {
             #expect(contentType?.subType == "json")
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -185,7 +178,6 @@ struct HealthControllerTests {
             #expect(checkNames.count == uniqueNames.count)
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 
@@ -209,7 +201,6 @@ struct HealthControllerTests {
             }
         }
         try await app.asyncShutdown()
-        try? await Task.sleep(for: .seconds(2))
         app.cleanupTestDatabase()
     }
 

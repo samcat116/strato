@@ -45,14 +45,14 @@ struct AgentWebSocketController: RouteCollection {
                 req.logger.warning("Rejecting X-Forwarded-Client-Cert from non-loopback peer (possible mTLS spoofing)", metadata: [
                     "remoteAddress": .string(req.remoteAddress?.ipAddress ?? "unknown")
                 ])
-                sendErrorResponse(ws: ws, requestId: "", error: "Client certificate header not accepted from this source")
+                sendErrorResponse(ws: ws, requestId: "", error: "Client certificate header not accepted from this source", logger: req.logger)
                 Task { try? await ws.close(code: .policyViolation) }
                 return
             }
 
             guard let spiffeID = extractSPIFFEIDFromXFCC(req: req) else {
                 req.logger.error("XFCC header present but contained no valid SPIFFE URI")
-                sendErrorResponse(ws: ws, requestId: "", error: "Invalid client certificate identity")
+                sendErrorResponse(ws: ws, requestId: "", error: "Invalid client certificate identity", logger: req.logger)
                 Task { try? await ws.close(code: .unacceptableData) }
                 return
             }
@@ -69,7 +69,7 @@ struct AgentWebSocketController: RouteCollection {
                 setupWebSocketConnection(req: req, ws: ws, agentName: agentID, authMethod: "mTLS-XFCC")
             } catch {
                 req.logger.error("SPIFFE ID validation failed: \(error)")
-                sendErrorResponse(ws: ws, requestId: "", error: "SPIFFE identity validation failed: \(error.localizedDescription)")
+                sendErrorResponse(ws: ws, requestId: "", error: "SPIFFE identity validation failed: \(error.localizedDescription)", logger: req.logger)
                 Task { try? await ws.close(code: .unacceptableData) }
             }
             return
@@ -80,7 +80,7 @@ struct AgentWebSocketController: RouteCollection {
         // let any caller that can reach the port authenticate as an agent.
         if requireClientCert {
             req.logger.error("mTLS required but no client certificate (X-Forwarded-Client-Cert) was presented")
-            sendErrorResponse(ws: ws, requestId: "", error: "Client certificate required for agent authentication")
+            sendErrorResponse(ws: ws, requestId: "", error: "Client certificate required for agent authentication", logger: req.logger)
             Task { try? await ws.close(code: .unacceptableData) }
             return
         }
@@ -135,7 +135,7 @@ struct AgentWebSocketController: RouteCollection {
         // query. The token is kept out of the URL so it never lands in access logs.
         guard let token = req.headers.bearerAuthorization?.token,
               let agentName = req.query[String.self, at: "name"] else {
-            sendErrorResponse(ws: ws, requestId: "", error: "Registration token and agent name are required")
+            sendErrorResponse(ws: ws, requestId: "", error: "Registration token and agent name are required", logger: req.logger)
             Task { try? await ws.close(code: .unacceptableData) }
             return
         }
@@ -244,42 +244,50 @@ struct AgentWebSocketController: RouteCollection {
             .filter(\.$agentName == agentName)
             .first()
 
-        return query.flatMapThrowing { registrationToken -> Bool in
+        return query.flatMap { registrationToken -> EventLoopFuture<Bool> in
             guard let registrationToken = registrationToken else {
                 Telemetry.agentRegistrationFailed(reason: "invalid_token")
                 // The explicit code lets the agent tell a hopeless credential apart
                 // from a transient server error, so only the former stops its
                 // reconnect loop.
-                self.sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token", code: ErrorMessage.ErrorCode.invalidToken)
+                self.sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token", code: ErrorMessage.ErrorCode.invalidToken, logger: req.logger)
                 _ = ws.close(code: .unacceptableData)
-                return false
+                return req.eventLoop.makeSucceededFuture(false)
             }
 
             guard registrationToken.isValid else {
                 Telemetry.agentRegistrationFailed(reason: "expired_token")
-                self.sendErrorResponse(ws: ws, requestId: "", error: "Registration token is invalid or expired", code: ErrorMessage.ErrorCode.invalidToken)
+                self.sendErrorResponse(ws: ws, requestId: "", error: "Registration token is invalid or expired", code: ErrorMessage.ErrorCode.invalidToken, logger: req.logger)
                 _ = ws.close(code: .unacceptableData)
-                return false
+                return req.eventLoop.makeSucceededFuture(false)
             }
 
-            // Mark token as used
+            // Mark the single-use token consumed and persist it *before* accepting
+            // the connection. Persisting is part of validation, not fire-and-forget:
+            // if the save were swallowed and we proceeded anyway, the token would
+            // stay unused in the store and remain replayable. On save failure we
+            // reject instead — the token is untouched and the agent can retry.
             registrationToken.markAsUsed()
-
-            // Save asynchronously
-            Task {
-                try? await registrationToken.save(on: req.db)
+            return registrationToken.save(on: req.db).map { _ -> Bool in
+                // Never log the raw token value — logs are lower-trust than the token
+                // store and may be shipped off-host. The agent name is sufficient.
+                req.logger.info("Agent registration token validated", metadata: [
+                    "agentName": .string(agentName)
+                ])
+                return true
+            }.flatMapError { error in
+                Telemetry.agentRegistrationFailed(reason: "token_save_failed")
+                req.logger.error("Failed to persist registration token as used; rejecting connection", metadata: [
+                    "agentName": .string(agentName),
+                    "error": .string("\(error)")
+                ])
+                self.sendErrorResponse(ws: ws, requestId: "", error: "Internal server error persisting registration token", logger: req.logger)
+                _ = ws.close(code: .unexpectedServerError)
+                return req.eventLoop.makeSucceededFuture(false)
             }
-
-            // Never log the raw token value — logs are lower-trust than the token
-            // store and may be shipped off-host. The agent name is sufficient.
-            req.logger.info("Agent registration token validated", metadata: [
-                "agentName": .string(agentName)
-            ])
-
-            return true
         }.flatMapErrorThrowing { error in
             req.logger.error("Error validating registration token: \(error)")
-            self.sendErrorResponse(ws: ws, requestId: "", error: "Internal server error during token validation")
+            self.sendErrorResponse(ws: ws, requestId: "", error: "Internal server error during token validation", logger: req.logger)
             _ = ws.close(code: .unexpectedServerError)
             return false
         }
@@ -334,7 +342,7 @@ struct AgentWebSocketController: RouteCollection {
                             name: agentName,
                             reconnectToken: reconnectToken
                         )
-                        self.sendMessage(ws: ws, message: response)
+                        self.sendMessage(ws: ws, message: response, logger: req.logger)
                     } catch {
                         Telemetry.agentRegistrationFailed(reason: "register_error")
                         req.logger.error("Failed to register agent: \(error)")
@@ -365,7 +373,7 @@ struct AgentWebSocketController: RouteCollection {
 
                         // No `code`: the agent treats unclassified errors as
                         // transient and keeps retrying with backoff.
-                        self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to register agent: \(error.localizedDescription)")
+                        self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to register agent: \(error.localizedDescription)", logger: req.logger)
                     }
                 }
 
@@ -374,10 +382,10 @@ struct AgentWebSocketController: RouteCollection {
                 Task {
                     do {
                         try await req.agentService.updateAgentHeartbeat(message, fromAgentNamed: agentName)
-                        self.sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged")
+                        self.sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged", logger: req.logger)
                     } catch {
                         req.logger.error("Failed to update heartbeat: \(error)")
-                        self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to update heartbeat")
+                        self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to update heartbeat", logger: req.logger)
                     }
                 }
 
@@ -386,10 +394,10 @@ struct AgentWebSocketController: RouteCollection {
                 Task {
                     do {
                         try await req.agentService.unregisterAgent(message.agentId)
-                        self.sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Agent unregistered successfully")
+                        self.sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Agent unregistered successfully", logger: req.logger)
                     } catch {
                         req.logger.error("Failed to unregister agent: \(error)")
-                        self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to unregister agent")
+                        self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to unregister agent", logger: req.logger)
                     }
                 }
 
@@ -453,44 +461,53 @@ struct AgentWebSocketController: RouteCollection {
 
             default:
                 req.logger.warning("Received unexpected message type from agent: \(envelope.type)")
-                sendErrorResponse(ws: ws, requestId: "", error: "Unexpected message type: \(envelope.type)")
+                sendErrorResponse(ws: ws, requestId: "", error: "Unexpected message type: \(envelope.type)", logger: req.logger)
             }
 
         } catch {
             req.logger.error("Failed to handle WebSocket message: \(error)")
-            sendErrorResponse(ws: ws, requestId: "", error: "Failed to process message: \(error.localizedDescription)")
+            sendErrorResponse(ws: ws, requestId: "", error: "Failed to process message: \(error.localizedDescription)", logger: req.logger)
         }
     }
 
-    private func sendMessage<T: WebSocketMessage>(ws: WebSocket, message: T) {
+    private func sendMessage<T: WebSocketMessage>(ws: WebSocket, message: T, logger: Logger) {
         do {
             let envelope = try MessageEnvelope(message: message)
             let data = try JSONEncoder().encode(envelope)
             ws.send(data)
         } catch {
-            print("Failed to send message: \(error)")
+            Telemetry.agentSendFailed(kind: "message")
+            logger.error("Failed to send message to agent", metadata: ["error": .string("\(error)")])
         }
     }
 
-    private func sendSuccessResponse(ws: WebSocket, requestId: String, message: String) {
+    private func sendSuccessResponse(ws: WebSocket, requestId: String, message: String, logger: Logger) {
         do {
             let response = SuccessMessage(requestId: requestId, message: message)
             let envelope = try MessageEnvelope(message: response)
             let data = try JSONEncoder().encode(envelope)
             ws.send(data)
         } catch {
-            print("Failed to send success response: \(error)")
+            Telemetry.agentSendFailed(kind: "success")
+            logger.error("Failed to send success response to agent", metadata: [
+                "requestId": .string(requestId),
+                "error": .string("\(error)")
+            ])
         }
     }
 
-    private func sendErrorResponse(ws: WebSocket, requestId: String, error: String, code: String? = nil) {
+    private func sendErrorResponse(ws: WebSocket, requestId: String, error: String, code: String? = nil, logger: Logger) {
         do {
             let response = ErrorMessage(requestId: requestId, error: error, code: code)
             let envelope = try MessageEnvelope(message: response)
             let data = try JSONEncoder().encode(envelope)
             ws.send(data)
         } catch {
-            print("Failed to send error response: \(error)")
+            Telemetry.agentSendFailed(kind: "error")
+            logger.error("Failed to send error response to agent", metadata: [
+                "requestId": .string(requestId),
+                "error": .string("\(error)")
+            ])
         }
     }
 

@@ -27,9 +27,15 @@ enum Telemetry {
     }
 
     /// A registration attempt was rejected. `reason` is e.g. `invalid_token`,
-    /// `expired_token`, or `register_error`.
+    /// `expired_token`, `register_error`, or `token_save_failed`.
     static func agentRegistrationFailed(reason: String) {
         Counter(label: "strato_agent_registration_failures_total", dimensions: [("reason", reason)]).increment()
+    }
+
+    /// Failed to encode or send a message to an agent over its WebSocket. `kind`
+    /// distinguishes which response path failed: `message`, `success`, or `error`.
+    static func agentSendFailed(kind: String) {
+        Counter(label: "strato_agent_send_failures_total", dimensions: [("kind", kind)]).increment()
     }
 
     /// Per-agent connection state: `1` while connected, `0` once disconnected.
