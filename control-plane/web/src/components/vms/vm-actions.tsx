@@ -12,6 +12,14 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -30,6 +38,7 @@ interface VMActionsProps {
 export function VMActions({ vm, onActionComplete }: VMActionsProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const handleAction = async (
     action: "start" | "stop" | "restart" | "pause" | "resume" | "delete"
@@ -61,6 +70,7 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
           break;
         case "delete":
           await vmsApi.delete(vm.id);
+          setShowDeleteConfirm(false);
           toast.success(`Deleted ${vm.name}`);
           break;
       }
@@ -178,7 +188,7 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
           )}
           <DropdownMenuSeparator className="bg-gray-700" />
           <DropdownMenuItem
-            onClick={() => handleAction("delete")}
+            onClick={() => setShowDeleteConfirm(true)}
             className="text-red-400 hover:bg-red-500/10 cursor-pointer"
           >
             <Trash2 className="h-4 w-4 mr-2" />
@@ -186,6 +196,40 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+          <DialogHeader>
+            <DialogTitle>Delete {vm.name}?</DialogTitle>
+            <DialogDescription className="text-gray-400">
+              This will permanently delete the virtual machine and its disk.
+              This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowDeleteConfirm(false)}
+              disabled={isLoading}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => handleAction("delete")}
+              disabled={isLoading}
+            >
+              {activeAction === "delete" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

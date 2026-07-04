@@ -509,7 +509,7 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
 
         switch lowercasePath {
         case "displayname":
-            return applyStringFilter(keyPath: \App.Group.$name, op: op, value: value, to: query)
+            return applyStringFilter(keyPath: \App.Group.$name, column: "name", op: op, value: value, to: query)
 
         case "externalid":
             // Would need to join with scim_external_ids
@@ -520,20 +520,9 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         }
     }
 
-    /// Escape special characters used in SQL LIKE/ILIKE patterns.
-    /// This prevents user input from injecting unintended wildcards.
-    private func escapeLikePattern(_ value: String) -> String {
-        var escaped = value
-        // First escape the escape character itself
-        escaped = escaped.replacingOccurrences(of: "\\", with: "\\\\")
-        // Then escape wildcard characters
-        escaped = escaped.replacingOccurrences(of: "%", with: "\\%")
-        escaped = escaped.replacingOccurrences(of: "_", with: "\\_")
-        return escaped
-    }
-
     private func applyStringFilter(
         keyPath: KeyPath<App.Group, FieldProperty<App.Group, String>>,
+        column: String,
         op: SCIMFilterOperator,
         value: String,
         to query: QueryBuilder<App.Group>
@@ -544,14 +533,11 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         case .notEqual:
             return query.filter(keyPath != value)
         case .contains:
-            let escapedValue = escapeLikePattern(value)
-            return query.filter(keyPath, .custom("ILIKE"), "%\(escapedValue)%")
+            return query.filter(.caseInsensitiveContains(schema: App.Group.schema, column: column, value: value))
         case .startsWith:
-            let escapedValue = escapeLikePattern(value)
-            return query.filter(keyPath, .custom("ILIKE"), "\(escapedValue)%")
+            return query.filter(.caseInsensitiveStartsWith(schema: App.Group.schema, column: column, value: value))
         case .endsWith:
-            let escapedValue = escapeLikePattern(value)
-            return query.filter(keyPath, .custom("ILIKE"), "%\(escapedValue)")
+            return query.filter(.caseInsensitiveEndsWith(schema: App.Group.schema, column: column, value: value))
         case .greaterThan, .greaterThanOrEqual, .lessThan, .lessThanOrEqual, .present:
             return query
         }
