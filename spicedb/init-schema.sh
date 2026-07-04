@@ -18,7 +18,7 @@ echo "Loading SpiceDB schema from $SCHEMA_FILE..."
 SCHEMA_CONTENT=$(cat "$SCHEMA_FILE")
 
 # Write schema to SpiceDB
-curl -X POST "$SPICEDB_ENDPOINT/v1/schemas/write" \
+curl -X POST "$SPICEDB_ENDPOINT/v1/schema/write" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $SPICEDB_TOKEN" \
     -d "{\"schema\": $(echo "$SCHEMA_CONTENT" | jq -Rs .)}" \
