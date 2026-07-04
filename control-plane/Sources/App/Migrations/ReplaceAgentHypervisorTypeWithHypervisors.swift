@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 
 /// Replaces the single `hypervisor_type` scalar on agents with the structured
 /// capability data reported at registration (issue #208): host architecture, a
@@ -15,8 +16,20 @@ struct ReplaceAgentHypervisorTypeWithHypervisors: AsyncMigration {
             .field("architecture", .string)
             .update()
 
+        // `Agent.hypervisors` is `[HypervisorSupport]`, and Fluent binds a Swift
+        // array as a native SQL array — so on Postgres the value arrives as
+        // `jsonb[]`. The column must match (mirroring `capabilities: [String]` →
+        // `.array(of: .string)`); declaring it a scalar `.json` made writes fail
+        // with "column is of type jsonb but expression is of type jsonb[]".
+        //
+        // The empty-array default that backfills existing rows is engine-specific:
+        // Postgres spells an empty array `'{}'`, while SQLite stores arrays as JSON
+        // text where it is `'[]'`.
+        let emptyArrayDefault = (database as? SQLDatabase)?.dialect.name == "postgresql"
+            ? "DEFAULT '{}'"
+            : "DEFAULT '[]'"
         try await database.schema("agents")
-            .field("hypervisors", .json, .required, .custom("DEFAULT '[]'"))
+            .field("hypervisors", .array(of: .json), .required, .custom(emptyArrayDefault))
             .update()
 
         try await database.schema("agents")
