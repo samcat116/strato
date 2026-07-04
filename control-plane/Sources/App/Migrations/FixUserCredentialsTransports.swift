@@ -13,11 +13,15 @@ struct FixUserCredentialsTransports: AsyncMigration {
         // Convert the PostgreSQL array column to a JSON string column
         let sqlDatabase = database as! SQLDatabase
 
-        // Check if the transports column is already converted (TEXT type instead of TEXT[])
+        // Check if the transports column is already converted (TEXT type instead of TEXT[]).
+        // Scope to current_schema() so parallel per-schema test runs (and any multi-schema
+        // deployment) only inspect this connection's own table, not a same-named table in
+        // another schema. Resolves to the per-test schema in CI and to `public` in production.
         let columnInfo = try await sqlDatabase.raw("""
             SELECT data_type
             FROM information_schema.columns
             WHERE table_name = 'user_credentials'
+            AND table_schema = current_schema()
             AND column_name = 'transports'
             """).all()
 
