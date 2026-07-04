@@ -874,12 +874,14 @@ struct AgentInfo: Sendable {
     var lastHeartbeat: Date
     var status: AgentStatus
 
-    /// Hypervisor backends advertised in the agent's capabilities. Every agent
-    /// version advertises "qemu", so an empty result only occurs for a
-    /// malformed registration — treated as QEMU-only rather than unschedulable.
+    /// Hypervisor backends advertised in the agent's capabilities. Agents
+    /// probe each backend's binary before advertising it, so an empty list
+    /// means the agent cannot run VMs at all — it stays registered but is
+    /// never eligible for placement. No QEMU fallback here: assuming QEMU
+    /// for an empty list would defeat the agent-side probe in exactly the
+    /// case it exists for.
     var supportedHypervisors: [HypervisorType] {
-        let advertised = capabilities.compactMap(HypervisorType.init(rawValue:))
-        return advertised.isEmpty ? [.qemu] : advertised
+        capabilities.compactMap(HypervisorType.init(rawValue:))
     }
 
     /// Only OVN-backed agents can provide VM-to-VM networking; user-mode

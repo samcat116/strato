@@ -563,7 +563,19 @@ actor Agent {
     }
 
     private func getAgentCapabilities() -> [String] {
-        var capabilities = ["vm_management", "qemu"]
+        var capabilities = ["vm_management"]
+
+        // Advertised hypervisors are hard placement constraints, so each one
+        // is gated on its configured binary actually being executable on this
+        // host — the scheduler must not route VMs here that create would
+        // reject.
+        if FileManager.default.isExecutableFile(atPath: qemuBinaryPath) {
+            capabilities.append("qemu")
+        } else {
+            logger.warning("QEMU binary not executable; not advertising qemu capability", metadata: [
+                "qemuBinaryPath": .string(qemuBinaryPath)
+            ])
+        }
 
         #if canImport(SwiftQEMU)
         #if os(Linux)
@@ -574,9 +586,6 @@ actor Agent {
         #endif
 
         #if os(Linux)
-        // Advertised hypervisors are hard placement constraints, so only
-        // advertise Firecracker when the configured binary is actually
-        // present and executable on this host.
         if FileManager.default.isExecutableFile(atPath: firecrackerBinaryPath) {
             capabilities.append("firecracker")
         } else {
