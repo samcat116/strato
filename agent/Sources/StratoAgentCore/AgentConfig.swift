@@ -360,11 +360,19 @@ public struct AgentConfig: Codable {
     /// Default QEMU binary path (platform and architecture-specific)
     public static var defaultQemuBinaryPath: String {
         #if os(macOS)
+            // Homebrew's prefix differs by hardware: /opt/homebrew on Apple
+            // Silicon, /usr/local on Intel. Probe both (native prefix first)
+            // so the default works on either, and fall back to the native
+            // prefix when QEMU isn't installed yet.
             #if arch(arm64)
-            return "/opt/homebrew/bin/qemu-system-aarch64"
+            let binary = "qemu-system-aarch64"
+            let prefixes = ["/opt/homebrew/bin", "/usr/local/bin"]
             #else
-            return "/opt/homebrew/bin/qemu-system-x86_64"
+            let binary = "qemu-system-x86_64"
+            let prefixes = ["/usr/local/bin", "/opt/homebrew/bin"]
             #endif
+            let candidates = prefixes.map { "\($0)/\(binary)" }
+            return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? candidates[0]
         #else
             #if arch(arm64)
             return "/usr/bin/qemu-system-aarch64"

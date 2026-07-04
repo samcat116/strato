@@ -82,6 +82,11 @@ public struct AgentRegisterMessage: WebSocketMessage {
     public let capabilities: [String]
     public let resources: AgentResources
     public let hypervisorType: HypervisorType
+    /// Host CPU architecture. Optional so messages from agents that predate
+    /// this field decode fine; absent means unknown, and the scheduler treats
+    /// unknown-architecture agents as ineligible for any VM that pins an
+    /// architecture.
+    public let architecture: CPUArchitecture?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -91,7 +96,8 @@ public struct AgentRegisterMessage: WebSocketMessage {
         version: String,
         capabilities: [String],
         resources: AgentResources,
-        hypervisorType: HypervisorType = .qemu
+        hypervisorType: HypervisorType = .qemu,
+        architecture: CPUArchitecture? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -101,6 +107,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.capabilities = capabilities
         self.resources = resources
         self.hypervisorType = hypervisorType
+        self.architecture = architecture
     }
 }
 

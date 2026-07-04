@@ -1,6 +1,7 @@
 import Vapor
 import Fluent
 import NIOConcurrencyHelpers
+import StratoShared
 
 /// Scheduling strategy for VM placement
 enum SchedulingStrategy: String, Codable, Sendable {
@@ -29,6 +30,43 @@ struct SchedulableAgent: Sendable {
     let availableDisk: Int64
     let status: AgentStatus
     let runningVMCount: Int
+    /// Hypervisor backends this agent can actually run (from its registered capabilities)
+    let supportedHypervisors: [HypervisorType]
+    /// Host CPU architecture; nil for agents that predate architecture reporting
+    let architecture: CPUArchitecture?
+    /// Whether the agent's networking backend supports VM-to-VM traffic
+    /// (OVN/OVS). User-mode (SLIRP) agents cannot satisfy inter-VM networking.
+    let supportsInterVMNetworking: Bool
+
+    init(
+        id: String,
+        name: String,
+        totalCPU: Int,
+        availableCPU: Int,
+        totalMemory: Int64,
+        availableMemory: Int64,
+        totalDisk: Int64,
+        availableDisk: Int64,
+        status: AgentStatus,
+        runningVMCount: Int,
+        supportedHypervisors: [HypervisorType] = [.qemu],
+        architecture: CPUArchitecture? = nil,
+        supportsInterVMNetworking: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.totalCPU = totalCPU
+        self.availableCPU = availableCPU
+        self.totalMemory = totalMemory
+        self.availableMemory = availableMemory
+        self.totalDisk = totalDisk
+        self.availableDisk = availableDisk
+        self.status = status
+        self.runningVMCount = runningVMCount
+        self.supportedHypervisors = supportedHypervisors
+        self.architecture = architecture
+        self.supportsInterVMNetworking = supportsInterVMNetworking
+    }
 
     /// Calculate resource utilization percentage (0.0 to 1.0)
     var cpuUtilization: Double {
@@ -61,17 +99,49 @@ struct SchedulableAgent: Sendable {
     }
 }
 
-/// VM resource requirements for scheduling
-struct VMResourceRequirements: Sendable {
+/// VM placement requirements for scheduling: hard constraints (hypervisor
+/// backend, architecture, network capability) plus resource needs.
+struct VMPlacementRequirements: Sendable {
     let cpu: Int
     let memory: Int64
     let disk: Int64
+    /// Hypervisor backend the VM must run under. Hard constraint — agents
+    /// that don't support it are never eligible.
+    let hypervisorType: HypervisorType
+    /// Guest CPU architecture, when known. KVM/HVF acceleration is same-arch
+    /// only, so when set, only agents with a matching (known) host
+    /// architecture are eligible. Nil means unconstrained (no image
+    /// architecture metadata yet).
+    let architecture: CPUArchitecture?
+    /// Whether the VM needs VM-to-VM networking, which user-mode (SLIRP)
+    /// agents cannot provide.
+    let requiresInterVMNetworking: Bool
+
+    init(
+        cpu: Int,
+        memory: Int64,
+        disk: Int64,
+        hypervisorType: HypervisorType = .qemu,
+        architecture: CPUArchitecture? = nil,
+        requiresInterVMNetworking: Bool = false
+    ) {
+        self.cpu = cpu
+        self.memory = memory
+        self.disk = disk
+        self.hypervisorType = hypervisorType
+        self.architecture = architecture
+        self.requiresInterVMNetworking = requiresInterVMNetworking
+    }
 }
 
 /// Scheduler service errors
 enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case noAvailableAgents
-    case insufficientResources(required: VMResourceRequirements, available: [SchedulableAgent])
+    case unsupportedHypervisor(required: HypervisorType, onlineAgents: Int, agentsWithoutHypervisors: Int)
+    case noUsableHypervisors(onlineAgents: Int)
+    case architectureMismatch(required: CPUArchitecture)
+    case networkCapabilityUnsatisfied
+    case insufficientResources(required: VMPlacementRequirements, available: [SchedulableAgent])
     case invalidStrategy(String)
     case agentServiceUnavailable
 
@@ -79,6 +149,18 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
         switch self {
         case .noAvailableAgents:
             return "No online agents available for VM placement"
+        case .unsupportedHypervisor(let required, let onlineAgents, let agentsWithoutHypervisors):
+            var message = "No online agent supports the \(required.displayName) hypervisor (\(onlineAgents) online agent(s) checked)"
+            if agentsWithoutHypervisors > 0 {
+                message += "; \(agentsWithoutHypervisors) of them advertise no usable hypervisor backend at all — check their configured binary paths"
+            }
+            return message
+        case .noUsableHypervisors(let onlineAgents):
+            return "All \(onlineAgents) online agent(s) advertise no usable hypervisor backend — check each agent's QEMU/Firecracker binary path configuration and its logs"
+        case .architectureMismatch(let required):
+            return "No eligible agent has a \(required.displayName) host architecture (required for hardware-accelerated guests)"
+        case .networkCapabilityUnsatisfied:
+            return "No eligible agent supports VM-to-VM networking required by this VM"
         case .insufficientResources(let required, let available):
             return "No agent has sufficient resources. Required: CPU=\(required.cpu), Memory=\(required.memory), Disk=\(required.disk). Available agents: \(available.count)"
         case .invalidStrategy(let strategy):
@@ -115,26 +197,41 @@ final class SchedulerService: @unchecked Sendable {
         from agents: [SchedulableAgent],
         strategy: SchedulingStrategy? = nil
     ) throws -> String {
-        let selectedStrategy = strategy ?? defaultStrategy
-
-        logger.info("Scheduling VM '\(vm.name)' using \(selectedStrategy.rawValue) strategy")
-
-        let requirements = VMResourceRequirements(
+        // Guest architecture is unconstrained until images carry architecture
+        // metadata; once VMs can derive it, the arch hard constraint below
+        // applies automatically.
+        //
+        // Inter-VM networking is likewise unconstrained here: every VM gets a
+        // NIC (a MAC is assigned at creation), and a plain NIC is satisfiable
+        // by user-mode/SLIRP agents (outbound NAT). Deriving the requirement
+        // from NIC presence would make every VM unplaceable on macOS dev
+        // agents. It becomes derivable once VMs can express attachment to a
+        // shared/tenant network at creation time.
+        let requirements = VMPlacementRequirements(
             cpu: vm.cpu,
             memory: vm.memory,
-            disk: vm.disk
+            disk: vm.disk,
+            hypervisorType: vm.hypervisorType
         )
 
-        // Filter to only online agents with sufficient resources
-        let eligibleAgents = filterEligibleAgents(agents, for: requirements)
+        return try selectAgent(requirements: requirements, from: agents, strategy: strategy, vmName: vm.name)
+    }
 
-        guard !eligibleAgents.isEmpty else {
-            if agents.isEmpty {
-                throw SchedulerError.noAvailableAgents
-            } else {
-                throw SchedulerError.insufficientResources(required: requirements, available: agents)
-            }
-        }
+    /// Select an agent for a set of placement requirements. Hard constraints
+    /// (hypervisor support, architecture, network capability) are applied
+    /// before resource filtering, and each stage that eliminates all
+    /// candidates throws its own error so placement failures say why.
+    func selectAgent(
+        requirements: VMPlacementRequirements,
+        from agents: [SchedulableAgent],
+        strategy: SchedulingStrategy? = nil,
+        vmName: String = "unnamed"
+    ) throws -> String {
+        let selectedStrategy = strategy ?? defaultStrategy
+
+        logger.info("Scheduling VM '\(vmName)' using \(selectedStrategy.rawValue) strategy (hypervisor: \(requirements.hypervisorType.rawValue), arch: \(requirements.architecture?.rawValue ?? "any"))")
+
+        let eligibleAgents = try filterEligibleAgents(agents, for: requirements)
 
         // Apply scheduling strategy
         let selectedAgent: SchedulableAgent
@@ -149,24 +246,72 @@ final class SchedulerService: @unchecked Sendable {
             selectedAgent = try selectRandom(from: eligibleAgents)
         }
 
-        logger.info("Selected agent '\(selectedAgent.name)' for VM '\(vm.name)' - CPU: \(selectedAgent.availableCPU)/\(selectedAgent.totalCPU), Memory: \(selectedAgent.availableMemory)/\(selectedAgent.totalMemory), Disk: \(selectedAgent.availableDisk)/\(selectedAgent.totalDisk)")
+        logger.info("Selected agent '\(selectedAgent.name)' for VM '\(vmName)' - CPU: \(selectedAgent.availableCPU)/\(selectedAgent.totalCPU), Memory: \(selectedAgent.availableMemory)/\(selectedAgent.totalMemory), Disk: \(selectedAgent.availableDisk)/\(selectedAgent.totalDisk)")
 
         return selectedAgent.id
     }
 
     // MARK: - Private Scheduling Algorithms
 
-    /// Filter agents to those online and with sufficient resources
+    /// Filter agents through the placement constraints, most fundamental
+    /// first. Throws a stage-specific error when a stage leaves no candidates,
+    /// so a Firecracker VM on a QEMU-only fleet fails with "unsupported
+    /// hypervisor" rather than a generic resource error.
     private func filterEligibleAgents(
         _ agents: [SchedulableAgent],
-        for requirements: VMResourceRequirements
-    ) -> [SchedulableAgent] {
-        return agents.filter { agent in
-            agent.status == AgentStatus.online &&
+        for requirements: VMPlacementRequirements
+    ) throws -> [SchedulableAgent] {
+        let online = agents.filter { $0.status == AgentStatus.online }
+        guard !online.isEmpty else {
+            throw SchedulerError.noAvailableAgents
+        }
+
+        let hypervisorCapable = online.filter { $0.supportedHypervisors.contains(requirements.hypervisorType) }
+        guard !hypervisorCapable.isEmpty else {
+            // Distinguish a genuine backend mismatch from agents that
+            // advertise no hypervisor at all (failed binary probes at
+            // registration) so the operator is pointed at the agent's
+            // configuration rather than the VM's hypervisor type.
+            let agentsWithoutHypervisors = online.count(where: { $0.supportedHypervisors.isEmpty })
+            if agentsWithoutHypervisors == online.count {
+                throw SchedulerError.noUsableHypervisors(onlineAgents: online.count)
+            }
+            throw SchedulerError.unsupportedHypervisor(
+                required: requirements.hypervisorType,
+                onlineAgents: online.count,
+                agentsWithoutHypervisors: agentsWithoutHypervisors
+            )
+        }
+
+        // An agent with unknown architecture cannot prove it satisfies an
+        // explicit architecture requirement, so it is excluded.
+        let architectureMatched: [SchedulableAgent]
+        if let requiredArchitecture = requirements.architecture {
+            architectureMatched = hypervisorCapable.filter { $0.architecture == requiredArchitecture }
+            guard !architectureMatched.isEmpty else {
+                throw SchedulerError.architectureMismatch(required: requiredArchitecture)
+            }
+        } else {
+            architectureMatched = hypervisorCapable
+        }
+
+        let networkCapable = requirements.requiresInterVMNetworking
+            ? architectureMatched.filter { $0.supportsInterVMNetworking }
+            : architectureMatched
+        guard !networkCapable.isEmpty else {
+            throw SchedulerError.networkCapabilityUnsatisfied
+        }
+
+        let eligible = networkCapable.filter { agent in
             agent.availableCPU >= requirements.cpu &&
             agent.availableMemory >= requirements.memory &&
             agent.availableDisk >= requirements.disk
         }
+        guard !eligible.isEmpty else {
+            throw SchedulerError.insufficientResources(required: requirements, available: networkCapable)
+        }
+
+        return eligible
     }
 
     /// Best-fit strategy: Pack VMs onto agents with least remaining capacity

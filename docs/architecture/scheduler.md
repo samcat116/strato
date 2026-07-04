@@ -110,25 +110,51 @@ try await agentService.createVM(
 )
 ```
 
-## Resource Requirements
+## Placement Requirements
 
-The scheduler filters agents based on VM resource requirements:
+The scheduler filters agents based on VM placement requirements — hard
+constraints plus resource needs:
 
 ```swift
-struct VMResourceRequirements {
-    let cpu: Int          // Number of CPU cores
-    let memory: Int64     // Memory in bytes
-    let disk: Int64       // Disk space in bytes
+struct VMPlacementRequirements {
+    let cpu: Int                          // Number of CPU cores
+    let memory: Int64                     // Memory in bytes
+    let disk: Int64                       // Disk space in bytes
+    let hypervisorType: HypervisorType    // Required hypervisor backend
+    let architecture: CPUArchitecture?    // Guest CPU architecture, when known
+    let requiresInterVMNetworking: Bool   // Needs VM-to-VM networking (OVN)
 }
 ```
 
-Only agents with sufficient **available** resources are considered eligible.
+Only agents with sufficient **available** resources that also satisfy every
+hard constraint are considered eligible.
+
+### Hard Constraints
+
+Hard constraints are never relaxed — a VM that cannot be placed fails with a
+specific error rather than landing on an agent that would silently run it
+differently than requested:
+
+- **Hypervisor support**: The agent must support the VM's hypervisor backend
+  (from the capabilities it advertised at registration). A Firecracker VM is
+  never placed on a QEMU-only agent (e.g. a macOS host).
+- **Architecture match**: KVM/HVF acceleration is same-architecture only. When
+  a guest architecture is specified, only agents with a matching host
+  architecture are eligible; agents with unknown architecture are excluded.
+  (Currently unconstrained for VM-driven placement until images carry
+  architecture metadata.)
+- **Network capability**: VMs requiring VM-to-VM networking are only placed on
+  OVN-backed agents, never on user-mode (SLIRP) agents.
 
 ## Agent Selection Process
 
 1. **Fetch Available Agents**: Get all online agents from AgentService
-2. **Filter Eligible Agents**:
+2. **Filter Eligible Agents** (staged, each stage throws its own error when it
+   eliminates all candidates):
    - Agent status must be `online`
+   - Agent must support the VM's hypervisor type
+   - Agent host architecture must match the guest architecture (when specified)
+   - Agent must satisfy the VM's network capability requirements
    - Available CPU ≥ VM CPU requirement
    - Available memory ≥ VM memory requirement
    - Available disk ≥ VM disk requirement
@@ -142,6 +168,9 @@ The scheduler throws specific errors for different failure scenarios:
 ### SchedulerError Types
 
 - **`noAvailableAgents`**: No online agents in the cluster
+- **`unsupportedHypervisor`**: No online agent supports the VM's hypervisor backend
+- **`architectureMismatch`**: No eligible agent has the required host architecture
+- **`networkCapabilityUnsatisfied`**: No eligible agent supports the required VM-to-VM networking
 - **`insufficientResources`**: Agents exist but none have enough resources
 - **`invalidStrategy`**: Specified strategy name is not recognized
 - **`agentServiceUnavailable`**: AgentService not properly initialized

@@ -83,6 +83,16 @@ actor Agent {
     private var vmHypervisorMap: [String: HypervisorType] = [:]
 
     private let networkMode: NetworkMode?
+    // The networking backend actually selected at startup (config value plus
+    // platform fallbacks). Drives the networking capability advertised at
+    // registration: a Linux agent configured for user-mode networking must not
+    // claim OVN/VM-to-VM support.
+    private var effectiveNetworkMode: NetworkMode = .user
+    // Whether the selected network service connected successfully at startup.
+    // An OVN agent whose OVN/OVS connection failed must not advertise
+    // ovn_networking, or the scheduler would place VM-to-VM workloads on a
+    // backend that will throw notConnected.
+    private var networkServiceConnected = false
     private let imageCachePath: String?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
@@ -170,18 +180,22 @@ actor Agent {
             #if os(Linux)
             logger.info("Network service initialized with SwiftOVN support")
             networkService = NetworkServiceLinux(logger: logger)
+            effectiveNetworkMode = .ovn
             #else
             logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
             networkService = NetworkServiceMacOS(logger: logger)
+            effectiveNetworkMode = .user
             #endif
         case .user:
             logger.info("Network service initialized with user-mode networking")
             networkService = NetworkServiceMacOS(logger: logger)
+            effectiveNetworkMode = .user
         }
 
         do {
             if let service = networkService {
                 try await service.connect()
+                networkServiceConnected = true
                 logger.info("Network service connected successfully")
             }
         } catch {
@@ -438,7 +452,8 @@ actor Agent {
             version: "1.0.0",
             capabilities: capabilities,
             resources: resources,
-            hypervisorType: hypervisorType
+            hypervisorType: hypervisorType,
+            architecture: CPUArchitecture.current
         )
 
         if let client = websocketClient {
@@ -548,15 +563,65 @@ actor Agent {
     }
 
     private func getAgentCapabilities() -> [String] {
-        var capabilities = ["vm_management", "qemu"]
+        var capabilities = ["vm_management"]
+
+        // Advertised hypervisors are hard placement constraints, so each one
+        // is gated on its configured binary actually being executable on this
+        // host — the scheduler must not route VMs here that create would
+        // reject.
+        if FileManager.default.isExecutableFile(atPath: qemuBinaryPath) {
+            capabilities.append("qemu")
+        } else {
+            // Error, not warning: without QEMU the agent is unusable for most
+            // placements, and the scheduler will only report "unsupported
+            // hypervisor" — this log is what points at the actual cause.
+            logger.error("QEMU binary not executable; not advertising qemu capability", metadata: [
+                "qemuBinaryPath": .string(qemuBinaryPath)
+            ])
+        }
 
         #if canImport(SwiftQEMU)
         #if os(Linux)
-        capabilities.append(contentsOf: ["kvm", "ovn_networking", "firecracker"])
+        capabilities.append("kvm")
         #elseif os(macOS)
-        capabilities.append(contentsOf: ["hvf", "user_networking"])
+        capabilities.append("hvf")
         #endif
         #endif
+
+        #if os(Linux)
+        if FileManager.default.isExecutableFile(atPath: firecrackerBinaryPath) {
+            capabilities.append("firecracker")
+        } else {
+            logger.warning("Firecracker binary not executable; not advertising firecracker capability", metadata: [
+                "firecrackerBinaryPath": .string(firecrackerBinaryPath)
+            ])
+        }
+        #endif
+
+        // The networking capability reflects the backend selected at startup,
+        // not the platform: a Linux agent configured for user-mode networking
+        // cannot provide OVN/VM-to-VM networking, and the scheduler relies on
+        // this to enforce the inter-VM-networking placement constraint.
+        switch (effectiveNetworkMode, networkServiceConnected) {
+        case (.ovn, true):
+            capabilities.append("ovn_networking")
+        case (.ovn, false):
+            // OVN was selected but the OVN/OVS connection failed at startup:
+            // advertise no networking capability rather than claiming VM-to-VM
+            // support the backend cannot currently provide (and user-mode
+            // would be a lie — the agent is not running SLIRP either).
+            logger.warning("OVN network service not connected; not advertising ovn_networking capability")
+        case (.user, _):
+            // User-mode (SLIRP) networking is built into QEMU and needs no
+            // external service, so it is not gated on connection state.
+            capabilities.append("user_networking")
+        }
+
+        if !HypervisorType.allCases.contains(where: { capabilities.contains($0.rawValue) }) {
+            logger.error("No usable hypervisor backend on this host; the agent will register but never be eligible for VM placement. Check qemu_binary_path (and firecracker_binary_path on Linux) in the agent configuration.", metadata: [
+                "qemuBinaryPath": .string(qemuBinaryPath)
+            ])
+        }
 
         return capabilities
     }
@@ -891,8 +956,11 @@ extension Agent {
             #if os(Linux)
             return firecrackerService
             #else
-            logger.warning("Firecracker is only available on Linux, falling back to QEMU")
-            return qemuService
+            // No silent fallback to QEMU: the scheduler should never place a
+            // Firecracker VM here, so surface the mismatch as an error instead
+            // of booting the VM under a different hypervisor than requested.
+            logger.error("Firecracker is only available on Linux; rejecting request for unsupported hypervisor")
+            return nil
             #endif
         }
     }
