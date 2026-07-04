@@ -1,0 +1,24 @@
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_32c16bb8991093::t_d242b552ba1ef8 69-79
+  s_32c16bb8991093::t_3963b4889bc6a9 89
+  s_32c16bb8991093::t_d172c9f32e7fac 95
+  s_32c16bb8991093::t_90428a4a589e13 114,120-121,123
+  s_32c16bb8991093::t_237a3a0dd42b45 150-166
+  s_32c16bb8991093::t_c11452e4ea142e 35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "27454ba711cf4673d18aa6e2eef3da06a17f49d5",
+  "prompts": {},
+  "sessions": {
+    "s_32c16bb8991093": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1289a897-b386-416b-806d-54fd9f976626",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
