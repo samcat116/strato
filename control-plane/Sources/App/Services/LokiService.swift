@@ -220,18 +220,13 @@ struct LokiStreamResult: Codable {
 // MARK: - Application Extension
 
 extension Application {
-    private struct LokiServiceKey: StorageKey {
+    private struct LokiServiceKey: StorageKey, LockKey {
         typealias Value = LokiService
     }
 
     var lokiService: LokiService {
         get {
-            if let existing = storage[LokiServiceKey.self] {
-                return existing
-            }
-            let service = LokiService(app: self)
-            storage[LokiServiceKey.self] = service
-            return service
+            lazyService(LokiServiceKey.self) { LokiService(app: self) }
         }
         set {
             storage[LokiServiceKey.self] = newValue

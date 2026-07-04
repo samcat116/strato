@@ -252,18 +252,13 @@ enum ConsoleSessionError: Error, LocalizedError {
 // MARK: - Application Extension
 
 extension Application {
-    private struct ConsoleSessionManagerKey: StorageKey {
+    private struct ConsoleSessionManagerKey: StorageKey, LockKey {
         typealias Value = ConsoleSessionManager
     }
 
     var consoleSessionManager: ConsoleSessionManager {
         get {
-            if let existing = storage[ConsoleSessionManagerKey.self] {
-                return existing
-            }
-            let new = ConsoleSessionManager(app: self)
-            storage[ConsoleSessionManagerKey.self] = new
-            return new
+            lazyService(ConsoleSessionManagerKey.self) { ConsoleSessionManager(app: self) }
         }
         set {
             storage[ConsoleSessionManagerKey.self] = newValue

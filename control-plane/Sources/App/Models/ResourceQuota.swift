@@ -108,6 +108,71 @@ final class ResourceQuota: Model, @unchecked Sendable {
 
 extension ResourceQuota: Content {}
 
+// MARK: - Actual Usage Calculation
+
+extension ResourceQuota {
+    /// Calculates the actual resource usage for this quota by aggregating the VMs
+    /// within its scope (project, organizational unit, or organization).
+    /// Returns the computed usage along with the VMs it was derived from.
+    func calculateActualUsage(on db: Database) async throws -> (QuotaUsage, [VM]) {
+        var vms: [VM] = []
+
+        // Get VMs based on quota scope
+        if let projectID = $project.id {
+            let query = VM.query(on: db).filter(\.$project.$id == projectID)
+            if let environment = environment {
+                query.filter(\.$environment == environment)
+            }
+            vms = try await query.all()
+        } else if let ouID = $organizationalUnit.id {
+            // Get all projects in this OU
+            let projects = try await Project.query(on: db)
+                .filter(\.$organizationalUnit.$id == ouID)
+                .all()
+
+            let projectIDs = projects.compactMap { $0.id }
+            if !projectIDs.isEmpty {
+                let query = VM.query(on: db).filter(\.$project.$id ~~ projectIDs)
+                if let environment = environment {
+                    query.filter(\.$environment == environment)
+                }
+                vms = try await query.all()
+            }
+        } else if let orgID = $organization.id {
+            // Get all projects in this organization (direct and via OUs)
+            guard let org = try await Organization.find(orgID, on: db) else {
+                // Return empty usage if organization not found (e.g. deleted concurrently)
+                return (QuotaUsage(vcpus: 0, memoryGB: 0, storageGB: 0, vms: 0, networks: 0), [])
+            }
+            let allProjects = try await org.getAllProjects(on: db)
+
+            let projectIDs = allProjects.compactMap { $0.id }
+            if !projectIDs.isEmpty {
+                let query = VM.query(on: db).filter(\.$project.$id ~~ projectIDs)
+                if let environment = environment {
+                    query.filter(\.$environment == environment)
+                }
+                vms = try await query.all()
+            }
+        }
+
+        // Calculate actual usage
+        let totalVCPUs = vms.reduce(0) { $0 + $1.cpu }
+        let totalMemory = vms.reduce(0) { $0 + $1.memory }
+        let totalStorage = vms.reduce(0) { $0 + $1.disk }
+
+        let actualUsage = QuotaUsage(
+            vcpus: totalVCPUs,
+            memoryGB: Double(totalMemory) / 1024 / 1024 / 1024,
+            storageGB: Double(totalStorage) / 1024 / 1024 / 1024,
+            vms: vms.count,
+            networks: 0 // TODO: Implement network counting when networking is added
+        )
+
+        return (actualUsage, vms)
+    }
+}
+
 // MARK: - Computed Properties
 
 extension ResourceQuota {

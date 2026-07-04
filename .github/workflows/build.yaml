@@ -9,11 +9,67 @@ permissions:
   contents: read
   security-events: write
   actions: read
+  pull-requests: read # dorny/paths-filter reads changed files via the PR API
+
+# Cancel any in-progress run for the same PR when a new commit is pushed,
+# so stale runs stop hogging the single self-hosted runner.
+concurrency:
+  group: pr-validation-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # Detect which parts of the repo changed so we can skip heavy jobs on
+  # e.g. docs-only PRs. Jobs are gated with `if:` (not workflow-level
+  # `on.paths`) so a skipped job still reports as a passing check — this
+  # keeps them safe to use as required status checks in branch protection.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      cp_backend: ${{ steps.filter.outputs.cp_backend }}
+      agent: ${{ steps.filter.outputs.agent }}
+      shared: ${{ steps.filter.outputs.shared }}
+      workflow: ${{ steps.filter.outputs.workflow }}
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # `every`: a changed file matches a filter only if it matches ALL of
+          # that filter's patterns, which is what makes the `!` exclusions
+          # actually take effect. (With the default `some`, a file matching any
+          # single positive pattern matches the filter and negations are
+          # ignored — so `!control-plane/web/**` and the docs exclusions below
+          # would be no-ops.) OR across directories is therefore expressed in
+          # each job's `if:` rather than inside a single filter.
+          predicate-quantifier: "every"
+          filters: |
+            web:
+              - 'control-plane/web/**'
+            cp_backend:
+              - 'control-plane/**'
+              - '!control-plane/web/**'
+            agent:
+              - 'agent/**'
+            shared:
+              - 'shared/**'
+            workflow:
+              - '.github/workflows/build.yaml'
+            code:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!**/*.mdx'
+              - '!LICENSE'
+
   lint-and-build-frontend:
     name: Frontend Lint & Build
-    runs-on: self-hosted
+    needs: changes
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.workflow == 'true'
+    # Lightweight Bun job — runs on GitHub-hosted runners to keep the
+    # self-hosted runner free for the heavy Swift build+test job.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -36,12 +92,10 @@ jobs:
         run: bun run build
 
   test:
-    name: Build and Test Swift Packages (${{ matrix.db }})
+    name: Build and Test Swift Packages
+    needs: changes
+    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: self-hosted
-    strategy:
-      fail-fast: false
-      matrix:
-        db: [sqlite, postgres]
     services:
       postgres:
         image: postgres:15
@@ -54,8 +108,12 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+        # Bind container port 5432 to an ephemeral host port (read back below
+        # via the job.services context) rather than a fixed 5432:5432. On the
+        # shared self-hosted runner a fixed mapping collides with anything else
+        # already bound to 5432; a dynamic port avoids that.
         ports:
-          - 5432:5432
+          - 5432
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -82,15 +140,26 @@ jobs:
         working-directory: control-plane
         run: swift build --build-tests
 
-      - name: Test Control Plane
+      # Two legs, one build: fast engine-independent coverage on SQLite, then
+      # the identical suite against the real engine production uses, validating
+      # migrations and Postgres-specific SQL (issue #195). Kept as sequential
+      # steps in one job rather than a matrix so only a single Postgres service
+      # container starts — a matrix would fan out two containers that both try
+      # to bind the port on this shared self-hosted runner.
+      - name: Test Control Plane (SQLite)
         working-directory: control-plane
         env:
-          # sqlite leg: fast, engine-independent coverage.
-          # postgres leg: same suite against the real engine production uses,
-          # validating migrations and Postgres-specific SQL (issue #195).
-          STRATO_TEST_DATABASE: ${{ matrix.db }}
+          STRATO_TEST_DATABASE: sqlite
+        run: swift test --skip-build --parallel
+
+      - name: Test Control Plane (Postgres)
+        # Run even if the SQLite leg failed, so both engines always report.
+        if: ${{ !cancelled() }}
+        working-directory: control-plane
+        env:
+          STRATO_TEST_DATABASE: postgres
           DATABASE_HOST: localhost
-          DATABASE_PORT: "5432"
+          DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}
           DATABASE_NAME: strato_test
           DATABASE_USERNAME: strato
           DATABASE_PASSWORD: strato_password
@@ -98,7 +167,10 @@ jobs:
 
   security:
     name: Security Scan
-    runs-on: self-hosted
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    # Trivy filesystem scan is light and needs no warm cache — offload it.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4

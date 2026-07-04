@@ -21,9 +21,14 @@ env:
   KIND_VERSION: v0.20.0
   KUBERNETES_VERSION: v1.27.3
 
+# Supersede in-progress runs on new pushes to the same ref.
+concurrency:
+  group: helm-test-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     name: Helm Chart Linting
     steps:
       - name: Checkout
@@ -50,7 +55,7 @@ jobs:
           helm dependency update
 
   template-validation:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     name: Template Validation
     needs: lint
     steps:
@@ -178,7 +183,7 @@ jobs:
   # - Run integration tests locally with: scripts/test-helm-chart.sh
   # - Test in dedicated Kubernetes environments, not CI
   integration-test:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     name: Kubernetes Integration Test (Experimental)
     needs: [lint, template-validation]
     if: false # Disabled due to CI resource constraints
@@ -329,7 +334,7 @@ jobs:
           helm uninstall strato-ci-test || true
 
   security-scan:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     name: Security Scanning
     needs: lint
     steps:
@@ -357,12 +362,18 @@ jobs:
             --set networkPolicy.enabled=true \
             --set podDisruptionBudget.enabled=true > /tmp/security-template.yaml
 
+      - name: Install Checkov
+        # Not present on GitHub-hosted runners; install it explicitly.
+        run: pipx install checkov
+
       - name: Run Checkov security scan
+        # --soft-fail keeps findings non-blocking; a missing/broken checkov
+        # now surfaces instead of being silently masked by `|| true`.
         run: |
           checkov -f /tmp/security-template.yaml \
             --framework kubernetes \
             --output cli \
-            --soft-fail || true
+            --soft-fail
 
       - name: Check for hardcoded secrets
         run: |
@@ -387,7 +398,7 @@ jobs:
           fi
 
   upgrade-test:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     name: Chart Upgrade Test (Experimental)
     needs: [lint, template-validation]
     if: false # Disabled due to CI resource constraints
