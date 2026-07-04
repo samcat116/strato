@@ -66,16 +66,6 @@ curl -L https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-
 sudo mv kubeval /usr/local/bin
 ```
 
-### Quick Test Script
-
-Run the comprehensive test script:
-
-```bash
-./scripts/test-helm-chart.sh
-```
-
-This script performs all local validation tests automatically.
-
 ### Manual Testing Steps
 
 #### 1. Basic Validation

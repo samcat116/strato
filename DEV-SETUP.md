@@ -344,7 +344,7 @@ skaffold dev --profile=minimal
 
 - Read [CLAUDE.md](./CLAUDE.md) for full project documentation
 - Review [API documentation](http://localhost:8080/api/docs) when control-plane is running
-- Check [docs/SCHEDULER.md](./docs/SCHEDULER.md) for VM scheduling details
+- Check [docs/architecture/scheduler.md](./docs/architecture/scheduler.md) for VM scheduling details
 - Explore the SpiceDB schema in [spicedb/schema.zed](./spicedb/schema.zed)
 
 ## Support

@@ -414,48 +414,6 @@ public struct VmInfo: Codable, Sendable {
     }
 }
 
-public struct VmmPingResponse: Codable, Sendable {
-    public let buildVersion: String?
-    public let version: String
-    public let pid: Int64?
-    public let features: [String]?
-    
-    enum CodingKeys: String, CodingKey {
-        case buildVersion = "build_version"
-        case version, pid, features
-    }
-    
-    public init(
-        buildVersion: String? = nil,
-        version: String,
-        pid: Int64? = nil,
-        features: [String]? = nil
-    ) {
-        self.buildVersion = buildVersion
-        self.version = version
-        self.pid = pid
-        self.features = features
-    }
-}
-
-public struct VmCounters: Codable, Sendable {
-    public let counters: [String: [String: Int64]]
-    
-    public init(counters: [String: [String: Int64]]) {
-        self.counters = counters
-    }
-    
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        self.counters = try container.decode([String: [String: Int64]].self)
-    }
-    
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        try container.encode(counters)
-    }
-}
-
 // MARK: - Error Types
 
 public enum QEMUError: Error, LocalizedError, Sendable {

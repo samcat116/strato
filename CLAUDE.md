@@ -61,10 +61,10 @@ Two compose files with different purposes:
 - **`deploy/compose/`**: the supported single-host deployment. `./setup.sh` generates a `.env` with strong random secrets, then `docker compose up -d`. Uses published images, persistent SpiceDB (PostgreSQL datastore), automatic SpiceDB migration/schema loading, and no auth bypass.
 
 ### Frontend/Styling (Control Plane)
-- TailwindCSS is integrated via SwiftyTailwind and runs automatically during app startup
-- CSS input: `control-plane/Resources/styles/app.css`
-- CSS output: `control-plane/Public/styles/app.generated.css` (auto-generated)
-- Frontend templates are split between Leaf templates (`control-plane/Resources/Views/`) and HTML templates (`control-plane/web/templates/`)
+- The frontend is a **Next.js** app (App Router) in `control-plane/web/`, deployed as a separate `strato-frontend` service that consumes the control-plane API.
+- Stack: React 19, TanStack Query (server state), Zustand (client state), shadcn/ui components on Radix primitives, and xterm.js for the VM terminal.
+- Styling: TailwindCSS v4 via `@tailwindcss/postcss` (see `control-plane/web/postcss.config.mjs`); components configured through `control-plane/web/components.json`.
+- Dev server: `cd control-plane/web && npm run dev` (http://localhost:3000).
 
 ## Architecture
 
@@ -77,8 +77,8 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 - **Database**: PostgreSQL with Fluent migrations (Control Plane only)
 - **Authorization**: SpiceDB for fine-grained access control and permissions (Control Plane only)
 - **Scheduler**: Intelligent VM placement service with multiple strategies (least-loaded, best-fit, round-robin, random) (Control Plane only)
-- **Frontend**: Leaf templates + HTMX for dynamic interactions (Control Plane only)
-- **Styling**: TailwindCSS integrated via SwiftyTailwind (Control Plane only)
+- **Frontend**: Next.js (App Router) single-page app in `control-plane/web/`, served as the separate `strato-frontend` service (Control Plane only)
+- **Styling**: TailwindCSS v4 via PostCSS, with shadcn/ui components (Control Plane only)
 - **VM Management**: QEMU integration via SwiftQEMU library (Agent only)
 - **Network Management**: Platform-specific networking (Agent only)
   - **Linux**: SwiftOVN integration for OVN/OVS software-defined networking
@@ -88,13 +88,13 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 ### Key Architecture Patterns
 - **Distributed Architecture**: Control Plane handles web UI/API, Agents handle VM operations on hypervisor nodes
 - **WebSocket Communication**: Real-time bidirectional communication between Control Plane and Agents
-- **MVC Structure**: Controllers handle HTTP requests, Models define data structures, Views use Leaf templating (Control Plane)
+- **API + SPA Structure**: Vapor controllers expose a JSON/REST API consumed by the Next.js frontend; Models define data structures (Control Plane)
 - **Database Integration**: Uses Fluent ORM with PostgreSQL driver and automatic migrations (Control Plane)
 - **Authorization**: SpiceDB middleware intercepts all requests, checks permissions via REST API, enforces relationship-based access control (Control Plane)
 - **Agent Management**: Dynamic agent registration, heartbeat monitoring, and VM-to-agent mapping
 - **VM Scheduling**: Intelligent hypervisor selection using configurable strategies (least-loaded, best-fit, round-robin, random) with automatic mapping persistence and recovery (Control Plane)
-- **Frontend**: Dual templating approach - Leaf templates in `control-plane/Resources/Views/` for server-rendered content, HTML templates in `control-plane/web/templates/` for HTMX components
-- **CSS Processing**: TailwindCSS processes styles from `control-plane/Resources/styles/app.css` and scans both Leaf templates and web templates for classes
+- **Frontend**: Next.js App Router app in `control-plane/web/src/` (`app/` routes, `components/`, `lib/api` client) talking to the control-plane API
+- **CSS Processing**: TailwindCSS v4 processed by PostCSS (`control-plane/web/postcss.config.mjs`) as part of the Next.js build
 
 ### Database (Control Plane)
 - VM model includes: name, description, image, CPU, memory, disk specifications
@@ -102,7 +102,7 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 - Database connection configured via environment variables (see docker-compose.yml)
 
 ### External Integrations
-- **Control Plane**: SpiceDB authorization service, HTMX for frontend interactions, xterm.js for terminal interfaces
+- **Control Plane**: SpiceDB authorization service, Next.js frontend (TanStack Query + Zustand), xterm.js for terminal interfaces
 - **Agent**:
   - **VM Management**: QEMU via SwiftQEMU library for VM lifecycle management
   - **Networking (Linux)**: OVN/OVS via SwiftOVN for software-defined networking
@@ -144,16 +144,15 @@ Strato is a distributed private cloud platform with a **Control Plane** and **Ag
 - **Agent Filtering**: Only online agents with sufficient resources are considered for placement
 - **Environment Configuration**: Default strategy via environment variable:
   - `SCHEDULING_STRATEGY` (default: least_loaded, options: least_loaded, best_fit, round_robin, random)
-- **Documentation**: See `docs/SCHEDULER.md` for detailed information on algorithms and configuration
+- **Documentation**: See `docs/architecture/scheduler.md` for detailed information on algorithms and configuration
 
 ### Project Structure
 ```
 strato/
-├── control-plane/          # Web UI, API, database, user management
-│   ├── Sources/App/         # Vapor application code
-│   ├── Resources/           # Templates and styles
-│   ├── Public/              # Static files
-│   ├── web/                 # HTMX templates
+├── control-plane/          # API, database, user management, frontend
+│   ├── Sources/App/         # Vapor application code (JSON/REST API)
+│   ├── Public/              # Static assets (built frontend output)
+│   ├── web/                 # Next.js frontend (App Router) source
 │   ├── Package.swift        # Control plane dependencies
 │   └── Dockerfile           # Control plane container
 ├── agent/                   # Hypervisor node agent
@@ -244,4 +243,4 @@ The agent supports both Linux and macOS platforms with hardware-accelerated virt
   - Linux: Production-ready with KVM and OVN/OVS
   - macOS: Development/testing with HVF and user-mode networking
 - Shared: Common models and WebSocket protocols
-- Frontend assets in control-plane only: static files (`control-plane/Public/`) and web templates (`control-plane/web/`)
+- Frontend in control-plane only: Next.js app source (`control-plane/web/`) and built static assets (`control-plane/Public/`)

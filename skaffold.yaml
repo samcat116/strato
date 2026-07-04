@@ -66,22 +66,10 @@ profiles:
     activation:
       - env: SKAFFOLD_PROFILE=minimal
     patches:
+      # Deploys only control-plane, PostgreSQL, and SpiceDB by turning off
+      # the observability stack (OTel collector + Prometheus), which is on by default.
       - op: add
         path: /manifests/helm/releases/0/setValues
         value:
-          agent.enabled: false
-          ovn.enabled: false
-          openvswitch.enabled: false
-      # Deploys only control-plane, PostgreSQL, and Permify
-
-  - name: production
-    activation:
-      - env: SKAFFOLD_PROFILE=production
-    patches:
-      - op: replace
-        path: /manifests/helm/releases/0/valuesFiles
-        value:
-          - helm/strato/values.yaml
-      - op: replace
-        path: /manifests/helm/releases/0/namespace
-        value: strato
+          opentelemetry.enabled: false
+          opentelemetry.prometheus.enabled: false

@@ -181,17 +181,18 @@ The chart includes comprehensive CI/CD testing via GitHub Actions that runs:
 
 ### Local Testing
 
-Use the provided test script to validate the chart locally:
+Validate the chart locally with Helm's built-in tooling:
 
 ```bash
-./scripts/test-helm-chart.sh
+# Lint the chart (also renders every ci/*.yaml values file)
+helm lint helm/strato-control-plane/
+
+# Render templates with a given values file to inspect the output
+helm template strato helm/strato-control-plane/ -f helm/strato-control-plane/ci/default-values.yaml
 ```
 
-This script performs:
-- Chart linting
-- Template validation with multiple configurations
-- Security checks
-- Dependency validation
+The same checks run in CI via `.github/workflows/helm-test.yml` (lint,
+template validation across the `ci/*.yaml` configurations, and secret scanning).
 
 ### Test Values
 
@@ -360,7 +361,7 @@ When making changes to the chart:
 1. Update version in `Chart.yaml`
 2. Add/update values in `values.yaml`
 3. Update this README
-4. Run tests: `./scripts/test-helm-chart.sh`
+4. Run `helm lint helm/strato-control-plane/` and validate rendered templates
 5. Test deployment in a real cluster
 6. Submit PR with clear description of changes
 
