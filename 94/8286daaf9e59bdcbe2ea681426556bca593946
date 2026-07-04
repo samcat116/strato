@@ -1,0 +1,49 @@
+shared/Tests/StratoSharedTests/MessageEnvelopeTests.swift
+  s_1fecf7529a5199::t_dad6f225914a14 1-8,10-60
+  s_1fecf7529a5199::t_b425f9c6b38d12 9
+shared/Tests/StratoSharedTests/Support/WireTestSupport.swift
+  s_1fecf7529a5199::t_12c10df6149a77 1-68
+shared/Tests/StratoSharedTests/VMMessageTests.swift
+  s_1fecf7529a5199::t_da24959aa83a81 1-137
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_1fecf7529a5199::t_802d8a390eab2c 1-91
+.github/workflows/build.yaml
+  s_1fecf7529a5199::t_c8be93f800744e 139-142
+shared/Tests/StratoSharedTests/VolumeMessageTests.swift
+  s_1fecf7529a5199::t_6957f97fde935c 1-144
+shared/Package.swift
+  s_1fecf7529a5199::t_9a17e2ec43352c 31-38
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_1fecf7529a5199::t_4c39b3c39bec0d 1-121
+shared/Tests/StratoSharedTests/CodableValueTests.swift
+  s_1fecf7529a5199::t_da241308259b8f 1-105
+shared/Tests/StratoSharedTests/ResponseMessageTests.swift
+  s_1fecf7529a5199::t_20bb123f198a1b 1-115
+shared/Tests/StratoSharedTests/ConsoleMessageTests.swift
+  s_1fecf7529a5199::t_7b722a6ba360b9 1-67
+shared/Tests/StratoSharedTests/VMDataTests.swift
+  s_1fecf7529a5199::t_b7144706359b86 1-122
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_1fecf7529a5199::t_8f8fe9d774ba5c 1-85
+shared/Tests/StratoSharedTests/NetworkMessageTests.swift
+  s_1fecf7529a5199::t_152e770114e395 1-219
+shared/Tests/StratoSharedTests/EnumDecodingTests.swift
+  s_1fecf7529a5199::t_abbe7bb6095d33 113-144
+  s_1fecf7529a5199::t_4d3e16a815e620 1-112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "948286daaf9e59bdcbe2ea681426556bca593946",
+  "prompts": {},
+  "sessions": {
+    "s_1fecf7529a5199": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "23eda341-8d4a-4911-82fe-441c208c7583",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
