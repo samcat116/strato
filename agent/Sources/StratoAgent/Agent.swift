@@ -70,6 +70,15 @@ actor Agent {
     private var registrationContinuation: CheckedContinuation<String, Error>?
     private let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
 
+    // Ordered inbound-message pipeline. The WebSocket client yields decoded frames into
+    // `inboundContinuation` in arrival order; `messageConsumerTask` drains the stream and
+    // routes each frame onto a per-resource serial lane in `messageQueue`, so operations on
+    // the same VM/volume are applied in the order the control plane sent them (issue #179).
+    private nonisolated let inboundMessages: AsyncStream<MessageEnvelope>
+    private nonisolated let inboundContinuation: AsyncStream<MessageEnvelope>.Continuation
+    private let messageQueue = SerialTaskQueue()
+    private var messageConsumerTask: Task<Void, Never>?
+
     // Track which hypervisor type is used for each VM
     private var vmHypervisorMap: [String: HypervisorType] = [:]
 
@@ -128,6 +137,10 @@ actor Agent {
         self.hypervisorType = hypervisorType
         self.spiffeConfig = spiffeConfig
         self.stateStore = stateStore
+
+        let (stream, continuation) = AsyncStream.makeStream(of: MessageEnvelope.self)
+        self.inboundMessages = stream
+        self.inboundContinuation = continuation
     }
 
     /// Returns the effective agent ID (assigned UUID if registered, initial ID otherwise)
@@ -246,12 +259,16 @@ actor Agent {
             }
         }
 
+        // Begin draining inbound frames before the connection opens so the registration
+        // response (and any early frames) are processed in order.
+        startMessageConsumer()
+
         if isRegistrationMode {
             logger.info("Connecting for agent registration", metadata: ["url": .string(webSocketURL)])
         } else {
             logger.info("Connecting to control plane", metadata: ["url": .string(webSocketURL)])
         }
-        websocketClient = WebSocketClient(url: currentWebSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration, registrationToken: currentRegistrationToken)
+        websocketClient = WebSocketClient(url: currentWebSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration, registrationToken: currentRegistrationToken, inboundContinuation: inboundContinuation)
 
         if let client = websocketClient {
             try await client.connect()
@@ -302,7 +319,12 @@ actor Agent {
 
         heartbeatTask?.cancel()
         heartbeatTask = nil
-        
+
+        // Stop draining inbound frames; finishing the stream ends the consumer loop.
+        inboundContinuation.finish()
+        messageConsumerTask?.cancel()
+        messageConsumerTask = nil
+
         // Unregister from control plane
         do {
             try await unregisterFromControlPlane()
@@ -732,6 +754,26 @@ actor Agent {
 // MARK: - Message Handling
 
 extension Agent {
+    /// Start the single consumer that drains the ordered inbound stream. Idempotent, so
+    /// repeated calls (e.g. across reconnects) reuse the existing consumer.
+    private func startMessageConsumer() {
+        guard messageConsumerTask == nil else { return }
+        let stream = inboundMessages
+        messageConsumerTask = Task { [weak self] in
+            for await envelope in stream {
+                await self?.routeInboundMessage(envelope)
+            }
+        }
+    }
+
+    /// Route a decoded inbound frame onto its per-resource serial lane. Frames for the same
+    /// resource run in arrival order; frames for unrelated resources run concurrently.
+    private func routeInboundMessage(_ envelope: MessageEnvelope) async {
+        await messageQueue.enqueue(keys: envelope.serializationKeys) { [weak self] in
+            await self?.handleMessage(envelope)
+        }
+    }
+
     func handleMessage(_ envelope: MessageEnvelope) async {
         logger.debug("Handling message from control plane", metadata: [
             "type": .string(envelope.type.rawValue)
