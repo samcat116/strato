@@ -1,0 +1,43 @@
+control-plane/Tests/AppTests/MigrationRoundTripTests.swift
+  s_6b79f3234a0fa6::t_ead8be7151e461 1-34
+.github/workflows/build.yaml
+  s_6b79f3234a0fa6::t_5984ec6c9b6d63 87-96
+  s_75812976e3ec91::t_cafc161f396af2 39,41-44
+control-plane/Tests/AppTests/BaseTestCase.swift
+  s_6b79f3234a0fa6::t_d4107811eeb6bc 27,35
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_6b79f3234a0fa6::t_4c57ec744e268e 125,133,149,156
+  s_6b79f3234a0fa6::t_558276b3f72cc3 4-5,9-30,41-67,69-77,83,88-92,94-104
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_6b79f3234a0fa6::t_a3be8350c992ef 283-284
+  s_6b79f3234a0fa6::t_452e4de9a41e45 341-342
+  s_6b79f3234a0fa6::t_a89cb26e37549d 377-378
+  s_6b79f3234a0fa6::t_5bc3ecb362dee2 223-224,251-252
+  s_6b79f3234a0fa6::t_cd32a44327a57f 366-367
+control-plane/Sources/App/Extensions/DatabaseQuery+CaseInsensitiveSearch.swift
+  s_6b79f3234a0fa6::t_b25f378398b762 1-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f7a4e7870324545c93640ff67df8c23dd10c9aaf",
+  "prompts": {},
+  "sessions": {
+    "s_6b79f3234a0fa6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ee0b4a12-ecbf-4742-92d3-87fdc50825fa",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_75812976e3ec91": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "191ad43b-b85a-4ced-90fa-20e2513b4f22",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
