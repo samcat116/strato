@@ -8,6 +8,7 @@ When a new VM is created, the Scheduler Service analyzes all available agents an
 
 - **Resource Availability**: CPU, memory, and disk capacity
 - **Agent Health**: Only online agents are considered
+- **Hypervisor Support**: Only agents that reported the VM's hypervisor (QEMU or Firecracker) as available are considered. Agents probe their hypervisors at startup (binary present, KVM/HVF accessible) and report the results at registration; agents that predate capability reporting are treated as supporting everything.
 - **Load Distribution**: Current VM count and resource utilization
 - **Scheduling Strategy**: Configurable algorithm for placement decisions
 

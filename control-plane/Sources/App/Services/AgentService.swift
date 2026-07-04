@@ -116,6 +116,9 @@ actor AgentService {
             agent.hostname = message.hostname
             agent.version = message.version
             agent.capabilities = message.capabilities
+            agent.architecture = message.architecture?.rawValue
+            agent.hypervisors = message.effectiveHypervisors
+            agent.networkCapability = message.networkCapability?.rawValue
             agent.updateResources(message.resources)
             agent.status = .online
         } else {
@@ -137,6 +140,9 @@ actor AgentService {
             hostname: message.hostname,
             version: message.version,
             capabilities: message.capabilities,
+            architecture: message.architecture,
+            hypervisors: message.effectiveHypervisors,
+            networkCapability: message.networkCapability,
             resources: message.resources,
             lastHeartbeat: Date(),
             status: .online
@@ -626,7 +632,10 @@ actor AgentService {
                 totalDisk: agentInfo.resources.totalDisk,
                 availableDisk: agentInfo.resources.availableDisk,
                 status: agentInfo.status,
-                runningVMCount: vmToAgentMapping.values.filter { $0 == agentInfo.id }.count
+                runningVMCount: vmToAgentMapping.values.filter { $0 == agentInfo.id }.count,
+                architecture: agentInfo.architecture,
+                hypervisors: agentInfo.hypervisors,
+                networkCapability: agentInfo.networkCapability
             )
         }
     }
@@ -861,6 +870,9 @@ struct AgentInfo: Sendable {
     let hostname: String
     let version: String
     let capabilities: [String]
+    let architecture: HostArchitecture?
+    let hypervisors: [HypervisorSupport]
+    let networkCapability: NetworkCapability?
     var resources: AgentResources
     var lastHeartbeat: Date
     var status: AgentStatus

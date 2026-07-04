@@ -1,5 +1,6 @@
 import Testing
 import Vapor
+import StratoShared
 @testable import App
 
 @Suite("SchedulerService Tests", .serialized)
@@ -7,7 +8,12 @@ struct SchedulerServiceTests {
 
     // MARK: - Test Data Helpers
 
-    func createTestVM(cpu: Int = 2, memory: Int64 = 2048, disk: Int64 = 20000) -> VM {
+    func createTestVM(
+        cpu: Int = 2,
+        memory: Int64 = 2048,
+        disk: Int64 = 20000,
+        hypervisorType: HypervisorType = .qemu
+    ) -> VM {
         return VM(
             name: "test-vm",
             description: "Test VM",
@@ -16,7 +22,8 @@ struct SchedulerServiceTests {
             environment: "test",
             cpu: cpu,
             memory: memory,
-            disk: disk
+            disk: disk,
+            hypervisorType: hypervisorType
         )
     }
 
@@ -30,7 +37,8 @@ struct SchedulerServiceTests {
         totalDisk: Int64 = 100000,
         availableDisk: Int64 = 80000,
         status: AgentStatus = .online,
-        runningVMCount: Int = 0
+        runningVMCount: Int = 0,
+        hypervisors: [HypervisorSupport] = []
     ) -> SchedulableAgent {
         return SchedulableAgent(
             id: id,
@@ -42,7 +50,18 @@ struct SchedulerServiceTests {
             totalDisk: totalDisk,
             availableDisk: availableDisk,
             status: status,
-            runningVMCount: runningVMCount
+            runningVMCount: runningVMCount,
+            hypervisors: hypervisors
+        )
+    }
+
+    func hypervisorSupport(_ type: HypervisorType, available: Bool) -> HypervisorSupport {
+        return HypervisorSupport(
+            type: type,
+            available: available,
+            accelerated: available,
+            unavailabilityReason: available ? nil : "not available in test",
+            capabilities: .capabilities(for: type)
         )
     }
 
@@ -251,6 +270,72 @@ struct SchedulerServiceTests {
         let selectedId = try scheduler.selectAgent(for: vm, from: agents)
 
         #expect(selectedId == "agent2")
+    }
+
+    // MARK: - Hypervisor Filtering Tests
+
+    @Test("Scheduler filters out agents that do not support the VM's hypervisor")
+    func testFiltersUnsupportedHypervisor() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(
+                id: "qemu-only", name: "qemu-only",
+                hypervisors: [
+                    hypervisorSupport(.qemu, available: true),
+                    hypervisorSupport(.firecracker, available: false)
+                ]
+            ),
+            createTestAgent(
+                id: "full-host", name: "full-host",
+                hypervisors: [
+                    hypervisorSupport(.qemu, available: true),
+                    hypervisorSupport(.firecracker, available: true)
+                ]
+            )
+        ]
+
+        let vm = createTestVM(hypervisorType: .firecracker)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
+
+        #expect(selectedId == "full-host")
+    }
+
+    @Test("Scheduler treats agents without a hypervisor report as supporting everything")
+    func testLegacyAgentWithoutHypervisorReport() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        // Legacy agent: registered before capability reporting, empty list
+        let agents = [createTestAgent(id: "legacy", name: "legacy", hypervisors: [])]
+
+        let vm = createTestVM(hypervisorType: .firecracker)
+        let selectedId = try scheduler.selectAgent(for: vm, from: agents)
+
+        #expect(selectedId == "legacy")
+    }
+
+    @Test("Scheduler throws when no agent supports the VM's hypervisor")
+    func testNoAgentSupportsHypervisor() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(
+                id: "qemu-only", name: "qemu-only",
+                hypervisors: [
+                    hypervisorSupport(.qemu, available: true),
+                    hypervisorSupport(.firecracker, available: false)
+                ]
+            )
+        ]
+
+        let vm = createTestVM(hypervisorType: .firecracker)
+
+        #expect(throws: SchedulerError.self) {
+            try scheduler.selectAgent(for: vm, from: agents)
+        }
     }
 
     // MARK: - Error Handling Tests

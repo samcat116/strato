@@ -67,6 +67,31 @@ export interface AgentResources {
   availableDisk: number;
 }
 
+export type HypervisorType = "qemu" | "firecracker";
+
+export type HostArchitecture = "x86_64" | "arm64";
+
+export type NetworkCapability = "overlay" | "user_mode";
+
+export interface HypervisorCapabilities {
+  type: HypervisorType;
+  supportsPause: boolean;
+  supportsLiveMigration: boolean;
+  supportsSnapshots: boolean;
+  requiresDirectKernelBoot: boolean;
+  maxVCPUs: number;
+  maxMemory: number;
+}
+
+// One hypervisor on an agent host, with availability probed at agent startup.
+export interface HypervisorSupport {
+  type: HypervisorType;
+  available: boolean;
+  accelerated: boolean;
+  unavailabilityReason?: string;
+  capabilities: HypervisorCapabilities;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -75,6 +100,9 @@ export interface Agent {
   capabilities: string[];
   status: AgentStatus;
   resources: AgentResources;
+  architecture?: HostArchitecture;
+  hypervisors: HypervisorSupport[];
+  networkCapability?: NetworkCapability;
   lastHeartbeat?: string;
   createdAt: string;
   isOnline: boolean;

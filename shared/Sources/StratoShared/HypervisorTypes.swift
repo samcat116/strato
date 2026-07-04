@@ -52,8 +52,72 @@ public enum HypervisorType: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// CPU architecture of an agent host.
+///
+/// KVM and HVF only accelerate same-architecture guests, so the scheduler needs
+/// to know each host's architecture to place VMs where they can run accelerated.
+public enum HostArchitecture: String, Codable, CaseIterable, Sendable {
+    case x86_64 = "x86_64"
+    case arm64 = "arm64"
+
+    /// The architecture this binary was compiled for. Agents run natively on
+    /// their host, so the compile-time architecture is the host architecture.
+    public static var current: HostArchitecture {
+        #if arch(arm64)
+        return .arm64
+        #else
+        return .x86_64
+        #endif
+    }
+}
+
+/// Networking capability of an agent host, as reported at registration.
+public enum NetworkCapability: String, Codable, CaseIterable, Sendable {
+    /// Software-defined overlay networking (OVN/OVS): inter-VM traffic,
+    /// tenant isolation, and inbound connections are supported.
+    case overlay = "overlay"
+
+    /// User-mode (SLIRP) networking only: outbound NAT, no VM-to-VM traffic,
+    /// no inbound connections, no isolation.
+    case userMode = "user_mode"
+}
+
+/// One hypervisor on an agent host: what it is, whether it can actually run
+/// VMs right now (probed at agent startup, not assumed from the platform),
+/// and what it supports.
+public struct HypervisorSupport: Codable, Equatable, Sendable {
+    /// The hypervisor type
+    public let type: HypervisorType
+
+    /// Whether the hypervisor is usable on this host (binary present, etc.)
+    public let available: Bool
+
+    /// Whether hardware acceleration (KVM/HVF) backs this hypervisor
+    public let accelerated: Bool
+
+    /// Why the hypervisor is unavailable, when `available` is false
+    public let unavailabilityReason: String?
+
+    /// Feature capabilities of this hypervisor
+    public let capabilities: HypervisorCapabilities
+
+    public init(
+        type: HypervisorType,
+        available: Bool,
+        accelerated: Bool,
+        unavailabilityReason: String? = nil,
+        capabilities: HypervisorCapabilities
+    ) {
+        self.type = type
+        self.available = available
+        self.accelerated = accelerated
+        self.unavailabilityReason = unavailabilityReason
+        self.capabilities = capabilities
+    }
+}
+
 /// Capabilities of a hypervisor
-public struct HypervisorCapabilities: Codable, Sendable {
+public struct HypervisorCapabilities: Codable, Equatable, Sendable {
     /// The hypervisor type
     public let type: HypervisorType
 

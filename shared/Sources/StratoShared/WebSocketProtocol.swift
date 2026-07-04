@@ -81,7 +81,18 @@ public struct AgentRegisterMessage: WebSocketMessage {
     public let version: String
     public let capabilities: [String]
     public let resources: AgentResources
+    /// Legacy single hypervisor type. Still sent so control planes that predate
+    /// `hypervisors` can register this agent; readers should prefer `hypervisors`.
     public let hypervisorType: HypervisorType
+    /// Host CPU architecture. Optional so registrations from older agents
+    /// (which never sent it) still decode.
+    public let architecture: HostArchitecture?
+    /// Every hypervisor on this host with probed availability and capabilities.
+    /// Optional so registrations from older agents still decode; readers fall
+    /// back to deriving a single entry from `hypervisorType`.
+    public let hypervisors: [HypervisorSupport]?
+    /// Networking capability of this host. Optional for the same reason.
+    public let networkCapability: NetworkCapability?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -91,7 +102,10 @@ public struct AgentRegisterMessage: WebSocketMessage {
         version: String,
         capabilities: [String],
         resources: AgentResources,
-        hypervisorType: HypervisorType = .qemu
+        hypervisorType: HypervisorType = .qemu,
+        architecture: HostArchitecture? = nil,
+        hypervisors: [HypervisorSupport]? = nil,
+        networkCapability: NetworkCapability? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -101,6 +115,25 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.capabilities = capabilities
         self.resources = resources
         self.hypervisorType = hypervisorType
+        self.architecture = architecture
+        self.hypervisors = hypervisors
+        self.networkCapability = networkCapability
+    }
+
+    /// The hypervisor list to act on: the probed report when the agent sent one,
+    /// otherwise a single entry derived from the legacy `hypervisorType` scalar.
+    /// The legacy entry is assumed available (the agent registered claiming to
+    /// run it) but not accelerated, since older agents never probed KVM/HVF.
+    public var effectiveHypervisors: [HypervisorSupport] {
+        if let hypervisors, !hypervisors.isEmpty {
+            return hypervisors
+        }
+        return [HypervisorSupport(
+            type: hypervisorType,
+            available: true,
+            accelerated: false,
+            capabilities: .capabilities(for: hypervisorType)
+        )]
     }
 }
 

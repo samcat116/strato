@@ -83,6 +83,9 @@ actor Agent {
     private var vmHypervisorMap: [String: HypervisorType] = [:]
 
     private let networkMode: NetworkMode?
+    // The network mode actually in effect after platform fallbacks, resolved in
+    // start(); registration reports it as the host's network capability.
+    private var resolvedNetworkMode: NetworkMode?
     private let imageCachePath: String?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
@@ -170,13 +173,16 @@ actor Agent {
             #if os(Linux)
             logger.info("Network service initialized with SwiftOVN support")
             networkService = NetworkServiceLinux(logger: logger)
+            resolvedNetworkMode = .ovn
             #else
             logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
             networkService = NetworkServiceMacOS(logger: logger)
+            resolvedNetworkMode = .user
             #endif
         case .user:
             logger.info("Network service initialized with user-mode networking")
             networkService = NetworkServiceMacOS(logger: logger)
+            resolvedNetworkMode = .user
         }
 
         do {
@@ -431,14 +437,33 @@ actor Agent {
 
     private func registerWithControlPlane() async throws {
         let resources = await getAgentResources()
-        let capabilities = getAgentCapabilities()
+        // Probe on every registration (initial and reconnect) so the control
+        // plane sees the host as it is now, not as it was at process start —
+        // e.g. Firecracker installed or /dev/kvm permissions fixed since then.
+        let hypervisors = HypervisorProbe.probeAll(
+            qemuBinaryPath: qemuBinaryPath,
+            firecrackerBinaryPath: firecrackerBinaryPath
+        )
+        let networkCapability: NetworkCapability = resolvedNetworkMode == .ovn ? .overlay : .userMode
+        let capabilities = getAgentCapabilities(hypervisors: hypervisors, networkCapability: networkCapability)
+
+        for hypervisor in hypervisors where !hypervisor.available {
+            logger.info("Hypervisor unavailable on this host", metadata: [
+                "hypervisor": .string(hypervisor.type.rawValue),
+                "reason": .string(hypervisor.unavailabilityReason ?? "unknown")
+            ])
+        }
+
         let message = AgentRegisterMessage(
             agentId: initialAgentID,
             hostname: ProcessInfo.processInfo.hostName,
             version: "1.0.0",
             capabilities: capabilities,
             resources: resources,
-            hypervisorType: hypervisorType
+            hypervisorType: hypervisorType,
+            architecture: .current,
+            hypervisors: hypervisors,
+            networkCapability: networkCapability
         )
 
         if let client = websocketClient {
@@ -547,16 +572,29 @@ actor Agent {
         ])
     }
 
-    private func getAgentCapabilities() -> [String] {
-        var capabilities = ["vm_management", "qemu"]
+    /// Legacy string capability list, derived from the same probes that back
+    /// the structured `hypervisors` report instead of hardcoded platform lists.
+    private func getAgentCapabilities(hypervisors: [HypervisorSupport], networkCapability: NetworkCapability) -> [String] {
+        var capabilities = ["vm_management"]
 
-        #if canImport(SwiftQEMU)
-        #if os(Linux)
-        capabilities.append(contentsOf: ["kvm", "ovn_networking", "firecracker"])
-        #elseif os(macOS)
-        capabilities.append(contentsOf: ["hvf", "user_networking"])
-        #endif
-        #endif
+        for hypervisor in hypervisors where hypervisor.available {
+            capabilities.append(hypervisor.type.rawValue)
+        }
+
+        if hypervisors.contains(where: { $0.accelerated }) {
+            #if os(Linux)
+            capabilities.append("kvm")
+            #elseif os(macOS)
+            capabilities.append("hvf")
+            #endif
+        }
+
+        switch networkCapability {
+        case .overlay:
+            capabilities.append("ovn_networking")
+        case .userMode:
+            capabilities.append("user_networking")
+        }
 
         return capabilities
     }

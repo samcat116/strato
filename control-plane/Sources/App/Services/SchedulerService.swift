@@ -1,6 +1,7 @@
 import Vapor
 import Fluent
 import NIOConcurrencyHelpers
+import StratoShared
 
 /// Scheduling strategy for VM placement
 enum SchedulingStrategy: String, Codable, Sendable {
@@ -29,6 +30,51 @@ struct SchedulableAgent: Sendable {
     let availableDisk: Int64
     let status: AgentStatus
     let runningVMCount: Int
+    /// Host CPU architecture, nil when the agent never reported it
+    let architecture: HostArchitecture?
+    /// Hypervisors on the host with probed availability, as reported at registration
+    let hypervisors: [HypervisorSupport]
+    /// Host networking capability, nil when the agent never reported it
+    let networkCapability: NetworkCapability?
+
+    init(
+        id: String,
+        name: String,
+        totalCPU: Int,
+        availableCPU: Int,
+        totalMemory: Int64,
+        availableMemory: Int64,
+        totalDisk: Int64,
+        availableDisk: Int64,
+        status: AgentStatus,
+        runningVMCount: Int,
+        architecture: HostArchitecture? = nil,
+        hypervisors: [HypervisorSupport] = [],
+        networkCapability: NetworkCapability? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.totalCPU = totalCPU
+        self.availableCPU = availableCPU
+        self.totalMemory = totalMemory
+        self.availableMemory = availableMemory
+        self.totalDisk = totalDisk
+        self.availableDisk = availableDisk
+        self.status = status
+        self.runningVMCount = runningVMCount
+        self.architecture = architecture
+        self.hypervisors = hypervisors
+        self.networkCapability = networkCapability
+    }
+
+    /// Whether this agent can run VMs on the given hypervisor right now.
+    /// An empty list means the agent predates capability reporting (or its row
+    /// hasn't been refreshed since the migration); treat it as supporting
+    /// everything rather than scheduling nothing onto it.
+    func supports(_ hypervisor: HypervisorType) -> Bool {
+        guard !hypervisors.isEmpty else { return true }
+        return hypervisors.contains { $0.type == hypervisor && $0.available }
+    }
 
     /// Calculate resource utilization percentage (0.0 to 1.0)
     var cpuUtilization: Double {
@@ -125,8 +171,9 @@ final class SchedulerService: @unchecked Sendable {
             disk: vm.disk
         )
 
-        // Filter to only online agents with sufficient resources
-        let eligibleAgents = filterEligibleAgents(agents, for: requirements)
+        // Filter to only online agents with sufficient resources that can run
+        // the VM's hypervisor
+        let eligibleAgents = filterEligibleAgents(agents, for: requirements, hypervisor: vm.hypervisorType)
 
         guard !eligibleAgents.isEmpty else {
             if agents.isEmpty {
@@ -156,13 +203,16 @@ final class SchedulerService: @unchecked Sendable {
 
     // MARK: - Private Scheduling Algorithms
 
-    /// Filter agents to those online and with sufficient resources
+    /// Filter agents to those online, able to run the VM's hypervisor, and
+    /// with sufficient resources
     private func filterEligibleAgents(
         _ agents: [SchedulableAgent],
-        for requirements: VMResourceRequirements
+        for requirements: VMResourceRequirements,
+        hypervisor: HypervisorType
     ) -> [SchedulableAgent] {
         return agents.filter { agent in
             agent.status == AgentStatus.online &&
+            agent.supports(hypervisor) &&
             agent.availableCPU >= requirements.cpu &&
             agent.availableMemory >= requirements.memory &&
             agent.availableDisk >= requirements.disk
