@@ -83,6 +83,11 @@ actor Agent {
     private var vmHypervisorMap: [String: HypervisorType] = [:]
 
     private let networkMode: NetworkMode?
+    // The networking backend actually selected at startup (config value plus
+    // platform fallbacks). Drives the networking capability advertised at
+    // registration: a Linux agent configured for user-mode networking must not
+    // claim OVN/VM-to-VM support.
+    private var effectiveNetworkMode: NetworkMode = .user
     private let imageCachePath: String?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
@@ -170,13 +175,16 @@ actor Agent {
             #if os(Linux)
             logger.info("Network service initialized with SwiftOVN support")
             networkService = NetworkServiceLinux(logger: logger)
+            effectiveNetworkMode = .ovn
             #else
             logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
             networkService = NetworkServiceMacOS(logger: logger)
+            effectiveNetworkMode = .user
             #endif
         case .user:
             logger.info("Network service initialized with user-mode networking")
             networkService = NetworkServiceMacOS(logger: logger)
+            effectiveNetworkMode = .user
         }
 
         do {
@@ -553,11 +561,17 @@ actor Agent {
 
         #if canImport(SwiftQEMU)
         #if os(Linux)
-        capabilities.append(contentsOf: ["kvm", "ovn_networking", "firecracker"])
+        capabilities.append(contentsOf: ["kvm", "firecracker"])
         #elseif os(macOS)
-        capabilities.append(contentsOf: ["hvf", "user_networking"])
+        capabilities.append("hvf")
         #endif
         #endif
+
+        // The networking capability reflects the backend selected at startup,
+        // not the platform: a Linux agent configured for user-mode networking
+        // cannot provide OVN/VM-to-VM networking, and the scheduler relies on
+        // this to enforce the inter-VM-networking placement constraint.
+        capabilities.append(effectiveNetworkMode == .ovn ? "ovn_networking" : "user_networking")
 
         return capabilities
     }

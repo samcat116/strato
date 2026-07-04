@@ -193,6 +193,13 @@ final class SchedulerService: @unchecked Sendable {
         // Guest architecture is unconstrained until images carry architecture
         // metadata; once VMs can derive it, the arch hard constraint below
         // applies automatically.
+        //
+        // Inter-VM networking is likewise unconstrained here: every VM gets a
+        // NIC (a MAC is assigned at creation), and a plain NIC is satisfiable
+        // by user-mode/SLIRP agents (outbound NAT). Deriving the requirement
+        // from NIC presence would make every VM unplaceable on macOS dev
+        // agents. It becomes derivable once VMs can express attachment to a
+        // shared/tenant network at creation time.
         let requirements = VMPlacementRequirements(
             cpu: vm.cpu,
             memory: vm.memory,
