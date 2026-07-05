@@ -1,6 +1,20 @@
 import Foundation
 
-/// Type of hypervisor used to run VMs
+/// Identity of a VM backend *driver*, not of the accelerator behind it.
+///
+/// `.qemu` is the QEMU driver wherever it runs — accelerated by KVM on Linux
+/// or Hypervisor.framework (HVF) on macOS, falling back to TCG emulation
+/// when neither is usable. Whether acceleration is actually in effect is a
+/// per-host attribute probed at agent startup and reported separately
+/// (`HypervisorSupport.accelerated`), never encoded in this enum. A backend
+/// that talks to a different VMM (e.g. a native Virtualization.framework
+/// driver on macOS) would be a new case here with its own `HypervisorService`
+/// conformance, not a variation of `.qemu`.
+///
+/// Adding a case means: the data tables in this file (`isAvailable`,
+/// `displayName`, `description`, `HypervisorCapabilities.capabilities(for:)`
+/// — all compiler-enforced), a probe report in `HypervisorProbe.probeAll`,
+/// and one driver registration in `Agent.start()`.
 public enum HypervisorType: String, Codable, CaseIterable, Sendable {
     /// QEMU with KVM (Linux) or HVF (macOS) acceleration
     case qemu = "qemu"
