@@ -1,0 +1,19 @@
+control-plane/web/src/components/organization-groups/manage-group-members-dialog.tsx
+  s_6f51127af38c38::t_f34b23b6222f78 48-75,78,81-83,95-101,103,105,126-132,134-135,137-164,166-183,185-239,241-242
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "715ee664b14523b7a86d83dff6202445b99bf558",
+  "prompts": {},
+  "sessions": {
+    "s_6f51127af38c38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "29aed775-6bfa-436f-a92b-a865af431af7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
