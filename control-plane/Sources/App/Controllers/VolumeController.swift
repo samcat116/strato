@@ -135,6 +135,22 @@ struct VolumeController: RouteCollection {
             guard let image = try await Image.find(sourceImageId, on: req.db) else {
                 throw Abort(.notFound, reason: "Source image not found")
             }
+
+            // The caller must be able to read the image before using it as a
+            // volume source: provisioning hands the agent a signed download URL
+            // for it, so accepting an unauthorized image ID would let a user
+            // materialize another project's image into their own volume.
+            let hasImagePermission = try await req.spicedb.checkPermission(
+                subject: user.id!.uuidString,
+                permission: "read",
+                resource: "image",
+                resourceId: sourceImageId.uuidString
+            )
+
+            guard hasImagePermission else {
+                throw Abort(.forbidden, reason: "Access denied to image")
+            }
+
             guard image.status == .ready else {
                 throw Abort(.badRequest, reason: "Source image is not ready (status: '\(image.status.rawValue)')")
             }
@@ -797,7 +813,7 @@ struct VolumeController: RouteCollection {
             throw Abort(
                 .conflict,
                 reason:
-                    "Snapshot cannot be deleted in status '\(snapshot.status.rawValue)'. Must be 'available' or 'error'"
+                    "Snapshot cannot be deleted in status '\(snapshot.status.rawValue)'. Must be 'available', 'error', or 'deleting'"
             )
         }
 
@@ -805,7 +821,21 @@ struct VolumeController: RouteCollection {
         snapshot.status = .deleting
         try await snapshot.save(on: req.db)
 
-        // TODO: Send message to agent to delete the snapshot from storage
+        // Delete the snapshot file on the hypervisor first; the database
+        // record is only removed once the agent confirms. Only snapshots of
+        // volumes that were never provisioned on a hypervisor skip the agent
+        // round-trip.
+        do {
+            try await req.application.volumeService.requestVolumeSnapshotDeletion(
+                volume: volume,
+                snapshot: snapshot
+            )
+        } catch {
+            snapshot.status = .error
+            snapshot.errorMessage = "Failed to delete snapshot on hypervisor: \(error.localizedDescription)"
+            try await snapshot.save(on: req.db)
+            throw Abort(.badGateway, reason: "Failed to delete snapshot on hypervisor: \(error.localizedDescription)")
+        }
 
         // Delete SpiceDB relationships
         try await req.spicedb.deleteRelationship(

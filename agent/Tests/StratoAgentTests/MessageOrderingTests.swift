@@ -202,9 +202,16 @@ struct MessageOrderingTests {
         let resizeKeys = MessageEnvelope.serializationKeys(
             type: .volumeResize, payload: payload(["volumeId": volumeId])
         )
+        let snapshotDeleteKeys = MessageEnvelope.serializationKeys(
+            type: .volumeSnapshotDelete,
+            payload: payload(["volumeId": volumeId, "snapshotId": UUID().uuidString])
+        )
         #expect(createKeys == [volumeId])
         #expect(deleteKeys == [volumeId])
         #expect(resizeKeys == [volumeId])
+        // Snapshot deletion removes a file inside the volume's directory, so it
+        // must share the volume lane with create/delete/resize/snapshot.
+        #expect(snapshotDeleteKeys == [volumeId])
     }
 
     @Test("Attach then detach of the same volume share the volume lane")

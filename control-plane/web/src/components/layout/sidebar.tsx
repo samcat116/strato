@@ -12,6 +12,7 @@ import {
   Settings,
   Plus,
   Key,
+  FolderKanban,
   Building2,
   FolderTree,
   Gauge,
@@ -127,6 +128,14 @@ export function Sidebar({ onCreateVM, onAddAgent }: SidebarProps) {
           <span className="flex items-center">
             <LayoutDashboard className="h-4 w-4 mr-2" />
             Dashboard
+          </span>
+        </SidebarLink>
+
+        {/* Projects Link */}
+        <SidebarLink href="/projects">
+          <span className="flex items-center">
+            <FolderKanban className="h-4 w-4 mr-2" />
+            Projects
           </span>
         </SidebarLink>
 

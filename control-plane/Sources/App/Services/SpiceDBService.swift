@@ -395,6 +395,10 @@ actor SpiceDBMockRecorder {
 
 struct MockSpiceDBService: SpiceDBServiceProtocol {
     var checkPermissionResult: Bool = true
+    /// Resource types (e.g. "image") whose permission checks are denied even
+    /// when `checkPermissionResult` is true, so tests can withhold access to
+    /// one resource while the rest of a handler's checks still pass.
+    var deniedResources: Set<String> = []
     var recorder: SpiceDBMockRecorder?
 
     func readSchema() async throws -> String? {
@@ -407,7 +411,7 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
 
     func checkPermission(subject: String, permission: String, resource: String, resourceId: String) async throws -> Bool
     {
-        return checkPermissionResult
+        return checkPermissionResult && !deniedResources.contains(resource)
     }
 
     func writeRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String)
@@ -449,7 +453,7 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
     func checkGroupBasedPermission(userID: String, permission: String, resource: String, resourceId: String)
         async throws -> Bool
     {
-        return checkPermissionResult
+        return checkPermissionResult && !deniedResources.contains(resource)
     }
 }
 
@@ -465,6 +469,20 @@ extension Application {
     var spicedbMockAllows: Bool {
         get { storage[SpiceDBMockAllowsKey.self] ?? true }
         set { storage[SpiceDBMockAllowsKey.self] = newValue }
+    }
+
+    /// Storage key for the testing SpiceDB mock's per-resource-type denials.
+    private struct SpiceDBMockDeniedResourcesKey: StorageKey {
+        typealias Value = Set<String>
+    }
+
+    /// In testing mode, resource types (e.g. "image") the mock SpiceDB denies
+    /// even while `spicedbMockAllows` is true. Lets tests withhold one
+    /// permission (say, image read) while a handler's other checks (say,
+    /// project create_volume) still pass. Empty by default.
+    var spicedbMockDeniedResources: Set<String> {
+        get { storage[SpiceDBMockDeniedResourcesKey.self] ?? [] }
+        set { storage[SpiceDBMockDeniedResourcesKey.self] = newValue }
     }
 
     /// Storage key for the testing SpiceDB mock's relationship-write recorder.
@@ -490,7 +508,11 @@ extension Application {
         get throws {
             // In testing mode, use a mock implementation
             if self.environment == .testing {
-                return MockSpiceDBService(checkPermissionResult: spicedbMockAllows, recorder: spicedbMockRecorder)
+                return MockSpiceDBService(
+                    checkPermissionResult: spicedbMockAllows,
+                    deniedResources: spicedbMockDeniedResources,
+                    recorder: spicedbMockRecorder
+                )
             }
 
             guard let endpoint = Environment.get("SPICEDB_ENDPOINT") else {

@@ -262,11 +262,25 @@ struct ProjectController: RouteCollection {
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
 
-        // Get direct projects in organization
-        let projects = try await Project.query(on: req.db)
+        // Return the full project set within the organization's hierarchy so
+        // callers (e.g. the project switcher) can reach OU-scoped projects too.
+        var projects = try await Project.query(on: req.db)
             .filter(\.$organization.$id == organizationID)
             .sort(\.$name)
             .all()
+
+        // Projects nested under organizational units within this organization.
+        let ous = try await OrganizationalUnit.query(on: req.db)
+            .filter(\.$organization.$id == organizationID)
+            .all()
+        let ouIDs = ous.compactMap { $0.id }
+        if !ouIDs.isEmpty {
+            let ouProjects = try await Project.query(on: req.db)
+                .filter(\.$organizationalUnit.$id ~~ ouIDs)
+                .sort(\.$name)
+                .all()
+            projects.append(contentsOf: ouProjects)
+        }
 
         var responses: [ProjectResponse] = []
         for project in projects {
@@ -596,23 +610,36 @@ struct ProjectController: RouteCollection {
         // Verify user has admin access to current location
         try await OrganizationAccessService.requireProjectAdmin(user: user, project: project, on: req.db)
 
-        // Verify user has access to destination
-        if let destOrgID = transferRequest.organizationId {
-            try await OrganizationAccessService.requireMember(user: user, organizationID: destOrgID, on: req.db)
-        }
+        // Capture the current root organization so we can migrate the SpiceDB
+        // project→organization tuple if the destination resolves to a different one.
+        let oldRootOrganizationID = try await project.getRootOrganizationId(on: req.db)
 
-        // Validate destination
+        // Resolve and validate the destination, deriving its root organization.
+        let destinationOrganizationID: UUID?
         if let destOuID = transferRequest.organizationalUnitId {
             guard let destOU = try await OrganizationalUnit.find(destOuID, on: req.db) else {
                 throw Abort(.notFound, reason: "Destination OU not found")
             }
-
-            if let destOrgID = transferRequest.organizationId {
-                if destOU.$organization.id != destOrgID {
-                    throw Abort(.badRequest, reason: "OU does not belong to specified organization")
-                }
+            if let destOrgID = transferRequest.organizationId, destOU.$organization.id != destOrgID {
+                throw Abort(.badRequest, reason: "OU does not belong to specified organization")
             }
+            destinationOrganizationID = destOU.$organization.id
+        } else {
+            destinationOrganizationID = transferRequest.organizationId
         }
+
+        guard let destinationOrganizationID else {
+            throw Abort(.badRequest, reason: "Transfer must specify a destination organization or organizational unit")
+        }
+
+        // Moving a project requires admin on the destination organization, not
+        // just membership — otherwise a member could relocate projects into orgs
+        // they do not administer.
+        try await OrganizationAccessService.requireAdmin(
+            user: user,
+            organizationID: destinationOrganizationID,
+            on: req.db
+        )
 
         // Check name uniqueness at destination
         try await validateProjectNameUniqueness(
@@ -630,6 +657,32 @@ struct ProjectController: RouteCollection {
 
         try project.validate()
         try await project.save(on: req.db)
+
+        // Migrate the project→organization SpiceDB tuple when the root org changes.
+        // Project-scoped permissions (view_project/update_project, image and VM
+        // creation, ...) resolve via organization->admin, so without this the
+        // destination admins get 403s and the source org retains access (issue #267).
+        let newRootOrganizationID = try await project.getRootOrganizationId(on: req.db)
+        if oldRootOrganizationID != newRootOrganizationID {
+            if let oldRootOrganizationID {
+                try await req.spicedb.deleteRelationship(
+                    entity: "project",
+                    entityId: projectID.uuidString,
+                    relation: "organization",
+                    subject: "organization",
+                    subjectId: oldRootOrganizationID.uuidString
+                )
+            }
+            if let newRootOrganizationID {
+                try await req.spicedb.writeRelationship(
+                    entity: "project",
+                    entityId: projectID.uuidString,
+                    relation: "organization",
+                    subject: "organization",
+                    subjectId: newRootOrganizationID.uuidString
+                )
+            }
+        }
 
         let vmCount = try await VM.query(on: req.db)
             .filter(\.$project.$id == projectID)

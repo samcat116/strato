@@ -60,10 +60,6 @@ actor AgentService {
     private var vmToAgentMapping: [String: String] = [:]  // VM ID -> Agent ID
     private var pendingRequests: [String: PendingRequest] = [:]
     private var heartbeatTask: Task<Void, Never>?
-    /// Set once the app is shutting down so the heartbeat loop is cancelled and can
-    /// never (re)start — otherwise the detached task keeps polling `app.db` after
-    /// teardown and faults with "Core not configured".
-    private var isShutDown = false
 
     /// A request awaiting a response from a specific agent.
     /// Tracking the agent lets us fail all of an agent's in-flight requests when it disconnects.
@@ -76,6 +72,10 @@ actor AgentService {
         var timeoutTask: Task<Void, Never>?
     }
 
+    /// Set at application shutdown. Guards against the init task arming the
+    /// heartbeat monitor after `shutdown()` already ran.
+    private var isShutDown = false
+
     init(app: Application) {
         self.app = app
         // Start heartbeat monitoring and restore VM mappings after initialization
@@ -83,6 +83,17 @@ actor AgentService {
             await startHeartbeatMonitoring()
             await restoreVMToAgentMappings()
         }
+    }
+
+    /// Cancel the heartbeat monitoring loop. Called from the application's
+    /// shutdown lifecycle (see `AgentServiceLifecycleHandler`): the loop holds
+    /// the `Application` and sweeps the database every 30 seconds, so a tick
+    /// that fires after shutdown would hit Vapor's "Core not configured"
+    /// fatal error — long-lived test processes crash exactly this way.
+    func shutdown() {
+        isShutDown = true
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
     }
 
     // MARK: - VM-to-Agent Mapping Recovery
@@ -397,14 +408,6 @@ actor AgentService {
     }
 
     // MARK: - Heartbeat Monitoring
-
-    /// Cancels the heartbeat/reconciliation loop. Idempotent. Invoked from the app
-    /// shutdown hook so the background task cannot outlive the app.
-    func shutdown() {
-        isShutDown = true
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
-    }
 
     /// Whether the heartbeat loop is currently armed. Test seam for verifying that
     /// the shutdown hook tears it down.
@@ -995,23 +998,19 @@ extension Application {
         }
     }
 
-    /// The `AgentService` only if one was already created — never constructs a new
-    /// instance (which would start its background loop). Used by the shutdown hook to
-    /// tear down the service without resurrecting it.
-    var existingAgentService: AgentService? {
+    /// The `AgentService` if one has already been created, without lazily
+    /// creating it. Shutdown must not instantiate the service (that would arm
+    /// the very heartbeat task shutdown exists to cancel).
+    var agentServiceIfCreated: AgentService? {
         storage[AgentServiceKey.self]
     }
 }
 
-/// Cancels ``AgentService``'s heartbeat/reconciliation loop when the app shuts down.
-/// Without this the detached task keeps polling `app.db` after teardown and faults
-/// with "Core not configured" — benign as a production process exits, but a crash in
-/// the test suite, where many short-lived apps boot and shut down within one process.
+/// Cancels the agent heartbeat monitor at application shutdown so its
+/// periodic database sweep never outlives the application.
 struct AgentServiceLifecycleHandler: LifecycleHandler {
     func shutdownAsync(_ application: Application) async {
-        if let service = application.existingAgentService {
-            await service.shutdown()
-        }
+        await application.agentServiceIfCreated?.shutdown()
     }
 }
 
