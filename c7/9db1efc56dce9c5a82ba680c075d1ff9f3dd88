@@ -1,0 +1,42 @@
+control-plane/Sources/App/Services/OIDCValidation.swift
+  s_147c01f479fdc5::t_c1e776c7548fe6 77-112,114-115,117,119,123-124,126,128
+control-plane/Sources/App/Services/HierarchyTreeBuilder.swift
+  s_147c01f479fdc5::t_f2fa8ec7094164 147-148
+control-plane/Tests/AppTests/AgentSchedulableTransformTests.swift
+  s_147c01f479fdc5::t_275fc207dfcc6b 33
+  s_147c01f479fdc5::t_5496c7b99d2bc4 46-47
+control-plane/Sources/App/Services/QuotaComplianceService.swift
+  s_147c01f479fdc5::t_c50e5171a8b4a8 31,34-35
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_147c01f479fdc5::t_152fd5434a1efc 160,169,527-528
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_147c01f479fdc5::t_bb27f03b3a6048 126,457
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_147c01f479fdc5::t_78e8387e5212ab 285-290
+  s_147c01f479fdc5::t_13175ccae9691a 307-311
+  s_147c01f479fdc5::t_e1cf3ff1541dd0 352-355
+control-plane/Sources/App/Models/OIDCDTOs.swift
+  s_147c01f479fdc5::t_fc9ade2b456d51 102-104
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_147c01f479fdc5::t_30f55cdaaed0d8 434-435
+control-plane/Tests/AppTests/OIDCValidationTests.swift
+  s_147c01f479fdc5::t_9629419d5b1b9e 79,81-86,89-99
+control-plane/Sources/App/Services/HierarchyPathResolver.swift
+  s_147c01f479fdc5::t_2165c1c1c2e9dc 20-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c79db1efc56dce9c5a82ba680c075d1ff9f3dd88",
+  "prompts": {},
+  "sessions": {
+    "s_147c01f479fdc5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "39662ce1-7a30-4b1f-8cfb-d3eb529768cf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
