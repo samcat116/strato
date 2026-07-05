@@ -84,6 +84,10 @@ STRATO_HOSTNAME=${HOSTNAME_ARG}
 # Host (and port, when non-standard) agents use to reach the control plane;
 # embedded in the join commands the UI generates.
 EXTERNAL_HOSTNAME=${EXTERNAL_HOSTNAME}
+# Full origin agents fetch signed image-download URLs from. Routes to the
+# control plane through the published proxy, so it must be the browser origin
+# (not the in-container :8080).
+CONTROL_PLANE_URL=${ORIGIN}
 WEBAUTHN_RELYING_PARTY_ID=${HOSTNAME_ARG}
 WEBAUTHN_RELYING_PARTY_NAME=Strato
 WEBAUTHN_RELYING_PARTY_ORIGIN=${ORIGIN}
