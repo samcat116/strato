@@ -331,6 +331,102 @@ export interface ImageStatusResponse {
   checksum?: string;
 }
 
+// Volume types
+export type VolumeStatus =
+  | "creating"
+  | "available"
+  | "attaching"
+  | "attached"
+  | "detaching"
+  | "resizing"
+  | "snapshotting"
+  | "cloning"
+  | "deleting"
+  | "error";
+
+export type VolumeFormat = "qcow2" | "raw";
+
+export type VolumeType = "boot" | "data";
+
+export interface Volume {
+  id?: string;
+  name: string;
+  description: string;
+  projectId?: string;
+  size: number;
+  sizeFormatted: string;
+  format: VolumeFormat;
+  volumeType: VolumeType;
+  status: VolumeStatus;
+  errorMessage?: string;
+  hypervisorId?: string;
+  vmId?: string;
+  deviceName?: string;
+  bootOrder?: number;
+  sourceImageId?: string;
+  sourceVolumeId?: string;
+  createdById?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type SnapshotStatus =
+  | "creating"
+  | "available"
+  | "restoring"
+  | "deleting"
+  | "error";
+
+export interface VolumeSnapshot {
+  id?: string;
+  name: string;
+  description: string;
+  volumeId?: string;
+  projectId?: string;
+  size: number;
+  sizeFormatted: string;
+  status: SnapshotStatus;
+  errorMessage?: string;
+  createdById?: string;
+  createdAt?: string;
+}
+
+export interface CreateVolumeRequest {
+  name: string;
+  description?: string;
+  projectId?: string;
+  sizeGB: number;
+  format?: VolumeFormat;
+  volumeType?: VolumeType;
+  sourceImageId?: string;
+}
+
+export interface UpdateVolumeRequest {
+  name?: string;
+  description?: string;
+}
+
+export interface AttachVolumeRequest {
+  vmId: string;
+  deviceName?: string;
+  bootOrder?: number;
+  readonly?: boolean;
+}
+
+export interface ResizeVolumeRequest {
+  sizeGB: number;
+}
+
+export interface CloneVolumeRequest {
+  name: string;
+  description?: string;
+}
+
+export interface CreateVolumeSnapshotRequest {
+  name: string;
+  description?: string;
+}
+
 // VM Log types
 export type VMLogLevel = "debug" | "info" | "warning" | "error";
 export type VMLogSource = "agent" | "qemu" | "control_plane";

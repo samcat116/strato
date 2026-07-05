@@ -73,27 +73,6 @@ interface SidebarLinkProps {
   onClick?: () => void;
 }
 
-function SidebarDisabledLink({
-  children,
-  tooltip,
-}: {
-  children: React.ReactNode;
-  tooltip: string;
-}) {
-  return (
-    <span
-      title={tooltip}
-      aria-disabled="true"
-      className="flex items-center justify-between px-3 py-2 text-sm rounded-md text-gray-500 cursor-not-allowed"
-    >
-      {children}
-      <span className="ml-2 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide rounded bg-gray-700 text-gray-400">
-        Soon
-      </span>
-    </span>
-  );
-}
-
 function SidebarLink({ href, children, onClick }: SidebarLinkProps) {
   const pathname = usePathname();
   const isActive = pathname === href;
@@ -164,12 +143,8 @@ export function Sidebar({ onCreateVM, onAddAgent }: SidebarProps) {
           defaultOpen
         >
           <SidebarLink href="/images">Images</SidebarLink>
-          <SidebarDisabledLink tooltip="Volume management is coming soon">
-            Volumes
-          </SidebarDisabledLink>
-          <SidebarDisabledLink tooltip="Volume snapshots are coming soon">
-            Snapshots
-          </SidebarDisabledLink>
+          <SidebarLink href="/storage/volumes">Volumes</SidebarLink>
+          <SidebarLink href="/storage/snapshots">Snapshots</SidebarLink>
         </SidebarSection>
 
         {/* Nodes Section */}
