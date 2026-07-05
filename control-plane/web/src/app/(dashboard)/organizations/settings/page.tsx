@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Save } from "lucide-react";
+import { Loader2, Save, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,18 +11,22 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { organizationsApi } from "@/lib/api/organizations";
-import { useOrganization } from "@/providers";
+import { useOrganizationMembers } from "@/lib/hooks";
+import { MembersTable, AddMemberDialog } from "@/components/organization-members";
+import { useAuth, useOrganization } from "@/providers";
 import { toast } from "sonner";
 
 export default function OrganizationSettingsPage() {
   const searchParams = useSearchParams();
   const idParam = searchParams.get("id");
   const { currentOrg } = useOrganization();
+  const { user } = useAuth();
 
   // Use URL param if provided, otherwise use current org
   const id = idParam || currentOrg?.id || "";
 
   const [isLoading, setIsLoading] = useState(false);
+  const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
     description: "",
@@ -37,6 +41,11 @@ export default function OrganizationSettingsPage() {
     queryFn: () => organizationsApi.get(id),
     enabled: !!id,
   });
+
+  const { data: members = [], isLoading: isMembersLoading } =
+    useOrganizationMembers(id);
+
+  const canManageMembers = org?.userRole === "admin";
 
   // Set form data when org loads
   useEffect(() => {
@@ -194,15 +203,35 @@ export default function OrganizationSettingsPage() {
         {/* Members Tab */}
         <TabsContent value="members">
           <Card className="bg-gray-800 border-gray-700">
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
               <CardTitle className="text-lg font-semibold text-gray-100">
                 Organization Members
               </CardTitle>
+              {canManageMembers && (
+                <Button
+                  size="sm"
+                  className="bg-blue-600 hover:bg-blue-700"
+                  onClick={() => setAddMemberOpen(true)}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Member
+                </Button>
+              )}
             </CardHeader>
             <CardContent>
-              <p className="text-gray-400">
-                Member management coming soon. Use the API to manage members.
-              </p>
+              {!canManageMembers && (
+                <p className="text-sm text-gray-400 mb-4">
+                  You need admin rights to add, remove, or change the roles of
+                  members.
+                </p>
+              )}
+              <MembersTable
+                orgId={id}
+                members={members}
+                isLoading={isMembersLoading}
+                canManage={canManageMembers}
+                currentUserId={user?.id}
+              />
             </CardContent>
           </Card>
         </TabsContent>
@@ -224,6 +253,14 @@ export default function OrganizationSettingsPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {canManageMembers && (
+        <AddMemberDialog
+          orgId={id}
+          open={addMemberOpen}
+          onOpenChange={setAddMemberOpen}
+        />
+      )}
     </div>
   );
 }
