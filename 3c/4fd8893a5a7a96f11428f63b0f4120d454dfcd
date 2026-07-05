@@ -175,6 +175,7 @@ control-plane/Tests/AppTests/AgentSchedulableTransformTests.swift
   s_533413c7c4564b::t_18fa79a6e167e0 36,41
 control-plane/Sources/App/Services/VolumeService.swift
   s_533413c7c4564b::t_18fa79a6e167e0 178,180-184,193-197,202-206,217,219-222,257,259-264,285,287-292,315,317-321,340-343,354,356-360,380-383,394,396-400,411-415,421-425,431-438,443-448,474,476-478,480
+  s_533413c7c4564b::t_2edbad4dfc835f 58,118,179,218,258,286,316,355,395,475
 agent/Sources/StratoAgent/SPIFFE/SPIFFEClient.swift
   s_533413c7c4564b::t_18fa79a6e167e0 58-63,92-97,179-183,261-265
 control-plane/Sources/App/Controllers/OrganizationController.swift
@@ -187,6 +188,7 @@ control-plane/Sources/App/Migrations/CreateUserGroup.swift
   s_533413c7c4564b::t_18fa79a6e167e0 10
 control-plane/Sources/App/Controllers/VolumeController.swift
   s_533413c7c4564b::t_18fa79a6e167e0 45-46,68-69,75-76,80-81,103-107,188,190-195,230-235,251-254,310-314,332-334,358-362,367-374,416-422,438-440,454-458,485-490,508-511,519-521,550-556,574-578,643-649,667-671,729,731-735,767-768,772-777,795-799,827-832,842-843
+  s_533413c7c4564b::t_2edbad4dfc835f 189,730
 control-plane/Sources/App/Models/VolumeSnapshot.swift
   s_533413c7c4564b::t_18fa79a6e167e0 7-11
 control-plane/Sources/App/Models/SCIMToken.swift
