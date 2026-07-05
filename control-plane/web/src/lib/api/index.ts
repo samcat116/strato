@@ -8,3 +8,4 @@ export { organizationsApi } from "./organizations";
 export { agentsApi } from "./agents";
 export { imagesApi } from "./images";
 export { projectsApi } from "./projects";
+export { apiKeysApi } from "./api-keys";

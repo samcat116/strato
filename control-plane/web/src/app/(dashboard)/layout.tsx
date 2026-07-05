@@ -44,10 +44,6 @@ export default function DashboardLayout({
         <Sidebar
           onCreateVM={() => setCreateVMOpen(true)}
           onAddAgent={() => setAddAgentOpen(true)}
-          onManageAPIKeys={() => {
-            // TODO: Implement API keys management dialog
-            router.push("/organizations/settings");
-          }}
         />
         <main className="flex-1 overflow-y-auto p-6">{children}</main>
       </div>

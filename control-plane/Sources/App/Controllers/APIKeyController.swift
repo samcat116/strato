@@ -4,7 +4,7 @@ import Vapor
 
 struct APIKeyController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        let apiKeys = routes.grouped("api-keys")
+        let apiKeys = routes.grouped("api", "api-keys")
         apiKeys.get(use: index)
         apiKeys.post(use: create)
 
