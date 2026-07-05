@@ -9,23 +9,27 @@ const nextConfig: NextConfig = {
   // Security headers for the user-facing HTML this service serves (/, /login,
   // ...). In the compose/Helm topologies these pages come from here, not the
   // control plane, so the control plane's SecurityHeadersMiddleware doesn't cover
-  // them — mirror the same headers here. HSTS is gated on HTTP_TLS_ENABLED so it's
-  // only sent when browsers reach us over HTTPS (see the control plane's rationale).
+  // them — mirror the same headers here.
+  //
+  // Only unconditional headers belong here: `headers()` is evaluated during
+  // `next build` and baked into the routes manifest, so runtime env (e.g.
+  // HTTP_TLS_ENABLED) can't influence it. HSTS is therefore emitted by the
+  // TLS-terminating runtime layer instead — nginx in the compose deployment
+  // (gated on the forwarded proto), and the TLS ingress in Kubernetes.
+  //
   // No strict CSP: Next.js ships inline hydration scripts a `default-src 'self'`
   // policy would block; X-Frame-Options still covers clickjacking.
   async headers() {
-    const headers = [
-      { key: "X-Content-Type-Options", value: "nosniff" },
-      { key: "X-Frame-Options", value: "DENY" },
-      { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        ],
+      },
     ];
-    if (process.env.HTTP_TLS_ENABLED === "true") {
-      headers.push({
-        key: "Strict-Transport-Security",
-        value: "max-age=31536000; includeSubDomains",
-      });
-    }
-    return [{ source: "/:path*", headers }];
   },
 
   // Rewrites for local development (proxies API to Vapor backend)

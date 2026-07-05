@@ -145,8 +145,6 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      # Gates HSTS on the frontend's HTML responses; see control-plane above.
-      HTTP_TLS_ENABLED: ${HTTP_TLS_ENABLED:-false}
     depends_on:
       - control-plane
     restart: unless-stopped
