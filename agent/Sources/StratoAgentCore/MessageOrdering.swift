@@ -108,7 +108,7 @@ extension MessageEnvelope {
             // Hot-plug/unplug acts on both the volume and the target VM (the handler drives
             // QEMU with vmId), so serialize against the VM's lifecycle lane too.
             raws = [fields?.volumeId, fields?.vmId]
-        case .volumeCreate, .volumeDelete, .volumeResize, .volumeSnapshot, .volumeInfo:
+        case .volumeCreate, .volumeDelete, .volumeResize, .volumeSnapshot, .volumeSnapshotDelete, .volumeInfo:
             raws = [fields?.volumeId]
         case .networkAttach:
             // Attaching a VM to a network acts on both the VM and the named network (the

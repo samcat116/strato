@@ -368,6 +368,57 @@ actor VolumeService {
         return status?.storagePath
     }
 
+    /// Request an agent to delete a volume snapshot from storage and await
+    /// its confirmation. The message carries only IDs — the agent derives the
+    /// file's location the same way it did at creation — so this also cleans
+    /// up snapshots whose create succeeded on the agent but whose response
+    /// was lost (status `.error`, no recorded storage path). Only volumes
+    /// that were never provisioned on any hypervisor skip the agent
+    /// round-trip; agent-side deletion is idempotent, so a snapshot with no
+    /// backing file confirms cleanly.
+    func requestVolumeSnapshotDeletion(
+        volume: Volume,
+        snapshot: VolumeSnapshot
+    ) async throws {
+        guard let hypervisorId = volume.hypervisorId else {
+            logger.info(
+                "Volume has no hypervisor, skipping agent snapshot deletion",
+                metadata: [
+                    "volumeId": .string(volume.id!.uuidString),
+                    "snapshotId": .string(snapshot.id!.uuidString),
+                ])
+            return
+        }
+
+        // `volume_snapshot_delete` postdates protocol version 1, so an older
+        // agent can't decode it — the frame is dropped before the agent can
+        // even reply with an error, and the request would burn its full
+        // timeout. Agents that understand the message advertise it as a
+        // capability at registration; fail fast on ones that don't.
+        if let agentInfo = await app.agentService.getAgentInfo(hypervisorId),
+            !agentInfo.capabilities.contains(MessageType.volumeSnapshotDelete.rawValue)
+        {
+            throw VolumeServiceError.operationUnsupportedByAgent(
+                MessageType.volumeSnapshotDelete.rawValue, hypervisorId
+            )
+        }
+
+        let message = VolumeSnapshotDeleteMessage(
+            volumeId: volume.id!.uuidString,
+            snapshotId: snapshot.id!.uuidString
+        )
+
+        _ = try await sendVolumeRequest(message, toAgent: hypervisorId)
+
+        logger.info(
+            "Agent confirmed snapshot deletion",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "snapshotId": .string(snapshot.id!.uuidString),
+                "agentId": .string(hypervisorId),
+            ])
+    }
+
     /// Request an agent to clone a volume and await its confirmation.
     /// Returns the target volume's storage path as reported by the agent.
     func requestVolumeClone(
@@ -508,6 +559,7 @@ enum VolumeServiceError: Error, LocalizedError {
     case volumeNotAttached
     case firecrackerNotSupported
     case agentOperationFailed(String, String?)
+    case operationUnsupportedByAgent(String, String)
 
     var errorDescription: String? {
         switch self {
@@ -530,6 +582,8 @@ enum VolumeServiceError: Error, LocalizedError {
                 return "\(error) (\(details))"
             }
             return error
+        case .operationUnsupportedByAgent(let operation, let agentId):
+            return "Agent '\(agentId)' does not support '\(operation)'; upgrade the agent and retry"
         }
     }
 }

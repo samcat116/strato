@@ -34,6 +34,7 @@ struct MessageTypeTests {
         case .volumeDetach: return "volume_detach"
         case .volumeResize: return "volume_resize"
         case .volumeSnapshot: return "volume_snapshot"
+        case .volumeSnapshotDelete: return "volume_snapshot_delete"
         case .volumeClone: return "volume_clone"
         case .volumeInfo: return "volume_info"
         case .consoleConnect: return "console_connect"
@@ -54,7 +55,7 @@ struct MessageTypeTests {
         .vmInfo, .vmStatus,
         .networkCreate, .networkDelete, .networkList, .networkInfo, .networkAttach, .networkDetach,
         .volumeCreate, .volumeDelete, .volumeAttach, .volumeDetach, .volumeResize,
-        .volumeSnapshot, .volumeClone, .volumeInfo,
+        .volumeSnapshot, .volumeSnapshotDelete, .volumeClone, .volumeInfo,
         .consoleConnect, .consoleDisconnect, .consoleData, .consoleConnected, .consoleDisconnected,
         .success, .error, .statusUpdate, .vmLog,
     ]

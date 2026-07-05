@@ -37,6 +37,7 @@ public enum MessageType: String, Codable, Sendable {
     case volumeDetach = "volume_detach"
     case volumeResize = "volume_resize"
     case volumeSnapshot = "volume_snapshot"
+    case volumeSnapshotDelete = "volume_snapshot_delete"
     case volumeClone = "volume_clone"
     case volumeInfo = "volume_info"
 
@@ -916,6 +917,31 @@ public struct VolumeSnapshotMessage: WebSocketMessage {
         self.snapshotId = snapshotId
         self.volumePath = volumePath
         self.snapshotPath = snapshotPath
+    }
+}
+
+/// Message to delete a snapshot of a volume from storage. Carries no file
+/// path: the agent derives the snapshot's location from the IDs (the same
+/// derivation it used when creating the snapshot), so deletion works even
+/// when the control plane never learned the path — e.g. when the snapshot
+/// was created on the agent but the success response was lost.
+public struct VolumeSnapshotDeleteMessage: WebSocketMessage {
+    public var type: MessageType { .volumeSnapshotDelete }
+    public let requestId: String
+    public let timestamp: Date
+    public let volumeId: String
+    public let snapshotId: String
+
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        volumeId: String,
+        snapshotId: String
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.volumeId = volumeId
+        self.snapshotId = snapshotId
     }
 }
 
