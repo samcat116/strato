@@ -39,9 +39,11 @@ export function TransferProjectDialog({
   const transferProject = useTransferProject();
   const [destinationOrgId, setDestinationOrgId] = useState("");
 
-  // Only organizations other than the project's current one are valid targets.
+  // Valid targets are other organizations the user administers — the backend
+  // requires admin on the destination, so offering member-only orgs would just
+  // produce a 403 on submit.
   const destinations = organizations.filter(
-    (org) => org.id !== project?.organizationId
+    (org) => org.id !== project?.organizationId && org.userRole === "admin"
   );
 
   // Clear the selection each time the dialog (re)opens, derived during render.

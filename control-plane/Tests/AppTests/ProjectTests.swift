@@ -398,6 +398,86 @@ final class ProjectTests {
         }
     }
 
+    @Test("Transfer to another organization migrates the SpiceDB org tuple")
+    func testTransferAcrossOrganizationsRewritesTuple() async throws {
+        try await withProjectTestApp { app, testUser, testOrganization, _, authToken in
+            // A second organization the user also administers.
+            let destinationOrg = Organization(name: "Destination Org", description: "Transfer target")
+            try await destinationOrg.save(on: app.db)
+            try await UserOrganization(
+                userID: testUser.id!,
+                organizationID: destinationOrg.id!,
+                role: "admin"
+            ).save(on: app.db)
+
+            let project = Project(
+                name: "Cross Org Project",
+                description: "Project to move between orgs",
+                organizationID: testOrganization.id,
+                path: ""
+            )
+            try await project.save(on: app.db)
+
+            let recorder = SpiceDBMockRecorder()
+            app.spicedbMockRecorder = recorder
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/transfer") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    TransferProjectRequest(
+                        organizationId: destinationOrg.id,
+                        organizationalUnitId: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(ProjectResponse.self)
+                #expect(response.organizationId == destinationOrg.id)
+            }
+
+            // The project→organization tuple must now point at the destination org,
+            // otherwise destination admins can't resolve project-scoped permissions.
+            let writes = await recorder.writes
+            let orgTuple = writes.first {
+                $0.entity == "project" && $0.relation == "organization"
+            }
+            let tuple = try #require(orgTuple, "expected a project→organization relationship write")
+            #expect(tuple.entityId == project.id!.uuidString)
+            #expect(tuple.subjectId == destinationOrg.id!.uuidString)
+        }
+    }
+
+    @Test("Transfer to an org where the user is only a member is forbidden")
+    func testTransferToNonAdminOrganizationForbidden() async throws {
+        try await withProjectTestApp { app, testUser, testOrganization, _, authToken in
+            let destinationOrg = Organization(name: "Member Only Org", description: "User is only a member")
+            try await destinationOrg.save(on: app.db)
+            try await UserOrganization(
+                userID: testUser.id!,
+                organizationID: destinationOrg.id!,
+                role: "member"
+            ).save(on: app.db)
+
+            let project = Project(
+                name: "Guarded Project",
+                description: "Should not move to a non-admin org",
+                organizationID: testOrganization.id,
+                path: ""
+            )
+            try await project.save(on: app.db)
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/transfer") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    TransferProjectRequest(
+                        organizationId: destinationOrg.id,
+                        organizationalUnitId: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+        }
+    }
+
     // MARK: - Update Project Tests
 
     @Test("Update project details")
