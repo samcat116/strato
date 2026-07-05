@@ -38,8 +38,8 @@ export const organizationsApi = {
     return api.get<OrganizationMember[]>(`/api/organizations/${orgId}/members`);
   },
 
-  addMember(orgId: string, userId: string, role: string): Promise<void> {
-    return api.post(`/api/organizations/${orgId}/members`, { userId, role });
+  addMember(orgId: string, userEmail: string, role: string): Promise<void> {
+    return api.post(`/api/organizations/${orgId}/members`, { userEmail, role });
   },
 
   removeMember(orgId: string, userId: string): Promise<void> {
