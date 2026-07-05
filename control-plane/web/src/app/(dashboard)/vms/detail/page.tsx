@@ -16,7 +16,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { VMStatusBadge, VMActions, LogViewer } from "@/components/vms";
+import {
+  VMStatusBadge,
+  VMActions,
+  LogViewer,
+  VMVolumesCard,
+} from "@/components/vms";
 import { useVM, useInvalidateVMs } from "@/lib/hooks";
 
 // Dynamically import ConsoleTerminal to avoid SSR issues with xterm.js
@@ -245,6 +250,9 @@ export default function VMDetailPage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Attached volumes */}
+          <VMVolumesCard vm={vm} />
         </TabsContent>
 
         <TabsContent value="console" className="mt-6">

@@ -1,4 +1,11 @@
 export { useVMs, useVM, useInvalidateVMs } from "./use-vms";
+export {
+  useVolumes,
+  useVolume,
+  useVolumeSnapshots,
+  useSnapshotsForVolumes,
+  useInvalidateVolumes,
+} from "./use-volumes";
 export { useAgents, useAgent, useAgentTokens, useInvalidateAgents } from "./use-agents";
 export {
   useImages,
