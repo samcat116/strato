@@ -102,6 +102,10 @@ actor Agent {
     private let manifestStore: VMManifestStore
     private var managedVMs: [String: VMManifestEntry] = [:]
     private var orphanedVMs: [String: VMManifestEntry] = [:]
+    // Set when a manifest write failed (disk full, permissions); the write is
+    // retried on every heartbeat until it succeeds, so a transient failure only
+    // leaves the on-disk manifest stale for a bounded window.
+    private var manifestPersistFailed = false
 
     private let networkMode: NetworkMode?
     // The networking backend actually selected at startup (config value plus
@@ -873,6 +877,15 @@ actor Agent {
             return
         }
 
+        // Retry a failed manifest write so a transient disk error can't leave the
+        // on-disk manifest permanently behind the in-memory VM records.
+        if manifestPersistFailed {
+            persistManifest()
+            if !manifestPersistFailed {
+                logger.info("VM manifest write recovered on heartbeat retry")
+            }
+        }
+
         let resources = await getAgentResources()
         let runningVMs = await getRunningVMList()
 
@@ -1119,8 +1132,16 @@ extension Agent {
     /// detected as orphaned after an agent restart. Orphaned entries are carried
     /// over (active entries win on ID collision) so a second restart still knows
     /// about them.
+    ///
+    /// A write failure does not fail the VM operation that triggered it — the
+    /// hypervisor-level change has already happened, so failing the response
+    /// would diverge control-plane state from reality worse than a stale
+    /// manifest does. Instead the failure is flagged and the write retried on
+    /// every heartbeat (each write covers the full VM set, so one success
+    /// heals all missed updates). The stale manifest only matters if the agent
+    /// restarts before a retry succeeds.
     private func persistManifest() {
-        manifestStore.save(orphanedVMs.merging(managedVMs) { _, active in active })
+        manifestPersistFailed = !manifestStore.save(orphanedVMs.merging(managedVMs) { _, active in active })
     }
 
     private func handleVMCreate(_ message: VMCreateMessage) async {
