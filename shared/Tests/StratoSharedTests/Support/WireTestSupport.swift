@@ -3,8 +3,8 @@ import StratoShared
 
 // The wire protocol routes every message through WireProtocol.makeEncoder()/
 // makeDecoder() on both sides (see MessageEnvelope); tests must use the same
-// coders so they exercise the real contract — including the pinned ISO-8601
-// date strategy and its tolerant decode.
+// coders so they exercise the real contract — including the pinned date
+// strategy and its tolerant decode.
 func encodeJSON<T: Encodable>(_ value: T) throws -> Data {
     try WireProtocol.makeEncoder().encode(value)
 }
