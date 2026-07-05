@@ -44,6 +44,10 @@ spec:
               value: "production"
             - name: PORT
               value: "3000"
+            # Gates HSTS on the frontend's HTML responses; same TLS signal the
+            # control plane uses (see the tlsEnabled helper).
+            - name: HTTP_TLS_ENABLED
+              value: "{{ include "strato-control-plane.tlsEnabled" . }}"
             {{- if .Values.frontend.env.NEXT_PUBLIC_API_URL }}
             - name: NEXT_PUBLIC_API_URL
               value: "{{ .Values.frontend.env.NEXT_PUBLIC_API_URL }}"

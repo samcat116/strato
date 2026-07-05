@@ -23,6 +23,24 @@ struct SecurityHeadersTests {
         app.cleanupTestDatabase()
     }
 
+    @Test("Security headers are present on synthesized error responses")
+    func testHeadersOnErrorResponse() async throws {
+        let app = try await Application.makeForTesting()
+        try await configure(app)
+
+        // An unmatched route becomes a 404 synthesized by Vapor's ErrorMiddleware.
+        // The security middleware must sit outside ErrorMiddleware so these still
+        // carry the headers.
+        try await app.test(.GET, "/this-route-does-not-exist") { res async throws in
+            #expect(res.status == .notFound)
+            #expect(res.headers.first(name: "X-Content-Type-Options") == "nosniff")
+            #expect(res.headers.first(name: "X-Frame-Options") == "DENY")
+        }
+
+        try await app.asyncShutdown()
+        app.cleanupTestDatabase()
+    }
+
     @Test("HSTS is not sent from a plaintext (non-TLS) server")
     func testNoHSTSWithoutTLS() async throws {
         let app = try await Application.makeForTesting()

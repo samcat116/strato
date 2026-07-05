@@ -38,7 +38,11 @@ public func configure(_ app: Application) async throws {
     // that terminate TLS set HTTP_TLS_ENABLED=true (the Helm chart derives it from
     // ingress.tls). Governs both HSTS and the Secure cookie flag below.
     let servedOverTLS = Environment.get("HTTP_TLS_ENABLED").flatMap(Bool.init) ?? false
-    app.middleware.use(SecurityHeadersMiddleware(enableHSTS: servedOverTLS))
+    // Insert at the front so it wraps Vapor's default ErrorMiddleware (which is
+    // registered ahead of any `.use`-appended middleware). Otherwise the 4xx/5xx
+    // responses ErrorMiddleware synthesizes from thrown errors would flow back out
+    // above this middleware and miss the security headers.
+    app.middleware.use(SecurityHeadersMiddleware(enableHSTS: servedOverTLS), at: .beginning)
 
     // Harden the session cookie: always HTTPOnly, and Secure whenever we're
     // behind TLS so the cookie can't leak over a downgraded/plaintext request.

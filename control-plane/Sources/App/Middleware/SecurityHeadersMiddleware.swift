@@ -1,11 +1,15 @@
 import Vapor
 
 /// Adds standard HTTP security headers to every response — including error
-/// responses, since `ErrorMiddleware` has already turned thrown errors into a
-/// `Response` by the time it propagates back through here.
+/// responses. It must be registered at the *front* of the middleware chain (see
+/// `configure.swift`, `at: .beginning`) so it wraps Vapor's default
+/// `ErrorMiddleware`: that way a thrown error is turned into a `Response` by
+/// `ErrorMiddleware` below and propagates back up through here, where the headers
+/// are applied. If it sat inside `ErrorMiddleware` instead, synthesized 4xx/5xx
+/// responses would bypass it entirely.
 ///
-/// Registered as one of the outermost middlewares (see `configure.swift`) so the
-/// headers land on API JSON, static assets, and error pages alike.
+/// Being outermost, the headers land on API JSON, static assets, and error pages
+/// alike.
 ///
 /// `Content-Security-Policy` is only applied when the handler hasn't already set
 /// one, so endpoints that need a looser policy (e.g. `/api/docs`, which loads
