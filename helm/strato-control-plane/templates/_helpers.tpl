@@ -192,6 +192,23 @@ Get the WebAuthn origin URL (protocol + domain + port)
 {{- end }}
 
 {{/*
+Whether browsers reach the control plane over HTTPS, used to gate the Secure
+session cookie + HSTS (HTTP_TLS_ENABLED). Derived from the resolved WebAuthn
+origin's scheme so it can never disagree with it — this covers an explicit
+https:// relyingPartyOrigin (e.g. TLS terminated by an external gateway) as well
+as the ingress.tls case. An explicit strato.httpTlsEnabled overrides the default.
+*/}}
+{{- define "strato-control-plane.tlsEnabled" -}}
+{{- if not (kindIs "invalid" .Values.strato.httpTlsEnabled) }}
+{{- .Values.strato.httpTlsEnabled }}
+{{- else if hasPrefix "https://" (include "strato-control-plane.webauthnOrigin" .) }}
+{{- true }}
+{{- else }}
+{{- false }}
+{{- end }}
+{{- end }}
+
+{{/*
 Common security context
 */}}
 {{- define "strato-control-plane.securityContext" -}}
