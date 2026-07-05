@@ -441,3 +441,41 @@ struct ResourceUsageResponse: Content {
     let totalStorageGB: Double
     let totalVMs: Int
 }
+
+// MARK: - Additional DTOs
+
+struct QuotaLimits: Content {
+    let maxVCPUs: Int
+    let maxMemoryGB: Double
+    let maxStorageGB: Double
+    let maxVMs: Int
+    let maxNetworks: Int
+}
+
+struct QuotaUsage: Content {
+    let vcpus: Int
+    let memoryGB: Double
+    let storageGB: Double
+    let vms: Int
+    let networks: Int
+}
+
+struct QuotaUtilization: Content {
+    let cpuPercent: Double
+    let memoryPercent: Double
+    let storagePercent: Double
+    let vmPercent: Double
+}
+
+struct QuotaUsageResponse: Content {
+    let quotaId: UUID
+    let quotaName: String
+    let limits: QuotaLimits
+    let reserved: QuotaUsage
+    let actual: QuotaUsage
+    let utilization: QuotaUtilization
+    let vmsByEnvironment: [String: Int]
+    let vmsByStatus: [String: Int]
+    let isEnabled: Bool
+    let environment: String?
+}

@@ -118,30 +118,12 @@ struct VolumeController: RouteCollection {
             throw Abort(.forbidden, reason: "You don't have permission to create volumes in this project")
         }
 
-        // Validate format
-        let format: VolumeFormat
-        if let formatString = request.format {
-            guard let parsedFormat = VolumeFormat(rawValue: formatString) else {
-                throw Abort(.badRequest, reason: "Invalid format '\(formatString)'. Must be 'qcow2' or 'raw'")
-            }
-            format = parsedFormat
-        } else {
-            format = .qcow2  // Default
-        }
-
-        // Validate volume type
-        let volumeType: VolumeType
-        if let typeString = request.volumeType {
-            guard let parsedType = VolumeType(rawValue: typeString) else {
-                throw Abort(.badRequest, reason: "Invalid volume type '\(typeString)'. Must be 'boot' or 'data'")
-            }
-            volumeType = parsedType
-        } else {
-            volumeType = .data  // Default
-        }
+        // Validate format and volume type
+        let format = try VolumeNaming.parseFormat(request.format)
+        let volumeType = try VolumeNaming.parseVolumeType(request.volumeType)
 
         // Calculate size in bytes
-        let sizeBytes = Int64(request.sizeGB) * 1024 * 1024 * 1024
+        let sizeBytes = Double(request.sizeGB).gbToBytes
 
         // Create volume record
         let volume = Volume(
@@ -472,7 +454,7 @@ struct VolumeController: RouteCollection {
         }
 
         // Calculate new size in bytes
-        let newSizeBytes = Int64(request.sizeGB) * 1024 * 1024 * 1024
+        let newSizeBytes = Double(request.sizeGB).gbToBytes
 
         // Validate new size is larger
         guard newSizeBytes > volume.size else {
@@ -788,17 +770,6 @@ struct VolumeController: RouteCollection {
             .filter(\.$vm.$id == vm.id!)
             .all()
 
-        // Find the highest disk number
-        var maxDiskNum = -1
-        for volume in attachedVolumes {
-            if let deviceName = volume.deviceName,
-               deviceName.hasPrefix("disk"),
-               let numStr = deviceName.dropFirst(4).description.components(separatedBy: CharacterSet.decimalDigits.inverted).first,
-               let num = Int(numStr) {
-                maxDiskNum = max(maxDiskNum, num)
-            }
-        }
-
-        return "disk\(maxDiskNum + 1)"
+        return VolumeNaming.nextDeviceName(existingDeviceNames: attachedVolumes.map { $0.deviceName })
     }
 }
