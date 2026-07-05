@@ -1,0 +1,121 @@
+control-plane/web/src/components/volumes/volume-actions.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-233
+control-plane/web/src/components/volumes/clone-volume-dialog.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-132
+control-plane/web/src/lib/api/scim-tokens.ts
+  s_3b51f876fe765a::t_ee679b26fac389 1-46
+control-plane/web/src/components/volumes/volume-table.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-132
+control-plane/web/src/lib/api/users.ts
+  s_3b51f876fe765a::t_ee679b26fac389 4,11-27
+control-plane/web/src/lib/hooks/use-users.ts
+  s_3b51f876fe765a::t_ee679b26fac389 1-44
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_3b51f876fe765a::t_ee679b26fac389 56-69,85-87,101,109,126,136-139,161
+control-plane/web/src/app/(dashboard)/images/detail/page.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 3,9,15,22,24,48,129-149,152-159
+  s_3b51f876fe765a::t_50ea289c06f0e2 160
+control-plane/web/src/components/scim-tokens/scim-tokens-section.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-272
+control-plane/web/src/app/(dashboard)/organizations/settings/page.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 18,265,279-280
+shared/Sources/StratoShared/HypervisorTypes.swift
+  s_3b51f876fe765a::t_ee679b26fac389 3-17
+control-plane/Sources/App/Models/vm.swift
+  s_3b51f876fe765a::t_ee679b26fac389 51-54
+control-plane/web/src/components/volumes/create-volume-dialog.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-270
+control-plane/Sources/App/Migrations/MigrateVMNetworkConfigToInterfaces.swift
+  s_3b51f876fe765a::t_ee679b26fac389 1-101
+control-plane/Sources/App/Controllers/VMController.swift
+  s_3b51f876fe765a::t_ee679b26fac389 252,288-297,340,343
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 30,80
+control-plane/Sources/App/Models/VMNetworkInterface.swift
+  s_3b51f876fe765a::t_ee679b26fac389 1-78
+control-plane/web/src/components/volumes/snapshot-table.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-212
+control-plane/web/src/types/api.ts
+  s_3b51f876fe765a::t_ee679b26fac389 19-23,237-272,375-469
+  s_3b51f876fe765a::t_acee90c81c5e5f 470
+control-plane/web/src/components/images/image-actions.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 4-10,12-19,24,27,30,44-45,56-57,60-62,78-91,93-163
+control-plane/web/src/app/(dashboard)/storage/snapshots/page.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-73
+control-plane/web/src/app/(dashboard)/admin/users/page.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-63
+control-plane/web/src/components/vms/index.ts
+  s_3b51f876fe765a::t_ee679b26fac389 6
+control-plane/web/src/components/layout/sidebar.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 19-20,23,105-106,151-152,205-220
+control-plane/web/src/lib/api/index.ts
+  s_3b51f876fe765a::t_ee679b26fac389 12
+control-plane/web/src/lib/hooks/use-scim-tokens.ts
+  s_3b51f876fe765a::t_ee679b26fac389 1-65
+control-plane/web/src/lib/errors.ts
+  s_3b51f876fe765a::t_ee679b26fac389 1-64
+control-plane/web/src/components/scim-tokens/create-scim-token-dialog.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-213
+control-plane/web/src/components/volumes/snapshot-status-badge.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-44
+control-plane/web/src/components/volumes/volume-status-badge.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-67
+control-plane/Sources/App/configure.swift
+  s_3b51f876fe765a::t_ee679b26fac389 221-226
+control-plane/Sources/App/Migrations/RemoveLegacyVMNetworkFields.swift
+  s_3b51f876fe765a::t_ee679b26fac389 1-21
+control-plane/web/src/components/users/edit-user-dialog.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-138
+control-plane/web/src/components/volumes/resize-volume-dialog.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-122
+control-plane/web/src/lib/hooks/index.ts
+  s_3b51f876fe765a::t_ee679b26fac389 2-8,32-44
+control-plane/web/src/components/volumes/index.ts
+  s_3b51f876fe765a::t_ee679b26fac389 1-10
+control-plane/web/src/components/volumes/create-snapshot-dialog.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-186
+control-plane/web/src/components/users/index.ts
+  s_3b51f876fe765a::t_ee679b26fac389 1-2
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 19-24,253-255
+control-plane/web/src/lib/api/client.ts
+  s_3b51f876fe765a::t_ee679b26fac389 17-27,49,52-56,58-63,65-78
+agent/Sources/StratoAgent/Agent.swift
+  s_3b51f876fe765a::t_ee679b26fac389 58-64,269,274,279,413,902,943,1090-1095,1097-1099,1102
+control-plane/web/src/components/volumes/attach-volume-dialog.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-165
+control-plane/Sources/App/Migrations/CreateVMNetworkInterface.swift
+  s_3b51f876fe765a::t_ee679b26fac389 1-36
+control-plane/web/src/components/vms/vm-volumes-card.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-262
+control-plane/web/src/app/(dashboard)/storage/volumes/page.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-65
+control-plane/Tests/AppTests/VMSpecBuilderTests.swift
+  s_3b51f876fe765a::t_ee679b26fac389 95-115,137,151,162,172,182,204,227,249,262,278,292,302,309,312-313,316,319,331-332,334,340-341,343,345,350-375,383,396,414,434,436,438,454,456
+control-plane/web/src/components/scim-tokens/index.ts
+  s_3b51f876fe765a::t_ee679b26fac389 1-2
+control-plane/web/src/components/users/user-table.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-209
+control-plane/web/src/lib/api/volumes.ts
+  s_3b51f876fe765a::t_ee679b26fac389 1-69
+control-plane/web/src/components/images/edit-image-dialog.tsx
+  s_3b51f876fe765a::t_ee679b26fac389 1-241
+control-plane/web/src/lib/hooks/use-volumes.ts
+  s_3b51f876fe765a::t_ee679b26fac389 1-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "178f0fdbe323a2ec039f8f3babdcd9a7c7cf87c6",
+  "prompts": {},
+  "sessions": {
+    "s_3b51f876fe765a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "afc8942e-6b0f-47cb-893a-c3f33533d891",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
