@@ -1,0 +1,69 @@
+agent/Sources/StratoAgent/ImageCacheService.swift
+  s_de96dbd684a309::t_95dc6a84445920 254-262
+  s_de96dbd684a309::t_331bc0b2984e70 4
+agent/Sources/StratoAgent/Agent.swift
+  s_de96dbd684a309::t_2c94dfb3b30022 1885-1891,1896,1898-1900,1903-1904,1906
+  s_de96dbd684a309::t_44a7a9d76539c4 2228-2229,2234
+  s_de96dbd684a309::t_e63da3a523f24c 265-266,268,270,275,287
+  s_de96dbd684a309::t_06e8400410ce66 2063-2064,2069
+  s_de96dbd684a309::t_f64c25b8c222b7 2183-2184,2189,2193
+  s_de96dbd684a309::t_4d19408897669b 2103-2104,2109
+  s_de96dbd684a309::t_2997fd33e5fb02 2149-2150,2155
+  s_de96dbd684a309::t_7fd5d1bc6d562d 1939-1940,1945
+  s_de96dbd684a309::t_29ab876f8b8a2f 67
+agent/Tests/StratoAgentTests/FileSystemStorageBackendTests.swift
+  s_de96dbd684a309::t_196587c0265a06 1-34,37-308
+  s_de96dbd684a309::t_e91ce4c63d7ecb 35-36
+docs/architecture/storage.md
+  s_de96dbd684a309::t_9823a65e3ea178 1-74
+agent/Sources/StratoAgentCore/StorageBackend.swift
+  s_de96dbd684a309::t_d3a214191ddc9b 1-15,24-162
+  s_de96dbd684a309::t_d2966e3b6f4fcf 16-23
+agent/Sources/StratoAgent/CloudInitProvisioner.swift
+  s_de96dbd684a309::t_c71f291e1e0ea9 3
+shared/Tests/StratoSharedTests/VolumeMessageTests.swift
+  s_de96dbd684a309::t_4a712852fbab95 30,34-43
+  s_de96dbd684a309::t_c5bc757b51ee78 97,102-116,127,133-147
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_de96dbd684a309::t_803e396b4f6b73 1-471
+agent/Sources/StratoAgentCore/ProcessRunner.swift
+  s_de96dbd684a309::t_03c9b4583a8c30 40-47
+  s_de96dbd684a309::t_2dcec760b381a9 10-24,28,79,102,112
+control-plane/Sources/App/Services/VolumeService.swift
+  s_de96dbd684a309::t_02b4ff649ea808 424,428
+  s_de96dbd684a309::t_8acf436c8d5e59 196-199,212
+  s_de96dbd684a309::t_2f79687bdc96ed 339,343
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_de96dbd684a309::t_1775dd88cde328 522
+agent/Sources/StratoAgent/QEMUService.swift
+  s_de96dbd684a309::t_e86691fb5ae996 16
+  s_de96dbd684a309::t_1c8ca890ea2f31 613
+  s_de96dbd684a309::t_005be2e0657995 665
+  s_de96dbd684a309::t_3adb9dd4d6ec57 71,73,80-85,87,90,101-103
+  s_de96dbd684a309::t_18b770fd2e8595 37,42
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_de96dbd684a309::t_70d0810f909590 31,38
+  s_de96dbd684a309::t_81314f2f106947 78,80,87-94,96,99
+  s_de96dbd684a309::t_af553931479b5f 3,14
+  s_de96dbd684a309::t_0782cfa90e552f 380
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_de96dbd684a309::t_730fd035d66ae9 953-955,963,971
+  s_de96dbd684a309::t_fa6098d5a734e1 899-901,909,917
+  s_de96dbd684a309::t_b9e9a3afa2766f 797-800,806,812
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "bbd4cc08c218fb30416bc3b451f154bf78346958",
+  "prompts": {},
+  "sessions": {
+    "s_de96dbd684a309": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "532eac8e-33b7-49a6-8d51-bf6eb51f4d38",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
