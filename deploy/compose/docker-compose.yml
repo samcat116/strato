@@ -121,6 +121,10 @@ services:
       WEBAUTHN_RELYING_PARTY_NAME: ${WEBAUTHN_RELYING_PARTY_NAME:-Strato}
       WEBAUTHN_RELYING_PARTY_ORIGIN: ${WEBAUTHN_RELYING_PARTY_ORIGIN}
       EXTERNAL_HOSTNAME: ${EXTERNAL_HOSTNAME:-${STRATO_HOSTNAME}}
+      # Secure session cookie + HSTS; only when TLS is terminated in front of the
+      # proxy (setup.sh sets this from the origin scheme). Defaults off so a
+      # plaintext http:// deploy doesn't set a Secure cookie the browser drops.
+      HTTP_TLS_ENABLED: ${HTTP_TLS_ENABLED:-false}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       OTEL_METRICS_ENABLED: "false"
       OTEL_LOGS_ENABLED: "false"

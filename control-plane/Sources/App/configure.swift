@@ -29,12 +29,15 @@ public func configure(_ app: Application) async throws {
         app.logger.info("Request logging enabled")
     }
 
-    // Standard security headers on every response. HSTS is sent only when we're
-    // served over TLS (production, or an explicit override for TLS-terminating
-    // ingress in front of a non-production deploy) — never from a plaintext dev
-    // server. Registered outermost so the headers also cover error responses.
-    let servedOverTLS = Environment.get("HTTP_TLS_ENABLED").flatMap(Bool.init)
-        ?? (app.environment == .production)
+    // Whether browsers reach us over HTTPS. This can't be inferred from the Vapor
+    // environment: the published image, single-host compose, and Helm chart all
+    // run `--env production` yet default to serving plaintext HTTP (TLS, when
+    // present, is terminated at an ingress/proxy we don't see). Defaulting
+    // production to TLS would set `Secure` on the session cookie, and browsers on
+    // http:// would then drop it — breaking login. So this is opt-in: deployments
+    // that terminate TLS set HTTP_TLS_ENABLED=true (the Helm chart derives it from
+    // ingress.tls). Governs both HSTS and the Secure cookie flag below.
+    let servedOverTLS = Environment.get("HTTP_TLS_ENABLED").flatMap(Bool.init) ?? false
     app.middleware.use(SecurityHeadersMiddleware(enableHSTS: servedOverTLS))
 
     // Harden the session cookie: always HTTPOnly, and Secure whenever we're
