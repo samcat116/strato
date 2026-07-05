@@ -38,7 +38,8 @@ enum MigrationError: Error, Sendable {
     var localizedDescription: String {
         switch self {
         case .orphanedVMs(let count):
-            return "Cannot make project_id required: \(count) VMs do not have a project assigned. Please run the data migration first."
+            return
+                "Cannot make project_id required: \(count) VMs do not have a project assigned. Please run the data migration first."
         }
     }
 }

@@ -21,13 +21,14 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             .filter(\.$organization.$id == organizationID)
             .first()
         {
-            throw SCIMServerError.conflict(detail: "Group with name '\(resource.displayName)' already exists in this organization")
+            throw SCIMServerError.conflict(
+                detail: "Group with name '\(resource.displayName)' already exists in this organization")
         }
 
         // Create group
         let group = App.Group(
             name: resource.displayName,
-            description: "", // SCIM Groups don't have a description field
+            description: "",  // SCIM Groups don't have a description field
             organizationID: organizationID,
             scimProvisioned: true
         )
@@ -67,10 +68,11 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             throw SCIMServerError.notFound(resourceType: "Group", id: id)
         }
 
-        guard let group = try await App.Group.query(on: db)
-            .filter(\.$id == uuid)
-            .filter(\.$organization.$id == organizationID)
-            .first()
+        guard
+            let group = try await App.Group.query(on: db)
+                .filter(\.$id == uuid)
+                .filter(\.$organization.$id == organizationID)
+                .first()
         else {
             throw SCIMServerError.notFound(resourceType: "Group", id: id)
         }
@@ -85,10 +87,11 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             throw SCIMServerError.notFound(resourceType: "Group", id: id)
         }
 
-        guard let group = try await App.Group.query(on: db)
-            .filter(\.$id == uuid)
-            .filter(\.$organization.$id == organizationID)
-            .first()
+        guard
+            let group = try await App.Group.query(on: db)
+                .filter(\.$id == uuid)
+                .filter(\.$organization.$id == organizationID)
+                .first()
         else {
             throw SCIMServerError.notFound(resourceType: "Group", id: id)
         }
@@ -101,7 +104,8 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
                 .filter(\.$id != uuid)
                 .first()
             if existingGroup != nil {
-                throw SCIMServerError.conflict(detail: "Group with name '\(resource.displayName)' already exists in this organization")
+                throw SCIMServerError.conflict(
+                    detail: "Group with name '\(resource.displayName)' already exists in this organization")
             }
         }
 
@@ -141,10 +145,11 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             throw SCIMServerError.notFound(resourceType: "Group", id: id)
         }
 
-        guard let group = try await App.Group.query(on: db)
-            .filter(\.$id == uuid)
-            .filter(\.$organization.$id == organizationID)
-            .first()
+        guard
+            let group = try await App.Group.query(on: db)
+                .filter(\.$id == uuid)
+                .filter(\.$organization.$id == organizationID)
+                .first()
         else {
             throw SCIMServerError.notFound(resourceType: "Group", id: id)
         }
@@ -188,7 +193,8 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         let totalCount = try await groupQuery.count()
 
         // Apply pagination
-        let groups = try await groupQuery
+        let groups =
+            try await groupQuery
             .offset(query.offset)
             .limit(query.count)
             .all()
@@ -215,10 +221,11 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             throw SCIMServerError.notFound(resourceType: "Group", id: id)
         }
 
-        guard let group = try await App.Group.query(on: db)
-            .filter(\.$id == uuid)
-            .filter(\.$organization.$id == organizationID)
-            .first()
+        guard
+            let group = try await App.Group.query(on: db)
+                .filter(\.$id == uuid)
+                .filter(\.$organization.$id == organizationID)
+                .first()
         else {
             throw SCIMServerError.notFound(resourceType: "Group", id: id)
         }
@@ -255,14 +262,17 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             .with(\.$user)
             .all()
 
-        let members: [GroupMember]? = memberships.isEmpty ? nil : memberships.map { membership in
-            GroupMember(
-                value: membership.$user.id.uuidString,
-                ref: context.resourceLocation(endpoint: "Users", id: membership.$user.id.uuidString),
-                display: membership.user.displayName,
-                type: "User"
-            )
-        }
+        let members: [GroupMember]? =
+            memberships.isEmpty
+            ? nil
+            : memberships.map { membership in
+                GroupMember(
+                    value: membership.$user.id.uuidString,
+                    ref: context.resourceLocation(endpoint: "Users", id: membership.$user.id.uuidString),
+                    display: membership.user.displayName,
+                    type: "User"
+                )
+            }
 
         let meta = SCIMResourceMeta(
             resourceType: "Group",
@@ -283,14 +293,17 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
 
     private func addMemberToGroup(userID: UUID, groupID: UUID) async throws {
         // Check if user is in this organization
-        let userInOrg = try await UserOrganization.query(on: db)
+        let userInOrg =
+            try await UserOrganization.query(on: db)
             .filter(\.$user.$id == userID)
             .filter(\.$organization.$id == organizationID)
             .first() != nil
 
         guard userInOrg else {
             // User not in organization - log and skip
-            db.logger.warning("SCIM Group membership add skipped: user \(userID) is not in organization \(organizationID) for group \(groupID)")
+            db.logger.warning(
+                "SCIM Group membership add skipped: user \(userID) is not in organization \(organizationID) for group \(groupID)"
+            )
             return
         }
 
@@ -378,7 +391,7 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
                 case .add, .replace:
                     group.name = name
                 case .remove:
-                    break // Can't remove displayName
+                    break  // Can't remove displayName
                 }
             }
 
@@ -419,7 +432,7 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
                 // Parse the filter to get the member ID
                 // Format: members[value eq "uuid"]
                 if let match = lowercasePath.range(of: "value eq \"", options: .caseInsensitive),
-                   let endQuote = lowercasePath.range(of: "\"", range: match.upperBound..<lowercasePath.endIndex)
+                    let endQuote = lowercasePath.range(of: "\"", range: match.upperBound..<lowercasePath.endIndex)
                 {
                     let memberIDString = String(lowercasePath[match.upperBound..<endQuote.lowerBound])
                     if let memberID = UUID(uuidString: memberIDString) {
@@ -442,17 +455,17 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         case .array(let items):
             for item in items {
                 if case .object(let dict) = item,
-                   let valueField = dict["value"],
-                   case .string(let idString) = valueField,
-                   let uuid = UUID(uuidString: idString)
+                    let valueField = dict["value"],
+                    case .string(let idString) = valueField,
+                    let uuid = UUID(uuidString: idString)
                 {
                     memberIDs.append(uuid)
                 }
             }
         case .object(let dict):
             if let valueField = dict["value"],
-               case .string(let idString) = valueField,
-               let uuid = UUID(uuidString: idString)
+                case .string(let idString) = valueField,
+                let uuid = UUID(uuidString: idString)
             {
                 memberIDs.append(uuid)
             }
@@ -463,7 +476,9 @@ struct GroupSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         return memberIDs
     }
 
-    private func applyFilter(_ filter: SCIMFilterExpression, to query: QueryBuilder<App.Group>) throws -> QueryBuilder<App.Group> {
+    private func applyFilter(_ filter: SCIMFilterExpression, to query: QueryBuilder<App.Group>) throws -> QueryBuilder<
+        App.Group
+    > {
         switch filter {
         case .attribute(let path, let op, let value):
             return try applyAttributeFilter(path: path, op: op, value: value, to: query)

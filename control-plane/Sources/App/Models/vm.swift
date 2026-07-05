@@ -50,10 +50,10 @@ final class VM: Model, @unchecked Sendable {
 
     // CPU configuration
     @Field(key: "cpu")
-    var cpu: Int // boot_vcpus
+    var cpu: Int  // boot_vcpus
 
     @Field(key: "max_cpu")
-    var maxCpu: Int // max_vcpus
+    var maxCpu: Int  // max_vcpus
 
     // Memory configuration (in bytes)
     @Field(key: "memory")

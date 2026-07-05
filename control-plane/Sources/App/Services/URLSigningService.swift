@@ -131,7 +131,9 @@ struct URLSigningService {
         // 1. Check environment variable first (takes precedence)
         if let envKey = Environment.get("IMAGE_DOWNLOAD_SIGNING_KEY"), !envKey.isEmpty {
             guard envKey.count >= minimumKeyLength else {
-                throw Abort(.internalServerError, reason: "IMAGE_DOWNLOAD_SIGNING_KEY must be at least \(minimumKeyLength) characters")
+                throw Abort(
+                    .internalServerError,
+                    reason: "IMAGE_DOWNLOAD_SIGNING_KEY must be at least \(minimumKeyLength) characters")
             }
             return envKey
         }
@@ -143,7 +145,8 @@ struct URLSigningService {
 
         // 3. Need to load from database - this requires async, so we throw an error
         // The async version should be called instead
-        throw Abort(.internalServerError, reason: "Signing key not initialized. Call getSigningKeyAsync during startup.")
+        throw Abort(
+            .internalServerError, reason: "Signing key not initialized. Call getSigningKeyAsync during startup.")
     }
 
     /// Asynchronously gets or generates the signing key
@@ -154,7 +157,9 @@ struct URLSigningService {
         // 1. Check environment variable first (takes precedence)
         if let envKey = Environment.get("IMAGE_DOWNLOAD_SIGNING_KEY"), !envKey.isEmpty {
             guard envKey.count >= minimumKeyLength else {
-                throw Abort(.internalServerError, reason: "IMAGE_DOWNLOAD_SIGNING_KEY must be at least \(minimumKeyLength) characters")
+                throw Abort(
+                    .internalServerError,
+                    reason: "IMAGE_DOWNLOAD_SIGNING_KEY must be at least \(minimumKeyLength) characters")
             }
             app.signingKeyCache.key = envKey
             return envKey
@@ -168,7 +173,8 @@ struct URLSigningService {
         // 3. Check database
         if let setting = try await AppSetting.query(on: app.db)
             .filter(\.$key == AppSetting.imageDownloadSigningKey)
-            .first() {
+            .first()
+        {
             app.signingKeyCache.key = setting.value
             app.logger.info("Loaded image download signing key from database")
             return setting.value
@@ -188,7 +194,8 @@ struct URLSigningService {
             // Re-query to get the existing key
             if let existingSetting = try await AppSetting.query(on: app.db)
                 .filter(\.$key == AppSetting.imageDownloadSigningKey)
-                .first() {
+                .first()
+            {
                 app.signingKeyCache.key = existingSetting.value
                 app.logger.info("Loaded image download signing key from database (concurrent insert)")
                 return existingSetting.value

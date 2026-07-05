@@ -12,7 +12,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
     var organization: Organization
 
     @Field(key: "name")
-    var name: String // Display name like "Azure AD", "Google Workspace"
+    var name: String  // Display name like "Azure AD", "Google Workspace"
 
     @Field(key: "client_id")
     var clientID: String
@@ -21,7 +21,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
     var clientSecret: String
 
     @OptionalField(key: "discovery_url")
-    var discoveryURL: String? // OpenID Connect discovery endpoint
+    var discoveryURL: String?  // OpenID Connect discovery endpoint
 
     @OptionalField(key: "authorization_endpoint")
     var authorizationEndpoint: String?
@@ -36,7 +36,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
     var jwksURI: String?
 
     @Field(key: "scopes")
-    var scopes: String // JSON array of scopes, default: ["openid", "profile", "email"]
+    var scopes: String  // JSON array of scopes, default: ["openid", "profile", "email"]
 
     @Field(key: "enabled")
     var enabled: Bool
@@ -91,7 +91,8 @@ extension OIDCProvider {
     var scopesArray: [String] {
         get {
             guard let data = scopes.data(using: .utf8),
-                  let array = try? JSONDecoder().decode([String].self, from: data) else {
+                let array = try? JSONDecoder().decode([String].self, from: data)
+            else {
                 return ["openid", "profile", "email"]
             }
             return array
@@ -106,7 +107,8 @@ extension OIDCProvider {
     /// Encode scopes array to JSON string
     private static func encodeScopesArray(_ scopesArray: [String]) -> String {
         guard let data = try? JSONEncoder().encode(scopesArray),
-              let string = String(data: data, encoding: .utf8) else {
+            let string = String(data: data, encoding: .utf8)
+        else {
             return "[\"openid\",\"profile\",\"email\"]"
         }
         return string
@@ -126,7 +128,7 @@ extension OIDCProvider {
         codeChallengeMethod: String? = nil
     ) -> String? {
         guard let authEndpoint = authorizationEndpoint else { return nil }
-        
+
         var components = URLComponents(string: authEndpoint)
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "client_id", value: clientID),
@@ -134,16 +136,17 @@ extension OIDCProvider {
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "scope", value: scopesArray.joined(separator: " ")),
             URLQueryItem(name: "state", value: state),
-            URLQueryItem(name: "nonce", value: nonce)
+            URLQueryItem(name: "nonce", value: nonce),
         ]
-        
+
         // Add PKCE parameters if provided
         if let codeChallenge = codeChallenge,
-           let codeChallengeMethod = codeChallengeMethod {
+            let codeChallengeMethod = codeChallengeMethod
+        {
             queryItems.append(URLQueryItem(name: "code_challenge", value: codeChallenge))
             queryItems.append(URLQueryItem(name: "code_challenge_method", value: codeChallengeMethod))
         }
-        
+
         components?.queryItems = queryItems
         return components?.url?.absoluteString
     }

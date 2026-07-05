@@ -28,10 +28,9 @@ struct ImageValidationService {
         let bytes = [UInt8](headerData)
 
         // Check for QCOW2 magic bytes
-        if bytes[0] == qcow2Magic[0] &&
-           bytes[1] == qcow2Magic[1] &&
-           bytes[2] == qcow2Magic[2] &&
-           bytes[3] == qcow2Magic[3] {
+        if bytes[0] == qcow2Magic[0] && bytes[1] == qcow2Magic[1] && bytes[2] == qcow2Magic[2]
+            && bytes[3] == qcow2Magic[3]
+        {
             return .qcow2
         }
 
@@ -51,10 +50,9 @@ struct ImageValidationService {
         }
 
         // Check for QCOW2 magic bytes
-        if bytes[0] == qcow2Magic[0] &&
-           bytes[1] == qcow2Magic[1] &&
-           bytes[2] == qcow2Magic[2] &&
-           bytes[3] == qcow2Magic[3] {
+        if bytes[0] == qcow2Magic[0] && bytes[1] == qcow2Magic[1] && bytes[2] == qcow2Magic[2]
+            && bytes[3] == qcow2Magic[3]
+        {
             return .qcow2
         }
 
@@ -73,7 +71,7 @@ struct ImageValidationService {
         defer { try? fileHandle.close() }
 
         var hasher = SHA256()
-        let bufferSize = 1024 * 1024 // 1MB chunks
+        let bufferSize = 1024 * 1024  // 1MB chunks
 
         while true {
             let data = fileHandle.readData(ofLength: bufferSize)

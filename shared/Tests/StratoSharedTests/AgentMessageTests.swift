@@ -81,9 +81,9 @@ struct AgentMessageTests {
     /// must still decode.
     @Test func agentRegisterResponseDecodesWithoutReconnectToken() throws {
         let json = """
-        {"type":"agent_register_response","requestId":"r","timestamp":0,
-         "agentId":"a","name":"n"}
-        """
+            {"type":"agent_register_response","requestId":"r","timestamp":0,
+             "agentId":"a","name":"n"}
+            """
         let decoded = try decodeJSON(AgentRegisterResponseMessage.self, from: json)
         #expect(decoded.reconnectToken == nil)
         #expect(decoded.name == "n")

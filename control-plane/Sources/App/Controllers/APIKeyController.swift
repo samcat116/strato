@@ -206,7 +206,8 @@ struct APIDocumentationController: RouteCollection {
         // bootstrap, so this page opts out of the global same-origin CSP with a
         // scoped policy of its own (SecurityHeadersMiddleware leaves an existing
         // Content-Security-Policy untouched).
-        let csp = "default-src 'self'; "
+        let csp =
+            "default-src 'self'; "
             + "script-src 'self' https://unpkg.com 'unsafe-inline'; "
             + "style-src 'self' https://unpkg.com 'unsafe-inline'; "
             + "img-src 'self' data:; "
@@ -216,7 +217,7 @@ struct APIDocumentationController: RouteCollection {
             status: .ok,
             headers: HTTPHeaders([
                 ("Content-Type", "text/html"),
-                ("Content-Security-Policy", csp)
+                ("Content-Security-Policy", csp),
             ]),
             body: .init(string: html))
     }

@@ -26,7 +26,9 @@ struct VolumeMessageTests {
 
     @Test func volumeDeleteRoundTrip() throws {
         let decoded = try throughEnvelope(
-            VolumeDeleteMessage(requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, volumeId: "vol-1", volumePath: "/var/lib/strato/vol-1.qcow2")
+            VolumeDeleteMessage(
+                requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, volumeId: "vol-1",
+                volumePath: "/var/lib/strato/vol-1.qcow2")
         )
         #expect(decoded.type == .volumeDelete)
         #expect(decoded.volumeId == "vol-1")
@@ -54,7 +56,9 @@ struct VolumeMessageTests {
 
     @Test func volumeDetachRoundTrip() throws {
         let decoded = try throughEnvelope(
-            VolumeDetachMessage(requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, vmId: "vm-1", volumeId: "vol-1", deviceName: "disk1")
+            VolumeDetachMessage(
+                requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, vmId: "vm-1", volumeId: "vol-1",
+                deviceName: "disk1")
         )
         #expect(decoded.type == .volumeDetach)
         #expect(decoded.deviceName == "disk1")
@@ -109,7 +113,9 @@ struct VolumeMessageTests {
 
     @Test func volumeInfoRoundTrip() throws {
         let decoded = try throughEnvelope(
-            VolumeInfoMessage(requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, volumeId: "vol-1", volumePath: "/var/lib/strato/vol-1.qcow2")
+            VolumeInfoMessage(
+                requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, volumeId: "vol-1",
+                volumePath: "/var/lib/strato/vol-1.qcow2")
         )
         #expect(decoded.type == .volumeInfo)
         #expect(decoded.volumeId == "vol-1")
@@ -117,7 +123,9 @@ struct VolumeMessageTests {
 
     @Test func volumeInfoResponseRoundTrip() throws {
         let decoded = try roundTrip(
-            VolumeInfoResponse(volumeId: "vol-1", actualSize: 1_234_567, virtualSize: 10_737_418_240, format: "qcow2", dirty: true, encrypted: true)
+            VolumeInfoResponse(
+                volumeId: "vol-1", actualSize: 1_234_567, virtualSize: 10_737_418_240, format: "qcow2", dirty: true,
+                encrypted: true)
         )
         #expect(decoded.volumeId == "vol-1")
         #expect(decoded.actualSize == 1_234_567)

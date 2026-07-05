@@ -80,17 +80,20 @@ struct OnboardingController: RouteCollection {
 
     private func removeUserFromDefaultOrganization(user: User, req: Request) async throws {
         // Find default organization
-        guard let defaultOrg = try await Organization.query(on: req.db)
-            .filter(\.$name == "Default Organization")
-            .first() else {
-            return // No default organization exists
+        guard
+            let defaultOrg = try await Organization.query(on: req.db)
+                .filter(\.$name == "Default Organization")
+                .first()
+        else {
+            return  // No default organization exists
         }
 
         // Find and remove user's membership in default organization
         if let membership = try await UserOrganization.query(on: req.db)
             .filter(\.$user.$id == user.id!)
             .filter(\.$organization.$id == defaultOrg.id!)
-            .first() {
+            .first()
+        {
 
             try await membership.delete(on: req.db)
             req.logger.info("Removed system admin \(user.username) from default organization")

@@ -16,7 +16,8 @@ struct LogsController: RouteCollection {
         let user = try req.auth.require(User.self)
 
         guard let vmIdString = req.parameters.get("vmID"),
-              let vmId = UUID(uuidString: vmIdString) else {
+            let vmId = UUID(uuidString: vmIdString)
+        else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
@@ -45,7 +46,7 @@ struct LogsController: RouteCollection {
         }
 
         // Parse query parameters
-        let limit = min(req.query[Int.self, at: "limit"] ?? 100, 1000) // Cap at 1000
+        let limit = min(req.query[Int.self, at: "limit"] ?? 100, 1000)  // Cap at 1000
         let directionStr = req.query[String.self, at: "direction"] ?? "backward"
         let direction = QueryDirection(rawValue: directionStr) ?? .backward
 

@@ -21,7 +21,9 @@ struct AlterSCIMTokenForeignKey: AsyncMigration {
 
         // Add the new foreign key with RESTRICT on delete
         try await database.schema("scim_tokens")
-            .foreignKey("created_by_id", references: "users", "id", onDelete: .restrict, name: "scim_tokens_created_by_id_fkey")
+            .foreignKey(
+                "created_by_id", references: "users", "id", onDelete: .restrict, name: "scim_tokens_created_by_id_fkey"
+            )
             .update()
     }
 
@@ -38,7 +40,9 @@ struct AlterSCIMTokenForeignKey: AsyncMigration {
 
         // Restore the CASCADE constraint
         try await database.schema("scim_tokens")
-            .foreignKey("created_by_id", references: "users", "id", onDelete: .cascade, name: "scim_tokens_created_by_id_fkey")
+            .foreignKey(
+                "created_by_id", references: "users", "id", onDelete: .cascade, name: "scim_tokens_created_by_id_fkey"
+            )
             .update()
     }
 }

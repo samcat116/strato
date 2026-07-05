@@ -26,7 +26,7 @@ actor LokiService {
             "level": logMessage.level.rawValue,
             "source": logMessage.source.rawValue,
             "event_type": logMessage.eventType.rawValue,
-            "operation": logMessage.operation ?? ""
+            "operation": logMessage.operation ?? "",
         ].filter { !$0.value.isEmpty }
 
         let lokiStream = LokiPushRequest(
@@ -36,7 +36,7 @@ actor LokiService {
                     values: [
                         [
                             String(Int(logMessage.timestamp.timeIntervalSince1970 * 1_000_000_000)),
-                            logMessage.message
+                            logMessage.message,
                         ]
                     ]
                 )
@@ -54,10 +54,12 @@ actor LokiService {
         do {
             let response = try await httpClient.execute(request, timeout: .seconds(10))
             if response.status.code >= 400 {
-                app.logger.error("Failed to push log to Loki", metadata: [
-                    "status": .stringConvertible(response.status.code),
-                    "vmId": .string(logMessage.vmId)
-                ])
+                app.logger.error(
+                    "Failed to push log to Loki",
+                    metadata: [
+                        "status": .stringConvertible(response.status.code),
+                        "vmId": .string(logMessage.vmId),
+                    ])
             }
         } catch {
             app.logger.error("Error pushing log to Loki: \(error)")
@@ -116,12 +118,12 @@ actor LokiService {
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "query", value: query),
             URLQueryItem(name: "limit", value: String(limit)),
-            URLQueryItem(name: "direction", value: direction.rawValue)
+            URLQueryItem(name: "direction", value: direction.rawValue),
         ]
 
         // Default to last 24 hours if no time range specified
         let endTime = end ?? Date()
-        let startTime = start ?? endTime.addingTimeInterval(-86400) // 24 hours ago
+        let startTime = start ?? endTime.addingTimeInterval(-86400)  // 24 hours ago
 
         queryItems.append(URLQueryItem(name: "start", value: String(Int(startTime.timeIntervalSince1970))))
         queryItems.append(URLQueryItem(name: "end", value: String(Int(endTime.timeIntervalSince1970))))
@@ -141,7 +143,7 @@ actor LokiService {
             throw LokiError.queryFailed("HTTP \(response.status.code)")
         }
 
-        let body = try await response.body.collect(upTo: 10 * 1024 * 1024) // 10MB max
+        let body = try await response.body.collect(upTo: 10 * 1024 * 1024)  // 10MB max
         let decoder = JSONDecoder()
         let lokiResponse = try decoder.decode(LokiQueryResponse.self, from: body)
 

@@ -47,9 +47,10 @@ struct OIDCValidation {
     /// True when the string is an absolute HTTPS URL with a host.
     static func isValidHTTPSURL(_ urlString: String) -> Bool {
         guard let url = URL(string: urlString),
-              let scheme = url.scheme,
-              scheme == "https",
-              url.host != nil else {
+            let scheme = url.scheme,
+            scheme == "https",
+            url.host != nil
+        else {
             return false
         }
         return true
@@ -57,7 +58,8 @@ struct OIDCValidation {
 
     /// Decodes a base64url-encoded string (JWT segment), restoring padding.
     static func decodeBase64URLSafe(_ string: String) throws -> Data {
-        var base64String = string
+        var base64String =
+            string
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
 
@@ -84,7 +86,7 @@ struct OIDCValidation {
         "okta.com",
         "oauth.reddit.com",
         "github.com",
-        "gitlab.com"
+        "gitlab.com",
     ]
 
     /// Domain suffixes allowed for OIDC discovery/JWKS fetches when
@@ -99,7 +101,7 @@ struct OIDCValidation {
         ".herokuapp.com",
         ".amazonaws.com",
         ".azure.com",
-        ".azurewebsites.net"
+        ".azurewebsites.net",
     ]
 
     /// Splits a comma/semicolon-separated allow-list, trimming and dropping empties.

@@ -11,7 +11,7 @@ public struct VMNetworkConfig: Codable, Sendable {
     public let vlanId: Int?
     public let portSecurity: Bool
     public let dhcp: Bool
-    
+
     public init(
         networkName: String,
         macAddress: String? = nil,
@@ -45,7 +45,7 @@ public struct VMNetworkInfo: Codable, Sendable {
     public let ipAddress: String
     public let status: NetworkPortStatus
     public let createdAt: Date
-    
+
     public init(
         vmId: String,
         networkName: String,
@@ -83,7 +83,7 @@ public struct NetworkInfo: Codable, Sendable {
     public let portCount: Int
     public let createdAt: Date
     public let updatedAt: Date
-    
+
     public init(
         name: String,
         uuid: String,
@@ -134,7 +134,7 @@ public extension VMNetworkInfo {
     var isActive: Bool {
         return status == .active
     }
-    
+
     var canDetach: Bool {
         return status == .active || status == .inactive
     }
@@ -144,15 +144,16 @@ public extension NetworkInfo {
     var isActive: Bool {
         return status == .active
     }
-    
+
     var canDelete: Bool {
         return portCount == 0 && status != .deleting
     }
-    
+
     var subnetInfo: (network: String, prefixLength: Int)? {
         let components = subnet.split(separator: "/")
         guard components.count == 2,
-              let prefixLength = Int(components[1]) else {
+            let prefixLength = Int(components[1])
+        else {
             return nil
         }
         return (network: String(components[0]), prefixLength: prefixLength)

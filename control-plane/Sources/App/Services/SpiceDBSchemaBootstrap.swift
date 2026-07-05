@@ -36,7 +36,7 @@ private func spiceDBSchemaPath(_ app: Application) -> String? {
     let workingDirectory = app.directory.workingDirectory
     let candidates = [
         workingDirectory + "spicedb/schema.zed",
-        workingDirectory + "../spicedb/schema.zed"
+        workingDirectory + "../spicedb/schema.zed",
     ]
     return candidates.first { FileManager.default.fileExists(atPath: $0) }
 }

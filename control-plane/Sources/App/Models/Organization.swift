@@ -87,7 +87,7 @@ final class UserOrganization: Model, @unchecked Sendable {
     var organization: Organization
 
     @Field(key: "role")
-    var role: String // "admin" or "member"
+    var role: String  // "admin" or "member"
 
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?

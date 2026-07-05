@@ -60,10 +60,11 @@ final class OrganizationalUnitTests {
         try await withOUTestApp { app, testUser, testOrganization, authToken in
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(CreateOrganizationalUnitRequest(
-                    name: "Engineering",
-                    description: "Engineering department"
-                ))
+                try req.content.encode(
+                    CreateOrganizationalUnitRequest(
+                        name: "Engineering",
+                        description: "Engineering department"
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
@@ -95,11 +96,12 @@ final class OrganizationalUnitTests {
             // Create nested OU
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(CreateOrganizationalUnitRequest(
-                    name: "Backend",
-                    description: "Backend team",
-                    parentOuId: parentOU.id
-                ))
+                try req.content.encode(
+                    CreateOrganizationalUnitRequest(
+                        name: "Backend",
+                        description: "Backend team",
+                        parentOuId: parentOU.id
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
@@ -127,10 +129,11 @@ final class OrganizationalUnitTests {
             // Try to create second OU with same name
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(CreateOrganizationalUnitRequest(
-                    name: "Duplicate",
-                    description: "Second OU"
-                ))
+                try req.content.encode(
+                    CreateOrganizationalUnitRequest(
+                        name: "Duplicate",
+                        description: "Second OU"
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
@@ -282,9 +285,10 @@ final class OrganizationalUnitTests {
             // Move childOU from ou1 to ou2
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous/\(childOU.id!)/move") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(MoveOrganizationalUnitRequest(
-                    newParentOuId: ou2.id
-                ))
+                try req.content.encode(
+                    MoveOrganizationalUnitRequest(
+                        newParentOuId: ou2.id
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
@@ -311,10 +315,11 @@ final class OrganizationalUnitTests {
 
             try await app.test(.PUT, "/api/organizations/\(testOrganization.id!)/ous/\(ou.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(UpdateOrganizationalUnitRequest(
-                    name: "Updated Name",
-                    description: "Updated description"
-                ))
+                try req.content.encode(
+                    UpdateOrganizationalUnitRequest(
+                        name: "Updated Name",
+                        description: "Updated description"
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 

@@ -15,7 +15,7 @@ public enum VMStatus: String, Codable, CaseIterable, Sendable {
     case stopping = "Stopping"
 
     // Diagnostic states set by reconciliation, never by a normal operation.
-    case error = "Error"      // operation failed, timed out, or the VM vanished from its agent
+    case error = "Error"  // operation failed, timed out, or the VM vanished from its agent
     case unknown = "Unknown"  // the VM's true state could not be determined
 
     /// True while a requested operation is in flight and not yet confirmed by the agent.
@@ -60,38 +60,38 @@ public struct VMData: Codable, Sendable {
     // CPU configuration
     public let cpu: Int
     public let maxCpu: Int
-    
+
     // Memory configuration (in bytes)
     public let memory: Int64
     public let hugepages: Bool
     public let sharedMemory: Bool
-    
+
     // Disk configuration
     public let disk: Int64
     public let diskPath: String?
     public let readonlyDisk: Bool
-    
+
     // Payload configuration
     public let kernelPath: String?
     public let initramfsPath: String?
     public let cmdline: String?
     public let firmwarePath: String?
-    
+
     // Network configuration
     public let macAddress: String?
     public let ipAddress: String?
     public let networkMask: String?
-    
+
     // Console configuration
     public let consoleMode: ConsoleMode
     public let serialMode: ConsoleMode
     public let consoleSocket: String?
     public let serialSocket: String?
-    
+
     // Timestamps
     public let createdAt: Date?
     public let updatedAt: Date?
-    
+
     public init(
         id: UUID,
         name: String,
@@ -159,31 +159,31 @@ public extension VMData {
     var memoryMB: Int {
         return Int(memory / 1024 / 1024)
     }
-    
+
     var memoryGB: Double {
         return Double(memory) / 1024.0 / 1024.0 / 1024.0
     }
-    
+
     var diskGB: Double {
         return Double(disk) / 1024.0 / 1024.0 / 1024.0
     }
-    
+
     var isRunning: Bool {
         return status == .running
     }
-    
+
     var canStart: Bool {
         return status == .created || status == .shutdown
     }
-    
+
     var canStop: Bool {
         return status == .running || status == .paused
     }
-    
+
     var canPause: Bool {
         return status == .running
     }
-    
+
     var canResume: Bool {
         return status == .paused
     }

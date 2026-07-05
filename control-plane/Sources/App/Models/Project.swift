@@ -37,14 +37,16 @@ final class Project: Model, @unchecked Sendable {
     var environments: [String] {
         get {
             guard let data = environmentsJSON.data(using: .utf8),
-                  let array = try? JSONDecoder().decode([String].self, from: data) else {
+                let array = try? JSONDecoder().decode([String].self, from: data)
+            else {
                 return ["development"]
             }
             return array
         }
         set {
             guard let data = try? JSONEncoder().encode(newValue),
-                  let string = String(data: data, encoding: .utf8) else {
+                let string = String(data: data, encoding: .utf8)
+            else {
                 environmentsJSON = "[\"development\"]"
                 return
             }
@@ -153,7 +155,8 @@ extension Project {
         }
 
         if let ouId = self.$organizationalUnit.id,
-           let ou = try await OrganizationalUnit.find(ouId, on: db) {
+            let ou = try await OrganizationalUnit.find(ouId, on: db)
+        {
             return ou.$organization.id
         }
 
@@ -175,7 +178,8 @@ extension Project {
     /// Removes an environment from the project (if not the default)
     func removeEnvironment(_ environment: String) -> Bool {
         guard environment != defaultEnvironment,
-              let index = environments.firstIndex(of: environment) else {
+            let index = environments.firstIndex(of: environment)
+        else {
             return false
         }
         environments.remove(at: index)
@@ -273,7 +277,7 @@ struct TransferProjectRequest: Content {
 struct ProjectPathComponent: Content {
     let id: UUID
     let name: String
-    let type: String // "organization", "organizational_unit", "project"
+    let type: String  // "organization", "organizational_unit", "project"
 }
 
 struct ProjectPathResponse: Content {

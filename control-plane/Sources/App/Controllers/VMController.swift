@@ -93,7 +93,7 @@ struct VMController: RouteCollection {
             let name: String
             let description: String?
             let templateName: String?  // Optional - either template or image required
-            let imageId: UUID?         // Optional - either template or image required
+            let imageId: UUID?  // Optional - either template or image required
             let projectId: UUID?
             let environment: String?
             let cpu: Int?
@@ -118,10 +118,12 @@ struct VMController: RouteCollection {
 
         if let templateName = createRequest.templateName {
             // Find the template
-            guard let foundTemplate = try await VMTemplate.query(on: req.db)
-                .filter(\VMTemplate.$imageName, .equal, templateName)
-                .filter(\VMTemplate.$isActive, .equal, true)
-                .first() else {
+            guard
+                let foundTemplate = try await VMTemplate.query(on: req.db)
+                    .filter(\VMTemplate.$imageName, .equal, templateName)
+                    .filter(\VMTemplate.$isActive, .equal, true)
+                    .first()
+            else {
                 throw Abort(.badRequest, reason: "Template '\(templateName)' not found or inactive")
             }
             template = foundTemplate
@@ -168,7 +170,7 @@ struct VMController: RouteCollection {
             projectId = requestedProjectId
         } else {
             guard let currentOrgId = user.currentOrganizationId else {
-                        throw Abort(.badRequest, reason: "No current organization set. Please specify a project.")
+                throw Abort(.badRequest, reason: "No current organization set. Please specify a project.")
             }
 
             // Find or create default project for organization
@@ -193,7 +195,11 @@ struct VMController: RouteCollection {
 
         // Validate environment exists in project
         if !project.hasEnvironment(environment) {
-            throw Abort(.badRequest, reason: "Environment '\(environment)' not available in project. Available: \(project.environments.joined(separator: ", "))")
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Environment '\(environment)' not available in project. Available: \(project.environments.joined(separator: ", "))"
+            )
         }
 
         // Create VM instance - either from template or image
@@ -294,7 +300,7 @@ struct VMController: RouteCollection {
                 relation: "organization",
                 subject: "organization",
                 subjectId: currentOrgId.uuidString
-        )
+            )
         }
 
         // Create VM via agent (scheduler will select best hypervisor and set hypervisorId)
@@ -316,11 +322,13 @@ struct VMController: RouteCollection {
             try await req.agentService.createVM(vm: vm, vmSpec: vmSpec, db: req.db, image: image)
 
             // hypervisorId is set and saved by AgentService via scheduler
-            req.logger.info("VM created successfully via agent", metadata: [
-                "vm_id": .string(vmID.uuidString),
-                "hypervisor_id": .string(vm.hypervisorId ?? "unknown"),
-                "created_from": .string(template != nil ? "template" : "image")
-            ])
+            req.logger.info(
+                "VM created successfully via agent",
+                metadata: [
+                    "vm_id": .string(vmID.uuidString),
+                    "hypervisor_id": .string(vm.hypervisorId ?? "unknown"),
+                    "created_from": .string(template != nil ? "template" : "image"),
+                ])
         } catch {
             req.logger.error("Failed to create VM via agent: \(error)", metadata: ["vm_id": .string(vmID.uuidString)])
 
@@ -367,7 +375,8 @@ struct VMController: RouteCollection {
                 try await req.agentService.performVMOperation(.vmDelete, vmId: vm.id?.uuidString ?? "")
                 req.logger.info("VM deleted via agent", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
             } catch {
-                req.logger.warning("Failed to delete VM via agent: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+                req.logger.warning(
+                    "Failed to delete VM via agent: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
                 // Continue with database deletion even if agent deletion fails
             }
         }
@@ -451,7 +460,9 @@ struct VMController: RouteCollection {
                     try await vm.save(on: req.db)
                 }
             } catch {
-                req.logger.warning("Failed to sync VM status with agent: \(error)", metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
+                req.logger.warning(
+                    "Failed to sync VM status with agent: \(error)",
+                    metadata: ["vm_id": .string(vm.id?.uuidString ?? "")])
             }
         }
 

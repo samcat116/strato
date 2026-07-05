@@ -60,13 +60,13 @@ struct AgentConfigTests {
     func loadValidConfig() throws {
         try withTempDirectory { tempDirectory in
             let tomlContent = """
-            control_plane_url = "ws://localhost:8080/agent/ws"
-            qemu_socket_dir = "/var/run/qemu"
-            log_level = "info"
-            network_mode = "ovn"
-            enable_hvf = false
-            enable_kvm = true
-            """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                qemu_socket_dir = "/var/run/qemu"
+                log_level = "info"
+                network_mode = "ovn"
+                enable_hvf = false
+                enable_kvm = true
+                """
 
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
@@ -86,8 +86,8 @@ struct AgentConfigTests {
     func loadMinimalConfig() throws {
         try withTempDirectory { tempDirectory in
             let tomlContent = """
-            control_plane_url = "ws://minimal:8080/ws"
-            """
+                control_plane_url = "ws://minimal:8080/ws"
+                """
 
             let configPath = tempDirectory.appendingPathComponent("minimal.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
@@ -105,9 +105,9 @@ struct AgentConfigTests {
     func loadConfigWithUserNetworkMode() throws {
         try withTempDirectory { tempDirectory in
             let tomlContent = """
-            control_plane_url = "ws://localhost:8080/agent/ws"
-            network_mode = "user"
-            """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                network_mode = "user"
+                """
 
             let configPath = tempDirectory.appendingPathComponent("user-mode.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
@@ -133,9 +133,9 @@ struct AgentConfigTests {
     func loadConfigMissingRequiredField() throws {
         try withTempDirectory { tempDirectory in
             let tomlContent = """
-            qemu_socket_dir = "/var/run/qemu"
-            log_level = "debug"
-            """
+                qemu_socket_dir = "/var/run/qemu"
+                log_level = "debug"
+                """
 
             let configPath = tempDirectory.appendingPathComponent("missing-url.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
@@ -150,9 +150,9 @@ struct AgentConfigTests {
     func loadConfigInvalidNetworkMode() throws {
         try withTempDirectory { tempDirectory in
             let tomlContent = """
-            control_plane_url = "ws://localhost:8080/agent/ws"
-            network_mode = "invalid_mode"
-            """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                network_mode = "invalid_mode"
+                """
 
             let configPath = tempDirectory.appendingPathComponent("invalid-mode.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
@@ -167,9 +167,9 @@ struct AgentConfigTests {
     func loadConfigInvalidTOML() throws {
         try withTempDirectory { tempDirectory in
             let invalidToml = """
-            control_plane_url = ws://localhost:8080/agent/ws
-            [this is not valid toml
-            """
+                control_plane_url = ws://localhost:8080/agent/ws
+                [this is not valid toml
+                """
 
             let configPath = tempDirectory.appendingPathComponent("invalid.toml").path
             try invalidToml.write(toFile: configPath, atomically: true, encoding: .utf8)
@@ -251,15 +251,15 @@ struct AgentConfigTests {
             #if os(macOS)
             // Test that KVM warning appears on macOS
             let tomlContent = """
-            control_plane_url = "ws://localhost:8080/agent/ws"
-            enable_kvm = true
-            """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                enable_kvm = true
+                """
             #else
             // Test that HVF warning appears on Linux
             let tomlContent = """
-            control_plane_url = "ws://localhost:8080/agent/ws"
-            enable_hvf = true
-            """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                enable_hvf = true
+                """
             #endif
 
             let configPath = tempDirectory.appendingPathComponent("platform-specific.toml").path
@@ -290,9 +290,9 @@ struct AgentConfigTests {
     func parsesStateFile() throws {
         try withTempDirectory { tempDirectory in
             let tomlContent = """
-            control_plane_url = "ws://cp:8080/agent/ws"
-            state_file = "/custom/agent-state.json"
-            """
+                control_plane_url = "ws://cp:8080/agent/ws"
+                state_file = "/custom/agent-state.json"
+                """
             let configPath = tempDirectory.appendingPathComponent("state-file.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
@@ -305,8 +305,8 @@ struct AgentConfigTests {
     func stateFileOptional() throws {
         try withTempDirectory { tempDirectory in
             let tomlContent = """
-            control_plane_url = "ws://cp:8080/agent/ws"
-            """
+                control_plane_url = "ws://cp:8080/agent/ws"
+                """
             let configPath = tempDirectory.appendingPathComponent("no-state-file.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 

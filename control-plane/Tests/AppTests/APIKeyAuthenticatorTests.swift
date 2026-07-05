@@ -66,9 +66,12 @@ struct APIKeyAuthenticatorTests {
             return authUser.username
         }
 
-        try await app.test(.GET, "/test", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-        }) { res async in
+        try await app.test(
+            .GET, "/test",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
             #expect(res.status == .ok)
             #expect(res.body.string == "testuser")
         }
@@ -97,9 +100,12 @@ struct APIKeyAuthenticatorTests {
             return authUser.username
         }
 
-        try await app.test(.GET, "/test", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: "sk_invalid_key_1234567890")
-        }) { res async in
+        try await app.test(
+            .GET, "/test",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: "sk_invalid_key_1234567890")
+            }
+        ) { res async in
             #expect(res.status == .unauthorized)
         }
 
@@ -155,9 +161,12 @@ struct APIKeyAuthenticatorTests {
         }
 
         // Try with a non-sk_ prefixed token (should be ignored by authenticator)
-        try await app.test(.GET, "/test", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: "other_token_format")
-        }) { res async in
+        try await app.test(
+            .GET, "/test",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: "other_token_format")
+            }
+        ) { res async in
             #expect(res.status == .unauthorized)
         }
 
@@ -187,9 +196,12 @@ struct APIKeyAuthenticatorTests {
             return authUser.username
         }
 
-        try await app.test(.GET, "/test", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-        }) { res async in
+        try await app.test(
+            .GET, "/test",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
             #expect(res.status == .unauthorized)
         }
 
@@ -205,7 +217,7 @@ struct APIKeyAuthenticatorTests {
         try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
-        let expiredDate = Date().addingTimeInterval(-86400) // 1 day ago
+        let expiredDate = Date().addingTimeInterval(-86400)  // 1 day ago
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, expiresAt: expiredDate)
 
         // Create a test route that requires authentication
@@ -218,9 +230,12 @@ struct APIKeyAuthenticatorTests {
             return authUser.username
         }
 
-        try await app.test(.GET, "/test", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-        }) { res async in
+        try await app.test(
+            .GET, "/test",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
             #expect(res.status == .unauthorized)
         }
 
@@ -236,7 +251,7 @@ struct APIKeyAuthenticatorTests {
         try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
-        let futureDate = Date().addingTimeInterval(86400) // 1 day from now
+        let futureDate = Date().addingTimeInterval(86400)  // 1 day from now
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, expiresAt: futureDate)
 
         // Create a test route that requires authentication
@@ -249,9 +264,12 @@ struct APIKeyAuthenticatorTests {
             return authUser.username
         }
 
-        try await app.test(.GET, "/test", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-        }) { res async in
+        try await app.test(
+            .GET, "/test",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
             #expect(res.status == .ok)
             #expect(res.body.string == "testuser")
         }
@@ -282,9 +300,12 @@ struct APIKeyAuthenticatorTests {
             return "\(authUser.username):\(authUser.email)"
         }
 
-        try await app.test(.GET, "/test", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-        }) { res async in
+        try await app.test(
+            .GET, "/test",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
             #expect(res.status == .ok)
             #expect(res.body.string == "testuser:test@example.com")
         }
@@ -315,9 +336,12 @@ struct APIKeyAuthenticatorTests {
             return storedKey.name
         }
 
-        try await app.test(.GET, "/test", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-        }) { res async in
+        try await app.test(
+            .GET, "/test",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
             #expect(res.status == .ok)
             #expect(res.body.string == "Test API Key")
         }
@@ -352,9 +376,12 @@ struct APIKeyAuthenticatorTests {
             return req.isAPIKeyAuthenticated ? "true" : "false"
         }
 
-        try await app.test(.GET, "/test", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-        }) { res async in
+        try await app.test(
+            .GET, "/test",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
             #expect(res.status == .ok)
             #expect(res.body.string == "true")
         }
@@ -393,9 +420,12 @@ struct APIKeyAuthenticatorTests {
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, scopes: ["read"])
         registerScopedRoutes(on: app)
 
-        try await app.test(.GET, "/resource", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-        }) { res async in
+        try await app.test(
+            .GET, "/resource",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
             #expect(res.status == .ok)
             #expect(res.body.string == "read-ok")
         }
@@ -414,9 +444,12 @@ struct APIKeyAuthenticatorTests {
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, scopes: ["read"])
         registerScopedRoutes(on: app)
 
-        try await app.test(.POST, "/resource", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-        }) { res async in
+        try await app.test(
+            .POST, "/resource",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
             #expect(res.status == .forbidden)
         }
 
@@ -434,15 +467,21 @@ struct APIKeyAuthenticatorTests {
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, scopes: ["write"])
         registerScopedRoutes(on: app)
 
-        try await app.test(.GET, "/resource", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-        }) { res async in
+        try await app.test(
+            .GET, "/resource",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
             #expect(res.status == .ok)
         }
 
-        try await app.test(.POST, "/resource", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-        }) { res async in
+        try await app.test(
+            .POST, "/resource",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
             #expect(res.status == .ok)
             #expect(res.body.string == "write-ok")
         }
@@ -461,9 +500,12 @@ struct APIKeyAuthenticatorTests {
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, scopes: ["admin"])
         registerScopedRoutes(on: app)
 
-        try await app.test(.POST, "/resource", beforeRequest: { req in
-            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-        }) { res async in
+        try await app.test(
+            .POST, "/resource",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
             #expect(res.status == .ok)
             #expect(res.body.string == "write-ok")
         }
@@ -552,7 +594,7 @@ struct APIKeyAuthenticatorTests {
         let key = APIKey.generateAPIKey()
 
         #expect(key.hasPrefix("sk_"))
-        #expect(key.count > 10) // Should be reasonably long
+        #expect(key.count > 10)  // Should be reasonably long
 
         // Should have the format: sk_[prefix]_[key]
         let components = key.components(separatedBy: "_")

@@ -55,10 +55,12 @@ public actor FileSPIFFEClient: SPIFFEClientProtocol {
     }
 
     public func fetchX509SVID() async throws -> X509SVID {
-        logger.debug("Fetching X.509 SVID from files", metadata: [
-            "certificatePath": .string(certificatePath),
-            "privateKeyPath": .string(privateKeyPath)
-        ])
+        logger.debug(
+            "Fetching X.509 SVID from files",
+            metadata: [
+                "certificatePath": .string(certificatePath),
+                "privateKeyPath": .string(privateKeyPath),
+            ])
 
         // Read certificate chain
         let certPEM = try readFile(certificatePath)
@@ -87,10 +89,12 @@ public actor FileSPIFFEClient: SPIFFEClientProtocol {
             expiresAt: expiresAt
         )
 
-        logger.info("Loaded X.509 SVID", metadata: [
-            "spiffeID": .string(svid.spiffeID.uri),
-            "expiresAt": .string(svid.expiresAt.description)
-        ])
+        logger.info(
+            "Loaded X.509 SVID",
+            metadata: [
+                "spiffeID": .string(svid.spiffeID.uri),
+                "expiresAt": .string(svid.expiresAt.description),
+            ])
 
         return svid
     }
@@ -172,9 +176,11 @@ public actor FileSPIFFEClient: SPIFFEClientProtocol {
                                 continuation.yield(svid)
                             }
 
-                            logger.info("SVID rotated, notified watchers", metadata: [
-                                "spiffeID": .string(svid.spiffeID.uri)
-                            ])
+                            logger.info(
+                                "SVID rotated, notified watchers",
+                                metadata: [
+                                    "spiffeID": .string(svid.spiffeID.uri)
+                                ])
                         }
                     }
 
@@ -252,9 +258,11 @@ public actor WorkloadAPISPIFFEClient: SPIFFEClientProtocol {
     }
 
     public func fetchX509SVID() async throws -> X509SVID {
-        logger.debug("Fetching X.509 SVID from Workload API", metadata: [
-            "socketPath": .string(socketPath)
-        ])
+        logger.debug(
+            "Fetching X.509 SVID from Workload API",
+            metadata: [
+                "socketPath": .string(socketPath)
+            ])
 
         // Check if socket exists
         guard FileManager.default.fileExists(atPath: socketPath) else {

@@ -13,7 +13,7 @@ struct MigrateExistingDataToProjects: AsyncMigration {
                 name: "Default Project",
                 description: "Default project for \(organization.name)",
                 organizationID: organization.id,
-                path: "" // Will be updated below
+                path: ""  // Will be updated below
             )
 
             try await defaultProject.save(on: database)
@@ -35,20 +35,23 @@ struct MigrateExistingDataToProjects: AsyncMigration {
         // If there are any VMs without a project_id after this migration,
         // they'll need to be handled manually or via a separate script
         if let firstOrg = organizations.first,
-           let firstOrgId = firstOrg.id,
-           let defaultProject = try await Project.query(on: database)
-            .filter(\Project.$organization.$id, .equal, firstOrgId)
-            .first(),
-           let defaultProjectId = defaultProject.id {
+            let firstOrgId = firstOrg.id,
+            let defaultProject = try await Project.query(on: database)
+                .filter(\Project.$organization.$id, .equal, firstOrgId)
+                .first(),
+            let defaultProjectId = defaultProject.id
+        {
 
             // Update any VMs that don't have a project_id using raw SQL
             // since Fluent's null checks don't work well with required @Parent relationships
             if let sql = database as? SQLDatabase {
-                try await sql.raw("""
+                try await sql.raw(
+                    """
                     UPDATE vms
                     SET project_id = \(bind: defaultProjectId), environment = 'development'
                     WHERE project_id IS NULL
-                    """).run()
+                    """
+                ).run()
             }
         }
 

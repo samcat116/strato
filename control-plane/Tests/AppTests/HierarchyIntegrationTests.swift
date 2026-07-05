@@ -8,7 +8,9 @@ import VaporTesting
 final class HierarchyIntegrationTests {
 
     // Helper to run tests with fresh app and test data
-    func withHierarchyTestApp(_ test: (Application, TestDataBuilder, User, Organization, String) async throws -> Void) async throws {
+    func withHierarchyTestApp(_ test: (Application, TestDataBuilder, User, Organization, String) async throws -> Void)
+        async throws
+    {
         let app = try await Application.makeForTesting()
 
         do {

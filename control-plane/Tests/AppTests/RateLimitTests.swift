@@ -15,10 +15,11 @@ struct RateLimitTests {
     ) async throws {
         let app = try await Application.make(.testing)
         do {
-            app.middleware.use(RateLimitMiddleware(
-                config: config,
-                fallbackStore: InMemoryRateLimitStore()
-            ))
+            app.middleware.use(
+                RateLimitMiddleware(
+                    config: config,
+                    fallbackStore: InMemoryRateLimitStore()
+                ))
             // General API route (scope: api).
             app.get("api", "things") { _ in "ok" }
             // Auth route that always fails (scope: auth) — drives the backoff.

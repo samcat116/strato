@@ -7,7 +7,7 @@ struct CreateUserGroup: AsyncMigration {
             .field("user_id", .uuid, .required, .references("users", "id", onDelete: .cascade))
             .field("group_id", .uuid, .required, .references("groups", "id", onDelete: .cascade))
             .field("created_at", .datetime)
-            .unique(on: "user_id", "group_id") // Prevent duplicate memberships
+            .unique(on: "user_id", "group_id")  // Prevent duplicate memberships
             .create()
     }
 

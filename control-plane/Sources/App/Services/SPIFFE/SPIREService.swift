@@ -205,11 +205,13 @@ public actor SPIREService {
             return
         }
 
-        logger.info("Starting SPIRE service", metadata: [
-            "trustDomain": .string(config.trustDomain),
-            "bundleEndpointURL": .string(config.bundleEndpointURL ?? "none"),
-            "trustBundlePath": .string(config.trustBundlePath ?? "none")
-        ])
+        logger.info(
+            "Starting SPIRE service",
+            metadata: [
+                "trustDomain": .string(config.trustDomain),
+                "bundleEndpointURL": .string(config.bundleEndpointURL ?? "none"),
+                "trustBundlePath": .string(config.trustBundlePath ?? "none"),
+            ])
 
         // Load initial trust bundle
         try await refreshTrustBundle()
@@ -268,9 +270,11 @@ public actor SPIREService {
             )
         }
 
-        logger.debug("Certificate validated successfully", metadata: [
-            "spiffeID": .string(spiffeID.uri)
-        ])
+        logger.debug(
+            "Certificate validated successfully",
+            metadata: [
+                "spiffeID": .string(spiffeID.uri)
+            ])
 
         return spiffeID
     }
@@ -333,10 +337,12 @@ public actor SPIREService {
             sequenceNumber: newSequence
         )
 
-        logger.info("Trust bundle loaded from file", metadata: [
-            "certificateCount": .stringConvertible(certificates.count),
-            "sequenceNumber": .stringConvertible(newSequence)
-        ])
+        logger.info(
+            "Trust bundle loaded from file",
+            metadata: [
+                "certificateCount": .stringConvertible(certificates.count),
+                "sequenceNumber": .stringConvertible(newSequence),
+            ])
     }
 
     private func fetchTrustBundleFromEndpoint(_ urlString: String) async throws {
@@ -344,7 +350,8 @@ public actor SPIREService {
 
         // Validate URL format
         guard urlString.hasPrefix("http://") || urlString.hasPrefix("https://") else {
-            throw SPIREServiceError.serverConnectionFailed("Invalid bundle endpoint URL: must start with http:// or https://")
+            throw SPIREServiceError.serverConnectionFailed(
+                "Invalid bundle endpoint URL: must start with http:// or https://")
         }
 
         let url = URI(string: urlString)
@@ -371,7 +378,8 @@ public actor SPIREService {
             var certificates: [String] = []
             for key in keys {
                 if let use = key["use"] as? String, use == "x509-svid",
-                   let x5c = key["x5c"] as? [String] {
+                    let x5c = key["x5c"] as? [String]
+                {
                     for cert in x5c {
                         // x5c contains base64-encoded DER certificates
                         let pem = "-----BEGIN CERTIFICATE-----\n\(cert)\n-----END CERTIFICATE-----"
@@ -391,10 +399,12 @@ public actor SPIREService {
                 sequenceNumber: newSequence
             )
 
-            logger.info("Trust bundle fetched from endpoint", metadata: [
-                "certificateCount": .stringConvertible(certificates.count),
-                "sequenceNumber": .stringConvertible(newSequence)
-            ])
+            logger.info(
+                "Trust bundle fetched from endpoint",
+                metadata: [
+                    "certificateCount": .stringConvertible(certificates.count),
+                    "sequenceNumber": .stringConvertible(newSequence),
+                ])
         } catch let error as SPIREServiceError {
             throw error
         } catch {

@@ -51,7 +51,9 @@ struct ProjectController: RouteCollection {
         try await user.$organizations.load(on: req.db)
         let organizationIDs = user.organizations.compactMap { $0.id }
 
-        req.logger.info("ProjectController.index - Found \(organizationIDs.count) organizations: \(organizationIDs.map { $0.uuidString })")
+        req.logger.info(
+            "ProjectController.index - Found \(organizationIDs.count) organizations: \(organizationIDs.map { $0.uuidString })"
+        )
 
         if organizationIDs.isEmpty {
             return []
@@ -180,7 +182,11 @@ struct ProjectController: RouteCollection {
                     .count()
 
                 if vmsUsingRemovedEnvs > 0 {
-                    throw Abort(.conflict, reason: "Cannot remove environments that are in use by VMs: \(removedEnvironments.joined(separator: ", "))")
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "Cannot remove environments that are in use by VMs: \(removedEnvironments.joined(separator: ", "))"
+                    )
                 }
             }
 
@@ -289,7 +295,9 @@ struct ProjectController: RouteCollection {
 
         // Verify organizationalUnitId is not provided for organization-level projects
         if createRequest.organizationalUnitId != nil {
-            throw Abort(.badRequest, reason: "Cannot specify organizationalUnitId when creating project directly in organization")
+            throw Abort(
+                .badRequest,
+                reason: "Cannot specify organizationalUnitId when creating project directly in organization")
         }
 
         // Verify user has access to create projects in organization
@@ -321,7 +329,8 @@ struct ProjectController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let ouID = req.parameters.get("ouID", as: UUID.self) else {
+            let ouID = req.parameters.get("ouID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or OU ID")
         }
 
@@ -354,7 +363,8 @@ struct ProjectController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let ouID = req.parameters.get("ouID", as: UUID.self) else {
+            let ouID = req.parameters.get("ouID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or OU ID")
         }
 
@@ -429,7 +439,8 @@ struct ProjectController: RouteCollection {
         }
 
         guard let projectID = req.parameters.get("projectID", as: UUID.self),
-              let environment = req.parameters.get("environment") else {
+            let environment = req.parameters.get("environment")
+        else {
             throw Abort(.badRequest, reason: "Invalid project ID or environment")
         }
 
@@ -511,11 +522,12 @@ struct ProjectController: RouteCollection {
 
         if let orgID = project.$organization.id {
             if let org = try await Organization.find(orgID, on: req.db) {
-                pathComponents.append(ProjectPathComponent(
-                    id: orgID,
-                    name: org.name,
-                    type: "organization"
-                ))
+                pathComponents.append(
+                    ProjectPathComponent(
+                        id: orgID,
+                        name: org.name,
+                        type: "organization"
+                    ))
             }
         } else if let ouID = project.$organizationalUnit.id {
             // Build OU path
@@ -529,11 +541,12 @@ struct ProjectController: RouteCollection {
                 } else {
                     // Add root organization
                     if let org = try await Organization.find(ou.$organization.id, on: req.db) {
-                        pathComponents.append(ProjectPathComponent(
-                            id: ou.$organization.id,
-                            name: org.name,
-                            type: "organization"
-                        ))
+                        pathComponents.append(
+                            ProjectPathComponent(
+                                id: ou.$organization.id,
+                                name: org.name,
+                                type: "organization"
+                            ))
                     }
                     break
                 }
@@ -541,20 +554,22 @@ struct ProjectController: RouteCollection {
 
             // Add all OUs in path
             for ou in ouPath {
-                pathComponents.append(ProjectPathComponent(
-                    id: ou.id!,
-                    name: ou.name,
-                    type: "organizational_unit"
-                ))
+                pathComponents.append(
+                    ProjectPathComponent(
+                        id: ou.id!,
+                        name: ou.name,
+                        type: "organizational_unit"
+                    ))
             }
         }
 
         // Add project itself
-        pathComponents.append(ProjectPathComponent(
-            id: project.id!,
-            name: project.name,
-            type: "project"
-        ))
+        pathComponents.append(
+            ProjectPathComponent(
+                id: project.id!,
+                name: project.name,
+                type: "project"
+            ))
 
         return ProjectPathResponse(
             projectId: project.id!,
@@ -671,7 +686,7 @@ struct ProjectController: RouteCollection {
             description: createRequest.description,
             organizationID: organizationID,
             organizationalUnitID: ouID,
-            path: "", // Will be updated after save
+            path: "",  // Will be updated after save
             defaultEnvironment: defaultEnvironment,
             environments: environments
         )

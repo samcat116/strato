@@ -8,7 +8,9 @@ import NIOHTTP1
 @Suite("Project API Tests", .serialized)
 final class ProjectTests {
 
-    func withProjectTestApp(_ test: (Application, User, Organization, OrganizationalUnit, String) async throws -> Void) async throws {
+    func withProjectTestApp(_ test: (Application, User, Organization, OrganizationalUnit, String) async throws -> Void)
+        async throws
+    {
         let app = try await Application.makeForTesting()
 
         do {
@@ -70,13 +72,14 @@ final class ProjectTests {
         try await withProjectTestApp { app, _, testOrganization, _, authToken in
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(CreateProjectRequest(
-                    name: "Web Application",
-                    description: "Main web application project",
-                    organizationalUnitId: nil,
-                    defaultEnvironment: "development",
-                    environments: ["development", "staging", "production"]
-                ))
+                try req.content.encode(
+                    CreateProjectRequest(
+                        name: "Web Application",
+                        description: "Main web application project",
+                        organizationalUnitId: nil,
+                        defaultEnvironment: "development",
+                        environments: ["development", "staging", "production"]
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
@@ -95,13 +98,14 @@ final class ProjectTests {
         try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous/\(testOU.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(CreateProjectRequest(
-                    name: "Backend API",
-                    description: "Backend API project",
-                    organizationalUnitId: nil,
-                    defaultEnvironment: "dev",
-                    environments: ["dev", "prod"]
-                ))
+                try req.content.encode(
+                    CreateProjectRequest(
+                        name: "Backend API",
+                        description: "Backend API project",
+                        organizationalUnitId: nil,
+                        defaultEnvironment: "dev",
+                        environments: ["dev", "prod"]
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
@@ -123,13 +127,14 @@ final class ProjectTests {
             var createdProjectId: UUID?
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(CreateProjectRequest(
-                    name: "Perms Project",
-                    description: "Project that should get an org tuple",
-                    organizationalUnitId: nil,
-                    defaultEnvironment: "development",
-                    environments: ["development"]
-                ))
+                try req.content.encode(
+                    CreateProjectRequest(
+                        name: "Perms Project",
+                        description: "Project that should get an org tuple",
+                        organizationalUnitId: nil,
+                        defaultEnvironment: "development",
+                        environments: ["development"]
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 createdProjectId = try res.content.decode(ProjectResponse.self).id
@@ -159,13 +164,14 @@ final class ProjectTests {
             var createdProjectId: UUID?
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous/\(testOU.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(CreateProjectRequest(
-                    name: "OU Perms Project",
-                    description: "OU project that should get an org tuple",
-                    organizationalUnitId: nil,
-                    defaultEnvironment: "development",
-                    environments: ["development"]
-                ))
+                try req.content.encode(
+                    CreateProjectRequest(
+                        name: "OU Perms Project",
+                        description: "OU project that should get an org tuple",
+                        organizationalUnitId: nil,
+                        defaultEnvironment: "development",
+                        environments: ["development"]
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 createdProjectId = try res.content.decode(ProjectResponse.self).id
@@ -189,13 +195,14 @@ final class ProjectTests {
         try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(CreateProjectRequest(
-                    name: "Invalid Project",
-                    description: "Should fail - organizationalUnitId specified for organization endpoint",
-                    organizationalUnitId: testOU.id,
-                    defaultEnvironment: nil,
-                    environments: nil
-                ))
+                try req.content.encode(
+                    CreateProjectRequest(
+                        name: "Invalid Project",
+                        description: "Should fail - organizationalUnitId specified for organization endpoint",
+                        organizationalUnitId: testOU.id,
+                        defaultEnvironment: nil,
+                        environments: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
@@ -219,9 +226,10 @@ final class ProjectTests {
 
             try await app.test(.POST, "/api/projects/\(project.id!)/environments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(ProjectEnvironmentRequest(
-                    environment: "qa"
-                ))
+                try req.content.encode(
+                    ProjectEnvironmentRequest(
+                        environment: "qa"
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
@@ -341,10 +349,11 @@ final class ProjectTests {
 
             try await app.test(.POST, "/api/projects/\(project.id!)/transfer") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(TransferProjectRequest(
-                    organizationId: nil,
-                    organizationalUnitId: targetOU.id
-                ))
+                try req.content.encode(
+                    TransferProjectRequest(
+                        organizationId: nil,
+                        organizationalUnitId: targetOU.id
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
@@ -369,12 +378,13 @@ final class ProjectTests {
 
             try await app.test(.PUT, "/api/projects/\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(UpdateProjectRequest(
-                    name: "Updated Name",
-                    description: "Updated description",
-                    defaultEnvironment: "production",
-                    environments: nil
-                ))
+                try req.content.encode(
+                    UpdateProjectRequest(
+                        name: "Updated Name",
+                        description: "Updated description",
+                        defaultEnvironment: "production",
+                        environments: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
