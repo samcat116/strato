@@ -63,21 +63,27 @@ Jobs target the scale set with `runs-on: swift-runners-strato`. ARC
 scale-set runners match on **exactly one label — the installation name** —
 so never combine it with `self-hosted`, `Linux`, or arch labels.
 
-Requirements for the runner image / scale set:
-- `sudo` + `apt` available in the runner image (the default
-  `ghcr.io/actions/actions-runner` image has no sudo): `vapor/swiftly-action`
-  installs Swift's apt dependencies, and main-build installs `libjemalloc-dev`
-- QEMU/glib build dependencies for agent builds
+Swift jobs run **inside the official `swift:<version>-noble` job container**
+(the same image the Dockerfiles build with), so the runner image itself needs
+no Swift toolchain, sudo, or build packages — vapor/swiftly-action is not
+used on these runners (it breaks on ARC pods, where `$USER` is unset).
+
+Requirements for the scale set:
 - Docker available to jobs (dind mode, or kubernetes mode with container
-  hooks) — the PR test job runs a Postgres **service container**
-- Optional but strongly recommended: a persistent volume mounted at
-  `RUNNER_TOOL_CACHE`. Swift build state lives in
-  `$RUNNER_TOOL_CACHE/strato-swift-build` (via `swift build --scratch-path`),
-  and swiftly caches toolchains there too. Without the volume every job runs
-  a cold build and re-downloads the toolchain; with it, builds are
-  incremental across runs with no cache upload/download. The PR workflow
-  wipes the scratch dir automatically past ~25GB; it is always safe to
-  delete manually — the next run just rebuilds cold.
+  hooks) — the jobs use a **job container** and the PR test job adds a
+  Postgres **service container**
+- Optional but recommended: a persistent volume backing `RUNNER_TOOL_CACHE`
+  (the runner mounts it into job containers). Swift build state lives in
+  `$RUNNER_TOOL_CACHE/strato-swift-build` (via `swift build --scratch-path`);
+  without the volume every job builds cold. The PR workflow wipes the
+  scratch dir automatically past ~25GB; it is always safe to delete
+  manually — the next run just rebuilds cold. An image registry mirror or
+  dind image cache also helps, since each job pulls `swift` and `postgres`
+  images fresh otherwise.
+
+When bumping the Swift toolchain, update the `swift:x.y.z-noble` container
+image tags in build.yaml/main-build.yaml together with the Dockerfiles and
+the remaining `vapor/swiftly-action` pins (swift-format lint, macOS job).
 
 ### Static Self-Hosted Runner (x64/AMD64)
 Used for:

@@ -23,6 +23,11 @@ jobs:
     # x64 runs on the ARC (actions-runner-controller) Swift runner scale set;
     # scale-set runners match on the installation name as their only label.
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'swift-runners-strato' }}
+    # Both legs build inside the official Swift image (the same one the
+    # Dockerfiles build with) instead of installing a toolchain per job —
+    # vapor/swiftly-action breaks on the ARC pods ($USER is unset).
+    container:
+      image: swift:6.3.2-noble
     strategy:
       matrix:
         include:
@@ -33,12 +38,13 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # The control-plane binary links -ljemalloc on both arches. The old
-      # static x64 runner had it preinstalled; ephemeral runners do not.
-      - name: Install jemalloc dependencies
+      # libjemalloc-dev: the control-plane binary links -ljemalloc.
+      # unzip: setup-bun needs it to extract its download; the swift image
+      # doesn't ship it. The job runs as root in the container, so no sudo.
+      - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libjemalloc-dev
+          apt-get update
+          apt-get install -y libjemalloc-dev unzip
 
       - name: Cache Swift packages
         uses: actions/cache@v4
@@ -63,10 +69,6 @@ jobs:
       - name: Build and deploy frontend
         working-directory: control-plane/web
         run: bun run build:deploy
-
-      - uses: vapor/swiftly-action@v0.2
-        with:
-          toolchain: "6.3.2"
 
       - name: Build Control Plane Release Binary
         working-directory: control-plane

@@ -136,6 +136,13 @@ jobs:
     # match on exactly one label — the installation name — so do not add
     # `self-hosted` or arch labels here.
     runs-on: swift-runners-strato
+    # Build inside the official Swift image instead of installing a toolchain
+    # on the ephemeral runner each job. vapor/swiftly-action breaks on the ARC
+    # pods ($USER is unset, so it sources /home//.local/.../env.sh), and this
+    # pins the exact toolchain the Dockerfiles build with — agent/Dockerfile
+    # uses this same image. The runner image needs nothing Swift-related.
+    container:
+      image: swift:6.3.2-noble
     services:
       postgres:
         image: postgres:15
@@ -148,11 +155,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-        # Bind container port 5432 to an ephemeral host port (read back below
-        # via the job.services context) rather than a fixed 5432:5432, so the
-        # job never assumes 5432 is free on whichever runner hosts it.
-        ports:
-          - 5432
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -161,10 +163,10 @@ jobs:
       # actions/cache: the GitHub cache never helped here — PR-scoped saves
       # are unreadable by sibling PRs and nothing on main saves the key, so
       # every run paid a ~5 minute 1.4GB upload for a restore that always
-      # missed. On the ARC runners this path is warm only if the scale set
-      # mounts a persistent volume at RUNNER_TOOL_CACHE (it survives
-      # checkout's `git clean -ffdx` because it is outside the repo); on a
-      # plain ephemeral pod these steps are harmless and the build runs cold.
+      # missed. The runner mounts its tool cache into the job container, so
+      # the path is warm across runs if the ARC scale set backs it with a
+      # persistent volume; on a plain ephemeral pod these steps are harmless
+      # and the build runs cold.
       - name: Prune build scratch dir if oversized
         run: |
           scratch="$RUNNER_TOOL_CACHE/strato-swift-build"
@@ -175,10 +177,6 @@ jobs:
               rm -rf "$scratch"
             fi
           fi
-
-      - uses: vapor/swiftly-action@v0.2
-        with:
-          toolchain: "6.3.2"
 
       - name: Build Shared Package
         working-directory: shared
@@ -210,8 +208,11 @@ jobs:
         working-directory: control-plane
         env:
           STRATO_TEST_DATABASE: postgres
-          DATABASE_HOST: localhost
-          DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}
+          # The job runs in a container on the same Docker network as the
+          # service, so Postgres is reachable by service name on its native
+          # port — no host port mapping involved.
+          DATABASE_HOST: postgres
+          DATABASE_PORT: 5432
           DATABASE_NAME: strato_test
           DATABASE_USERNAME: strato
           DATABASE_PASSWORD: strato_password
