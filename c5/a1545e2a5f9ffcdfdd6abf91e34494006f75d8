@@ -1,0 +1,25 @@
+control-plane/Sources/App/Controllers/APIKeyController.swift
+  s_2d493391de3833::t_2ecbc17802f7ea 207-216,218-222
+control-plane/Tests/AppTests/SecurityHeadersTests.swift
+  s_2d493391de3833::t_7c3e8533094718 1-56
+control-plane/Sources/App/Middleware/SecurityHeadersMiddleware.swift
+  s_2d493391de3833::t_d01ecddb4090a1 1-49
+control-plane/Sources/App/configure.swift
+  s_2d493391de3833::t_dfd80984982238 32-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c5a1545e2a5f9ffcdfdd6abf91e34494006f75d8",
+  "prompts": {},
+  "sessions": {
+    "s_2d493391de3833": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "02826c83-f11c-46e9-92a1-3bea16bd80bd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
