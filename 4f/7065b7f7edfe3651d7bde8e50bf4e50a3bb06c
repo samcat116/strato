@@ -1,0 +1,30 @@
+control-plane/Sources/App/Models/APIKey.swift
+  s_be27cefad59237::t_c1aa3ff208b9da 102-116,121-152
+  s_be27cefad59237::t_7761953f3403bf 153
+control-plane/Sources/App/configure.swift
+  s_be27cefad59237::t_40d4f3c91101ee 83-87
+control-plane/Tests/AppTests/APIKeyAuthenticatorTests.swift
+  s_be27cefad59237::t_9eb9e457461724 363-502
+  s_be27cefad59237::t_b95386e372a2c7 23-29,39
+control-plane/Sources/App/Controllers/APIKeyController.swift
+  s_be27cefad59237::t_e0cde6b258b85c 135
+  s_be27cefad59237::t_a9254b2cb61eb3 65
+control-plane/Sources/App/Middleware/APIKeyAuthenticator.swift
+  s_be27cefad59237::t_f36e036e605ec6 77-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4f7065b7f7edfe3651d7bde8e50bf4e50a3bb06c",
+  "prompts": {},
+  "sessions": {
+    "s_be27cefad59237": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "efbd6865-81f1-46c1-9720-32511b819d38",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
