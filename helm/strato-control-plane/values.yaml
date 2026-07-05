@@ -412,7 +412,11 @@ opentelemetry:
         cpu: 250m
         memory: 512Mi
 
-# Valkey (Redis-compatible) configuration for session storage and caching
+# Valkey (Redis-compatible) configuration. REQUIRED: the control plane uses
+# Valkey for its coordination layer (agent presence, singleton sweep locks,
+# scheduler placement reservations) as well as session storage, and fails at
+# startup without it. Disable the bundled instance only when pointing
+# externalValkey.host at an existing one.
 valkey:
   enabled: true
   # Override with Valkey image instead of Redis

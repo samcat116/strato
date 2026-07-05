@@ -53,4 +53,19 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.databaseSecretName" . }}"
                   key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
+            # The migrate command boots the full application, which requires
+            # Valkey for the coordination layer (issue #258).
+            - name: VALKEY_HOST
+              value: "{{ include "strato-control-plane.valkeyHost" . }}"
+            - name: VALKEY_PORT
+              value: "{{ include "strato-control-plane.valkeyPort" . }}"
+            - name: VALKEY_DATABASE
+              value: "{{ .Values.externalValkey.database | default 0 }}"
+            {{- if or (and .Values.valkey.enabled .Values.valkey.auth.enabled) .Values.externalValkey.password }}
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ include "strato-control-plane.valkeySecretName" . }}"
+                  key: "{{ include "strato-control-plane.valkeySecretKey" . }}"
+            {{- end }}
 {{- end }}

@@ -23,7 +23,8 @@ For a real hostname (WebAuthn then requires HTTPS in front of the proxy):
 - **SpiceDB** — authorization, persisted to PostgreSQL. Datastore migration
   and schema loading run automatically as one-shot services on every `up`
   (they show as `Exited (0)` in `docker compose ps`, which is expected).
-- **Valkey** — session storage, password-protected.
+- **Valkey** — control-plane coordination (agent presence, singleton sweeps,
+  scheduler reservations) and session storage; required, password-protected.
 - **Control plane + frontend** — published images
   (`ghcr.io/samcat116/strato-*`). Database migrations run automatically at
   startup. Pin a version with `STRATO_VERSION` in `.env`.

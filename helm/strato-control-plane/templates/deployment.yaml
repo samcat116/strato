@@ -203,7 +203,10 @@ spec:
             - name: OTEL_TRACES_ENABLED
               value: "false"
             {{- end }}
-            {{- if or .Values.valkey.enabled .Values.externalValkey.host }}
+            # Valkey is required for control-plane coordination (agent presence,
+            # singleton sweeps, scheduler reservations — issue #258); the
+            # valkeyHost helper fails the render when neither valkey.enabled nor
+            # externalValkey.host provides one.
             - name: VALKEY_HOST
               value: "{{ include "strato-control-plane.valkeyHost" . }}"
             - name: VALKEY_PORT
@@ -216,7 +219,6 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.valkeySecretName" . }}"
                   key: "{{ include "strato-control-plane.valkeySecretKey" . }}"
-            {{- end }}
             {{- end }}
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:

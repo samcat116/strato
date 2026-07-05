@@ -162,6 +162,32 @@ differently than requested:
 3. **Apply Strategy**: Run selected algorithm on eligible agents
 4. **Return Selection**: Return agent ID or throw `SchedulerError` if no suitable agent found
 
+### Placement Reservations
+
+VM creation uses `selectAndReserveAgent`, which wraps the selection above in a
+reservation step backed by the Valkey coordination layer
+(`CoordinationService`, issue #258). This closes the read-decide-write race
+where two concurrent creates both observe the same free capacity on an agent
+and both place against it (oversubscription):
+
+1. Before selection, each agent's reported availability is reduced by the sum
+   of its **active reservations** (`resv:agent:{agentId}:*` keys) — capacity
+   claimed by placements in flight that the agent's own resource reports do
+   not reflect yet.
+2. After selection, the VM's resources are reserved **atomically** (a Lua
+   script in Valkey sums existing reservations, checks the new one fits the
+   agent's reported availability, and writes it in one step). Two concurrent
+   creates therefore serialize: exactly one wins the capacity.
+3. If the reservation loses the race, selection re-runs with fresh reservation
+   data; the now-full agent drops out in the resource filter and the create
+   either lands elsewhere or fails with a clean `insufficientResources` error.
+
+Reservations are released when the create fails to dispatch or when the owning
+agent first reports on the VM (its resource reports then account for it); a
+~120s TTL is the backstop for crashes in between. If Valkey is unavailable,
+reservation calls fail open — placement proceeds unreserved (the
+pre-reservation behavior) rather than coupling VM creation to Valkey uptime.
+
 ## Error Handling
 
 The scheduler throws specific errors for different failure scenarios:
