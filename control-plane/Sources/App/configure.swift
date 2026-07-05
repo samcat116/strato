@@ -29,6 +29,28 @@ public func configure(_ app: Application) async throws {
         app.logger.info("Request logging enabled")
     }
 
+    // Standard security headers on every response. HSTS is sent only when we're
+    // served over TLS (production, or an explicit override for TLS-terminating
+    // ingress in front of a non-production deploy) — never from a plaintext dev
+    // server. Registered outermost so the headers also cover error responses.
+    let servedOverTLS = Environment.get("HTTP_TLS_ENABLED").flatMap(Bool.init)
+        ?? (app.environment == .production)
+    app.middleware.use(SecurityHeadersMiddleware(enableHSTS: servedOverTLS))
+
+    // Harden the session cookie: always HTTPOnly, and Secure whenever we're
+    // behind TLS so the cookie can't leak over a downgraded/plaintext request.
+    // SameSite=lax keeps the cookie on top-level navigations (needed for the
+    // OAuth/OIDC redirect back into the app) while blocking cross-site sends.
+    app.sessions.configuration = .init(cookieName: "vapor-session") { sessionID in
+        HTTPCookies.Value(
+            string: sessionID.string,
+            path: "/",
+            isSecure: servedOverTLS,
+            isHTTPOnly: true,
+            sameSite: .lax
+        )
+    }
+
     // Configure Valkey if available, fallback to Fluent sessions
     if let valkeyConfig = ValkeyConfiguration.fromEnvironment() {
         do {

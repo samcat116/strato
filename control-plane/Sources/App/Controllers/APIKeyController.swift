@@ -204,8 +204,22 @@ struct APIDocumentationController: RouteCollection {
                 </body>
             </html>
             """
+        // Swagger UI is loaded from a CDN and needs inline script/style to
+        // bootstrap, so this page opts out of the global same-origin CSP with a
+        // scoped policy of its own (SecurityHeadersMiddleware leaves an existing
+        // Content-Security-Policy untouched).
+        let csp = "default-src 'self'; "
+            + "script-src 'self' https://unpkg.com 'unsafe-inline'; "
+            + "style-src 'self' https://unpkg.com 'unsafe-inline'; "
+            + "img-src 'self' data:; "
+            + "connect-src 'self'; "
+            + "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
         return Response(
-            status: .ok, headers: HTTPHeaders([("Content-Type", "text/html")]),
+            status: .ok,
+            headers: HTTPHeaders([
+                ("Content-Type", "text/html"),
+                ("Content-Security-Policy", csp)
+            ]),
             body: .init(string: html))
     }
 }
