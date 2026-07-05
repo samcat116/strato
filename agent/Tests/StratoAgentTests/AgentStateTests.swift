@@ -2,6 +2,10 @@ import Testing
 import Foundation
 @testable import StratoAgentCore
 
+#if canImport(Glibc)
+import Glibc
+#endif
+
 @Suite("AgentState Tests")
 struct AgentStateTests {
 
@@ -136,7 +140,12 @@ struct AgentStateTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: nested).isEmpty)
     }
 
-    @Test("ensureWritable throws when the directory is not writable")
+    @Test(
+        "ensureWritable throws when the directory is not writable",
+        // Root bypasses directory permission bits, so the 0o500 chmod below
+        // can't make the probe write fail — e.g. in CI's job container.
+        .disabled(if: geteuid() == 0, "meaningless when running as root")
+    )
     func ensureWritableThrowsOnReadOnlyDirectory() throws {
         let dir = try makeTempDir()
         defer {

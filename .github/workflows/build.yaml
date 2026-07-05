@@ -12,7 +12,7 @@ permissions:
   pull-requests: read # dorny/paths-filter reads changed files via the PR API
 
 # Cancel any in-progress run for the same PR when a new commit is pushed,
-# so stale runs stop hogging the single self-hosted runner.
+# so stale runs don't tie up Swift runner capacity.
 concurrency:
   group: pr-validation-${{ github.ref }}
   cancel-in-progress: true
@@ -80,7 +80,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
     # Lightweight formatting check — runs on GitHub-hosted runners to keep the
-    # self-hosted runner free for the heavy Swift build+test job. `swift format`
+    # Swift runner pool free for the heavy build+test job. `swift format`
     # ships with the toolchain, so no extra tooling is needed.
     runs-on: ubuntu-latest
     steps:
@@ -105,7 +105,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.web == 'true' || needs.changes.outputs.workflow == 'true'
     # Lightweight Bun job — runs on GitHub-hosted runners to keep the
-    # self-hosted runner free for the heavy Swift build+test job.
+    # Swift runner pool free for the heavy build+test job.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -132,7 +132,17 @@ jobs:
     name: Build and Test Swift Packages
     needs: changes
     if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
-    runs-on: self-hosted
+    # ARC (actions-runner-controller) runner scale set. Scale-set runners
+    # match on exactly one label — the installation name — so do not add
+    # `self-hosted` or arch labels here.
+    runs-on: swift-runners-strato
+    # Build inside the official Swift image instead of installing a toolchain
+    # on the ephemeral runner each job. vapor/swiftly-action breaks on the ARC
+    # pods ($USER is unset, so it sources /home//.local/.../env.sh), and this
+    # pins the exact toolchain the Dockerfiles build with — agent/Dockerfile
+    # uses this same image. The runner image needs nothing Swift-related.
+    container:
+      image: swift:6.3.2-noble
     services:
       postgres:
         image: postgres:15
@@ -145,23 +155,18 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-        # Bind container port 5432 to an ephemeral host port (read back below
-        # via the job.services context) rather than a fixed 5432:5432. On the
-        # shared self-hosted runner a fixed mapping collides with anything else
-        # already bound to 5432; a dynamic port avoids that.
-        ports:
-          - 5432
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Build state lives in a persistent scratch dir on the self-hosted
-      # runner instead of actions/cache: RUNNER_TOOL_CACHE survives both the
-      # end of the job and checkout's `git clean -ffdx` (it is outside the
-      # repo), so builds are incremental across runs with zero network cost.
-      # The GitHub cache never helped here — PR-scoped saves are unreadable
-      # by sibling PRs and nothing on main saved the key, so every run paid
-      # a ~5 minute 1.4GB upload for a restore that always missed.
+      # Build state lives in a scratch dir under RUNNER_TOOL_CACHE instead of
+      # actions/cache: the GitHub cache never helped here — PR-scoped saves
+      # are unreadable by sibling PRs and nothing on main saves the key, so
+      # every run paid a ~5 minute 1.4GB upload for a restore that always
+      # missed. The runner mounts its tool cache into the job container, so
+      # the path is warm across runs if the ARC scale set backs it with a
+      # persistent volume; on a plain ephemeral pod these steps are harmless
+      # and the build runs cold.
       - name: Prune build scratch dir if oversized
         run: |
           scratch="$RUNNER_TOOL_CACHE/strato-swift-build"
@@ -172,10 +177,6 @@ jobs:
               rm -rf "$scratch"
             fi
           fi
-
-      - uses: vapor/swiftly-action@v0.2
-        with:
-          toolchain: "6.3.2"
 
       - name: Build Shared Package
         working-directory: shared
@@ -207,12 +208,23 @@ jobs:
         working-directory: control-plane
         env:
           STRATO_TEST_DATABASE: postgres
-          DATABASE_HOST: localhost
-          DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}
+          # The job runs in a container on the same Docker network as the
+          # service, so Postgres is reachable by service name on its native
+          # port — no host port mapping involved.
+          DATABASE_HOST: postgres
+          DATABASE_PORT: 5432
           DATABASE_NAME: strato_test
           DATABASE_USERNAME: strato
           DATABASE_PASSWORD: strato_password
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+        # --no-parallel: every parallel test holds its own Vapor app whose
+        # pool opens up to one connection per event loop, so on a many-core
+        # runner the suite blows past Postgres's max_connections=100
+        # ("sorry, too many clients already", sqlState 53300) — and a service
+        # container can't be given -c max_connections=N (no command args).
+        # Engine validation is this leg's job, not speed; the SQLite leg
+        # above keeps full parallelism. (swift-testing ignores --num-workers,
+        # so on/off is the only knob here.)
+        run: swift test --skip-build --no-parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
 
       - name: Build Agent
         # Run even if a control-plane leg failed — agent coverage should
