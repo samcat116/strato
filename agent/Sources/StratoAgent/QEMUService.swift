@@ -22,19 +22,6 @@ actor QEMUService: HypervisorService {
     /// run under TCG emulation.
     private let hardwareAccelerationEnabled: Bool
 
-    // Durable record of managed VMs, used to detect VMs orphaned by an agent restart.
-    private let manifestStore: VMManifestStore
-    /// VMs this agent was managing before the current process started. They are not
-    /// under active management (no QEMU re-adoption in Option A), but their specs
-    /// are retained: the orphaned QEMU processes may still be running and consuming
-    /// CPU/memory, so their reservations must keep counting against host capacity
-    /// until the VM is deleted or re-created.
-    private var orphanedVMSpecs: [String: VMSpec] = [:]
-
-    var orphanedVMIDs: Set<String> {
-        Set(orphanedVMSpecs.keys)
-    }
-
     // HypervisorService protocol requirement
     public let hypervisorType: HypervisorType = .qemu
 
@@ -57,23 +44,6 @@ actor QEMUService: HypervisorService {
         self.qemuBinaryPath = qemuBinaryPath
         self.configuredFirmwarePath = firmwarePath
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
-        self.manifestStore = VMManifestStore(
-            path: (vmStoragePath as NSString).appendingPathComponent("qemu-manifest.json"),
-            logger: logger
-        )
-
-        // Any VMs recorded in the manifest were managed by a previous incarnation of
-        // this agent. We do not re-adopt them (Option A), so record them as orphaned
-        // and warn — the control plane will mark them for attention via reconciliation.
-        let previousManifest = manifestStore.load()
-        if !previousManifest.isEmpty {
-            orphanedVMSpecs = previousManifest
-            logger.warning(
-                "Found \(previousManifest.count) VM(s) managed before restart; their QEMU processes are now unmanaged but their resources stay reserved",
-                metadata: [
-                    "vmIds": .string(previousManifest.keys.sorted().joined(separator: ","))
-                ])
-        }
 
         #if os(Linux)
         logger.info("QEMU service initialized with KVM acceleration support")
@@ -244,10 +214,6 @@ actor QEMUService: HypervisorService {
 
         activeVMs[vmId] = qemuManager
         vmSpecs[vmId] = spec
-        // A re-created VM is actively managed again; drop any orphan record so its
-        // resources are not double-counted.
-        orphanedVMSpecs.removeValue(forKey: vmId)
-        persistManifest()
 
         logger.info("QEMU VM created successfully", metadata: ["vmId": .string(vmId)])
     }
@@ -345,19 +311,6 @@ actor QEMUService: HypervisorService {
 
     func deleteVM(vmId: String) async throws {
         guard let qemuManager = activeVMs[vmId] else {
-            // Deleting an orphaned VM releases its manifest entry and reservation so
-            // the control plane can remove the record. The unmanaged QEMU process
-            // (if still alive) cannot be stopped from here — that needs operator
-            // cleanup (or Option B re-adoption).
-            if orphanedVMSpecs.removeValue(forKey: vmId) != nil {
-                persistManifest()
-                logger.warning(
-                    "Deleted orphaned VM from manifest; any surviving QEMU process must be cleaned up manually",
-                    metadata: [
-                        "vmId": .string(vmId)
-                    ])
-                return
-            }
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
 
@@ -372,7 +325,6 @@ actor QEMUService: HypervisorService {
         // Clean up VM resources
         activeVMs.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
-        persistManifest()
         vmNetworkInfo.removeValue(forKey: vmId)
 
         // Clean up console socket
@@ -506,10 +458,10 @@ actor QEMUService: HypervisorService {
         return Array(activeVMs.keys)
     }
 
-    /// Sum of vCPUs and memory (in bytes) reserved by all VMs this service is managing,
-    /// plus VMs orphaned by an agent restart — their QEMU processes may still be
-    /// running, so the scheduler must not hand their capacity to new placements.
+    /// Sum of vCPUs and memory (in bytes) reserved by all VMs this service is managing.
     /// Used to compute accurate available-resource figures for the scheduler.
+    /// (VMs orphaned by an agent restart are accounted for by the Agent, which owns
+    /// the durable manifest they are recovered from.)
     func reservedResources() -> (vcpus: Int, memoryBytes: Int64) {
         var vcpus = 0
         var memoryBytes: Int64 = 0
@@ -517,18 +469,7 @@ actor QEMUService: HypervisorService {
             vcpus += spec.cpus
             memoryBytes += spec.memoryBytes
         }
-        for spec in orphanedVMSpecs.values {
-            vcpus += spec.cpus
-            memoryBytes += spec.memoryBytes
-        }
         return (vcpus, memoryBytes)
-    }
-
-    /// Persists the current set of managed VMs to the on-disk manifest so they can be
-    /// detected as orphaned after an agent restart. Orphaned entries are carried over
-    /// (active specs win on ID collision) so a second restart still knows about them.
-    private func persistManifest() {
-        manifestStore.save(orphanedVMSpecs.merging(vmSpecs) { _, active in active })
     }
 
     // MARK: - Legacy Methods (for backward compatibility)
