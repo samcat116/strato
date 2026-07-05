@@ -189,7 +189,7 @@ actor QEMUService: HypervisorService {
         }
 
         // Translate the neutral spec into QEMU's native configuration
-        let qemuConfig = convertToQEMUConfiguration(spec, disks: disks, vmId: vmId)
+        let qemuConfig = await convertToQEMUConfiguration(spec, disks: disks, vmId: vmId)
 
         // Create VM with timeout - QMP connection can hang indefinitely
         logger.info("Starting QEMU VM creation with 30 second timeout", metadata: ["vmId": .string(vmId)])
@@ -649,7 +649,7 @@ actor QEMUService: HypervisorService {
         let readonly: Bool
     }
 
-    private func convertToQEMUConfiguration(_ spec: VMSpec, disks: [ResolvedDisk], vmId: String) -> QEMUConfiguration {
+    private func convertToQEMUConfiguration(_ spec: VMSpec, disks: [ResolvedDisk], vmId: String) async -> QEMUConfiguration {
         var qemuConfig = QEMUConfiguration()
 
         // Determine boot mode: direct kernel boot or UEFI firmware boot
@@ -832,7 +832,7 @@ actor QEMUService: HypervisorService {
         // For disk-based boot, create cloud-init ISO to configure serial console
         // Cloud-init allows configuring the guest without modifying the disk image
         let cloudInitISOPath = (vmDir as NSString).appendingPathComponent("cloud-init.iso")
-        if CloudInitProvisioner(logger: logger).makeNoCloudISO(at: cloudInitISOPath, vmId: vmId) {
+        if await CloudInitProvisioner(logger: logger).makeNoCloudISO(at: cloudInitISOPath, vmId: vmId) {
             qemuConfig.additionalArgs.append(contentsOf: [
                 "-drive", "file=\(cloudInitISOPath),format=raw,if=virtio,readonly=on"
             ])

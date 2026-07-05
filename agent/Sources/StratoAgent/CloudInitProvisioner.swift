@@ -22,7 +22,7 @@ struct CloudInitProvisioner {
     ///   - isoPath: Destination path for the generated ISO.
     ///   - vmId: The VM identifier, used for the instance-id and hostname.
     /// - Returns: true if the ISO was created successfully.
-    func makeNoCloudISO(at isoPath: String, vmId: String) -> Bool {
+    func makeNoCloudISO(at isoPath: String, vmId: String) async -> Bool {
         let fileManager = FileManager.default
         let tempDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("cloud-init-\(vmId)")
 
@@ -64,10 +64,11 @@ struct CloudInitProvisioner {
             try userData.write(toFile: userDataPath, atomically: true, encoding: .utf8)
 
             // Create ISO using hdiutil (macOS) or genisoimage/mkisofs (Linux)
-            let process = Process()
+            let executableURL: URL
+            let arguments: [String]
             #if os(macOS)
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-            process.arguments = [
+            executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+            arguments = [
                 "makehybrid",
                 "-iso",
                 "-joliet",
@@ -79,12 +80,9 @@ struct CloudInitProvisioner {
             // Try genisoimage first, then mkisofs
             let genisoimagePath = "/usr/bin/genisoimage"
             let mkisofsPath = "/usr/bin/mkisofs"
-            if fileManager.fileExists(atPath: genisoimagePath) {
-                process.executableURL = URL(fileURLWithPath: genisoimagePath)
-            } else {
-                process.executableURL = URL(fileURLWithPath: mkisofsPath)
-            }
-            process.arguments = [
+            executableURL = URL(fileURLWithPath:
+                fileManager.fileExists(atPath: genisoimagePath) ? genisoimagePath : mkisofsPath)
+            arguments = [
                 "-output", isoPath,
                 "-volid", "cidata",
                 "-joliet",
@@ -93,22 +91,16 @@ struct CloudInitProvisioner {
             ]
             #endif
 
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
-
-            try process.run()
-            process.waitUntilExit()
+            let result = try await ProcessRunner.run(executableURL: executableURL, arguments: arguments)
 
             // Clean up temp directory
             try? fileManager.removeItem(atPath: tempDir)
 
-            if process.terminationStatus == 0 {
+            if result.terminationStatus == 0 {
                 logger.debug("Created cloud-init ISO at: \(isoPath)")
                 return true
             } else {
-                let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                logger.warning("Failed to create cloud-init ISO: \(output)")
+                logger.warning("Failed to create cloud-init ISO: \(result.combinedOutput)")
                 return false
             }
         } catch {
