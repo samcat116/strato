@@ -51,6 +51,7 @@ let package = Package(
             name: "StratoAgentTests",
             dependencies: [
                 "StratoAgentCore",
+                .product(name: "StratoShared", package: "shared"),
             ],
             swiftSettings: swiftSettings
         )

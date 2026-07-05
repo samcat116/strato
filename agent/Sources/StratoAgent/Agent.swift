@@ -93,8 +93,19 @@ actor Agent {
     private let messageQueue = SerialTaskQueue()
     private var messageConsumerTask: Task<Void, Never>?
 
-    // Track which hypervisor type is used for each VM
-    private var vmHypervisorMap: [String: HypervisorType] = [:]
+    // Durable, backend-agnostic record of the VMs this agent owns, keyed by vmId.
+    // `managedVMs` are actively managed by this process; `orphanedVMs` were managed
+    // by a previous incarnation — their hypervisor processes may still be running,
+    // so they stay routable to the right backend and their reservations keep
+    // counting against host capacity until they are deleted or re-created. Both
+    // sets are persisted via `manifestStore` so routing survives restarts.
+    private let manifestStore: VMManifestStore
+    private var managedVMs: [String: VMManifestEntry] = [:]
+    private var orphanedVMs: [String: VMManifestEntry] = [:]
+    // Set when a manifest write failed (disk full, permissions); the write is
+    // retried on every heartbeat until it succeeds, so a transient failure only
+    // leaves the on-disk manifest stale for a bounded window.
+    private var manifestPersistFailed = false
 
     private let networkMode: NetworkMode?
     // The networking backend actually selected at startup (config value plus
@@ -164,6 +175,11 @@ actor Agent {
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         self.spiffeConfig = spiffeConfig
         self.stateStore = stateStore
+        self.manifestStore = VMManifestStore(
+            path: (vmStoragePath as NSString).appendingPathComponent("vm-manifest.json"),
+            legacyQEMUManifestPath: (vmStoragePath as NSString).appendingPathComponent("qemu-manifest.json"),
+            logger: logger
+        )
 
         let (stream, continuation) = AsyncStream.makeStream(of: MessageEnvelope.self)
         self.inboundMessages = stream
@@ -179,6 +195,20 @@ actor Agent {
         guard !isRunning else {
             logger.warning("Agent is already running")
             return
+        }
+
+        // Recover the VM manifest from a previous incarnation of this agent. These
+        // VMs are not re-adopted (Option A) — the control plane surfaces them for
+        // attention via reconciliation — but they stay routable to the backend that
+        // owns them and keep reserving capacity until deleted or re-created.
+        let previousManifest = manifestStore.load()
+        if !previousManifest.isEmpty {
+            orphanedVMs = previousManifest
+            logger.warning(
+                "Found \(previousManifest.count) VM(s) managed before restart; their hypervisor processes are now unmanaged but their resources stay reserved",
+                metadata: [
+                    "vmIds": .string(previousManifest.keys.sorted().joined(separator: ","))
+                ])
         }
 
         logger.info("Initializing network service")
@@ -397,8 +427,10 @@ actor Agent {
         }
         svidManager = nil
 
-        // Clear VM hypervisor mapping
-        vmHypervisorMap.removeAll()
+        // Clear the in-memory VM records; the on-disk manifest keeps them for the
+        // next incarnation to recover as orphans.
+        managedVMs.removeAll()
+        orphanedVMs.removeAll()
 
         logger.info("Agent stopped")
 
@@ -845,6 +877,15 @@ actor Agent {
             return
         }
 
+        // Retry a failed manifest write so a transient disk error can't leave the
+        // on-disk manifest permanently behind the in-memory VM records.
+        if manifestPersistFailed {
+            persistManifest()
+            if !manifestPersistFailed {
+                logger.info("VM manifest write recovered on heartbeat retry")
+            }
+        }
+
         let resources = await getAgentResources()
         let runningVMs = await getRunningVMList()
 
@@ -875,6 +916,14 @@ actor Agent {
             let reserved = await service.reservedResources()
             reservedCPU += reserved.vcpus
             reservedMemory += reserved.memoryBytes
+        }
+
+        // VMs orphaned by a restart are not managed by any service, but their
+        // hypervisor processes may still be running — the scheduler must not hand
+        // their capacity to new placements until they are deleted or re-created.
+        for entry in orphanedVMs.values {
+            reservedCPU += entry.spec.cpus
+            reservedMemory += entry.spec.memoryBytes
         }
 
         let availableCPU = max(0, totalCPU - reservedCPU)
@@ -1068,11 +1117,31 @@ extension Agent {
 
     /// Get the hypervisor service for an existing VM
     private func getHypervisorServiceForVM(vmId: String) -> (any HypervisorService)? {
-        guard let hypervisorType = vmHypervisorMap[vmId] else {
-            logger.warning("No hypervisor type recorded for VM, defaulting to QEMU", metadata: ["vmId": .string(vmId)])
-            return hypervisorServices[.qemu]
+        guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId] else {
+            // No silent QEMU fallback: routing a VM to a backend that never created
+            // it can only yield misleading vmNotFound errors (or operate on the
+            // wrong VM). An unknown vmId means this agent has no record of the VM.
+            logger.error(
+                "No hypervisor backend recorded for VM; rejecting operation", metadata: ["vmId": .string(vmId)])
+            return nil
         }
-        return getHypervisorService(for: hypervisorType)
+        return getHypervisorService(for: entry.hypervisorType)
+    }
+
+    /// Persists managed + orphaned VMs to the on-disk manifest so they can be
+    /// detected as orphaned after an agent restart. Orphaned entries are carried
+    /// over (active entries win on ID collision) so a second restart still knows
+    /// about them.
+    ///
+    /// A write failure does not fail the VM operation that triggered it — the
+    /// hypervisor-level change has already happened, so failing the response
+    /// would diverge control-plane state from reality worse than a stale
+    /// manifest does. Instead the failure is flagged and the write retried on
+    /// every heartbeat (each write covers the full VM set, so one success
+    /// heals all missed updates). The stale manifest only matters if the agent
+    /// restarts before a retry succeeds.
+    private func persistManifest() {
+        manifestPersistFailed = !manifestStore.save(orphanedVMs.merging(managedVMs) { _, active in active })
     }
 
     private func handleVMCreate(_ message: VMCreateMessage) async {
@@ -1118,8 +1187,11 @@ extension Agent {
                 spec: message.vmSpec,
                 imageInfo: message.imageInfo
             )
-            // Record the hypervisor type for this VM
-            vmHypervisorMap[vmId] = hypervisorType
+            // Record the owning backend in the durable manifest; a re-created VM
+            // is actively managed again, so any orphan record is dropped.
+            managedVMs[vmId] = VMManifestEntry(hypervisorType: hypervisorType, spec: message.vmSpec)
+            orphanedVMs.removeValue(forKey: vmId)
+            persistManifest()
             await sendSuccess(for: message.requestId, message: "VM created successfully")
             await sendVMLog(
                 vmId: vmId, level: .info, eventType: .statusChange, message: "VM created successfully",
@@ -1290,6 +1362,22 @@ extension Agent {
             vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM deletion",
             operation: "delete")
 
+        // A VM orphaned by an agent restart has no live hypervisor session to tear
+        // down. Deleting it releases its manifest entry and reservation so the
+        // control plane can remove the record; any surviving hypervisor process
+        // must be cleaned up manually (or via Option B re-adoption, #260).
+        if managedVMs[message.vmId] == nil, orphanedVMs.removeValue(forKey: message.vmId) != nil {
+            persistManifest()
+            logger.warning(
+                "Deleted orphaned VM from manifest; any surviving hypervisor process must be cleaned up manually",
+                metadata: ["vmId": .string(message.vmId)])
+            await sendSuccess(for: message.requestId, message: "VM deleted successfully")
+            await sendVMLog(
+                vmId: message.vmId, level: .info, eventType: .operation, message: "VM deleted successfully",
+                operation: "delete")
+            return
+        }
+
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
             await sendVMLog(
@@ -1301,7 +1389,8 @@ extension Agent {
         do {
             try await service.deleteVM(vmId: message.vmId)
             // Clean up the hypervisor mapping
-            vmHypervisorMap.removeValue(forKey: message.vmId)
+            managedVMs.removeValue(forKey: message.vmId)
+            persistManifest()
             await sendSuccess(for: message.requestId, message: "VM deleted successfully")
             await sendVMLog(
                 vmId: message.vmId, level: .info, eventType: .operation, message: "VM deleted successfully",
