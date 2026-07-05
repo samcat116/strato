@@ -282,15 +282,21 @@ extension Application {
         typealias Value = WebAuthnService
     }
 
+    /// The configured WebAuthn service.
+    ///
+    /// Throws rather than calling `fatalError` if accessed before
+    /// `configureWebAuthn` installed it: this getter is reachable from the
+    /// registration and authentication request paths, so a missing service should
+    /// surface as a request error rather than crash the process.
     var webAuthn: WebAuthnService {
-        get {
+        get throws {
             guard let service = self.storage[WebAuthnServiceKey.self] else {
-                fatalError("WebAuthnService not configured. Call app.webAuthn.initialize() in configure.swift")
+                throw Abort(
+                    .internalServerError,
+                    reason: "WebAuthnService not configured. Call app.configureWebAuthn(...) in configure.swift"
+                )
             }
             return service
-        }
-        set {
-            self.storage[WebAuthnServiceKey.self] = newValue
         }
     }
 
@@ -299,7 +305,7 @@ extension Application {
         relyingPartyName: String,
         relyingPartyOrigin: String
     ) {
-        self.webAuthn = WebAuthnService(
+        self.storage[WebAuthnServiceKey.self] = WebAuthnService(
             relyingPartyID: relyingPartyID,
             relyingPartyName: relyingPartyName,
             relyingPartyOrigin: relyingPartyOrigin
@@ -309,7 +315,7 @@ extension Application {
 
 extension Request {
     var webAuthn: WebAuthnService {
-        return self.application.webAuthn
+        get throws { try self.application.webAuthn }
     }
 }
 

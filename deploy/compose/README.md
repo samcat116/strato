@@ -28,6 +28,11 @@ For a real hostname (WebAuthn then requires HTTPS in front of the proxy):
   (`ghcr.io/samcat116/strato-*`). Database migrations run automatically at
   startup. Pin a version with `STRATO_VERSION` in `.env`.
 - **nginx proxy** — the only service with a published port.
+- **Image storage** — downloaded base images are written to the
+  `image_storage` volume (`IMAGE_STORAGE_PATH`). A one-shot
+  `image-storage-init` service chowns the volume to the non-root control-plane
+  user on each `up` so imports can write to it. Agents fetch images via
+  `CONTROL_PLANE_URL`, which setup.sh points at the proxy origin.
 
 ## Adding a hypervisor
 

@@ -99,6 +99,18 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # One-shot: make the image-storage volume writable by the non-root user the
+  # control plane runs as. A fresh named volume is owned by root, but the
+  # control-plane image runs as the system `vapor` user (uid 999), so without
+  # this it can't write downloaded base images and URL imports fail with a
+  # permission error. Runs on every `up`; the chown is idempotent.
+  image-storage-init:
+    image: alpine
+    command: ["chown", "-R", "999:999", "/images"]
+    volumes:
+      - image_storage:/images
+    restart: "no"
+
   control-plane:
     image: ghcr.io/samcat116/strato-control-plane:${STRATO_VERSION:-latest}
     # To run from source instead of the published image, comment out `image:`
@@ -125,10 +137,20 @@ services:
       # proxy (setup.sh sets this from the origin scheme). Defaults off so a
       # plaintext http:// deploy doesn't set a Secure cookie the browser drops.
       HTTP_TLS_ENABLED: ${HTTP_TLS_ENABLED:-false}
+      # Base URL agents use to fetch signed image-download links. Must route to
+      # the control plane from the agent's network — i.e. the published proxy
+      # origin, NOT the in-container :8080 (which only exists on the internal
+      # network). Set to the browser origin by setup.sh.
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL}
+      # Where the control plane writes downloaded base images. Backed by the
+      # image_storage volume, made vapor-writable by image-storage-init.
+      IMAGE_STORAGE_PATH: /app/images
       LOG_LEVEL: ${LOG_LEVEL:-info}
       OTEL_METRICS_ENABLED: "false"
       OTEL_LOGS_ENABLED: "false"
       OTEL_TRACES_ENABLED: "false"
+    volumes:
+      - image_storage:/app/images
     depends_on:
       db:
         condition: service_healthy
@@ -138,6 +160,8 @@ services:
         condition: service_completed_successfully
       valkey:
         condition: service_healthy
+      image-storage-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   frontend:
@@ -166,3 +190,4 @@ services:
 volumes:
   postgres_data:
   valkey_data:
+  image_storage:

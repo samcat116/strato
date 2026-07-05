@@ -183,7 +183,7 @@ actor WebSocketClient {
                     }
 
                     do {
-                        let envelope = try JSONDecoder().decode(MessageEnvelope.self, from: data)
+                        let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
                         loggerRef.info("Received message from control plane", metadata: [
                             "type": .string(envelope.type.rawValue)
                         ])
@@ -212,7 +212,7 @@ actor WebSocketClient {
                     }
 
                     do {
-                        let envelope = try JSONDecoder().decode(MessageEnvelope.self, from: data)
+                        let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
                         loggerRef.info("Received message from control plane", metadata: [
                             "type": .string(envelope.type.rawValue)
                         ])
@@ -293,7 +293,7 @@ actor WebSocketClient {
 
         // Encode message to JSON
         let envelope = try MessageEnvelope(message: message)
-        let data = try JSONEncoder().encode(envelope)
+        let data = try WireProtocol.makeEncoder().encode(envelope)
 
         guard let jsonString = String(data: data, encoding: .utf8) else {
             throw WebSocketClientError.encodingError("Failed to convert message to UTF-8")

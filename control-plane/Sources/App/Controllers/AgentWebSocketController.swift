@@ -306,12 +306,20 @@ struct AgentWebSocketController: RouteCollection {
         }
 
         do {
-            let envelope = try JSONDecoder().decode(MessageEnvelope.self, from: data)
+            let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
             req.logger.info("Decoded message envelope", metadata: ["type": .string("\(envelope.type)"), "agentName": .string(agentName)])
 
             switch envelope.type {
             case .agentRegister:
                 let message = try envelope.decode(as: AgentRegisterMessage.self)
+                let agentProtocolVersion = message.protocolVersion ?? 0
+                if agentProtocolVersion != WireProtocol.currentVersion {
+                    req.logger.warning("Agent wire protocol version differs from control plane", metadata: [
+                        "agentName": .string(agentName),
+                        "agentProtocolVersion": .stringConvertible(agentProtocolVersion),
+                        "controlPlaneProtocolVersion": .stringConvertible(WireProtocol.currentVersion)
+                    ])
+                }
                 let isTokenAuthenticated = req.headers.bearerAuthorization != nil
                 Task {
                     do {
@@ -473,7 +481,7 @@ struct AgentWebSocketController: RouteCollection {
     private func sendMessage<T: WebSocketMessage>(ws: WebSocket, message: T, logger: Logger) {
         do {
             let envelope = try MessageEnvelope(message: message)
-            let data = try JSONEncoder().encode(envelope)
+            let data = try WireProtocol.makeEncoder().encode(envelope)
             ws.send(data)
         } catch {
             Telemetry.agentSendFailed(kind: "message")
@@ -485,7 +493,7 @@ struct AgentWebSocketController: RouteCollection {
         do {
             let response = SuccessMessage(requestId: requestId, message: message)
             let envelope = try MessageEnvelope(message: response)
-            let data = try JSONEncoder().encode(envelope)
+            let data = try WireProtocol.makeEncoder().encode(envelope)
             ws.send(data)
         } catch {
             Telemetry.agentSendFailed(kind: "success")
@@ -500,7 +508,7 @@ struct AgentWebSocketController: RouteCollection {
         do {
             let response = ErrorMessage(requestId: requestId, error: error, code: code)
             let envelope = try MessageEnvelope(message: response)
-            let data = try JSONEncoder().encode(envelope)
+            let data = try WireProtocol.makeEncoder().encode(envelope)
             ws.send(data)
         } catch {
             Telemetry.agentSendFailed(kind: "error")

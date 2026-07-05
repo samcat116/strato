@@ -1,19 +1,20 @@
 import Foundation
 import StratoShared
 
-// The wire protocol uses plain JSONEncoder()/JSONDecoder() on both sides
-// (see MessageEnvelope); tests must use the same defaults so they exercise
-// the real contract.
+// The wire protocol routes every message through WireProtocol.makeEncoder()/
+// makeDecoder() on both sides (see MessageEnvelope); tests must use the same
+// coders so they exercise the real contract — including the pinned date
+// strategy and its tolerant decode.
 func encodeJSON<T: Encodable>(_ value: T) throws -> Data {
-    try JSONEncoder().encode(value)
+    try WireProtocol.makeEncoder().encode(value)
 }
 
 func decodeJSON<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
-    try JSONDecoder().decode(type, from: data)
+    try WireProtocol.makeDecoder().decode(type, from: data)
 }
 
 func decodeJSON<T: Decodable>(_ type: T.Type, from json: String) throws -> T {
-    try JSONDecoder().decode(type, from: Data(json.utf8))
+    try WireProtocol.makeDecoder().decode(type, from: Data(json.utf8))
 }
 
 /// Encode a value and decode it back with the protocol's default coders.

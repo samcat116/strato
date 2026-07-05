@@ -87,7 +87,7 @@ extension MessageEnvelope {
 
     /// Compute the serial lanes for a frame of `type` with the given raw JSON `payload`.
     static func serializationKeys(type: MessageType, payload: Data) -> [String] {
-        let fields = try? JSONDecoder().decode(RoutingFields.self, from: payload)
+        let fields = try? WireProtocol.makeDecoder().decode(RoutingFields.self, from: payload)
 
         let raws: [String?]
         switch type {
