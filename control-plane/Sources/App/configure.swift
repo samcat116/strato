@@ -234,6 +234,9 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(MigrateVMNetworkConfigToInterfaces())
     app.migrations.add(RemoveLegacyVMNetworkFields())
 
+    // Async VM operations (issue #259)
+    app.migrations.add(CreateVMOperation())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen

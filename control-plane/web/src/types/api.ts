@@ -289,6 +289,29 @@ export interface UpdateVMRequest {
   description?: string;
 }
 
+// Async VM operations: lifecycle mutations return 202 Accepted with an
+// Operation record, which the client polls until it reaches a terminal state.
+export type OperationKind =
+  | "create"
+  | "boot"
+  | "shutdown"
+  | "reboot"
+  | "pause"
+  | "resume"
+  | "delete";
+
+export type OperationStatus = "pending" | "succeeded" | "failed";
+
+export interface Operation {
+  id: string;
+  vmId: string;
+  kind: OperationKind;
+  status: OperationStatus;
+  error?: string | null;
+  createdAt?: string | null;
+  completedAt?: string | null;
+}
+
 export interface CreateOrganizationRequest {
   name: string;
   description?: string;

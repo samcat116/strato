@@ -10,6 +10,7 @@ func routes(_ app: Application) throws {
     try app.register(collection: HealthController())
     try app.register(collection: UserController())
     try app.register(collection: VMController())
+    try app.register(collection: OperationController())
     try app.register(collection: OrganizationController())
     try app.register(collection: APIKeyController())
     try app.register(collection: APIDocumentationController())

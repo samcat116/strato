@@ -441,8 +441,9 @@ actor AgentService {
                     // Check for stale agents
                     await checkStaleAgents()
 
-                    // Move VMs stuck in a transitional state to error
-                    await sweepStuckTransitionalVMs()
+                    // Fail operations stuck pending past their budget and resolve
+                    // VMs stuck in a transitional state
+                    await sweepStuckOperations()
                 } catch {
                     if !Task.isCancelled {
                         app.logger.error("Error in heartbeat monitoring task: \(error)")
@@ -532,31 +533,85 @@ actor AgentService {
         }
     }
 
-    /// Moves VMs that have been stuck in a transitional state (.starting/.stopping)
-    /// longer than the timeout to `.error`. This catches operations whose terminal
-    /// confirmation never arrived — e.g. the agent crashed mid-boot, or the
-    /// statusUpdate message was lost.
-    private func sweepStuckTransitionalVMs() async {
+    /// Fails operations stuck `pending` past their per-kind budget and resolves the
+    /// affected VM's in-flight status (issue #259). This is the restart backstop:
+    /// while the dispatching process lives, the awaited agent response (or its
+    /// timeout) completes the operation; after a crash, only this sweep does.
+    /// It also broadens the old stuck-VM sweep — transitional VMs with no pending
+    /// operation (e.g. a lost statusUpdate after a completed operation) still
+    /// resolve to `.error`.
+    ///
+    /// Internal rather than private so tests can drive a pass directly.
+    func sweepStuckOperations() async {
         // Cluster-singleton: with multiple replicas, only one may sweep per interval.
-        guard await app.coordination.acquireSweepLock("stuck_vms") else {
-            app.logger.debug("Skipping stuck-VM sweep; lock held by another control-plane instance")
+        guard await app.coordination.acquireSweepLock("stuck_operations") else {
+            app.logger.debug("Skipping stuck-operation sweep; lock held by another control-plane instance")
             return
         }
 
         let db = app.db
-        let timeout: TimeInterval = 120  // a VM may legitimately be transitional this long
         let now = Date()
 
         do {
+            let pending = try await VMOperation.query(on: db)
+                .filter(\.$status == .pending)
+                .all()
+
+            for operation in pending {
+                // A missing creation timestamp yields age 0 and is left for a
+                // later sweep (it is set on insert, so this is a safety net).
+                let age = now.timeIntervalSince(operation.createdAt ?? now)
+                let budget = operation.kind.completionBudgetSeconds
+                guard age > budget else { continue }
+
+                guard
+                    try await operation.completeIfPending(
+                        as: .failed,
+                        error: "Operation timed out: no completion after \(Int(budget))s",
+                        on: db
+                    )
+                else { continue }
+
+                // Resolve the VM state the operation left in flight. `.created`
+                // only counts as stuck for a create — for every other kind it is
+                // a legitimate resting state.
+                if let vm = try await VM.find(operation.vmID, on: db),
+                    vm.status.isTransitional || (operation.kind == .create && vm.status == .created)
+                {
+                    vm.setStatus(.error)
+                    try await vm.save(on: db)
+                    Telemetry.vmEnteredError(reason: "stuck_operation")
+                }
+
+                app.logger.warning(
+                    "Operation stuck pending past budget; marking as failed",
+                    metadata: [
+                        "operationId": .string(operation.id?.uuidString ?? ""),
+                        "vmId": .string(operation.vmID.uuidString),
+                        "kind": .string(operation.kind.rawValue),
+                        "budgetSeconds": .string("\(Int(budget))"),
+                    ])
+            }
+
+            // Transitional VMs with no pending operation: the operation completed
+            // (or predates the operations table) but the confirming statusUpdate
+            // never landed. Same 120s timeout as the old stuck-VM sweep.
+            let timeout: TimeInterval = 120
             let transitional = try await VM.query(on: db)
                 .filter(\.$status ~~ [.starting, .stopping])
                 .all()
 
             for vm in transitional {
-                // Fall back to updatedAt, then now, if the timestamp is somehow missing
-                // (a missing timestamp yields age 0 and is left for the next sweep).
                 let changedAt = vm.statusChangedAt ?? vm.updatedAt ?? now
-                guard now.timeIntervalSince(changedAt) > timeout else { continue }
+                guard now.timeIntervalSince(changedAt) > timeout, let vmID = vm.id else { continue }
+
+                let hasPendingOperation =
+                    try await VMOperation.query(on: db)
+                        .filter(\.$vmID == vmID)
+                        .filter(\.$status == .pending)
+                        .count() > 0
+                // A pending operation owns this VM's resolution via its own budget.
+                guard !hasPendingOperation else { continue }
 
                 let previous = vm.status
                 vm.setStatus(.error)
@@ -566,28 +621,38 @@ actor AgentService {
                 app.logger.warning(
                     "VM stuck in transitional state past timeout; marking as error",
                     metadata: [
-                        "vmId": .string(vm.id?.uuidString ?? ""),
+                        "vmId": .string(vmID.uuidString),
                         "stuckStatus": .string(previous.rawValue),
                         "timeoutSeconds": .string("\(Int(timeout))"),
                     ])
             }
         } catch {
-            app.logger.error("Stuck-VM sweep failed: \(error)")
+            app.logger.error("Stuck-operation sweep failed: \(error)")
         }
     }
 
     // MARK: - VM Operations
 
-    /// Creates a VM on an agent selected by the scheduler
+    /// Creates a VM on an agent selected by the scheduler and awaits the agent's
+    /// correlated success/error response (the agent replies only once the create —
+    /// including any image download — has finished or failed, so `responseTimeout`
+    /// must be the operation's full completion budget, not a dispatch timeout).
+    /// The caller records the returned verdict on the VM's `create` operation.
     /// - Parameters:
     ///   - vm: The VM to create
     ///   - vmSpec: Hypervisor-neutral VM specification
     ///   - db: Database connection
     ///   - strategy: Optional scheduling strategy override
     ///   - image: Optional image for image-based VM creation (will generate signed download URL)
-    func createVM(vm: VM, vmSpec: VMSpec, db: Database, strategy: SchedulingStrategy? = nil, image: Image? = nil)
-        async throws
-    {
+    ///   - responseTimeout: How long to wait for the agent's completion response
+    func createVM(
+        vm: VM,
+        vmSpec: VMSpec,
+        db: Database,
+        strategy: SchedulingStrategy? = nil,
+        image: Image? = nil,
+        responseTimeout: Duration = VMOperationKind.create.completionBudget
+    ) async throws -> AgentServiceResponse {
         // Convert agents to schedulable format
         let schedulableAgents = getSchedulableAgents()
         let vmId = vm.id?.uuidString ?? ""
@@ -645,29 +710,47 @@ actor AgentService {
                 imageInfo: imageInfo
             )
 
-            try await sendMessageToAgent(message, agentId: agentId)
+            // Persist the placement before dispatching, so a control-plane
+            // restart mid-create still knows which agent owns the VM (the
+            // stuck-operation sweep and a later retry both rely on it).
+            vmToAgentMapping[vmId] = agentId
+            vm.hypervisorId = agentId
+            try await vm.save(on: db)
+
+            app.logger.info(
+                "VM creation dispatched",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "agentId": .string(agentId),
+                    "hasImageInfo": .string(imageInfo != nil ? "yes" : "no"),
+                ])
+
+            let response = try await sendMessageToAgentWithResponse(
+                message, agentId: agentId, timeout: responseTimeout)
+
+            if case .error = response {
+                // The agent reported the create failed: nothing will ever show up
+                // in its resource reports, so release the reservation now instead
+                // of pinning capacity until the TTL.
+                await app.coordination.releaseReservation(agentId: agentId, vmId: vmId)
+            }
+            return response
         } catch {
             await app.coordination.releaseReservation(agentId: agentId, vmId: vmId)
             throw error
         }
-
-        // Map VM to agent (in-memory)
-        vmToAgentMapping[vm.id?.uuidString ?? ""] = agentId
-
-        // Persist hypervisor assignment to database
-        vm.hypervisorId = agentId
-        try await vm.save(on: db)
-
-        app.logger.info(
-            "VM creation requested",
-            metadata: [
-                "vmId": .string(vm.id?.uuidString ?? ""),
-                "agentId": .string(agentId),
-                "hasImageInfo": .string(imageInfo != nil ? "yes" : "no"),
-            ])
     }
 
-    func performVMOperation(_ operation: MessageType, vmId: String) async throws {
+    /// Dispatch a VM lifecycle operation and await the agent's correlated
+    /// success/error response. The agent replies only after the operation ran
+    /// on the hypervisor, so `timeout` should be the operation kind's full
+    /// completion budget. Callers record the verdict on the operation row
+    /// (issue #259) — this method no longer gates any HTTP response.
+    func performVMOperationAwaitingResponse(
+        _ operation: MessageType,
+        vmId: String,
+        timeout: Duration
+    ) async throws -> AgentServiceResponse {
         guard let agentId = vmToAgentMapping[vmId] else {
             throw AgentServiceError.vmNotMapped(vmId)
         }
@@ -677,15 +760,16 @@ actor AgentService {
         }
 
         let message = VMOperationMessage(type: operation, vmId: vmId)
-        try await sendMessageToAgent(message, agentId: agentId)
 
         app.logger.info(
-            "VM operation requested",
+            "VM operation dispatched",
             metadata: [
                 "operation": .string(operation.rawValue),
                 "vmId": .string(vmId),
                 "agentId": .string(agentId),
             ])
+
+        return try await sendMessageToAgentWithResponse(message, agentId: agentId, timeout: timeout)
     }
 
     func getVMInfo(vmId: String) async throws -> VmInfo {

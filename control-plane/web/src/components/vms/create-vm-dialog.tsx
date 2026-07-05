@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { vmsApi } from "@/lib/api/vms";
 import { useImages } from "@/lib/hooks/use-images";
+import { useOperationsStore } from "@/lib/stores/operations-store";
 import { useProjectContext } from "@/providers";
 import { toast } from "sonner";
 
@@ -32,6 +33,7 @@ export function CreateVMDialog({
   onOpenChange,
   onCreated,
 }: CreateVMDialogProps) {
+  const watch = useOperationsStore((state) => state.watch);
   const [isLoading, setIsLoading] = useState(false);
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [sourceType, setSourceType] = useState<SourceType>("image");
@@ -97,7 +99,9 @@ export function CreateVMDialog({
     setQuotaError(null);
     try {
       const GB = 1024 * 1024 * 1024; // 1 GB in bytes
-      await vmsApi.create({
+      // Creation is asynchronous: the server accepts the request and returns an
+      // operation, which the OperationWatcher polls and reports on completion.
+      const operation = await vmsApi.create({
         name: formData.name,
         description: formData.description || undefined,
         projectId,
@@ -108,7 +112,8 @@ export function CreateVMDialog({
         memory: (parseInt(formData.memory) || 4) * GB,
         disk: (parseInt(formData.disk) || 50) * GB,
       });
-      toast.success(`VM "${formData.name}" created successfully`);
+      watch(operation, formData.name);
+      toast.success(`Creating VM "${formData.name}"`);
       onOpenChange(false);
       onCreated?.();
       // Reset form

@@ -103,7 +103,7 @@ export default function VMDetailPage() {
           </Link>
           <div className="flex items-center gap-3">
             <h2 className="text-2xl font-semibold text-gray-100">{vm.name}</h2>
-            <VMStatusBadge status={vm.status} />
+            <VMStatusBadge status={vm.status} vmId={vm.id} />
           </div>
           {vm.description && (
             <p className="text-gray-400 mt-1">{vm.description}</p>

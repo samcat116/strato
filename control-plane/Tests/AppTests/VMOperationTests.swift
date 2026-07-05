@@ -1,0 +1,275 @@
+import Testing
+import Vapor
+import Fluent
+import VaporTesting
+import StratoShared
+@testable import App
+
+/// Tests for asynchronous VM operations (issue #259): mutation endpoints return
+/// `202 Accepted` with an operation record, agent failures land on the operation
+/// instead of vanishing, conflicting mutations are rejected with `409`, and the
+/// stuck-operation sweep resolves operations that survive a process restart.
+@Suite("VM Operation Tests", .serialized)
+final class VMOperationTests {
+
+    /// Boots a configured test app with a non-admin user, org, project and one VM.
+    /// Mirrors the harness in `VMAuthorizationTests` so requests traverse the full
+    /// middleware stack (mock SpiceDB, API-key auth).
+    private func withVMTestApp(
+        _ test: (Application, User, VM, String) async throws -> Void
+    ) async throws {
+        let app = try await Application.makeForTesting()
+
+        do {
+            try await configure(app)
+            try await app.autoMigrate()
+
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(
+                username: "vmopuser",
+                email: "vmop@example.com",
+                displayName: "VM Op User",
+                isSystemAdmin: false
+            )
+            let org = try await builder.createOrganization(name: "VM Op Org")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+            user.currentOrganizationId = org.id
+            try await user.save(on: app.db)
+
+            let project = try await builder.createProject(
+                name: "VM Op Project",
+                description: "Project for VM operation tests",
+                organization: org
+            )
+            let vm = try await builder.createVM(name: "op-vm", project: project)
+            let token = try await user.generateAPIKey(on: app.db)
+
+            try await test(app, user, vm, token)
+
+            try await app.autoRevert()
+        } catch {
+            try? await app.autoRevert()
+            try await app.asyncShutdown()
+            app.cleanupTestDatabase()
+            throw error
+        }
+
+        try await app.asyncShutdown()
+        app.cleanupTestDatabase()
+    }
+
+    /// Waits for the background dispatch task to resolve the VM to `expected`.
+    /// The operation is completed before the VM status is written, so once the
+    /// VM matches, the operation is guaranteed terminal.
+    private func pollVMStatus(
+        _ vmID: UUID, until expected: VMStatus, on db: any Database
+    ) async throws {
+        for _ in 0..<100 {
+            if let vm = try await VM.find(vmID, on: db), vm.status == expected {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        Issue.record("VM \(vmID) never reached status \(expected.rawValue)")
+    }
+
+    // MARK: - 202 + async failure recording
+
+    @Test("POST /api/vms/:id/start returns 202 and records the dispatch failure on the operation")
+    func startReturnsAcceptedAndFailsWithoutAgent() async throws {
+        try await withVMTestApp { app, _, vm, token in
+            var operationId: UUID?
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.kind == .boot)
+                #expect(operation.status == .pending)
+                #expect(operation.vmId == vm.id)
+                operationId = operation.id
+            }
+
+            // No agent is mapped to the VM, so the background dispatch fails
+            // immediately: the operation must record it and the VM must be
+            // restored to its pre-operation status (not left `.starting`).
+            try await pollVMStatus(vm.id!, until: .created, on: app.db)
+
+            let operation = try await VMOperation.find(operationId, on: app.db)
+            #expect(operation?.status == .failed)
+            #expect(operation?.error?.isEmpty == false)
+            #expect(operation?.completedAt != nil)
+        }
+    }
+
+    // MARK: - Conflict guard
+
+    @Test("A pending operation on the VM rejects a new mutation with 409")
+    func conflictingPendingOperationRejected() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            let pending = VMOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
+            try await pending.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            // The rejected mutation must not have touched the VM.
+            let refreshed = try await VM.find(vm.id, on: app.db)
+            #expect(refreshed?.status == .created)
+        }
+    }
+
+    // MARK: - Stuck-operation sweep (restart safety)
+
+    @Test("The sweep fails a pending operation past its budget and resolves the VM")
+    func sweepFailsStuckOperationAndResolvesVM() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            // Simulate a boot whose dispatching process died: pending operation,
+            // VM stuck `.starting`, and no completion path left but the sweep.
+            vm.setStatus(.starting, at: Date().addingTimeInterval(-400))
+            try await vm.save(on: app.db)
+
+            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            try await operation.save(on: app.db)
+            operation.createdAt = Date().addingTimeInterval(-400)  // past the 180s boot budget
+            try await operation.save(on: app.db)
+
+            await app.agentService.sweepStuckOperations()
+
+            let swept = try await VMOperation.find(operation.id, on: app.db)
+            #expect(swept?.status == .failed)
+            #expect(swept?.error?.contains("timed out") == true)
+            #expect(swept?.completedAt != nil)
+
+            let sweptVM = try await VM.find(vm.id, on: app.db)
+            #expect(sweptVM?.status == .error)
+        }
+    }
+
+    @Test("The sweep fails a stuck create and marks the .created VM as error")
+    func sweepFailsStuckCreate() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .create)
+            try await operation.save(on: app.db)
+            operation.createdAt = Date().addingTimeInterval(-700)  // past the 600s create budget
+            try await operation.save(on: app.db)
+
+            await app.agentService.sweepStuckOperations()
+
+            let swept = try await VMOperation.find(operation.id, on: app.db)
+            #expect(swept?.status == .failed)
+
+            // `.created` counts as stuck for a create operation specifically.
+            let sweptVM = try await VM.find(vm.id, on: app.db)
+            #expect(sweptVM?.status == .error)
+        }
+    }
+
+    @Test("The sweep leaves fresh pending operations and their VMs alone")
+    func sweepIgnoresFreshOperations() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            vm.setStatus(.starting)
+            try await vm.save(on: app.db)
+
+            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            try await operation.save(on: app.db)
+
+            await app.agentService.sweepStuckOperations()
+
+            let fresh = try await VMOperation.find(operation.id, on: app.db)
+            #expect(fresh?.status == .pending)
+
+            let freshVM = try await VM.find(vm.id, on: app.db)
+            #expect(freshVM?.status == .starting)
+        }
+    }
+
+    // MARK: - Operation read API authorization
+
+    @Test("GET /api/operations/:id follows the VM's read permission")
+    func operationReadFollowsVMPermission() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            try await operation.save(on: app.db)
+
+            app.spicedbMockAllows = true
+            try await app.test(.GET, "/api/operations/\(operation.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let body = try res.content.decode(OperationResponse.self)
+                #expect(body.id == operation.id)
+                #expect(body.vmId == vm.id)
+            }
+
+            app.spicedbMockAllows = false
+            try await app.test(.GET, "/api/operations/\(operation.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+        }
+    }
+
+    @Test("An operation whose VM is gone is visible to its initiator only")
+    func operationForDeletedVMVisibleToInitiatorOnly() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .delete)
+            operation.status = .succeeded
+            try await operation.save(on: app.db)
+
+            // Remove the VM row directly, as a completed delete would.
+            try await vm.delete(on: app.db)
+
+            try await app.test(.GET, "/api/operations/\(operation.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            // A different (non-admin) user cannot see it — 404, not 403, so the
+            // operation's existence is not leaked.
+            let builder = TestDataBuilder(db: app.db)
+            let other = try await builder.createUser(
+                username: "othervmopuser",
+                email: "othervmop@example.com",
+                displayName: "Other User"
+            )
+            let otherToken = try await other.generateAPIKey(on: app.db)
+
+            try await app.test(.GET, "/api/operations/\(operation.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: otherToken)
+            } afterResponse: { res in
+                #expect(res.status == .notFound)
+            }
+        }
+    }
+
+    @Test("GET /api/vms/:id/operations lists newest first and honors limit")
+    func listOperationsNewestFirst() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            let older = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            older.status = .succeeded
+            try await older.save(on: app.db)
+            older.createdAt = Date().addingTimeInterval(-60)
+            try await older.save(on: app.db)
+
+            let newer = VMOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
+            newer.status = .succeeded
+            try await newer.save(on: app.db)
+
+            try await app.test(.GET, "/api/vms/\(vm.id!)/operations?limit=1") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let operations = try res.content.decode([OperationResponse].self)
+                #expect(operations.count == 1)
+                #expect(operations.first?.id == newer.id)
+            }
+        }
+    }
+}

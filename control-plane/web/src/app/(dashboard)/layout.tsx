@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Header, Sidebar } from "@/components/layout";
-import { CreateVMDialog } from "@/components/vms";
+import { CreateVMDialog, OperationWatcher } from "@/components/vms";
 import { CreateTokenDialog } from "@/components/agents";
 import { useAuth } from "@/providers";
 import { useInvalidateVMs } from "@/lib/hooks";
@@ -39,6 +39,8 @@ export default function DashboardLayout({
 
   return (
     <div className="min-h-screen flex flex-col">
+      {/* Polls in-flight VM operations to completion across page navigations */}
+      <OperationWatcher />
       <Header />
       <div className="flex flex-1 h-[calc(100vh-4rem)]">
         <Sidebar

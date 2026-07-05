@@ -1,5 +1,8 @@
+"use client";
+
 import { Badge } from "@/components/ui/badge";
-import type { VMStatus } from "@/types/api";
+import { usePendingOperation } from "@/lib/stores/operations-store";
+import type { VMStatus, OperationKind } from "@/types/api";
 
 const statusConfig: Record<
   VMStatus,
@@ -40,7 +43,39 @@ const statusConfig: Record<
   },
 };
 
-export function VMStatusBadge({ status }: { status: VMStatus }) {
+// Labels for VM states that only exist as an in-flight operation (the server
+// keeps the VM's resting status until the agent confirms).
+const pendingOperationLabels: Record<OperationKind, string> = {
+  create: "Creating",
+  boot: "Starting",
+  shutdown: "Stopping",
+  reboot: "Restarting",
+  pause: "Pausing",
+  resume: "Resuming",
+  delete: "Deleting",
+};
+
+export function VMStatusBadge({
+  status,
+  vmId,
+}: {
+  status: VMStatus;
+  /** When provided, an in-flight operation on this VM overrides the status label. */
+  vmId?: string;
+}) {
+  const pendingOperation = usePendingOperation(vmId);
+
+  if (pendingOperation) {
+    return (
+      <Badge
+        variant="outline"
+        className="bg-blue-500/20 text-blue-400 border-blue-500/30 animate-pulse"
+      >
+        {pendingOperationLabels[pendingOperation.kind]}
+      </Badge>
+    );
+  }
+
   const config = statusConfig[status] || statusConfig.Unknown;
 
   return (
