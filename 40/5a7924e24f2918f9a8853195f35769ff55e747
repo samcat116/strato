@@ -1,0 +1,22 @@
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_bd516ccae91710::t_cf6c1b8421df6b 265-267,272-283
+  s_bd516ccae91710::t_4fcecdc4c9da45 284
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_bd516ccae91710::t_2910761da2167f 327-361
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "405a7924e24f2918f9a8853195f35769ff55e747",
+  "prompts": {},
+  "sessions": {
+    "s_bd516ccae91710": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "44061ba0-985d-4af7-89df-9953978662e0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
