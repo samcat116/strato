@@ -68,6 +68,8 @@ services:
       DATABASE_NAME: vapor_database
       DATABASE_USERNAME: vapor_username
       DATABASE_PASSWORD: vapor_password
+      # DB lives on the private Docker network; plaintext is fine locally.
+      DATABASE_TLS: disable
       SPICEDB_ENDPOINT: http://spicedb:8080
       SPICEDB_PRESHARED_KEY: strato-dev-key
       # In-memory SpiceDB starts with no schema; the control plane loads this

@@ -124,6 +124,10 @@ services:
       DATABASE_NAME: vapor_database
       DATABASE_USERNAME: vapor_username
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      # Postgres runs in this compose network and never leaves the host, so
+      # plaintext is acceptable. Override with DATABASE_TLS=require (and
+      # DATABASE_TLS_CA_CERT_PATH) if you point this at an external database.
+      DATABASE_TLS: ${DATABASE_TLS:-disable}
       SPICEDB_ENDPOINT: http://spicedb:8080
       SPICEDB_PRESHARED_KEY: ${SPICEDB_PRESHARED_KEY}
       VALKEY_HOST: valkey

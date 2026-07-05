@@ -135,6 +135,16 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.databaseSecretName" . }}"
                   key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
+            # Encrypt the Postgres connection (issue #56). Defaults to `require`;
+            # set strato.database.tls=disable for an in-cluster DB on a trusted
+            # network. When a CA bundle is supplied it's mounted below and its
+            # path handed to the control plane for server-cert verification.
+            - name: DATABASE_TLS
+              value: "{{ .Values.strato.database.tls | default "require" }}"
+            {{- if .Values.strato.database.tlsCACert }}
+            - name: DATABASE_TLS_CA_CERT_PATH
+              value: "/etc/strato/db-tls/ca.crt"
+            {{- end }}
             {{- if .Values.spicedb.enabled }}
             - name: SPICEDB_ENDPOINT
               value: "http://{{ include "strato-control-plane.spicedb.fullname" . }}:{{ .Values.spicedb.service.httpPort }}"
@@ -241,10 +251,17 @@ spec:
             successThreshold: {{ .Values.readinessProbe.successThreshold | default 1 }}
             failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
           {{- end }}
+          {{- if .Values.strato.database.tlsCACert }}
+          volumeMounts:
+            - name: db-tls-ca
+              mountPath: /etc/strato/db-tls
+              readOnly: true
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
+      {{- if or (and .Values.spire.enabled .Values.spire.envoy.enabled) .Values.strato.database.tlsCACert }}
       volumes:
+        {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
         - name: envoy-config
           configMap:
             name: {{ include "strato-control-plane.fullname" . }}-envoy-sidecar
@@ -252,6 +269,12 @@ spec:
           hostPath:
             path: {{ .Values.spire.envoy.spireAgentSocketDir }}
             type: DirectoryOrCreate
+        {{- end }}
+        {{- if .Values.strato.database.tlsCACert }}
+        - name: db-tls-ca
+          secret:
+            secretName: {{ include "strato-control-plane.fullname" . }}-db-tls-ca
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

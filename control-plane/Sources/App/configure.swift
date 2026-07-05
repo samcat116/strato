@@ -151,6 +151,10 @@ public func configure(_ app: Application) async throws {
         // Testing environment already configured with in-memory SQLite in test setup
         // Skip database configuration here
     } else {
+        // TLS mode is configurable via DATABASE_TLS (disable|prefer|require) and
+        // defaults to `require` outside development, so credentials and data are
+        // encrypted whenever Postgres is remote. See issue #56.
+        let databaseTLS = try makeDatabaseTLS(for: app.environment, logger: app.logger)
         app.databases.use(
             DatabaseConfigurationFactory.postgres(
                 configuration: .init(
@@ -160,7 +164,7 @@ public func configure(_ app: Application) async throws {
                     username: Environment.get("DATABASE_USERNAME") ?? "vapor_username",
                     password: Environment.get("DATABASE_PASSWORD") ?? "vapor_password",
                     database: Environment.get("DATABASE_NAME") ?? "vapor_database",
-                    tls: .disable)
+                    tls: databaseTLS)
             ), as: .psql)
     }
 
