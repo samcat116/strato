@@ -97,6 +97,11 @@ public func configure(_ app: Application) async throws {
         ])
     }
 
+    // Enforce the scopes attached to an API key. Must run after the bearer
+    // authenticator above (which populates request.apiKey) so it can see the
+    // key; a no-op for session-authenticated requests (issue #173).
+    app.middleware.use(APIKeyScopeMiddleware())
+
     // Configure WebAuthn
     let relyingPartyID = Environment.get("WEBAUTHN_RELYING_PARTY_ID") ?? "localhost"
     let relyingPartyName = Environment.get("WEBAUTHN_RELYING_PARTY_NAME") ?? "Strato"
