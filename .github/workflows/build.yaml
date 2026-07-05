@@ -30,8 +30,12 @@ jobs:
       cp_backend: ${{ steps.filter.outputs.cp_backend }}
       agent: ${{ steps.filter.outputs.agent }}
       shared: ${{ steps.filter.outputs.shared }}
+      firecracker: ${{ steps.filter.outputs.firecracker }}
       workflow: ${{ steps.filter.outputs.workflow }}
       code: ${{ steps.filter.outputs.code }}
+      docker_cp: ${{ steps.filter.outputs.docker_cp }}
+      docker_agent: ${{ steps.filter.outputs.docker_agent }}
+      docker_web: ${{ steps.filter.outputs.docker_web }}
     steps:
       - uses: dorny/paths-filter@v3
         id: filter
@@ -54,8 +58,16 @@ jobs:
               - 'agent/**'
             shared:
               - 'shared/**'
+            firecracker:
+              - 'SwiftFirecracker/**'
             workflow:
               - '.github/workflows/build.yaml'
+            docker_cp:
+              - 'control-plane/Dockerfile'
+            docker_agent:
+              - 'agent/Dockerfile'
+            docker_web:
+              - 'control-plane/web/Dockerfile'
             code:
               - '**'
               - '!docs/**'
@@ -94,7 +106,7 @@ jobs:
   test:
     name: Build and Test Swift Packages
     needs: changes
-    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
+    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: self-hosted
     services:
       postgres:
@@ -118,15 +130,23 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Cache Swift packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            control-plane/.build
-            shared/.build
-          key: ${{ runner.os }}-swift-${{ hashFiles('control-plane/Package.resolved', 'shared/Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-swift-
+      # Build state lives in a persistent scratch dir on the self-hosted
+      # runner instead of actions/cache: RUNNER_TOOL_CACHE survives both the
+      # end of the job and checkout's `git clean -ffdx` (it is outside the
+      # repo), so builds are incremental across runs with zero network cost.
+      # The GitHub cache never helped here — PR-scoped saves are unreadable
+      # by sibling PRs and nothing on main saved the key, so every run paid
+      # a ~5 minute 1.4GB upload for a restore that always missed.
+      - name: Prune build scratch dir if oversized
+        run: |
+          scratch="$RUNNER_TOOL_CACHE/strato-swift-build"
+          if [ -d "$scratch" ]; then
+            size_kb=$(du -sk "$scratch" | cut -f1)
+            if [ "$size_kb" -gt $((25 * 1024 * 1024)) ]; then
+              echo "Scratch dir is $((size_kb / 1024 / 1024))GB (>25GB); wiping for a cold rebuild"
+              rm -rf "$scratch"
+            fi
+          fi
 
       - uses: vapor/swiftly-action@v0.2
         with:
@@ -134,15 +154,15 @@ jobs:
 
       - name: Build Shared Package
         working-directory: shared
-        run: swift build --build-tests
+        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared"
 
       - name: Test Shared Package
         working-directory: shared
-        run: swift test --skip-build --parallel
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared"
 
       - name: Build Control Plane
         working-directory: control-plane
-        run: swift build --build-tests
+        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
 
       # Two legs, one build: fast engine-independent coverage on SQLite, then
       # the identical suite against the real engine production uses, validating
@@ -154,7 +174,7 @@ jobs:
         working-directory: control-plane
         env:
           STRATO_TEST_DATABASE: sqlite
-        run: swift test --skip-build --parallel
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
 
       - name: Test Control Plane (Postgres)
         # Run even if the SQLite leg failed, so both engines always report.
@@ -167,7 +187,20 @@ jobs:
           DATABASE_NAME: strato_test
           DATABASE_USERNAME: strato
           DATABASE_PASSWORD: strato_password
-        run: swift test --skip-build --parallel
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+
+      - name: Build Agent
+        # Run even if a control-plane leg failed — agent coverage should
+        # always report on PRs that touch it.
+        id: build-agent
+        if: ${{ !cancelled() }}
+        working-directory: agent
+        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent"
+
+      - name: Test Agent
+        if: ${{ !cancelled() && steps.build-agent.outcome == 'success' }}
+        working-directory: agent
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent"
 
   security:
     name: Security Scan
@@ -192,3 +225,77 @@ jobs:
         if: always()
         with:
           sarif_file: "trivy-results.sarif"
+
+  # Dockerfile changes were previously only exercised on main / at release
+  # time, so image breakage surfaced post-merge. These jobs build (never
+  # push) the affected image on hosted runners; they are rare because they
+  # are gated on the Dockerfile paths themselves. `cache-to` is deliberately
+  # omitted everywhere: PR-scoped buildkit caches are unreadable by sibling
+  # PRs and would only thrash the 10GB repo cache quota.
+  docker-control-plane:
+    name: Docker Build Check (Control Plane)
+    needs: changes
+    if: needs.changes.outputs.docker_cp == 'true' || needs.changes.outputs.workflow == 'true'
+    runs-on: ubuntu-latest
+    # No prebuilt artifacts on PRs, so the image compiles Swift from source.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Control Plane Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./control-plane/Dockerfile
+          push: false
+          platforms: linux/amd64
+          # Readable from PRs because main-build saves it from main's scope.
+          cache-from: type=gha,key=control-plane-x64
+
+  docker-agent:
+    name: Docker Build Check (Agent)
+    needs: changes
+    if: needs.changes.outputs.docker_agent == 'true' || needs.changes.outputs.workflow == 'true'
+    runs-on: ubuntu-latest
+    # Compiles Swift from source; the agent's gha cache is only saved from
+    # tag refs, which PRs cannot read, so this leg runs cold.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Agent Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./agent/Dockerfile
+          push: false
+          platforms: linux/amd64
+
+  docker-web:
+    name: Docker Build Check (Frontend)
+    needs: changes
+    if: needs.changes.outputs.docker_web == 'true' || needs.changes.outputs.workflow == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Frontend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./control-plane/web
+          file: ./control-plane/web/Dockerfile
+          push: false
+          platforms: linux/amd64

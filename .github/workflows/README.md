@@ -7,7 +7,9 @@ This directory contains GitHub Actions workflows for the Strato project. Workflo
 ### PR Validation (`build.yaml`)
 Runs on pull requests to validate code quality:
 - Frontend lint & build (GitHub-hosted)
-- Swift package building and testing (self-hosted, warm cache)
+- Swift package building and testing — shared, control plane, and agent
+  (self-hosted, warm cache)
+- Docker image build checks, gated on Dockerfile changes (GitHub-hosted)
 - Security scanning with Trivy (GitHub-hosted)
 
 A `changes` job (via `dorny/paths-filter`) detects which parts of the repo
@@ -50,8 +52,16 @@ when docs change on the main branch.
 
 Workflows use a hybrid approach with both self-hosted and GitHub-hosted runners.
 The self-hosted runner is a single fast machine, so only jobs that genuinely
-benefit from it (Swift builds with a warm `.build` cache) are pinned there;
-everything else is offloaded to GitHub-hosted runners to avoid queueing.
+benefit from it are pinned there; everything else is offloaded to
+GitHub-hosted runners to avoid queueing.
+
+Swift builds on the self-hosted runner keep their build state in a
+persistent scratch directory (`$RUNNER_TOOL_CACHE/strato-swift-build`,
+via `swift build --scratch-path`) rather than `actions/cache`. The directory
+lives outside the repo, so it survives checkout's `git clean -ffdx` and
+gives incremental builds across runs with no cache upload/download. The
+PR workflow wipes it automatically if it grows past ~25GB; it is also
+always safe to delete manually — the next run just rebuilds cold.
 
 ### Self-Hosted Runners (x64/AMD64)
 Used for:
