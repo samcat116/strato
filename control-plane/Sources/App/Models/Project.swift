@@ -262,3 +262,22 @@ struct ProjectStatsResponse: Content {
     let vmsByEnvironment: [String: Int]
     let resourceUsage: ResourceUsageResponse
 }
+
+// MARK: - Additional DTOs
+
+struct TransferProjectRequest: Content {
+    let organizationId: UUID?
+    let organizationalUnitId: UUID?
+}
+
+struct ProjectPathComponent: Content {
+    let id: UUID
+    let name: String
+    let type: String // "organization", "organizational_unit", "project"
+}
+
+struct ProjectPathResponse: Content {
+    let projectId: UUID
+    let path: String
+    let components: [ProjectPathComponent]
+}

@@ -36,7 +36,7 @@ struct GroupController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await verifyOrganizationAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
 
         // Get all groups in the organization
         let groups = try await Group.query(on: req.db)
@@ -66,7 +66,7 @@ struct GroupController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await verifyOrganizationAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
 
         guard let group = try await Group.find(groupID, on: req.db) else {
             throw Abort(.notFound, reason: "Group not found")
@@ -93,7 +93,7 @@ struct GroupController: RouteCollection {
         let createRequest = try req.content.decode(CreateGroupRequest.self)
 
         // Verify user has admin access to organization
-        try await verifyOrganizationAdminAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
 
         // Check for name uniqueness within organization
         let existingGroup = try await Group.query(on: req.db)
@@ -142,7 +142,7 @@ struct GroupController: RouteCollection {
         let updateRequest = try req.content.decode(UpdateGroupRequest.self)
 
         // Verify user has admin access
-        try await verifyOrganizationAdminAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
 
         guard let group = try await Group.find(groupID, on: req.db) else {
             throw Abort(.notFound, reason: "Group not found")
@@ -190,7 +190,7 @@ struct GroupController: RouteCollection {
         }
 
         // Verify user has admin access
-        try await verifyOrganizationAdminAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
 
         guard let group = try await Group.find(groupID, on: req.db) else {
             throw Abort(.notFound, reason: "Group not found")
@@ -245,7 +245,7 @@ struct GroupController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await verifyOrganizationAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
 
         guard let group = try await Group.find(groupID, on: req.db) else {
             throw Abort(.notFound, reason: "Group not found")
@@ -272,7 +272,7 @@ struct GroupController: RouteCollection {
         let addRequest = try req.content.decode(AddGroupMemberRequest.self)
 
         // Verify user has admin access
-        try await verifyOrganizationAdminAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
 
         guard let group = try await Group.find(groupID, on: req.db) else {
             throw Abort(.notFound, reason: "Group not found")
@@ -327,7 +327,7 @@ struct GroupController: RouteCollection {
         let removeRequest = try req.content.decode(RemoveGroupMemberRequest.self)
 
         // Verify user has admin access
-        try await verifyOrganizationAdminAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
 
         guard let group = try await Group.find(groupID, on: req.db) else {
             throw Abort(.notFound, reason: "Group not found")
@@ -370,7 +370,7 @@ struct GroupController: RouteCollection {
         }
 
         // Verify user has admin access
-        try await verifyOrganizationAdminAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
 
         guard let group = try await Group.find(groupID, on: req.db) else {
             throw Abort(.notFound, reason: "Group not found")
@@ -400,25 +400,4 @@ struct GroupController: RouteCollection {
 
     // MARK: - Helper Methods
 
-    private func verifyOrganizationAccess(user: User, organizationID: UUID, on db: Database) async throws {
-        let userOrg = try await UserOrganization.query(on: db)
-            .filter(\.$user.$id, .equal, user.id!)
-            .filter(\.$organization.$id, .equal, organizationID)
-            .first()
-
-        guard userOrg != nil else {
-            throw Abort(.forbidden, reason: "Not a member of this organization")
-        }
-    }
-
-    private func verifyOrganizationAdminAccess(user: User, organizationID: UUID, on db: Database) async throws {
-        let userOrg = try await UserOrganization.query(on: db)
-            .filter(\.$user.$id, .equal, user.id!)
-            .filter(\.$organization.$id, .equal, organizationID)
-            .first()
-
-        guard let userOrganization = userOrg, userOrganization.role == "admin" else {
-            throw Abort(.forbidden, reason: "Admin access required")
-        }
-    }
 }

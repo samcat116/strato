@@ -232,7 +232,7 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await verifyOrganizationAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
 
         // Get all quotas for the organization
         let quotas = try await ResourceQuota.query(on: req.db)
@@ -255,7 +255,7 @@ struct ResourceQuotaController: RouteCollection {
         let createRequest = try req.content.decode(CreateResourceQuotaRequest.self)
 
         // Verify user has admin access to organization
-        try await verifyOrganizationAdminAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
 
         // Check for duplicate quota name within organization
         try await validateQuotaNameUniqueness(
@@ -291,7 +291,7 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await verifyOrganizationAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
 
         // Get all quotas for the OU
         let quotas = try await ResourceQuota.query(on: req.db)
@@ -315,7 +315,7 @@ struct ResourceQuotaController: RouteCollection {
         let createRequest = try req.content.decode(CreateResourceQuotaRequest.self)
 
         // Verify user has admin access to organization
-        try await verifyOrganizationAdminAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
 
         // Verify OU exists and belongs to organization
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
@@ -363,7 +363,7 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         // Verify user has access to project
-        try await verifyProjectAccess(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectMember(user: user, project: project, on: req.db)
 
         // Get all quotas for the project
         let quotas = try await ResourceQuota.query(on: req.db)
@@ -390,7 +390,7 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         // Verify user has admin access to project
-        try await verifyProjectAdminAccess(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectAdmin(user: user, project: project, on: req.db)
 
         // Validate environment if specified
         if let environment = createRequest.environment {
@@ -443,116 +443,40 @@ struct ResourceQuotaController: RouteCollection {
         // Get actual usage based on quota scope
         let (actualUsage, vms) = try await quota.calculateActualUsage(on: req.db)
 
-        // Calculate VM breakdown by environment
-        var vmsByEnvironment: [String: Int] = [:]
-        var vmsByStatus: [String: Int] = [:]
-
-        for vm in vms {
-            vmsByEnvironment[vm.environment, default: 0] += 1
-            vmsByStatus[vm.status.rawValue, default: 0] += 1
-        }
-
-        return QuotaUsageResponse(
-            quotaId: quota.id!,
-            quotaName: quota.name,
-            limits: QuotaLimits(
-                maxVCPUs: quota.maxVCPUs,
-                maxMemoryGB: Double(quota.maxMemory) / 1024 / 1024 / 1024,
-                maxStorageGB: Double(quota.maxStorage) / 1024 / 1024 / 1024,
-                maxVMs: quota.maxVMs,
-                maxNetworks: quota.maxNetworks
-            ),
-            reserved: QuotaUsage(
-                vcpus: quota.reservedVCPUs,
-                memoryGB: Double(quota.reservedMemory) / 1024 / 1024 / 1024,
-                storageGB: Double(quota.reservedStorage) / 1024 / 1024 / 1024,
-                vms: quota.vmCount,
-                networks: quota.networkCount
-            ),
-            actual: actualUsage,
-            utilization: QuotaUtilization(
-                cpuPercent: quota.cpuUtilizationPercent,
-                memoryPercent: quota.memoryUtilizationPercent,
-                storagePercent: quota.storageUtilizationPercent,
-                vmPercent: quota.vmUtilizationPercent
-            ),
-            vmsByEnvironment: vmsByEnvironment,
-            vmsByStatus: vmsByStatus,
-            isEnabled: quota.isEnabled,
-            environment: quota.environment
-        )
+        return QuotaUsageService.usageResponse(for: quota, actualUsage: actualUsage, vms: vms)
     }
 
     // MARK: - Helper Methods
 
-    private func verifyOrganizationAccess(user: User, organizationID: UUID, on db: Database) async throws {
-        let userOrg = try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == user.id!)
-            .filter(\.$organization.$id == organizationID)
-            .first()
-
-        guard userOrg != nil else {
-            throw Abort(.forbidden, reason: "Not a member of this organization")
-        }
-    }
-
-    private func verifyOrganizationAdminAccess(user: User, organizationID: UUID, on db: Database) async throws {
-        let userOrg = try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == user.id!)
-            .filter(\.$organization.$id == organizationID)
-            .first()
-
-        guard let userOrganization = userOrg, userOrganization.role == "admin" else {
-            throw Abort(.forbidden, reason: "Admin access required")
-        }
-    }
-
-    private func verifyProjectAccess(user: User, project: Project, on db: Database) async throws {
-        let organizationID = try await project.getRootOrganizationId(on: db)
-        guard let orgID = organizationID else {
-            throw Abort(.internalServerError, reason: "Project has no organization")
-        }
-
-        try await verifyOrganizationAccess(user: user, organizationID: orgID, on: db)
-    }
-
-    private func verifyProjectAdminAccess(user: User, project: Project, on db: Database) async throws {
-        let organizationID = try await project.getRootOrganizationId(on: db)
-        guard let orgID = organizationID else {
-            throw Abort(.internalServerError, reason: "Project has no organization")
-        }
-
-        let userOrg = try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == user.id!)
-            .filter(\.$organization.$id == orgID)
-            .first()
-
-        guard let userOrganization = userOrg, userOrganization.role == "admin" else {
-            throw Abort(.forbidden, reason: "Admin access required")
-        }
-    }
-
     private func verifyQuotaAccess(user: User, quota: ResourceQuota, on db: Database) async throws {
         if let orgID = quota.$organization.id {
-            try await verifyOrganizationAccess(user: user, organizationID: orgID, on: db)
+            try await OrganizationAccessService.requireMember(user: user, organizationID: orgID, on: db)
         } else if let ouID = quota.$organizationalUnit.id {
-            let ou = try await OrganizationalUnit.find(ouID, on: db)
-            try await verifyOrganizationAccess(user: user, organizationID: ou!.$organization.id, on: db)
+            guard let ou = try await OrganizationalUnit.find(ouID, on: db) else {
+                throw Abort(.notFound, reason: "Organizational unit not found")
+            }
+            try await OrganizationAccessService.requireMember(user: user, organizationID: ou.$organization.id, on: db)
         } else if let projectID = quota.$project.id {
-            let project = try await Project.find(projectID, on: db)
-            try await verifyProjectAccess(user: user, project: project!, on: db)
+            guard let project = try await Project.find(projectID, on: db) else {
+                throw Abort(.notFound, reason: "Project not found")
+            }
+            try await OrganizationAccessService.requireProjectMember(user: user, project: project, on: db)
         }
     }
 
     private func verifyQuotaAdminAccess(user: User, quota: ResourceQuota, on db: Database) async throws {
         if let orgID = quota.$organization.id {
-            try await verifyOrganizationAdminAccess(user: user, organizationID: orgID, on: db)
+            try await OrganizationAccessService.requireAdmin(user: user, organizationID: orgID, on: db)
         } else if let ouID = quota.$organizationalUnit.id {
-            let ou = try await OrganizationalUnit.find(ouID, on: db)
-            try await verifyOrganizationAdminAccess(user: user, organizationID: ou!.$organization.id, on: db)
+            guard let ou = try await OrganizationalUnit.find(ouID, on: db) else {
+                throw Abort(.notFound, reason: "Organizational unit not found")
+            }
+            try await OrganizationAccessService.requireAdmin(user: user, organizationID: ou.$organization.id, on: db)
         } else if let projectID = quota.$project.id {
-            let project = try await Project.find(projectID, on: db)
-            try await verifyProjectAdminAccess(user: user, project: project!, on: db)
+            guard let project = try await Project.find(projectID, on: db) else {
+                throw Abort(.notFound, reason: "Project not found")
+            }
+            try await OrganizationAccessService.requireProjectAdmin(user: user, project: project, on: db)
         }
     }
 
@@ -623,42 +547,4 @@ struct ResourceQuotaController: RouteCollection {
         return quota
     }
 
-}
-
-// MARK: - Additional DTOs
-
-struct QuotaLimits: Content {
-    let maxVCPUs: Int
-    let maxMemoryGB: Double
-    let maxStorageGB: Double
-    let maxVMs: Int
-    let maxNetworks: Int
-}
-
-struct QuotaUsage: Content {
-    let vcpus: Int
-    let memoryGB: Double
-    let storageGB: Double
-    let vms: Int
-    let networks: Int
-}
-
-struct QuotaUtilization: Content {
-    let cpuPercent: Double
-    let memoryPercent: Double
-    let storagePercent: Double
-    let vmPercent: Double
-}
-
-struct QuotaUsageResponse: Content {
-    let quotaId: UUID
-    let quotaName: String
-    let limits: QuotaLimits
-    let reserved: QuotaUsage
-    let actual: QuotaUsage
-    let utilization: QuotaUtilization
-    let vmsByEnvironment: [String: Int]
-    let vmsByStatus: [String: Int]
-    let isEnabled: Bool
-    let environment: String?
 }

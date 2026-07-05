@@ -110,7 +110,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has access to project
-        try await verifyProjectAccess(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectMember(user: user, project: project, on: req.db)
 
         // Get VM count
         let vmCount = try await VM.query(on: req.db)
@@ -143,7 +143,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has admin access to project
-        try await verifyProjectAdminAccess(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectAdmin(user: user, project: project, on: req.db)
 
         // Update fields
         if let name = updateRequest.name {
@@ -227,7 +227,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has admin access to project
-        try await verifyProjectAdminAccess(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectAdmin(user: user, project: project, on: req.db)
 
         // Check for dependent resources
         let vmCount = try await VM.query(on: req.db)
@@ -254,7 +254,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await verifyOrganizationAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
 
         // Get direct projects in organization
         let projects = try await Project.query(on: req.db)
@@ -293,7 +293,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has access to create projects in organization
-        try await verifyOrganizationMemberAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
 
         // Check name uniqueness within organization
         try await validateProjectNameUniqueness(
@@ -326,7 +326,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await verifyOrganizationAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
 
         // Get projects in OU
         let projects = try await Project.query(on: req.db)
@@ -361,7 +361,7 @@ struct ProjectController: RouteCollection {
         let createRequest = try req.content.decode(CreateProjectRequest.self)
 
         // Verify user has access to create projects in organization
-        try await verifyOrganizationMemberAccess(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
 
         // Verify OU exists and belongs to organization
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
@@ -410,7 +410,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has admin access to project
-        try await verifyProjectAdminAccess(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectAdmin(user: user, project: project, on: req.db)
 
         // Add environment if not already present
         project.addEnvironment(envRequest.environment)
@@ -438,7 +438,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has admin access to project
-        try await verifyProjectAdminAccess(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectAdmin(user: user, project: project, on: req.db)
 
         // Check if any VMs use this environment
         let vmsUsingEnv = try await VM.query(on: req.db)
@@ -480,42 +480,14 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has access to project
-        try await verifyProjectAccess(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectMember(user: user, project: project, on: req.db)
 
         // Get all VMs in project
         let vms = try await VM.query(on: req.db)
             .filter(\.$project.$id == projectID)
             .all()
 
-        // Calculate stats by environment
-        var vmsByEnvironment: [String: Int] = [:]
-        for environment in project.environments {
-            vmsByEnvironment[environment] = 0
-        }
-
-        var totalVCPUs = 0
-        var totalMemory: Int64 = 0
-        var totalStorage: Int64 = 0
-
-        for vm in vms {
-            vmsByEnvironment[vm.environment, default: 0] += 1
-            totalVCPUs += vm.cpu
-            totalMemory += vm.memory
-            totalStorage += vm.disk
-        }
-
-        let resourceUsage = ResourceUsageResponse(
-            totalVCPUs: totalVCPUs,
-            totalMemoryGB: Double(totalMemory) / 1024 / 1024 / 1024,
-            totalStorageGB: Double(totalStorage) / 1024 / 1024 / 1024,
-            totalVMs: vms.count
-        )
-
-        return ProjectStatsResponse(
-            totalVMs: vms.count,
-            vmsByEnvironment: vmsByEnvironment,
-            resourceUsage: resourceUsage
-        )
+        return ProjectStatsService.stats(for: project, vms: vms)
     }
 
     func getPath(req: Request) async throws -> ProjectPathResponse {
@@ -532,7 +504,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has access to project
-        try await verifyProjectAccess(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectMember(user: user, project: project, on: req.db)
 
         // Build full path with names
         var pathComponents: [ProjectPathComponent] = []
@@ -607,11 +579,11 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has admin access to current location
-        try await verifyProjectAdminAccess(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectAdmin(user: user, project: project, on: req.db)
 
         // Verify user has access to destination
         if let destOrgID = transferRequest.organizationId {
-            try await verifyOrganizationMemberAccess(user: user, organizationID: destOrgID, on: req.db)
+            try await OrganizationAccessService.requireMember(user: user, organizationID: destOrgID, on: req.db)
         }
 
         // Validate destination
@@ -652,53 +624,6 @@ struct ProjectController: RouteCollection {
     }
 
     // MARK: - Helper Methods
-
-    private func verifyOrganizationAccess(user: User, organizationID: UUID, on db: Database) async throws {
-        let userOrg = try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == user.id!)
-            .filter(\.$organization.$id == organizationID)
-            .first()
-
-        guard userOrg != nil else {
-            throw Abort(.forbidden, reason: "Not a member of this organization")
-        }
-    }
-
-    private func verifyOrganizationMemberAccess(user: User, organizationID: UUID, on db: Database) async throws {
-        let userOrg = try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == user.id!)
-            .filter(\.$organization.$id == organizationID)
-            .first()
-
-        guard userOrg != nil else {
-            throw Abort(.forbidden, reason: "Not a member of this organization")
-        }
-    }
-
-    private func verifyProjectAccess(user: User, project: Project, on db: Database) async throws {
-        let organizationID = try await project.getRootOrganizationId(on: db)
-        guard let orgID = organizationID else {
-            throw Abort(.internalServerError, reason: "Project has no organization")
-        }
-
-        try await verifyOrganizationAccess(user: user, organizationID: orgID, on: db)
-    }
-
-    private func verifyProjectAdminAccess(user: User, project: Project, on db: Database) async throws {
-        let organizationID = try await project.getRootOrganizationId(on: db)
-        guard let orgID = organizationID else {
-            throw Abort(.internalServerError, reason: "Project has no organization")
-        }
-
-        let userOrg = try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == user.id!)
-            .filter(\.$organization.$id == orgID)
-            .first()
-
-        guard let userOrganization = userOrg, userOrganization.role == "admin" else {
-            throw Abort(.forbidden, reason: "Admin access required")
-        }
-    }
 
     private func validateProjectNameUniqueness(
         name: String,
@@ -759,23 +684,4 @@ struct ProjectController: RouteCollection {
 
         return project
     }
-}
-
-// MARK: - Additional DTOs
-
-struct TransferProjectRequest: Content {
-    let organizationId: UUID?
-    let organizationalUnitId: UUID?
-}
-
-struct ProjectPathComponent: Content {
-    let id: UUID
-    let name: String
-    let type: String // "organization", "organizational_unit", "project"
-}
-
-struct ProjectPathResponse: Content {
-    let projectId: UUID
-    let path: String
-    let components: [ProjectPathComponent]
 }
