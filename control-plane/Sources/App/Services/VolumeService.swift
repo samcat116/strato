@@ -329,23 +329,19 @@ actor VolumeService {
     }
 
     /// Request an agent to delete a volume snapshot from storage and await
-    /// its confirmation. Snapshots that never materialized on an agent (no
-    /// hypervisor or no storage path, e.g. a failed creation) have no backing
-    /// file to remove, so agent deletion is skipped.
+    /// its confirmation. The message carries only IDs — the agent derives the
+    /// file's location the same way it did at creation — so this also cleans
+    /// up snapshots whose create succeeded on the agent but whose response
+    /// was lost (status `.error`, no recorded storage path). Only volumes
+    /// that were never provisioned on any hypervisor skip the agent
+    /// round-trip; agent-side deletion is idempotent, so a snapshot with no
+    /// backing file confirms cleanly.
     func requestVolumeSnapshotDeletion(
         volume: Volume,
         snapshot: VolumeSnapshot
     ) async throws {
         guard let hypervisorId = volume.hypervisorId else {
             logger.info("Volume has no hypervisor, skipping agent snapshot deletion", metadata: [
-                "volumeId": .string(volume.id!.uuidString),
-                "snapshotId": .string(snapshot.id!.uuidString)
-            ])
-            return
-        }
-
-        guard let snapshotPath = snapshot.storagePath else {
-            logger.info("Snapshot has no storage path, skipping agent deletion", metadata: [
                 "volumeId": .string(volume.id!.uuidString),
                 "snapshotId": .string(snapshot.id!.uuidString)
             ])
@@ -366,8 +362,7 @@ actor VolumeService {
 
         let message = VolumeSnapshotDeleteMessage(
             volumeId: volume.id!.uuidString,
-            snapshotId: snapshot.id!.uuidString,
-            snapshotPath: snapshotPath
+            snapshotId: snapshot.id!.uuidString
         )
 
         _ = try await sendVolumeRequest(message, toAgent: hypervisorId)

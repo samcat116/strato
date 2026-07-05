@@ -1877,8 +1877,7 @@ extension Agent {
     private func handleVolumeSnapshotDelete(_ message: VolumeSnapshotDeleteMessage) async {
         logger.info("Deleting volume snapshot", metadata: [
             "volumeId": .string(message.volumeId),
-            "snapshotId": .string(message.snapshotId),
-            "path": .string(message.snapshotPath)
+            "snapshotId": .string(message.snapshotId)
         ])
 
         guard let volumeService = volumeService else {
@@ -1887,7 +1886,7 @@ extension Agent {
         }
 
         do {
-            try await volumeService.deleteSnapshot(snapshotPath: message.snapshotPath)
+            try await volumeService.deleteSnapshot(volumeId: message.volumeId, snapshotId: message.snapshotId)
             await sendSuccess(for: message.requestId, message: "Snapshot deleted successfully")
             logger.info("Volume snapshot deleted successfully", metadata: [
                 "volumeId": .string(message.volumeId),

@@ -241,9 +241,19 @@ actor VolumeService {
         return snapshotPath
     }
 
-    /// Deletes a snapshot
-    func deleteSnapshot(snapshotPath: String) async throws {
-        logger.info("Deleting snapshot", metadata: ["path": .string(snapshotPath)])
+    /// Deletes a snapshot. The path is derived from the IDs — the same
+    /// derivation `createSnapshot` uses — rather than trusted from the wire,
+    /// so deletion works even when the control plane never recorded the path
+    /// (e.g. the create succeeded but its response was lost). A missing file
+    /// is not an error: deletion is idempotent.
+    func deleteSnapshot(volumeId: String, snapshotId: String) async throws {
+        let snapshotPath = "\(volumeStoragePath)/\(volumeId)/snapshots/\(snapshotId).qcow2"
+
+        logger.info("Deleting snapshot", metadata: [
+            "volumeId": .string(volumeId),
+            "snapshotId": .string(snapshotId),
+            "path": .string(snapshotPath)
+        ])
 
         if FileManager.default.fileExists(atPath: snapshotPath) {
             try FileManager.default.removeItem(atPath: snapshotPath)

@@ -742,9 +742,9 @@ struct VolumeController: RouteCollection {
         try await snapshot.save(on: req.db)
 
         // Delete the snapshot file on the hypervisor first; the database
-        // record is only removed once the agent confirms. Snapshots that
-        // never materialized on an agent are deleted from the database
-        // directly.
+        // record is only removed once the agent confirms. Only snapshots of
+        // volumes that were never provisioned on a hypervisor skip the agent
+        // round-trip.
         do {
             try await req.application.volumeService.requestVolumeSnapshotDeletion(
                 volume: volume,
