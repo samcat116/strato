@@ -242,34 +242,54 @@ struct VMController: RouteCollection {
             throw Abort(.internalServerError, reason: "Neither template nor image available")
         }
 
-        // Save VM to database first to generate ID
-        try await vm.save(on: req.db)
+        // Bind an immutable copy for the @Sendable transaction closure below; the
+        // template selection is final by this point.
+        let resolvedTemplate = template
 
-        // Generate unique paths and configurations using the generated ID
-        guard let vmID = vm.id else {
-            throw Abort(.internalServerError, reason: "VM ID is required after saving")
+        // Reserve quota and persist the VM in one transaction: enforcement checks,
+        // the reservation bump, the initial insert, and the path update all commit
+        // together or roll back together, so a quota rejection leaves nothing behind.
+        try await req.db.transaction { db in
+            // Enforce and reserve applicable project/OU/org quotas before the VM row
+            // exists. Throws Abort(.forbidden) naming the quota if it would be exceeded.
+            try await QuotaEnforcementService.reserve(
+                for: project,
+                environment: environment,
+                vcpus: vm.cpu,
+                memory: vm.memory,
+                storage: vm.disk,
+                on: db
+            )
+
+            // Save VM to database first to generate ID
+            try await vm.save(on: db)
+
+            // Generate unique paths and configurations using the generated ID
+            let vmID = try vm.requireID()
+
+            if let template = resolvedTemplate {
+                // Template-based paths
+                vm.diskPath = template.generateDiskPath(for: vmID)
+                vm.macAddress = template.generateMacAddress()
+                vm.kernelPath = template.kernelPath
+                vm.initramfsPath = template.initramfsPath
+                vm.firmwarePath = template.firmwarePath
+                vm.cmdline = vm.cmdline ?? template.defaultCmdline
+            } else {
+                // Image-based paths - disk will be created by agent from cached image
+                vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
+                vm.macAddress = VM.generateMACAddress()
+            }
+
+            // Set up console sockets to align with agent VM storage path
+            vm.consoleSocket = Self.socketPath(for: vmID, filename: "console.sock")
+            vm.serialSocket = Self.socketPath(for: vmID, filename: "serial.sock")
+
+            // Update VM with generated paths
+            try await vm.update(on: db)
         }
 
-        if let template = template {
-            // Template-based paths
-            vm.diskPath = template.generateDiskPath(for: vmID)
-            vm.macAddress = template.generateMacAddress()
-            vm.kernelPath = template.kernelPath
-            vm.initramfsPath = template.initramfsPath
-            vm.firmwarePath = template.firmwarePath
-            vm.cmdline = vm.cmdline ?? template.defaultCmdline
-        } else {
-            // Image-based paths - disk will be created by agent from cached image
-            vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
-            vm.macAddress = VM.generateMACAddress()
-        }
-
-        // Set up console sockets to align with agent VM storage path
-        vm.consoleSocket = Self.socketPath(for: vmID, filename: "console.sock")
-        vm.serialSocket = Self.socketPath(for: vmID, filename: "serial.sock")
-
-        // Update VM with generated paths
-        try await vm.update(on: req.db)
+        let vmID = try vm.requireID()
 
         // Create relationships in SpiceDB
         let vmId = vm.id?.uuidString ?? ""
@@ -381,8 +401,13 @@ struct VMController: RouteCollection {
             }
         }
 
-        // Delete from database
-        try await vm.delete(on: req.db)
+        // Delete the VM, then recompute its quotas from the remaining VMs, in one
+        // transaction so the reservation counters and the VM row stay consistent.
+        // Deletion happens first so the removed VM drops out of the recount.
+        try await req.db.transaction { db in
+            try await vm.delete(on: db)
+            try await QuotaEnforcementService.release(for: vm, on: db)
+        }
         return .ok
     }
 

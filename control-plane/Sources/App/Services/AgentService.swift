@@ -409,7 +409,14 @@ actor AgentService {
 
     // MARK: - Heartbeat Monitoring
 
+    /// Whether the heartbeat loop is currently armed. Test seam for verifying that
+    /// the shutdown hook tears it down.
+    var isHeartbeatActive: Bool {
+        heartbeatTask != nil
+    }
+
     private func startHeartbeatMonitoring() {
+        // Don't (re)arm the loop if shutdown already raced ahead of init.
         guard !isShutDown else { return }
         heartbeatTask = Task {
             while !Task.isCancelled {
