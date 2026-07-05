@@ -1,0 +1,33 @@
+shared/Sources/StratoShared/WireProtocol.swift
+  s_1e3115b4d924a4::t_6c3c403b566706 12-13,15-16,20-38,44-46,49-53,56,60-64,80,90
+shared/Tests/StratoSharedTests/Support/WireTestSupport.swift
+  s_1e3115b4d924a4::t_df920bb96d5132 6-7
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_1e3115b4d924a4::t_a58f377b8f3033 75-80,88-91,94-95,97-98,107,116-122
+  s_1e3115b4d924a4::t_dbf43b8b4bc4b6 123-125
+  s_147c01f479fdc5::t_267904bc4e3fc5 126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8e7f9248e0b5498d36b4f6d53c4880d0f4cb4315",
+  "prompts": {},
+  "sessions": {
+    "s_147c01f479fdc5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "39662ce1-7a30-4b1f-8cfb-d3eb529768cf",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_1e3115b4d924a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b2cb9825-9361-476a-9312-16416f950303",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
