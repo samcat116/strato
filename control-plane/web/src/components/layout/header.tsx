@@ -4,6 +4,7 @@ import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/providers";
 import { OrganizationSwitcher } from "./organization-switcher";
+import { ProjectSwitcher } from "./project-switcher";
 
 export function Header() {
   const { logout } = useAuth();
@@ -16,6 +17,7 @@ export function Header() {
         </div>
         <div className="flex items-center space-x-4">
           <OrganizationSwitcher />
+          <ProjectSwitcher />
           <Button
             variant="ghost"
             size="sm"

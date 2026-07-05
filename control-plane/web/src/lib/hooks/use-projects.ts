@@ -1,5 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { projectsApi } from "@/lib/api/projects";
+import {
+  projectsApi,
+  type CreateProjectData,
+  type UpdateProjectData,
+  type TransferProjectData,
+} from "@/lib/api/projects";
 
 export function useProjects() {
   return useQuery({
@@ -28,21 +33,25 @@ export function useProject(projectId: string | undefined) {
   });
 }
 
+/**
+ * Invalidate every projects query. Project lists are keyed both globally
+ * (["projects"]) and per-organization (["projects", "organization", orgId]),
+ * so a broad invalidation keeps switchers, the projects page, and scoped
+ * resource lists consistent after a mutation.
+ */
+function invalidateAllProjects(
+  queryClient: ReturnType<typeof useQueryClient>
+) {
+  queryClient.invalidateQueries({ queryKey: ["projects"] });
+}
+
 export function useCreateProject(organizationId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (data: {
-      name: string;
-      description?: string;
-      environments?: string[];
-    }) => projectsApi.create(organizationId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
-      queryClient.invalidateQueries({
-        queryKey: ["projects", "organization", organizationId],
-      });
-    },
+    mutationFn: (data: CreateProjectData) =>
+      projectsApi.create(organizationId, data),
+    onSuccess: () => invalidateAllProjects(queryClient),
   });
 }
 
@@ -55,14 +64,9 @@ export function useUpdateProject() {
       data,
     }: {
       projectId: string;
-      data: { name?: string; description?: string; defaultEnvironment?: string };
+      data: UpdateProjectData;
     }) => projectsApi.update(projectId, data),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
-      queryClient.invalidateQueries({
-        queryKey: ["projects", variables.projectId],
-      });
-    },
+    onSuccess: () => invalidateAllProjects(queryClient),
   });
 }
 
@@ -71,8 +75,21 @@ export function useDeleteProject() {
 
   return useMutation({
     mutationFn: (projectId: string) => projectsApi.delete(projectId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
-    },
+    onSuccess: () => invalidateAllProjects(queryClient),
+  });
+}
+
+export function useTransferProject() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      projectId,
+      data,
+    }: {
+      projectId: string;
+      data: TransferProjectData;
+    }) => projectsApi.transfer(projectId, data),
+    onSuccess: () => invalidateAllProjects(queryClient),
   });
 }

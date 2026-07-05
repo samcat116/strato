@@ -15,6 +15,25 @@ export interface Project {
   vmCount?: number;
 }
 
+export interface CreateProjectData {
+  name: string;
+  description?: string;
+  environments?: string[];
+  defaultEnvironment?: string;
+}
+
+export interface UpdateProjectData {
+  name?: string;
+  description?: string;
+  defaultEnvironment?: string;
+  environments?: string[];
+}
+
+export interface TransferProjectData {
+  organizationId?: string;
+  organizationalUnitId?: string;
+}
+
 export const projectsApi = {
   // Get all projects for the current user
   list(): Promise<Project[]> {
@@ -34,24 +53,27 @@ export const projectsApi = {
   // Create a project in an organization
   create(
     organizationId: string,
-    data: { name: string; description?: string; environments?: string[] }
+    data: CreateProjectData
   ): Promise<Project> {
-    return api.post<Project>(
-      `/api/organizations/${organizationId}/projects`,
-      data
-    );
+    // The backend requires a non-optional description; default to an empty string.
+    return api.post<Project>(`/api/organizations/${organizationId}/projects`, {
+      ...data,
+      description: data.description ?? "",
+    });
   },
 
   // Update a project
-  update(
-    projectId: string,
-    data: { name?: string; description?: string; defaultEnvironment?: string }
-  ): Promise<Project> {
+  update(projectId: string, data: UpdateProjectData): Promise<Project> {
     return api.put<Project>(`/api/projects/${projectId}`, data);
   },
 
   // Delete a project
   delete(projectId: string): Promise<void> {
     return api.delete(`/api/projects/${projectId}`);
+  },
+
+  // Transfer a project to a different organization or OU
+  transfer(projectId: string, data: TransferProjectData): Promise<Project> {
+    return api.post<Project>(`/api/projects/${projectId}/transfer`, data);
   },
 };
