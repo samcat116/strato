@@ -408,6 +408,11 @@ public func configure(_ app: Application) async throws {
         }
     }
 
+    // Cancel AgentService's heartbeat loop on shutdown so it cannot poll `app.db`
+    // after teardown (a "Core not configured" fault, seen in the test suite where
+    // many apps are booted and shut down within one process).
+    app.lifecycle.use(AgentServiceLifecycleHandler())
+
     try routes(app)
 
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
