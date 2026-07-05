@@ -122,6 +122,19 @@ struct VolumeController: RouteCollection {
         let format = try VolumeNaming.parseFormat(request.format)
         let volumeType = try VolumeNaming.parseVolumeType(request.volumeType)
 
+        // Resolve the source image (if any) up front, so a bad image ID fails
+        // the request instead of surfacing later as a failed volume.
+        var sourceImage: Image?
+        if let sourceImageId = request.sourceImageId {
+            guard let image = try await Image.find(sourceImageId, on: req.db) else {
+                throw Abort(.notFound, reason: "Source image not found")
+            }
+            guard image.status == .ready else {
+                throw Abort(.badRequest, reason: "Source image is not ready (status: '\(image.status.rawValue)')")
+            }
+            sourceImage = image
+        }
+
         // Calculate size in bytes
         let sizeBytes = Double(request.sizeGB).gbToBytes
 
@@ -157,12 +170,16 @@ struct VolumeController: RouteCollection {
             subjectId: projectId.uuidString
         )
 
-        // TODO: Send message to an agent to actually create the volume
-        // For now, mark as available (would be done by agent callback)
-        volume.status = .available
-        try await volume.save(on: req.db)
+        // Provision the volume on an agent in the background. The volume stays
+        // `.creating` until the agent confirms, then becomes `.available` with
+        // its real storage path and hypervisor — or `.error` on failure.
+        let volumeService = req.application.volumeService
+        let volumeId = volume.id!
+        Task {
+            await volumeService.provisionVolume(volumeId: volumeId, sourceImage: sourceImage)
+        }
 
-        req.logger.info("Volume created", metadata: [
+        req.logger.info("Volume creation requested", metadata: [
             "volumeId": .string(volume.id!.uuidString),
             "name": .string(volume.name),
             "projectId": .string(projectId.uuidString),
@@ -228,6 +245,19 @@ struct VolumeController: RouteCollection {
         volume.status = .deleting
         try await volume.save(on: req.db)
 
+        // Delete the backing storage on the agent first; database records are
+        // only removed once the hypervisor confirms (deleting the volume
+        // directory also removes its snapshot files). Volumes that were never
+        // provisioned on an agent are deleted from the database directly.
+        do {
+            try await req.application.volumeService.requestVolumeDeletion(volume: volume)
+        } catch {
+            volume.status = .error
+            volume.errorMessage = "Failed to delete volume on hypervisor: \(error.localizedDescription)"
+            try await volume.save(on: req.db)
+            throw Abort(.badGateway, reason: "Failed to delete volume on hypervisor: \(error.localizedDescription)")
+        }
+
         // Delete any snapshots first
         let snapshots = try await VolumeSnapshot.query(on: req.db)
             .filter(\.$volume.$id == volume.id!)
@@ -244,9 +274,6 @@ struct VolumeController: RouteCollection {
             )
             try await snapshot.delete(on: req.db)
         }
-
-        // TODO: Send message to agent to delete the volume from storage
-        // For now, delete directly
 
         // Delete SpiceDB relationships
         try await req.spicedb.deleteRelationship(
@@ -329,22 +356,14 @@ struct VolumeController: RouteCollection {
             deviceName = try await generateDeviceName(for: vm, on: req.db)
         }
 
-        // Mark as attaching
+        // Mark as attaching. The volume's hypervisorId is set at provisioning
+        // and must not be overwritten here — the same-hypervisor check above
+        // already guarantees it matches the VM's.
         volume.status = .attaching
         volume.$vm.id = vm.id
         volume.deviceName = deviceName
         volume.bootOrder = request.bootOrder
-        volume.hypervisorId = vm.hypervisorId
         try await volume.save(on: req.db)
-
-        // If volume doesn't have a storage path, generate one based on where VM disks are stored
-        // In production this would be set when the volume is created on an agent
-        if volume.storagePath == nil {
-            // Use the VM's hypervisorId and volume ID to construct a path
-            // This assumes volumes are stored alongside VMs
-            volume.storagePath = "/tmp/strato-test/volumes/\(volume.id!.uuidString)/volume.qcow2"
-            try await volume.save(on: req.db)
-        }
 
         // Send hot-plug message to agent
         do {
@@ -364,7 +383,7 @@ struct VolumeController: RouteCollection {
             throw error
         }
 
-        // Mark as attached (in production this would be done by agent callback)
+        // Agent confirmed the hot-plug
         volume.status = .attached
         try await volume.save(on: req.db)
 
@@ -422,7 +441,7 @@ struct VolumeController: RouteCollection {
             throw error
         }
 
-        // Clear attachment info (in production this would be done by agent callback)
+        // Agent confirmed the hot-unplug; clear attachment info
         volume.$vm.id = nil
         volume.deviceName = nil
         volume.bootOrder = nil
@@ -461,15 +480,30 @@ struct VolumeController: RouteCollection {
             throw Abort(.badRequest, reason: "New size (\(request.sizeGB) GB) must be larger than current size (\(volume.sizeGB) GB)")
         }
 
+        guard volume.hypervisorId != nil, volume.storagePath != nil else {
+            throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
+        }
+
         // Mark as resizing
         let previousSize = volume.size
         volume.status = .resizing
         try await volume.save(on: req.db)
 
-        // TODO: Send message to agent to resize the volume
-        // For now, update directly
+        // Grow the disk on the hypervisor; the database size is only updated
+        // once the agent confirms.
+        do {
+            try await req.application.volumeService.requestVolumeResize(volume: volume, newSizeBytes: newSizeBytes)
+        } catch {
+            // The agent didn't grow the disk; the volume is unchanged and usable.
+            volume.status = .available
+            volume.errorMessage = "Resize failed: \(error.localizedDescription)"
+            try await volume.save(on: req.db)
+            throw Abort(.badGateway, reason: "Failed to resize volume on hypervisor: \(error.localizedDescription)")
+        }
+
         volume.size = newSizeBytes
         volume.status = .available
+        volume.errorMessage = nil
         try await volume.save(on: req.db)
 
         req.logger.info("Volume resized", metadata: [
@@ -495,6 +529,10 @@ struct VolumeController: RouteCollection {
         // Validate volume can be snapshotted
         guard volume.canSnapshot else {
             throw Abort(.conflict, reason: "Volume cannot be snapshotted in status '\(volume.status.rawValue)'. Must be 'available' or 'attached'")
+        }
+
+        guard volume.hypervisorId != nil, volume.storagePath != nil else {
+            throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
         }
 
         // Mark volume as snapshotting
@@ -532,10 +570,24 @@ struct VolumeController: RouteCollection {
             subjectId: user.id!.uuidString
         )
 
-        // TODO: Send message to agent to create the snapshot
-        // For now, mark as available directly
-        snapshot.status = .available
-        try await snapshot.save(on: req.db)
+        // Create the snapshot on the hypervisor; the agent reports the actual
+        // snapshot storage path.
+        do {
+            let snapshotPath = try await req.application.volumeService.requestVolumeSnapshot(
+                volume: volume,
+                snapshot: snapshot
+            )
+            snapshot.storagePath = snapshotPath
+            snapshot.status = .available
+            try await snapshot.save(on: req.db)
+        } catch {
+            snapshot.status = .error
+            snapshot.errorMessage = error.localizedDescription
+            try await snapshot.save(on: req.db)
+            volume.status = previousStatus
+            try await volume.save(on: req.db)
+            throw Abort(.badGateway, reason: "Failed to create snapshot on hypervisor: \(error.localizedDescription)")
+        }
 
         // Restore volume status
         volume.status = previousStatus
@@ -564,6 +616,10 @@ struct VolumeController: RouteCollection {
         // Validate source volume can be cloned
         guard sourceVolume.canSnapshot else {
             throw Abort(.conflict, reason: "Volume cannot be cloned in status '\(sourceVolume.status.rawValue)'. Must be 'available' or 'attached'")
+        }
+
+        guard sourceVolume.hypervisorId != nil, sourceVolume.storagePath != nil else {
+            throw Abort(.conflict, reason: "Source volume is not provisioned on any hypervisor")
         }
 
         // Mark source as cloning
@@ -603,16 +659,21 @@ struct VolumeController: RouteCollection {
             subjectId: sourceVolume.$project.id.uuidString
         )
 
-        // TODO: Send message to agent to clone the volume
-        // For now, mark as available directly
-        newVolume.status = .available
-        try await newVolume.save(on: req.db)
+        // Clone on the agent in the background (copying a disk image can take
+        // minutes). The new volume stays `.creating` until the agent confirms,
+        // and the source returns to its prior status either way.
+        let volumeService = req.application.volumeService
+        let sourceVolumeId = sourceVolume.id!
+        let targetVolumeId = newVolume.id!
+        Task {
+            await volumeService.performClone(
+                sourceVolumeId: sourceVolumeId,
+                targetVolumeId: targetVolumeId,
+                restoreSourceStatusTo: previousStatus
+            )
+        }
 
-        // Restore source volume status
-        sourceVolume.status = previousStatus
-        try await sourceVolume.save(on: req.db)
-
-        req.logger.info("Volume cloned", metadata: [
+        req.logger.info("Volume clone requested", metadata: [
             "sourceVolumeId": .string(sourceVolume.id!.uuidString),
             "newVolumeId": .string(newVolume.id!.uuidString),
             "name": .string(newVolume.name)
