@@ -51,18 +51,22 @@ actor ImageCacheService {
 
         // Check if image is already cached and valid
         if try await isCached(imageInfo: imageInfo) {
-            logger.info("Image found in cache", metadata: [
-                "imageId": .string(imageInfo.imageId.uuidString),
-                "path": .string(cachedPath)
-            ])
+            logger.info(
+                "Image found in cache",
+                metadata: [
+                    "imageId": .string(imageInfo.imageId.uuidString),
+                    "path": .string(cachedPath),
+                ])
             return cachedPath
         }
 
         // Download the image
-        logger.info("Image not in cache, downloading", metadata: [
-            "imageId": .string(imageInfo.imageId.uuidString),
-            "url": .string(imageInfo.downloadURL)
-        ])
+        logger.info(
+            "Image not in cache, downloading",
+            metadata: [
+                "imageId": .string(imageInfo.imageId.uuidString),
+                "url": .string(imageInfo.downloadURL),
+            ])
 
         try await downloadImage(imageInfo: imageInfo, to: cachedPath)
 
@@ -83,11 +87,13 @@ actor ImageCacheService {
         let isValid = actualChecksum.lowercased() == imageInfo.checksum.lowercased()
 
         if !isValid {
-            logger.warning("Cached image checksum mismatch, will re-download", metadata: [
-                "imageId": .string(imageInfo.imageId.uuidString),
-                "expected": .string(imageInfo.checksum),
-                "actual": .string(actualChecksum)
-            ])
+            logger.warning(
+                "Cached image checksum mismatch, will re-download",
+                metadata: [
+                    "imageId": .string(imageInfo.imageId.uuidString),
+                    "expected": .string(imageInfo.checksum),
+                    "actual": .string(actualChecksum),
+                ])
             // Delete the invalid cached file
             try? FileManager.default.removeItem(atPath: cachedPath)
         }
@@ -116,17 +122,20 @@ actor ImageCacheService {
             throw ImageCacheError.invalidURL(imageInfo.downloadURL)
         }
 
-        logger.info("Downloading image", metadata: [
-            "imageId": .string(imageInfo.imageId.uuidString),
-            "url": .string(imageInfo.downloadURL),
-            "size": .stringConvertible(imageInfo.size)
-        ])
+        logger.info(
+            "Downloading image",
+            metadata: [
+                "imageId": .string(imageInfo.imageId.uuidString),
+                "url": .string(imageInfo.downloadURL),
+                "size": .stringConvertible(imageInfo.size),
+            ])
 
         // Perform the download
         let (tempURL, response) = try await URLSession.shared.download(from: url)
 
         guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
+            httpResponse.statusCode == 200
+        else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             throw ImageCacheError.downloadFailed("HTTP \(statusCode)")
         }
@@ -147,11 +156,13 @@ actor ImageCacheService {
             throw ImageCacheError.checksumMismatch(expected: imageInfo.checksum, actual: actualChecksum)
         }
 
-        logger.info("Image downloaded and verified", metadata: [
-            "imageId": .string(imageInfo.imageId.uuidString),
-            "path": .string(localPath),
-            "checksum": .string(actualChecksum)
-        ])
+        logger.info(
+            "Image downloaded and verified",
+            metadata: [
+                "imageId": .string(imageInfo.imageId.uuidString),
+                "path": .string(localPath),
+                "checksum": .string(actualChecksum),
+            ])
     }
 
     /// Computes SHA256 checksum of a file
@@ -162,7 +173,7 @@ actor ImageCacheService {
         defer { try? fileHandle.close() }
 
         var hasher = SHA256()
-        let bufferSize = 1024 * 1024 // 1MB chunks
+        let bufferSize = 1024 * 1024  // 1MB chunks
 
         while true {
             let data = fileHandle.readData(ofLength: bufferSize)
@@ -198,8 +209,9 @@ actor ImageCacheService {
             let fullPath = "\(cachePath)/\(file)"
 
             guard let attributes = try? fileManager.attributesOfItem(atPath: fullPath),
-                  let modificationDate = attributes[.modificationDate] as? Date,
-                  modificationDate < cutoffDate else {
+                let modificationDate = attributes[.modificationDate] as? Date,
+                modificationDate < cutoffDate
+            else {
                 continue
             }
 
@@ -228,7 +240,8 @@ actor ImageCacheService {
         while let file = enumerator.nextObject() as? String {
             let fullPath = "\(cachePath)/\(file)"
             if let attributes = try? fileManager.attributesOfItem(atPath: fullPath),
-               let size = attributes[.size] as? Int64 {
+                let size = attributes[.size] as? Int64
+            {
                 totalSize += size
             }
         }

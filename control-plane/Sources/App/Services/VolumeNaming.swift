@@ -29,9 +29,12 @@ struct VolumeNaming {
         var maxDiskNum = -1
         for name in existingDeviceNames {
             if let deviceName = name,
-               deviceName.hasPrefix("disk"),
-               let numStr = deviceName.dropFirst(4).description.components(separatedBy: CharacterSet.decimalDigits.inverted).first,
-               let num = Int(numStr) {
+                deviceName.hasPrefix("disk"),
+                let numStr = deviceName.dropFirst(4).description.components(
+                    separatedBy: CharacterSet.decimalDigits.inverted
+                ).first,
+                let num = Int(numStr)
+            {
                 maxDiskNum = max(maxDiskNum, num)
             }
         }

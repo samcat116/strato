@@ -399,8 +399,10 @@ actor MockImageFetchService: ImageFetchServiceProtocol {
 
 class MockSpiceDBService {
     var checkPermissionResult: Bool = true
-    var writtenRelationships: [(entity: String, entityId: String, relation: String, subject: String, subjectId: String)] = []
-    var deletedRelationships: [(entity: String, entityId: String, relation: String, subject: String, subjectId: String)] = []
+    var writtenRelationships:
+        [(entity: String, entityId: String, relation: String, subject: String, subjectId: String)] = []
+    var deletedRelationships:
+        [(entity: String, entityId: String, relation: String, subject: String, subjectId: String)] = []
 
     func checkPermission(
         subject: String,

@@ -7,30 +7,32 @@ struct APIKeyAuthenticator: AsyncBearerAuthenticator {
     func authenticate(bearer: BearerAuthorization, for request: Request) async throws {
         // Check if the bearer token is an API key format (starts with "sk_")
         guard bearer.token.hasPrefix("sk_") else {
-            return // Not an API key format, skip this authenticator
+            return  // Not an API key format, skip this authenticator
         }
 
         // Hash the provided key
         let hashedKey = APIKey.hashAPIKey(bearer.token)
 
         // Find the API key in the database
-        guard let apiKey = try await APIKey.query(on: request.db)
-            .filter(\.$keyHash == hashedKey)
-            .filter(\.$isActive == true)
-            .with(\.$user)
-            .first() else {
-            return // API key not found or inactive
+        guard
+            let apiKey = try await APIKey.query(on: request.db)
+                .filter(\.$keyHash == hashedKey)
+                .filter(\.$isActive == true)
+                .with(\.$user)
+                .first()
+        else {
+            return  // API key not found or inactive
         }
 
         // Check if the key is expired
         if apiKey.isExpired {
-            return // Key is expired
+            return  // Key is expired
         }
 
         // Update last used information (async, don't wait)
-        let clientIP = request.headers.first(name: "X-Forwarded-For") ??
-                      request.headers.first(name: "X-Real-IP") ??
-                      request.remoteAddress?.description
+        let clientIP =
+            request.headers.first(name: "X-Forwarded-For") ?? request.headers.first(name: "X-Real-IP")
+            ?? request.remoteAddress?.description
 
         Task {
             try? await apiKey.updateLastUsed(ip: clientIP)

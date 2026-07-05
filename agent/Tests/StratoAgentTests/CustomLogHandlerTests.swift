@@ -48,7 +48,7 @@ struct CustomLogHandlerTests {
 
         let metadata: Logger.Metadata = [
             "request_id": "12345",
-            "user_id": "user-67890"
+            "user_id": "user-67890",
         ]
         handler.metadata = metadata
 
@@ -131,15 +131,17 @@ struct CustomLogHandlerTests {
         #expect(handler2[metadataKey: "handler"] == "2")
     }
 
-    @Test("All log levels are supported", arguments: [
-        Logger.Level.trace,
-        Logger.Level.debug,
-        Logger.Level.info,
-        Logger.Level.notice,
-        Logger.Level.warning,
-        Logger.Level.error,
-        Logger.Level.critical
-    ])
+    @Test(
+        "All log levels are supported",
+        arguments: [
+            Logger.Level.trace,
+            Logger.Level.debug,
+            Logger.Level.info,
+            Logger.Level.notice,
+            Logger.Level.warning,
+            Logger.Level.error,
+            Logger.Level.critical,
+        ])
     func logLevelFiltering(level: Logger.Level) {
         var handler = CustomLogHandler(label: "test-logger")
         handler.logLevel = level

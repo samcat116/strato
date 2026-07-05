@@ -99,10 +99,12 @@ struct RateLimitMiddleware: AsyncMiddleware {
         // 1. Exponential backoff: reject early if this identity is currently
         //    locked out from a run of failed auth attempts.
         if scope == .auth, let retryAfter = await activeLockout(store, identity: identity) {
-            request.logger.warning("rate_limit_locked_out", metadata: [
-                "identity": .string(identity),
-                "retryAfter": .stringConvertible(retryAfter)
-            ])
+            request.logger.warning(
+                "rate_limit_locked_out",
+                metadata: [
+                    "identity": .string(identity),
+                    "retryAfter": .stringConvertible(retryAfter),
+                ])
             return lockoutResponse(retryAfter: retryAfter)
         }
 
@@ -113,19 +115,23 @@ struct RateLimitMiddleware: AsyncMiddleware {
             count = try await store.hit(key, window: policy.window)
         } catch {
             // Fail open: a limiter backend error must not take down the API.
-            request.logger.error("rate_limit_backend_error", metadata: [
-                "error": .string(String(reflecting: error))
-            ])
+            request.logger.error(
+                "rate_limit_backend_error",
+                metadata: [
+                    "error": .string(String(reflecting: error))
+                ])
             return try await next.respond(to: request)
         }
 
         let remaining = max(0, policy.limit - count.count)
         if count.count > policy.limit {
-            request.logger.warning("rate_limit_exceeded", metadata: [
-                "scope": .string(scope.rawValue),
-                "identity": .string(identity),
-                "path": .string(request.url.path)
-            ])
+            request.logger.warning(
+                "rate_limit_exceeded",
+                metadata: [
+                    "scope": .string(scope.rawValue),
+                    "identity": .string(identity),
+                    "path": .string(request.url.path),
+                ])
             return limitedResponse(limit: policy.limit, resetAfter: count.ttl)
         }
 
@@ -229,7 +235,8 @@ struct RateLimitMiddleware: AsyncMiddleware {
     private func clientIP(for request: Request) -> String {
         if config.trustForwardedFor {
             if let forwarded = request.headers.first(name: "X-Forwarded-For"),
-               let first = forwarded.split(separator: ",").first {
+                let first = forwarded.split(separator: ",").first
+            {
                 return first.trimmingCharacters(in: .whitespaces)
             }
             if let realIP = request.headers.first(name: "X-Real-IP") {

@@ -7,7 +7,9 @@ import Fluent
 /// so the tree-walking logic can be tested and reused independently of routing.
 struct HierarchyTreeBuilder {
     /// Builds the complete hierarchy response for an organization.
-    static func buildCompleteHierarchy(organization: Organization, on db: Database) async throws -> OrganizationHierarchyResponse {
+    static func buildCompleteHierarchy(organization: Organization, on db: Database) async throws
+        -> OrganizationHierarchyResponse
+    {
         // Get all OUs for the organization
         let allOUs = try await OrganizationalUnit.query(on: db)
             .filter(\.$organization.$id == organization.id!)
@@ -79,7 +81,8 @@ struct HierarchyTreeBuilder {
             }
             .count()
 
-        let maxDepth = try await OrganizationalUnit.query(on: db)
+        let maxDepth =
+            try await OrganizationalUnit.query(on: db)
             .filter(\.$organization.$id == organizationID)
             .max(\.$depth) ?? 0
 
@@ -95,7 +98,9 @@ struct HierarchyTreeBuilder {
         )
     }
 
-    private static func buildOUNode(ou: OrganizationalUnit, allOUs: [OrganizationalUnit], allProjects: [Project], on db: Database) async throws -> OrganizationalUnitNode {
+    private static func buildOUNode(
+        ou: OrganizationalUnit, allOUs: [OrganizationalUnit], allProjects: [Project], on db: Database
+    ) async throws -> OrganizationalUnitNode {
         // Get child OUs
         let childOUs = allOUs.filter { $0.$parentOU.id == ou.id }
         var childNodes: [OrganizationalUnitNode] = []

@@ -8,8 +8,8 @@ import StratoShared
 // MARK: - Supporting Types
 
 struct AgentInfo: Sendable {
-    let id: String      // Database UUID
-    let name: String    // Human-readable name
+    let id: String  // Database UUID
+    let name: String  // Human-readable name
     let hostname: String
     let version: String
     let capabilities: [String]

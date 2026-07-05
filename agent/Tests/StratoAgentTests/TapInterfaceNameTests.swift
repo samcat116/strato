@@ -14,11 +14,11 @@ struct TapInterfaceNameTests {
     @Test("TAP name never exceeds the Linux IFNAMSIZ limit (15 chars)")
     func tapNameFitsInterfaceNameLimit() {
         let vmIds = [
-            "550e8400-e29b-41d4-a716-446655440000", // a typical UUID (36 chars)
+            "550e8400-e29b-41d4-a716-446655440000",  // a typical UUID (36 chars)
             "00000000-0000-0000-0000-000000000000",
             "short",
             "",
-            String(repeating: "a", count: 256) // pathologically long
+            String(repeating: "a", count: 256),  // pathologically long
         ]
         for vmId in vmIds {
             let name = tapInterfaceName(for: vmId)
@@ -56,10 +56,10 @@ struct TapInterfaceNameTests {
     @Test("Real TAP device create/remove round-trips")
     func tapCreateRemoveRoundTrips() {
         guard ProcessInfo.processInfo.environment["STRATO_TAP_INTEGRATION"] == "1" else {
-            return // opt-in only
+            return  // opt-in only
         }
         guard geteuid() == 0 else {
-            return // requires root / CAP_NET_ADMIN
+            return  // requires root / CAP_NET_ADMIN
         }
 
         let name = tapInterfaceName(for: "integration-\(UUID().uuidString)")

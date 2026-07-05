@@ -35,7 +35,8 @@ extension DatabaseQuery.Filter {
     /// `pattern` is expected to already contain the `%`/`_` wildcards for the desired
     /// match and to have had literal wildcard characters escaped via `escapeLikePattern`.
     private static func caseInsensitiveLike(schema: String, column: String, pattern: String) -> DatabaseQuery.Filter {
-        let expression: SQLQueryString = "LOWER(\(ident: schema).\(ident: column)) LIKE LOWER(\(bind: pattern)) ESCAPE '\\'"
+        let expression: SQLQueryString =
+            "LOWER(\(ident: schema).\(ident: column)) LIKE LOWER(\(bind: pattern)) ESCAPE '\\'"
         return .custom(expression)
     }
 

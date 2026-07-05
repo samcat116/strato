@@ -103,7 +103,9 @@ final class ImageControllerTests {
 
     // MARK: - Test App Helper
 
-    func withImageTestApp(_ test: (Application, User, Organization, Project, String, String) async throws -> Void) async throws {
+    func withImageTestApp(_ test: (Application, User, Organization, Project, String, String) async throws -> Void)
+        async throws
+    {
         let app = try await Application.makeForTesting()
         let tempStoragePath = try Self.createTempStorageDirectory()
 
@@ -330,15 +332,16 @@ final class ImageControllerTests {
             try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 req.headers.contentType = .json
-                try req.content.encode(CreateImageRequest(
-                    name: "URL Image",
-                    description: "Image from URL",
-                    sourceURL: "https://example.com/image.qcow2",
-                    defaultCpu: 2,
-                    defaultMemory: 4 * 1024 * 1024 * 1024,
-                    defaultDisk: 20 * 1024 * 1024 * 1024,
-                    defaultCmdline: nil
-                ))
+                try req.content.encode(
+                    CreateImageRequest(
+                        name: "URL Image",
+                        description: "Image from URL",
+                        sourceURL: "https://example.com/image.qcow2",
+                        defaultCpu: 2,
+                        defaultMemory: 4 * 1024 * 1024 * 1024,
+                        defaultDisk: 20 * 1024 * 1024 * 1024,
+                        defaultCmdline: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
@@ -356,15 +359,16 @@ final class ImageControllerTests {
             try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 req.headers.contentType = .json
-                try req.content.encode(CreateImageRequest(
-                    name: "No URL Image",
-                    description: nil,
-                    sourceURL: nil,
-                    defaultCpu: nil,
-                    defaultMemory: nil,
-                    defaultDisk: nil,
-                    defaultCmdline: nil
-                ))
+                try req.content.encode(
+                    CreateImageRequest(
+                        name: "No URL Image",
+                        description: nil,
+                        sourceURL: nil,
+                        defaultCpu: nil,
+                        defaultMemory: nil,
+                        defaultDisk: nil,
+                        defaultCmdline: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
@@ -377,15 +381,16 @@ final class ImageControllerTests {
             try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 req.headers.contentType = .json
-                try req.content.encode(CreateImageRequest(
-                    name: "Invalid URL Image",
-                    description: nil,
-                    sourceURL: "not-a-valid-url",
-                    defaultCpu: nil,
-                    defaultMemory: nil,
-                    defaultDisk: nil,
-                    defaultCmdline: nil
-                ))
+                try req.content.encode(
+                    CreateImageRequest(
+                        name: "Invalid URL Image",
+                        description: nil,
+                        sourceURL: "not-a-valid-url",
+                        defaultCpu: nil,
+                        defaultMemory: nil,
+                        defaultDisk: nil,
+                        defaultCmdline: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
@@ -398,15 +403,16 @@ final class ImageControllerTests {
             try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 req.headers.contentType = .json
-                try req.content.encode(CreateImageRequest(
-                    name: "FTP URL Image",
-                    description: nil,
-                    sourceURL: "ftp://example.com/image.qcow2",
-                    defaultCpu: nil,
-                    defaultMemory: nil,
-                    defaultDisk: nil,
-                    defaultCmdline: nil
-                ))
+                try req.content.encode(
+                    CreateImageRequest(
+                        name: "FTP URL Image",
+                        description: nil,
+                        sourceURL: "ftp://example.com/image.qcow2",
+                        defaultCpu: nil,
+                        defaultMemory: nil,
+                        defaultDisk: nil,
+                        defaultCmdline: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
@@ -418,15 +424,16 @@ final class ImageControllerTests {
         try await withImageTestApp { app, _, _, project, _, _ in
             try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
                 req.headers.contentType = .json
-                try req.content.encode(CreateImageRequest(
-                    name: "URL Image",
-                    description: nil,
-                    sourceURL: "https://example.com/image.qcow2",
-                    defaultCpu: nil,
-                    defaultMemory: nil,
-                    defaultDisk: nil,
-                    defaultCmdline: nil
-                ))
+                try req.content.encode(
+                    CreateImageRequest(
+                        name: "URL Image",
+                        description: nil,
+                        sourceURL: "https://example.com/image.qcow2",
+                        defaultCpu: nil,
+                        defaultMemory: nil,
+                        defaultDisk: nil,
+                        defaultCmdline: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .unauthorized)
             }
@@ -448,7 +455,8 @@ final class ImageControllerTests {
 
             try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                req.headers.contentType = HTTPMediaType(type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
                 req.body = ByteBuffer(data: body)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -476,7 +484,8 @@ final class ImageControllerTests {
 
             try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                req.headers.contentType = HTTPMediaType(type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
                 req.body = ByteBuffer(data: body)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -500,7 +509,8 @@ final class ImageControllerTests {
 
             try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                req.headers.contentType = HTTPMediaType(type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
                 req.body = ByteBuffer(data: body)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -523,7 +533,8 @@ final class ImageControllerTests {
             )
 
             try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
-                req.headers.contentType = HTTPMediaType(type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
                 req.body = ByteBuffer(data: body)
             } afterResponse: { res in
                 #expect(res.status == .unauthorized)
@@ -546,14 +557,15 @@ final class ImageControllerTests {
 
             try await app.test(.PUT, "/api/projects/\(project.id!)/images/\(image.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(UpdateImageRequest(
-                    name: "Updated Name",
-                    description: "Updated description",
-                    defaultCpu: 4,
-                    defaultMemory: 8 * 1024 * 1024 * 1024,
-                    defaultDisk: 50 * 1024 * 1024 * 1024,
-                    defaultCmdline: "console=ttyS0"
-                ))
+                try req.content.encode(
+                    UpdateImageRequest(
+                        name: "Updated Name",
+                        description: "Updated description",
+                        defaultCpu: 4,
+                        defaultMemory: 8 * 1024 * 1024 * 1024,
+                        defaultDisk: 50 * 1024 * 1024 * 1024,
+                        defaultCmdline: "console=ttyS0"
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
@@ -578,20 +590,21 @@ final class ImageControllerTests {
 
             try await app.test(.PUT, "/api/projects/\(project.id!)/images/\(image.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(UpdateImageRequest(
-                    name: "New Name Only",
-                    description: nil,
-                    defaultCpu: nil,
-                    defaultMemory: nil,
-                    defaultDisk: nil,
-                    defaultCmdline: nil
-                ))
+                try req.content.encode(
+                    UpdateImageRequest(
+                        name: "New Name Only",
+                        description: nil,
+                        defaultCpu: nil,
+                        defaultMemory: nil,
+                        defaultDisk: nil,
+                        defaultCmdline: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
                 let response = try res.content.decode(ImageResponse.self)
                 #expect(response.name == "New Name Only")
-                #expect(response.description == "Original description") // Unchanged
+                #expect(response.description == "Original description")  // Unchanged
             }
         }
     }
@@ -603,14 +616,15 @@ final class ImageControllerTests {
 
             try await app.test(.PUT, "/api/projects/\(project.id!)/images/\(fakeImageId)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(UpdateImageRequest(
-                    name: "Updated",
-                    description: nil,
-                    defaultCpu: nil,
-                    defaultMemory: nil,
-                    defaultDisk: nil,
-                    defaultCmdline: nil
-                ))
+                try req.content.encode(
+                    UpdateImageRequest(
+                        name: "Updated",
+                        description: nil,
+                        defaultCpu: nil,
+                        defaultMemory: nil,
+                        defaultDisk: nil,
+                        defaultCmdline: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .notFound)
             }
@@ -624,14 +638,15 @@ final class ImageControllerTests {
             let image = try await builder.createImage(project: project, uploadedBy: user)
 
             try await app.test(.PUT, "/api/projects/\(project.id!)/images/\(image.id!)") { req in
-                try req.content.encode(UpdateImageRequest(
-                    name: "Updated",
-                    description: nil,
-                    defaultCpu: nil,
-                    defaultMemory: nil,
-                    defaultDisk: nil,
-                    defaultCmdline: nil
-                ))
+                try req.content.encode(
+                    UpdateImageRequest(
+                        name: "Updated",
+                        description: nil,
+                        defaultCpu: nil,
+                        defaultMemory: nil,
+                        defaultDisk: nil,
+                        defaultCmdline: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .unauthorized)
             }
@@ -865,15 +880,16 @@ final class ImageControllerTests {
             try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 req.headers.contentType = .json
-                try req.content.encode(CreateImageRequest(
-                    name: "URL Image",
-                    description: nil,
-                    sourceURL: "https://example.com/image.qcow2",
-                    defaultCpu: nil,
-                    defaultMemory: nil,
-                    defaultDisk: nil,
-                    defaultCmdline: nil
-                ))
+                try req.content.encode(
+                    CreateImageRequest(
+                        name: "URL Image",
+                        description: nil,
+                        sourceURL: "https://example.com/image.qcow2",
+                        defaultCpu: nil,
+                        defaultMemory: nil,
+                        defaultDisk: nil,
+                        defaultCmdline: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -890,14 +906,15 @@ final class ImageControllerTests {
             try await app.test(.PUT, "/api/projects/\(project.id!)/images/\(image.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 req.headers.contentType = .json
-                try req.content.encode(UpdateImageRequest(
-                    name: "Renamed",
-                    description: nil,
-                    defaultCpu: nil,
-                    defaultMemory: nil,
-                    defaultDisk: nil,
-                    defaultCmdline: nil
-                ))
+                try req.content.encode(
+                    UpdateImageRequest(
+                        name: "Renamed",
+                        description: nil,
+                        defaultCpu: nil,
+                        defaultMemory: nil,
+                        defaultDisk: nil,
+                        defaultCmdline: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }

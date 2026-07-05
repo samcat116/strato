@@ -12,7 +12,7 @@ final class SCIMExternalID: Model, @unchecked Sendable {
     var organization: Organization
 
     @Field(key: "resource_type")
-    var resourceType: String // "User" or "Group"
+    var resourceType: String  // "User" or "Group"
 
     @Field(key: "external_id")
     var externalId: String

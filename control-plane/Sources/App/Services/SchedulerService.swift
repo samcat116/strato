@@ -93,8 +93,8 @@ struct SchedulableAgent: Sendable {
     var remainingCapacity: Int64 {
         // Normalize to common scale and sum
         let cpuScore = Int64(availableCPU) * 1000
-        let memoryScore = availableMemory / (1024 * 1024) // MB
-        let diskScore = availableDisk / (1024 * 1024 * 1024) // GB
+        let memoryScore = availableMemory / (1024 * 1024)  // MB
+        let diskScore = availableDisk / (1024 * 1024 * 1024)  // GB
         return cpuScore + memoryScore + diskScore
     }
 }
@@ -150,19 +150,24 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
         case .noAvailableAgents:
             return "No online agents available for VM placement"
         case .unsupportedHypervisor(let required, let onlineAgents, let agentsWithoutHypervisors):
-            var message = "No online agent supports the \(required.displayName) hypervisor (\(onlineAgents) online agent(s) checked)"
+            var message =
+                "No online agent supports the \(required.displayName) hypervisor (\(onlineAgents) online agent(s) checked)"
             if agentsWithoutHypervisors > 0 {
-                message += "; \(agentsWithoutHypervisors) of them advertise no usable hypervisor backend at all — check their configured binary paths"
+                message +=
+                    "; \(agentsWithoutHypervisors) of them advertise no usable hypervisor backend at all — check their configured binary paths"
             }
             return message
         case .noUsableHypervisors(let onlineAgents):
-            return "All \(onlineAgents) online agent(s) advertise no usable hypervisor backend — check each agent's QEMU/Firecracker binary path configuration and its logs"
+            return
+                "All \(onlineAgents) online agent(s) advertise no usable hypervisor backend — check each agent's QEMU/Firecracker binary path configuration and its logs"
         case .architectureMismatch(let required):
-            return "No eligible agent has a \(required.displayName) host architecture (required for hardware-accelerated guests)"
+            return
+                "No eligible agent has a \(required.displayName) host architecture (required for hardware-accelerated guests)"
         case .networkCapabilityUnsatisfied:
             return "No eligible agent supports VM-to-VM networking required by this VM"
         case .insufficientResources(let required, let available):
-            return "No agent has sufficient resources. Required: CPU=\(required.cpu), Memory=\(required.memory), Disk=\(required.disk). Available agents: \(available.count)"
+            return
+                "No agent has sufficient resources. Required: CPU=\(required.cpu), Memory=\(required.memory), Disk=\(required.disk). Available agents: \(available.count)"
         case .invalidStrategy(let strategy):
             return "Invalid scheduling strategy: \(strategy)"
         case .agentServiceUnavailable:
@@ -229,7 +234,9 @@ final class SchedulerService: @unchecked Sendable {
     ) throws -> String {
         let selectedStrategy = strategy ?? defaultStrategy
 
-        logger.info("Scheduling VM '\(vmName)' using \(selectedStrategy.rawValue) strategy (hypervisor: \(requirements.hypervisorType.rawValue), arch: \(requirements.architecture?.rawValue ?? "any"))")
+        logger.info(
+            "Scheduling VM '\(vmName)' using \(selectedStrategy.rawValue) strategy (hypervisor: \(requirements.hypervisorType.rawValue), arch: \(requirements.architecture?.rawValue ?? "any"))"
+        )
 
         let eligibleAgents = try filterEligibleAgents(agents, for: requirements)
 
@@ -246,7 +253,9 @@ final class SchedulerService: @unchecked Sendable {
             selectedAgent = try selectRandom(from: eligibleAgents)
         }
 
-        logger.info("Selected agent '\(selectedAgent.name)' for VM '\(vmName)' - CPU: \(selectedAgent.availableCPU)/\(selectedAgent.totalCPU), Memory: \(selectedAgent.availableMemory)/\(selectedAgent.totalMemory), Disk: \(selectedAgent.availableDisk)/\(selectedAgent.totalDisk)")
+        logger.info(
+            "Selected agent '\(selectedAgent.name)' for VM '\(vmName)' - CPU: \(selectedAgent.availableCPU)/\(selectedAgent.totalCPU), Memory: \(selectedAgent.availableMemory)/\(selectedAgent.totalMemory), Disk: \(selectedAgent.availableDisk)/\(selectedAgent.totalDisk)"
+        )
 
         return selectedAgent.id
     }
@@ -295,7 +304,8 @@ final class SchedulerService: @unchecked Sendable {
             architectureMatched = hypervisorCapable
         }
 
-        let networkCapable = requirements.requiresInterVMNetworking
+        let networkCapable =
+            requirements.requiresInterVMNetworking
             ? architectureMatched.filter { $0.supportsInterVMNetworking }
             : architectureMatched
         guard !networkCapable.isEmpty else {
@@ -303,9 +313,8 @@ final class SchedulerService: @unchecked Sendable {
         }
 
         let eligible = networkCapable.filter { agent in
-            agent.availableCPU >= requirements.cpu &&
-            agent.availableMemory >= requirements.memory &&
-            agent.availableDisk >= requirements.disk
+            agent.availableCPU >= requirements.cpu && agent.availableMemory >= requirements.memory
+                && agent.availableDisk >= requirements.disk
         }
         guard !eligible.isEmpty else {
             throw SchedulerError.insufficientResources(required: requirements, available: networkCapable)
@@ -320,7 +329,8 @@ final class SchedulerService: @unchecked Sendable {
         guard let selected = agents.min(by: { $0.remainingCapacity < $1.remainingCapacity }) else {
             throw SchedulerError.noAvailableAgents
         }
-        logger.debug("BestFit selected agent '\(selected.name)' with remaining capacity score: \(selected.remainingCapacity)")
+        logger.debug(
+            "BestFit selected agent '\(selected.name)' with remaining capacity score: \(selected.remainingCapacity)")
         return selected
     }
 
@@ -330,7 +340,9 @@ final class SchedulerService: @unchecked Sendable {
         guard let selected = agents.min(by: { $0.overallUtilization < $1.overallUtilization }) else {
             throw SchedulerError.noAvailableAgents
         }
-        logger.debug("LeastLoaded selected agent '\(selected.name)' with utilization: \(String(format: "%.2f%%", selected.overallUtilization * 100))")
+        logger.debug(
+            "LeastLoaded selected agent '\(selected.name)' with utilization: \(String(format: "%.2f%%", selected.overallUtilization * 100))"
+        )
         return selected
     }
 

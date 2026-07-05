@@ -78,7 +78,10 @@ actor WebSocketClient {
     // drop (triggers the agent's reconnection loop).
     private var intentionalDisconnect = false
 
-    init(url: String, agent: Agent, logger: Logger, tlsConfiguration: TLSConfiguration? = nil, registrationToken: String? = nil, inboundContinuation: AsyncStream<MessageEnvelope>.Continuation) {
+    init(
+        url: String, agent: Agent, logger: Logger, tlsConfiguration: TLSConfiguration? = nil,
+        registrationToken: String? = nil, inboundContinuation: AsyncStream<MessageEnvelope>.Continuation
+    ) {
         self.url = url
         self.agent = agent
         self.logger = logger
@@ -126,10 +129,12 @@ actor WebSocketClient {
 
         // Log TLS status
         if let tlsConfig = tlsConfiguration {
-            logger.info("Connecting with mTLS enabled", metadata: [
-                "scheme": .string(scheme),
-                "certificateVerification": .string(String(describing: tlsConfig.certificateVerification))
-            ])
+            logger.info(
+                "Connecting with mTLS enabled",
+                metadata: [
+                    "scheme": .string(scheme),
+                    "certificateVerification": .string(String(describing: tlsConfig.certificateVerification)),
+                ])
         } else {
             logger.debug("Connecting without TLS (plain WebSocket)")
         }
@@ -184,9 +189,11 @@ actor WebSocketClient {
 
                     do {
                         let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
-                        loggerRef.info("Received message from control plane", metadata: [
-                            "type": .string(envelope.type.rawValue)
-                        ])
+                        loggerRef.info(
+                            "Received message from control plane",
+                            metadata: [
+                                "type": .string(envelope.type.rawValue)
+                            ])
 
                         // Preserve arrival order: hand off to the agent's ordered inbound
                         // pipeline rather than spawning an unordered per-frame Task.
@@ -213,9 +220,11 @@ actor WebSocketClient {
 
                     do {
                         let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
-                        loggerRef.info("Received message from control plane", metadata: [
-                            "type": .string(envelope.type.rawValue)
-                        ])
+                        loggerRef.info(
+                            "Received message from control plane",
+                            metadata: [
+                                "type": .string(envelope.type.rawValue)
+                            ])
 
                         // Preserve arrival order: hand off to the agent's ordered inbound
                         // pipeline rather than spawning an unordered per-frame Task.
@@ -241,7 +250,9 @@ actor WebSocketClient {
                 }
             }.whenFailure { error in
                 if !resumed.testAndSet(true) {
-                    continuation.resume(throwing: WebSocketClientError.connectionFailed("Failed to connect: \(error.localizedDescription)"))
+                    continuation.resume(
+                        throwing: WebSocketClientError.connectionFailed(
+                            "Failed to connect: \(error.localizedDescription)"))
                 }
             }
         }
@@ -286,10 +297,12 @@ actor WebSocketClient {
             throw WebSocketClientError.notConnected
         }
 
-        logger.debug("Sending WebSocket message", metadata: [
-            "type": .string(message.type.rawValue),
-            "requestId": .string(message.requestId)
-        ])
+        logger.debug(
+            "Sending WebSocket message",
+            metadata: [
+                "type": .string(message.type.rawValue),
+                "requestId": .string(message.requestId),
+            ])
 
         // Encode message to JSON
         let envelope = try MessageEnvelope(message: message)

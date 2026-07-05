@@ -98,7 +98,7 @@ final class ImageValidationServiceTests {
     @Test("Detect raw format from small ByteBuffer")
     func testDetectFormatSmallBuffer() {
         var buffer = ByteBufferAllocator().buffer(capacity: 2)
-        buffer.writeBytes([0x51, 0x46]) // Only first 2 bytes of magic
+        buffer.writeBytes([0x51, 0x46])  // Only first 2 bytes of magic
         let format = ImageValidationService.detectFormat(from: buffer)
         #expect(format == .raw)
     }
@@ -125,7 +125,7 @@ final class ImageValidationServiceTests {
 
     @Test("Detect raw format from small file")
     func testDetectFormatSmallFile() throws {
-        let filePath = try Self.createTempFile(content: Data([0x51, 0x46])) // Only 2 bytes
+        let filePath = try Self.createTempFile(content: Data([0x51, 0x46]))  // Only 2 bytes
         defer { Self.removeTempFile(filePath) }
 
         let format = try ImageValidationService.detectFormat(filePath: filePath)
@@ -352,7 +352,7 @@ final class ImageValidationServiceTests {
 
     @Test("Get QCOW2 virtual size")
     func testGetQCOW2VirtualSize() throws {
-        let expectedSize: Int64 = 10 * 1024 * 1024 * 1024 // 10GB
+        let expectedSize: Int64 = 10 * 1024 * 1024 * 1024  // 10GB
         let filePath = try Self.createTempQCOW2File(virtualSize: expectedSize)
         defer { Self.removeTempFile(filePath) }
 
@@ -374,9 +374,9 @@ final class ImageValidationServiceTests {
     @Test("Get QCOW2 virtual size handles different sizes")
     func testGetQCOW2VirtualSizeDifferentSizes() throws {
         let sizes: [Int64] = [
-            1 * 1024 * 1024 * 1024,      // 1GB
-            50 * 1024 * 1024 * 1024,     // 50GB
-            100 * 1024 * 1024 * 1024,    // 100GB
+            1 * 1024 * 1024 * 1024,  // 1GB
+            50 * 1024 * 1024 * 1024,  // 50GB
+            100 * 1024 * 1024 * 1024,  // 100GB
         ]
 
         for expectedSize in sizes {
@@ -406,7 +406,7 @@ final class ImageValidationServiceTests {
         let (format, checksum) = try ImageValidationService.validateImage(filePath: filePath)
 
         #expect(format == .qcow2)
-        #expect(checksum.count == 64) // SHA256 hex string length
+        #expect(checksum.count == 64)  // SHA256 hex string length
     }
 
     @Test("Validate raw image")

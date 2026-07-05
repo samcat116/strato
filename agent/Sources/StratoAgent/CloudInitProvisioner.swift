@@ -35,31 +35,31 @@ struct CloudInitProvisioner {
 
             // Create meta-data file (required for NoCloud)
             let metaData = """
-            instance-id: \(vmId)
-            local-hostname: vm-\(vmId.prefix(8))
-            """
+                instance-id: \(vmId)
+                local-hostname: vm-\(vmId.prefix(8))
+                """
             let metaDataPath = (tempDir as NSString).appendingPathComponent("meta-data")
             try metaData.write(toFile: metaDataPath, atomically: true, encoding: .utf8)
 
             // Create user-data file with serial console configuration
             let userData = """
-            #cloud-config
-            # Enable serial console output
-            bootcmd:
-              # Update GRUB to output to serial console
-              - 'sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\\"console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0\\"/" /etc/default/grub || true'
-              - 'update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg 2>/dev/null || true'
+                #cloud-config
+                # Enable serial console output
+                bootcmd:
+                  # Update GRUB to output to serial console
+                  - 'sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\\"console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0\\"/" /etc/default/grub || true'
+                  - 'update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg 2>/dev/null || true'
 
-            # Enable getty on serial console
-            runcmd:
-              - systemctl enable --now serial-getty@ttyS0.service || true
-              - systemctl enable --now serial-getty@ttyAMA0.service || true
-              - systemctl enable --now serial-getty@hvc0.service || true
-              # Emit a marker so we can verify console output quickly
-              - "sh -c 'echo [cloud-init] console marker > /dev/ttyS0 2>/dev/null || true'"
-              - "sh -c 'echo [cloud-init] console marker > /dev/ttyAMA0 2>/dev/null || true'"
-              - "sh -c 'echo [cloud-init] console marker > /dev/hvc0 2>/dev/null || true'"
-            """
+                # Enable getty on serial console
+                runcmd:
+                  - systemctl enable --now serial-getty@ttyS0.service || true
+                  - systemctl enable --now serial-getty@ttyAMA0.service || true
+                  - systemctl enable --now serial-getty@hvc0.service || true
+                  # Emit a marker so we can verify console output quickly
+                  - "sh -c 'echo [cloud-init] console marker > /dev/ttyS0 2>/dev/null || true'"
+                  - "sh -c 'echo [cloud-init] console marker > /dev/ttyAMA0 2>/dev/null || true'"
+                  - "sh -c 'echo [cloud-init] console marker > /dev/hvc0 2>/dev/null || true'"
+                """
             let userDataPath = (tempDir as NSString).appendingPathComponent("user-data")
             try userData.write(toFile: userDataPath, atomically: true, encoding: .utf8)
 
@@ -74,20 +74,21 @@ struct CloudInitProvisioner {
                 "-joliet",
                 "-o", isoPath,
                 "-default-volume-name", "cidata",
-                tempDir
+                tempDir,
             ]
             #else
             // Try genisoimage first, then mkisofs
             let genisoimagePath = "/usr/bin/genisoimage"
             let mkisofsPath = "/usr/bin/mkisofs"
-            executableURL = URL(fileURLWithPath:
-                fileManager.fileExists(atPath: genisoimagePath) ? genisoimagePath : mkisofsPath)
+            executableURL = URL(
+                fileURLWithPath:
+                    fileManager.fileExists(atPath: genisoimagePath) ? genisoimagePath : mkisofsPath)
             arguments = [
                 "-output", isoPath,
                 "-volid", "cidata",
                 "-joliet",
                 "-rock",
-                tempDir
+                tempDir,
             ]
             #endif
 

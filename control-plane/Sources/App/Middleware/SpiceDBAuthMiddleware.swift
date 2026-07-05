@@ -9,7 +9,7 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
         // Dev mode bypass - skip all auth
         if request.application.environment == .development,
-           Environment.get("DEV_AUTH_BYPASS") == "true"
+            Environment.get("DEV_AUTH_BYPASS") == "true"
         {
             // Reload the dev user from the database to ensure proper context
             // This is necessary because the stored user object may not be properly
@@ -31,10 +31,10 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         // Swift type-checker ("unable to type-check in reasonable time").
         let path = request.url.path
         let exactPublic: Set<String> = [
-            "/", "/hello", "/login", "/register", "/api/docs", "/openapi.json", "/favicon.ico"
+            "/", "/hello", "/login", "/register", "/api/docs", "/openapi.json", "/favicon.ico",
         ]
         let publicPrefixes = [
-            "/health", "/auth", "/api/users/register", "/onboarding", "/js/", "/styles/", "/agent/ws"
+            "/health", "/auth", "/api/users/register", "/onboarding", "/js/", "/styles/", "/agent/ws",
         ]
         // Signed image-download URLs: agents fetch base images with an HMAC
         // signature, not a session; the controller verifies the signature.

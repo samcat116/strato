@@ -8,7 +8,9 @@ import Fluent
 struct HierarchyPathResolver {
     /// Builds the ordered path components from the organization root down to the
     /// given entity. Unknown entity types yield just the organization root.
-    static func buildEntityPath(entityType: String, entityID: UUID, organizationID: UUID, on db: Database) async throws -> [PathComponent] {
+    static func buildEntityPath(entityType: String, entityID: UUID, organizationID: UUID, on db: Database) async throws
+        -> [PathComponent]
+    {
         var components: [PathComponent] = []
 
         // Add organization as root
@@ -45,8 +47,9 @@ struct HierarchyPathResolver {
             if let project = try await Project.find(entityID, on: db) {
                 // Add OU path if project belongs to OU
                 if let ouID = project.$organizationalUnit.id {
-                    let ouComponents = try await buildEntityPath(entityType: "organizational_unit", entityID: ouID, organizationID: organizationID, on: db)
-                    components.append(contentsOf: ouComponents.dropFirst()) // Remove duplicate org
+                    let ouComponents = try await buildEntityPath(
+                        entityType: "organizational_unit", entityID: ouID, organizationID: organizationID, on: db)
+                    components.append(contentsOf: ouComponents.dropFirst())  // Remove duplicate org
                 }
                 components.append(PathComponent(id: entityID, name: project.name, type: "project"))
             }
@@ -54,8 +57,9 @@ struct HierarchyPathResolver {
         case "vm":
             if let vm = try await VM.find(entityID, on: db) {
                 // Add project path
-                let projectComponents = try await buildEntityPath(entityType: "project", entityID: vm.$project.id, organizationID: organizationID, on: db)
-                components.append(contentsOf: projectComponents.dropFirst()) // Remove duplicate org
+                let projectComponents = try await buildEntityPath(
+                    entityType: "project", entityID: vm.$project.id, organizationID: organizationID, on: db)
+                components.append(contentsOf: projectComponents.dropFirst())  // Remove duplicate org
                 components.append(PathComponent(id: entityID, name: vm.name, type: "vm"))
             }
 

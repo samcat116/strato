@@ -119,10 +119,11 @@ private func launchAgent(
     // Validate the registration URL up front so a bad copy-paste fails fast.
     if let regURL = registrationURL {
         guard let url = URL(string: regURL),
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let queryItems = components.queryItems,
-              queryItems.contains(where: { $0.name == "token" }),
-              queryItems.contains(where: { $0.name == "name" }) else {
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+            let queryItems = components.queryItems,
+            queryItems.contains(where: { $0.name == "token" }),
+            queryItems.contains(where: { $0.name == "name" })
+        else {
             logger.error("Invalid registration URL format. Must include 'token' and 'name' query parameters.")
             logger.error("Expected format: ws://host:port/agent/ws?token=TOKEN&name=AGENT_NAME")
             throw ExitCode.failure
@@ -140,10 +141,11 @@ private func launchAgent(
             throw ExitCode.failure
         }
     } else if writeConfigIfMissing,
-              !FileManager.default.fileExists(atPath: AgentConfig.defaultConfigPath),
-              !FileManager.default.fileExists(atPath: AgentConfig.fallbackConfigPath),
-              let regURL = registrationURL,
-              let bareURL = WebSocketURLs.removingQuery(from: regURL) {
+        !FileManager.default.fileExists(atPath: AgentConfig.defaultConfigPath),
+        !FileManager.default.fileExists(atPath: AgentConfig.fallbackConfigPath),
+        let regURL = registrationURL,
+        let bareURL = WebSocketURLs.removingQuery(from: regURL)
+    {
         // First join on a host with no config: derive the control plane URL
         // from the registration URL and persist it, so plain restarts work.
         config = AgentConfig(controlPlaneURL: bareURL)
@@ -172,7 +174,9 @@ private func launchAgent(
             try stateStore.ensureWritable()
         } catch {
             logger.error("Cannot write the join state file at \(statePath): \(error)")
-            logger.error("The join state stores the reconnect credential; without it a restart cannot reconnect. Run with sufficient privileges (the default path is \(FileAgentStateStore.defaultPath)), or point --state-file (or state_file in config.toml) at a writable location.")
+            logger.error(
+                "The join state stores the reconnect credential; without it a restart cannot reconnect. Run with sufficient privileges (the default path is \(FileAgentStateStore.defaultPath)), or point --state-file (or state_file in config.toml) at a writable location."
+            )
             throw ExitCode.failure
         }
     }
@@ -199,22 +203,27 @@ private func launchAgent(
         isRegistrationMode = true
         logger.info("Using registration URL for initial agent registration")
     } else if let state = stateStore.load(),
-              let stateURL = WebSocketURLs.appendingNameQueryParameter(
-                  to: state.controlPlaneURL,
-                  name: state.agentName
-              ) {
+        let stateURL = WebSocketURLs.appendingNameQueryParameter(
+            to: state.controlPlaneURL,
+            name: state.agentName
+        )
+    {
         finalWebSocketURL = stateURL
         finalRegistrationToken = state.reconnectToken
         isRegistrationMode = false
-        logger.info("Resuming from persisted join state", metadata: [
-            "stateFile": .string(statePath),
-            "agentName": .string(state.agentName)
-        ])
+        logger.info(
+            "Resuming from persisted join state",
+            metadata: [
+                "stateFile": .string(statePath),
+                "agentName": .string(state.agentName),
+            ])
     } else {
         finalWebSocketURL = options.controlPlaneURL ?? config.controlPlaneURL
         finalRegistrationToken = nil
         isRegistrationMode = false
-        logger.info("No join state found; connecting with the configured control plane URL. If the control plane requires token registration, join first with: strato-agent join '<registration-url>'")
+        logger.info(
+            "No join state found; connecting with the configured control plane URL. If the control plane requires token registration, join first with: strato-agent join '<registration-url>'"
+        )
     }
 
     // Override config values with command-line arguments if provided
@@ -232,8 +241,10 @@ private func launchAgent(
     #endif
 
     // Resolve Firecracker configuration (Linux only)
-    let finalFirecrackerBinaryPath = options.firecrackerBinaryPath ?? config.firecrackerBinaryPath ?? AgentConfig.defaultFirecrackerBinaryPath
-    let finalFirecrackerSocketDir = options.firecrackerSocketDir ?? config.firecrackerSocketDir ?? AgentConfig.defaultFirecrackerSocketDir
+    let finalFirecrackerBinaryPath =
+        options.firecrackerBinaryPath ?? config.firecrackerBinaryPath ?? AgentConfig.defaultFirecrackerBinaryPath
+    let finalFirecrackerSocketDir =
+        options.firecrackerSocketDir ?? config.firecrackerSocketDir ?? AgentConfig.defaultFirecrackerSocketDir
 
     // Resolve hypervisor type
     let finalHypervisorType = config.hypervisorType ?? AgentConfig.defaultHypervisorType
@@ -252,28 +263,32 @@ private func launchAgent(
     // Update log level based on final configuration
     logger.logLevel = debug ? .debug : Logger.Level(rawValue: finalLogLevel) ?? .info
 
-    logger.info("Starting Strato Agent", metadata: [
-        "agentID": .string(finalAgentID),
-        "webSocketURL": .string(finalWebSocketURL),
-        "qemuSocketDir": .string(finalQemuSocketDir),
-        "vmStoragePath": .string(finalVMStoragePath),
-        "qemuBinaryPath": .string(finalQemuBinaryPath),
-        "firmwarePath": .string(finalFirmwarePath ?? "(platform default)"),
-        "firecrackerBinaryPath": .string(finalFirecrackerBinaryPath),
-        "firecrackerSocketDir": .string(finalFirecrackerSocketDir),
-        "hypervisorType": .string(finalHypervisorType.rawValue),
-        "hardwareAcceleration": .string(finalHardwareAcceleration ? "enabled" : "disabled"),
-        "logLevel": .string(finalLogLevel),
-        "stateFile": .string(statePath),
-        "registrationMode": .string(isRegistrationMode ? "yes" : "no")
-    ])
+    logger.info(
+        "Starting Strato Agent",
+        metadata: [
+            "agentID": .string(finalAgentID),
+            "webSocketURL": .string(finalWebSocketURL),
+            "qemuSocketDir": .string(finalQemuSocketDir),
+            "vmStoragePath": .string(finalVMStoragePath),
+            "qemuBinaryPath": .string(finalQemuBinaryPath),
+            "firmwarePath": .string(finalFirmwarePath ?? "(platform default)"),
+            "firecrackerBinaryPath": .string(finalFirecrackerBinaryPath),
+            "firecrackerSocketDir": .string(finalFirecrackerSocketDir),
+            "hypervisorType": .string(finalHypervisorType.rawValue),
+            "hardwareAcceleration": .string(finalHardwareAcceleration ? "enabled" : "disabled"),
+            "logLevel": .string(finalLogLevel),
+            "stateFile": .string(statePath),
+            "registrationMode": .string(isRegistrationMode ? "yes" : "no"),
+        ])
 
     // Log SPIFFE configuration if enabled
     if let spiffe = config.spiffe, spiffe.enabled {
-        logger.info("SPIFFE authentication enabled", metadata: [
-            "trustDomain": .string(spiffe.trustDomain ?? "strato.local"),
-            "sourceType": .string(spiffe.sourceType ?? "workload_api")
-        ])
+        logger.info(
+            "SPIFFE authentication enabled",
+            metadata: [
+                "trustDomain": .string(spiffe.trustDomain ?? "strato.local"),
+                "sourceType": .string(spiffe.sourceType ?? "workload_api"),
+            ])
     }
 
     let agent = Agent(
@@ -314,7 +329,9 @@ private func launchAgent(
     } catch let error as AgentError {
         if case .registrationRejected = error {
             logger.error("Agent failed to start: \(error)")
-            logger.error("The token was rejected (expired, already used, or revoked). Create a new registration token in the Strato UI (Agents → Create Registration Token) and run: strato-agent join '<registration-url>'")
+            logger.error(
+                "The token was rejected (expired, already used, or revoked). Create a new registration token in the Strato UI (Agents → Create Registration Token) and run: strato-agent join '<registration-url>'"
+            )
         } else {
             logger.error("Agent failed to start: \(error)")
         }

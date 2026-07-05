@@ -11,7 +11,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
     // Track VM network configurations for info queries
     private var vmNetworks: [String: VMNetworkInfo] = [:]
     private var logicalNetworks: [String: NetworkInfo] = [:]
-    private var nextIPSuffix: UInt8 = 15 // Start from 10.0.2.15 (QEMU default)
+    private var nextIPSuffix: UInt8 = 15  // Start from 10.0.2.15 (QEMU default)
     private var usedMACs: Set<String> = []
 
     init(logger: Logger) {
@@ -47,19 +47,21 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
             vmId: vmId,
             networkName: config.networkName,
             portName: "user-\(vmId)",
-            portUUID: nil, // Not applicable for user-mode networking
-            tapInterface: "n/a", // User-mode doesn't use TAP
+            portUUID: nil,  // Not applicable for user-mode networking
+            tapInterface: "n/a",  // User-mode doesn't use TAP
             macAddress: macAddress,
             ipAddress: ipAddress
         )
 
         vmNetworks[vmId] = networkInfo
 
-        logger.info("VM network created with user-mode networking", metadata: [
-            "vmId": .string(vmId),
-            "macAddress": .string(macAddress),
-            "ipAddress": .string(ipAddress)
-        ])
+        logger.info(
+            "VM network created with user-mode networking",
+            metadata: [
+                "vmId": .string(vmId),
+                "macAddress": .string(macAddress),
+                "ipAddress": .string(ipAddress),
+            ])
 
         return networkInfo
     }
@@ -68,7 +70,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         let config = VMNetworkConfig(
             networkName: networkName,
             macAddress: macAddress,
-            subnet: "10.0.2.0/24" // QEMU user-mode default
+            subnet: "10.0.2.0/24"  // QEMU user-mode default
         )
         return try await createVMNetwork(vmId: vmId, config: config)
     }
@@ -95,7 +97,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
             subnet: subnet,
             gateway: gateway,
             dhcpEnabled: true,
-            dnsServers: ["10.0.2.3"] // QEMU user-mode DNS server
+            dnsServers: ["10.0.2.3"]  // QEMU user-mode DNS server
         )
 
         logicalNetworks[name] = networkInfo
@@ -125,7 +127,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         let ip = "10.0.2.\(nextIPSuffix)"
         nextIPSuffix += 1
         if nextIPSuffix > 254 {
-            nextIPSuffix = 15 // Wrap around, skip network/broadcast
+            nextIPSuffix = 15  // Wrap around, skip network/broadcast
         }
         return ip
     }
@@ -135,23 +137,24 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         // Use QEMU's OUI (52:54:00) for better compatibility
         var macAddress: String
         var attempts = 0
-        
+
         repeat {
             let bytes = (0..<3).map { _ in UInt8.random(in: 0...255) }
             macAddress = "52:54:00:" + bytes.map { String(format: "%02x", $0) }.joined(separator: ":")
             attempts += 1
-            
+
             if attempts > maxMACGenerationAttempts {
                 // Fallback to deterministic MAC if we can't find a unique one
                 let timestamp = UInt32(Date().timeIntervalSince1970)
-                macAddress = String(format: "52:54:00:%02x:%02x:%02x", 
-                                   UInt8(timestamp >> 16 & 0xFF),
-                                   UInt8(timestamp >> 8 & 0xFF),
-                                   UInt8(timestamp & 0xFF))
+                macAddress = String(
+                    format: "52:54:00:%02x:%02x:%02x",
+                    UInt8(timestamp >> 16 & 0xFF),
+                    UInt8(timestamp >> 8 & 0xFF),
+                    UInt8(timestamp & 0xFF))
                 break
             }
         } while usedMACs.contains(macAddress)
-        
+
         usedMACs.insert(macAddress)
         return macAddress
     }

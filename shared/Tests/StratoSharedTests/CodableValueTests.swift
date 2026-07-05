@@ -61,9 +61,9 @@ struct CodableValueTests {
     @Test func heterogeneousObjectSurvivesEnvelope() throws {
         // The typical shape of SuccessMessage.data: an untyped bag of values.
         let json = """
-        {"state":"Running","cpus":4,"balloon":0.5,"paused":false,
-         "tags":["web","prod"],"nested":{"depth":2},"missing":null}
-        """
+            {"state":"Running","cpus":4,"balloon":0.5,"paused":false,
+             "tags":["web","prod"],"nested":{"depth":2},"missing":null}
+            """
         let value = try decodeJSON(CodableValue.self, from: json)
         let reencoded = try roundTrip(value)
 

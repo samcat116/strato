@@ -60,7 +60,7 @@ struct MessageOrderingTests {
         // them out of order. A per-key serial lane must still record 0,1,2,...
         for index in 0..<count {
             await queue.enqueue(key: "vm-A") {
-                let backwards = UInt64(count - index) * 1_000_000 // ms, descending
+                let backwards = UInt64(count - index) * 1_000_000  // ms, descending
                 try? await Task.sleep(nanoseconds: backwards)
                 await recorder.append(index)
             }
@@ -145,7 +145,7 @@ struct MessageOrderingTests {
             payload: payload([
                 "vmData": ["id": vmId.uuidString],
                 "vmSpec": ["networks": [["network": "net0"], [String: String]()]],
-                "requestId": "r1"
+                "requestId": "r1",
             ])
         )
         // The VM lane, the named network, and network:default for the unnamed entry.
@@ -267,7 +267,7 @@ struct MessageOrderingTests {
             type: .volumeClone,
             payload: payload([
                 "sourceVolumeId": sourceId, "sourceVolumePath": "/a",
-                "targetVolumeId": targetId, "targetVolumePath": "/b"
+                "targetVolumeId": targetId, "targetVolumePath": "/b",
             ])
         )
 

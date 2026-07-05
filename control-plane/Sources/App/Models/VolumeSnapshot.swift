@@ -4,11 +4,11 @@ import Foundation
 
 /// Represents the status of a volume snapshot
 public enum SnapshotStatus: String, Codable, CaseIterable, Sendable {
-    case creating = "creating"     // Snapshot is being created
-    case available = "available"   // Snapshot is ready for use
-    case restoring = "restoring"   // Snapshot is being restored to a volume
-    case deleting = "deleting"     // Snapshot is being deleted
-    case error = "error"           // An error occurred
+    case creating = "creating"  // Snapshot is being created
+    case available = "available"  // Snapshot is ready for use
+    case restoring = "restoring"  // Snapshot is being restored to a volume
+    case deleting = "deleting"  // Snapshot is being deleted
+    case error = "error"  // An error occurred
 }
 
 final class VolumeSnapshot: Model, @unchecked Sendable {

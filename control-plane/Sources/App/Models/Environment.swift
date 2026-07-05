@@ -10,8 +10,8 @@ struct DeploymentEnvironment: Content {
     let name: String
     let displayName: String
     let description: String
-    let color: String // For UI display
-    let icon: String // For UI display
+    let color: String  // For UI display
+    let icon: String  // For UI display
     let isProduction: Bool
     let requiresApproval: Bool
 
@@ -70,7 +70,7 @@ struct DeploymentEnvironment: Content {
     static let defaults: [DeploymentEnvironment] = [
         development,
         staging,
-        production
+        production,
     ]
 
     // Get all available preset environments
@@ -79,7 +79,7 @@ struct DeploymentEnvironment: Content {
         staging,
         production,
         testing,
-        demo
+        demo,
     ]
 
     // Get environment by name

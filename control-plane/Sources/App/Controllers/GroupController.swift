@@ -61,7 +61,8 @@ struct GroupController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let groupID = req.parameters.get("groupID", as: UUID.self) else {
+            let groupID = req.parameters.get("groupID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or group ID")
         }
 
@@ -135,7 +136,8 @@ struct GroupController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let groupID = req.parameters.get("groupID", as: UUID.self) else {
+            let groupID = req.parameters.get("groupID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or group ID")
         }
 
@@ -185,7 +187,8 @@ struct GroupController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let groupID = req.parameters.get("groupID", as: UUID.self) else {
+            let groupID = req.parameters.get("groupID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or group ID")
         }
 
@@ -240,7 +243,8 @@ struct GroupController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let groupID = req.parameters.get("groupID", as: UUID.self) else {
+            let groupID = req.parameters.get("groupID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or group ID")
         }
 
@@ -265,7 +269,8 @@ struct GroupController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let groupID = req.parameters.get("groupID", as: UUID.self) else {
+            let groupID = req.parameters.get("groupID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or group ID")
         }
 
@@ -294,8 +299,9 @@ struct GroupController: RouteCollection {
                 .first()
 
             guard userOrg != nil else {
-                req.logger.warning("Attempted to add user \(userID) who is not a member of organization \(organizationID)")
-                continue // Skip invalid users instead of failing the entire request
+                req.logger.warning(
+                    "Attempted to add user \(userID) who is not a member of organization \(organizationID)")
+                continue  // Skip invalid users instead of failing the entire request
             }
 
             // Add to database
@@ -320,7 +326,8 @@ struct GroupController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let groupID = req.parameters.get("groupID", as: UUID.self) else {
+            let groupID = req.parameters.get("groupID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or group ID")
         }
 
@@ -364,8 +371,9 @@ struct GroupController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let groupID = req.parameters.get("groupID", as: UUID.self),
-              let userID = req.parameters.get("userID", as: UUID.self) else {
+            let groupID = req.parameters.get("groupID", as: UUID.self),
+            let userID = req.parameters.get("userID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization, group, or user ID")
         }
 

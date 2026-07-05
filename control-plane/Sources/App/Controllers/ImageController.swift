@@ -65,7 +65,8 @@ struct ImageController: RouteCollection {
         }
 
         guard let projectID = req.parameters.get("projectID", as: UUID.self),
-              let imageID = req.parameters.get("imageID", as: UUID.self) else {
+            let imageID = req.parameters.get("imageID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 
@@ -161,7 +162,8 @@ struct ImageController: RouteCollection {
         }
 
         // Extract filename from URL
-        let filename = try ImageValidationService.validateFilename(url.lastPathComponent.isEmpty ? "image.qcow2" : url.lastPathComponent)
+        let filename = try ImageValidationService.validateFilename(
+            url.lastPathComponent.isEmpty ? "image.qcow2" : url.lastPathComponent)
 
         // Create image record in pending state
         let image = Image(
@@ -199,19 +201,23 @@ struct ImageController: RouteCollection {
         )
 
         // Start background fetch
-        req.logger.info("Image created for URL fetch", metadata: [
-            "image_id": .string(imageId),
-            "source_url": .string(sourceURL)
-        ])
+        req.logger.info(
+            "Image created for URL fetch",
+            metadata: [
+                "image_id": .string(imageId),
+                "source_url": .string(sourceURL),
+            ])
 
         // Queue the fetch asynchronously
         Task {
             do {
                 try await req.imageFetchService.startFetch(imageId: image.id!)
             } catch {
-                req.logger.error("Failed to start image fetch: \(error)", metadata: [
-                    "image_id": .string(imageId)
-                ])
+                req.logger.error(
+                    "Failed to start image fetch: \(error)",
+                    metadata: [
+                        "image_id": .string(imageId)
+                    ])
             }
         }
 
@@ -342,12 +348,14 @@ struct ImageController: RouteCollection {
             subjectId: userID.uuidString
         )
 
-        req.logger.info("Image uploaded successfully", metadata: [
-            "image_id": .string(imageId),
-            "filename": .string(filename),
-            "size": .stringConvertible(size),
-            "format": .string(format.rawValue)
-        ])
+        req.logger.info(
+            "Image uploaded successfully",
+            metadata: [
+                "image_id": .string(imageId),
+                "filename": .string(filename),
+                "size": .stringConvertible(size),
+                "format": .string(format.rawValue),
+            ])
 
         return ImageResponse(from: tempImage)
     }
@@ -360,7 +368,8 @@ struct ImageController: RouteCollection {
         }
 
         guard let projectID = req.parameters.get("projectID", as: UUID.self),
-              let imageID = req.parameters.get("imageID", as: UUID.self) else {
+            let imageID = req.parameters.get("imageID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 
@@ -421,7 +430,8 @@ struct ImageController: RouteCollection {
         }
 
         guard let projectID = req.parameters.get("projectID", as: UUID.self),
-              let imageID = req.parameters.get("imageID", as: UUID.self) else {
+            let imageID = req.parameters.get("imageID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 
@@ -455,9 +465,11 @@ struct ImageController: RouteCollection {
                 imageId: imageID
             )
         } catch {
-            req.logger.warning("Failed to delete image file: \(error)", metadata: [
-                "image_id": .string(imageID.uuidString)
-            ])
+            req.logger.warning(
+                "Failed to delete image file: \(error)",
+                metadata: [
+                    "image_id": .string(imageID.uuidString)
+                ])
             // Continue with database deletion even if file deletion fails
         }
 
@@ -473,15 +485,17 @@ struct ImageController: RouteCollection {
 
     func download(req: Request) async throws -> Response {
         guard let projectID = req.parameters.get("projectID", as: UUID.self),
-              let imageID = req.parameters.get("imageID", as: UUID.self) else {
+            let imageID = req.parameters.get("imageID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 
         // Try signed URL authentication first (for agents)
         if let agentName = req.query[String.self, at: "agent"],
-           let expiresStr = req.query[String.self, at: "expires"],
-           let expires = Int(expiresStr),
-           let signature = req.query[String.self, at: "sig"] {
+            let expiresStr = req.query[String.self, at: "expires"],
+            let expires = Int(expiresStr),
+            let signature = req.query[String.self, at: "sig"]
+        {
 
             // Verify the signing key is configured
             let signingKey: String
@@ -505,17 +519,21 @@ struct ImageController: RouteCollection {
             )
 
             guard isValid else {
-                req.logger.warning("Invalid or expired image download signature", metadata: [
-                    "imageId": .string(imageID.uuidString),
-                    "agent": .string(agentName)
-                ])
+                req.logger.warning(
+                    "Invalid or expired image download signature",
+                    metadata: [
+                        "imageId": .string(imageID.uuidString),
+                        "agent": .string(agentName),
+                    ])
                 throw Abort(.forbidden, reason: "Invalid or expired download signature")
             }
 
-            req.logger.info("Agent downloading image via signed URL", metadata: [
-                "imageId": .string(imageID.uuidString),
-                "agent": .string(agentName)
-            ])
+            req.logger.info(
+                "Agent downloading image via signed URL",
+                metadata: [
+                    "imageId": .string(imageID.uuidString),
+                    "agent": .string(agentName),
+                ])
 
             // Signature valid - serve the file
             return try await serveImageFile(req: req, imageID: imageID, projectID: projectID)
@@ -580,7 +598,8 @@ struct ImageController: RouteCollection {
         }
 
         guard let projectID = req.parameters.get("projectID", as: UUID.self),
-              let imageID = req.parameters.get("imageID", as: UUID.self) else {
+            let imageID = req.parameters.get("imageID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 

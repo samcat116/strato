@@ -22,7 +22,8 @@ struct ResponseMessageTests {
     @Test func successWithTypedDataRoundTrip() throws {
         // The real handlers ship typed structs through AnyCodableValue —
         // e.g. VolumeStatusResponse inside a SuccessMessage.
-        let status = VolumeStatusResponse(volumeId: "vol-1", status: "attached", storagePath: "/var/lib/strato/vol-1.qcow2")
+        let status = VolumeStatusResponse(
+            volumeId: "vol-1", status: "attached", storagePath: "/var/lib/strato/vol-1.qcow2")
         let message = SuccessMessage(requestId: Fixtures.requestId, data: try AnyCodableValue(status))
         let decoded = try throughEnvelope(message)
         let extracted = try #require(try decoded.data?.decode(as: VolumeStatusResponse.self))
@@ -51,8 +52,8 @@ struct ResponseMessageTests {
     /// classification still interoperate; absence must decode as nil.
     @Test func errorDecodesWithoutCode() throws {
         let json = """
-        {"requestId":"r","timestamp":0,"error":"nope"}
-        """
+            {"requestId":"r","timestamp":0,"error":"nope"}
+            """
         let decoded = try decodeJSON(ErrorMessage.self, from: json)
         #expect(decoded.error == "nope")
         #expect(decoded.details == nil)
@@ -79,8 +80,8 @@ struct ResponseMessageTests {
     /// real message, not fail the whole decode.
     @Test func statusUpdateToleratesUnknownStatus() throws {
         let json = """
-        {"requestId":"r","timestamp":0,"vmId":"vm-5","status":"Hibernated"}
-        """
+            {"requestId":"r","timestamp":0,"vmId":"vm-5","status":"Hibernated"}
+            """
         let decoded = try decodeJSON(StatusUpdateMessage.self, from: json)
         #expect(decoded.status == .unknown)
     }

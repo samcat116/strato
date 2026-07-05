@@ -214,7 +214,8 @@ struct VMSpecBuilderTests {
 
         #expect(boot.kernel == "/template/kernel")
         #expect(boot.initramfs == "/template/initramfs")
-        #expect(boot.cmdline == "template cmdline console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0")
+        #expect(
+            boot.cmdline == "template cmdline console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0")
     }
 
     @Test("VMSpecBuilder handles missing optional template paths")

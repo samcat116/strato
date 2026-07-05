@@ -12,9 +12,10 @@ public enum WebSocketURLs {
     /// Returns nil if the URL is unparseable or has no `token` parameter.
     public static func extractingToken(from urlString: String) -> (url: String, token: String)? {
         guard var components = URLComponents(string: urlString),
-              var items = components.queryItems,
-              let index = items.firstIndex(where: { $0.name == "token" }),
-              let token = items[index].value else {
+            var items = components.queryItems,
+            let index = items.firstIndex(where: { $0.name == "token" }),
+            let token = items[index].value
+        else {
             return nil
         }
         items.remove(at: index)

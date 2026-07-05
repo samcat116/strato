@@ -35,9 +35,11 @@ public actor SPIRERegistrationService {
             throw SPIRERegistrationError.notConfigured
         }
 
-        logger.info("Creating SPIRE registration entry for agent", metadata: [
-            "agentName": .string(agentName)
-        ])
+        logger.info(
+            "Creating SPIRE registration entry for agent",
+            metadata: [
+                "agentName": .string(agentName)
+            ])
 
         // Create the SPIFFE ID for this agent
         let spiffeID = "spiffe://\(config.trustDomain)/agent/\(agentName)"
@@ -52,11 +54,13 @@ public actor SPIRERegistrationService {
             selectors: selectors.isEmpty ? defaultSelectors(for: agentName) : selectors
         )
 
-        logger.info("SPIRE registration entry created", metadata: [
-            "agentName": .string(agentName),
-            "spiffeID": .string(spiffeID),
-            "entryID": .string(entryID)
-        ])
+        logger.info(
+            "SPIRE registration entry created",
+            metadata: [
+                "agentName": .string(agentName),
+                "spiffeID": .string(spiffeID),
+                "entryID": .string(entryID),
+            ])
 
         return AgentRegistrationResult(
             spiffeID: spiffeID,
@@ -77,24 +81,30 @@ public actor SPIRERegistrationService {
 
         let spiffeID = "spiffe://\(config.trustDomain)/agent/\(agentName)"
 
-        logger.info("Revoking SPIRE registration for agent", metadata: [
-            "agentName": .string(agentName),
-            "spiffeID": .string(spiffeID)
-        ])
+        logger.info(
+            "Revoking SPIRE registration for agent",
+            metadata: [
+                "agentName": .string(agentName),
+                "spiffeID": .string(spiffeID),
+            ])
 
         // Find and delete the registration entry
         let entryID = try await findEntryBySpiffeID(spiffeID)
 
         if let entryID = entryID {
             try await deleteRegistrationEntry(entryID: entryID)
-            logger.info("SPIRE registration revoked", metadata: [
-                "agentName": .string(agentName),
-                "entryID": .string(entryID)
-            ])
+            logger.info(
+                "SPIRE registration revoked",
+                metadata: [
+                    "agentName": .string(agentName),
+                    "entryID": .string(entryID),
+                ])
         } else {
-            logger.warning("No SPIRE registration entry found for agent", metadata: [
-                "agentName": .string(agentName)
-            ])
+            logger.warning(
+                "No SPIRE registration entry found for agent",
+                metadata: [
+                    "agentName": .string(agentName)
+                ])
         }
     }
 
@@ -130,7 +140,7 @@ public actor SPIRERegistrationService {
 
         let body = JoinTokenRequest(
             ttl: config.joinTokenTTL,
-            token: nil // Let SPIRE generate the token
+            token: nil  // Let SPIRE generate the token
         )
 
         let response = try await httpClient.post(url) { req in
@@ -209,7 +219,7 @@ public actor SPIRERegistrationService {
                 spiffeID: "spiffe://\(entry.spiffe_id.trust_domain)\(entry.spiffe_id.path)",
                 parentID: "spiffe://\(entry.parent_id.trust_domain)\(entry.parent_id.path)",
                 selectors: entry.selectors.map { WorkloadSelector(type: $0.type, value: $0.value) },
-                createdAt: Date() // API doesn't always return creation time
+                createdAt: Date()  // API doesn't always return creation time
             )
         }
     }
@@ -220,7 +230,7 @@ public actor SPIRERegistrationService {
         // Default selectors for Strato Agent
         [
             WorkloadSelector(type: "unix", value: "uid:0"),
-            WorkloadSelector(type: "unix", value: "path:/usr/local/bin/strato-agent")
+            WorkloadSelector(type: "unix", value: "path:/usr/local/bin/strato-agent"),
         ]
     }
 
@@ -254,8 +264,8 @@ public struct SPIRERegistrationConfig: Sendable {
         enabled: Bool = false,
         serverURL: String = "http://localhost:8081",
         trustDomain: String = "strato.local",
-        joinTokenTTL: Int = 600, // 10 minutes
-        svidTTL: Int = 3600 // 1 hour
+        joinTokenTTL: Int = 600,  // 10 minutes
+        svidTTL: Int = 3600  // 1 hour
     ) {
         self.enabled = enabled
         self.serverURL = serverURL
@@ -409,9 +419,11 @@ extension Application {
         )
 
         spireRegistrationService = service
-        logger.info("SPIRE registration service configured", metadata: [
-            "serverURL": .string(config.serverURL),
-            "trustDomain": .string(config.trustDomain)
-        ])
+        logger.info(
+            "SPIRE registration service configured",
+            metadata: [
+                "serverURL": .string(config.serverURL),
+                "trustDomain": .string(config.trustDomain),
+            ])
     }
 }

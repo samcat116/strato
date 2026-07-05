@@ -30,7 +30,10 @@ struct VMNetworkConfig: Sendable {
     let subnet: String?
     let gateway: String?
 
-    init(networkName: String, macAddress: String? = nil, ipAddress: String? = nil, subnet: String? = nil, gateway: String? = nil) {
+    init(
+        networkName: String, macAddress: String? = nil, ipAddress: String? = nil, subnet: String? = nil,
+        gateway: String? = nil
+    ) {
         self.networkName = networkName
         self.macAddress = macAddress
         self.ipAddress = ipAddress
@@ -58,7 +61,10 @@ struct NetworkInfo: Codable, Sendable {
     let dhcpEnabled: Bool?
     let dnsServers: [String]?
 
-    init(name: String, uuid: String, subnet: String, gateway: String? = nil, vlanId: Int? = nil, dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil) {
+    init(
+        name: String, uuid: String, subnet: String, gateway: String? = nil, vlanId: Int? = nil,
+        dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil
+    ) {
         self.name = name
         self.uuid = uuid
         self.subnet = subnet

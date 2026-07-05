@@ -49,7 +49,8 @@ struct AgentController: RouteCollection {
         let isHTTPS = forwardedProto == "https" || (forwardedProto == nil && req.url.scheme == "https")
         let scheme = isHTTPS ? "wss" : "ws"
 
-        let host = Environment.get("EXTERNAL_HOSTNAME").map(Self.sanitizedHost)
+        let host =
+            Environment.get("EXTERNAL_HOSTNAME").map(Self.sanitizedHost)
             ?? req.headers["host"].first
             ?? "localhost:8080"
 
@@ -93,7 +94,8 @@ struct AgentController: RouteCollection {
             .first()
 
         if let existing = existingToken, existing.isValid {
-            throw Abort(.conflict, reason: "A valid registration token already exists for agent '\(createRequest.agentName)'")
+            throw Abort(
+                .conflict, reason: "A valid registration token already exists for agent '\(createRequest.agentName)'")
         }
 
         // Create new registration token
@@ -106,11 +108,13 @@ struct AgentController: RouteCollection {
 
         let baseURL = webSocketBaseURL(req: req)
 
-        req.logger.info("Created agent registration token", metadata: [
-            "agentName": .string(createRequest.agentName),
-            "tokenId": .string(token.id?.uuidString ?? "unknown"),
-            "expiresAt": .string(token.expiresAt?.description ?? "no expiration")
-        ])
+        req.logger.info(
+            "Created agent registration token",
+            metadata: [
+                "agentName": .string(createRequest.agentName),
+                "tokenId": .string(token.id?.uuidString ?? "unknown"),
+                "expiresAt": .string(token.expiresAt?.description ?? "no expiration"),
+            ])
 
         return try AgentRegistrationTokenResponse(from: token, baseURL: baseURL)
     }
@@ -140,10 +144,12 @@ struct AgentController: RouteCollection {
 
         try await token.delete(on: req.db)
 
-        req.logger.info("Revoked agent registration token", metadata: [
-            "tokenId": .string(tokenId.uuidString),
-            "agentName": .string(token.agentName)
-        ])
+        req.logger.info(
+            "Revoked agent registration token",
+            metadata: [
+                "tokenId": .string(tokenId.uuidString),
+                "agentName": .string(token.agentName),
+            ])
 
         return .noContent
     }
@@ -201,10 +207,12 @@ struct AgentController: RouteCollection {
         // Delete from database
         try await agent.delete(on: req.db)
 
-        req.logger.info("Deregistered agent", metadata: [
-            "agentId": .string(agentId.uuidString),
-            "agentName": .string(agent.name)
-        ])
+        req.logger.info(
+            "Deregistered agent",
+            metadata: [
+                "agentId": .string(agentId.uuidString),
+                "agentName": .string(agent.name),
+            ])
 
         return .noContent
     }
@@ -227,10 +235,12 @@ struct AgentController: RouteCollection {
         agent.status = .offline
         try await agent.save(on: req.db)
 
-        req.logger.info("Forced agent offline", metadata: [
-            "agentId": .string(agentId.uuidString),
-            "agentName": .string(agent.name)
-        ])
+        req.logger.info(
+            "Forced agent offline",
+            metadata: [
+                "agentId": .string(agentId.uuidString),
+                "agentName": .string(agent.name),
+            ])
 
         return .noContent
     }

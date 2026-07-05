@@ -15,8 +15,9 @@ struct SecurityHeadersTests {
             #expect(res.headers.first(name: "X-Content-Type-Options") == "nosniff")
             #expect(res.headers.first(name: "X-Frame-Options") == "DENY")
             #expect(res.headers.first(name: "Referrer-Policy") == "strict-origin-when-cross-origin")
-            #expect(res.headers.first(name: "Content-Security-Policy")
-                == SecurityHeadersMiddleware.defaultContentSecurityPolicy)
+            #expect(
+                res.headers.first(name: "Content-Security-Policy")
+                    == SecurityHeadersMiddleware.defaultContentSecurityPolicy)
         }
 
         try await app.asyncShutdown()
@@ -84,8 +85,9 @@ struct SecurityHeadersTests {
             req.headers.bearerAuthorization = BearerAuthorization(token: token)
         } afterResponse: { res async throws in
             #expect(res.status == .ok)
-            #expect(res.headers.first(name: "Content-Security-Policy")
-                != SecurityHeadersMiddleware.defaultContentSecurityPolicy)
+            #expect(
+                res.headers.first(name: "Content-Security-Policy")
+                    != SecurityHeadersMiddleware.defaultContentSecurityPolicy)
             #expect(res.headers.first(name: "X-Frame-Options") == "DENY")
             #expect(res.headers.first(name: "X-Content-Type-Options") == "nosniff")
         }
