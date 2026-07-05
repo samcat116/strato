@@ -2,6 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working in worktrees (IMPORTANT)
+
+- Sessions almost always run in a git worktree under `.claude/worktrees/<name>/`. Other Claude sessions may be active in sibling worktrees and in the main checkout at the same time.
+- NEVER `cd` into or edit `/Users/sam/Projects/Active/strato/` (the main checkout) directly. Derive all paths from your own session's tree (`git rev-parse --show-toplevel`).
+- The shell cwd resets between Bash calls: always use absolute paths rooted in your worktree, never bare relative commands like `cd control-plane && ...` chained across calls.
+- If you see uncommitted changes you didn't make, they belong to another session's tree — do not fix, complete, or revert them; check `pwd` and re-root yourself first.
+
+## Pull request conventions
+
+- Before creating a PR (and again before declaring work done), run `git fetch origin main && git merge origin/main` and resolve conflicts locally. Parallel sessions land PRs frequently, so branches go stale within hours — don't wait for the merge-conflict notification.
+- Review comments from `chatgpt-codex-connector[bot]` that only report Codex usage limits are noise: do not reply, push, or take any action on them.
+- Use `/pr-comments` to fetch and address unresolved review threads on the current branch's PR.
+
 ## Development Commands
 
 ### Control Plane (Swift/Vapor Commands)
@@ -35,6 +48,13 @@ The agent uses TOML configuration files to set connection and operational parame
 - `cd shared && swift build` - Build the shared package
 - `cd shared && swift test` - Run shared package tests
 
+### Build & test notes
+- Swift builds in a fresh worktree start from a cold `.build` and can take 10+ minutes. Run builds/tests with a generous timeout or in the background — never the default 2-minute timeout.
+- Prefer `swift test --filter <SuiteName>` while iterating; run the full suite once before creating or updating a PR.
+- Control-plane tests run against in-memory SQLite locally — no Postgres/SpiceDB services needed. CI additionally runs a Postgres job, so migrations must work on BOTH (SQLite `ALTER TABLE` cannot combine multiple actions in one migration step; use separate `.update()` calls).
+- Known CI flake: the "Test Control Plane (Postgres)" job can crash with Vapor's `ServeCommand did not shutdown before deinit` teardown race. If a failure doesn't reproduce locally and matches this signature, rerun with `gh run rerun <run-id> --failed` instead of debugging.
+- CI runs on a self-hosted runner on the strato-dev VM (`/home/sam/actions-runner`). If Swift CI fails with missing-symbol errors your diff can't explain, suspect a stale runner build cache — reproduce locally before debugging source.
+
 ### JavaScript/Linting Commands (Control Plane)
 - `cd control-plane && npm run lint` - Check JavaScript files for syntax errors and style issues
 - `cd control-plane && npm run lint:fix` - Automatically fix JavaScript style issues where possible
@@ -59,6 +79,16 @@ The agent uses TOML configuration files to set connection and operational parame
 Two compose files with different purposes:
 - **Root `docker-compose.yml`**: local development only (fixed dev credentials, in-memory SpiceDB, `DEV_AUTH_BYPASS`). `docker compose up control-plane` starts the control plane with its dependencies. Database migrations run automatically at control-plane startup — there is no separate migrate step.
 - **`deploy/compose/`**: the supported single-host deployment. `./setup.sh` generates a `.env` with strong random secrets, then `docker compose up -d`. Uses published images, persistent SpiceDB (PostgreSQL datastore), automatic SpiceDB migration/schema loading, and no auth bypass.
+
+### strato-dev VM (remote sessions at /home/sam/strato)
+When running on the strato-dev Linux VM (Ubuntu, headless):
+- The user browses from their Mac — never say "open localhost". The UI is served at `https://strato-dev.tail21c16.ts.net` (tailscale serve → nginx :80). k3s occupies :443, so don't try to bind it.
+- There are no published container images for this environment; the compose stack builds from source (long Swift build — always run in the background).
+- Deployment overrides go in `deploy/compose/docker-compose.override.yml`, never in the tracked compose file.
+- Control-plane tests need Postgres: user `strato` / password `strato_password` / db `strato_test`, on port 5433 to avoid colliding with the compose stack.
+- First-user registration is a WebAuthn passkey flow that only the user can complete in their browser — hand it off rather than attempting it.
+- `sudo` requires a password on this host. If a command needs root, give the user the exact command to run instead of retrying.
+- This is a disposable dev VM: when asked to "clean up" deployments, removing all strato-* containers and volumes is in scope.
 
 ### Frontend/Styling (Control Plane)
 - The frontend is a **Next.js** app (App Router) in `control-plane/web/`, deployed as a separate `strato-frontend` service that consumes the control-plane API.
