@@ -140,14 +140,12 @@ actor VolumeService {
         volume: Volume,
         sourceImage: Image? = nil
     ) async throws -> (agentId: String, storagePath: String?) {
-        // For now, select an agent using the scheduler
         // In the future, we might want to consider storage locality
         let agentService = app.agentService
 
-        // Get list of online agents
         let agents = await agentService.getAgentList()
 
-        guard let selectedAgent = agents.first(where: { $0.status == .online }) else {
+        guard let selectedAgent = Self.selectVolumeAgent(from: agents) else {
             throw VolumeServiceError.noAgentsAvailable
         }
 
@@ -184,6 +182,14 @@ actor VolumeService {
             ])
 
         return (selectedAgent.id, status?.storagePath)
+    }
+
+    /// Pick the agent that should host a new volume. Volume attachment goes
+    /// through QEMU's block layer and requires the volume to live on the same
+    /// agent as the VM, so only online agents that can run QEMU are eligible —
+    /// a volume placed on a Firecracker-only agent could never be attached.
+    static func selectVolumeAgent(from agents: [AgentInfo]) -> AgentInfo? {
+        agents.first { $0.status == .online && $0.supportedHypervisors.contains(.qemu) }
     }
 
     /// Request an agent to delete a volume and await its confirmation.

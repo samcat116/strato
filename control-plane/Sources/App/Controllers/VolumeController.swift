@@ -250,7 +250,9 @@ struct VolumeController: RouteCollection {
         guard volume.canDelete else {
             throw Abort(
                 .conflict,
-                reason: "Volume cannot be deleted in status '\(volume.status.rawValue)'. Must be 'available' or 'error'"
+                reason:
+                    "Volume cannot be deleted in status '\(volume.status.rawValue)'. "
+                    + "Must be 'available', 'error', or 'deleting'"
             )
         }
 

@@ -11,3 +11,5 @@ export { projectsApi } from "./projects";
 export { apiKeysApi } from "./api-keys";
 export { groupsApi } from "./groups";
 export { organizationalUnitsApi } from "./organizational-units";
+export { quotasApi } from "./quotas";
+export { hierarchyApi } from "./hierarchy";
