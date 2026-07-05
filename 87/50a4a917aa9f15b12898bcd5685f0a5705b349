@@ -1,0 +1,24 @@
+control-plane/Sources/App/Controllers/VMController.swift
+  s_6d10c001a4a7b5::t_7248d76c554c63 404-406,409
+control-plane/Tests/AppTests/QuotaEnforcementTests.swift
+  s_6d10c001a4a7b5::t_a1fa83cd5b0248 189-221
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_6d10c001a4a7b5::t_8e6eaabd31427a 55-58,73-79,91-92,99,101-104,113,117-127
+  s_6d10c001a4a7b5::t_cc1553c0146e1c 128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8750a4a917aa9f15b12898bcd5685f0a5705b349",
+  "prompts": {},
+  "sessions": {
+    "s_6d10c001a4a7b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "50d4918c-41e7-4462-88f4-f3a42d7c12ee",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
