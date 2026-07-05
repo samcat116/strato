@@ -53,7 +53,7 @@ The agent uses TOML configuration files to set connection and operational parame
 - Prefer `swift test --filter <SuiteName>` while iterating; run the full suite once before creating or updating a PR.
 - Control-plane tests run against in-memory SQLite locally — no Postgres/SpiceDB services needed. CI additionally runs a Postgres job, so migrations must work on BOTH (SQLite `ALTER TABLE` cannot combine multiple actions in one migration step; use separate `.update()` calls).
 - Known CI flake: the "Test Control Plane (Postgres)" job can crash with Vapor's `ServeCommand did not shutdown before deinit` teardown race. If a failure doesn't reproduce locally and matches this signature, rerun with `gh run rerun <run-id> --failed` instead of debugging.
-- CI runs on a self-hosted runner on the strato-dev VM (`/home/sam/actions-runner`). If Swift CI fails with missing-symbol errors your diff can't explain, suspect a stale runner build cache — reproduce locally before debugging source.
+- Swift CI (PR build/test and main-branch release binaries) runs on the `swift-runners-strato` runner scale set managed by actions-runner-controller; Docker image builds still run on the static self-hosted runner on the strato-dev VM (`/home/sam/actions-runner`). If Swift CI fails with missing-symbol errors your diff can't explain, suspect a stale build cache in the runner's persistent `RUNNER_TOOL_CACHE` volume — reproduce locally before debugging source.
 
 ### JavaScript/Linting Commands (Control Plane)
 - `cd control-plane && npm run lint` - Check JavaScript files for syntax errors and style issues

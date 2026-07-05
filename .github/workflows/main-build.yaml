@@ -10,8 +10,9 @@ permissions:
   packages: write
   actions: read
 
-# Rapid merges to main can stack builds on the single self-hosted x64 runner.
-# This build only validates (Docker push: false), so keep just the latest.
+# Rapid merges to main can stack builds on the runners (the x64 Docker job
+# still runs on the single static self-hosted runner). This build only
+# validates (Docker push: false), so keep just the latest.
 concurrency:
   group: main-build-${{ github.ref }}
   cancel-in-progress: true
@@ -19,7 +20,9 @@ concurrency:
 jobs:
   build-swift-release:
     name: Build Swift Release Binaries
-    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'self-hosted' }}
+    # x64 runs on the ARC (actions-runner-controller) Swift runner scale set;
+    # scale-set runners match on the installation name as their only label.
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'swift-runners-strato' }}
     strategy:
       matrix:
         include:
@@ -30,8 +33,9 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install jemalloc dependencies (arm64)
-        if: matrix.arch == 'arm64'
+      # The control-plane binary links -ljemalloc on both arches. The old
+      # static x64 runner had it preinstalled; ephemeral runners do not.
+      - name: Install jemalloc dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libjemalloc-dev

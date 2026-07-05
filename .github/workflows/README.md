@@ -1,6 +1,6 @@
 # GitHub Actions Workflows
 
-This directory contains GitHub Actions workflows for the Strato project. Workflows use a **hybrid runner strategy**: only the heavy Swift build/test and release binary jobs run on the (single) self-hosted runner, where they benefit from a warm build cache. Lightweight jobs — frontend lint/build, Trivy scans, Helm tests, ARM64/macOS builds — run on GitHub-hosted runners so they don't queue behind Swift work. PR and main-branch workflows also use `concurrency` groups to cancel superseded runs on new pushes.
+This directory contains GitHub Actions workflows for the Strato project. Workflows use a **hybrid runner strategy**: the heavy Swift build/test and release binary jobs run on the `swift-runners-strato` runner scale set (self-hosted, managed by [actions-runner-controller](https://github.com/actions/actions-runner-controller)); Docker image builds that need a Docker daemon stay on the single static self-hosted runner; lightweight jobs — frontend lint/build, Trivy scans, Helm tests, ARM64/macOS builds — run on GitHub-hosted runners so they don't queue behind Swift work. PR and main-branch workflows also use `concurrency` groups to cancel superseded runs on new pushes.
 
 ## Workflows
 
@@ -8,7 +8,7 @@ This directory contains GitHub Actions workflows for the Strato project. Workflo
 Runs on pull requests to validate code quality:
 - Frontend lint & build (GitHub-hosted)
 - Swift package building and testing — shared, control plane, and agent
-  (self-hosted, warm cache)
+  (`swift-runners-strato` ARC scale set)
 - Docker image build checks, gated on Dockerfile changes (GitHub-hosted)
 - Security scanning with Trivy (GitHub-hosted)
 
@@ -50,29 +50,42 @@ when docs change on the main branch.
 
 ## Runner Configuration
 
-Workflows use a hybrid approach with both self-hosted and GitHub-hosted runners.
-The self-hosted runner is a single fast machine, so only jobs that genuinely
-benefit from it are pinned there; everything else is offloaded to
-GitHub-hosted runners to avoid queueing.
+Workflows use a hybrid approach: an ARC (actions-runner-controller) runner
+scale set for Swift work, one static self-hosted machine for Docker image
+builds, and GitHub-hosted runners for everything lightweight.
 
-Swift builds on the self-hosted runner keep their build state in a
-persistent scratch directory (`$RUNNER_TOOL_CACHE/strato-swift-build`,
-via `swift build --scratch-path`) rather than `actions/cache`. The directory
-lives outside the repo, so it survives checkout's `git clean -ffdx` and
-gives incremental builds across runs with no cache upload/download. The
-PR workflow wipes it automatically if it grows past ~25GB; it is also
-always safe to delete manually — the next run just rebuilds cold.
-
-### Self-Hosted Runners (x64/AMD64)
+### ARC Runner Scale Set: `swift-runners-strato` (x64)
 Used for:
-- PR validation — **Swift build & test only** (build.yaml)
-- Main branch x64 Swift release + Docker builds (main-build.yaml)
-- Release x64 Swift binary + Docker builds (release.yaml)
+- PR validation — Swift build & test (build.yaml)
+- Main branch x64 Swift release binaries (main-build.yaml)
 
-Requirements for self-hosted runners:
-- Swift 6.3+
+Jobs target the scale set with `runs-on: swift-runners-strato`. ARC
+scale-set runners match on **exactly one label — the installation name** —
+so never combine it with `self-hosted`, `Linux`, or arch labels.
+
+Requirements for the runner image / scale set:
+- `sudo` + `apt` available in the runner image (the default
+  `ghcr.io/actions/actions-runner` image has no sudo): `vapor/swiftly-action`
+  installs Swift's apt dependencies, and main-build installs `libjemalloc-dev`
+- QEMU/glib build dependencies for agent builds
+- Docker available to jobs (dind mode, or kubernetes mode with container
+  hooks) — the PR test job runs a Postgres **service container**
+- Optional but strongly recommended: a persistent volume mounted at
+  `RUNNER_TOOL_CACHE`. Swift build state lives in
+  `$RUNNER_TOOL_CACHE/strato-swift-build` (via `swift build --scratch-path`),
+  and swiftly caches toolchains there too. Without the volume every job runs
+  a cold build and re-downloads the toolchain; with it, builds are
+  incremental across runs with no cache upload/download. The PR workflow
+  wipes the scratch dir automatically past ~25GB; it is always safe to
+  delete manually — the next run just rebuilds cold.
+
+### Static Self-Hosted Runner (x64/AMD64)
+Used for:
+- Main branch x64 Docker image builds (main-build.yaml)
+- Release creation and x64 Docker image builds (release.yaml)
+
+Requirements:
 - Docker
-- QEMU dependencies (for agent builds)
 
 ### GitHub-Hosted Runners
 Used for:
@@ -85,7 +98,7 @@ Used for:
 - macOS binary builds (`macos-latest`)
 
 This hybrid approach:
-- Keeps the single self-hosted runner free for the heavy Swift work
+- Lets Swift jobs scale out on the ARC runner set instead of queueing on one machine
 - Runs lightweight jobs in parallel on GitHub's cloud instead of queueing
 - Provides ARM64/macOS build capability without dedicated runners
 - Maintains security controls via PR approval for self-hosted jobs
@@ -155,8 +168,9 @@ act pull_request -W .github/workflows/build.yaml --secret-file .secrets
 ## Troubleshooting
 
 ### Workflow not starting
-- Check if self-hosted runners are online in repository settings
-- Verify runner labels match `self-hosted`
+- Check if self-hosted runners / the ARC scale set are online in repository settings
+- For Swift jobs, verify `runs-on` is exactly `swift-runners-strato` (no extra labels)
+- For ARC, check the listener and runner pods: `kubectl get pods -n <arc-namespace>`
 - Check runner connectivity and logs
 
 ### Approval not appearing

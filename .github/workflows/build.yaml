@@ -12,7 +12,7 @@ permissions:
   pull-requests: read # dorny/paths-filter reads changed files via the PR API
 
 # Cancel any in-progress run for the same PR when a new commit is pushed,
-# so stale runs stop hogging the single self-hosted runner.
+# so stale runs don't tie up Swift runner capacity.
 concurrency:
   group: pr-validation-${{ github.ref }}
   cancel-in-progress: true
@@ -80,7 +80,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
     # Lightweight formatting check — runs on GitHub-hosted runners to keep the
-    # self-hosted runner free for the heavy Swift build+test job. `swift format`
+    # Swift runner pool free for the heavy build+test job. `swift format`
     # ships with the toolchain, so no extra tooling is needed.
     runs-on: ubuntu-latest
     steps:
@@ -105,7 +105,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.web == 'true' || needs.changes.outputs.workflow == 'true'
     # Lightweight Bun job — runs on GitHub-hosted runners to keep the
-    # self-hosted runner free for the heavy Swift build+test job.
+    # Swift runner pool free for the heavy build+test job.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -132,7 +132,10 @@ jobs:
     name: Build and Test Swift Packages
     needs: changes
     if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
-    runs-on: self-hosted
+    # ARC (actions-runner-controller) runner scale set. Scale-set runners
+    # match on exactly one label — the installation name — so do not add
+    # `self-hosted` or arch labels here.
+    runs-on: swift-runners-strato
     services:
       postgres:
         image: postgres:15
@@ -146,22 +149,22 @@ jobs:
           --health-timeout 5s
           --health-retries 5
         # Bind container port 5432 to an ephemeral host port (read back below
-        # via the job.services context) rather than a fixed 5432:5432. On the
-        # shared self-hosted runner a fixed mapping collides with anything else
-        # already bound to 5432; a dynamic port avoids that.
+        # via the job.services context) rather than a fixed 5432:5432, so the
+        # job never assumes 5432 is free on whichever runner hosts it.
         ports:
           - 5432
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Build state lives in a persistent scratch dir on the self-hosted
-      # runner instead of actions/cache: RUNNER_TOOL_CACHE survives both the
-      # end of the job and checkout's `git clean -ffdx` (it is outside the
-      # repo), so builds are incremental across runs with zero network cost.
-      # The GitHub cache never helped here — PR-scoped saves are unreadable
-      # by sibling PRs and nothing on main saved the key, so every run paid
-      # a ~5 minute 1.4GB upload for a restore that always missed.
+      # Build state lives in a scratch dir under RUNNER_TOOL_CACHE instead of
+      # actions/cache: the GitHub cache never helped here — PR-scoped saves
+      # are unreadable by sibling PRs and nothing on main saves the key, so
+      # every run paid a ~5 minute 1.4GB upload for a restore that always
+      # missed. On the ARC runners this path is warm only if the scale set
+      # mounts a persistent volume at RUNNER_TOOL_CACHE (it survives
+      # checkout's `git clean -ffdx` because it is outside the repo); on a
+      # plain ephemeral pod these steps are harmless and the build runs cold.
       - name: Prune build scratch dir if oversized
         run: |
           scratch="$RUNNER_TOOL_CACHE/strato-swift-build"
