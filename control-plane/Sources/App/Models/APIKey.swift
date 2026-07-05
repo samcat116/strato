@@ -99,9 +99,57 @@ final class APIKey: Model, @unchecked Sendable {
     var isValid: Bool {
         return isActive && !isExpired
     }
+
+    // MARK: - Scopes
+
+    /// The recognized scopes this key actually holds. Unknown scope strings are
+    /// dropped so a bogus scope can never accidentally grant access.
+    var grantedScopes: Set<APIKeyScope> {
+        Set(scopes.compactMap(APIKeyScope.init(rawValue:)))
+    }
+
+    /// Whether this key grants at least `required`, honoring the
+    /// `admin` > `write` > `read` hierarchy (a `write` key can read, an `admin`
+    /// key can do anything).
+    func grants(_ required: APIKeyScope) -> Bool {
+        grantedScopes.contains { $0 >= required }
+    }
 }
 
 extension APIKey: Content {}
+
+/// Permission scopes attachable to an API key. Ordered least-to-most
+/// privileged: `admin` implies `write` implies `read`.
+enum APIKeyScope: String, CaseIterable, Comparable {
+    case read
+    case write
+    case admin
+
+    static let validValues = Set(APIKeyScope.allCases.map(\.rawValue))
+
+    private var rank: Int {
+        switch self {
+        case .read: return 0
+        case .write: return 1
+        case .admin: return 2
+        }
+    }
+
+    static func < (lhs: APIKeyScope, rhs: APIKeyScope) -> Bool {
+        lhs.rank < rhs.rank
+    }
+
+    /// The minimum scope required to service a request with the given HTTP
+    /// method: safe (non-mutating) methods need `read`, everything else `write`.
+    static func required(for method: HTTPMethod) -> APIKeyScope {
+        switch method {
+        case .GET, .HEAD, .OPTIONS:
+            return .read
+        default:
+            return .write
+        }
+    }
+}
 
 // MARK: - String Extension for Random Generation
 
