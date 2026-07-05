@@ -429,30 +429,48 @@ extension Application {
         set { storage[SpiceDBMockAllowsKey.self] = newValue }
     }
 
+    /// The SpiceDB service, constructed from the required environment configuration.
+    ///
+    /// Throws rather than calling `fatalError` when configuration is missing: this
+    /// getter is reached on every authorized request, so a crash here would take
+    /// down a live server. `configure` validates the same variables at startup
+    /// (see `validateSpiceDBConfiguration`) so a misconfiguration fails fast at
+    /// boot rather than on the first request.
     var spicedb: SpiceDBServiceProtocol {
-        // In testing mode, use a mock implementation
-        if self.environment == .testing {
-            return MockSpiceDBService(checkPermissionResult: spicedbMockAllows)
-        }
+        get throws {
+            // In testing mode, use a mock implementation
+            if self.environment == .testing {
+                return MockSpiceDBService(checkPermissionResult: spicedbMockAllows)
+            }
 
-        guard let endpoint = Environment.get("SPICEDB_ENDPOINT") else {
-            fatalError("SPICEDB_ENDPOINT environment variable is required")
+            guard let endpoint = Environment.get("SPICEDB_ENDPOINT") else {
+                throw Abort(.internalServerError, reason: "SPICEDB_ENDPOINT environment variable is required")
+            }
+            // Require the preshared key to be provided explicitly. There is no
+            // in-code fallback: a hardcoded default would ship a known secret that
+            // authenticates against SpiceDB in any deployment that forgets to set
+            // this variable.
+            guard let presharedKey = Environment.get("SPICEDB_PRESHARED_KEY"),
+                  !presharedKey.isEmpty
+            else {
+                throw Abort(
+                    .internalServerError,
+                    reason: "SPICEDB_PRESHARED_KEY environment variable is required and must not be empty"
+                )
+            }
+            return SpiceDBService(client: self.client, endpoint: endpoint, presharedKey: presharedKey)
         }
-        // Require the preshared key to be provided explicitly. There is no
-        // in-code fallback: a hardcoded default would ship a known secret that
-        // authenticates against SpiceDB in any deployment that forgets to set
-        // this variable.
-        guard let presharedKey = Environment.get("SPICEDB_PRESHARED_KEY"),
-              !presharedKey.isEmpty
-        else {
-            fatalError("SPICEDB_PRESHARED_KEY environment variable is required and must not be empty")
-        }
-        return SpiceDBService(client: self.client, endpoint: endpoint, presharedKey: presharedKey)
+    }
+
+    /// Validate that the required SpiceDB environment configuration is present so
+    /// that a missing variable fails the boot rather than the first request.
+    func validateSpiceDBConfiguration() throws {
+        _ = try self.spicedb
     }
 }
 
 extension Request {
     var spicedb: SpiceDBServiceProtocol {
-        return self.application.spicedb
+        get throws { try self.application.spicedb }
     }
 }

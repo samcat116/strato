@@ -58,7 +58,7 @@ struct SCIMController: RouteCollection {
         let scimRequest = try buildSCIMRequest(from: req)
 
         // Create processor with handlers
-        let processor = await createProcessor(
+        let processor = try await createProcessor(
             req: req,
             organizationID: organizationID,
             authContext: authContext
@@ -183,7 +183,7 @@ struct SCIMController: RouteCollection {
         req: Request,
         organizationID: UUID,
         authContext: SCIMAuthContext
-    ) async -> SCIMRequestProcessor {
+    ) async throws -> SCIMRequestProcessor {
         // Build base URL for this organization's SCIM endpoint
         // Prioritize X-Forwarded-Proto header (set by reverse proxies), then check TLS config, then URL scheme
         let forwardedProto = req.headers.first(name: "X-Forwarded-Proto")?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -229,14 +229,14 @@ struct SCIMController: RouteCollection {
         let userHandler = UserSCIMHandler(
             db: req.db,
             organizationID: organizationID,
-            spicedb: req.spicedb
+            spicedb: try req.spicedb
         )
         await processor.register(userHandler)
 
         let groupHandler = GroupSCIMHandler(
             db: req.db,
             organizationID: organizationID,
-            spicedb: req.spicedb
+            spicedb: try req.spicedb
         )
         await processor.register(groupHandler)
 

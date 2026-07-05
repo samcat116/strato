@@ -393,21 +393,32 @@ extension Application {
         typealias Value = SchedulerService
     }
 
+    /// The configured scheduler service.
+    ///
+    /// Throws rather than calling `fatalError` if accessed before `configure`
+    /// installed it: this getter is reachable from request handling, so a missing
+    /// service should surface as a request error, not crash the process. Install
+    /// it with `useScheduler(_:)` during boot.
     var scheduler: SchedulerService {
-        get {
+        get throws {
             guard let scheduler = self.storage[SchedulerServiceKey.self] else {
-                fatalError("SchedulerService not configured. Call app.scheduler = SchedulerService(...) in configure.swift")
+                throw Abort(
+                    .internalServerError,
+                    reason: "SchedulerService not configured. Call app.useScheduler(...) in configure.swift"
+                )
             }
             return scheduler
         }
-        set {
-            self.storage[SchedulerServiceKey.self] = newValue
-        }
+    }
+
+    /// Install the scheduler service during application configuration.
+    func useScheduler(_ scheduler: SchedulerService) {
+        self.storage[SchedulerServiceKey.self] = scheduler
     }
 }
 
 extension Request {
     var scheduler: SchedulerService {
-        return self.application.scheduler
+        get throws { try self.application.scheduler }
     }
 }
