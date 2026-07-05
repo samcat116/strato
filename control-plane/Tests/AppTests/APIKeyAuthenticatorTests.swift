@@ -336,6 +336,15 @@ struct APIKeyAuthenticatorTests {
         let user = try await createTestUser(on: app.db)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
 
+        // This is a route-level unit test of the `isAPIKeyAuthenticated` request
+        // property, including the *unauthenticated* branch. `configure` now installs
+        // the global `SpiceDBAuthMiddleware` in every environment (issue #196), which
+        // would 401 the no-key request below before it ever reaches the handler. Reset
+        // the middleware stack to just error handling so the request-scoped
+        // authenticator on the route group is the only auth in play.
+        app.middleware = Middlewares()
+        app.middleware.use(ErrorMiddleware.default(environment: app.environment))
+
         // Create a test route that checks isAPIKeyAuthenticated
         app.routes.all.removeAll()
         let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
