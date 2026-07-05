@@ -45,15 +45,42 @@ export function ManageGroupMembersDialog({
   onOpenChange,
   canManage,
 }: ManageGroupMembersDialogProps) {
-  const groupId = group?.id ?? "";
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+        {/* Keyed so per-group state (e.g. the pending member selection) resets
+            whenever a different group is opened, rather than leaking across
+            groups while this component stays mounted. */}
+        {group && (
+          <MembersManager
+            key={group.id}
+            orgId={orgId}
+            group={group}
+            canManage={canManage}
+          />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function MembersManager({
+  orgId,
+  group,
+  canManage,
+}: {
+  orgId: string;
+  group: Group;
+  canManage: boolean;
+}) {
   const { data: members = [], isLoading: isMembersLoading } = useGroupMembers(
     orgId,
-    group?.id
+    group.id
   );
   const { data: orgMembers = [], isLoading: isOrgMembersLoading } =
-    useOrganizationMembers(open ? orgId : "");
-  const addMembers = useAddGroupMembers(orgId, groupId);
-  const removeMember = useRemoveGroupMember(orgId, groupId);
+    useOrganizationMembers(orgId);
+  const addMembers = useAddGroupMembers(orgId, group.id);
+  const removeMember = useRemoveGroupMember(orgId, group.id);
 
   const [selectedUserId, setSelectedUserId] = useState("");
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -65,12 +92,17 @@ export function ManageGroupMembersDialog({
   }, [orgMembers, members]);
 
   const handleAdd = async () => {
-    if (!selectedUserId) return;
+    // Guard against a stale selection (e.g. the user was added via another
+    // path and is no longer a candidate).
+    const added = candidates.find((c) => c.id === selectedUserId);
+    if (!added) {
+      setSelectedUserId("");
+      return;
+    }
     try {
-      await addMembers.mutateAsync([selectedUserId]);
-      const added = candidates.find((c) => c.id === selectedUserId);
+      await addMembers.mutateAsync([added.id]);
       toast.success(
-        `Added ${added?.displayName || added?.username || "member"} to ${group?.name}`
+        `Added ${added.displayName || added.username} to ${group.name}`
       );
       setSelectedUserId("");
     } catch (error) {
@@ -91,124 +123,122 @@ export function ManageGroupMembersDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
-        <DialogHeader>
-          <DialogTitle>Manage Members{group ? ` — ${group.name}` : ""}</DialogTitle>
-          <DialogDescription className="text-gray-400">
-            Add or remove organization members from this group.
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <DialogHeader>
+        <DialogTitle>Manage Members — {group.name}</DialogTitle>
+        <DialogDescription className="text-gray-400">
+          Add or remove organization members from this group.
+        </DialogDescription>
+      </DialogHeader>
 
-        <div className="space-y-4 py-2">
-          {canManage && (
-            <div className="space-y-2">
-              <Label className="text-gray-200">Add member</Label>
-              <div className="flex gap-2">
-                <Select
-                  value={selectedUserId}
-                  onValueChange={setSelectedUserId}
-                  disabled={
-                    addMembers.isPending ||
-                    isOrgMembersLoading ||
-                    candidates.length === 0
-                  }
-                >
-                  <SelectTrigger className="flex-1 bg-gray-900 border-gray-700 text-gray-100">
-                    <SelectValue
-                      placeholder={
-                        isOrgMembersLoading
-                          ? "Loading members..."
-                          : candidates.length === 0
-                            ? "All members are in this group"
-                            : "Select a member"
-                      }
-                    />
-                  </SelectTrigger>
-                  <SelectContent className="bg-gray-800 border-gray-700">
-                    {candidates.map((c) => (
-                      <SelectItem
-                        key={c.id}
-                        value={c.id}
-                        className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
-                      >
-                        {c.displayName || c.username} ({c.email})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  type="button"
-                  className="bg-blue-600 hover:bg-blue-700"
-                  onClick={handleAdd}
-                  disabled={!selectedUserId || addMembers.isPending}
-                >
-                  {addMembers.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Plus className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-          )}
-
+      <div className="space-y-4 py-2">
+        {canManage && (
           <div className="space-y-2">
-            <Label className="text-gray-200">
-              Members{members.length > 0 ? ` (${members.length})` : ""}
-            </Label>
-            {isMembersLoading ? (
-              <div className="space-y-2">
-                {[...Array(2)].map((_, i) => (
-                  <Skeleton key={i} className="h-11 w-full bg-gray-700" />
-                ))}
-              </div>
-            ) : members.length === 0 ? (
-              <p className="text-sm text-gray-400 py-4 text-center">
-                This group has no members yet.
-              </p>
-            ) : (
-              <ul className="divide-y divide-gray-700 rounded-md border border-gray-700 max-h-64 overflow-y-auto">
-                {members.map((member) => {
-                  const label = member.displayName || member.username;
-                  const isPending = pendingId === member.id;
-                  return (
-                    <li
-                      key={member.id}
-                      className="flex items-center justify-between px-3 py-2"
+            <Label className="text-gray-200">Add member</Label>
+            <div className="flex gap-2">
+              <Select
+                value={selectedUserId}
+                onValueChange={setSelectedUserId}
+                disabled={
+                  addMembers.isPending ||
+                  isOrgMembersLoading ||
+                  candidates.length === 0
+                }
+              >
+                <SelectTrigger className="flex-1 bg-gray-900 border-gray-700 text-gray-100">
+                  <SelectValue
+                    placeholder={
+                      isOrgMembersLoading
+                        ? "Loading members..."
+                        : candidates.length === 0
+                          ? "All members are in this group"
+                          : "Select a member"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent className="bg-gray-800 border-gray-700">
+                  {candidates.map((c) => (
+                    <SelectItem
+                      key={c.id}
+                      value={c.id}
+                      className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
                     >
-                      <div className="flex flex-col">
-                        <span className="text-sm font-medium text-gray-100">
-                          {label}
-                        </span>
-                        <span className="text-xs text-gray-400">
-                          {member.email}
-                        </span>
-                      </div>
-                      {canManage && (
-                        <Button
-                          size="icon-sm"
-                          variant="ghost"
-                          className="text-gray-400 hover:text-red-400 hover:bg-red-950/30"
-                          onClick={() => handleRemove(member.id, label)}
-                          disabled={isPending}
-                          aria-label={`Remove ${label}`}
-                        >
-                          {isPending ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-4 w-4" />
-                          )}
-                        </Button>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+                      {c.displayName || c.username} ({c.email})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                className="bg-blue-600 hover:bg-blue-700"
+                onClick={handleAdd}
+                disabled={!selectedUserId || addMembers.isPending}
+              >
+                {addMembers.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Plus className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
           </div>
+        )}
+
+        <div className="space-y-2">
+          <Label className="text-gray-200">
+            Members{members.length > 0 ? ` (${members.length})` : ""}
+          </Label>
+          {isMembersLoading ? (
+            <div className="space-y-2">
+              {[...Array(2)].map((_, i) => (
+                <Skeleton key={i} className="h-11 w-full bg-gray-700" />
+              ))}
+            </div>
+          ) : members.length === 0 ? (
+            <p className="text-sm text-gray-400 py-4 text-center">
+              This group has no members yet.
+            </p>
+          ) : (
+            <ul className="divide-y divide-gray-700 rounded-md border border-gray-700 max-h-64 overflow-y-auto">
+              {members.map((member) => {
+                const label = member.displayName || member.username;
+                const isPending = pendingId === member.id;
+                return (
+                  <li
+                    key={member.id}
+                    className="flex items-center justify-between px-3 py-2"
+                  >
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium text-gray-100">
+                        {label}
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        {member.email}
+                      </span>
+                    </div>
+                    {canManage && (
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        className="text-gray-400 hover:text-red-400 hover:bg-red-950/30"
+                        onClick={() => handleRemove(member.id, label)}
+                        disabled={isPending}
+                        aria-label={`Remove ${label}`}
+                      >
+                        {isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </Button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </>
   );
 }
