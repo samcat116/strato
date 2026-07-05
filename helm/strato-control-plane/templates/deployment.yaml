@@ -150,6 +150,13 @@ spec:
               value: "{{ .Values.strato.webauthn.relyingPartyName }}"
             - name: WEBAUTHN_RELYING_PARTY_ORIGIN
               value: "{{ include "strato-control-plane.webauthnOrigin" . }}"
+            # Enable Secure session cookies + HSTS only when browsers reach us over
+            # HTTPS. Derived from the resolved WebAuthn origin's scheme so it tracks
+            # exactly what that origin considers HTTPS — an explicit https:// origin
+            # override or ingress.tls — and plaintext installs don't set a Secure
+            # cookie the browser would drop. Force with strato.httpTlsEnabled.
+            - name: HTTP_TLS_ENABLED
+              value: "{{ include "strato-control-plane.tlsEnabled" . }}"
             {{- if .Values.strato.externalHostname }}
             - name: EXTERNAL_HOSTNAME
               value: "{{ .Values.strato.externalHostname }}"

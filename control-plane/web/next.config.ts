@@ -6,6 +6,31 @@ const nextConfig: NextConfig = {
     unoptimized: true,
   },
 
+  // Security headers for the user-facing HTML this service serves (/, /login,
+  // ...). In the compose/Helm topologies these pages come from here, not the
+  // control plane, so the control plane's SecurityHeadersMiddleware doesn't cover
+  // them — mirror the same headers here.
+  //
+  // Only unconditional headers belong here: `headers()` is evaluated during
+  // `next build` and baked into the routes manifest, so it can't gate on runtime
+  // TLS state. HSTS, which must only be sent over HTTPS, is emitted per request
+  // in middleware.ts (keyed on X-Forwarded-Proto) instead.
+  //
+  // No strict CSP: Next.js ships inline hydration scripts a `default-src 'self'`
+  // policy would block; X-Frame-Options still covers clickjacking.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        ],
+      },
+    ];
+  },
+
   // Rewrites for local development (proxies API to Vapor backend)
   async rewrites() {
     if (process.env.NODE_ENV === "development") {

@@ -29,6 +29,35 @@ public func configure(_ app: Application) async throws {
         app.logger.info("Request logging enabled")
     }
 
+    // Whether browsers reach us over HTTPS. This can't be inferred from the Vapor
+    // environment: the published image, single-host compose, and Helm chart all
+    // run `--env production` yet default to serving plaintext HTTP (TLS, when
+    // present, is terminated at an ingress/proxy we don't see). Defaulting
+    // production to TLS would set `Secure` on the session cookie, and browsers on
+    // http:// would then drop it — breaking login. So this is opt-in: deployments
+    // that terminate TLS set HTTP_TLS_ENABLED=true (the Helm chart derives it from
+    // ingress.tls). Governs both HSTS and the Secure cookie flag below.
+    let servedOverTLS = Environment.get("HTTP_TLS_ENABLED").flatMap(Bool.init) ?? false
+    // Insert at the front so it wraps Vapor's default ErrorMiddleware (which is
+    // registered ahead of any `.use`-appended middleware). Otherwise the 4xx/5xx
+    // responses ErrorMiddleware synthesizes from thrown errors would flow back out
+    // above this middleware and miss the security headers.
+    app.middleware.use(SecurityHeadersMiddleware(enableHSTS: servedOverTLS), at: .beginning)
+
+    // Harden the session cookie: always HTTPOnly, and Secure whenever we're
+    // behind TLS so the cookie can't leak over a downgraded/plaintext request.
+    // SameSite=lax keeps the cookie on top-level navigations (needed for the
+    // OAuth/OIDC redirect back into the app) while blocking cross-site sends.
+    app.sessions.configuration = .init(cookieName: "vapor-session") { sessionID in
+        HTTPCookies.Value(
+            string: sessionID.string,
+            path: "/",
+            isSecure: servedOverTLS,
+            isHTTPOnly: true,
+            sameSite: .lax
+        )
+    }
+
     // Configure Valkey if available, fallback to Fluent sessions
     if let valkeyConfig = ValkeyConfiguration.fromEnvironment() {
         do {

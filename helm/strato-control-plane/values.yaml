@@ -180,6 +180,11 @@ strato:
   # When empty, will use the first ingress hostname or service name
   externalHostname: ""
 
+  # Force the Secure session cookie + HSTS on/off. Leave null to auto-detect from
+  # the WebAuthn origin scheme (https:// -> true). Set true when TLS is terminated
+  # by an external gateway/LoadBalancer that this chart's ingress.tls doesn't cover.
+  httpTlsEnabled: null
+
 # SpiceDB configuration
 spicedb:
   enabled: true

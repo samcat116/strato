@@ -94,6 +94,10 @@ WEBAUTHN_RELYING_PARTY_ORIGIN=${ORIGIN}
 
 # --- Service settings ---
 HTTP_PORT=${PORT_ARG}
+# Set to true once TLS is terminated in front of the proxy (required for any
+# non-localhost origin). Makes the session cookie Secure and enables HSTS; leave
+# false for plaintext http:// or the browser will drop the session cookie.
+HTTP_TLS_ENABLED=$([[ "$SCHEME" == "https" ]] && echo true || echo false)
 LOG_LEVEL=info
 # Pin to a released version instead of latest for reproducible deployments,
 # e.g. STRATO_VERSION=v0.5.0
