@@ -324,6 +324,41 @@ final class ProjectTests {
         }
     }
 
+    @Test("List organization projects includes OU-scoped projects")
+    func testListOrganizationProjectsIncludesOUProjects() async throws {
+        try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
+            // A project directly on the organization...
+            let orgProject = Project(
+                name: "Org Project",
+                description: "Organization level project",
+                organizationID: testOrganization.id,
+                path: ""
+            )
+            try await orgProject.save(on: app.db)
+
+            // ...and one nested under an OU within the same organization.
+            let ouProject = Project(
+                name: "OU Project",
+                description: "OU level project",
+                organizationalUnitID: testOU.id,
+                path: ""
+            )
+            try await ouProject.save(on: app.db)
+
+            try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/projects") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+
+                let projects = try res.content.decode([ProjectResponse].self)
+                // The org-scoped endpoint must surface OU projects too so the
+                // project switcher can reach them.
+                #expect(projects.contains { $0.name == "Org Project" })
+                #expect(projects.contains { $0.name == "OU Project" })
+            }
+        }
+    }
+
     // MARK: - Transfer Project Tests
 
     @Test("Transfer project between OUs")

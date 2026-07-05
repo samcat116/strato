@@ -262,11 +262,25 @@ struct ProjectController: RouteCollection {
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
 
-        // Get direct projects in organization
-        let projects = try await Project.query(on: req.db)
+        // Return the full project set within the organization's hierarchy so
+        // callers (e.g. the project switcher) can reach OU-scoped projects too.
+        var projects = try await Project.query(on: req.db)
             .filter(\.$organization.$id == organizationID)
             .sort(\.$name)
             .all()
+
+        // Projects nested under organizational units within this organization.
+        let ous = try await OrganizationalUnit.query(on: req.db)
+            .filter(\.$organization.$id == organizationID)
+            .all()
+        let ouIDs = ous.compactMap { $0.id }
+        if !ouIDs.isEmpty {
+            let ouProjects = try await Project.query(on: req.db)
+                .filter(\.$organizationalUnit.$id ~~ ouIDs)
+                .sort(\.$name)
+                .all()
+            projects.append(contentsOf: ouProjects)
+        }
 
         var responses: [ProjectResponse] = []
         for project in projects {
