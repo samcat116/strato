@@ -218,7 +218,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
         }
 
         let envelope = try MessageEnvelope(message: message)
-        let data = try JSONEncoder().encode(envelope)
+        let data = try WireProtocol.makeEncoder().encode(envelope)
 
         app.logger.debug("Sending message to agent", metadata: [
             "agentName": .string(agentName),

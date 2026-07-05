@@ -90,6 +90,12 @@ public struct AgentRegisterMessage: WebSocketMessage {
     public let hypervisors: [HypervisorSupport]?
     /// Networking capability of this host. Optional for the same reason.
     public let networkCapability: NetworkCapability?
+    /// Wire/schema version the agent speaks (see `WireProtocol.currentVersion`).
+    /// Optional so registrations from agents that predate protocol versioning
+    /// decode fine; absent is treated as the legacy version 0. The control plane
+    /// echoes its own version in `AgentRegisterResponseMessage` so each side can
+    /// detect and log skew.
+    public let protocolVersion: Int?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -102,7 +108,8 @@ public struct AgentRegisterMessage: WebSocketMessage {
         hypervisorType: HypervisorType = .qemu,
         architecture: CPUArchitecture? = nil,
         hypervisors: [HypervisorSupport]? = nil,
-        networkCapability: NetworkCapability? = nil
+        networkCapability: NetworkCapability? = nil,
+        protocolVersion: Int? = WireProtocol.currentVersion
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -115,6 +122,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.architecture = architecture
         self.hypervisors = hypervisors
         self.networkCapability = networkCapability
+        self.protocolVersion = protocolVersion
     }
 
     /// The hypervisor list to act on: the probed report when the agent sent
@@ -201,18 +209,27 @@ public struct AgentRegisterResponseMessage: WebSocketMessage {
     /// connections (and from control planes that predate rotation).
     public let reconnectToken: String?
 
+    /// Wire/schema version the control plane speaks (see
+    /// `WireProtocol.currentVersion`). Optional so responses from control planes
+    /// that predate protocol versioning decode fine; absent is treated as the
+    /// legacy version 0. The agent compares this against its own version and
+    /// logs on mismatch.
+    public let protocolVersion: Int?
+
     public init(
         requestId: String,
         timestamp: Date = Date(),
         agentId: String,
         name: String,
-        reconnectToken: String? = nil
+        reconnectToken: String? = nil,
+        protocolVersion: Int? = WireProtocol.currentVersion
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.agentId = agentId
         self.name = name
         self.reconnectToken = reconnectToken
+        self.protocolVersion = protocolVersion
     }
 }
 
@@ -419,8 +436,8 @@ public struct AnyCodableValue: Codable, Sendable {
     public let value: CodableValue
     
     public init<T: Codable>(_ value: T) throws {
-        let data = try JSONEncoder().encode(value)
-        self.value = try JSONDecoder().decode(CodableValue.self, from: data)
+        let data = try WireProtocol.makeEncoder().encode(value)
+        self.value = try WireProtocol.makeDecoder().decode(CodableValue.self, from: data)
     }
     
     public init(from decoder: Decoder) throws {
@@ -434,8 +451,8 @@ public struct AnyCodableValue: Codable, Sendable {
     }
     
     public func decode<T: Codable>(as type: T.Type) throws -> T {
-        let data = try JSONEncoder().encode(value)
-        return try JSONDecoder().decode(type, from: data)
+        let data = try WireProtocol.makeEncoder().encode(value)
+        return try WireProtocol.makeDecoder().decode(type, from: data)
     }
 }
 
@@ -995,42 +1012,79 @@ public struct VolumeStatusResponse: Codable, Sendable {
 
 public struct MessageEnvelope: Codable, Sendable {
     public let type: MessageType
+    /// Wire/schema version of the sender (see `WireProtocol.currentVersion`).
+    /// Optional so envelopes from peers that predate versioning — which omit the
+    /// field entirely — still decode; a missing value is treated as the legacy
+    /// version 0 via `senderVersion`.
+    public let version: Int?
     public let payload: Data
-    
+
     public init<T: WebSocketMessage>(message: T) throws {
         self.type = message.type
-        self.payload = try JSONEncoder().encode(message)
+        self.version = WireProtocol.currentVersion
+        self.payload = try WireProtocol.makeEncoder().encode(message)
     }
-    
+
     public func decode<T: WebSocketMessage>(as messageType: T.Type) throws -> T {
-        return try JSONDecoder().decode(messageType, from: payload)
+        return try WireProtocol.makeDecoder().decode(messageType, from: payload)
     }
+
+    /// The sender's wire version, mapping a pre-versioning envelope (no `version`
+    /// field) to 0 so callers can compare against `WireProtocol.currentVersion`
+    /// without special-casing `nil`.
+    public var senderVersion: Int { version ?? 0 }
 }
 
 // MARK: - VM Log Messages
 
 /// Log level for VM log messages
-public enum VMLogLevel: String, Codable, Sendable {
+public enum VMLogLevel: String, Codable, CaseIterable, Sendable {
     case debug = "debug"
     case info = "info"
     case warning = "warning"
     case error = "error"
+    /// Fallback for a level emitted by a peer on a newer protocol version.
+    case unknown = "unknown"
+
+    /// Tolerant decoding: an unrecognized level decodes to `.unknown` rather
+    /// than throwing, so a purely informational field can't fail the decode of
+    /// an entire log message across protocol versions.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = VMLogLevel(rawValue: raw) ?? .unknown
+    }
 }
 
 /// Source of the log message
-public enum VMLogSource: String, Codable, Sendable {
+public enum VMLogSource: String, Codable, CaseIterable, Sendable {
     case agent = "agent"
     case qemu = "qemu"
     case controlPlane = "control_plane"
+    /// Fallback for a source emitted by a peer on a newer protocol version.
+    case unknown = "unknown"
+
+    /// Tolerant decoding: see `VMLogLevel.init(from:)`.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = VMLogSource(rawValue: raw) ?? .unknown
+    }
 }
 
 /// Type of VM event
-public enum VMEventType: String, Codable, Sendable {
+public enum VMEventType: String, Codable, CaseIterable, Sendable {
     case statusChange = "status_change"
     case operation = "operation"
     case qemuOutput = "qemu_output"
     case error = "error"
     case info = "info"
+    /// Fallback for an event type emitted by a peer on a newer protocol version.
+    case unknown = "unknown"
+
+    /// Tolerant decoding: see `VMLogLevel.init(from:)`.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = VMEventType(rawValue: raw) ?? .unknown
+    }
 }
 
 /// VM log message sent from agent to control plane
