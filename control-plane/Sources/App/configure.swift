@@ -64,6 +64,10 @@ public func configure(_ app: Application) async throws {
 
 
     if app.environment != .testing {
+        // Fail fast: the SpiceDB service is constructed lazily on every authorized
+        // request, so validate its required configuration at boot rather than
+        // letting the first request that touches it error out.
+        try app.validateSpiceDBConfiguration()
         app.middleware.use(SpiceDBAuthMiddleware())
     }
 
@@ -278,7 +282,7 @@ public func configure(_ app: Application) async throws {
     // Default strategy can be configured via environment variable
     let schedulingStrategy = Environment.get("SCHEDULING_STRATEGY")
         .flatMap { SchedulingStrategy(rawValue: $0) } ?? .leastLoaded
-    app.scheduler = SchedulerService(logger: app.logger, defaultStrategy: schedulingStrategy)
+    app.useScheduler(SchedulerService(logger: app.logger, defaultStrategy: schedulingStrategy))
     app.logger.info("Scheduler service initialized with strategy: \(schedulingStrategy.rawValue)")
 
     // Configure SPIFFE/SPIRE authentication (if enabled via environment)
