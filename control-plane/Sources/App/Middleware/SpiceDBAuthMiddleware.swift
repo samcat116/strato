@@ -31,7 +31,7 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
             || request.url.path == "/hello" || request.url.path == "/login"
             || request.url.path == "/register" || request.url.path == "/api/docs"
             || request.url.path == "/openapi.json" || request.url.path.hasPrefix("/auth")
-            || request.url.path.hasPrefix("/users/register")
+            || request.url.path.hasPrefix("/api/users/register")
             || request.url.path.hasPrefix("/onboarding") || request.url.path.hasPrefix("/js/")
             || request.url.path.hasPrefix("/styles/") || request.url.path == "/favicon.ico"
             || request.url.path.hasPrefix("/agent/ws")
