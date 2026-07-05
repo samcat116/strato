@@ -114,6 +114,17 @@ final class VolumeAuthorizationTests {
                 let volume = try res.content.decode(VolumeResponse.self)
                 #expect(volume.sourceImageId == image.id)
             }
+
+            // createVolume provisions on a detached task that touches app.db;
+            // wait for it to settle (no agents connected → `.error`) so it
+            // can't race application shutdown during test teardown.
+            var provisioned: Volume?
+            for _ in 0..<100 {
+                provisioned = try await Volume.query(on: app.db).first()
+                if provisioned?.status == .error { break }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            #expect(provisioned?.status == .error)
         }
     }
 }

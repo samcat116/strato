@@ -408,6 +408,10 @@ public func configure(_ app: Application) async throws {
         }
     }
 
+    // The agent service's heartbeat monitor must not outlive the application:
+    // the handler cancels it at shutdown (if the service was ever created).
+    app.lifecycle.use(AgentServiceLifecycleHandler())
+
     try routes(app)
 
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
