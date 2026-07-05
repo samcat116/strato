@@ -86,7 +86,8 @@ final class SCIMFilterTests: BaseTestCase {
             try await createUser(builder, username: "CAROL", displayName: "Carol Danvers", org: org)
 
             // Lowercase query must match the mixed-case "Alice".
-            #expect(try await searchUsernames(app, org: org, path: "userName", op: .contains, value: "lic") == ["Alice"])
+            #expect(
+                try await searchUsernames(app, org: org, path: "userName", op: .contains, value: "lic") == ["Alice"])
             // Uppercase query must match the lowercase "bob".
             #expect(try await searchUsernames(app, org: org, path: "userName", op: .contains, value: "OB") == ["bob"])
         }
@@ -101,9 +102,11 @@ final class SCIMFilterTests: BaseTestCase {
             try await createUser(builder, username: "bob", displayName: "Bob Builder", org: org)
             try await createUser(builder, username: "CAROL", displayName: "Carol Danvers", org: org)
 
-            #expect(try await searchUsernames(app, org: org, path: "userName", op: .startsWith, value: "ALI") == ["Alice"])
+            #expect(
+                try await searchUsernames(app, org: org, path: "userName", op: .startsWith, value: "ALI") == ["Alice"])
             // "car" should match "CAROL" but not "Alice"/"bob".
-            #expect(try await searchUsernames(app, org: org, path: "userName", op: .startsWith, value: "car") == ["CAROL"])
+            #expect(
+                try await searchUsernames(app, org: org, path: "userName", op: .startsWith, value: "car") == ["CAROL"])
         }
     }
 
@@ -115,8 +118,10 @@ final class SCIMFilterTests: BaseTestCase {
             try await createUser(builder, username: "Alice", displayName: "Alice Anderson", org: org)
             try await createUser(builder, username: "CAROL", displayName: "Carol Danvers", org: org)
 
-            #expect(try await searchUsernames(app, org: org, path: "userName", op: .endsWith, value: "ROL") == ["CAROL"])
-            #expect(try await searchUsernames(app, org: org, path: "userName", op: .endsWith, value: "ICE") == ["Alice"])
+            #expect(
+                try await searchUsernames(app, org: org, path: "userName", op: .endsWith, value: "ROL") == ["CAROL"])
+            #expect(
+                try await searchUsernames(app, org: org, path: "userName", op: .endsWith, value: "ICE") == ["Alice"])
         }
     }
 
@@ -143,9 +148,16 @@ final class SCIMFilterTests: BaseTestCase {
             try await createUser(builder, username: "alice", displayName: "Alice Anderson", org: org)
             try await createUser(builder, username: "bob", displayName: "Bob Builder", org: org)
 
-            #expect(try await searchUsernames(app, org: org, path: "displayName", op: .contains, value: "BUILD") == ["bob"])
-            #expect(try await searchUsernames(app, org: org, path: "displayName", op: .startsWith, value: "alice") == ["alice"])
-            #expect(try await searchUsernames(app, org: org, path: "displayName", op: .endsWith, value: "anderson") == ["alice"])
+            #expect(
+                try await searchUsernames(app, org: org, path: "displayName", op: .contains, value: "BUILD") == ["bob"])
+            #expect(
+                try await searchUsernames(app, org: org, path: "displayName", op: .startsWith, value: "alice") == [
+                    "alice"
+                ])
+            #expect(
+                try await searchUsernames(app, org: org, path: "displayName", op: .endsWith, value: "anderson") == [
+                    "alice"
+                ])
         }
     }
 
@@ -162,7 +174,8 @@ final class SCIMFilterTests: BaseTestCase {
             // A literal "%" must be escaped: it should match only the username that
             // actually contains "%", not every row (which is what an unescaped
             // wildcard would do).
-            #expect(try await searchUsernames(app, org: org, path: "userName", op: .contains, value: "%") == ["ten%off"])
+            #expect(
+                try await searchUsernames(app, org: org, path: "userName", op: .contains, value: "%") == ["ten%off"])
         }
     }
 
@@ -177,8 +190,12 @@ final class SCIMFilterTests: BaseTestCase {
 
             // "alice" matches both usernames case-insensitively, but only Org A's user
             // should be returned when searching Org A.
-            #expect(try await searchUsernames(app, org: orgA, path: "userName", op: .contains, value: "alice") == ["Alice"])
-            #expect(try await searchUsernames(app, org: orgB, path: "userName", op: .contains, value: "alice") == ["AliceClone"])
+            #expect(
+                try await searchUsernames(app, org: orgA, path: "userName", op: .contains, value: "alice") == ["Alice"])
+            #expect(
+                try await searchUsernames(app, org: orgB, path: "userName", op: .contains, value: "alice") == [
+                    "AliceClone"
+                ])
         }
     }
 
@@ -193,10 +210,22 @@ final class SCIMFilterTests: BaseTestCase {
             _ = try await builder.createGroup(name: "platform-eng", description: "", organization: org)
             _ = try await builder.createGroup(name: "Design", description: "", organization: org)
 
-            #expect(try await searchGroupNames(app, org: org, path: "displayName", op: .contains, value: "PLAT") == ["Platform", "platform-eng"])
-            #expect(try await searchGroupNames(app, org: org, path: "displayName", op: .startsWith, value: "plat") == ["Platform", "platform-eng"])
-            #expect(try await searchGroupNames(app, org: org, path: "displayName", op: .endsWith, value: "ENG") == ["platform-eng"])
-            #expect(try await searchGroupNames(app, org: org, path: "displayName", op: .equal, value: "Design") == ["Design"])
+            #expect(
+                try await searchGroupNames(app, org: org, path: "displayName", op: .contains, value: "PLAT") == [
+                    "Platform", "platform-eng",
+                ])
+            #expect(
+                try await searchGroupNames(app, org: org, path: "displayName", op: .startsWith, value: "plat") == [
+                    "Platform", "platform-eng",
+                ])
+            #expect(
+                try await searchGroupNames(app, org: org, path: "displayName", op: .endsWith, value: "ENG") == [
+                    "platform-eng"
+                ])
+            #expect(
+                try await searchGroupNames(app, org: org, path: "displayName", op: .equal, value: "Design") == [
+                    "Design"
+                ])
         }
     }
 
@@ -209,8 +238,14 @@ final class SCIMFilterTests: BaseTestCase {
             _ = try await builder.createGroup(name: "Platform", description: "", organization: orgA)
             _ = try await builder.createGroup(name: "PlatformClone", description: "", organization: orgB)
 
-            #expect(try await searchGroupNames(app, org: orgA, path: "displayName", op: .contains, value: "platform") == ["Platform"])
-            #expect(try await searchGroupNames(app, org: orgB, path: "displayName", op: .contains, value: "platform") == ["PlatformClone"])
+            #expect(
+                try await searchGroupNames(app, org: orgA, path: "displayName", op: .contains, value: "platform") == [
+                    "Platform"
+                ])
+            #expect(
+                try await searchGroupNames(app, org: orgB, path: "displayName", op: .contains, value: "platform") == [
+                    "PlatformClone"
+                ])
         }
     }
 }

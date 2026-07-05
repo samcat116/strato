@@ -76,10 +76,12 @@ actor ImageFetchService: ImageFetchServiceProtocol {
             throw ImageError.downloadFailed("Invalid source URL")
         }
 
-        logger.info("Starting image fetch", metadata: [
-            "image_id": .string(imageId.uuidString),
-            "source_url": .string(sourceURL)
-        ])
+        logger.info(
+            "Starting image fetch",
+            metadata: [
+                "image_id": .string(imageId.uuidString),
+                "source_url": .string(sourceURL),
+            ])
 
         // Update status to downloading
         image.status = .downloading
@@ -123,11 +125,13 @@ actor ImageFetchService: ImageFetchServiceProtocol {
 
             try await image.save(on: db)
 
-            logger.info("Image fetch completed", metadata: [
-                "image_id": .string(imageId.uuidString),
-                "size": .stringConvertible(size),
-                "checksum": .string(checksum)
-            ])
+            logger.info(
+                "Image fetch completed",
+                metadata: [
+                    "image_id": .string(imageId.uuidString),
+                    "size": .stringConvertible(size),
+                    "checksum": .string(checksum),
+                ])
 
         } catch is CancellationError {
             logger.info("Image fetch cancelled", metadata: ["image_id": .string(imageId.uuidString)])
@@ -263,9 +267,11 @@ actor ImageFetchService: ImageFetchServiceProtocol {
                     continue
                 }
 
-                logger.info("Queueing pending image for fetch", metadata: [
-                    "image_id": .string(imageId.uuidString)
-                ])
+                logger.info(
+                    "Queueing pending image for fetch",
+                    metadata: [
+                        "image_id": .string(imageId.uuidString)
+                    ])
 
                 try await startFetch(imageId: imageId)
             }

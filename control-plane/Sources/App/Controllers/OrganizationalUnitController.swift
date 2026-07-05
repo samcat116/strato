@@ -44,7 +44,7 @@ struct OrganizationalUnitController: RouteCollection {
         // Get all OUs in the organization (top-level only)
         let ous = try await OrganizationalUnit.query(on: req.db)
             .filter(\.$organization.$id, .equal, organizationID)
-            .filter(\.$parentOU.$id == nil) // Only top-level OUs
+            .filter(\.$parentOU.$id == nil)  // Only top-level OUs
             .sort(\.$name)
             .all()
 
@@ -77,7 +77,8 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let ouID = req.parameters.get("ouID", as: UUID.self) else {
+            let ouID = req.parameters.get("ouID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or OU ID")
         }
 
@@ -163,7 +164,7 @@ struct OrganizationalUnitController: RouteCollection {
             description: createRequest.description,
             organizationID: organizationID,
             parentOUID: createRequest.parentOuId,
-            path: "", // Will be updated after save
+            path: "",  // Will be updated after save
             depth: depth
         )
 
@@ -182,7 +183,8 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let ouID = req.parameters.get("ouID", as: UUID.self) else {
+            let ouID = req.parameters.get("ouID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or OU ID")
         }
 
@@ -250,7 +252,8 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let ouID = req.parameters.get("ouID", as: UUID.self) else {
+            let ouID = req.parameters.get("ouID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or OU ID")
         }
 
@@ -295,7 +298,8 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let ouID = req.parameters.get("ouID", as: UUID.self) else {
+            let ouID = req.parameters.get("ouID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or OU ID")
         }
 
@@ -315,7 +319,8 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let ouID = req.parameters.get("ouID", as: UUID.self) else {
+            let ouID = req.parameters.get("ouID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or OU ID")
         }
 
@@ -376,7 +381,8 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let ouID = req.parameters.get("ouID", as: UUID.self) else {
+            let ouID = req.parameters.get("ouID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or OU ID")
         }
 
@@ -417,7 +423,8 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let parentOUID = req.parameters.get("ouID", as: UUID.self) else {
+            let parentOUID = req.parameters.get("ouID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or OU ID")
         }
 
@@ -456,7 +463,7 @@ struct OrganizationalUnitController: RouteCollection {
             description: createRequest.description,
             organizationID: organizationID,
             parentOUID: parentOUID,
-            path: "", // Will be updated after save
+            path: "",  // Will be updated after save
             depth: depth
         )
 
@@ -470,7 +477,6 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     // MARK: - Helper Methods
-
 
     private func calculateDepth(parentOU: OrganizationalUnit?, on db: Database) async throws -> Int {
         if let parent = parentOU {

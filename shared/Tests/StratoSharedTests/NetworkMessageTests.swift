@@ -28,7 +28,8 @@ struct NetworkMessageTests {
 
     @Test func networkDeleteRoundTrip() throws {
         let decoded = try throughEnvelope(
-            NetworkDeleteMessage(requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, networkName: "tenant-net")
+            NetworkDeleteMessage(
+                requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, networkName: "tenant-net")
         )
         #expect(decoded.type == .networkDelete)
         #expect(decoded.networkName == "tenant-net")

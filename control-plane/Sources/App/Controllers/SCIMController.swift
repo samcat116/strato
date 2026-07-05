@@ -25,13 +25,14 @@ struct SCIMController: RouteCollection {
         return Response(
             status: .ok,
             headers: HTTPHeaders([("Content-Type", "application/scim+json")]),
-            body: .init(string: """
-            {
-                "schemas": ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
-                "totalResults": 0,
-                "Resources": []
-            }
-            """)
+            body: .init(
+                string: """
+                    {
+                        "schemas": ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+                        "totalResults": 0,
+                        "Resources": []
+                    }
+                    """)
         )
     }
 
@@ -39,7 +40,7 @@ struct SCIMController: RouteCollection {
     func handleRequest(req: Request) async throws -> Response {
         // Extract organization ID
         guard let organizationIDString = req.parameters.get("organizationID"),
-              let organizationID = UUID(uuidString: organizationIDString)
+            let organizationID = UUID(uuidString: organizationIDString)
         else {
             return scimErrorResponse(status: .badRequest, detail: "Invalid organization ID")
         }
@@ -186,7 +187,8 @@ struct SCIMController: RouteCollection {
     ) async throws -> SCIMRequestProcessor {
         // Build base URL for this organization's SCIM endpoint
         // Prioritize X-Forwarded-Proto header (set by reverse proxies), then check TLS config, then URL scheme
-        let forwardedProto = req.headers.first(name: "X-Forwarded-Proto")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let forwardedProto = req.headers.first(name: "X-Forwarded-Proto")?.trimmingCharacters(
+            in: .whitespacesAndNewlines)
         let scheme: String
         if let proto = forwardedProto, !proto.isEmpty {
             scheme = proto
@@ -203,11 +205,12 @@ struct SCIMController: RouteCollection {
         if let parsedURL = URL(string: baseURLString) {
             baseURL = parsedURL
         } else {
-            req.logger.warning("Failed to construct valid SCIM base URL from request; falling back to localhost",
-                               metadata: [
-                                   "scim_base_url_string": .string(baseURLString),
-                                   "scim_host_header": .string(host)
-                               ])
+            req.logger.warning(
+                "Failed to construct valid SCIM base URL from request; falling back to localhost",
+                metadata: [
+                    "scim_base_url_string": .string(baseURLString),
+                    "scim_host_header": .string(host),
+                ])
             baseURL = URL(string: "http://localhost:8080")!
         }
 
@@ -271,7 +274,7 @@ struct SCIMController: RouteCollection {
         let error: [String: Any] = [
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:Error"],
             "detail": detail,
-            "status": status.code
+            "status": status.code,
         ]
 
         let body: Data
@@ -323,7 +326,7 @@ struct SCIMController: RouteCollection {
                 endpoint: "/Groups",
                 description: "Group resource type",
                 schema: "urn:ietf:params:scim:schemas:core:2.0:Group"
-            )
+            ),
         ]
     }
 

@@ -25,7 +25,8 @@ struct ReplaceAgentHypervisorTypeWithHypervisors: AsyncMigration {
         // The empty-array default that backfills existing rows is engine-specific:
         // Postgres spells an empty array `'{}'`, while SQLite stores arrays as JSON
         // text where it is `'[]'`.
-        let emptyArrayDefault = (database as? SQLDatabase)?.dialect.name == "postgresql"
+        let emptyArrayDefault =
+            (database as? SQLDatabase)?.dialect.name == "postgresql"
             ? "DEFAULT '{}'"
             : "DEFAULT '[]'"
         try await database.schema("agents")

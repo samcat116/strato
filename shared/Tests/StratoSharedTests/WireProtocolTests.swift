@@ -23,11 +23,12 @@ struct WireProtocolTests {
     @Test("an envelope without a version field decodes as legacy version 0")
     func legacyEnvelopeDefaultsToZero() throws {
         // A peer that predates versioning sends only `type` + `payload`.
-        let inner = try encodeJSON(VMInfoRequestMessage(
-            requestId: Fixtures.requestId,
-            timestamp: Fixtures.timestamp,
-            vmId: "vm-1"
-        ))
+        let inner = try encodeJSON(
+            VMInfoRequestMessage(
+                requestId: Fixtures.requestId,
+                timestamp: Fixtures.timestamp,
+                vmId: "vm-1"
+            ))
         let json = #"{"type":"vm_info","payload":"\#(inner.base64EncodedString())"}"#
         let envelope = try decodeJSON(MessageEnvelope.self, from: json)
         #expect(envelope.version == nil)
@@ -65,7 +66,8 @@ struct WireProtocolTests {
         #expect(try throughEnvelope(register).protocolVersion == WireProtocol.currentVersion)
 
         // A registration from an agent that predates negotiation omits the field.
-        let legacy = #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","agentId":"a1","hostname":"h","version":"0.9","capabilities":[],"resources":{"totalCPU":1,"availableCPU":1,"totalMemory":1,"availableMemory":1,"totalDisk":1,"availableDisk":1},"hypervisorType":"qemu"}"#
+        let legacy =
+            #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","agentId":"a1","hostname":"h","version":"0.9","capabilities":[],"resources":{"totalCPU":1,"availableCPU":1,"totalMemory":1,"availableMemory":1,"totalDisk":1,"availableDisk":1},"hypervisorType":"qemu"}"#
         let decoded = try decodeJSON(AgentRegisterMessage.self, from: legacy)
         #expect(decoded.protocolVersion == nil)
     }

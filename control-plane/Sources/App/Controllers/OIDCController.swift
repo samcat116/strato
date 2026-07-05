@@ -88,16 +88,19 @@ struct OIDCController: RouteCollection {
 
     func getProvider(req: Request) async throws -> OIDCProviderResponse {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let providerID = req.parameters.get("providerID", as: UUID.self) else {
+            let providerID = req.parameters.get("providerID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or provider ID")
         }
 
         try await verifyOrganizationAccess(req: req, organizationID: organizationID)
 
-        guard let provider = try await OIDCProvider.query(on: req.db)
-            .filter(\.$id == providerID)
-            .filter(\.$organization.$id == organizationID)
-            .first() else {
+        guard
+            let provider = try await OIDCProvider.query(on: req.db)
+                .filter(\.$id == providerID)
+                .filter(\.$organization.$id == organizationID)
+                .first()
+        else {
             throw Abort(.notFound, reason: "OIDC provider not found")
         }
 
@@ -106,16 +109,19 @@ struct OIDCController: RouteCollection {
 
     func updateProvider(req: Request) async throws -> OIDCProviderResponse {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let providerID = req.parameters.get("providerID", as: UUID.self) else {
+            let providerID = req.parameters.get("providerID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or provider ID")
         }
 
         try await verifyOrganizationAdminAccess(req: req, organizationID: organizationID)
 
-        guard let provider = try await OIDCProvider.query(on: req.db)
-            .filter(\.$id == providerID)
-            .filter(\.$organization.$id == organizationID)
-            .first() else {
+        guard
+            let provider = try await OIDCProvider.query(on: req.db)
+                .filter(\.$id == providerID)
+                .filter(\.$organization.$id == organizationID)
+                .first()
+        else {
             throw Abort(.notFound, reason: "OIDC provider not found")
         }
 
@@ -125,7 +131,9 @@ struct OIDCController: RouteCollection {
         if let clientID = updateRequest.clientID { provider.clientID = clientID }
         if let clientSecret = updateRequest.clientSecret { provider.clientSecret = clientSecret }
         if let discoveryURL = updateRequest.discoveryURL { provider.discoveryURL = discoveryURL }
-        if let authorizationEndpoint = updateRequest.authorizationEndpoint { provider.authorizationEndpoint = authorizationEndpoint }
+        if let authorizationEndpoint = updateRequest.authorizationEndpoint {
+            provider.authorizationEndpoint = authorizationEndpoint
+        }
         if let tokenEndpoint = updateRequest.tokenEndpoint { provider.tokenEndpoint = tokenEndpoint }
         if let userinfoEndpoint = updateRequest.userinfoEndpoint { provider.userinfoEndpoint = userinfoEndpoint }
         if let jwksURI = updateRequest.jwksURI { provider.jwksURI = jwksURI }
@@ -139,16 +147,19 @@ struct OIDCController: RouteCollection {
 
     func deleteProvider(req: Request) async throws -> HTTPStatus {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let providerID = req.parameters.get("providerID", as: UUID.self) else {
+            let providerID = req.parameters.get("providerID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or provider ID")
         }
 
         try await verifyOrganizationAdminAccess(req: req, organizationID: organizationID)
 
-        guard let provider = try await OIDCProvider.query(on: req.db)
-            .filter(\.$id == providerID)
-            .filter(\.$organization.$id == organizationID)
-            .first() else {
+        guard
+            let provider = try await OIDCProvider.query(on: req.db)
+                .filter(\.$id == providerID)
+                .filter(\.$organization.$id == organizationID)
+                .first()
+        else {
             throw Abort(.notFound, reason: "OIDC provider not found")
         }
 
@@ -158,7 +169,8 @@ struct OIDCController: RouteCollection {
             .count()
 
         if linkedUserCount > 0 {
-            throw Abort(.badRequest, reason: "Cannot delete provider: \(linkedUserCount) users are linked to this provider")
+            throw Abort(
+                .badRequest, reason: "Cannot delete provider: \(linkedUserCount) users are linked to this provider")
         }
 
         try await provider.delete(on: req.db)
@@ -170,16 +182,19 @@ struct OIDCController: RouteCollection {
 
     func testProvider(req: Request) async throws -> Response {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let providerID = req.parameters.get("providerID", as: UUID.self) else {
+            let providerID = req.parameters.get("providerID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or provider ID")
         }
 
         try await verifyOrganizationAdminAccess(req: req, organizationID: organizationID)
 
-        guard let provider = try await OIDCProvider.query(on: req.db)
-            .filter(\.$id == providerID)
-            .filter(\.$organization.$id == organizationID)
-            .first() else {
+        guard
+            let provider = try await OIDCProvider.query(on: req.db)
+                .filter(\.$id == providerID)
+                .filter(\.$organization.$id == organizationID)
+                .first()
+        else {
             throw Abort(.notFound, reason: "OIDC provider not found")
         }
 
@@ -189,14 +204,18 @@ struct OIDCController: RouteCollection {
                 _ = try await fetchDiscoveryDocument(url: discoveryURL, on: req)
                 return Response(status: .ok, body: .init(string: "Provider configuration is valid"))
             } catch {
-                return Response(status: .badRequest, body: .init(string: "Provider configuration test failed: \(error.localizedDescription)"))
+                return Response(
+                    status: .badRequest,
+                    body: .init(string: "Provider configuration test failed: \(error.localizedDescription)"))
             }
         } else {
             // If no discovery URL, check that required endpoints are configured
             if provider.hasRequiredEndpoints() {
                 return Response(status: .ok, body: .init(string: "Provider endpoints are configured"))
             } else {
-                return Response(status: .badRequest, body: .init(string: "Provider configuration is incomplete: missing required endpoints"))
+                return Response(
+                    status: .badRequest,
+                    body: .init(string: "Provider configuration is incomplete: missing required endpoints"))
             }
         }
     }
@@ -220,16 +239,19 @@ struct OIDCController: RouteCollection {
 
     func initiateOIDCAuth(req: Request) async throws -> Response {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let providerID = req.parameters.get("providerID", as: UUID.self) else {
+            let providerID = req.parameters.get("providerID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or provider ID")
         }
 
         // Fetch the OIDC provider
-        guard let provider = try await OIDCProvider.query(on: req.db)
-            .filter(\.$id == providerID)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$enabled == true)
-            .first() else {
+        guard
+            let provider = try await OIDCProvider.query(on: req.db)
+                .filter(\.$id == providerID)
+                .filter(\.$organization.$id == organizationID)
+                .filter(\.$enabled == true)
+                .first()
+        else {
             throw Abort(.notFound, reason: "OIDC provider not found or disabled")
         }
 
@@ -248,11 +270,13 @@ struct OIDCController: RouteCollection {
         let redirectURI = "\(baseURL)/auth/oidc/\(organizationID)/\(providerID)/callback"
 
         // Generate authorization URL
-        guard let authURL = provider.getAuthorizationURL(
-            redirectURI: redirectURI,
-            state: state,
-            nonce: nonce
-        ) else {
+        guard
+            let authURL = provider.getAuthorizationURL(
+                redirectURI: redirectURI,
+                state: state,
+                nonce: nonce
+            )
+        else {
             throw Abort(.internalServerError, reason: "Failed to generate authorization URL")
         }
 
@@ -261,7 +285,8 @@ struct OIDCController: RouteCollection {
 
     func handleOIDCCallback(req: Request) async throws -> Response {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let providerID = req.parameters.get("providerID", as: UUID.self) else {
+            let providerID = req.parameters.get("providerID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or provider ID")
         }
 
@@ -271,24 +296,28 @@ struct OIDCController: RouteCollection {
 
         // Verify state parameter for CSRF protection
         guard let sessionState = req.session.data["oidc_state"],
-              state == sessionState else {
+            state == sessionState
+        else {
             throw Abort(.badRequest, reason: "Invalid state parameter")
         }
 
         // Verify session provider and organization match
         guard let sessionProviderID = req.session.data["oidc_provider_id"],
-              let sessionOrgID = req.session.data["oidc_organization_id"],
-              sessionProviderID == providerID.uuidString,
-              sessionOrgID == organizationID.uuidString else {
+            let sessionOrgID = req.session.data["oidc_organization_id"],
+            sessionProviderID == providerID.uuidString,
+            sessionOrgID == organizationID.uuidString
+        else {
             throw Abort(.badRequest, reason: "Session mismatch")
         }
 
         // Fetch the OIDC provider
-        guard let provider = try await OIDCProvider.query(on: req.db)
-            .filter(\.$id == providerID)
-            .filter(\.$organization.$id == organizationID)
-            .with(\.$organization)
-            .first() else {
+        guard
+            let provider = try await OIDCProvider.query(on: req.db)
+                .filter(\.$id == providerID)
+                .filter(\.$organization.$id == organizationID)
+                .with(\.$organization)
+                .first()
+        else {
             throw Abort(.notFound, reason: "OIDC provider not found")
         }
 
@@ -366,7 +395,7 @@ struct OIDCController: RouteCollection {
         }
 
         if user.isSystemAdmin {
-            return // System admins can manage all organizations
+            return  // System admins can manage all organizations
         }
 
         // Check if user is an admin of this organization
@@ -381,7 +410,9 @@ struct OIDCController: RouteCollection {
         }
     }
 
-    private func validateProviderConfiguration(_ request: CreateOIDCProviderRequest, on database: Database, organizationID: UUID) async throws {
+    private func validateProviderConfiguration(
+        _ request: CreateOIDCProviderRequest, on database: Database, organizationID: UUID
+    ) async throws {
         // Check for duplicate provider names within the organization
         let existingProvider = try await OIDCProvider.query(on: database)
             .filter(\.$organization.$id == organizationID)
@@ -400,12 +431,16 @@ struct OIDCController: RouteCollection {
 
         // If no discovery URL, check for required individual endpoints
         guard let authEndpoint = request.authorizationEndpoint, !authEndpoint.isEmpty,
-              let tokenEndpoint = request.tokenEndpoint, !tokenEndpoint.isEmpty else {
-            throw Abort(.badRequest, reason: "Either discovery URL or both authorization and token endpoints must be provided")
+            let tokenEndpoint = request.tokenEndpoint, !tokenEndpoint.isEmpty
+        else {
+            throw Abort(
+                .badRequest, reason: "Either discovery URL or both authorization and token endpoints must be provided")
         }
     }
 
-    private func fetchAndUpdateProviderConfiguration(provider: OIDCProvider, discoveryURL: String, on req: Request) async throws {
+    private func fetchAndUpdateProviderConfiguration(provider: OIDCProvider, discoveryURL: String, on req: Request)
+        async throws
+    {
         do {
             let discovery = try await fetchDiscoveryDocument(url: discoveryURL, on: req)
 
@@ -425,8 +460,9 @@ struct OIDCController: RouteCollection {
     private func fetchDiscoveryDocument(url: String, on req: Request) async throws -> OIDCDiscoveryDocument {
         // Validate URL to prevent SSRF attacks
         guard let parsedURL = URL(string: url),
-              let host = parsedURL.host,
-              parsedURL.scheme == "https" else {
+            let host = parsedURL.host,
+            parsedURL.scheme == "https"
+        else {
             throw Abort(.badRequest, reason: "Discovery URL must be a valid HTTPS URL")
         }
 
@@ -434,11 +470,14 @@ struct OIDCController: RouteCollection {
         let allowedHosts = OIDCValidation.allowedHosts()
         let allowedDomainSuffixes = OIDCValidation.allowedDomainSuffixes()
 
-        let isHostAllowed = allowedHosts.contains(host) ||
-                           allowedDomainSuffixes.contains { host.hasSuffix($0) }
+        let isHostAllowed = allowedHosts.contains(host) || allowedDomainSuffixes.contains { host.hasSuffix($0) }
 
         guard isHostAllowed else {
-            throw Abort(.badRequest, reason: "Discovery URL host is not in the allowed list for security reasons. If you are an administrator, set OIDC_DISCOVERY_ALLOWED_HOSTS or OIDC_DISCOVERY_ALLOWED_SUFFIXES to allow this host.")
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Discovery URL host is not in the allowed list for security reasons. If you are an administrator, set OIDC_DISCOVERY_ALLOWED_HOSTS or OIDC_DISCOVERY_ALLOWED_SUFFIXES to allow this host."
+            )
         }
 
         let response = try await req.client.get(URI(string: url))
@@ -466,7 +505,7 @@ struct OIDCController: RouteCollection {
             "client_id": provider.clientID,
             "client_secret": provider.clientSecret,
             "code": code,
-            "redirect_uri": redirectURI
+            "redirect_uri": redirectURI,
         ]
 
         let response = try await req.client.post(URI(string: tokenEndpoint)) { clientReq in
@@ -524,7 +563,7 @@ struct OIDCController: RouteCollection {
         }
 
         let jwks = try await fetchJWKS(uri: jwksURI, on: req)
-        
+
         // Find the matching key
         guard let jwk = jwks.keys.first(where: { $0.kid == header.kid && $0.kty == "RSA" }) else {
             throw Abort(.badRequest, reason: "Unable to find matching RSA key for ID token")
@@ -536,18 +575,20 @@ struct OIDCController: RouteCollection {
         // Configure JWT signers and verify signature
         let signers = JWTSigners()
         signers.use(.rs256(key: rsaKey))
-        
+
         // Verify JWT signature and decode claims
         let claims = try signers.verify(idToken, as: OIDCIDTokenClaims.self)
 
         // Additional claim validation
         try validateIDTokenClaims(claims, provider: provider, expectedNonce: expectedNonce)
 
-        req.logger.info("Successfully validated JWT signature for OIDC token", metadata: [
-            "provider_id": .string(provider.id?.uuidString ?? "unknown"),
-            "subject": .string(claims.sub),
-            "issuer": .string(claims.iss)
-        ])
+        req.logger.info(
+            "Successfully validated JWT signature for OIDC token",
+            metadata: [
+                "provider_id": .string(provider.id?.uuidString ?? "unknown"),
+                "subject": .string(claims.sub),
+                "issuer": .string(claims.iss),
+            ])
 
         return claims
     }
@@ -555,8 +596,9 @@ struct OIDCController: RouteCollection {
     private func fetchJWKS(uri: String, on req: Request) async throws -> JWKS {
         // Validate JWKS URI for security
         guard let url = URL(string: uri),
-              let scheme = url.scheme,
-              scheme == "https" else {
+            let scheme = url.scheme,
+            scheme == "https"
+        else {
             throw Abort(.badRequest, reason: "JWKS URI must be HTTPS")
         }
 
@@ -576,10 +618,12 @@ struct OIDCController: RouteCollection {
         expectedNonce: String?
     ) throws {
         // Expiration and issued-at time validation is handled by JWTPayload.verify()
-        
+
         // Validate audience (aud) - should match our client ID
         guard claims.aud == provider.clientID else {
-            throw Abort(.badRequest, reason: "ID token audience '\(claims.aud)' does not match client ID '\(provider.clientID)'")
+            throw Abort(
+                .badRequest, reason: "ID token audience '\(claims.aud)' does not match client ID '\(provider.clientID)'"
+            )
         }
 
         // Validate nonce if provided
@@ -590,7 +634,6 @@ struct OIDCController: RouteCollection {
         // Additional issuer validation could be added here
         // For production, consider validating the issuer (iss) claim matches expected values
     }
-
 
     private func findOrCreateUser(
         userInfo: OIDCUserInfo,
@@ -645,7 +688,8 @@ struct OIDCController: RouteCollection {
 
         // Add user to organization as a member
         guard let userID = user.id,
-              let organizationID = organization.id else {
+            let organizationID = organization.id
+        else {
             throw Abort(.internalServerError, reason: "User and organization IDs are required")
         }
         let membership = UserOrganization(

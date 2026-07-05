@@ -60,11 +60,13 @@ struct WebAuthnService {
         )
 
         // Find the user by challenge
-        guard let authChallenge = try await AuthenticationChallenge.query(on: database)
-            .filter(\.$challenge == challenge)
-            .filter(\.$operation == "registration")
-            .first(),
-              let userID = authChallenge.userID else {
+        guard
+            let authChallenge = try await AuthenticationChallenge.query(on: database)
+                .filter(\.$challenge == challenge)
+                .filter(\.$operation == "registration")
+                .first(),
+            let userID = authChallenge.userID
+        else {
             throw WebAuthnError.challengeNotFound
         }
 
@@ -100,9 +102,11 @@ struct WebAuthnService {
 
         if let username = username {
             // Get user's credentials
-            guard let user = try await User.query(on: database)
-                .filter(\.$username == username)
-                .first() else {
+            guard
+                let user = try await User.query(on: database)
+                    .filter(\.$username == username)
+                    .first()
+            else {
                 throw WebAuthnError.userNotFound
             }
 
@@ -141,10 +145,12 @@ struct WebAuthnService {
 
         let credentialID = authenticationCredential.id.urlDecoded.decoded ?? Data()
 
-        guard let credential = try await UserCredential.query(on: database)
-            .filter(\.$credentialID == credentialID)
-            .with(\.$user)
-            .first() else {
+        guard
+            let credential = try await UserCredential.query(on: database)
+                .filter(\.$credentialID == credentialID)
+                .with(\.$user)
+                .first()
+        else {
             throw WebAuthnError.credentialNotFound
         }
 
@@ -190,7 +196,8 @@ struct WebAuthnService {
             }
 
         guard let stored = try await query.first(),
-              let storedID = stored.id else {
+            let storedID = stored.id
+        else {
             throw WebAuthnError.challengeNotFound
         }
 
@@ -201,11 +208,13 @@ struct WebAuthnService {
         }
 
         // Atomically remove the row and confirm we were the ones who removed it.
-        let claimed = try await sql.raw("""
+        let claimed = try await sql.raw(
+            """
             DELETE FROM authentication_challenges
             WHERE id = \(bind: storedID)
             RETURNING id
-            """).first()
+            """
+        ).first()
 
         guard claimed != nil else {
             // Another request consumed the same challenge first.
@@ -325,7 +334,7 @@ extension String {
     func base64URLDecodedBytes() throws -> [UInt8] {
         // Convert base64url to base64
         var base64 = self.replacingOccurrences(of: "-", with: "+")
-                         .replacingOccurrences(of: "_", with: "/")
+            .replacingOccurrences(of: "_", with: "/")
 
         // Add padding if needed
         let remainder = base64.count % 4

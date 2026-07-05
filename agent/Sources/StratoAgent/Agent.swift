@@ -171,23 +171,25 @@ actor Agent {
     private var effectiveAgentID: String {
         return assignedAgentID ?? initialAgentID
     }
-    
+
     func start() async throws {
         guard !isRunning else {
             logger.warning("Agent is already running")
             return
         }
-        
+
         logger.info("Initializing network service")
 
         // Initialize network service based on config, falling back to platform defaults
-        let selectedMode = networkMode ?? {
-            #if os(Linux)
-            return .ovn
-            #else
-            return .user
-            #endif
-        }()
+        let selectedMode =
+            networkMode
+            ?? {
+                #if os(Linux)
+                return .ovn
+                #else
+                return .user
+                #endif
+            }()
 
         switch selectedMode {
         case .ovn:
@@ -216,7 +218,7 @@ actor Agent {
             logger.warning("Failed to connect to network service: \(error.localizedDescription)")
             logger.warning("VM networking will be limited")
         }
-        
+
         // Initialize image cache service
         logger.info("Initializing image cache service")
         imageCacheService = ImageCacheService(
@@ -235,7 +237,10 @@ actor Agent {
 
         logger.info("Initializing QEMU service")
         #if canImport(SwiftQEMU)
-        qemuService = QEMUService(logger: logger, networkService: networkService, imageCacheService: imageCacheService, vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath, hardwareAccelerationEnabled: hardwareAccelerationEnabled)
+        qemuService = QEMUService(
+            logger: logger, networkService: networkService, imageCacheService: imageCacheService,
+            vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath,
+            hardwareAccelerationEnabled: hardwareAccelerationEnabled)
         #else
         qemuService = MockHypervisorService(logger: logger, hypervisorType: .qemu)
         #endif
@@ -257,14 +262,16 @@ actor Agent {
         await consoleSocketManager?.setOnConsoleData { [weak self] vmId, sessionId, data in
             await self?.sendConsoleData(vmId: vmId, sessionId: sessionId, data: data)
         }
-        
+
         // Initialize SPIFFE/mTLS if enabled
         var tlsConfiguration: TLSConfiguration?
         if let spiffe = spiffeConfig, spiffe.enabled {
-            logger.info("Initializing SPIFFE authentication", metadata: [
-                "trustDomain": .string(spiffe.trustDomain ?? SPIFFEConfig.defaultTrustDomain),
-                "sourceType": .string(spiffe.sourceType ?? "files")
-            ])
+            logger.info(
+                "Initializing SPIFFE authentication",
+                metadata: [
+                    "trustDomain": .string(spiffe.trustDomain ?? SPIFFEConfig.defaultTrustDomain),
+                    "sourceType": .string(spiffe.sourceType ?? "files"),
+                ])
 
             do {
                 let spiffeClient = try createSPIFFEClient(config: spiffe)
@@ -300,12 +307,14 @@ actor Agent {
         } else {
             logger.info("Connecting to control plane", metadata: ["url": .string(webSocketURL)])
         }
-        websocketClient = WebSocketClient(url: currentWebSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration, registrationToken: currentRegistrationToken, inboundContinuation: inboundContinuation)
+        websocketClient = WebSocketClient(
+            url: currentWebSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration,
+            registrationToken: currentRegistrationToken, inboundContinuation: inboundContinuation)
 
         if let client = websocketClient {
             try await client.connect()
         }
-        
+
         // Register with control plane
         try await registerWithControlPlane()
 
@@ -367,7 +376,7 @@ actor Agent {
         } catch {
             logger.error("Failed to unregister from control plane: \(error)")
         }
-        
+
         if let client = websocketClient {
             await client.disconnect()
         }
@@ -411,17 +420,20 @@ actor Agent {
         switch config.sourceType {
         case "files":
             guard let certPath = config.certificatePath,
-                  let keyPath = config.privateKeyPath,
-                  let bundlePath = config.trustBundlePath else {
+                let keyPath = config.privateKeyPath,
+                let bundlePath = config.trustBundlePath
+            else {
                 throw AgentError.spiffeConfigurationError(
                     "File-based SPIFFE requires certificate_path, private_key_path, and trust_bundle_path"
                 )
             }
 
-            logger.info("Using file-based SPIFFE client", metadata: [
-                "certificatePath": .string(certPath),
-                "spiffeID": .string(spiffeID.uri)
-            ])
+            logger.info(
+                "Using file-based SPIFFE client",
+                metadata: [
+                    "certificatePath": .string(certPath),
+                    "spiffeID": .string(spiffeID.uri),
+                ])
 
             return FileSPIFFEClient(
                 certificatePath: certPath,
@@ -434,10 +446,12 @@ actor Agent {
         case "workload_api", nil:
             let socketPath = config.workloadAPISocketPath ?? SPIFFEConfig.defaultWorkloadAPISocketPath
 
-            logger.info("Using Workload API SPIFFE client", metadata: [
-                "socketPath": .string(socketPath),
-                "spiffeID": .string(spiffeID.uri)
-            ])
+            logger.info(
+                "Using Workload API SPIFFE client",
+                metadata: [
+                    "socketPath": .string(socketPath),
+                    "spiffeID": .string(spiffeID.uri),
+                ])
 
             return WorkloadAPISPIFFEClient(
                 socketPath: socketPath,
@@ -495,7 +509,8 @@ actor Agent {
         logger.info("Registration message sent to control plane, waiting for response...")
 
         // Wait for registration response with timeout
-        let assignedId = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+        let assignedId = try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<String, Error>) in
             self.armRegistrationWait(continuation)
         }
 
@@ -550,10 +565,12 @@ actor Agent {
     func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) async {
         let controlPlaneProtocolVersion = response.protocolVersion ?? 0
         if controlPlaneProtocolVersion != WireProtocol.currentVersion {
-            logger.warning("Control plane wire protocol version differs from agent", metadata: [
-                "controlPlaneProtocolVersion": .stringConvertible(controlPlaneProtocolVersion),
-                "agentProtocolVersion": .stringConvertible(WireProtocol.currentVersion)
-            ])
+            logger.warning(
+                "Control plane wire protocol version differs from agent",
+                metadata: [
+                    "controlPlaneProtocolVersion": .stringConvertible(controlPlaneProtocolVersion),
+                    "agentProtocolVersion": .stringConvertible(WireProtocol.currentVersion),
+                ])
         }
 
         // Adopt the rotated reconnect token (if any) before resuming registration:
@@ -597,7 +614,9 @@ actor Agent {
             try store.save(state)
             logger.debug("Persisted join state", metadata: ["stateFile": .string(store.location)])
         } catch {
-            logger.error("Failed to persist join state to \(store.location): \(error). The agent stays connected, but a restart will need a new join token.")
+            logger.error(
+                "Failed to persist join state to \(store.location): \(error). The agent stays connected, but a restart will need a new join token."
+            )
         }
     }
 
@@ -630,9 +649,11 @@ actor Agent {
             return
         }
 
-        logger.error("Control plane reported an error: \(message.error)\(detailSuffix)", metadata: [
-            "requestId": .string(message.requestId)
-        ])
+        logger.error(
+            "Control plane reported an error: \(message.error)\(detailSuffix)",
+            metadata: [
+                "requestId": .string(message.requestId)
+            ])
     }
 
     /// The networking capability to report at registration, reflecting the
@@ -663,7 +684,9 @@ actor Agent {
     /// lists. Advertised hypervisors are hard placement constraints, so each
     /// one is gated on its probe (binary executable, and KVM for Firecracker)
     /// — the scheduler must not route VMs here that create would reject.
-    private func getAgentCapabilities(hypervisors: [HypervisorSupport], networkCapability: NetworkCapability?) -> [String] {
+    private func getAgentCapabilities(hypervisors: [HypervisorSupport], networkCapability: NetworkCapability?)
+        -> [String]
+    {
         var capabilities = ["vm_management"]
 
         // Message-set capabilities: message types added after protocol
@@ -680,17 +703,21 @@ actor Agent {
                 // Error, not warning: without QEMU the agent is unusable for
                 // most placements, and the scheduler will only report
                 // "unsupported hypervisor" — this log points at the cause.
-                logger.error("QEMU unusable; not advertising qemu capability", metadata: [
-                    "reason": .string(hypervisor.unavailabilityReason ?? "unknown"),
-                    "qemuBinaryPath": .string(qemuBinaryPath)
-                ])
+                logger.error(
+                    "QEMU unusable; not advertising qemu capability",
+                    metadata: [
+                        "reason": .string(hypervisor.unavailabilityReason ?? "unknown"),
+                        "qemuBinaryPath": .string(qemuBinaryPath),
+                    ])
             } else {
                 #if os(Linux)
                 // Not worth a log on platforms where the backend can never
                 // exist (e.g. Firecracker on macOS).
-                logger.warning("\(hypervisor.type.displayName) unusable; not advertising \(hypervisor.type.rawValue) capability", metadata: [
-                    "reason": .string(hypervisor.unavailabilityReason ?? "unknown")
-                ])
+                logger.warning(
+                    "\(hypervisor.type.displayName) unusable; not advertising \(hypervisor.type.rawValue) capability",
+                    metadata: [
+                        "reason": .string(hypervisor.unavailabilityReason ?? "unknown")
+                    ])
                 #endif
             }
         }
@@ -709,18 +736,20 @@ actor Agent {
         case .userMode:
             capabilities.append("user_networking")
         case nil:
-            break // backend selected but not connected; advertise nothing
+            break  // backend selected but not connected; advertise nothing
         }
 
         if !HypervisorType.allCases.contains(where: { capabilities.contains($0.rawValue) }) {
-            logger.error("No usable hypervisor backend on this host; the agent will register but never be eligible for VM placement. Check qemu_binary_path (and firecracker_binary_path on Linux) in the agent configuration.", metadata: [
-                "qemuBinaryPath": .string(qemuBinaryPath)
-            ])
+            logger.error(
+                "No usable hypervisor backend on this host; the agent will register but never be eligible for VM placement. Check qemu_binary_path (and firecracker_binary_path on Linux) in the agent configuration.",
+                metadata: [
+                    "qemuBinaryPath": .string(qemuBinaryPath)
+                ])
         }
 
         return capabilities
     }
-    
+
     private func unregisterFromControlPlane() async throws {
         let message = AgentUnregisterMessage(
             agentId: effectiveAgentID,
@@ -732,7 +761,7 @@ actor Agent {
         }
         logger.info("Unregistration message sent to control plane")
     }
-    
+
     // MARK: - Reconnection
 
     /// Called by the WebSocket client when the connection to the control plane drops
@@ -764,7 +793,7 @@ actor Agent {
             do {
                 try await Task.sleep(for: .seconds(delaySeconds + jitter))
             } catch {
-                return // cancelled (agent stopping)
+                return  // cancelled (agent stopping)
             }
 
             guard isRunning else { return }
@@ -782,7 +811,9 @@ actor Agent {
                 // for transient rejections: the restart re-reads the state
                 // file and retries once with the same token.
                 logger.error("Registration rejected by control plane: \(reason)")
-                logger.error("If the token expired or was revoked, create a new registration token in the Strato UI (Agents → Create Registration Token) and run: strato-agent join '<registration-url>'")
+                logger.error(
+                    "If the token expired or was revoked, create a new registration token in the Strato UI (Agents → Create Registration Token) and run: strato-agent join '<registration-url>'"
+                )
                 await websocketClient?.disconnect()
                 terminalError = AgentError.registrationRejected(reason)
                 signalShutdown()
@@ -798,7 +829,7 @@ actor Agent {
             }
         }
     }
-    
+
     func sendHeartbeat() async {
         do {
             try await _sendHeartbeat()
@@ -806,7 +837,7 @@ actor Agent {
             logger.error("Failed to send heartbeat: \(error)")
         }
     }
-    
+
     private func _sendHeartbeat() async throws {
         // Only send heartbeat if we have an assigned ID from registration
         guard assignedAgentID != nil else {
@@ -828,7 +859,7 @@ actor Agent {
         }
         logger.debug("Heartbeat sent", metadata: ["agentId": .string(effectiveAgentID)])
     }
-    
+
     private func getAgentResources() async -> AgentResources {
         // Host capacity, probed live from the machine the agent runs on.
         let totalCPU = HostResources.logicalCoreCount
@@ -853,9 +884,11 @@ actor Agent {
         // rather than tracking reservations — this naturally accounts for existing disks.
         let disk = HostResources.diskCapacity(forPath: vmStoragePath)
         if disk == nil {
-            logger.warning("Unable to determine disk capacity for VM storage path", metadata: [
-                "path": .string(vmStoragePath)
-            ])
+            logger.warning(
+                "Unable to determine disk capacity for VM storage path",
+                metadata: [
+                    "path": .string(vmStoragePath)
+                ])
         }
 
         return AgentResources(
@@ -867,7 +900,7 @@ actor Agent {
             availableDisk: disk?.free ?? 0
         )
     }
-    
+
     private func getRunningVMList() async -> [String] {
         var vmList: [String] = []
 
@@ -921,9 +954,11 @@ extension Agent {
     }
 
     func handleMessage(_ envelope: MessageEnvelope) async {
-        logger.debug("Handling message from control plane", metadata: [
-            "type": .string(envelope.type.rawValue)
-        ])
+        logger.debug(
+            "Handling message from control plane",
+            metadata: [
+                "type": .string(envelope.type.rawValue)
+            ])
 
         do {
             switch envelope.type {
@@ -1016,10 +1051,12 @@ extension Agent {
                 // ACK to a control-plane-initiated request (incl. every heartbeat).
                 // Logged at debug so it stops surfacing as "unknown message type".
                 let message = try envelope.decode(as: SuccessMessage.self)
-                logger.debug("Received success response from control plane", metadata: [
-                    "requestId": .string(message.requestId),
-                    "message": .string(message.message ?? "")
-                ])
+                logger.debug(
+                    "Received success response from control plane",
+                    metadata: [
+                        "requestId": .string(message.requestId),
+                        "message": .string(message.message ?? ""),
+                    ])
             case .error:
                 let message = try envelope.decode(as: ErrorMessage.self)
                 await handleErrorResponse(message)
@@ -1030,7 +1067,7 @@ extension Agent {
             logger.error("Failed to handle message: \(error)")
         }
     }
-    
+
     /// Get the hypervisor service for a VM based on its type
     private func getHypervisorService(for hypervisorType: HypervisorType) -> (any HypervisorService)? {
         switch hypervisorType {
@@ -1062,25 +1099,36 @@ extension Agent {
         let vmId = message.vmData.id.uuidString
         let hypervisorType = message.vmData.hypervisorType
 
-        logger.info("Creating VM", metadata: [
-            "vmId": .string(vmId),
-            "hypervisorType": .string(hypervisorType.rawValue)
-        ])
-        await sendVMLog(vmId: vmId, level: .info, eventType: .operation, message: "Starting VM creation with hypervisor: \(hypervisorType.rawValue)", operation: "create")
+        logger.info(
+            "Creating VM",
+            metadata: [
+                "vmId": .string(vmId),
+                "hypervisorType": .string(hypervisorType.rawValue),
+            ])
+        await sendVMLog(
+            vmId: vmId, level: .info, eventType: .operation,
+            message: "Starting VM creation with hypervisor: \(hypervisorType.rawValue)", operation: "create")
 
         // Log image info if provided
         if let imageInfo = message.imageInfo {
-            logger.info("VM creation includes image info", metadata: [
-                "vmId": .string(vmId),
-                "imageId": .string(imageInfo.imageId.uuidString),
-                "filename": .string(imageInfo.filename)
-            ])
-            await sendVMLog(vmId: vmId, level: .info, eventType: .info, message: "Using image: \(imageInfo.filename)", operation: "create")
+            logger.info(
+                "VM creation includes image info",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "imageId": .string(imageInfo.imageId.uuidString),
+                    "filename": .string(imageInfo.filename),
+                ])
+            await sendVMLog(
+                vmId: vmId, level: .info, eventType: .info, message: "Using image: \(imageInfo.filename)",
+                operation: "create")
         }
 
         guard let service = getHypervisorService(for: hypervisorType) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for type: \(hypervisorType.rawValue)")
-            await sendVMLog(vmId: vmId, level: .error, eventType: .error, message: "Hypervisor service not available for type: \(hypervisorType.rawValue)", operation: "create")
+            await sendError(
+                for: message.requestId, error: "Hypervisor service not available for type: \(hypervisorType.rawValue)")
+            await sendVMLog(
+                vmId: vmId, level: .error, eventType: .error,
+                message: "Hypervisor service not available for type: \(hypervisorType.rawValue)", operation: "create")
             return
         }
 
@@ -1093,22 +1141,30 @@ extension Agent {
             // Record the hypervisor type for this VM
             vmHypervisorMap[vmId] = hypervisorType
             await sendSuccess(for: message.requestId, message: "VM created successfully")
-            await sendVMLog(vmId: vmId, level: .info, eventType: .statusChange, message: "VM created successfully", operation: "create", newStatus: .created)
+            await sendVMLog(
+                vmId: vmId, level: .info, eventType: .statusChange, message: "VM created successfully",
+                operation: "create", newStatus: .created)
             logger.info("VM created successfully", metadata: ["vmId": .string(vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to create VM: \(error.localizedDescription)")
-            await sendVMLog(vmId: vmId, level: .error, eventType: .error, message: "Failed to create VM: \(error.localizedDescription)", operation: "create")
-            logger.error("Failed to create VM", metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
+            await sendVMLog(
+                vmId: vmId, level: .error, eventType: .error,
+                message: "Failed to create VM: \(error.localizedDescription)", operation: "create")
+            logger.error(
+                "Failed to create VM", metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
         }
     }
-    
+
     private func handleVMBoot(_ message: VMOperationMessage) async {
         logger.info("Booting VM", metadata: ["vmId": .string(message.vmId)])
-        await sendVMLog(vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM boot", operation: "boot")
+        await sendVMLog(
+            vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM boot", operation: "boot")
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available", operation: "boot")
+            await sendVMLog(
+                vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available",
+                operation: "boot")
             return
         }
 
@@ -1116,22 +1172,32 @@ extension Agent {
             try await service.bootVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM booted successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .running)
-            await sendVMLog(vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM booted successfully", operation: "boot", newStatus: .running)
+            await sendVMLog(
+                vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM booted successfully",
+                operation: "boot", newStatus: .running)
             logger.info("VM booted successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to boot VM: \(error.localizedDescription)")
-            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Failed to boot VM: \(error.localizedDescription)", operation: "boot")
-            logger.error("Failed to boot VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
+            await sendVMLog(
+                vmId: message.vmId, level: .error, eventType: .error,
+                message: "Failed to boot VM: \(error.localizedDescription)", operation: "boot")
+            logger.error(
+                "Failed to boot VM",
+                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
-    
+
     private func handleVMShutdown(_ message: VMOperationMessage) async {
         logger.info("Shutting down VM", metadata: ["vmId": .string(message.vmId)])
-        await sendVMLog(vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM shutdown", operation: "shutdown")
+        await sendVMLog(
+            vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM shutdown",
+            operation: "shutdown")
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available", operation: "shutdown")
+            await sendVMLog(
+                vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available",
+                operation: "shutdown")
             return
         }
 
@@ -1139,12 +1205,18 @@ extension Agent {
             try await service.shutdownVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM shut down successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .shutdown)
-            await sendVMLog(vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM shut down successfully", operation: "shutdown", newStatus: .shutdown)
+            await sendVMLog(
+                vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM shut down successfully",
+                operation: "shutdown", newStatus: .shutdown)
             logger.info("VM shut down successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to shutdown VM: \(error.localizedDescription)")
-            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Failed to shutdown VM: \(error.localizedDescription)", operation: "shutdown")
-            logger.error("Failed to shutdown VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
+            await sendVMLog(
+                vmId: message.vmId, level: .error, eventType: .error,
+                message: "Failed to shutdown VM: \(error.localizedDescription)", operation: "shutdown")
+            logger.error(
+                "Failed to shutdown VM",
+                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
 
@@ -1162,17 +1234,22 @@ extension Agent {
             logger.info("VM rebooted successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to reboot VM: \(error.localizedDescription)")
-            logger.error("Failed to reboot VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
+            logger.error(
+                "Failed to reboot VM",
+                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
 
     private func handleVMPause(_ message: VMOperationMessage) async {
         logger.info("Pausing VM", metadata: ["vmId": .string(message.vmId)])
-        await sendVMLog(vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM pause", operation: "pause")
+        await sendVMLog(
+            vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM pause", operation: "pause")
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available", operation: "pause")
+            await sendVMLog(
+                vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available",
+                operation: "pause")
             return
         }
 
@@ -1180,22 +1257,31 @@ extension Agent {
             try await service.pauseVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM paused successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .paused)
-            await sendVMLog(vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM paused successfully", operation: "pause", newStatus: .paused)
+            await sendVMLog(
+                vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM paused successfully",
+                operation: "pause", newStatus: .paused)
             logger.info("VM paused successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to pause VM: \(error.localizedDescription)")
-            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Failed to pause VM: \(error.localizedDescription)", operation: "pause")
-            logger.error("Failed to pause VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
+            await sendVMLog(
+                vmId: message.vmId, level: .error, eventType: .error,
+                message: "Failed to pause VM: \(error.localizedDescription)", operation: "pause")
+            logger.error(
+                "Failed to pause VM",
+                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
 
     private func handleVMResume(_ message: VMOperationMessage) async {
         logger.info("Resuming VM", metadata: ["vmId": .string(message.vmId)])
-        await sendVMLog(vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM resume", operation: "resume")
+        await sendVMLog(
+            vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM resume", operation: "resume")
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available", operation: "resume")
+            await sendVMLog(
+                vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available",
+                operation: "resume")
             return
         }
 
@@ -1203,22 +1289,32 @@ extension Agent {
             try await service.resumeVM(vmId: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM resumed successfully")
             await sendStatusUpdate(vmId: message.vmId, status: .running)
-            await sendVMLog(vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM resumed successfully", operation: "resume", newStatus: .running)
+            await sendVMLog(
+                vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM resumed successfully",
+                operation: "resume", newStatus: .running)
             logger.info("VM resumed successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to resume VM: \(error.localizedDescription)")
-            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Failed to resume VM: \(error.localizedDescription)", operation: "resume")
-            logger.error("Failed to resume VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
+            await sendVMLog(
+                vmId: message.vmId, level: .error, eventType: .error,
+                message: "Failed to resume VM: \(error.localizedDescription)", operation: "resume")
+            logger.error(
+                "Failed to resume VM",
+                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
 
     private func handleVMDelete(_ message: VMOperationMessage) async {
         logger.info("Deleting VM", metadata: ["vmId": .string(message.vmId)])
-        await sendVMLog(vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM deletion", operation: "delete")
+        await sendVMLog(
+            vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM deletion",
+            operation: "delete")
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available", operation: "delete")
+            await sendVMLog(
+                vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available",
+                operation: "delete")
             return
         }
 
@@ -1227,15 +1323,21 @@ extension Agent {
             // Clean up the hypervisor mapping
             vmHypervisorMap.removeValue(forKey: message.vmId)
             await sendSuccess(for: message.requestId, message: "VM deleted successfully")
-            await sendVMLog(vmId: message.vmId, level: .info, eventType: .operation, message: "VM deleted successfully", operation: "delete")
+            await sendVMLog(
+                vmId: message.vmId, level: .info, eventType: .operation, message: "VM deleted successfully",
+                operation: "delete")
             logger.info("VM deleted successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to delete VM: \(error.localizedDescription)")
-            await sendVMLog(vmId: message.vmId, level: .error, eventType: .error, message: "Failed to delete VM: \(error.localizedDescription)", operation: "delete")
-            logger.error("Failed to delete VM", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
+            await sendVMLog(
+                vmId: message.vmId, level: .error, eventType: .error,
+                message: "Failed to delete VM: \(error.localizedDescription)", operation: "delete")
+            logger.error(
+                "Failed to delete VM",
+                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
-    
+
     private func handleVMInfo(_ message: VMInfoRequestMessage) async {
         logger.info("Getting VM info", metadata: ["vmId": .string(message.vmId)])
 
@@ -1251,7 +1353,9 @@ extension Agent {
             logger.info("VM info retrieved successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to get VM info: \(error.localizedDescription)")
-            logger.error("Failed to get VM info", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
+            logger.error(
+                "Failed to get VM info",
+                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
 
@@ -1267,13 +1371,17 @@ extension Agent {
             let status = try await service.getVMStatus(vmId: message.vmId)
             let data = try AnyCodableValue(status)
             await sendSuccess(for: message.requestId, message: "VM status retrieved", data: data)
-            logger.info("VM status retrieved successfully", metadata: ["vmId": .string(message.vmId), "status": .string(status.rawValue)])
+            logger.info(
+                "VM status retrieved successfully",
+                metadata: ["vmId": .string(message.vmId), "status": .string(status.rawValue)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to get VM status: \(error.localizedDescription)")
-            logger.error("Failed to get VM status", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
+            logger.error(
+                "Failed to get VM status",
+                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
-    
+
     private func sendSuccess(for requestId: String, message: String? = nil, data: AnyCodableValue? = nil) async {
         let successMessage = SuccessMessage(requestId: requestId, message: message, data: data)
         do {
@@ -1282,7 +1390,7 @@ extension Agent {
             logger.error("Failed to send success message: \(error)")
         }
     }
-    
+
     private func sendError(for requestId: String, error: String, details: String? = nil) async {
         let errorMessage = ErrorMessage(requestId: requestId, error: error, details: details)
         do {
@@ -1291,7 +1399,7 @@ extension Agent {
             logger.error("Failed to send error message: \(error)")
         }
     }
-    
+
     private func sendStatusUpdate(vmId: String, status: VMStatus, details: String? = nil) async {
         let statusMessage = StatusUpdateMessage(vmId: vmId, status: status, details: details)
         do {
@@ -1329,24 +1437,24 @@ extension Agent {
             logger.error("Failed to send VM log: \(error)")
         }
     }
-    
+
     // MARK: - Network Message Handlers
-    
+
     private func handleNetworkCreate(_ message: NetworkCreateMessage) async {
         logger.info("Creating network", metadata: ["networkName": .string(message.networkName)])
-        
+
         guard let networkService = networkService else {
             await sendError(for: message.requestId, error: "Network service not available")
             return
         }
-        
+
         do {
             let networkUUID = try await networkService.createLogicalNetwork(
                 name: message.networkName,
                 subnet: message.subnet,
                 gateway: message.gateway
             )
-            
+
             let networkInfo = NetworkInfo(
                 name: message.networkName,
                 uuid: networkUUID.uuidString,
@@ -1356,42 +1464,46 @@ extension Agent {
                 dhcpEnabled: message.dhcpEnabled,
                 dnsServers: message.dnsServers
             )
-            
+
             let data = try AnyCodableValue(networkInfo)
             await sendSuccess(for: message.requestId, message: "Network created successfully", data: data)
             logger.info("Network created successfully", metadata: ["networkName": .string(message.networkName)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to create network: \(error.localizedDescription)")
-            logger.error("Failed to create network", metadata: ["networkName": .string(message.networkName), "error": .string(error.localizedDescription)])
+            logger.error(
+                "Failed to create network",
+                metadata: ["networkName": .string(message.networkName), "error": .string(error.localizedDescription)])
         }
     }
-    
+
     private func handleNetworkDelete(_ message: NetworkDeleteMessage) async {
         logger.info("Deleting network", metadata: ["networkName": .string(message.networkName)])
-        
+
         guard let networkService = networkService else {
             await sendError(for: message.requestId, error: "Network service not available")
             return
         }
-        
+
         do {
             try await networkService.deleteLogicalNetwork(name: message.networkName)
             await sendSuccess(for: message.requestId, message: "Network deleted successfully")
             logger.info("Network deleted successfully", metadata: ["networkName": .string(message.networkName)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to delete network: \(error.localizedDescription)")
-            logger.error("Failed to delete network", metadata: ["networkName": .string(message.networkName), "error": .string(error.localizedDescription)])
+            logger.error(
+                "Failed to delete network",
+                metadata: ["networkName": .string(message.networkName), "error": .string(error.localizedDescription)])
         }
     }
-    
+
     private func handleNetworkList(_ message: NetworkListMessage) async {
         logger.info("Listing networks")
-        
+
         guard let networkService = networkService else {
             await sendError(for: message.requestId, error: "Network service not available")
             return
         }
-        
+
         do {
             let networks = try await networkService.listLogicalNetworks()
             let data = try AnyCodableValue(networks)
@@ -1402,55 +1514,68 @@ extension Agent {
             logger.error("Failed to list networks", metadata: ["error": .string(error.localizedDescription)])
         }
     }
-    
+
     private func handleNetworkInfo(_ message: NetworkInfoMessage) async {
         logger.info("Getting network info", metadata: ["networkName": .string(message.networkName)])
-        
+
         guard let networkService = networkService else {
             await sendError(for: message.requestId, error: "Network service not available")
             return
         }
-        
+
         do {
             let networks = try await networkService.listLogicalNetworks()
             if let network = networks.first(where: { $0.name == message.networkName }) {
                 let data = try AnyCodableValue(network)
                 await sendSuccess(for: message.requestId, message: "Network info retrieved successfully", data: data)
-                logger.info("Network info retrieved successfully", metadata: ["networkName": .string(message.networkName)])
+                logger.info(
+                    "Network info retrieved successfully", metadata: ["networkName": .string(message.networkName)])
             } else {
                 await sendError(for: message.requestId, error: "Network not found: \(message.networkName)")
                 logger.warning("Network not found", metadata: ["networkName": .string(message.networkName)])
             }
         } catch {
             await sendError(for: message.requestId, error: "Failed to get network info: \(error.localizedDescription)")
-            logger.error("Failed to get network info", metadata: ["networkName": .string(message.networkName), "error": .string(error.localizedDescription)])
+            logger.error(
+                "Failed to get network info",
+                metadata: ["networkName": .string(message.networkName), "error": .string(error.localizedDescription)])
         }
     }
-    
+
     private func handleNetworkAttach(_ message: NetworkAttachMessage) async {
-        logger.info("Attaching VM to network", metadata: ["vmId": .string(message.vmId), "networkName": .string(message.networkName)])
-        
+        logger.info(
+            "Attaching VM to network",
+            metadata: ["vmId": .string(message.vmId), "networkName": .string(message.networkName)])
+
         guard let networkService = networkService else {
             await sendError(for: message.requestId, error: "Network service not available")
             return
         }
-        
+
         do {
             let networkInfo = try await networkService.attachVMToNetwork(
                 vmId: message.vmId,
                 networkName: message.networkName,
                 macAddress: message.config?.macAddress
             )
-            
+
             let data = try AnyCodableValue(networkInfo)
             await sendSuccess(for: message.requestId, message: "VM attached to network successfully", data: data)
-            logger.info("VM attached to network successfully", metadata: ["vmId": .string(message.vmId), "networkName": .string(message.networkName)])
+            logger.info(
+                "VM attached to network successfully",
+                metadata: ["vmId": .string(message.vmId), "networkName": .string(message.networkName)])
         } catch {
-            await sendError(for: message.requestId, error: "Failed to attach VM to network: \(error.localizedDescription)")
-            logger.error("Failed to attach VM to network", metadata: ["vmId": .string(message.vmId), "networkName": .string(message.networkName), "error": .string(error.localizedDescription)])
+            await sendError(
+                for: message.requestId, error: "Failed to attach VM to network: \(error.localizedDescription)")
+            logger.error(
+                "Failed to attach VM to network",
+                metadata: [
+                    "vmId": .string(message.vmId), "networkName": .string(message.networkName),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
-    
+
     private func handleNetworkDetach(_ message: NetworkDetachMessage) async {
         logger.info("Detaching VM from network", metadata: ["vmId": .string(message.vmId)])
 
@@ -1464,22 +1589,28 @@ extension Agent {
             await sendSuccess(for: message.requestId, message: "VM detached from network successfully")
             logger.info("VM detached from network successfully", metadata: ["vmId": .string(message.vmId)])
         } catch {
-            await sendError(for: message.requestId, error: "Failed to detach VM from network: \(error.localizedDescription)")
-            logger.error("Failed to detach VM from network", metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
+            await sendError(
+                for: message.requestId, error: "Failed to detach VM from network: \(error.localizedDescription)")
+            logger.error(
+                "Failed to detach VM from network",
+                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
     }
 
     // MARK: - Console Message Handlers
 
     private func handleConsoleConnect(_ message: ConsoleConnectMessage) async {
-        logger.info("Console connect request received", metadata: [
-            "vmId": .string(message.vmId),
-            "sessionId": .string(message.sessionId),
-            "requestId": .string(message.requestId)
-        ])
+        logger.info(
+            "Console connect request received",
+            metadata: [
+                "vmId": .string(message.vmId),
+                "sessionId": .string(message.sessionId),
+                "requestId": .string(message.requestId),
+            ])
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            logger.error("Hypervisor service not available for console connect", metadata: ["vmId": .string(message.vmId)])
+            logger.error(
+                "Hypervisor service not available for console connect", metadata: ["vmId": .string(message.vmId)])
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
             return
         }
@@ -1490,11 +1621,15 @@ extension Agent {
         do {
             endpoint = try await service.consoleEndpoint(vmId: message.vmId)
         } catch {
-            logger.error("Console not available", metadata: [
-                "vmId": .string(message.vmId),
-                "error": .string(error.localizedDescription)
-            ])
-            await sendError(for: message.requestId, error: "Console not available for VM \(message.vmId): \(error.localizedDescription)")
+            logger.error(
+                "Console not available",
+                metadata: [
+                    "vmId": .string(message.vmId),
+                    "error": .string(error.localizedDescription),
+                ])
+            await sendError(
+                for: message.requestId,
+                error: "Console not available for VM \(message.vmId): \(error.localizedDescription)")
             return
         }
 
@@ -1502,7 +1637,8 @@ extension Agent {
         let consolePath = endpoint?.consoleSocketPath
 
         guard serialPath != nil || consolePath != nil else {
-            logger.error("No console socket found (tried serial and virtio-console)", metadata: ["vmId": .string(message.vmId)])
+            logger.error(
+                "No console socket found (tried serial and virtio-console)", metadata: ["vmId": .string(message.vmId)])
             await sendError(for: message.requestId, error: "Console socket not found for VM \(message.vmId)")
             return
         }
@@ -1516,10 +1652,12 @@ extension Agent {
         // Clean up any existing sessions for this VM to prevent stale data routing
         let existingSessions = await consoleManager.getSessionsForVM(vmId: message.vmId)
         if !existingSessions.isEmpty {
-            logger.info("Cleaning up existing console sessions for VM", metadata: [
-                "vmId": .string(message.vmId),
-                "sessionCount": .stringConvertible(existingSessions.count)
-            ])
+            logger.info(
+                "Cleaning up existing console sessions for VM",
+                metadata: [
+                    "vmId": .string(message.vmId),
+                    "sessionCount": .stringConvertible(existingSessions.count),
+                ])
             await consoleManager.disconnectAllForVM(vmId: message.vmId)
         }
 
@@ -1528,22 +1666,26 @@ extension Agent {
 
         if let serialPath = serialPath {
             do {
-                try await consoleManager.connect(vmId: message.vmId, sessionId: message.sessionId, socketPath: serialPath)
+                try await consoleManager.connect(
+                    vmId: message.vmId, sessionId: message.sessionId, socketPath: serialPath)
                 connectedPath = serialPath
                 logger.debug("Connected to serial console socket", metadata: ["socketPath": .string(serialPath)])
             } catch {
                 lastError = error
-                logger.warning("Failed to connect to serial socket, will try virtio-console", metadata: [
-                    "vmId": .string(message.vmId),
-                    "sessionId": .string(message.sessionId),
-                    "error": .string(error.localizedDescription)
-                ])
+                logger.warning(
+                    "Failed to connect to serial socket, will try virtio-console",
+                    metadata: [
+                        "vmId": .string(message.vmId),
+                        "sessionId": .string(message.sessionId),
+                        "error": .string(error.localizedDescription),
+                    ])
             }
         }
 
         if connectedPath == nil, let consolePath = consolePath {
             do {
-                try await consoleManager.connect(vmId: message.vmId, sessionId: message.sessionId, socketPath: consolePath)
+                try await consoleManager.connect(
+                    vmId: message.vmId, sessionId: message.sessionId, socketPath: consolePath)
                 connectedPath = consolePath
                 logger.debug("Connected to virtio-console socket", metadata: ["socketPath": .string(consolePath)])
             } catch {
@@ -1554,11 +1696,13 @@ extension Agent {
         guard connectedPath != nil else {
             let errorMessage = "Failed to connect to console: \(lastError?.localizedDescription ?? "unknown error")"
             await sendError(for: message.requestId, error: errorMessage)
-            logger.error("Failed to connect to console", metadata: [
-                "vmId": .string(message.vmId),
-                "sessionId": .string(message.sessionId),
-                "error": .string(lastError?.localizedDescription ?? "unknown")
-            ])
+            logger.error(
+                "Failed to connect to console",
+                metadata: [
+                    "vmId": .string(message.vmId),
+                    "sessionId": .string(message.sessionId),
+                    "error": .string(lastError?.localizedDescription ?? "unknown"),
+                ])
             return
         }
 
@@ -1574,18 +1718,22 @@ extension Agent {
             logger.error("Failed to send console connected message: \(error)")
         }
 
-        logger.info("Console connected", metadata: [
-            "vmId": .string(message.vmId),
-            "sessionId": .string(message.sessionId),
-            "socketPath": .string(connectedPath ?? "unknown")
-        ])
+        logger.info(
+            "Console connected",
+            metadata: [
+                "vmId": .string(message.vmId),
+                "sessionId": .string(message.sessionId),
+                "socketPath": .string(connectedPath ?? "unknown"),
+            ])
     }
 
     private func handleConsoleDisconnect(_ message: ConsoleDisconnectMessage) async {
-        logger.info("Console disconnect request", metadata: [
-            "vmId": .string(message.vmId),
-            "sessionId": .string(message.sessionId)
-        ])
+        logger.info(
+            "Console disconnect request",
+            metadata: [
+                "vmId": .string(message.vmId),
+                "sessionId": .string(message.sessionId),
+            ])
 
         guard let consoleManager = consoleSocketManager else {
             await sendError(for: message.requestId, error: "Console manager not available")
@@ -1607,10 +1755,12 @@ extension Agent {
             logger.error("Failed to send disconnected message: \(error)")
         }
 
-        logger.info("Console disconnected", metadata: [
-            "vmId": .string(message.vmId),
-            "sessionId": .string(message.sessionId)
-        ])
+        logger.info(
+            "Console disconnected",
+            metadata: [
+                "vmId": .string(message.vmId),
+                "sessionId": .string(message.sessionId),
+            ])
     }
 
     private func handleConsoleData(_ message: ConsoleDataMessage) async {
@@ -1628,10 +1778,12 @@ extension Agent {
         do {
             try await consoleManager.write(sessionId: message.sessionId, data: data)
         } catch {
-            logger.error("Failed to write to console", metadata: [
-                "sessionId": .string(message.sessionId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to write to console",
+                metadata: [
+                    "sessionId": .string(message.sessionId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 
@@ -1652,11 +1804,13 @@ extension Agent {
     // MARK: - Volume Message Handlers
 
     private func handleVolumeCreate(_ message: VolumeCreateMessage) async {
-        logger.info("Creating volume", metadata: [
-            "volumeId": .string(message.volumeId),
-            "size": .stringConvertible(message.size),
-            "format": .string(message.format)
-        ])
+        logger.info(
+            "Creating volume",
+            metadata: [
+                "volumeId": .string(message.volumeId),
+                "size": .stringConvertible(message.size),
+                "format": .string(message.format),
+            ])
 
         guard let volumeService = volumeService else {
             await sendError(for: message.requestId, error: "Volume service not available")
@@ -1667,10 +1821,12 @@ extension Agent {
             let volumePath: String
             if let imageInfo = message.sourceImageInfo {
                 // Create volume from image
-                volumePath = try await volumeService.createVolumeFromImage(volumeId: message.volumeId, imageInfo: imageInfo)
+                volumePath = try await volumeService.createVolumeFromImage(
+                    volumeId: message.volumeId, imageInfo: imageInfo)
             } else {
                 // Create empty volume
-                volumePath = try await volumeService.createVolume(volumeId: message.volumeId, size: message.size, format: message.format)
+                volumePath = try await volumeService.createVolume(
+                    volumeId: message.volumeId, size: message.size, format: message.format)
             }
 
             let response = VolumeStatusResponse(
@@ -1680,23 +1836,29 @@ extension Agent {
             )
             let data = try AnyCodableValue(response)
             await sendSuccess(for: message.requestId, message: "Volume created successfully", data: data)
-            logger.info("Volume created successfully", metadata: [
-                "volumeId": .string(message.volumeId),
-                "path": .string(volumePath)
-            ])
+            logger.info(
+                "Volume created successfully",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "path": .string(volumePath),
+                ])
         } catch {
             await sendError(for: message.requestId, error: "Failed to create volume: \(error.localizedDescription)")
-            logger.error("Failed to create volume", metadata: [
-                "volumeId": .string(message.volumeId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to create volume",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 
     private func handleVolumeDelete(_ message: VolumeDeleteMessage) async {
-        logger.info("Deleting volume", metadata: [
-            "volumeId": .string(message.volumeId)
-        ])
+        logger.info(
+            "Deleting volume",
+            metadata: [
+                "volumeId": .string(message.volumeId)
+            ])
 
         guard let volumeService = volumeService else {
             await sendError(for: message.requestId, error: "Volume service not available")
@@ -1709,20 +1871,24 @@ extension Agent {
             logger.info("Volume deleted successfully", metadata: ["volumeId": .string(message.volumeId)])
         } catch {
             await sendError(for: message.requestId, error: "Failed to delete volume: \(error.localizedDescription)")
-            logger.error("Failed to delete volume", metadata: [
-                "volumeId": .string(message.volumeId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to delete volume",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 
     private func handleVolumeAttach(_ message: VolumeAttachMessage) async {
-        logger.info("Attaching volume to VM (hot-plug)", metadata: [
-            "volumeId": .string(message.volumeId),
-            "vmId": .string(message.vmId),
-            "deviceName": .string(message.deviceName),
-            "volumePath": .string(message.volumePath)
-        ])
+        logger.info(
+            "Attaching volume to VM (hot-plug)",
+            metadata: [
+                "volumeId": .string(message.volumeId),
+                "vmId": .string(message.vmId),
+                "deviceName": .string(message.deviceName),
+                "volumePath": .string(message.volumePath),
+            ])
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
@@ -1745,27 +1911,33 @@ extension Agent {
             )
             let data = try AnyCodableValue(response)
             await sendSuccess(for: message.requestId, message: "Volume attached successfully", data: data)
-            logger.info("Volume attached successfully (hot-plug)", metadata: [
-                "volumeId": .string(message.volumeId),
-                "vmId": .string(message.vmId),
-                "deviceName": .string(message.deviceName)
-            ])
+            logger.info(
+                "Volume attached successfully (hot-plug)",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "vmId": .string(message.vmId),
+                    "deviceName": .string(message.deviceName),
+                ])
         } catch {
             await sendError(for: message.requestId, error: "Failed to attach volume: \(error.localizedDescription)")
-            logger.error("Failed to attach volume (hot-plug)", metadata: [
-                "volumeId": .string(message.volumeId),
-                "vmId": .string(message.vmId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to attach volume (hot-plug)",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "vmId": .string(message.vmId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 
     private func handleVolumeDetach(_ message: VolumeDetachMessage) async {
-        logger.info("Detaching volume from VM (hot-unplug)", metadata: [
-            "volumeId": .string(message.volumeId),
-            "vmId": .string(message.vmId),
-            "deviceName": .string(message.deviceName)
-        ])
+        logger.info(
+            "Detaching volume from VM (hot-unplug)",
+            metadata: [
+                "volumeId": .string(message.volumeId),
+                "vmId": .string(message.vmId),
+                "deviceName": .string(message.deviceName),
+            ])
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
@@ -1786,25 +1958,31 @@ extension Agent {
             )
             let data = try AnyCodableValue(response)
             await sendSuccess(for: message.requestId, message: "Volume detached successfully", data: data)
-            logger.info("Volume detached successfully (hot-unplug)", metadata: [
-                "volumeId": .string(message.volumeId),
-                "vmId": .string(message.vmId)
-            ])
+            logger.info(
+                "Volume detached successfully (hot-unplug)",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "vmId": .string(message.vmId),
+                ])
         } catch {
             await sendError(for: message.requestId, error: "Failed to detach volume: \(error.localizedDescription)")
-            logger.error("Failed to detach volume (hot-unplug)", metadata: [
-                "volumeId": .string(message.volumeId),
-                "vmId": .string(message.vmId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to detach volume (hot-unplug)",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "vmId": .string(message.vmId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 
     private func handleVolumeResize(_ message: VolumeResizeMessage) async {
-        logger.info("Resizing volume", metadata: [
-            "volumeId": .string(message.volumeId),
-            "newSize": .stringConvertible(message.newSize)
-        ])
+        logger.info(
+            "Resizing volume",
+            metadata: [
+                "volumeId": .string(message.volumeId),
+                "newSize": .stringConvertible(message.newSize),
+            ])
 
         guard let volumeService = volumeService else {
             await sendError(for: message.requestId, error: "Volume service not available")
@@ -1821,24 +1999,30 @@ extension Agent {
             )
             let data = try AnyCodableValue(response)
             await sendSuccess(for: message.requestId, message: "Volume resized successfully", data: data)
-            logger.info("Volume resized successfully", metadata: [
-                "volumeId": .string(message.volumeId),
-                "newSize": .stringConvertible(message.newSize)
-            ])
+            logger.info(
+                "Volume resized successfully",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "newSize": .stringConvertible(message.newSize),
+                ])
         } catch {
             await sendError(for: message.requestId, error: "Failed to resize volume: \(error.localizedDescription)")
-            logger.error("Failed to resize volume", metadata: [
-                "volumeId": .string(message.volumeId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to resize volume",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 
     private func handleVolumeSnapshot(_ message: VolumeSnapshotMessage) async {
-        logger.info("Creating volume snapshot", metadata: [
-            "volumeId": .string(message.volumeId),
-            "snapshotId": .string(message.snapshotId)
-        ])
+        logger.info(
+            "Creating volume snapshot",
+            metadata: [
+                "volumeId": .string(message.volumeId),
+                "snapshotId": .string(message.snapshotId),
+            ])
 
         guard let volumeService = volumeService else {
             await sendError(for: message.requestId, error: "Volume service not available")
@@ -1859,26 +2043,32 @@ extension Agent {
             )
             let data = try AnyCodableValue(response)
             await sendSuccess(for: message.requestId, message: "Snapshot created successfully", data: data)
-            logger.info("Volume snapshot created successfully", metadata: [
-                "volumeId": .string(message.volumeId),
-                "snapshotId": .string(message.snapshotId),
-                "path": .string(snapshotPath)
-            ])
+            logger.info(
+                "Volume snapshot created successfully",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "snapshotId": .string(message.snapshotId),
+                    "path": .string(snapshotPath),
+                ])
         } catch {
             await sendError(for: message.requestId, error: "Failed to create snapshot: \(error.localizedDescription)")
-            logger.error("Failed to create snapshot", metadata: [
-                "volumeId": .string(message.volumeId),
-                "snapshotId": .string(message.snapshotId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to create snapshot",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "snapshotId": .string(message.snapshotId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 
     private func handleVolumeSnapshotDelete(_ message: VolumeSnapshotDeleteMessage) async {
-        logger.info("Deleting volume snapshot", metadata: [
-            "volumeId": .string(message.volumeId),
-            "snapshotId": .string(message.snapshotId)
-        ])
+        logger.info(
+            "Deleting volume snapshot",
+            metadata: [
+                "volumeId": .string(message.volumeId),
+                "snapshotId": .string(message.snapshotId),
+            ])
 
         guard let volumeService = volumeService else {
             await sendError(for: message.requestId, error: "Volume service not available")
@@ -1888,25 +2078,31 @@ extension Agent {
         do {
             try await volumeService.deleteSnapshot(volumeId: message.volumeId, snapshotId: message.snapshotId)
             await sendSuccess(for: message.requestId, message: "Snapshot deleted successfully")
-            logger.info("Volume snapshot deleted successfully", metadata: [
-                "volumeId": .string(message.volumeId),
-                "snapshotId": .string(message.snapshotId)
-            ])
+            logger.info(
+                "Volume snapshot deleted successfully",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "snapshotId": .string(message.snapshotId),
+                ])
         } catch {
             await sendError(for: message.requestId, error: "Failed to delete snapshot: \(error.localizedDescription)")
-            logger.error("Failed to delete snapshot", metadata: [
-                "volumeId": .string(message.volumeId),
-                "snapshotId": .string(message.snapshotId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to delete snapshot",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "snapshotId": .string(message.snapshotId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 
     private func handleVolumeClone(_ message: VolumeCloneMessage) async {
-        logger.info("Cloning volume", metadata: [
-            "sourceVolumeId": .string(message.sourceVolumeId),
-            "targetVolumeId": .string(message.targetVolumeId)
-        ])
+        logger.info(
+            "Cloning volume",
+            metadata: [
+                "sourceVolumeId": .string(message.sourceVolumeId),
+                "targetVolumeId": .string(message.targetVolumeId),
+            ])
 
         guard let volumeService = volumeService else {
             await sendError(for: message.requestId, error: "Volume service not available")
@@ -1927,25 +2123,31 @@ extension Agent {
             )
             let data = try AnyCodableValue(response)
             await sendSuccess(for: message.requestId, message: "Volume cloned successfully", data: data)
-            logger.info("Volume cloned successfully", metadata: [
-                "sourceVolumeId": .string(message.sourceVolumeId),
-                "targetVolumeId": .string(message.targetVolumeId),
-                "targetPath": .string(targetPath)
-            ])
+            logger.info(
+                "Volume cloned successfully",
+                metadata: [
+                    "sourceVolumeId": .string(message.sourceVolumeId),
+                    "targetVolumeId": .string(message.targetVolumeId),
+                    "targetPath": .string(targetPath),
+                ])
         } catch {
             await sendError(for: message.requestId, error: "Failed to clone volume: \(error.localizedDescription)")
-            logger.error("Failed to clone volume", metadata: [
-                "sourceVolumeId": .string(message.sourceVolumeId),
-                "targetVolumeId": .string(message.targetVolumeId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to clone volume",
+                metadata: [
+                    "sourceVolumeId": .string(message.sourceVolumeId),
+                    "targetVolumeId": .string(message.targetVolumeId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 
     private func handleVolumeInfo(_ message: VolumeInfoMessage) async {
-        logger.info("Getting volume info", metadata: [
-            "volumeId": .string(message.volumeId)
-        ])
+        logger.info(
+            "Getting volume info",
+            metadata: [
+                "volumeId": .string(message.volumeId)
+            ])
 
         guard let volumeService = volumeService else {
             await sendError(for: message.requestId, error: "Volume service not available")
@@ -1965,15 +2167,19 @@ extension Agent {
             )
             let data = try AnyCodableValue(response)
             await sendSuccess(for: message.requestId, message: "Volume info retrieved successfully", data: data)
-            logger.info("Volume info retrieved successfully", metadata: [
-                "volumeId": .string(message.volumeId)
-            ])
+            logger.info(
+                "Volume info retrieved successfully",
+                metadata: [
+                    "volumeId": .string(message.volumeId)
+                ])
         } catch {
             await sendError(for: message.requestId, error: "Failed to get volume info: \(error.localizedDescription)")
-            logger.error("Failed to get volume info", metadata: [
-                "volumeId": .string(message.volumeId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to get volume info",
+                metadata: [
+                    "volumeId": .string(message.volumeId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 }

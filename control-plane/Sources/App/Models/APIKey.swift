@@ -19,10 +19,10 @@ final class APIKey: Model, @unchecked Sendable {
     var keyHash: String
 
     @Field(key: "key_prefix")
-    var keyPrefix: String // First 8 characters for identification
+    var keyPrefix: String  // First 8 characters for identification
 
     @Field(key: "scopes")
-    var scopes: [String] // Permissions/scopes for this key
+    var scopes: [String]  // Permissions/scopes for this key
 
     @Field(key: "is_active")
     var isActive: Bool
@@ -165,13 +165,13 @@ extension String {
 struct CreateAPIKeyRequest: Content {
     let name: String
     let scopes: [String]?
-    let expiresInDays: Int? // Optional expiration in days
+    let expiresInDays: Int?  // Optional expiration in days
 }
 
 struct CreateAPIKeyResponse: Content {
     let id: UUID?
     let name: String
-    let key: String // Full key - only shown once
+    let key: String  // Full key - only shown once
     let keyPrefix: String
     let scopes: [String]
     let expiresAt: Date?

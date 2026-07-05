@@ -144,9 +144,11 @@ struct UserController: RouteCollection {
         let beginRequest = try req.content.decode(RegistrationBeginRequest.self)
 
         // Check if user exists
-        guard let user = try await User.query(on: req.db)
-            .filter(\.$username == beginRequest.username)
-            .first() else {
+        guard
+            let user = try await User.query(on: req.db)
+                .filter(\.$username == beginRequest.username)
+                .first()
+        else {
             throw Abort(.notFound, reason: "User not found")
         }
 
@@ -303,7 +305,9 @@ struct RegistrationBeginResponse: Content {
     }
 
     init(from decoder: Decoder) throws {
-        throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: [], debugDescription: "RegistrationBeginResponse should only be encoded, not decoded"))
+        throw DecodingError.dataCorrupted(
+            DecodingError.Context(
+                codingPath: [], debugDescription: "RegistrationBeginResponse should only be encoded, not decoded"))
     }
 }
 
@@ -316,7 +320,11 @@ struct RegistrationFinishRequest: Content {
         try container.encode(challenge, forKey: .challenge)
         // RegistrationCredential is already Decodable but not Encodable
         // For our purposes, we only need to decode it from the client
-        throw EncodingError.invalidValue(response, EncodingError.Context(codingPath: encoder.codingPath, debugDescription: "RegistrationFinishRequest should only be decoded, not encoded"))
+        throw EncodingError.invalidValue(
+            response,
+            EncodingError.Context(
+                codingPath: encoder.codingPath,
+                debugDescription: "RegistrationFinishRequest should only be decoded, not encoded"))
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -342,7 +350,9 @@ struct AuthenticationBeginResponse: Content {
     }
 
     init(from decoder: Decoder) throws {
-        throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: [], debugDescription: "AuthenticationBeginResponse should only be encoded, not decoded"))
+        throw DecodingError.dataCorrupted(
+            DecodingError.Context(
+                codingPath: [], debugDescription: "AuthenticationBeginResponse should only be encoded, not decoded"))
     }
 }
 
@@ -355,7 +365,11 @@ struct AuthenticationFinishRequest: Content {
         try container.encode(challenge, forKey: .challenge)
         // AuthenticationCredential is already Decodable but not Encodable
         // For our purposes, we only need to decode it from the client
-        throw EncodingError.invalidValue(response, EncodingError.Context(codingPath: encoder.codingPath, debugDescription: "AuthenticationFinishRequest should only be decoded, not encoded"))
+        throw EncodingError.invalidValue(
+            response,
+            EncodingError.Context(
+                codingPath: encoder.codingPath,
+                debugDescription: "AuthenticationFinishRequest should only be decoded, not encoded"))
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -417,7 +431,8 @@ extension UserController {
         // Try to find existing default organization
         if let existingOrg = try await Organization.query(on: req.db)
             .filter(\.$name == "Default Organization")
-            .first() {
+            .first()
+        {
             return existingOrg
         }
 

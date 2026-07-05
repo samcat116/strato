@@ -25,9 +25,11 @@ actor MockHypervisorService: HypervisorService {
     init(logger: Logger, hypervisorType: HypervisorType = .qemu) {
         self.logger = logger
         self.hypervisorType = hypervisorType
-        logger.warning("Hypervisor running in mock mode - native backend unavailable", metadata: [
-            "hypervisorType": .string(hypervisorType.rawValue)
-        ])
+        logger.warning(
+            "Hypervisor running in mock mode - native backend unavailable",
+            metadata: [
+                "hypervisorType": .string(hypervisorType.rawValue)
+            ])
     }
 
     func createVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo?) async throws {
@@ -37,17 +39,17 @@ actor MockHypervisorService: HypervisorService {
 
     func bootVM(vmId: String) async throws {
         logger.info("Booting mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
-        try await Task.sleep(for: .milliseconds(500)) // Simulate boot delay
+        try await Task.sleep(for: .milliseconds(500))  // Simulate boot delay
     }
 
     func shutdownVM(vmId: String) async throws {
         logger.info("Shutting down mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
-        try await Task.sleep(for: .milliseconds(200)) // Simulate shutdown delay
+        try await Task.sleep(for: .milliseconds(200))  // Simulate shutdown delay
     }
 
     func rebootVM(vmId: String) async throws {
         logger.info("Rebooting mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
-        try await Task.sleep(for: .milliseconds(300)) // Simulate reboot delay
+        try await Task.sleep(for: .milliseconds(300))  // Simulate reboot delay
     }
 
     func pauseVM(vmId: String) async throws {
@@ -70,7 +72,7 @@ actor MockHypervisorService: HypervisorService {
         let mockSpec = VMSpec(
             cpus: 2,
             maxCpus: 4,
-            memoryBytes: 2 * 1024 * 1024 * 1024, // 2GB
+            memoryBytes: 2 * 1024 * 1024 * 1024,  // 2GB
             boot: .directKernel(kernel: "/boot/vmlinuz", initramfs: nil, cmdline: nil)
         )
         return VmInfo(
@@ -99,20 +101,25 @@ actor MockHypervisorService: HypervisorService {
         )
     }
 
-    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool) async throws {
-        logger.info("Mock: attaching disk to VM (mock mode)", metadata: [
-            "vmId": .string(vmId),
-            "volumeId": .string(volumeId),
-            "deviceName": .string(deviceName)
-        ])
+    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool) async throws
+    {
+        logger.info(
+            "Mock: attaching disk to VM (mock mode)",
+            metadata: [
+                "vmId": .string(vmId),
+                "volumeId": .string(volumeId),
+                "deviceName": .string(deviceName),
+            ])
     }
 
     func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws {
-        logger.info("Mock: detaching disk from VM (mock mode)", metadata: [
-            "vmId": .string(vmId),
-            "volumeId": .string(volumeId),
-            "deviceName": .string(deviceName)
-        ])
+        logger.info(
+            "Mock: detaching disk from VM (mock mode)",
+            metadata: [
+                "vmId": .string(vmId),
+                "volumeId": .string(volumeId),
+                "deviceName": .string(deviceName),
+            ])
     }
 
     func reservedResources() async -> (vcpus: Int, memoryBytes: Int64) {

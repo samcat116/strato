@@ -42,7 +42,7 @@ struct AgentModelTests {
                 accelerated: false,
                 unavailabilityReason: "firecracker binary not found",
                 capabilities: .firecracker
-            )
+            ),
         ],
         networkCapability: NetworkCapability? = .overlay,
         lastHeartbeat: Date? = Date()
@@ -141,7 +141,7 @@ struct AgentModelTests {
 
     @Test("Agent isOnline returns false when heartbeat is old")
     func testIsOnlineWithOldHeartbeat() {
-        let oldDate = Date().addingTimeInterval(-120) // 2 minutes ago
+        let oldDate = Date().addingTimeInterval(-120)  // 2 minutes ago
         let agent = createTestAgent(lastHeartbeat: oldDate)
 
         #expect(agent.isOnline == false)
@@ -207,13 +207,13 @@ struct AgentModelTests {
         // Connecting with recent heartbeat should become online
         let agentRecent = createTestAgent(status: .connecting, lastHeartbeat: Date())
         agentRecent.updateStatusBasedOnHeartbeat()
-        #expect(agentRecent.status == .connecting) // Does not change from connecting to online
+        #expect(agentRecent.status == .connecting)  // Does not change from connecting to online
 
         // Connecting with old heartbeat should become offline
         let oldDate = Date().addingTimeInterval(-120)
         let agentOld = createTestAgent(status: .connecting, lastHeartbeat: oldDate)
         agentOld.updateStatusBasedOnHeartbeat()
-        #expect(agentOld.status == .connecting) // Does not change from connecting to offline
+        #expect(agentOld.status == .connecting)  // Does not change from connecting to offline
     }
 
     // MARK: - Agent.from(registration:name:) Tests
@@ -292,7 +292,7 @@ struct AgentModelTests {
                 accelerated: false,
                 unavailabilityReason: "/dev/kvm not present",
                 capabilities: .firecracker
-            )
+            ),
         ]
         let message = AgentRegisterMessage(
             agentId: "probed-agent",

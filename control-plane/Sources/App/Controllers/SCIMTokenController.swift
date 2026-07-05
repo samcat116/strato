@@ -87,15 +87,16 @@ struct SCIMTokenController: RouteCollection {
         try await requireOrganizationAdmin(user: user, organizationID: organizationID, on: req.db)
 
         guard let tokenIDString = req.parameters.get("tokenID"),
-              let tokenID = UUID(uuidString: tokenIDString)
+            let tokenID = UUID(uuidString: tokenIDString)
         else {
             throw Abort(.badRequest, reason: "Invalid token ID")
         }
 
-        guard let token = try await SCIMToken.query(on: req.db)
-            .filter(\.$id == tokenID)
-            .filter(\.$organization.$id == organizationID)
-            .first()
+        guard
+            let token = try await SCIMToken.query(on: req.db)
+                .filter(\.$id == tokenID)
+                .filter(\.$organization.$id == organizationID)
+                .first()
         else {
             throw Abort(.notFound, reason: "Token not found")
         }
@@ -114,15 +115,16 @@ struct SCIMTokenController: RouteCollection {
         try await requireOrganizationAdmin(user: user, organizationID: organizationID, on: req.db)
 
         guard let tokenIDString = req.parameters.get("tokenID"),
-              let tokenID = UUID(uuidString: tokenIDString)
+            let tokenID = UUID(uuidString: tokenIDString)
         else {
             throw Abort(.badRequest, reason: "Invalid token ID")
         }
 
-        guard let token = try await SCIMToken.query(on: req.db)
-            .filter(\.$id == tokenID)
-            .filter(\.$organization.$id == organizationID)
-            .first()
+        guard
+            let token = try await SCIMToken.query(on: req.db)
+                .filter(\.$id == tokenID)
+                .filter(\.$organization.$id == organizationID)
+                .first()
         else {
             throw Abort(.notFound, reason: "Token not found")
         }
@@ -153,15 +155,16 @@ struct SCIMTokenController: RouteCollection {
         try await requireOrganizationAdmin(user: user, organizationID: organizationID, on: req.db)
 
         guard let tokenIDString = req.parameters.get("tokenID"),
-              let tokenID = UUID(uuidString: tokenIDString)
+            let tokenID = UUID(uuidString: tokenIDString)
         else {
             throw Abort(.badRequest, reason: "Invalid token ID")
         }
 
-        guard let token = try await SCIMToken.query(on: req.db)
-            .filter(\.$id == tokenID)
-            .filter(\.$organization.$id == organizationID)
-            .first()
+        guard
+            let token = try await SCIMToken.query(on: req.db)
+                .filter(\.$id == tokenID)
+                .filter(\.$organization.$id == organizationID)
+                .first()
         else {
             throw Abort(.notFound, reason: "Token not found")
         }
@@ -175,7 +178,7 @@ struct SCIMTokenController: RouteCollection {
 
     private func getOrganizationID(from req: Request) throws -> UUID {
         guard let organizationIDString = req.parameters.get("organizationID"),
-              let organizationID = UUID(uuidString: organizationIDString)
+            let organizationID = UUID(uuidString: organizationIDString)
         else {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
@@ -193,10 +196,11 @@ struct SCIMTokenController: RouteCollection {
         }
 
         // Check if user is admin of this organization
-        guard let membership = try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == userID)
-            .filter(\.$organization.$id == organizationID)
-            .first()
+        guard
+            let membership = try await UserOrganization.query(on: db)
+                .filter(\.$user.$id == userID)
+                .filter(\.$organization.$id == organizationID)
+                .first()
         else {
             throw Abort(.forbidden, reason: "You are not a member of this organization")
         }

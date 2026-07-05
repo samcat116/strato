@@ -166,7 +166,7 @@ extension ResourceQuota {
             memoryGB: Double(totalMemory) / 1024 / 1024 / 1024,
             storageGB: Double(totalStorage) / 1024 / 1024 / 1024,
             vms: vms.count,
-            networks: 0 // TODO: Implement network counting when networking is added
+            networks: 0  // TODO: Implement network counting when networking is added
         )
 
         return (actualUsage, vms)
@@ -233,13 +233,19 @@ extension ResourceQuota {
         if reservedMemory + memory > maxMemory {
             let availableGB = Double(availableMemory) / 1024 / 1024 / 1024
             let requestedGB = Double(memory) / 1024 / 1024 / 1024
-            return (false, "Insufficient memory quota: \(String(format: "%.2f", availableGB))GB available, \(String(format: "%.2f", requestedGB))GB requested")
+            return (
+                false,
+                "Insufficient memory quota: \(String(format: "%.2f", availableGB))GB available, \(String(format: "%.2f", requestedGB))GB requested"
+            )
         }
 
         if reservedStorage + storage > maxStorage {
             let availableGB = Double(availableStorage) / 1024 / 1024 / 1024
             let requestedGB = Double(storage) / 1024 / 1024 / 1024
-            return (false, "Insufficient storage quota: \(String(format: "%.2f", availableGB))GB available, \(String(format: "%.2f", requestedGB))GB requested")
+            return (
+                false,
+                "Insufficient storage quota: \(String(format: "%.2f", availableGB))GB available, \(String(format: "%.2f", requestedGB))GB requested"
+            )
         }
 
         if vmCount >= maxVMs {
@@ -307,11 +313,12 @@ extension ResourceQuota {
         let parentCount = [
             $organization.id != nil,
             $organizationalUnit.id != nil,
-            $project.id != nil
+            $project.id != nil,
         ].filter { $0 }.count
 
         if parentCount != 1 {
-            throw Abort(.badRequest, reason: "Resource quota must belong to exactly one entity (organization, OU, or project)")
+            throw Abort(
+                .badRequest, reason: "Resource quota must belong to exactly one entity (organization, OU, or project)")
         }
 
         // Validate limits are positive
@@ -320,8 +327,7 @@ extension ResourceQuota {
         }
 
         // Validate reserved doesn't exceed max
-        if reservedVCPUs > maxVCPUs || reservedMemory > maxMemory ||
-           reservedStorage > maxStorage || vmCount > maxVMs {
+        if reservedVCPUs > maxVCPUs || reservedMemory > maxMemory || reservedStorage > maxStorage || vmCount > maxVMs {
             throw Abort(.badRequest, reason: "Reserved resources cannot exceed maximum limits")
         }
     }
@@ -353,7 +359,7 @@ struct UpdateResourceQuotaRequest: Content {
 struct ResourceQuotaResponse: Content {
     let id: UUID?
     let name: String
-    let entityType: String // "organization", "ou", or "project"
+    let entityType: String  // "organization", "ou", or "project"
     let entityId: UUID
     let environment: String?
     let isEnabled: Bool

@@ -28,7 +28,7 @@ struct RequestLoggingMiddleware: AsyncMiddleware {
                 "method": .string(request.method.rawValue),
                 "path": .string(request.url.path),
                 "status": .stringConvertible(status.code),
-                "durationMs": .stringConvertible(elapsedMilliseconds())
+                "durationMs": .stringConvertible(elapsedMilliseconds()),
             ]
             if let error {
                 metadata["error"] = .string(String(reflecting: error))

@@ -105,7 +105,7 @@ struct VMSpecBuilder {
     /// sent unless the VM carries a legacy disk path.
     static func buildVMSpec(from vm: VM, image: Image) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image.defaultCpu ?? 1)
-        let memorySize = vm.memory > 0 ? vm.memory : (image.defaultMemory ?? 1024 * 1024 * 1024) // 1GB default
+        let memorySize = vm.memory > 0 ? vm.memory : (image.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
 
         return VMSpec(
             cpus: cpuCount,
@@ -132,7 +132,7 @@ struct VMSpecBuilder {
     ///   - volumes: Attached volumes (sorted by boot order, then device name)
     static func buildVMSpecWithVolumes(from vm: VM, image: Image?, volumes: [Volume]) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
-        let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024) // 1GB default
+        let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
 
         var volumes = volumeSpecs(from: volumes)
         if volumes.isEmpty {
@@ -176,13 +176,14 @@ struct VMSpecBuilder {
         var specs: [VolumeSpec] = []
         for volume in sortedVolumes where volume.status == .attached {
             guard let storagePath = volume.storagePath else { continue }
-            specs.append(VolumeSpec(
-                volumeId: volume.id,
-                deviceName: volume.deviceName ?? "disk\(specs.count)",
-                storagePath: storagePath,
-                readonly: false, // Could be enhanced to track readonly per-volume
-                bootOrder: volume.bootOrder
-            ))
+            specs.append(
+                VolumeSpec(
+                    volumeId: volume.id,
+                    deviceName: volume.deviceName ?? "disk\(specs.count)",
+                    storagePath: storagePath,
+                    readonly: false,  // Could be enhanced to track readonly per-volume
+                    bootOrder: volume.bootOrder
+                ))
         }
         return specs
     }

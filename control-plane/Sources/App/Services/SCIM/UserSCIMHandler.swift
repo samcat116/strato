@@ -24,7 +24,8 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         }
 
         // Extract primary email
-        let email = resource.emails?.first(where: { $0.primary == true })?.value
+        let email =
+            resource.emails?.first(where: { $0.primary == true })?.value
             ?? resource.emails?.first?.value
             ?? "\(resource.userName)@scim.local"
 
@@ -80,15 +81,17 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
-        guard let user = try await User.query(on: db)
-            .filter(\.$id == uuid)
-            .first()
+        guard
+            let user = try await User.query(on: db)
+                .filter(\.$id == uuid)
+                .first()
         else {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
         // Verify user is in this organization
-        let isMember = try await UserOrganization.query(on: db)
+        let isMember =
+            try await UserOrganization.query(on: db)
             .filter(\.$user.$id == uuid)
             .filter(\.$organization.$id == organizationID)
             .first() != nil
@@ -107,15 +110,17 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
-        guard let user = try await User.query(on: db)
-            .filter(\.$id == uuid)
-            .first()
+        guard
+            let user = try await User.query(on: db)
+                .filter(\.$id == uuid)
+                .first()
         else {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
         // Verify user is in this organization
-        let isMember = try await UserOrganization.query(on: db)
+        let isMember =
+            try await UserOrganization.query(on: db)
             .filter(\.$user.$id == uuid)
             .filter(\.$organization.$id == organizationID)
             .first() != nil
@@ -169,18 +174,20 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
-        guard let user = try await User.query(on: db)
-            .filter(\.$id == uuid)
-            .first()
+        guard
+            let user = try await User.query(on: db)
+                .filter(\.$id == uuid)
+                .first()
         else {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
         // Verify user is in this organization
-        guard let membership = try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == uuid)
-            .filter(\.$organization.$id == organizationID)
-            .first()
+        guard
+            let membership = try await UserOrganization.query(on: db)
+                .filter(\.$user.$id == uuid)
+                .filter(\.$organization.$id == organizationID)
+                .first()
         else {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
@@ -246,7 +253,8 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         let totalCount = try await userQuery.count()
 
         // Apply pagination
-        let users = try await userQuery
+        let users =
+            try await userQuery
             .offset(query.offset)
             .limit(query.count)
             .all()
@@ -313,7 +321,8 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         )
     }
 
-    private func applyFilter(_ filter: SCIMFilterExpression, to query: QueryBuilder<User>) throws -> QueryBuilder<User> {
+    private func applyFilter(_ filter: SCIMFilterExpression, to query: QueryBuilder<User>) throws -> QueryBuilder<User>
+    {
         switch filter {
         case .attribute(let path, let op, let value):
             return try applyAttributeFilter(path: path, op: op, value: value, to: query)
@@ -363,7 +372,8 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             return applyStringFilter(keyPath: \User.$username, column: "username", op: op, value: value, to: query)
 
         case "displayname":
-            return applyStringFilter(keyPath: \User.$displayName, column: "display_name", op: op, value: value, to: query)
+            return applyStringFilter(
+                keyPath: \User.$displayName, column: "display_name", op: op, value: value, to: query)
 
         case "emails.value", "emails[type eq \"work\"].value":
             return applyStringFilter(keyPath: \User.$email, column: "email", op: op, value: value, to: query)

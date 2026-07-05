@@ -84,11 +84,13 @@ extension Application {
         valkeyConfiguration = config
         valkeyEnabled = true
 
-        logger.info("Valkey configured", metadata: [
-            "hostname": .string(config.hostname),
-            "port": .stringConvertible(config.port),
-            "database": .stringConvertible(config.database)
-        ])
+        logger.info(
+            "Valkey configured",
+            metadata: [
+                "hostname": .string(config.hostname),
+                "port": .stringConvertible(config.port),
+                "database": .stringConvertible(config.database),
+            ])
     }
 
     /// Check Valkey health

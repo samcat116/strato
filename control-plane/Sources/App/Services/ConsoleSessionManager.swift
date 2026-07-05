@@ -58,11 +58,13 @@ final class ConsoleSessionManager: @unchecked Sendable {
             vmSessions[vmId]?.insert(sessionId)
         }
 
-        app.logger.info("Console session created", metadata: [
-            "sessionId": .string(sessionId),
-            "vmId": .string(vmId),
-            "agentName": .string(agentName)
-        ])
+        app.logger.info(
+            "Console session created",
+            metadata: [
+                "sessionId": .string(sessionId),
+                "vmId": .string(vmId),
+                "agentName": .string(agentName),
+            ])
     }
 
     /// Remove a console session
@@ -76,10 +78,12 @@ final class ConsoleSessionManager: @unchecked Sendable {
                     vmSessions.removeValue(forKey: sessionInfo.vmId)
                 }
 
-                app.logger.info("Console session removed", metadata: [
-                    "sessionId": .string(sessionId),
-                    "vmId": .string(sessionInfo.vmId)
-                ])
+                app.logger.info(
+                    "Console session removed",
+                    metadata: [
+                        "sessionId": .string(sessionId),
+                        "vmId": .string(sessionInfo.vmId),
+                    ])
             }
         }
     }
@@ -115,10 +119,12 @@ final class ConsoleSessionManager: @unchecked Sendable {
         }
 
         guard let ws = websocket else {
-            app.logger.warning("No frontend connection for session", metadata: [
-                "sessionId": .string(sessionId),
-                "vmId": .string(vmId)
-            ])
+            app.logger.warning(
+                "No frontend connection for session",
+                metadata: [
+                    "sessionId": .string(sessionId),
+                    "vmId": .string(vmId),
+                ])
             return
         }
 
@@ -133,15 +139,19 @@ final class ConsoleSessionManager: @unchecked Sendable {
         }
 
         guard let ws = websocket else {
-            app.logger.warning("No frontend connection for session to notify ready", metadata: [
-                "sessionId": .string(sessionId)
-            ])
+            app.logger.warning(
+                "No frontend connection for session to notify ready",
+                metadata: [
+                    "sessionId": .string(sessionId)
+                ])
             return
         }
 
-        app.logger.info("Notifying frontend that console is ready", metadata: [
-            "sessionId": .string(sessionId)
-        ])
+        app.logger.info(
+            "Notifying frontend that console is ready",
+            metadata: [
+                "sessionId": .string(sessionId)
+            ])
 
         // Send a "ready" text message to the frontend
         ws.send("ready")
@@ -169,11 +179,13 @@ final class ConsoleSessionManager: @unchecked Sendable {
 
     /// Send console connect message to agent
     func sendConsoleConnect(sessionId: String, vmId: String, agentName: String) async throws {
-        app.logger.info("Sending console connect to agent", metadata: [
-            "sessionId": .string(sessionId),
-            "vmId": .string(vmId),
-            "agentName": .string(agentName)
-        ])
+        app.logger.info(
+            "Sending console connect to agent",
+            metadata: [
+                "sessionId": .string(sessionId),
+                "vmId": .string(vmId),
+                "agentName": .string(agentName),
+            ])
 
         let message = ConsoleConnectMessage(
             vmId: vmId,
@@ -182,10 +194,12 @@ final class ConsoleSessionManager: @unchecked Sendable {
 
         try await sendMessageToAgent(message, agentName: agentName)
 
-        app.logger.info("Console connect message sent successfully", metadata: [
-            "sessionId": .string(sessionId),
-            "vmId": .string(vmId)
-        ])
+        app.logger.info(
+            "Console connect message sent successfully",
+            metadata: [
+                "sessionId": .string(sessionId),
+                "vmId": .string(vmId),
+            ])
     }
 
     /// Send console disconnect message to agent
@@ -220,11 +234,13 @@ final class ConsoleSessionManager: @unchecked Sendable {
         let envelope = try MessageEnvelope(message: message)
         let data = try WireProtocol.makeEncoder().encode(envelope)
 
-        app.logger.debug("Sending message to agent", metadata: [
-            "agentName": .string(agentName),
-            "messageType": .string(message.type.rawValue),
-            "dataSize": .stringConvertible(data.count)
-        ])
+        app.logger.debug(
+            "Sending message to agent",
+            metadata: [
+                "agentName": .string(agentName),
+                "messageType": .string(message.type.rawValue),
+                "dataSize": .stringConvertible(data.count),
+            ])
 
         websocket.send(data)
     }

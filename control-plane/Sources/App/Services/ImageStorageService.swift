@@ -130,7 +130,7 @@ struct ImageStorageService {
         defer { try? outputHandle.close() }
 
         var totalBytesWritten: Int64 = 0
-        let bufferSize = 1024 * 1024 // 1MB chunks
+        let bufferSize = 1024 * 1024  // 1MB chunks
 
         // Stream data from input to output
         while true {

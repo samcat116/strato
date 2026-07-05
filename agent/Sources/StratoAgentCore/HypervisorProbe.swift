@@ -24,13 +24,14 @@ public enum HypervisorProbe {
         #if os(Linux)
         reports.append(firecrackerReport(binaryPath: firecrackerBinaryPath, acceleration: acceleration))
         #else
-        reports.append(HypervisorSupport(
-            type: .firecracker,
-            available: false,
-            accelerated: false,
-            unavailabilityReason: "Firecracker is only supported on Linux",
-            capabilities: .firecracker
-        ))
+        reports.append(
+            HypervisorSupport(
+                type: .firecracker,
+                available: false,
+                accelerated: false,
+                unavailabilityReason: "Firecracker is only supported on Linux",
+                capabilities: .firecracker
+            ))
         #endif
 
         return reports

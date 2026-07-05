@@ -11,10 +11,10 @@ struct MergeOrganizationsRequest: Content {
     let newName: String?
 
     struct ConflictResolution: Content {
-        let ouNameConflicts: String // "rename", "merge", or "abort"
-        let projectNameConflicts: String // "rename", "merge", or "abort"
-        let quotaConflicts: String // "sum", "max", "keep_target", or "abort"
-        let namingStrategy: String // "prefix_source", "suffix_source", or "manual"
+        let ouNameConflicts: String  // "rename", "merge", or "abort"
+        let projectNameConflicts: String  // "rename", "merge", or "abort"
+        let quotaConflicts: String  // "sum", "max", "keep_target", or "abort"
+        let namingStrategy: String  // "prefix_source", "suffix_source", or "manual"
         let prefix: String?
         let suffix: String?
     }
@@ -37,7 +37,7 @@ struct MergeOrganizationsResponse: Content {
     }
 
     struct MergeConflict: Content {
-        let type: String // "ou_name", "project_name", "quota_name"
+        let type: String  // "ou_name", "project_name", "quota_name"
         let sourceName: String
         let targetName: String
         let resolution: String
@@ -50,9 +50,9 @@ struct BulkTransferRequest: Content {
     let validateOnly: Bool
 
     struct ResourceTransfer: Content {
-        let resourceType: String // "ou", "project", "vm"
+        let resourceType: String  // "ou", "project", "vm"
         let resourceId: UUID
-        let destinationType: String // "organization", "ou", "project"
+        let destinationType: String  // "organization", "ou", "project"
         let destinationId: UUID
         let newName: String?
     }
@@ -83,9 +83,9 @@ struct HierarchyValidationResponse: Content {
 
 struct HierarchyIssue: Content {
     let id: UUID
-    let type: String // "circular_reference", "broken_path", "orphaned_resource", "quota_violation"
-    let severity: String // "critical", "warning", "info"
-    let entityType: String // "ou", "project", "vm", "quota"
+    let type: String  // "circular_reference", "broken_path", "orphaned_resource", "quota_violation"
+    let severity: String  // "critical", "warning", "info"
+    let entityType: String  // "ou", "project", "vm", "quota"
     let entityId: UUID
     let entityName: String
     let description: String
@@ -127,7 +127,6 @@ struct HierarchyRepairResponse: Content {
         let details: String
     }
 }
-
 
 // MARK: - DTOs for Hierarchy Management
 

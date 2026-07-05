@@ -130,20 +130,24 @@ public struct FileAgentStateStore: AgentStateStore {
         // file with "The file doesn't exist" (NSCocoaError 4), which is exactly
         // the reconnect-time persistence failure this avoids.
         let tempPath = directory + "/.agent-state-\(UUID().uuidString).tmp"
-        guard fileManager.createFile(
-            atPath: tempPath,
-            contents: data,
-            attributes: [.posixPermissions: 0o600]
-        ) else {
+        guard
+            fileManager.createFile(
+                atPath: tempPath,
+                contents: data,
+                attributes: [.posixPermissions: 0o600]
+            )
+        else {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: tempPath])
         }
         if rename(tempPath, path) != 0 {
             let code = errno
             try? fileManager.removeItem(atPath: tempPath)
-            throw CocoaError(.fileWriteUnknown, userInfo: [
-                NSFilePathErrorKey: path,
-                NSLocalizedDescriptionKey: "rename to \(path) failed: \(String(cString: strerror(code)))"
-            ])
+            throw CocoaError(
+                .fileWriteUnknown,
+                userInfo: [
+                    NSFilePathErrorKey: path,
+                    NSLocalizedDescriptionKey: "rename to \(path) failed: \(String(cString: strerror(code)))",
+                ])
         }
         // The temp file was created 0600 and rename preserves the inode's mode,
         // so the destination already carries the restrictive permissions.

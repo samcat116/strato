@@ -13,7 +13,7 @@ struct CreateOIDCProvider: AsyncMigration {
             .field("token_endpoint", .string)
             .field("userinfo_endpoint", .string)
             .field("jwks_uri", .string)
-            .field("scopes", .string, .required) // JSON encoded array of scopes
+            .field("scopes", .string, .required)  // JSON encoded array of scopes
             .field("enabled", .bool, .required, .custom("DEFAULT true"))
             .field("created_at", .datetime)
             .field("updated_at", .datetime)

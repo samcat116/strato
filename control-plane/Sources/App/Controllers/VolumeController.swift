@@ -42,7 +42,8 @@ struct VolumeController: RouteCollection {
 
         // Filter by project if specified
         if let projectIdString = req.query[String.self, at: "project_id"],
-           let projectId = UUID(uuidString: projectIdString) {
+            let projectId = UUID(uuidString: projectIdString)
+        {
             // Verify user has access to the project
             let hasAccess = try await req.spicedb.checkPermission(
                 subject: user.id!.uuidString,
@@ -64,17 +65,20 @@ struct VolumeController: RouteCollection {
 
         // Filter by status if specified
         if let statusString = req.query[String.self, at: "status"],
-           let status = VolumeStatus(rawValue: statusString) {
+            let status = VolumeStatus(rawValue: statusString)
+        {
             query = query.filter(\.$status == status)
         }
 
         // Filter by volume type if specified
         if let typeString = req.query[String.self, at: "type"],
-           let volumeType = VolumeType(rawValue: typeString) {
+            let volumeType = VolumeType(rawValue: typeString)
+        {
             query = query.filter(\.$volumeType == volumeType)
         }
 
-        let volumes = try await query
+        let volumes =
+            try await query
             .sort(\.$createdAt, .descending)
             .all()
 
@@ -96,9 +100,11 @@ struct VolumeController: RouteCollection {
             projectId = requestProjectId
         } else if let currentOrgId = user.currentOrganizationId {
             // Get default project for user's current organization
-            guard let defaultProject = try await Project.query(on: req.db)
-                .filter(\.$organization.$id == currentOrgId)
-                .first() else {
+            guard
+                let defaultProject = try await Project.query(on: req.db)
+                    .filter(\.$organization.$id == currentOrgId)
+                    .first()
+            else {
                 throw Abort(.badRequest, reason: "No project specified and no default project found")
             }
             projectId = defaultProject.id!
@@ -179,12 +185,14 @@ struct VolumeController: RouteCollection {
             await volumeService.provisionVolume(volumeId: volumeId, sourceImage: sourceImage)
         }
 
-        req.logger.info("Volume creation requested", metadata: [
-            "volumeId": .string(volume.id!.uuidString),
-            "name": .string(volume.name),
-            "projectId": .string(projectId.uuidString),
-            "sizeGB": .stringConvertible(request.sizeGB)
-        ])
+        req.logger.info(
+            "Volume creation requested",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "name": .string(volume.name),
+                "projectId": .string(projectId.uuidString),
+                "sizeGB": .stringConvertible(request.sizeGB),
+            ])
 
         return VolumeResponse(from: volume)
     }
@@ -219,10 +227,12 @@ struct VolumeController: RouteCollection {
 
         try await volume.save(on: req.db)
 
-        req.logger.info("Volume updated", metadata: [
-            "volumeId": .string(volume.id!.uuidString),
-            "name": .string(volume.name)
-        ])
+        req.logger.info(
+            "Volume updated",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "name": .string(volume.name),
+            ])
 
         return VolumeResponse(from: volume)
     }
@@ -238,7 +248,10 @@ struct VolumeController: RouteCollection {
 
         // Validate volume can be deleted
         guard volume.canDelete else {
-            throw Abort(.conflict, reason: "Volume cannot be deleted in status '\(volume.status.rawValue)'. Must be 'available' or 'error'")
+            throw Abort(
+                .conflict,
+                reason: "Volume cannot be deleted in status '\(volume.status.rawValue)'. Must be 'available' or 'error'"
+            )
         }
 
         // Mark as deleting
@@ -294,9 +307,11 @@ struct VolumeController: RouteCollection {
 
         try await volume.delete(on: req.db)
 
-        req.logger.info("Volume deleted", metadata: [
-            "volumeId": .string(volume.id!.uuidString)
-        ])
+        req.logger.info(
+            "Volume deleted",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString)
+            ])
 
         return .noContent
     }
@@ -314,7 +329,9 @@ struct VolumeController: RouteCollection {
 
         // Validate volume can be attached
         guard volume.canAttach else {
-            throw Abort(.conflict, reason: "Volume cannot be attached in status '\(volume.status.rawValue)'. Must be 'available'")
+            throw Abort(
+                .conflict,
+                reason: "Volume cannot be attached in status '\(volume.status.rawValue)'. Must be 'available'")
         }
 
         // Fetch the VM
@@ -338,14 +355,23 @@ struct VolumeController: RouteCollection {
 
         // IMPORTANT: Check that VM is QEMU type - volumes not supported for Firecracker
         guard vm.hypervisorType == .qemu else {
-            throw Abort(.badRequest, reason: "Volume operations are not supported for Firecracker VMs. Firecracker only supports a single root disk.")
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Volume operations are not supported for Firecracker VMs. Firecracker only supports a single root disk."
+            )
         }
 
         // Check that volume and VM are on the same hypervisor (if volume has a hypervisor)
         if let volumeHypervisorId = volume.hypervisorId,
-           let vmHypervisorId = vm.hypervisorId,
-           volumeHypervisorId != vmHypervisorId {
-            throw Abort(.badRequest, reason: "Volume and VM must be on the same hypervisor. Volume is on '\(volumeHypervisorId)', VM is on '\(vmHypervisorId)'")
+            let vmHypervisorId = vm.hypervisorId,
+            volumeHypervisorId != vmHypervisorId
+        {
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Volume and VM must be on the same hypervisor. Volume is on '\(volumeHypervisorId)', VM is on '\(vmHypervisorId)'"
+            )
         }
 
         // Generate device name if not provided
@@ -387,11 +413,13 @@ struct VolumeController: RouteCollection {
         volume.status = .attached
         try await volume.save(on: req.db)
 
-        req.logger.info("Volume attached to VM", metadata: [
-            "volumeId": .string(volume.id!.uuidString),
-            "vmId": .string(vm.id!.uuidString),
-            "deviceName": .string(deviceName)
-        ])
+        req.logger.info(
+            "Volume attached to VM",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "vmId": .string(vm.id!.uuidString),
+                "deviceName": .string(deviceName),
+            ])
 
         return VolumeResponse(from: volume)
     }
@@ -407,7 +435,9 @@ struct VolumeController: RouteCollection {
 
         // Validate volume can be detached
         guard volume.canDetach else {
-            throw Abort(.conflict, reason: "Volume cannot be detached in status '\(volume.status.rawValue)'. Must be 'attached'")
+            throw Abort(
+                .conflict, reason: "Volume cannot be detached in status '\(volume.status.rawValue)'. Must be 'attached'"
+            )
         }
 
         guard let vmId = volume.$vm.id else {
@@ -421,7 +451,11 @@ struct VolumeController: RouteCollection {
 
         // Check that VM is QEMU type - volumes not supported for Firecracker
         guard vm.hypervisorType == .qemu else {
-            throw Abort(.badRequest, reason: "Volume operations are not supported for Firecracker VMs. Firecracker only supports a single root disk.")
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Volume operations are not supported for Firecracker VMs. Firecracker only supports a single root disk."
+            )
         }
 
         // Mark as detaching
@@ -448,10 +482,12 @@ struct VolumeController: RouteCollection {
         volume.status = .available
         try await volume.save(on: req.db)
 
-        req.logger.info("Volume detached from VM", metadata: [
-            "volumeId": .string(volume.id!.uuidString),
-            "previousVmId": .string(vmId.uuidString)
-        ])
+        req.logger.info(
+            "Volume detached from VM",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "previousVmId": .string(vmId.uuidString),
+            ])
 
         return VolumeResponse(from: volume)
     }
@@ -469,7 +505,10 @@ struct VolumeController: RouteCollection {
 
         // Validate volume can be resized
         guard volume.canResize else {
-            throw Abort(.conflict, reason: "Volume cannot be resized in status '\(volume.status.rawValue)'. Must be 'available' (detached)")
+            throw Abort(
+                .conflict,
+                reason: "Volume cannot be resized in status '\(volume.status.rawValue)'. Must be 'available' (detached)"
+            )
         }
 
         // Calculate new size in bytes
@@ -477,7 +516,9 @@ struct VolumeController: RouteCollection {
 
         // Validate new size is larger
         guard newSizeBytes > volume.size else {
-            throw Abort(.badRequest, reason: "New size (\(request.sizeGB) GB) must be larger than current size (\(volume.sizeGB) GB)")
+            throw Abort(
+                .badRequest,
+                reason: "New size (\(request.sizeGB) GB) must be larger than current size (\(volume.sizeGB) GB)")
         }
 
         guard volume.hypervisorId != nil, volume.storagePath != nil else {
@@ -506,11 +547,13 @@ struct VolumeController: RouteCollection {
         volume.errorMessage = nil
         try await volume.save(on: req.db)
 
-        req.logger.info("Volume resized", metadata: [
-            "volumeId": .string(volume.id!.uuidString),
-            "previousSizeGB": .stringConvertible(Double(previousSize) / 1024.0 / 1024.0 / 1024.0),
-            "newSizeGB": .stringConvertible(request.sizeGB)
-        ])
+        req.logger.info(
+            "Volume resized",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "previousSizeGB": .stringConvertible(Double(previousSize) / 1024.0 / 1024.0 / 1024.0),
+                "newSizeGB": .stringConvertible(request.sizeGB),
+            ])
 
         return VolumeResponse(from: volume)
     }
@@ -528,7 +571,11 @@ struct VolumeController: RouteCollection {
 
         // Validate volume can be snapshotted
         guard volume.canSnapshot else {
-            throw Abort(.conflict, reason: "Volume cannot be snapshotted in status '\(volume.status.rawValue)'. Must be 'available' or 'attached'")
+            throw Abort(
+                .conflict,
+                reason:
+                    "Volume cannot be snapshotted in status '\(volume.status.rawValue)'. Must be 'available' or 'attached'"
+            )
         }
 
         guard volume.hypervisorId != nil, volume.storagePath != nil else {
@@ -593,11 +640,13 @@ struct VolumeController: RouteCollection {
         volume.status = previousStatus
         try await volume.save(on: req.db)
 
-        req.logger.info("Snapshot created", metadata: [
-            "snapshotId": .string(snapshot.id!.uuidString),
-            "volumeId": .string(volume.id!.uuidString),
-            "name": .string(snapshot.name)
-        ])
+        req.logger.info(
+            "Snapshot created",
+            metadata: [
+                "snapshotId": .string(snapshot.id!.uuidString),
+                "volumeId": .string(volume.id!.uuidString),
+                "name": .string(snapshot.name),
+            ])
 
         return SnapshotResponse(from: snapshot)
     }
@@ -615,7 +664,11 @@ struct VolumeController: RouteCollection {
 
         // Validate source volume can be cloned
         guard sourceVolume.canSnapshot else {
-            throw Abort(.conflict, reason: "Volume cannot be cloned in status '\(sourceVolume.status.rawValue)'. Must be 'available' or 'attached'")
+            throw Abort(
+                .conflict,
+                reason:
+                    "Volume cannot be cloned in status '\(sourceVolume.status.rawValue)'. Must be 'available' or 'attached'"
+            )
         }
 
         guard sourceVolume.hypervisorId != nil, sourceVolume.storagePath != nil else {
@@ -673,11 +726,13 @@ struct VolumeController: RouteCollection {
             )
         }
 
-        req.logger.info("Volume clone requested", metadata: [
-            "sourceVolumeId": .string(sourceVolume.id!.uuidString),
-            "newVolumeId": .string(newVolume.id!.uuidString),
-            "name": .string(newVolume.name)
-        ])
+        req.logger.info(
+            "Volume clone requested",
+            metadata: [
+                "sourceVolumeId": .string(sourceVolume.id!.uuidString),
+                "newVolumeId": .string(newVolume.id!.uuidString),
+                "name": .string(newVolume.name),
+            ])
 
         return VolumeResponse(from: newVolume)
     }
@@ -709,14 +764,17 @@ struct VolumeController: RouteCollection {
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "read")
 
         guard let snapshotIdString = req.parameters.get("snapshotId"),
-              let snapshotId = UUID(uuidString: snapshotIdString) else {
+            let snapshotId = UUID(uuidString: snapshotIdString)
+        else {
             throw Abort(.badRequest, reason: "Invalid snapshot ID")
         }
 
-        guard let snapshot = try await VolumeSnapshot.query(on: req.db)
-            .filter(\.$id == snapshotId)
-            .filter(\.$volume.$id == volume.id!)
-            .first() else {
+        guard
+            let snapshot = try await VolumeSnapshot.query(on: req.db)
+                .filter(\.$id == snapshotId)
+                .filter(\.$volume.$id == volume.id!)
+                .first()
+        else {
             throw Abort(.notFound, reason: "Snapshot not found")
         }
 
@@ -734,7 +792,11 @@ struct VolumeController: RouteCollection {
 
         // Validate snapshot can be deleted
         guard snapshot.canDelete else {
-            throw Abort(.conflict, reason: "Snapshot cannot be deleted in status '\(snapshot.status.rawValue)'. Must be 'available', 'error', or 'deleting'")
+            throw Abort(
+                .conflict,
+                reason:
+                    "Snapshot cannot be deleted in status '\(snapshot.status.rawValue)'. Must be 'available', 'error', or 'deleting'"
+            )
         }
 
         // Mark as deleting
@@ -776,10 +838,12 @@ struct VolumeController: RouteCollection {
 
         try await snapshot.delete(on: req.db)
 
-        req.logger.info("Snapshot deleted", metadata: [
-            "snapshotId": .string(snapshotId.uuidString),
-            "volumeId": .string(volume.id!.uuidString)
-        ])
+        req.logger.info(
+            "Snapshot deleted",
+            metadata: [
+                "snapshotId": .string(snapshotId.uuidString),
+                "volumeId": .string(volume.id!.uuidString),
+            ])
 
         return .noContent
     }
@@ -789,7 +853,8 @@ struct VolumeController: RouteCollection {
     /// Fetch a volume and check permission
     private func fetchVolumeWithPermission(req: Request, user: User, permission: String) async throws -> Volume {
         guard let volumeIdString = req.parameters.get("volumeId"),
-              let volumeId = UUID(uuidString: volumeIdString) else {
+            let volumeId = UUID(uuidString: volumeIdString)
+        else {
             throw Abort(.badRequest, reason: "Invalid volume ID")
         }
 

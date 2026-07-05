@@ -23,7 +23,7 @@ struct EnhanceVM: AsyncMigration {
 
         // Enhanced memory configuration (change memory to int64)
         try await database.schema("vms")
-            .field("memory_new", .int64, .required, .sql(.default("536870912"))) // 512MB default
+            .field("memory_new", .int64, .required, .sql(.default("536870912")))  // 512MB default
             .update()
 
         try await database.schema("vms")
@@ -36,7 +36,7 @@ struct EnhanceVM: AsyncMigration {
 
         // Enhanced disk configuration (change disk to int64)
         try await database.schema("vms")
-            .field("disk_new", .int64, .required, .sql(.default("1073741824"))) // 1GB default
+            .field("disk_new", .int64, .required, .sql(.default("1073741824")))  // 1GB default
             .update()
 
         try await database.schema("vms")
@@ -111,7 +111,7 @@ struct EnhanceVM: AsyncMigration {
             "disk_new", "disk_path", "readonly_disk", "kernel_path", "initramfs_path",
             "cmdline", "firmware_path", "mac_address", "ip_address", "network_mask",
             "console_mode", "serial_mode", "console_socket", "serial_socket",
-            "created_at", "updated_at"
+            "created_at", "updated_at",
         ]
 
         for field in fieldsToDelete {

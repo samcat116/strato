@@ -6,7 +6,8 @@ import StratoShared
 struct ConsoleMessageTests {
     @Test func consoleConnectRoundTrip() throws {
         let decoded = try throughEnvelope(
-            ConsoleConnectMessage(requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, vmId: "vm-1", sessionId: "sess-1")
+            ConsoleConnectMessage(
+                requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, vmId: "vm-1", sessionId: "sess-1")
         )
         #expect(decoded.type == .consoleConnect)
         #expect(decoded.vmId == "vm-1")
@@ -15,7 +16,8 @@ struct ConsoleMessageTests {
 
     @Test func consoleDisconnectRoundTrip() throws {
         let decoded = try throughEnvelope(
-            ConsoleDisconnectMessage(requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, vmId: "vm-1", sessionId: "sess-1")
+            ConsoleDisconnectMessage(
+                requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, vmId: "vm-1", sessionId: "sess-1")
         )
         #expect(decoded.type == .consoleDisconnect)
         #expect(decoded.sessionId == "sess-1")
@@ -45,7 +47,8 @@ struct ConsoleMessageTests {
 
     @Test func consoleConnectedRoundTrip() throws {
         let decoded = try throughEnvelope(
-            ConsoleConnectedMessage(requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, vmId: "vm-1", sessionId: "sess-1")
+            ConsoleConnectedMessage(
+                requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, vmId: "vm-1", sessionId: "sess-1")
         )
         #expect(decoded.type == .consoleConnected)
         #expect(decoded.vmId == "vm-1")

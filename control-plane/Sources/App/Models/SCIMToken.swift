@@ -128,7 +128,7 @@ struct CreateSCIMTokenRequest: Content {
 struct CreateSCIMTokenResponse: Content {
     let id: UUID?
     let name: String
-    let token: String // Full token - only shown once
+    let token: String  // Full token - only shown once
     let tokenPrefix: String
     let organizationId: UUID
     let expiresAt: Date?

@@ -12,8 +12,16 @@ struct VMMessageTests {
             sharedMemory: true,
             hugepages: true,
             boot: .disk(firmware: "/usr/share/OVMF/OVMF_CODE.fd"),
-            volumes: [VolumeSpec(volumeId: Fixtures.uuidA, deviceName: "disk0", storagePath: "/var/lib/strato/disk0.qcow2", readonly: false, bootOrder: 0)],
-            networks: [NetworkSpec(network: "default", macAddress: "52:54:00:00:00:01", ipAddress: "10.0.0.5", netmask: "255.255.255.0", mtu: 1500)],
+            volumes: [
+                VolumeSpec(
+                    volumeId: Fixtures.uuidA, deviceName: "disk0", storagePath: "/var/lib/strato/disk0.qcow2",
+                    readonly: false, bootOrder: 0)
+            ],
+            networks: [
+                NetworkSpec(
+                    network: "default", macAddress: "52:54:00:00:00:01", ipAddress: "10.0.0.5",
+                    netmask: "255.255.255.0", mtu: 1500)
+            ],
             console: ConsoleSpec(console: .pty, serial: .socket)
         )
         let vmData = VMData(

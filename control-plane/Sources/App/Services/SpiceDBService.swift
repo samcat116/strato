@@ -5,13 +5,16 @@ protocol SpiceDBServiceProtocol {
     func readSchema() async throws -> String?
     func writeSchema(_ schema: String) async throws
     func checkPermission(subject: String, permission: String, resource: String, resourceId: String) async throws -> Bool
-    func writeRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String) async throws
-    func deleteRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String) async throws
+    func writeRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String)
+        async throws
+    func deleteRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String)
+        async throws
     func addUserToGroup(userID: String, groupID: String) async throws
     func removeUserFromGroup(userID: String, groupID: String) async throws
     func addGroupToProject(groupID: String, projectID: String, role: GroupProjectRole) async throws
     func removeGroupFromProject(groupID: String, projectID: String, role: GroupProjectRole) async throws
-    func checkGroupBasedPermission(userID: String, permission: String, resource: String, resourceId: String) async throws -> Bool
+    func checkGroupBasedPermission(userID: String, permission: String, resource: String, resourceId: String)
+        async throws -> Bool
 }
 
 struct SpiceDBService: SpiceDBServiceProtocol {
@@ -402,11 +405,14 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
         // Mock implementation - do nothing
     }
 
-    func checkPermission(subject: String, permission: String, resource: String, resourceId: String) async throws -> Bool {
+    func checkPermission(subject: String, permission: String, resource: String, resourceId: String) async throws -> Bool
+    {
         return checkPermissionResult
     }
 
-    func writeRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String) async throws {
+    func writeRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String)
+        async throws
+    {
         await recorder?.record(
             SpiceDBMockRecorder.RelationshipWrite(
                 entity: entity,
@@ -418,7 +424,9 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
         )
     }
 
-    func deleteRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String) async throws {
+    func deleteRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String)
+        async throws
+    {
         // Mock implementation - do nothing
     }
 
@@ -438,7 +446,9 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
         // Mock implementation - do nothing
     }
 
-    func checkGroupBasedPermission(userID: String, permission: String, resource: String, resourceId: String) async throws -> Bool {
+    func checkGroupBasedPermission(userID: String, permission: String, resource: String, resourceId: String)
+        async throws -> Bool
+    {
         return checkPermissionResult
     }
 }
@@ -491,7 +501,7 @@ extension Application {
             // authenticates against SpiceDB in any deployment that forgets to set
             // this variable.
             guard let presharedKey = Environment.get("SPICEDB_PRESHARED_KEY"),
-                  !presharedKey.isEmpty
+                !presharedKey.isEmpty
             else {
                 throw Abort(
                     .internalServerError,

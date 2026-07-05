@@ -33,9 +33,11 @@ actor VolumeService {
     func provisionVolume(volumeId: UUID, sourceImage: Image?) async {
         do {
             guard let volume = try await Volume.find(volumeId, on: app.db) else {
-                logger.warning("Volume deleted before provisioning started", metadata: [
-                    "volumeId": .string(volumeId.uuidString)
-                ])
+                logger.warning(
+                    "Volume deleted before provisioning started",
+                    metadata: [
+                        "volumeId": .string(volumeId.uuidString)
+                    ])
                 return
             }
 
@@ -47,11 +49,13 @@ actor VolumeService {
             volume.errorMessage = nil
             try await volume.save(on: app.db)
 
-            logger.info("Volume provisioned on agent", metadata: [
-                "volumeId": .string(volumeId.uuidString),
-                "agentId": .string(result.agentId),
-                "storagePath": .string(result.storagePath ?? "")
-            ])
+            logger.info(
+                "Volume provisioned on agent",
+                metadata: [
+                    "volumeId": .string(volumeId.uuidString),
+                    "agentId": .string(result.agentId),
+                    "storagePath": .string(result.storagePath ?? ""),
+                ])
         } catch {
             await markVolumeFailed(volumeId: volumeId, error: error)
         }
@@ -63,11 +67,14 @@ actor VolumeService {
     /// or `.error`.
     func performClone(sourceVolumeId: UUID, targetVolumeId: UUID, restoreSourceStatusTo: VolumeStatus) async {
         guard let source = try? await Volume.find(sourceVolumeId, on: app.db),
-              let target = try? await Volume.find(targetVolumeId, on: app.db) else {
-            logger.warning("Volume disappeared before clone started", metadata: [
-                "sourceVolumeId": .string(sourceVolumeId.uuidString),
-                "targetVolumeId": .string(targetVolumeId.uuidString)
-            ])
+            let target = try? await Volume.find(targetVolumeId, on: app.db)
+        else {
+            logger.warning(
+                "Volume disappeared before clone started",
+                metadata: [
+                    "sourceVolumeId": .string(sourceVolumeId.uuidString),
+                    "targetVolumeId": .string(targetVolumeId.uuidString),
+                ])
             return
         }
 
@@ -79,10 +86,12 @@ actor VolumeService {
             target.errorMessage = nil
             try await target.save(on: app.db)
 
-            logger.info("Volume cloned on agent", metadata: [
-                "sourceVolumeId": .string(sourceVolumeId.uuidString),
-                "targetVolumeId": .string(targetVolumeId.uuidString)
-            ])
+            logger.info(
+                "Volume cloned on agent",
+                metadata: [
+                    "sourceVolumeId": .string(sourceVolumeId.uuidString),
+                    "targetVolumeId": .string(targetVolumeId.uuidString),
+                ])
         } catch {
             await markVolumeFailed(volumeId: targetVolumeId, error: error)
         }
@@ -92,28 +101,34 @@ actor VolumeService {
         do {
             try await source.save(on: app.db)
         } catch {
-            logger.error("Failed to restore source volume status after clone", metadata: [
-                "sourceVolumeId": .string(sourceVolumeId.uuidString),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to restore source volume status after clone",
+                metadata: [
+                    "sourceVolumeId": .string(sourceVolumeId.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 
     private func markVolumeFailed(volumeId: UUID, error: Error) async {
-        logger.error("Volume operation failed", metadata: [
-            "volumeId": .string(volumeId.uuidString),
-            "error": .string(error.localizedDescription)
-        ])
+        logger.error(
+            "Volume operation failed",
+            metadata: [
+                "volumeId": .string(volumeId.uuidString),
+                "error": .string(error.localizedDescription),
+            ])
         do {
             guard let volume = try await Volume.find(volumeId, on: app.db) else { return }
             volume.status = .error
             volume.errorMessage = error.localizedDescription
             try await volume.save(on: app.db)
         } catch {
-            logger.error("Failed to record volume error state", metadata: [
-                "volumeId": .string(volumeId.uuidString),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to record volume error state",
+                metadata: [
+                    "volumeId": .string(volumeId.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 
@@ -160,11 +175,13 @@ actor VolumeService {
         let timeout = sourceImageInfo != nil ? Self.transferTimeout : Self.createTimeout
         let status = try await sendVolumeRequest(message, toAgent: selectedAgent.id, timeout: timeout)
 
-        logger.info("Agent confirmed volume creation", metadata: [
-            "volumeId": .string(volume.id!.uuidString),
-            "agentId": .string(selectedAgent.id),
-            "hasSourceImage": .stringConvertible(sourceImageInfo != nil)
-        ])
+        logger.info(
+            "Agent confirmed volume creation",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "agentId": .string(selectedAgent.id),
+                "hasSourceImage": .stringConvertible(sourceImageInfo != nil),
+            ])
 
         return (selectedAgent.id, status?.storagePath)
     }
@@ -173,16 +190,20 @@ actor VolumeService {
     func requestVolumeDeletion(volume: Volume) async throws {
         guard let hypervisorId = volume.hypervisorId else {
             // Volume was never created on an agent, just delete from DB
-            logger.info("Volume has no hypervisor, skipping agent deletion", metadata: [
-                "volumeId": .string(volume.id!.uuidString)
-            ])
+            logger.info(
+                "Volume has no hypervisor, skipping agent deletion",
+                metadata: [
+                    "volumeId": .string(volume.id!.uuidString)
+                ])
             return
         }
 
         guard let volumePath = volume.storagePath else {
-            logger.info("Volume has no storage path, skipping agent deletion", metadata: [
-                "volumeId": .string(volume.id!.uuidString)
-            ])
+            logger.info(
+                "Volume has no storage path, skipping agent deletion",
+                metadata: [
+                    "volumeId": .string(volume.id!.uuidString)
+                ])
             return
         }
 
@@ -193,10 +214,12 @@ actor VolumeService {
 
         _ = try await sendVolumeRequest(message, toAgent: hypervisorId)
 
-        logger.info("Agent confirmed volume deletion", metadata: [
-            "volumeId": .string(volume.id!.uuidString),
-            "agentId": .string(hypervisorId)
-        ])
+        logger.info(
+            "Agent confirmed volume deletion",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "agentId": .string(hypervisorId),
+            ])
     }
 
     // MARK: - Volume Attachment
@@ -231,12 +254,14 @@ actor VolumeService {
 
         _ = try await sendVolumeRequest(message, toAgent: hypervisorId)
 
-        logger.info("Agent confirmed volume attachment", metadata: [
-            "volumeId": .string(volume.id!.uuidString),
-            "vmId": .string(vm.id!.uuidString),
-            "deviceName": .string(deviceName),
-            "agentId": .string(hypervisorId)
-        ])
+        logger.info(
+            "Agent confirmed volume attachment",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "vmId": .string(vm.id!.uuidString),
+                "deviceName": .string(deviceName),
+                "agentId": .string(hypervisorId),
+            ])
     }
 
     /// Request an agent to detach a volume from a VM and await its confirmation.
@@ -257,12 +282,14 @@ actor VolumeService {
 
         _ = try await sendVolumeRequest(message, toAgent: hypervisorId)
 
-        logger.info("Agent confirmed volume detachment", metadata: [
-            "volumeId": .string(volume.id!.uuidString),
-            "vmId": .string(vm.id!.uuidString),
-            "deviceName": .string(deviceName),
-            "agentId": .string(hypervisorId)
-        ])
+        logger.info(
+            "Agent confirmed volume detachment",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "vmId": .string(vm.id!.uuidString),
+                "deviceName": .string(deviceName),
+                "agentId": .string(hypervisorId),
+            ])
     }
 
     // MARK: - Volume Operations
@@ -285,11 +312,13 @@ actor VolumeService {
 
         _ = try await sendVolumeRequest(message, toAgent: hypervisorId)
 
-        logger.info("Agent confirmed volume resize", metadata: [
-            "volumeId": .string(volume.id!.uuidString),
-            "newSizeBytes": .stringConvertible(newSizeBytes),
-            "agentId": .string(hypervisorId)
-        ])
+        logger.info(
+            "Agent confirmed volume resize",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "newSizeBytes": .stringConvertible(newSizeBytes),
+                "agentId": .string(hypervisorId),
+            ])
     }
 
     /// Request an agent to create a snapshot of a volume and await its
@@ -308,7 +337,10 @@ actor VolumeService {
         }
 
         // Build snapshot path based on volume path
-        let snapshotPath = snapshot.buildStoragePath(basePath: volumePath.components(separatedBy: "/").dropLast().joined(separator: "/"), volumeId: volume.id!) ?? "\(volumePath).snap.\(snapshot.id!.uuidString)"
+        let snapshotPath =
+            snapshot.buildStoragePath(
+                basePath: volumePath.components(separatedBy: "/").dropLast().joined(separator: "/"),
+                volumeId: volume.id!) ?? "\(volumePath).snap.\(snapshot.id!.uuidString)"
 
         let message = VolumeSnapshotMessage(
             volumeId: volume.id!.uuidString,
@@ -319,11 +351,13 @@ actor VolumeService {
 
         let status = try await sendVolumeRequest(message, toAgent: hypervisorId, timeout: Self.snapshotTimeout)
 
-        logger.info("Agent confirmed volume snapshot", metadata: [
-            "volumeId": .string(volume.id!.uuidString),
-            "snapshotId": .string(snapshot.id!.uuidString),
-            "agentId": .string(hypervisorId)
-        ])
+        logger.info(
+            "Agent confirmed volume snapshot",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "snapshotId": .string(snapshot.id!.uuidString),
+                "agentId": .string(hypervisorId),
+            ])
 
         return status?.storagePath
     }
@@ -341,10 +375,12 @@ actor VolumeService {
         snapshot: VolumeSnapshot
     ) async throws {
         guard let hypervisorId = volume.hypervisorId else {
-            logger.info("Volume has no hypervisor, skipping agent snapshot deletion", metadata: [
-                "volumeId": .string(volume.id!.uuidString),
-                "snapshotId": .string(snapshot.id!.uuidString)
-            ])
+            logger.info(
+                "Volume has no hypervisor, skipping agent snapshot deletion",
+                metadata: [
+                    "volumeId": .string(volume.id!.uuidString),
+                    "snapshotId": .string(snapshot.id!.uuidString),
+                ])
             return
         }
 
@@ -354,7 +390,8 @@ actor VolumeService {
         // timeout. Agents that understand the message advertise it as a
         // capability at registration; fail fast on ones that don't.
         if let agentInfo = await app.agentService.getAgentInfo(hypervisorId),
-           !agentInfo.capabilities.contains(MessageType.volumeSnapshotDelete.rawValue) {
+            !agentInfo.capabilities.contains(MessageType.volumeSnapshotDelete.rawValue)
+        {
             throw VolumeServiceError.operationUnsupportedByAgent(
                 MessageType.volumeSnapshotDelete.rawValue, hypervisorId
             )
@@ -367,11 +404,13 @@ actor VolumeService {
 
         _ = try await sendVolumeRequest(message, toAgent: hypervisorId)
 
-        logger.info("Agent confirmed snapshot deletion", metadata: [
-            "volumeId": .string(volume.id!.uuidString),
-            "snapshotId": .string(snapshot.id!.uuidString),
-            "agentId": .string(hypervisorId)
-        ])
+        logger.info(
+            "Agent confirmed snapshot deletion",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "snapshotId": .string(snapshot.id!.uuidString),
+                "agentId": .string(hypervisorId),
+            ])
     }
 
     /// Request an agent to clone a volume and await its confirmation.
@@ -389,7 +428,10 @@ actor VolumeService {
         }
 
         // Build target volume path based on volume storage convention
-        let targetVolumePath = targetVolume.buildStoragePath(basePath: sourceVolumePath.components(separatedBy: "/").dropLast(2).joined(separator: "/")) ?? "\(sourceVolumePath).clone.\(targetVolume.id!.uuidString)"
+        let targetVolumePath =
+            targetVolume.buildStoragePath(
+                basePath: sourceVolumePath.components(separatedBy: "/").dropLast(2).joined(separator: "/"))
+            ?? "\(sourceVolumePath).clone.\(targetVolume.id!.uuidString)"
 
         let message = VolumeCloneMessage(
             sourceVolumeId: sourceVolume.id!.uuidString,
@@ -400,11 +442,13 @@ actor VolumeService {
 
         let status = try await sendVolumeRequest(message, toAgent: hypervisorId, timeout: Self.transferTimeout)
 
-        logger.info("Agent confirmed volume clone", metadata: [
-            "sourceVolumeId": .string(sourceVolume.id!.uuidString),
-            "targetVolumeId": .string(targetVolume.id!.uuidString),
-            "agentId": .string(hypervisorId)
-        ])
+        logger.info(
+            "Agent confirmed volume clone",
+            metadata: [
+                "sourceVolumeId": .string(sourceVolume.id!.uuidString),
+                "targetVolumeId": .string(targetVolume.id!.uuidString),
+                "agentId": .string(hypervisorId),
+            ])
 
         return status?.storagePath
     }
@@ -415,36 +459,44 @@ actor VolumeService {
     /// This is used to update volume status after operations complete
     func handleVolumeInfoResponse(_ response: VolumeInfoResponse) async {
         guard let volumeId = UUID(uuidString: response.volumeId) else {
-            logger.warning("Invalid volume ID in info response", metadata: [
-                "volumeId": .string(response.volumeId)
-            ])
+            logger.warning(
+                "Invalid volume ID in info response",
+                metadata: [
+                    "volumeId": .string(response.volumeId)
+                ])
             return
         }
 
         do {
             guard let volume = try await Volume.find(volumeId, on: app.db) else {
-                logger.warning("Volume not found for info response", metadata: [
-                    "volumeId": .string(response.volumeId)
-                ])
+                logger.warning(
+                    "Volume not found for info response",
+                    metadata: [
+                        "volumeId": .string(response.volumeId)
+                    ])
                 return
             }
 
             // Update volume size info from agent
             // The virtualSize is the provisioned size, actualSize is the real disk usage
-            logger.info("Received volume info from agent", metadata: [
-                "volumeId": .string(response.volumeId),
-                "virtualSize": .stringConvertible(response.virtualSize),
-                "actualSize": .stringConvertible(response.actualSize),
-                "format": .string(response.format)
-            ])
+            logger.info(
+                "Received volume info from agent",
+                metadata: [
+                    "volumeId": .string(response.volumeId),
+                    "virtualSize": .stringConvertible(response.virtualSize),
+                    "actualSize": .stringConvertible(response.actualSize),
+                    "format": .string(response.format),
+                ])
 
             // Volume info doesn't change the status - that's handled by operation-specific callbacks
             try await volume.save(on: app.db)
         } catch {
-            logger.error("Failed to process volume info response", metadata: [
-                "volumeId": .string(response.volumeId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to process volume info response",
+                metadata: [
+                    "volumeId": .string(response.volumeId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 
@@ -470,13 +522,16 @@ actor VolumeService {
             throw VolumeServiceError.agentOffline(agentId)
         }
 
-        logger.info("Sending volume message to agent", metadata: [
-            "agentId": .string(agentId),
-            "agentName": .string(agentInfo.name),
-            "messageType": .string(message.type.rawValue)
-        ])
+        logger.info(
+            "Sending volume message to agent",
+            metadata: [
+                "agentId": .string(agentId),
+                "agentName": .string(agentInfo.name),
+                "messageType": .string(message.type.rawValue),
+            ])
 
-        let response = try await agentService.sendMessageToAgentWithResponse(message, agentId: agentId, timeout: timeout)
+        let response = try await agentService.sendMessageToAgentWithResponse(
+            message, agentId: agentId, timeout: timeout)
 
         switch response {
         case .success(let data):

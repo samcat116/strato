@@ -8,7 +8,8 @@ import VaporTesting
 final class ResourceQuotaTests {
 
     // Helper to run tests with fresh app and test data
-    func withQuotaTestApp(_ test: (Application, User, Organization, Project, String) async throws -> Void) async throws {
+    func withQuotaTestApp(_ test: (Application, User, Organization, Project, String) async throws -> Void) async throws
+    {
         let app = try await Application.makeForTesting()
 
         do {
@@ -71,16 +72,17 @@ final class ResourceQuotaTests {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/quotas") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(CreateResourceQuotaRequest(
-                    name: "Org Quota",
-                    maxVCPUs: 100,
-                    maxMemoryGB: 200,
-                    maxStorageGB: 1000,
-                    maxVMs: 50,
-                    maxNetworks: nil,
-                    environment: nil,
-                    isEnabled: nil
-                ))
+                try req.content.encode(
+                    CreateResourceQuotaRequest(
+                        name: "Org Quota",
+                        maxVCPUs: 100,
+                        maxMemoryGB: 200,
+                        maxStorageGB: 1000,
+                        maxVMs: 50,
+                        maxNetworks: nil,
+                        environment: nil,
+                        isEnabled: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
@@ -101,16 +103,17 @@ final class ResourceQuotaTests {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
             try await app.test(.POST, "/api/projects/\(testProject.id!)/quotas") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(CreateResourceQuotaRequest(
-                    name: "Project Quota",
-                    maxVCPUs: 20,
-                    maxMemoryGB: 40,
-                    maxStorageGB: 200,
-                    maxVMs: 10,
-                    maxNetworks: nil,
-                    environment: nil,
-                    isEnabled: nil
-                ))
+                try req.content.encode(
+                    CreateResourceQuotaRequest(
+                        name: "Project Quota",
+                        maxVCPUs: 20,
+                        maxMemoryGB: 40,
+                        maxStorageGB: 200,
+                        maxVMs: 10,
+                        maxNetworks: nil,
+                        environment: nil,
+                        isEnabled: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
@@ -127,22 +130,23 @@ final class ResourceQuotaTests {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
             try await app.test(.POST, "/api/projects/\(testProject.id!)/quotas") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(CreateResourceQuotaRequest(
-                    name: "Production Quota",
-                    maxVCPUs: 50,
-                    maxMemoryGB: 100,
-                    maxStorageGB: 500,
-                    maxVMs: 25,
-                    maxNetworks: nil,
-                    environment: "production",
-                    isEnabled: nil
-                ))
+                try req.content.encode(
+                    CreateResourceQuotaRequest(
+                        name: "Production Quota",
+                        maxVCPUs: 50,
+                        maxMemoryGB: 100,
+                        maxStorageGB: 500,
+                        maxVMs: 25,
+                        maxNetworks: nil,
+                        environment: "production",
+                        isEnabled: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
                 let response = try res.content.decode(ResourceQuotaResponse.self)
                 #expect(response.environment == "production")
-                #expect(response.entityType == "project") // Environment quota is still under project
+                #expect(response.entityType == "project")  // Environment quota is still under project
             }
         }
     }
@@ -185,10 +189,10 @@ final class ResourceQuotaTests {
                 #expect(response.usage.vmCount == 2)
 
                 // Check utilization percentages
-                #expect(response.utilization.cpuPercent == 40.0) // 4/10 * 100
-                #expect(response.utilization.memoryPercent == 40.0) // 8/20 * 100
-                #expect(response.utilization.storagePercent == 40.0) // 40/100 * 100
-                #expect(response.utilization.vmPercent == 40.0) // 2/5 * 100
+                #expect(response.utilization.cpuPercent == 40.0)  // 4/10 * 100
+                #expect(response.utilization.memoryPercent == 40.0)  // 8/20 * 100
+                #expect(response.utilization.storagePercent == 40.0)  // 40/100 * 100
+                #expect(response.utilization.vmPercent == 40.0)  // 2/5 * 100
             }
         }
     }
@@ -290,15 +294,16 @@ final class ResourceQuotaTests {
 
             try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(UpdateResourceQuotaRequest(
-                    name: "Updated Name",
-                    maxVCPUs: 20,
-                    maxMemoryGB: 40.0,
-                    maxStorageGB: 200.0,
-                    maxVMs: 10,
-                    maxNetworks: nil,
-                    isEnabled: nil
-                ))
+                try req.content.encode(
+                    UpdateResourceQuotaRequest(
+                        name: "Updated Name",
+                        maxVCPUs: 20,
+                        maxMemoryGB: 40.0,
+                        maxStorageGB: 200.0,
+                        maxVMs: 10,
+                        maxNetworks: nil,
+                        isEnabled: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
@@ -330,15 +335,16 @@ final class ResourceQuotaTests {
 
             try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(UpdateResourceQuotaRequest(
-                    name: nil,
-                    maxVCPUs: 5,  // Less than current usage of 8
-                    maxMemoryGB: nil,
-                    maxStorageGB: nil,
-                    maxVMs: nil,
-                    maxNetworks: nil,
-                    isEnabled: nil
-                ))
+                try req.content.encode(
+                    UpdateResourceQuotaRequest(
+                        name: nil,
+                        maxVCPUs: 5,  // Less than current usage of 8
+                        maxMemoryGB: nil,
+                        maxStorageGB: nil,
+                        maxVMs: nil,
+                        maxNetworks: nil,
+                        isEnabled: nil
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }

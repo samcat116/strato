@@ -50,9 +50,10 @@ struct SecurityHeadersMiddleware: AsyncMiddleware {
             )
         }
 
-        let isHTML = response.headers.contentType.map {
-            $0.type == "text" && $0.subType == "html"
-        } ?? false
+        let isHTML =
+            response.headers.contentType.map {
+                $0.type == "text" && $0.subType == "html"
+            } ?? false
         if !isHTML, !response.headers.contains(name: "Content-Security-Policy") {
             response.headers.replaceOrAdd(
                 name: "Content-Security-Policy",

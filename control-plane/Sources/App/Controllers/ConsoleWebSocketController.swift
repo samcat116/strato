@@ -14,7 +14,8 @@ struct ConsoleWebSocketController: RouteCollection {
     private func websocketHandler(req: Request, ws: WebSocket) {
         // Extract VM ID from path
         guard let vmIdString = req.parameters.get("vmID"),
-              let vmId = UUID(uuidString: vmIdString) else {
+            let vmId = UUID(uuidString: vmIdString)
+        else {
             ws.send("error: Invalid VM ID")
             _ = ws.close(code: .unacceptableData)
             return
@@ -32,11 +33,13 @@ struct ConsoleWebSocketController: RouteCollection {
 
                 let (_, agentName, userId) = result
 
-                req.logger.info("Console WebSocket connection established", metadata: [
-                    "vmId": .string(vmIdString),
-                    "sessionId": .string(sessionId),
-                    "agentName": .string(agentName)
-                ])
+                req.logger.info(
+                    "Console WebSocket connection established",
+                    metadata: [
+                        "vmId": .string(vmIdString),
+                        "sessionId": .string(sessionId),
+                        "agentName": .string(agentName),
+                    ])
 
                 // Create session in ConsoleSessionManager
                 req.consoleSessionManager.createSession(
@@ -78,15 +81,19 @@ struct ConsoleWebSocketController: RouteCollection {
                 ws.onClose.whenComplete { result in
                     switch result {
                     case .success:
-                        req.logger.info("Console WebSocket connection closed normally", metadata: [
-                            "vmId": .string(vmIdString),
-                            "sessionId": .string(sessionId)
-                        ])
+                        req.logger.info(
+                            "Console WebSocket connection closed normally",
+                            metadata: [
+                                "vmId": .string(vmIdString),
+                                "sessionId": .string(sessionId),
+                            ])
                     case .failure(let error):
-                        req.logger.error("Console WebSocket connection closed with error: \(error)", metadata: [
-                            "vmId": .string(vmIdString),
-                            "sessionId": .string(sessionId)
-                        ])
+                        req.logger.error(
+                            "Console WebSocket connection closed with error: \(error)",
+                            metadata: [
+                                "vmId": .string(vmIdString),
+                                "sessionId": .string(sessionId),
+                            ])
                     }
 
                     // Notify agent to disconnect console before removing session
@@ -134,7 +141,8 @@ struct ConsoleWebSocketController: RouteCollection {
             // User already authenticated via middleware
             userFuture = ws.eventLoop.makeSucceededFuture(user)
         } else if req.application.environment == .development,
-                  Environment.get("DEV_AUTH_BYPASS") == "true" {
+            Environment.get("DEV_AUTH_BYPASS") == "true"
+        {
             // Dev mode bypass - look up dev user from database
             req.logger.debug("Console WebSocket attempting dev auth bypass")
             userFuture = User.query(on: req.db)
@@ -164,9 +172,11 @@ struct ConsoleWebSocketController: RouteCollection {
             // arbitrary VM UUIDs via distinct "VM not found" / "not running" errors.
             // Consistent with SpiceDBAuthMiddleware: system admins and the dev-auth
             // bypass skip the permission check.
-            let devBypass = req.application.environment == .development
+            let devBypass =
+                req.application.environment == .development
                 && Environment.get("DEV_AUTH_BYPASS") == "true"
-            let authorizedFuture: EventLoopFuture<Bool> = (user.isSystemAdmin || devBypass)
+            let authorizedFuture: EventLoopFuture<Bool> =
+                (user.isSystemAdmin || devBypass)
                 ? ws.eventLoop.makeSucceededFuture(true)
                 : ws.eventLoop.makeFutureWithTask {
                     try await req.spicedb.checkPermission(
@@ -179,10 +189,12 @@ struct ConsoleWebSocketController: RouteCollection {
 
             return authorizedFuture.flatMap { hasPermission -> EventLoopFuture<(VM, String, String?)?> in
                 guard hasPermission else {
-                    req.logger.warning("Console access denied", metadata: [
-                        "vmId": .string(vmId.uuidString),
-                        "userId": .string(userId)
-                    ])
+                    req.logger.warning(
+                        "Console access denied",
+                        metadata: [
+                            "vmId": .string(vmId.uuidString),
+                            "userId": .string(userId),
+                        ])
                     ws.send("error: You do not have permission to access this VM console")
                     _ = ws.close(code: .policyViolation)
                     return ws.eventLoop.makeSucceededFuture(nil)
@@ -205,7 +217,8 @@ struct ConsoleWebSocketController: RouteCollection {
 
                     // Check if VM has an assigned hypervisor (agent UUID)
                     guard let agentIdString = vm.hypervisorId,
-                          let agentId = UUID(uuidString: agentIdString) else {
+                        let agentId = UUID(uuidString: agentIdString)
+                    else {
                         ws.send("error: VM has no assigned hypervisor")
                         _ = ws.close(code: .unexpectedServerError)
                         return ws.eventLoop.makeSucceededFuture(nil)

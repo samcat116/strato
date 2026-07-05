@@ -15,10 +15,10 @@ import Foundation
 /// This lives in `StratoAgentCore` (rather than the platform-gated
 /// `NetworkServiceLinux`) so it is pure, portable, and unit-testable.
 public func tapInterfaceName(for vmId: String) -> String {
-    var hash: UInt64 = 0xcbf2_9ce4_8422_2325 // FNV-1a 64-bit offset basis
+    var hash: UInt64 = 0xcbf2_9ce4_8422_2325  // FNV-1a 64-bit offset basis
     for byte in vmId.utf8 {
         hash ^= UInt64(byte)
-        hash = hash &* 0x0000_0100_0000_01b3 // FNV-1a 64-bit prime
+        hash = hash &* 0x0000_0100_0000_01b3  // FNV-1a 64-bit prime
     }
     let hex = String(format: "%012x", hash & 0xffff_ffff_ffff)
     return "tap" + hex

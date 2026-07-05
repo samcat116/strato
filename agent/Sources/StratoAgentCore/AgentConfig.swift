@@ -182,7 +182,8 @@ public struct AgentConfig: Codable {
         let hypervisorType: HypervisorType?
         if let typeString = hypervisorTypeString {
             guard let hType = HypervisorType(rawValue: typeString) else {
-                throw AgentConfigError.invalidConfiguration("hypervisor_type must be 'qemu' or 'firecracker', got '\(typeString)'")
+                throw AgentConfigError.invalidConfiguration(
+                    "hypervisor_type must be 'qemu' or 'firecracker', got '\(typeString)'")
             }
             hypervisorType = hType
             logger?.info("Agent configured to use hypervisor type: \(typeString)")
@@ -212,10 +213,12 @@ public struct AgentConfig: Codable {
             )
 
             if enabled {
-                logger?.info("SPIFFE authentication enabled", metadata: [
-                    "trustDomain": .string(trustDomain ?? SPIFFEConfig.defaultTrustDomain),
-                    "sourceType": .string(sourceType ?? "workload_api")
-                ])
+                logger?.info(
+                    "SPIFFE authentication enabled",
+                    metadata: [
+                        "trustDomain": .string(trustDomain ?? SPIFFEConfig.defaultTrustDomain),
+                        "sourceType": .string(sourceType ?? "workload_api"),
+                    ])
             }
         } else {
             spiffeConfig = nil
@@ -257,11 +260,11 @@ public struct AgentConfig: Codable {
     /// to platform defaults and can be added to the file later.
     public static func writeMinimalConfig(controlPlaneURL: String, to path: String) throws {
         let contents = """
-        # Written by `strato-agent join`. All other settings use platform
-        # defaults; see config.toml.example in the Strato repository for the
-        # full list of options.
-        control_plane_url = "\(controlPlaneURL)"
-        """
+            # Written by `strato-agent join`. All other settings use platform
+            # defaults; see config.toml.example in the Strato repository for the
+            # full list of options.
+            control_plane_url = "\(controlPlaneURL)"
+            """
 
         let fileManager = FileManager.default
         let directory = (path as NSString).deletingLastPathComponent
@@ -290,14 +293,14 @@ public struct AgentConfig: Codable {
         } catch {
             logger?.warning("Failed to load config from \(defaultConfigPath): \(error)")
         }
-        
+
         // Try fallback path for development
         do {
             return try load(from: fallbackConfigPath, logger: logger)
         } catch {
             logger?.warning("Failed to load config from \(fallbackConfigPath): \(error)")
         }
-        
+
         // Return default configuration if no config file found
         logger?.info("Using default configuration")
 
@@ -360,25 +363,25 @@ public struct AgentConfig: Codable {
     /// Default QEMU binary path (platform and architecture-specific)
     public static var defaultQemuBinaryPath: String {
         #if os(macOS)
-            // Homebrew's prefix differs by hardware: /opt/homebrew on Apple
-            // Silicon, /usr/local on Intel. Probe both (native prefix first)
-            // so the default works on either, and fall back to the native
-            // prefix when QEMU isn't installed yet.
-            #if arch(arm64)
-            let binary = "qemu-system-aarch64"
-            let prefixes = ["/opt/homebrew/bin", "/usr/local/bin"]
-            #else
-            let binary = "qemu-system-x86_64"
-            let prefixes = ["/usr/local/bin", "/opt/homebrew/bin"]
-            #endif
-            let candidates = prefixes.map { "\($0)/\(binary)" }
-            return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? candidates[0]
+        // Homebrew's prefix differs by hardware: /opt/homebrew on Apple
+        // Silicon, /usr/local on Intel. Probe both (native prefix first)
+        // so the default works on either, and fall back to the native
+        // prefix when QEMU isn't installed yet.
+        #if arch(arm64)
+        let binary = "qemu-system-aarch64"
+        let prefixes = ["/opt/homebrew/bin", "/usr/local/bin"]
         #else
-            #if arch(arm64)
-            return "/usr/bin/qemu-system-aarch64"
-            #else
-            return "/usr/bin/qemu-system-x86_64"
-            #endif
+        let binary = "qemu-system-x86_64"
+        let prefixes = ["/usr/local/bin", "/opt/homebrew/bin"]
+        #endif
+        let candidates = prefixes.map { "\($0)/\(binary)" }
+        return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? candidates[0]
+        #else
+        #if arch(arm64)
+        return "/usr/bin/qemu-system-aarch64"
+        #else
+        return "/usr/bin/qemu-system-x86_64"
+        #endif
         #endif
     }
 
@@ -393,7 +396,7 @@ public struct AgentConfig: Codable {
         let paths = [
             "/usr/share/AAVMF/AAVMF_CODE.fd",
             "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-            "/usr/share/edk2/aarch64/QEMU_EFI.fd"
+            "/usr/share/edk2/aarch64/QEMU_EFI.fd",
         ]
         return paths.first { FileManager.default.fileExists(atPath: $0) }
         #endif
@@ -410,7 +413,7 @@ public struct AgentConfig: Codable {
         let paths = [
             "/usr/share/OVMF/OVMF_CODE.fd",
             "/usr/share/edk2/ovmf/OVMF_CODE.fd",
-            "/usr/share/qemu/OVMF.fd"
+            "/usr/share/qemu/OVMF.fd",
         ]
         return paths.first { FileManager.default.fileExists(atPath: $0) }
         #endif
@@ -422,7 +425,7 @@ public struct AgentConfig: Codable {
         // Check common installation paths
         let paths = [
             "/usr/local/bin/firecracker",
-            "/usr/bin/firecracker"
+            "/usr/bin/firecracker",
         ]
         if let path = paths.first(where: { FileManager.default.fileExists(atPath: $0) }) {
             return path

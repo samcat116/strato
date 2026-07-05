@@ -6,7 +6,7 @@ struct ResourceQuotaController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         // Global quota routes
         let quotas = routes.grouped("api", "quotas")
-        quotas.get(use: indexByLevel) // Add route for /quotas?level=...
+        quotas.get(use: indexByLevel)  // Add route for /quotas?level=...
         quotas.group(":quotaID") { quota in
             quota.get(use: show)
             quota.put(use: update)
@@ -58,8 +58,8 @@ struct ResourceQuotaController: RouteCollection {
         switch level {
         case "organization":
             query = query.filter(\.$organization.$id ~~ organizationIDs)
-                        .filter(\.$organizationalUnit.$id == nil)
-                        .filter(\.$project.$id == nil)
+                .filter(\.$organizationalUnit.$id == nil)
+                .filter(\.$project.$id == nil)
         case "project":
             // Get all projects in user's organizations
             let directProjects = try await Project.query(on: req.db)
@@ -72,9 +72,11 @@ struct ResourceQuotaController: RouteCollection {
                 .all()
             let ouIDs = ous.compactMap { $0.id }
 
-            let ouProjects = !ouIDs.isEmpty ? try await Project.query(on: req.db)
-                .filter(\.$organizationalUnit.$id ~~ ouIDs)
-                .all() : []
+            let ouProjects =
+                !ouIDs.isEmpty
+                ? try await Project.query(on: req.db)
+                    .filter(\.$organizationalUnit.$id ~~ ouIDs)
+                    .all() : []
 
             let allProjects = directProjects + ouProjects
             let projectIDs = allProjects.compactMap { $0.id }
@@ -93,7 +95,7 @@ struct ResourceQuotaController: RouteCollection {
                 return []
             }
             query = query.filter(\.$organizationalUnit.$id ~~ ouIDs)
-                        .filter(\.$project.$id == nil)
+                .filter(\.$project.$id == nil)
         default:
             // No level specified, return all quotas in user's organizations
             query = query.group(.or) { or in
@@ -151,7 +153,9 @@ struct ResourceQuotaController: RouteCollection {
         if let maxVCPUs = updateRequest.maxVCPUs {
             // Ensure new limit isn't below current reservation
             if maxVCPUs < quota.reservedVCPUs {
-                throw Abort(.badRequest, reason: "New vCPU limit (\(maxVCPUs)) cannot be below current reservation (\(quota.reservedVCPUs))")
+                throw Abort(
+                    .badRequest,
+                    reason: "New vCPU limit (\(maxVCPUs)) cannot be below current reservation (\(quota.reservedVCPUs))")
             }
             quota.maxVCPUs = maxVCPUs
         }
@@ -160,7 +164,11 @@ struct ResourceQuotaController: RouteCollection {
             let maxMemoryBytes = maxMemoryGB.gbToBytes
             if maxMemoryBytes < quota.reservedMemory {
                 let currentReservedGB = Double(quota.reservedMemory) / 1024 / 1024 / 1024
-                throw Abort(.badRequest, reason: "New memory limit (\(String(format: "%.2f", maxMemoryGB))GB) cannot be below current reservation (\(String(format: "%.2f", currentReservedGB))GB)")
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "New memory limit (\(String(format: "%.2f", maxMemoryGB))GB) cannot be below current reservation (\(String(format: "%.2f", currentReservedGB))GB)"
+                )
             }
             quota.maxMemory = maxMemoryBytes
         }
@@ -169,14 +177,19 @@ struct ResourceQuotaController: RouteCollection {
             let maxStorageBytes = maxStorageGB.gbToBytes
             if maxStorageBytes < quota.reservedStorage {
                 let currentReservedGB = Double(quota.reservedStorage) / 1024 / 1024 / 1024
-                throw Abort(.badRequest, reason: "New storage limit (\(String(format: "%.2f", maxStorageGB))GB) cannot be below current reservation (\(String(format: "%.2f", currentReservedGB))GB)")
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "New storage limit (\(String(format: "%.2f", maxStorageGB))GB) cannot be below current reservation (\(String(format: "%.2f", currentReservedGB))GB)"
+                )
             }
             quota.maxStorage = maxStorageBytes
         }
 
         if let maxVMs = updateRequest.maxVMs {
             if maxVMs < quota.vmCount {
-                throw Abort(.badRequest, reason: "New VM limit (\(maxVMs)) cannot be below current count (\(quota.vmCount))")
+                throw Abort(
+                    .badRequest, reason: "New VM limit (\(maxVMs)) cannot be below current count (\(quota.vmCount))")
             }
             quota.maxVMs = maxVMs
         }
@@ -286,7 +299,8 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let ouID = req.parameters.get("ouID", as: UUID.self) else {
+            let ouID = req.parameters.get("ouID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or OU ID")
         }
 
@@ -308,7 +322,8 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let ouID = req.parameters.get("ouID", as: UUID.self) else {
+            let ouID = req.parameters.get("ouID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid organization or OU ID")
         }
 

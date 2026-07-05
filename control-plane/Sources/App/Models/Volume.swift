@@ -10,22 +10,22 @@ public enum VolumeFormat: String, Codable, CaseIterable, Sendable {
 
 /// Represents the type of volume
 public enum VolumeType: String, Codable, CaseIterable, Sendable {
-    case boot = "boot"   // Boot disk for VM
-    case data = "data"   // Additional data disk
+    case boot = "boot"  // Boot disk for VM
+    case data = "data"  // Additional data disk
 }
 
 /// Represents the status of a volume during its lifecycle
 public enum VolumeStatus: String, Codable, CaseIterable, Sendable {
-    case creating = "creating"         // Volume is being created
-    case available = "available"       // Volume is ready and not attached
-    case attaching = "attaching"       // Volume is being attached to a VM
-    case attached = "attached"         // Volume is attached to a VM
-    case detaching = "detaching"       // Volume is being detached from a VM
-    case resizing = "resizing"         // Volume is being resized
-    case snapshotting = "snapshotting" // Snapshot is being created
-    case cloning = "cloning"           // Volume is being cloned
-    case deleting = "deleting"         // Volume is being deleted
-    case error = "error"               // An error occurred
+    case creating = "creating"  // Volume is being created
+    case available = "available"  // Volume is ready and not attached
+    case attaching = "attaching"  // Volume is being attached to a VM
+    case attached = "attached"  // Volume is attached to a VM
+    case detaching = "detaching"  // Volume is being detached from a VM
+    case resizing = "resizing"  // Volume is being resized
+    case snapshotting = "snapshotting"  // Snapshot is being created
+    case cloning = "cloning"  // Volume is being cloned
+    case deleting = "deleting"  // Volume is being deleted
+    case error = "error"  // An error occurred
 }
 
 final class Volume: Model, @unchecked Sendable {
@@ -237,9 +237,9 @@ struct CreateVolumeRequest: Content {
     let name: String
     let description: String?
     let projectId: UUID?
-    let sizeGB: Int           // Size in GB for user convenience
-    let format: String?       // "qcow2" or "raw", defaults to qcow2
-    let volumeType: String?   // "boot" or "data", defaults to data
+    let sizeGB: Int  // Size in GB for user convenience
+    let format: String?  // "qcow2" or "raw", defaults to qcow2
+    let volumeType: String?  // "boot" or "data", defaults to data
     let sourceImageId: UUID?  // Create volume from image
 }
 
@@ -250,13 +250,13 @@ struct UpdateVolumeRequest: Content {
 
 struct AttachVolumeRequest: Content {
     let vmId: UUID
-    let deviceName: String?   // e.g., "disk1", auto-generated if not provided
-    let bootOrder: Int?       // Boot priority (lower = higher priority)
-    let readonly: Bool?       // Mount as read-only
+    let deviceName: String?  // e.g., "disk1", auto-generated if not provided
+    let bootOrder: Int?  // Boot priority (lower = higher priority)
+    let readonly: Bool?  // Mount as read-only
 }
 
 struct ResizeVolumeRequest: Content {
-    let sizeGB: Int           // New size in GB (must be larger than current)
+    let sizeGB: Int  // New size in GB (must be larger than current)
 }
 
 struct CloneVolumeRequest: Content {
@@ -337,8 +337,8 @@ enum VolumeError: Error, LocalizedError, Sendable {
     case deleteFailed(String)
     case snapshotFailed(String)
     case cloneFailed(String)
-    case hypervisorMismatch(String)   // Volume and VM on different hypervisors
-    case firecrackerNotSupported      // Firecracker doesn't support volumes
+    case hypervisorMismatch(String)  // Volume and VM on different hypervisors
+    case firecrackerNotSupported  // Firecracker doesn't support volumes
 
     var errorDescription: String? {
         switch self {
@@ -355,7 +355,8 @@ enum VolumeError: Error, LocalizedError, Sendable {
         case .invalidVolumeType(let volumeType):
             return "Invalid volume type: \(volumeType). Must be 'boot' or 'data'."
         case .resizeTooSmall(let current, let requested):
-            return "Cannot resize volume: requested size (\(requested) bytes) must be larger than current size (\(current) bytes)."
+            return
+                "Cannot resize volume: requested size (\(requested) bytes) must be larger than current size (\(current) bytes)."
         case .attachFailed(let reason):
             return "Failed to attach volume: \(reason)"
         case .detachFailed(let reason):
@@ -371,7 +372,8 @@ enum VolumeError: Error, LocalizedError, Sendable {
         case .hypervisorMismatch(let reason):
             return "Hypervisor mismatch: \(reason)"
         case .firecrackerNotSupported:
-            return "Volume operations are not supported for Firecracker VMs. Firecracker only supports a single root disk."
+            return
+                "Volume operations are not supported for Firecracker VMs. Firecracker only supports a single root disk."
         }
     }
 }

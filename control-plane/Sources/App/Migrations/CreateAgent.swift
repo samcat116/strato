@@ -8,7 +8,7 @@ struct CreateAgent: AsyncMigration {
             .case("connecting")
             .case("error")
             .create()
-        
+
         try await database.schema("agents")
             .id()
             .field("name", .string, .required)

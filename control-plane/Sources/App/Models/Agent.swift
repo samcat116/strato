@@ -4,49 +4,49 @@ import StratoShared
 
 final class Agent: Model, Content, @unchecked Sendable {
     static let schema = "agents"
-    
+
     @ID(key: .id)
     var id: UUID?
-    
+
     @Field(key: "name")
     var name: String
-    
+
     @Field(key: "hostname")
     var hostname: String
-    
+
     @Field(key: "version")
     var version: String
-    
+
     @Field(key: "capabilities")
     var capabilities: [String]
-    
+
     @Enum(key: "status")
     var status: AgentStatus
-    
+
     @Field(key: "total_cpu")
     var totalCPU: Int
-    
+
     @Field(key: "total_memory")
     var totalMemory: Int64
-    
+
     @Field(key: "total_disk")
     var totalDisk: Int64
-    
+
     @Field(key: "available_cpu")
     var availableCPU: Int
-    
+
     @Field(key: "available_memory")
     var availableMemory: Int64
-    
+
     @Field(key: "available_disk")
     var availableDisk: Int64
-    
+
     @Timestamp(key: "last_heartbeat", on: .none)
     var lastHeartbeat: Date?
-    
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
-    
+
     @Timestamp(key: "updated_at", on: .update)
     var updatedAt: Date?
 
@@ -62,7 +62,7 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "network_capability")
     var networkCapability: String?
 
-    init() { }
+    init() {}
 
     init(
         id: UUID? = nil,
@@ -94,14 +94,14 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.networkCapability = networkCapability?.rawValue
         self.lastHeartbeat = lastHeartbeat
     }
-    
+
     func updateResources(_ resources: AgentResources) {
         self.availableCPU = resources.availableCPU
         self.availableMemory = resources.availableMemory
         self.availableDisk = resources.availableDisk
         self.lastHeartbeat = Date()
     }
-    
+
     var resources: AgentResources {
         return AgentResources(
             totalCPU: totalCPU,
@@ -139,13 +139,13 @@ extension Agent {
             lastHeartbeat: Date()
         )
     }
-    
+
     /// Check if agent is considered online based on heartbeat
     var isOnline: Bool {
         guard let lastHeartbeat = lastHeartbeat else { return false }
-        return Date().timeIntervalSince(lastHeartbeat) < 60 // 60 seconds timeout
+        return Date().timeIntervalSince(lastHeartbeat) < 60  // 60 seconds timeout
     }
-    
+
     /// Update agent status based on heartbeat age
     func updateStatusBasedOnHeartbeat() {
         if isOnline && status == .offline {

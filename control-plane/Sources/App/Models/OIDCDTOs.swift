@@ -50,11 +50,11 @@ struct OIDCTokenResponse: Content {
 }
 
 struct OIDCIDTokenClaims: Content, JWTPayload, @unchecked Sendable {
-    let iss: String // Issuer
-    let sub: String // Subject
-    let aud: String // Audience
-    let exp: ExpirationClaim    // Expiration time
-    let iat: IssuedAtClaim    // Issued at
+    let iss: String  // Issuer
+    let sub: String  // Subject
+    let aud: String  // Audience
+    let exp: ExpirationClaim  // Expiration time
+    let iat: IssuedAtClaim  // Issued at
     let nonce: String?
     let email: String?
     let name: String?
@@ -91,34 +91,34 @@ struct JWKS: Codable {
 }
 
 struct JWK: Codable {
-    let kty: String // Key type (RSA)
-    let use: String? // Key usage (sig)
-    let kid: String? // Key ID
-    let n: String // RSA modulus (base64url)
-    let e: String // RSA exponent (base64url)
-    let alg: String? // Algorithm
-    
+    let kty: String  // Key type (RSA)
+    let use: String?  // Key usage (sig)
+    let kid: String?  // Key ID
+    let n: String  // RSA modulus (base64url)
+    let e: String  // RSA exponent (base64url)
+    let alg: String?  // Algorithm
+
     func createRSAPublicKey() throws -> RSAKey {
         // Decode the base64url-encoded modulus and exponent (shared, unit-tested decoder)
         let modulusData = try OIDCValidation.decodeBase64URLSafe(n)
         let exponentData = try OIDCValidation.decodeBase64URLSafe(e)
-        
+
         // Create DER representation manually since we can't use internal APIs
         let derData = try createRSAPublicKeyDER(modulus: modulusData, exponent: exponentData)
         let base64String = derData.base64EncodedString()
-        
+
         // Format as PEM
         let pemHeader = "-----BEGIN PUBLIC KEY-----"
         let pemFooter = "-----END PUBLIC KEY-----"
-        
+
         // Split base64 string into 64-character lines
         let chunks = base64String.chunked(into: 64)
         let pemBody = chunks.joined(separator: "\n")
-        
+
         let pemString = "\(pemHeader)\n\(pemBody)\n\(pemFooter)"
         return try RSAKey.public(pem: pemString)
     }
-    
+
     private func createRSAPublicKeyDER(modulus: Data, exponent: Data) throws -> Data {
         // RSA Public Key DER format:
         // SEQUENCE {
@@ -129,61 +129,61 @@ struct JWK: Codable {
         //   BIT STRING {
         //     SEQUENCE {
         //       INTEGER modulus
-        //       INTEGER exponent  
+        //       INTEGER exponent
         //     }
         //   }
         // }
-        
+
         // RSA encryption OID: 1.2.840.113549.1.1.1
         let rsaOID = Data([0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00])
-        
+
         // Build inner SEQUENCE with modulus and exponent
         var innerSequence = Data()
         innerSequence.append(encodeASN1Integer(modulus))
         innerSequence.append(encodeASN1Integer(exponent))
         let innerSequenceData = encodeASN1Sequence(innerSequence)
-        
+
         // Build BIT STRING containing the inner sequence
-        var bitString = Data([0x00]) // unused bits = 0
+        var bitString = Data([0x00])  // unused bits = 0
         bitString.append(innerSequenceData)
         let bitStringData = encodeASN1BitString(bitString)
-        
+
         // Build outer SEQUENCE
         var outerSequence = Data()
         outerSequence.append(rsaOID)
         outerSequence.append(bitStringData)
-        
+
         return encodeASN1Sequence(outerSequence)
     }
-    
+
     private func encodeASN1Integer(_ data: Data) -> Data {
-        var result = Data([0x02]) // INTEGER tag
+        var result = Data([0x02])  // INTEGER tag
         var integerData = data
-        
+
         // Add leading zero if first bit is set (to ensure positive number)
         if let firstByte = integerData.first, firstByte & 0x80 != 0 {
             integerData.insert(0x00, at: 0)
         }
-        
+
         result.append(encodeASN1Length(integerData.count))
         result.append(integerData)
         return result
     }
-    
+
     private func encodeASN1Sequence(_ data: Data) -> Data {
-        var result = Data([0x30]) // SEQUENCE tag
+        var result = Data([0x30])  // SEQUENCE tag
         result.append(encodeASN1Length(data.count))
         result.append(data)
         return result
     }
-    
+
     private func encodeASN1BitString(_ data: Data) -> Data {
-        var result = Data([0x03]) // BIT STRING tag
+        var result = Data([0x03])  // BIT STRING tag
         result.append(encodeASN1Length(data.count))
         result.append(data)
         return result
     }
-    
+
     private func encodeASN1Length(_ length: Int) -> Data {
         if length < 0x80 {
             return Data([UInt8(length)])
@@ -195,7 +195,7 @@ struct JWK: Codable {
             return result
         }
     }
-    
+
 }
 
 extension String {

@@ -9,7 +9,9 @@ import Fluent
 ///   from `HierarchyController` so the controller stays a thin router; each method
 ///   still returns a "not yet implemented" response until the feature is built.
 struct HierarchyMaintenanceService {
-    static func performOrganizationMerge(sourceOrg: Organization, targetOrg: Organization, mergeRequest: MergeOrganizationsRequest, on db: Database) async throws -> MergeOrganizationsResponse {
+    static func performOrganizationMerge(
+        sourceOrg: Organization, targetOrg: Organization, mergeRequest: MergeOrganizationsRequest, on db: Database
+    ) async throws -> MergeOrganizationsResponse {
         // This would be a complex implementation
         // For now, return a basic response
         return MergeOrganizationsResponse(
@@ -28,7 +30,9 @@ struct HierarchyMaintenanceService {
         )
     }
 
-    static func performBulkTransfer(organizationID: UUID, transferRequest: BulkTransferRequest, on db: Database) async throws -> BulkTransferResponse {
+    static func performBulkTransfer(organizationID: UUID, transferRequest: BulkTransferRequest, on db: Database)
+        async throws -> BulkTransferResponse
+    {
         // This would be a complex implementation
         // For now, return a basic response
         return BulkTransferResponse(
@@ -46,7 +50,9 @@ struct HierarchyMaintenanceService {
         return []
     }
 
-    static func performHierarchyRepair(repairRequest: HierarchyRepairRequest, on db: Database) async throws -> HierarchyRepairResponse {
+    static func performHierarchyRepair(repairRequest: HierarchyRepairRequest, on db: Database) async throws
+        -> HierarchyRepairResponse
+    {
         // This would perform actual repairs
         // For now, return a basic response
         return HierarchyRepairResponse(
