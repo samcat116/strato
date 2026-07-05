@@ -3,36 +3,18 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ImageTable, UploadImageDialog } from "@/components/images";
 import { useImages, useInvalidateImages } from "@/lib/hooks/use-images";
-import { useProjectsForOrganization } from "@/lib/hooks/use-projects";
-import { useOrganization } from "@/providers/organization-provider";
+import { useProjectContext } from "@/providers";
 import { HardDrive, Loader2, FolderPlus } from "lucide-react";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { useState, useMemo } from "react";
 
 export default function ImagesPage() {
-  const { currentOrg } = useOrganization();
-  const [userSelectedProjectId, setUserSelectedProjectId] = useState<
-    string | null
-  >(null);
+  // Images are scoped to the project selected in the header switcher.
+  const {
+    currentProject,
+    projects,
+    isLoading: projectsLoading,
+  } = useProjectContext();
 
-  // Fetch projects for the current organization
-  const { data: projects, isLoading: projectsLoading } =
-    useProjectsForOrganization(currentOrg?.id);
-
-  // Derive the selected project ID: use user selection if set, otherwise default to first project
-  const selectedProjectId = useMemo(() => {
-    if (userSelectedProjectId) return userSelectedProjectId;
-    if (projects && projects.length > 0) return projects[0].id;
-    return null;
-  }, [userSelectedProjectId, projects]);
-
-  const projectId = selectedProjectId || "";
+  const projectId = currentProject?.id || "";
   const { data: images, isLoading: imagesLoading } = useImages(
     projectId || undefined
   );
@@ -51,7 +33,7 @@ export default function ImagesPage() {
   }
 
   // No projects state
-  if (!projects || projects.length === 0) {
+  if (projects.length === 0) {
     return (
       <div className="container mx-auto py-6 space-y-6">
         <div className="flex items-center gap-3">
@@ -94,43 +76,17 @@ export default function ImagesPage() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-4">
-          {projects.length > 1 && (
-            <Select
-              value={selectedProjectId || undefined}
-              onValueChange={setUserSelectedProjectId}
-            >
-              <SelectTrigger className="w-48 bg-gray-900 border-gray-700 text-gray-100">
-                <SelectValue placeholder="Select project" />
-              </SelectTrigger>
-              <SelectContent className="bg-gray-800 border-gray-700">
-                {projects.map((project) => (
-                  <SelectItem
-                    key={project.id}
-                    value={project.id}
-                    className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
-                  >
-                    {project.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          {projectId && (
-            <UploadImageDialog
-              projectId={projectId}
-              onSuccess={invalidateImages}
-            />
-          )}
-        </div>
+        {projectId && (
+          <UploadImageDialog projectId={projectId} onSuccess={invalidateImages} />
+        )}
       </div>
 
       <Card className="bg-gray-800 border-gray-700">
         <CardHeader>
           <CardTitle className="text-gray-100">
-            {projects.length === 1
-              ? `Images in ${projects[0].name}`
-              : "All Images"}
+            {currentProject
+              ? `Images in ${currentProject.name}`
+              : "Images"}
           </CardTitle>
         </CardHeader>
         <CardContent>

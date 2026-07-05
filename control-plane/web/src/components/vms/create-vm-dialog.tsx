@@ -16,8 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { vmsApi } from "@/lib/api/vms";
 import { useImages } from "@/lib/hooks/use-images";
-import { useProjectsForOrganization } from "@/lib/hooks/use-projects";
-import { useOrganization } from "@/providers/organization-provider";
+import { useProjectContext } from "@/providers";
 import { toast } from "sonner";
 
 interface CreateVMDialogProps {
@@ -46,12 +45,9 @@ export function CreateVMDialog({
     disk: "50",
   });
 
-  // Get current organization and its projects
-  const { currentOrg } = useOrganization();
-  const { data: projects } = useProjectsForOrganization(currentOrg?.id);
-
-  // Use the first project's ID if available
-  const projectId = projects?.[0]?.id;
+  // The VM is created in the project selected in the header switcher.
+  const { currentProject } = useProjectContext();
+  const projectId = currentProject?.id;
   const { data: images, isLoading: imagesLoading } = useImages(projectId);
 
   // Filter to only show ready images with valid IDs (memoized to prevent dependency changes on every render)
@@ -104,6 +100,7 @@ export function CreateVMDialog({
       await vmsApi.create({
         name: formData.name,
         description: formData.description || undefined,
+        projectId,
         ...(sourceType === "image"
           ? { imageId: formData.imageId }
           : { templateName: formData.templateName }),
