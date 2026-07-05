@@ -16,8 +16,11 @@ import {
   Building2,
   FolderTree,
   Gauge,
+  ShieldCheck,
+  Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/providers";
 
 interface SidebarSectionProps {
   id: string;
@@ -120,6 +123,8 @@ interface SidebarProps {
 }
 
 export function Sidebar({ onCreateVM, onAddAgent }: SidebarProps) {
+  const { user } = useAuth();
+
   return (
     <aside className="w-64 bg-gray-800 border-r border-gray-700 overflow-y-auto">
       <nav className="px-3 py-4 space-y-1">
@@ -222,6 +227,22 @@ export function Sidebar({ onCreateVM, onAddAgent }: SidebarProps) {
             </span>
           </SidebarLink>
         </SidebarSection>
+
+        {/* Administration Section (system admins only) */}
+        {user?.isSystemAdmin && (
+          <SidebarSection
+            id="admin-section"
+            title="Administration"
+            icon={<ShieldCheck className="h-4 w-4" />}
+          >
+            <SidebarLink href="/admin/users">
+              <span className="flex items-center">
+                <Users className="h-4 w-4 mr-2" />
+                Users
+              </span>
+            </SidebarLink>
+          </SidebarSection>
+        )}
       </nav>
     </aside>
   );

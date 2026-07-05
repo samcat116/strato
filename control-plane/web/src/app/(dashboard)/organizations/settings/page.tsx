@@ -15,6 +15,7 @@ import { useOrganizationMembers } from "@/lib/hooks";
 import { MembersTable, AddMemberDialog } from "@/components/organization-members";
 import { GroupsSection } from "@/components/organization-groups";
 import { OrganizationalUnitsSection } from "@/components/organizational-units";
+import { SCIMTokensSection } from "@/components/scim-tokens";
 import { useAuth, useOrganization } from "@/providers";
 import { toast } from "sonner";
 
@@ -261,7 +262,7 @@ export default function OrganizationSettingsPage() {
         </TabsContent>
 
         {/* Authentication Tab */}
-        <TabsContent value="auth">
+        <TabsContent value="auth" className="space-y-6">
           <Card className="bg-gray-800 border-gray-700">
             <CardHeader>
               <CardTitle className="text-lg font-semibold text-gray-100">
@@ -275,6 +276,8 @@ export default function OrganizationSettingsPage() {
               </p>
             </CardContent>
           </Card>
+
+          <SCIMTokensSection orgId={id} canManage={canManageMembers} />
         </TabsContent>
       </Tabs>
 
