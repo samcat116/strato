@@ -371,8 +371,28 @@ enum SpiceDBError: Error, Sendable {
 
 // MARK: - Mock Implementation for Testing
 
+/// Records the relationship writes a `MockSpiceDBService` receives so tests can
+/// assert on what would have been written to SpiceDB (which is stubbed out in the
+/// testing environment). Install one via `Application.spicedbMockRecorder`.
+actor SpiceDBMockRecorder {
+    struct RelationshipWrite: Sendable, Equatable {
+        let entity: String
+        let entityId: String
+        let relation: String
+        let subject: String
+        let subjectId: String
+    }
+
+    private(set) var writes: [RelationshipWrite] = []
+
+    func record(_ write: RelationshipWrite) {
+        writes.append(write)
+    }
+}
+
 struct MockSpiceDBService: SpiceDBServiceProtocol {
     var checkPermissionResult: Bool = true
+    var recorder: SpiceDBMockRecorder?
 
     func readSchema() async throws -> String? {
         return "mock schema"
@@ -387,7 +407,15 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
     }
 
     func writeRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String) async throws {
-        // Mock implementation - do nothing
+        await recorder?.record(
+            SpiceDBMockRecorder.RelationshipWrite(
+                entity: entity,
+                entityId: entityId,
+                relation: relation,
+                subject: subject,
+                subjectId: subjectId
+            )
+        )
     }
 
     func deleteRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String) async throws {
@@ -429,6 +457,18 @@ extension Application {
         set { storage[SpiceDBMockAllowsKey.self] = newValue }
     }
 
+    /// Storage key for the testing SpiceDB mock's relationship-write recorder.
+    private struct SpiceDBMockRecorderKey: StorageKey {
+        typealias Value = SpiceDBMockRecorder
+    }
+
+    /// In testing mode, an optional recorder that captures the relationship writes
+    /// sent to the mock SpiceDB so tests can assert on them. Unset by default.
+    var spicedbMockRecorder: SpiceDBMockRecorder? {
+        get { storage[SpiceDBMockRecorderKey.self] }
+        set { storage[SpiceDBMockRecorderKey.self] = newValue }
+    }
+
     /// The SpiceDB service, constructed from the required environment configuration.
     ///
     /// Throws rather than calling `fatalError` when configuration is missing: this
@@ -440,7 +480,7 @@ extension Application {
         get throws {
             // In testing mode, use a mock implementation
             if self.environment == .testing {
-                return MockSpiceDBService(checkPermissionResult: spicedbMockAllows)
+                return MockSpiceDBService(checkPermissionResult: spicedbMockAllows, recorder: spicedbMockRecorder)
             }
 
             guard let endpoint = Environment.get("SPICEDB_ENDPOINT") else {

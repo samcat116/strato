@@ -309,7 +309,7 @@ struct ProjectController: RouteCollection {
             createRequest: createRequest,
             organizationID: organizationID,
             ouID: nil,
-            on: req.db
+            on: req
         )
 
         return ProjectResponse(from: project, vmCount: 0)
@@ -386,7 +386,7 @@ struct ProjectController: RouteCollection {
             createRequest: createRequest,
             organizationID: nil,
             ouID: ouID,
-            on: req.db
+            on: req
         )
 
         return ProjectResponse(from: project, vmCount: 0)
@@ -730,8 +730,9 @@ struct ProjectController: RouteCollection {
         createRequest: CreateProjectRequest,
         organizationID: UUID?,
         ouID: UUID?,
-        on db: Database
+        on req: Request
     ) async throws -> Project {
+        let db = req.db
         let environments = createRequest.environments ?? DeploymentEnvironment.defaults.map { $0.name }
         let defaultEnvironment = createRequest.defaultEnvironment ?? "development"
 
@@ -756,6 +757,25 @@ struct ProjectController: RouteCollection {
         // Update path with actual ID
         project.path = try await project.buildPath(on: db)
         try await project.save(on: db)
+
+        // Write the SpiceDB project→organization relationship using the *persisted*
+        // project id. Without this tuple, project-scoped permissions that resolve via
+        // `organization->admin` (update_project, image/VM/volume creation, ...) can't
+        // resolve, so even the org admin who created the project gets 403s. OU-scoped
+        // projects still resolve to their root organization. See issue #267.
+        guard let projectId = project.id else {
+            throw Abort(.internalServerError, reason: "Project was not assigned an ID after save")
+        }
+        guard let rootOrganizationID = try await project.getRootOrganizationId(on: db) else {
+            throw Abort(.internalServerError, reason: "Project has no organization")
+        }
+        try await req.spicedb.writeRelationship(
+            entity: "project",
+            entityId: projectId.uuidString,
+            relation: "organization",
+            subject: "organization",
+            subjectId: rootOrganizationID.uuidString
+        )
 
         return project
     }

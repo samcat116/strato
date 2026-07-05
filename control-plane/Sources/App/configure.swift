@@ -186,6 +186,9 @@ public func configure(_ app: Application) async throws {
     // first writer on a fresh stack and crashes with a 400 without a schema.
     if app.environment != .testing {
         try await ensureSpiceDBSchema(app)
+        // Backfill project→organization tuples for projects created before the
+        // creation path wrote them, so project-scoped permissions resolve (issue #267).
+        try await backfillProjectOrganizationRelationships(app)
     }
 
     // Initialize the image download signing key (generates if not exists)
