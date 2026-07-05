@@ -46,7 +46,7 @@ struct VolumeAgentSelectionTests {
     func testMixedClusterSelectsQEMUAgent() throws {
         let agents = [
             makeAgent(id: "fc-only", hypervisors: [hypervisor(.firecracker)]),
-            makeAgent(id: "qemu-capable", hypervisors: [hypervisor(.qemu)])
+            makeAgent(id: "qemu-capable", hypervisors: [hypervisor(.qemu)]),
         ]
 
         let selected = try #require(VolumeService.selectVolumeAgent(from: agents))
@@ -57,7 +57,7 @@ struct VolumeAgentSelectionTests {
     func testFirecrackerOnlyCluster() {
         let agents = [
             makeAgent(id: "fc-1", hypervisors: [hypervisor(.firecracker)]),
-            makeAgent(id: "fc-2", hypervisors: [hypervisor(.firecracker)])
+            makeAgent(id: "fc-2", hypervisors: [hypervisor(.firecracker)]),
         ]
 
         #expect(VolumeService.selectVolumeAgent(from: agents) == nil)
@@ -67,7 +67,7 @@ struct VolumeAgentSelectionTests {
     func testOfflineQEMUAgent() {
         let agents = [
             makeAgent(id: "qemu-offline", hypervisors: [hypervisor(.qemu)], status: .offline),
-            makeAgent(id: "fc-online", hypervisors: [hypervisor(.firecracker)])
+            makeAgent(id: "fc-online", hypervisors: [hypervisor(.firecracker)]),
         ]
 
         #expect(VolumeService.selectVolumeAgent(from: agents) == nil)
@@ -77,7 +77,7 @@ struct VolumeAgentSelectionTests {
     func testUnavailableQEMUProbe() {
         let agents = [
             makeAgent(id: "qemu-broken", hypervisors: [hypervisor(.qemu, available: false)]),
-            makeAgent(id: "qemu-good", hypervisors: [hypervisor(.qemu)])
+            makeAgent(id: "qemu-good", hypervisors: [hypervisor(.qemu)]),
         ]
 
         #expect(VolumeService.selectVolumeAgent(from: agents)?.id == "qemu-good")
