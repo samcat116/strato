@@ -996,6 +996,9 @@ extension Agent {
             case .volumeSnapshot:
                 let message = try envelope.decode(as: VolumeSnapshotMessage.self)
                 await handleVolumeSnapshot(message)
+            case .volumeSnapshotDelete:
+                let message = try envelope.decode(as: VolumeSnapshotDeleteMessage.self)
+                await handleVolumeSnapshotDelete(message)
             case .volumeClone:
                 let message = try envelope.decode(as: VolumeCloneMessage.self)
                 await handleVolumeClone(message)
@@ -1857,6 +1860,35 @@ extension Agent {
         } catch {
             await sendError(for: message.requestId, error: "Failed to create snapshot: \(error.localizedDescription)")
             logger.error("Failed to create snapshot", metadata: [
+                "volumeId": .string(message.volumeId),
+                "snapshotId": .string(message.snapshotId),
+                "error": .string(error.localizedDescription)
+            ])
+        }
+    }
+
+    private func handleVolumeSnapshotDelete(_ message: VolumeSnapshotDeleteMessage) async {
+        logger.info("Deleting volume snapshot", metadata: [
+            "volumeId": .string(message.volumeId),
+            "snapshotId": .string(message.snapshotId),
+            "path": .string(message.snapshotPath)
+        ])
+
+        guard let volumeService = volumeService else {
+            await sendError(for: message.requestId, error: "Volume service not available")
+            return
+        }
+
+        do {
+            try await volumeService.deleteSnapshot(snapshotPath: message.snapshotPath)
+            await sendSuccess(for: message.requestId, message: "Snapshot deleted successfully")
+            logger.info("Volume snapshot deleted successfully", metadata: [
+                "volumeId": .string(message.volumeId),
+                "snapshotId": .string(message.snapshotId)
+            ])
+        } catch {
+            await sendError(for: message.requestId, error: "Failed to delete snapshot: \(error.localizedDescription)")
+            logger.error("Failed to delete snapshot", metadata: [
                 "volumeId": .string(message.volumeId),
                 "snapshotId": .string(message.snapshotId),
                 "error": .string(error.localizedDescription)

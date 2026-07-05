@@ -328,6 +328,45 @@ actor VolumeService {
         return status?.storagePath
     }
 
+    /// Request an agent to delete a volume snapshot from storage and await
+    /// its confirmation. Snapshots that never materialized on an agent (no
+    /// hypervisor or no storage path, e.g. a failed creation) have no backing
+    /// file to remove, so agent deletion is skipped.
+    func requestVolumeSnapshotDeletion(
+        volume: Volume,
+        snapshot: VolumeSnapshot
+    ) async throws {
+        guard let hypervisorId = volume.hypervisorId else {
+            logger.info("Volume has no hypervisor, skipping agent snapshot deletion", metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "snapshotId": .string(snapshot.id!.uuidString)
+            ])
+            return
+        }
+
+        guard let snapshotPath = snapshot.storagePath else {
+            logger.info("Snapshot has no storage path, skipping agent deletion", metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "snapshotId": .string(snapshot.id!.uuidString)
+            ])
+            return
+        }
+
+        let message = VolumeSnapshotDeleteMessage(
+            volumeId: volume.id!.uuidString,
+            snapshotId: snapshot.id!.uuidString,
+            snapshotPath: snapshotPath
+        )
+
+        _ = try await sendVolumeRequest(message, toAgent: hypervisorId)
+
+        logger.info("Agent confirmed snapshot deletion", metadata: [
+            "volumeId": .string(volume.id!.uuidString),
+            "snapshotId": .string(snapshot.id!.uuidString),
+            "agentId": .string(hypervisorId)
+        ])
+    }
+
     /// Request an agent to clone a volume and await its confirmation.
     /// Returns the target volume's storage path as reported by the agent.
     func requestVolumeClone(

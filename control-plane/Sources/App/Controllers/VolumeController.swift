@@ -741,7 +741,21 @@ struct VolumeController: RouteCollection {
         snapshot.status = .deleting
         try await snapshot.save(on: req.db)
 
-        // TODO: Send message to agent to delete the snapshot from storage
+        // Delete the snapshot file on the hypervisor first; the database
+        // record is only removed once the agent confirms. Snapshots that
+        // never materialized on an agent are deleted from the database
+        // directly.
+        do {
+            try await req.application.volumeService.requestVolumeSnapshotDeletion(
+                volume: volume,
+                snapshot: snapshot
+            )
+        } catch {
+            snapshot.status = .error
+            snapshot.errorMessage = "Failed to delete snapshot on hypervisor: \(error.localizedDescription)"
+            try await snapshot.save(on: req.db)
+            throw Abort(.badGateway, reason: "Failed to delete snapshot on hypervisor: \(error.localizedDescription)")
+        }
 
         // Delete SpiceDB relationships
         try await req.spicedb.deleteRelationship(

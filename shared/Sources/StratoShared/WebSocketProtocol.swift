@@ -37,6 +37,7 @@ public enum MessageType: String, Codable, Sendable {
     case volumeDetach = "volume_detach"
     case volumeResize = "volume_resize"
     case volumeSnapshot = "volume_snapshot"
+    case volumeSnapshotDelete = "volume_snapshot_delete"
     case volumeClone = "volume_clone"
     case volumeInfo = "volume_info"
 
@@ -913,6 +914,32 @@ public struct VolumeSnapshotMessage: WebSocketMessage {
         self.volumeId = volumeId
         self.snapshotId = snapshotId
         self.volumePath = volumePath
+        self.snapshotPath = snapshotPath
+    }
+}
+
+/// Message to delete a snapshot of a volume from storage
+public struct VolumeSnapshotDeleteMessage: WebSocketMessage {
+    public var type: MessageType { .volumeSnapshotDelete }
+    public let requestId: String
+    public let timestamp: Date
+    public let volumeId: String
+    public let snapshotId: String
+    /// Path of the snapshot file on the agent, as reported by the agent when
+    /// the snapshot was created.
+    public let snapshotPath: String
+
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        volumeId: String,
+        snapshotId: String,
+        snapshotPath: String
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.volumeId = volumeId
+        self.snapshotId = snapshotId
         self.snapshotPath = snapshotPath
     }
 }
