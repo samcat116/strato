@@ -249,7 +249,7 @@ struct VMController: RouteCollection {
         // Reserve quota and persist the VM in one transaction: enforcement checks,
         // the reservation bump, the initial insert, and the path update all commit
         // together or roll back together, so a quota rejection leaves nothing behind.
-        try await req.db.transaction { db in
+        let networkInterfaces: [VMNetworkInterface] = try await req.db.transaction { db in
             // Enforce and reserve applicable project/OU/org quotas before the VM row
             // exists. Throws Abort(.forbidden) naming the quota if it would be exceeded.
             try await QuotaEnforcementService.reserve(
@@ -270,7 +270,6 @@ struct VMController: RouteCollection {
             if let template = resolvedTemplate {
                 // Template-based paths
                 vm.diskPath = template.generateDiskPath(for: vmID)
-                vm.macAddress = template.generateMacAddress()
                 vm.kernelPath = template.kernelPath
                 vm.initramfsPath = template.initramfsPath
                 vm.firmwarePath = template.firmwarePath
@@ -278,7 +277,6 @@ struct VMController: RouteCollection {
             } else {
                 // Image-based paths - disk will be created by agent from cached image
                 vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
-                vm.macAddress = VM.generateMACAddress()
             }
 
             // Set up console sockets to align with agent VM storage path
@@ -287,6 +285,16 @@ struct VMController: RouteCollection {
 
             // Update VM with generated paths
             try await vm.update(on: db)
+
+            // Every VM starts with one NIC on the default network
+            let networkInterface = VMNetworkInterface(
+                vmID: vmID,
+                macAddress: resolvedTemplate?.generateMacAddress()
+                    ?? VMNetworkInterface.generateMACAddress()
+            )
+            try await networkInterface.save(on: db)
+
+            return [networkInterface]
         }
 
         let vmID = try vm.requireID()
@@ -329,10 +337,10 @@ struct VMController: RouteCollection {
 
             if let template = template {
                 // Template-based creation
-                vmSpec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+                vmSpec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: networkInterfaces)
             } else if let image = image {
                 // Image-based creation
-                vmSpec = VMSpecBuilder.buildVMSpec(from: vm, image: image)
+                vmSpec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: networkInterfaces)
             } else {
                 throw Abort(.internalServerError, reason: "Neither template nor image available")
             }

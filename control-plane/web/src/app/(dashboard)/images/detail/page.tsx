@@ -1,22 +1,27 @@
 "use client";
 
+import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
   Cpu,
+  Download,
   HardDrive,
   MemoryStick,
   Clock,
   FileType,
   Hash,
+  Pencil,
   Settings,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { EditImageDialog } from "@/components/images/edit-image-dialog";
 import { useImage } from "@/lib/hooks/use-images";
+import { imagesApi } from "@/lib/api/images";
 
 function ImageStatusBadge({ status }: { status: string }) {
   const statusStyles: Record<string, string> = {
@@ -40,6 +45,7 @@ export default function ImageDetailPage() {
   const id = searchParams.get("id") || "";
   const projectId = searchParams.get("projectId") || "";
   const { data: image, isLoading, error } = useImage(projectId, id);
+  const [editOpen, setEditOpen] = useState(false);
 
   if (!id || !projectId) {
     return (
@@ -120,7 +126,37 @@ export default function ImageDetailPage() {
             <p className="text-gray-400 mt-1">{image.description}</p>
           )}
         </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            className="border-gray-600"
+            disabled={image.status !== "ready"}
+            onClick={() =>
+              window.open(imagesApi.getDownloadURL(projectId, id), "_blank")
+            }
+          >
+            <Download className="h-4 w-4 mr-2" />
+            Download
+          </Button>
+          <Button
+            variant="outline"
+            className="border-gray-600"
+            onClick={() => setEditOpen(true)}
+          >
+            <Pencil className="h-4 w-4 mr-2" />
+            Edit
+          </Button>
+        </div>
       </div>
+
+      {editOpen && (
+        <EditImageDialog
+          image={image}
+          projectId={projectId}
+          open={editOpen}
+          onOpenChange={setEditOpen}
+        />
+      )}
 
       {/* Overview */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

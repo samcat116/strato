@@ -1,4 +1,11 @@
 export { useVMs, useVM, useInvalidateVMs } from "./use-vms";
+export {
+  useVolumes,
+  useVolume,
+  useVolumeSnapshots,
+  useSnapshotsForVolumes,
+  useInvalidateVolumes,
+} from "./use-volumes";
 export { useAgents, useAgent, useAgentTokens, useInvalidateAgents } from "./use-agents";
 export {
   useImages,
@@ -22,6 +29,19 @@ export {
 export { useConsole } from "./use-console";
 export { useVMLogs, useInvalidateVMLogs } from "./use-vm-logs";
 export { useAPIKeys, useCreateAPIKey, useRevokeAPIKey } from "./use-api-keys";
+export {
+  useUsers,
+  useUpdateUser,
+  useDeleteUser,
+  userErrorMessage,
+} from "./use-users";
+export {
+  useSCIMTokens,
+  useCreateSCIMToken,
+  useUpdateSCIMToken,
+  useDeleteSCIMToken,
+  scimTokenErrorMessage,
+} from "./use-scim-tokens";
 export {
   useOrganizationMembers,
   useAddMember,

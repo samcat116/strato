@@ -16,6 +16,11 @@ export interface CreateUserRequest {
   displayName: string;
 }
 
+export interface UpdateUserRequest {
+  displayName?: string;
+  email?: string;
+}
+
 export type VMStatus =
   | "Running"
   | "Shutdown"
@@ -229,6 +234,42 @@ export interface SessionResponse {
   user: User;
 }
 
+// SCIM provisioning tokens (org-scoped, admin only)
+export interface SCIMToken {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  organizationId: string;
+  isActive: boolean;
+  expiresAt?: string;
+  lastUsedAt?: string;
+  createdAt?: string;
+}
+
+export interface CreateSCIMTokenRequest {
+  name: string;
+  expiresInDays?: number;
+}
+
+/**
+ * Response returned when creating a SCIM token. The full `token` is only ever
+ * returned here — it is never retrievable again after creation.
+ */
+export interface CreateSCIMTokenResponse {
+  id: string;
+  name: string;
+  token: string;
+  tokenPrefix: string;
+  organizationId: string;
+  expiresAt?: string;
+  createdAt?: string;
+}
+
+export interface UpdateSCIMTokenRequest {
+  name?: string;
+  isActive?: boolean;
+}
+
 // Request types
 export interface CreateVMRequest {
   name: string;
@@ -329,6 +370,102 @@ export interface ImageStatusResponse {
   errorMessage?: string;
   size?: number;
   checksum?: string;
+}
+
+// Volume types
+export type VolumeStatus =
+  | "creating"
+  | "available"
+  | "attaching"
+  | "attached"
+  | "detaching"
+  | "resizing"
+  | "snapshotting"
+  | "cloning"
+  | "deleting"
+  | "error";
+
+export type VolumeFormat = "qcow2" | "raw";
+
+export type VolumeType = "boot" | "data";
+
+export interface Volume {
+  id?: string;
+  name: string;
+  description: string;
+  projectId?: string;
+  size: number;
+  sizeFormatted: string;
+  format: VolumeFormat;
+  volumeType: VolumeType;
+  status: VolumeStatus;
+  errorMessage?: string;
+  hypervisorId?: string;
+  vmId?: string;
+  deviceName?: string;
+  bootOrder?: number;
+  sourceImageId?: string;
+  sourceVolumeId?: string;
+  createdById?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type SnapshotStatus =
+  | "creating"
+  | "available"
+  | "restoring"
+  | "deleting"
+  | "error";
+
+export interface VolumeSnapshot {
+  id?: string;
+  name: string;
+  description: string;
+  volumeId?: string;
+  projectId?: string;
+  size: number;
+  sizeFormatted: string;
+  status: SnapshotStatus;
+  errorMessage?: string;
+  createdById?: string;
+  createdAt?: string;
+}
+
+export interface CreateVolumeRequest {
+  name: string;
+  description?: string;
+  projectId?: string;
+  sizeGB: number;
+  format?: VolumeFormat;
+  volumeType?: VolumeType;
+  sourceImageId?: string;
+}
+
+export interface UpdateVolumeRequest {
+  name?: string;
+  description?: string;
+}
+
+export interface AttachVolumeRequest {
+  vmId: string;
+  deviceName?: string;
+  bootOrder?: number;
+  readonly?: boolean;
+}
+
+export interface ResizeVolumeRequest {
+  sizeGB: number;
+}
+
+export interface CloneVolumeRequest {
+  name: string;
+  description?: string;
+}
+
+export interface CreateVolumeSnapshotRequest {
+  name: string;
+  description?: string;
 }
 
 // VM Log types

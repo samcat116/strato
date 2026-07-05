@@ -27,6 +27,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { vmsApi } from "@/lib/api/vms";
+import { friendlyErrorMessage } from "@/lib/errors";
 import { toast } from "sonner";
 import type { VM } from "@/types/api";
 
@@ -76,9 +77,7 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
       }
       onActionComplete?.();
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : `Failed to ${action} VM`
-      );
+      toast.error(friendlyErrorMessage(error, `Failed to ${action} VM`));
     } finally {
       setIsLoading(false);
       setActiveAction(null);

@@ -55,10 +55,13 @@ actor Agent {
     private let logger: Logger
 
     private var websocketClient: WebSocketClient?
-    private var qemuService: (any HypervisorService)?
-    #if os(Linux)
-    private var firecrackerService: FirecrackerService?
-    #endif
+    // Registry of hypervisor drivers keyed by backend type, populated once in
+    // start(). This registry and `getHypervisorService(for:)` are the only
+    // places message handling may reach the concrete services — everything
+    // else goes through the `HypervisorService` protocol, so adding a backend
+    // means one new registration here (plus the enum case and its data tables
+    // in HypervisorTypes.swift), not new switch sites.
+    private var hypervisorServices: [HypervisorType: any HypervisorService] = [:]
     private var networkService: (any NetworkServiceProtocol)?
     private var imageCacheService: ImageCacheService?
     private var volumeService: VolumeService?
@@ -263,17 +266,17 @@ actor Agent {
 
         logger.info("Initializing QEMU service")
         #if canImport(SwiftQEMU)
-        qemuService = QEMUService(
+        hypervisorServices[.qemu] = QEMUService(
             logger: logger, networkService: networkService, imageCacheService: imageCacheService,
             vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath,
             hardwareAccelerationEnabled: hardwareAccelerationEnabled)
         #else
-        qemuService = MockHypervisorService(logger: logger, hypervisorType: .qemu)
+        hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
         #endif
 
         #if os(Linux)
         logger.info("Initializing Firecracker service (Linux only)")
-        firecrackerService = FirecrackerService(
+        hypervisorServices[.firecracker] = FirecrackerService(
             logger: logger,
             networkService: networkService,
             imageCacheService: imageCacheService,
@@ -407,10 +410,7 @@ actor Agent {
             await client.disconnect()
         }
         websocketClient = nil
-        qemuService = nil
-        #if os(Linux)
-        firecrackerService = nil
-        #endif
+        hypervisorServices.removeAll()
 
         if let service = networkService {
             await service.disconnect()
@@ -899,7 +899,7 @@ actor Agent {
         var reservedCPU = 0
         var reservedMemory: Int64 = 0
 
-        for service in hypervisorServices {
+        for service in hypervisorServices.values {
             let reserved = await service.reservedResources()
             reservedCPU += reserved.vcpus
             reservedMemory += reserved.memoryBytes
@@ -940,29 +940,12 @@ actor Agent {
     private func getRunningVMList() async -> [String] {
         var vmList: [String] = []
 
-        for service in hypervisorServices {
+        for service in hypervisorServices.values {
             let vms = await service.listVMs()
             vmList.append(contentsOf: vms)
         }
 
         return vmList
-    }
-
-    /// All hypervisor backends this agent is running. Together with
-    /// `getHypervisorService(for:)`, this is the only place message handling
-    /// may reach the concrete services — everything else goes through the
-    /// `HypervisorService` protocol so new backends get honest behavior.
-    private var hypervisorServices: [any HypervisorService] {
-        var services: [any HypervisorService] = []
-        if let qemu = qemuService {
-            services.append(qemu)
-        }
-        #if os(Linux)
-        if let firecracker = firecrackerService {
-            services.append(firecracker)
-        }
-        #endif
-        return services
     }
 }
 
@@ -1104,22 +1087,19 @@ extension Agent {
         }
     }
 
-    /// Get the hypervisor service for a VM based on its type
+    /// Get the hypervisor service for a VM based on its type. A missing
+    /// registry entry means no driver for that backend runs on this host
+    /// (e.g. Firecracker on macOS). No silent fallback to another driver: the
+    /// scheduler should never place such a VM here, so surface the mismatch
+    /// as an error instead of booting the VM under a different hypervisor
+    /// than requested.
     private func getHypervisorService(for hypervisorType: HypervisorType) -> (any HypervisorService)? {
-        switch hypervisorType {
-        case .qemu:
-            return qemuService
-        case .firecracker:
-            #if os(Linux)
-            return firecrackerService
-            #else
-            // No silent fallback to QEMU: the scheduler should never place a
-            // Firecracker VM here, so surface the mismatch as an error instead
-            // of booting the VM under a different hypervisor than requested.
-            logger.error("Firecracker is only available on Linux; rejecting request for unsupported hypervisor")
+        guard let service = hypervisorServices[hypervisorType] else {
+            logger.error(
+                "No \(hypervisorType.displayName) driver on this host; rejecting request for unsupported hypervisor")
             return nil
-            #endif
         }
+        return service
     }
 
     /// Get the hypervisor service for an existing VM
