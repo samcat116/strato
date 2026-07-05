@@ -1,0 +1,95 @@
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_147c01f479fdc5::t_bfa4dc8c08a165 63
+  s_147c01f479fdc5::t_b1d8f704d284f6 518
+  s_147c01f479fdc5::t_61ab46e8ade470 434-435
+control-plane/Sources/App/Services/HierarchyMaintenanceService.swift
+  s_147c01f479fdc5::t_7e7cbaa00108be 1-59
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_147c01f479fdc5::t_930b08518b441a 235,258,294,318,366,393,453,455-458,460-463,469,471-474,476-479
+  s_147c01f479fdc5::t_b2dfd9318ce644 446
+control-plane/Sources/App/Services/QuotaUsageService.swift
+  s_147c01f479fdc5::t_bb1a2fd5509145 1-49
+control-plane/Tests/AppTests/VolumeNamingTests.swift
+  s_147c01f479fdc5::t_70bc0a610020c0 1-59
+control-plane/Tests/AppTests/QuotaComplianceServiceTests.swift
+  s_147c01f479fdc5::t_bc04d2002f360f 1-92
+control-plane/Sources/App/Models/Project.swift
+  s_147c01f479fdc5::t_9fb22e76260350 265-283
+control-plane/Sources/App/Services/HierarchySearchService.swift
+  s_147c01f479fdc5::t_2a29aee3ca1a4e 1-177
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_147c01f479fdc5::t_9fb22e76260350 444-481
+control-plane/Sources/App/Extensions/ByteConversion.swift
+  s_147c01f479fdc5::t_e405f2ed6a1d46 1-18
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_147c01f479fdc5::t_930b08518b441a 45,67,138,178,246,277-278,310
+  s_147c01f479fdc5::t_b2b98b73a2d1a3 219-224
+  s_147c01f479fdc5::t_99349213e65385 287
+  s_147c01f479fdc5::t_d4aa347450e861 180-185
+  s_147c01f479fdc5::t_c3b6a128f08c92 336
+  s_147c01f479fdc5::t_19df0b14359bb9 363
+  s_147c01f479fdc5::t_9cb20d24b83d37 314
+  s_147c01f479fdc5::t_0e2bf32f9dcf48 147-149,156
+  s_147c01f479fdc5::t_33a40fc63b57e7 248
+  s_147c01f479fdc5::t_1994f0409ab178 52
+control-plane/Sources/App/Models/OIDCDTOs.swift
+  s_147c01f479fdc5::t_2408e713d142bf 1-224
+control-plane/Sources/App/Services/ProjectStatsService.swift
+  s_147c01f479fdc5::t_1ab3d47a01c0c8 1-39
+control-plane/Tests/AppTests/HierarchyPathResolverTests.swift
+  s_147c01f479fdc5::t_dff81c50eb072f 1-101
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_147c01f479fdc5::t_fe3dda10e9deda 490
+  s_147c01f479fdc5::t_930b08518b441a 113,146,230,257,296,329,364,413,441,483,507,582,586
+control-plane/Sources/App/Services/HierarchyPathResolver.swift
+  s_147c01f479fdc5::t_5d92f51feecdae 1-21,24,26,31,33-65
+  s_147c01f479fdc5::t_c6d746a6659064 22-23,25,27-30,32
+control-plane/Sources/App/Services/OIDCValidation.swift
+  s_147c01f479fdc5::t_e98c9d70dccb0e 1-128
+control-plane/Sources/App/Services/OrganizationAccessService.swift
+  s_147c01f479fdc5::t_dda18028fe7e6b 1-67
+control-plane/Tests/AppTests/OrganizationAccessServiceTests.swift
+  s_147c01f479fdc5::t_1cbb13e527e4ad 1-160
+control-plane/Tests/AppTests/OIDCValidationTests.swift
+  s_147c01f479fdc5::t_9e6e80f2408a54 1-94
+control-plane/Sources/App/Services/AgentService.swift
+  s_147c01f479fdc5::t_376c373b7a05eb 631-641,643
+control-plane/Sources/App/Models/HierarchyDTOs.swift
+  s_147c01f479fdc5::t_b8b78d101d5afd 131-288
+control-plane/Sources/App/Services/AgentService+Types.swift
+  s_147c01f479fdc5::t_b0fc543b48e364 1-82
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_147c01f479fdc5::t_930b08518b441a 42,85,124,192,258,303,325,384,427
+control-plane/Tests/AppTests/AgentSchedulableTransformTests.swift
+  s_147c01f479fdc5::t_c5c563feddbc4e 1-67
+control-plane/Sources/App/Services/HierarchyTreeBuilder.swift
+  s_147c01f479fdc5::t_73aa8931b0e821 1-168
+control-plane/Tests/AppTests/ProjectQuotaServiceTests.swift
+  s_147c01f479fdc5::t_cf8d733ec9fa11 1-102,104-123,125-127
+  s_147c01f479fdc5::t_fc1a82b90eeefa 103,124
+control-plane/Sources/App/Controllers/GroupController.swift
+  s_147c01f479fdc5::t_930b08518b441a 39,69,96,145,193,248,275,330,373
+control-plane/Sources/App/Services/VolumeNaming.swift
+  s_147c01f479fdc5::t_2f1bf254d31cd3 1-40
+control-plane/Sources/App/Services/QuotaComplianceService.swift
+  s_147c01f479fdc5::t_f21be9f2608bef 1-88
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_147c01f479fdc5::t_5e0a8d5e06dc31 121-123
+  s_147c01f479fdc5::t_0ab80dea884ecd 773
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "27ffee35ac234ae60df53475bccae60959c7b38d",
+  "prompts": {},
+  "sessions": {
+    "s_147c01f479fdc5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "39662ce1-7a30-4b1f-8cfb-d3eb529768cf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
