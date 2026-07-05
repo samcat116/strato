@@ -1,0 +1,25 @@
+.github/workflows/build.yaml
+  s_533413c7c4564b::t_f5b5972ac27932 281-282,288-290
+  s_533413c7c4564b::t_8f4e6be67e72ea 230-232,253-273,291,293,296,298,301
+  s_533413c7c4564b::t_e70555f1a555bf 233-237,292,295,297,300
+  s_533413c7c4564b::t_ff4e82f1afffa2 294,299
+  s_533413c7c4564b::t_cc80e10bb6b104 274-277,285,287
+  s_533413c7c4564b::t_9f2bf409a9eb72 238-252
+  s_533413c7c4564b::t_92cfddff0900c2 278-280,283-284,286
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "53a53f380c8ce711d7d6956db2fe49a5f35e8dae",
+  "prompts": {},
+  "sessions": {
+    "s_533413c7c4564b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "adb76446-5582-4bfa-a681-9b9f70494726",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": null
+    }
+  }
+}
