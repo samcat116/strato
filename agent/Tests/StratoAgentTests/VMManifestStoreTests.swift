@@ -111,6 +111,31 @@ struct VMManifestStoreTests {
         #expect(loaded["vm-new"]?.hypervisorType == .firecracker)
     }
 
+    @Test("Legacy manifest survives when the unified rewrite fails")
+    func legacySurvivesFailedRewrite() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let legacyPath = dir + "/qemu-manifest.json"
+        try JSONEncoder().encode(["vm-a": makeSpec()]).write(to: URL(fileURLWithPath: legacyPath))
+
+        // A regular file where the unified manifest's parent directory should be
+        // makes createDirectory (and therefore save) fail.
+        let blocker = dir + "/blocker"
+        FileManager.default.createFile(atPath: blocker, contents: Data())
+        let store = VMManifestStore(
+            path: blocker + "/vm-manifest.json",
+            legacyQEMUManifestPath: legacyPath,
+            logger: Logger(label: "test")
+        )
+
+        // The entries are still returned for this process's orphan tracking, and
+        // the legacy file is retained so the next start can retry the migration.
+        let loaded = store.load()
+        #expect(loaded["vm-a"]?.hypervisorType == .qemu)
+        #expect(FileManager.default.fileExists(atPath: legacyPath))
+        #expect(store.load()["vm-a"]?.hypervisorType == .qemu)
+    }
+
     @Test("Corrupt manifest degrades to empty instead of crashing")
     func corruptManifest() throws {
         let dir = try makeTempDir()

@@ -58,7 +58,9 @@ public struct VMManifestStore {
     }
 
     /// Atomically writes the current manifest to disk.
-    public func save(_ manifest: [String: VMManifestEntry]) {
+    /// - Returns: `true` when the write succeeded; failures are logged.
+    @discardableResult
+    public func save(_ manifest: [String: VMManifestEntry]) -> Bool {
         do {
             let directory = (path as NSString).deletingLastPathComponent
             if !directory.isEmpty {
@@ -67,8 +69,10 @@ public struct VMManifestStore {
             let data = try JSONEncoder().encode(manifest)
             // Atomic write so a crash mid-write can't leave a truncated manifest.
             try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+            return true
         } catch {
             logger.error("Failed to write VM manifest at \(path): \(error)")
+            return false
         }
     }
 
@@ -94,9 +98,12 @@ public struct VMManifestStore {
                 logger.warning("Migrated \(migrated.count) VM manifest entr(ies) from the QEMU-only manifest format")
             }
             // Persist in the unified format before dropping the legacy file, so a
-            // crash between the two steps can't lose the entries.
-            save(migrated)
-            try? FileManager.default.removeItem(atPath: legacyPath)
+            // crash — or a failed write (disk full, permissions) — between the two
+            // steps can't destroy the only readable manifest. On failure the legacy
+            // file stays put and the next start retries the migration.
+            if save(migrated) {
+                try? FileManager.default.removeItem(atPath: legacyPath)
+            }
             return migrated
         } catch {
             logger.error("Failed to read legacy VM manifest at \(legacyPath): \(error)")
