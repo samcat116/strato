@@ -1,0 +1,27 @@
+control-plane/Tests/AppTests/VolumeAuthorizationTests.swift
+  s_a655ca3f21107d::t_7ed5912b965c1b 1-119
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_a655ca3f21107d::t_449358bb29777f 132-147
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_a655ca3f21107d::t_517c2e661ecfbb 410
+  s_a655ca3f21107d::t_4bbc0aed4685e1 464-477
+  s_a655ca3f21107d::t_e50cc8c4f6d4ad 501-505
+  s_a655ca3f21107d::t_19a00751576c99 446
+  s_a655ca3f21107d::t_3d7e72ce8f72c3 395-398
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0873209ca0fbe9bec587cc264b32edd559979736",
+  "prompts": {},
+  "sessions": {
+    "s_a655ca3f21107d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6c1eace1-4f69-4d16-bb69-be6dfb391f28",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
