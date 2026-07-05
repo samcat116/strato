@@ -1,0 +1,120 @@
+control-plane/web/src/components/organization-groups/group-form-dialog.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 1-174
+control-plane/Sources/App/configure.swift
+  s_6d10c001a4a7b5::t_e25af128987047 411-412
+control-plane/web/src/components/organizational-units/organizational-units-section.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 1-97
+control-plane/web/src/lib/api/groups.ts
+  s_6d10c001a4a7b5::t_e25af128987047 1-57
+control-plane/web/src/lib/hooks/use-projects.ts
+  s_6d10c001a4a7b5::t_e25af128987047 2-7,36-47,52-54,67,69,78-93
+control-plane/web/src/app/(dashboard)/images/page.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 6,10-15,17,36,79-81,87-89
+control-plane/web/src/lib/hooks/use-groups.ts
+  s_6d10c001a4a7b5::t_e25af128987047 1-112
+agent/Tests/StratoAgentTests/MessageOrderingTests.swift
+  s_6d10c001a4a7b5::t_e25af128987047 205-208,212-214
+control-plane/web/src/providers/project-provider.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 1-100
+control-plane/web/src/app/(dashboard)/vms/page.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 3,9,16-23,33-35,51-52,56-60
+agent/Sources/StratoAgent/Agent.swift
+  s_6d10c001a4a7b5::t_e25af128987047 692-698,1041-1043,2065-2093,2095-2096
+  s_6d10c001a4a7b5::t_a05baadce4e97b 2094,2097-2098
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_6d10c001a4a7b5::t_e25af128987047 40,923-944
+  s_6d10c001a4a7b5::t_4fa674479389da 945-947
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 19,48-50,103
+control-plane/web/src/components/layout/header.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 7,20
+control-plane/web/src/components/projects/transfer-project-dialog.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 1-157
+control-plane/web/src/components/organization-groups/groups-table.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 1-152
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_6d10c001a4a7b5::t_e25af128987047 111
+control-plane/web/src/components/organizational-units/ou-form-dialog.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 1-199
+control-plane/web/src/components/organizational-units/index.ts
+  s_6d10c001a4a7b5::t_e25af128987047 1-4
+control-plane/web/src/types/api.ts
+  s_6d10c001a4a7b5::t_e25af128987047 65-128
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_6d10c001a4a7b5::t_e25af128987047 265-267,272-284,613-615,617-618,623-624,626-628,631-643,661-685
+  s_6d10c001a4a7b5::t_471a45ffff9ce9 686
+control-plane/Sources/App/Services/AgentService.swift
+  s_6d10c001a4a7b5::t_e25af128987047 75-78,88-98,1001-1004,1009-1010,1013
+control-plane/web/src/components/layout/project-switcher.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 1-83
+control-plane/Sources/App/Models/VolumeSnapshot.swift
+  s_6d10c001a4a7b5::t_e25af128987047 138-140,142
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_6d10c001a4a7b5::t_e25af128987047 37,58
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_6d10c001a4a7b5::t_e25af128987047 327-361,401-479
+  s_6d10c001a4a7b5::t_8afd5c3db540d7 480
+control-plane/web/src/components/organization-groups/manage-group-members-dialog.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 1-244
+control-plane/web/src/lib/api/index.ts
+  s_6d10c001a4a7b5::t_e25af128987047 12-13
+control-plane/web/src/components/organizational-units/ou-tree.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 1-268
+control-plane/Tests/AppTests/VolumeAuthorizationTests.swift
+  s_6d10c001a4a7b5::t_e25af128987047 1-130
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_6d10c001a4a7b5::t_e25af128987047 138-153,816,824-838
+control-plane/web/src/app/(dashboard)/organizations/settings/page.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 16-17,131-142,253-261
+  s_6d10c001a4a7b5::t_5a2400bcbe8ca9 262
+control-plane/web/src/lib/api/organizational-units.ts
+  s_6d10c001a4a7b5::t_e25af128987047 1-54
+control-plane/web/src/app/(dashboard)/projects/page.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 1-101
+control-plane/web/src/lib/api/projects.ts
+  s_6d10c001a4a7b5::t_e25af128987047 18-36,56,58-62,66,74-77
+  s_6d10c001a4a7b5::t_3d218d02903d12 78
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_6d10c001a4a7b5::t_e25af128987047 398-401,414,456,474-487,511-515
+agent/Sources/StratoAgent/VolumeService.swift
+  s_6d10c001a4a7b5::t_e25af128987047 272-286
+control-plane/web/src/components/projects/projects-table.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 1-174
+control-plane/web/src/components/layout/sidebar.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 15,134-138
+  s_6d10c001a4a7b5::t_8fa2c9dae4ac96 139-141
+control-plane/web/src/components/projects/index.ts
+  s_6d10c001a4a7b5::t_e25af128987047 1-3
+control-plane/web/src/lib/hooks/index.ts
+  s_6d10c001a4a7b5::t_e25af128987047 20,32-49
+control-plane/web/src/providers/index.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 7,15-18,27
+control-plane/Sources/App/Services/VolumeService.swift
+  s_6d10c001a4a7b5::t_e25af128987047 371-421,562,585-586
+control-plane/web/src/components/projects/project-form-dialog.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 1-309
+control-plane/web/src/components/organization-groups/index.ts
+  s_6d10c001a4a7b5::t_e25af128987047 1-4
+control-plane/web/src/lib/hooks/use-organizational-units.ts
+  s_6d10c001a4a7b5::t_e25af128987047 1-87
+control-plane/web/src/components/organization-groups/groups-section.tsx
+  s_6d10c001a4a7b5::t_e25af128987047 1-99
+bun.lock
+  s_6d10c001a4a7b5::t_846615e2dc52f1 1-358
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "69d036fb29da592012e4e2406bf233fd4dfd9c68",
+  "prompts": {},
+  "sessions": {
+    "s_6d10c001a4a7b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "50d4918c-41e7-4462-88f4-f3a42d7c12ee",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
