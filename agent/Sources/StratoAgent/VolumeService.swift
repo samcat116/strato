@@ -82,19 +82,13 @@ actor VolumeService {
         )
 
         // Run qemu-img create
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: qemuImgPath)
-        process.arguments = ["create", "-f", format, volumePath, "\(size)"]
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: qemuImgPath),
+            arguments: ["create", "-f", format, volumePath, "\(size)"]
+        )
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        if process.terminationStatus != 0 {
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if result.terminationStatus != 0 {
+            let output = result.combinedOutput
             logger.error("qemu-img create failed", metadata: [
                 "volumeId": .string(volumeId),
                 "output": .string(output)
@@ -176,19 +170,13 @@ actor VolumeService {
         ])
 
         // Run qemu-img resize
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: qemuImgPath)
-        process.arguments = ["resize", volumePath, "\(newSize)"]
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: qemuImgPath),
+            arguments: ["resize", volumePath, "\(newSize)"]
+        )
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        if process.terminationStatus != 0 {
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if result.terminationStatus != 0 {
+            let output = result.combinedOutput
             logger.error("qemu-img resize failed", metadata: [
                 "path": .string(volumePath),
                 "output": .string(output)
@@ -224,25 +212,19 @@ actor VolumeService {
         )
 
         // Create snapshot as a new qcow2 with the volume as backing file
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: qemuImgPath)
-        process.arguments = [
-            "create",
-            "-f", "qcow2",
-            "-b", volumePath,
-            "-F", "qcow2",
-            snapshotPath
-        ]
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: qemuImgPath),
+            arguments: [
+                "create",
+                "-f", "qcow2",
+                "-b", volumePath,
+                "-F", "qcow2",
+                snapshotPath
+            ]
+        )
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        if process.terminationStatus != 0 {
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if result.terminationStatus != 0 {
+            let output = result.combinedOutput
             logger.error("qemu-img snapshot create failed", metadata: [
                 "volumeId": .string(volumeId),
                 "output": .string(output)
@@ -293,25 +275,19 @@ actor VolumeService {
         )
 
         // Use qemu-img convert to create a full copy (breaks backing file chain)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: qemuImgPath)
-        process.arguments = [
-            "convert",
-            "-f", "qcow2",
-            "-O", "qcow2",
-            sourcePath,
-            targetPath
-        ]
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: qemuImgPath),
+            arguments: [
+                "convert",
+                "-f", "qcow2",
+                "-O", "qcow2",
+                sourcePath,
+                targetPath
+            ]
+        )
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        if process.terminationStatus != 0 {
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if result.terminationStatus != 0 {
+            let output = result.combinedOutput
             logger.error("qemu-img clone failed", metadata: [
                 "sourceVolumeId": .string(sourceVolumeId),
                 "output": .string(output)
@@ -334,23 +310,16 @@ actor VolumeService {
     func getVolumeInfo(volumePath: String) async throws -> VolumeInfoResult {
         logger.debug("Getting volume info", metadata: ["path": .string(volumePath)])
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: qemuImgPath)
-        process.arguments = ["info", "--output=json", volumePath]
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: qemuImgPath),
+            arguments: ["info", "--output=json", volumePath]
+        )
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-
-        try process.run()
-        process.waitUntilExit()
-
-        if process.terminationStatus != 0 {
+        if result.terminationStatus != 0 {
             throw VolumeServiceError.infoFailed("qemu-img info failed")
         }
 
-        let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
-        let info = try JSONDecoder().decode(QemuImgInfo.self, from: outputData)
+        let info = try JSONDecoder().decode(QemuImgInfo.self, from: result.standardOutput)
 
         return VolumeInfoResult(
             actualSize: info.actualSize,

@@ -15,7 +15,7 @@ import Darwin
 public actor UnixSocketHTTPClient {
     private let socketPath: String
     private let logger: Logger
-    private var fileHandle: FileHandle?
+    private var socketFD: Int32?
 
     public init(socketPath: String, logger: Logger = Logger(label: "SwiftFirecracker.HTTPClient")) {
         self.socketPath = socketPath
@@ -44,9 +44,27 @@ public actor UnixSocketHTTPClient {
         // Connect to Unix socket
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
+
+        // sun_path is a fixed-size C buffer (108 bytes on Linux, 104 on macOS).
+        // Guard against overflow before copying — a path that doesn't fit, with
+        // room for the trailing NUL, cannot be represented.
+        let sunPathCapacity = MemoryLayout.size(ofValue: addr.sun_path)
+        let pathBytes = socketPath.utf8
+        guard pathBytes.count < sunPathCapacity else {
+            close(sock)
+            throw FirecrackerError.invalidSocketPath(
+                "Socket path is \(pathBytes.count) bytes; must be < \(sunPathCapacity): \(socketPath)"
+            )
+        }
+
         socketPath.withCString { ptr in
             withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
-                _ = strcpy(sunPath.pointer(to: \.0)!, ptr)
+                sunPath.withMemoryRebound(to: CChar.self, capacity: sunPathCapacity) { dest in
+                    // Bounded copy: strncpy never writes past `sunPathCapacity - 1`,
+                    // and the guard above guarantees the source fits with a NUL.
+                    strncpy(dest, ptr, sunPathCapacity - 1)
+                    dest[sunPathCapacity - 1] = 0
+                }
             }
         }
 
@@ -65,13 +83,16 @@ public actor UnixSocketHTTPClient {
             throw FirecrackerError.connectionFailed("Failed to connect: \(errno)")
         }
 
-        self.fileHandle = FileHandle(fileDescriptor: sock, closeOnDealloc: true)
+        self.socketFD = sock
         logger.info("Connected to Firecracker socket", metadata: ["path": "\(socketPath)"])
     }
 
     /// Disconnects from the socket
     public func disconnect() {
-        fileHandle = nil
+        if let fd = socketFD {
+            close(fd)
+            socketFD = nil
+        }
         logger.debug("Disconnected from socket")
     }
 
@@ -81,7 +102,7 @@ public actor UnixSocketHTTPClient {
         path: String,
         body: Data? = nil
     ) async throws -> HTTPResponse {
-        guard let handle = fileHandle else {
+        guard let fd = socketFD else {
             throw FirecrackerError.notConnected
         }
 
@@ -109,10 +130,10 @@ public actor UnixSocketHTTPClient {
             requestData.append(body)
         }
 
-        try handle.write(contentsOf: requestData)
+        try await SocketIO.writeAll(fd: fd, data: requestData)
 
         // Read response
-        let response = try await readHTTPResponse(from: handle)
+        let response = try await readHTTPResponse(fd: fd)
 
         logger.debug("Received response", metadata: [
             "statusCode": "\(response.statusCode)",
@@ -123,14 +144,14 @@ public actor UnixSocketHTTPClient {
     }
 
     /// Reads an HTTP response from the socket
-    private func readHTTPResponse(from handle: FileHandle) async throws -> HTTPResponse {
+    private func readHTTPResponse(fd: Int32) async throws -> HTTPResponse {
         var responseData = Data()
         var headerComplete = false
         var contentLength = 0
 
         // Read response in chunks
         while true {
-            let chunk = try handle.read(upToCount: 4096) ?? Data()
+            let chunk = try await SocketIO.read(fd: fd, maxLength: 4096)
             if chunk.isEmpty {
                 break
             }
@@ -217,6 +238,73 @@ public actor UnixSocketHTTPClient {
         let body = bodySection.flatMap { $0.isEmpty ? nil : Data($0.utf8) }
 
         return HTTPResponse(statusCode: statusCode, headers: headers, body: body)
+    }
+}
+
+/// Blocking socket reads/writes moved off the Swift concurrency cooperative
+/// thread pool.
+///
+/// Raw `read(2)`/`write(2)` on a Unix socket block the calling thread until data
+/// is available or drained. Invoking them directly in an `async` method would tie
+/// up a cooperative-pool thread; instead each call is dispatched to a global queue
+/// and its result delivered through a continuation, so the awaiting task suspends
+/// rather than blocks. The socket file descriptor is a plain `Int32`, so it crosses
+/// the concurrency boundary without a `Sendable` concern.
+private enum SocketIO {
+    /// Writes the entire buffer, looping over short writes and retrying `EINTR`.
+    static func writeAll(fd: Int32, data: Data) async throws {
+        try await runBlocking {
+            try data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+                guard let base = raw.baseAddress else { return }
+                var offset = 0
+                while offset < raw.count {
+                    let written = write(fd, base + offset, raw.count - offset)
+                    if written < 0 {
+                        if errno == EINTR { continue }
+                        throw FirecrackerError.connectionFailed("Socket write failed: \(errno)")
+                    }
+                    if written == 0 {
+                        throw FirecrackerError.connectionFailed("Socket write returned 0 (connection closed)")
+                    }
+                    offset += written
+                }
+            }
+        }
+    }
+
+    /// Reads up to `maxLength` bytes; an empty result signals EOF.
+    static func read(fd: Int32, maxLength: Int) async throws -> Data {
+        try await runBlocking {
+            var buffer = [UInt8](repeating: 0, count: maxLength)
+            while true {
+                let count = buffer.withUnsafeMutableBytes { ptr in
+                    #if os(Linux)
+                    Glibc.read(fd, ptr.baseAddress, maxLength)
+                    #else
+                    Darwin.read(fd, ptr.baseAddress, maxLength)
+                    #endif
+                }
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    throw FirecrackerError.connectionFailed("Socket read failed: \(errno)")
+                }
+                return Data(buffer.prefix(count))
+            }
+        }
+    }
+
+    private static func runBlocking<T: Sendable>(
+        _ work: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async {
+                do {
+                    continuation.resume(returning: try work())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 }
 
