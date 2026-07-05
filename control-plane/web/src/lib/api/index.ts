@@ -9,3 +9,5 @@ export { agentsApi } from "./agents";
 export { imagesApi } from "./images";
 export { projectsApi } from "./projects";
 export { apiKeysApi } from "./api-keys";
+export { quotasApi } from "./quotas";
+export { hierarchyApi } from "./hierarchy";
