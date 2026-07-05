@@ -52,6 +52,10 @@ struct QuotaEnforcementService {
     /// transaction as the VM insert so a rejection — or a later failure to persist
     /// the VM — rolls the reservations back atomically.
     ///
+    /// Each quota's counters are first resynced to real in-scope usage so the
+    /// admission check has an accurate baseline even for a quota created *after* some
+    /// of its VMs already existed (whose reservations `createQuota` never backfilled).
+    ///
     /// Note: reservation reads are not row-locked, so under `READ COMMITTED` two
     /// concurrent creates against the same quota could both pass the check and
     /// slightly over-commit. Enforcement is best-effort accounting rather than a hard
@@ -66,8 +70,13 @@ struct QuotaEnforcementService {
     ) async throws {
         let quotas = try await applicableQuotas(for: project, environment: environment, on: db)
 
-        // First pass validates every quota before mutating any, so a rejection never
-        // leaves a partial reservation even within the enclosing transaction.
+        // Resync every quota to real usage, then validate all of them before mutating
+        // any, so a rejection never leaves a partial reservation even within the
+        // enclosing transaction.
+        for quota in quotas {
+            try await resyncReservations(quota, on: db)
+        }
+
         for quota in quotas {
             let check = quota.canAccommodateVM(vcpus: vcpus, memory: memory, storage: storage)
             guard check.allowed else {
@@ -79,18 +88,20 @@ struct QuotaEnforcementService {
             }
         }
 
+        // Adds the incoming VM to the resynced baseline; after the VM row is inserted
+        // this equals the quota's true in-scope usage.
         for quota in quotas {
             try quota.reserveResources(vcpus: vcpus, memory: memory, storage: storage)
             try await quota.save(on: db)
         }
     }
 
-    /// Releases a VM's reserved resources from every quota that currently governs it.
+    /// Recomputes every quota governing `vm` from the VMs still in its scope.
     ///
-    /// Resolves the same scope as `reserve` and clamps at zero. Assumes quotas are
-    /// configured before the VMs they govern (the usual case, and enforced by the
-    /// controller's refusal to delete a quota with live reservations); a quota
-    /// created between two VMs' lifecycles is a known accounting edge case.
+    /// Call *after* the VM row is deleted so the deleted VM drops out of the recount.
+    /// Recomputing (rather than decrementing the VM's own numbers) keeps a delete from
+    /// erasing reservations that belong to other VMs — e.g. when the quota was created
+    /// after some VMs already existed and so never counted them in the first place.
     static func release(
         for vm: VM,
         on db: Database
@@ -99,8 +110,20 @@ struct QuotaEnforcementService {
         let quotas = try await applicableQuotas(for: project, environment: vm.environment, on: db)
 
         for quota in quotas {
-            quota.releaseResources(vcpus: vm.cpu, memory: vm.memory, storage: vm.disk)
+            try await resyncReservations(quota, on: db)
             try await quota.save(on: db)
         }
+    }
+
+    /// Sets a quota's reservation counters to the exact usage of the VMs currently in
+    /// its scope. Sums the raw `Int64` byte fields (not the lossy GB figures in
+    /// `QuotaUsage`) so memory/storage stay byte-accurate. Does not persist — the
+    /// caller saves.
+    private static func resyncReservations(_ quota: ResourceQuota, on db: Database) async throws {
+        let (_, vms) = try await quota.calculateActualUsage(on: db)
+        quota.reservedVCPUs = vms.reduce(0) { $0 + $1.cpu }
+        quota.reservedMemory = vms.reduce(0) { $0 + $1.memory }
+        quota.reservedStorage = vms.reduce(0) { $0 + $1.disk }
+        quota.vmCount = vms.count
     }
 }

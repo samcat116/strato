@@ -186,6 +186,39 @@ final class QuotaEnforcementTests {
         }
     }
 
+    @Test("release recomputes usage and does not erase reservations of other VMs")
+    func releaseDoesNotEraseOtherReservations() async throws {
+        try await withApp { app, _, _, project, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+
+            // vmA predates the quota, so the quota is created with zero reservations
+            // that never accounted for it (mirrors ResourceQuotaController.createQuota).
+            let vmA = try await builder.createVM(name: "a", project: project)  // cpu 2
+            let quota = try await builder.createResourceQuota(
+                name: "late", maxVCPUs: 100, project: project)
+
+            // vmB is created under the quota. reserve resyncs to real usage (vmA) then
+            // adds vmB, so the counters reflect both once vmB's row exists.
+            try await QuotaEnforcementService.reserve(
+                for: project, environment: "development",
+                vcpus: 2, memory: gb(2), storage: gb(10), on: app.db)
+            _ = try await builder.createVM(name: "b", project: project)  // cpu 2
+
+            let afterReserve = try await ResourceQuota.find(quota.id, on: app.db)!
+            #expect(afterReserve.reservedVCPUs == 4)  // vmA + vmB
+            #expect(afterReserve.vmCount == 2)
+
+            // Deleting vmA must not drag vmB's reservation down with it: a blind
+            // decrement of vmA's 2 vCPUs would erase vmB and drop the count to zero.
+            try await vmA.delete(on: app.db)
+            try await QuotaEnforcementService.release(for: vmA, on: app.db)
+
+            let afterDelete = try await ResourceQuota.find(quota.id, on: app.db)!
+            #expect(afterDelete.reservedVCPUs == 2)  // vmB preserved
+            #expect(afterDelete.vmCount == 1)
+        }
+    }
+
     // MARK: - HTTP integration
 
     @Test("POST /api/vms is rejected (403) when a project quota is exceeded")

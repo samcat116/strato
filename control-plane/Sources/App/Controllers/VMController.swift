@@ -401,11 +401,12 @@ struct VMController: RouteCollection {
             }
         }
 
-        // Release the VM's reserved quota and delete it in one transaction so the
-        // reservation counters and the VM row stay consistent.
+        // Delete the VM, then recompute its quotas from the remaining VMs, in one
+        // transaction so the reservation counters and the VM row stay consistent.
+        // Deletion happens first so the removed VM drops out of the recount.
         try await req.db.transaction { db in
-            try await QuotaEnforcementService.release(for: vm, on: db)
             try await vm.delete(on: db)
+            try await QuotaEnforcementService.release(for: vm, on: db)
         }
         return .ok
     }
