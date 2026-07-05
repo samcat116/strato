@@ -12,10 +12,9 @@ const nextConfig: NextConfig = {
   // them — mirror the same headers here.
   //
   // Only unconditional headers belong here: `headers()` is evaluated during
-  // `next build` and baked into the routes manifest, so runtime env (e.g.
-  // HTTP_TLS_ENABLED) can't influence it. HSTS is therefore emitted by the
-  // TLS-terminating runtime layer instead — nginx in the compose deployment
-  // (gated on the forwarded proto), and the TLS ingress in Kubernetes.
+  // `next build` and baked into the routes manifest, so it can't gate on runtime
+  // TLS state. HSTS, which must only be sent over HTTPS, is emitted per request
+  // in middleware.ts (keyed on X-Forwarded-Proto) instead.
   //
   // No strict CSP: Next.js ships inline hydration scripts a `default-src 'self'`
   // policy would block; X-Frame-Options still covers clickjacking.
