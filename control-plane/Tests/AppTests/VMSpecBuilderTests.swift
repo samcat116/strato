@@ -57,9 +57,6 @@ struct VMSpecBuilderTests {
         sharedMemory: Bool = false,
         diskPath: String? = "/var/lib/strato/disks/test.qcow2",
         readonlyDisk: Bool = false,
-        macAddress: String? = "52:54:00:12:34:56",
-        ipAddress: String? = "192.168.1.10",
-        networkMask: String? = "255.255.255.0",
         consoleSocket: String? = "/var/run/console.sock",
         serialSocket: String? = "/var/run/serial.sock",
         consoleMode: ConsoleMode = .pty,
@@ -84,9 +81,6 @@ struct VMSpecBuilderTests {
         vm.sharedMemory = sharedMemory
         vm.diskPath = diskPath
         vm.readonlyDisk = readonlyDisk
-        vm.macAddress = macAddress
-        vm.ipAddress = ipAddress
-        vm.networkMask = networkMask
         vm.consoleSocket = consoleSocket
         vm.serialSocket = serialSocket
         vm.consoleMode = consoleMode
@@ -96,6 +90,27 @@ struct VMSpecBuilderTests {
         vm.firmwarePath = firmwarePath
         vm.cmdline = cmdline
         return vm
+    }
+
+    func createTestInterface(
+        network: String = "default",
+        macAddress: String = "52:54:00:12:34:56",
+        ipAddress: String? = "192.168.1.10",
+        netmask: String? = "255.255.255.0",
+        mtu: Int? = nil,
+        deviceName: String = "net0",
+        orderIndex: Int = 0
+    ) -> VMNetworkInterface {
+        return VMNetworkInterface(
+            vmID: UUID(),
+            network: network,
+            macAddress: macAddress,
+            ipAddress: ipAddress,
+            netmask: netmask,
+            mtu: mtu,
+            deviceName: deviceName,
+            orderIndex: orderIndex
+        )
     }
 
     struct TestAbort: Error {}
@@ -119,7 +134,7 @@ struct VMSpecBuilderTests {
         let template = createTestTemplate()
         let vm = createTestVM()
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
 
         #expect(spec.cpus == 2)
         #expect(spec.maxCpus == 4)
@@ -133,7 +148,7 @@ struct VMSpecBuilderTests {
         let template = createTestTemplate()
         let vm = createTestVM(cpu: 8, maxCpu: 16)
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
 
         #expect(spec.cpus == 8)
         #expect(spec.maxCpus == 16)
@@ -144,7 +159,7 @@ struct VMSpecBuilderTests {
         let template = createTestTemplate()
         let vm = createTestVM(memory: 4096)
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
 
         #expect(spec.memoryBytes == 4096)
     }
@@ -154,7 +169,7 @@ struct VMSpecBuilderTests {
         let template = createTestTemplate()
         let vm = createTestVM(hugepages: true)
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
 
         #expect(spec.hugepages == true)
     }
@@ -164,7 +179,7 @@ struct VMSpecBuilderTests {
         let template = createTestTemplate()
         let vm = createTestVM(sharedMemory: true)
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
 
         #expect(spec.sharedMemory == true)
     }
@@ -186,7 +201,7 @@ struct VMSpecBuilderTests {
             cmdline: "vm cmdline"
         )
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
         let boot = try directKernel(spec)
 
         #expect(boot.kernel == "/vm/kernel")
@@ -209,7 +224,7 @@ struct VMSpecBuilderTests {
             cmdline: nil
         )
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
         let boot = try directKernel(spec)
 
         #expect(boot.kernel == "/template/kernel")
@@ -231,7 +246,7 @@ struct VMSpecBuilderTests {
             cmdline: "cmdline"
         )
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
         let boot = try directKernel(spec)
 
         #expect(boot.kernel == "/vm/kernel")
@@ -244,7 +259,7 @@ struct VMSpecBuilderTests {
         let template = createTestTemplate(kernelPath: "")
         let vm = createTestVM(kernelPath: nil, firmwarePath: "/vm/firmware")
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
 
         guard case .disk(let firmware) = spec.boot else {
             Issue.record("Expected disk (firmware) boot, got \(spec.boot)")
@@ -260,7 +275,7 @@ struct VMSpecBuilderTests {
         let template = createTestTemplate()
         let vm = createTestVM(diskPath: "/var/lib/strato/disks/vm.qcow2", readonlyDisk: false)
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
 
         #expect(spec.volumes.count == 1)
         #expect(spec.volumes.first?.storagePath == "/var/lib/strato/disks/vm.qcow2")
@@ -274,7 +289,7 @@ struct VMSpecBuilderTests {
         let template = createTestTemplate()
         let vm = createTestVM(diskPath: "/var/lib/strato/disks/vm.qcow2", readonlyDisk: true)
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
 
         #expect(spec.volumes.first?.readonly == true)
     }
@@ -284,23 +299,24 @@ struct VMSpecBuilderTests {
         let template = createTestTemplate()
         let vm = createTestVM(diskPath: nil)
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
 
         #expect(spec.volumes.isEmpty)
     }
 
     // MARK: - Network Tests
 
-    @Test("VMSpecBuilder creates network spec when MAC address is set")
+    @Test("VMSpecBuilder maps a network interface to a network spec")
     func testNetworkConfiguration() throws {
         let template = createTestTemplate()
-        let vm = createTestVM(
+        let vm = createTestVM()
+        let interface = createTestInterface(
             macAddress: "52:54:00:12:34:56",
             ipAddress: "192.168.1.10",
-            networkMask: "255.255.255.0"
+            netmask: "255.255.255.0"
         )
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [interface])
 
         #expect(spec.networks.count == 1)
         #expect(spec.networks.first?.network == "default")
@@ -312,26 +328,49 @@ struct VMSpecBuilderTests {
     @Test("VMSpecBuilder does not fabricate an IP when none is assigned")
     func testNoFabricatedIPAddress() throws {
         let template = createTestTemplate()
-        let vm = createTestVM(
-            macAddress: "52:54:00:12:34:56",
-            ipAddress: nil,
-            networkMask: nil
-        )
+        let vm = createTestVM()
+        let interface = createTestInterface(ipAddress: nil, netmask: nil)
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [interface])
 
         #expect(spec.networks.first?.ipAddress == nil)
         #expect(spec.networks.first?.netmask == nil)
     }
 
-    @Test("VMSpecBuilder omits network when no MAC address is set")
-    func testNoMACAddress() throws {
+    @Test("VMSpecBuilder omits networks when the VM has no interfaces")
+    func testNoNetworkInterfaces() throws {
         let template = createTestTemplate()
-        let vm = createTestVM(macAddress: nil)
+        let vm = createTestVM()
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
 
         #expect(spec.networks.isEmpty)
+    }
+
+    @Test("VMSpecBuilder orders multiple interfaces by order index, then device name")
+    func testMultipleInterfaceOrdering() throws {
+        let template = createTestTemplate()
+        let vm = createTestVM()
+        let second = createTestInterface(
+            network: "backend",
+            macAddress: "52:54:00:00:00:02",
+            deviceName: "net1",
+            orderIndex: 1
+        )
+        let first = createTestInterface(
+            macAddress: "52:54:00:00:00:01",
+            deviceName: "net0",
+            orderIndex: 0
+        )
+
+        // Passed out of order; the builder must sort.
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [second, first])
+
+        #expect(spec.networks.count == 2)
+        #expect(spec.networks.first?.macAddress == "52:54:00:00:00:01")
+        #expect(spec.networks.first?.network == "default")
+        #expect(spec.networks.last?.macAddress == "52:54:00:00:00:02")
+        #expect(spec.networks.last?.network == "backend")
     }
 
     // MARK: - Console Tests
@@ -341,7 +380,7 @@ struct VMSpecBuilderTests {
         let template = createTestTemplate()
         let vm = createTestVM(consoleMode: .pty, serialMode: .tty)
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
 
         #expect(spec.console?.console == .pty)
         #expect(spec.console?.serial == .tty)
@@ -354,7 +393,7 @@ struct VMSpecBuilderTests {
         let image = createTestImage()
         let vm = createTestVM(diskPath: nil, kernelPath: nil, firmwarePath: nil)
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
         #expect(spec.cpus == 2)
         #expect(spec.memoryBytes == 2048)
@@ -372,7 +411,7 @@ struct VMSpecBuilderTests {
         let image = createTestImage(defaultCpu: 4, defaultMemory: 4096)
         let vm = createTestVM(cpu: 0, maxCpu: 0, memory: 0)
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
         #expect(spec.cpus == 4)
         #expect(spec.maxCpus == 4)
@@ -392,13 +431,11 @@ struct VMSpecBuilderTests {
             hugepages: true,
             sharedMemory: true,
             diskPath: "/var/lib/strato/disks/vm.qcow2",
-            readonlyDisk: false,
-            macAddress: "52:54:00:12:34:56",
-            ipAddress: "192.168.1.100",
-            networkMask: "255.255.255.0"
+            readonlyDisk: false
         )
+        let interface = createTestInterface(ipAddress: "192.168.1.100")
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [interface])
         let boot = try directKernel(spec)
 
         #expect(spec.cpus == 4)
@@ -414,12 +451,9 @@ struct VMSpecBuilderTests {
     @Test("VMSpecBuilder creates minimal spec without optional components")
     func testMinimalSpec() throws {
         let template = createTestTemplate()
-        let vm = createTestVM(
-            diskPath: nil,
-            macAddress: nil
-        )
+        let vm = createTestVM(diskPath: nil)
 
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template)
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [])
 
         #expect(spec.cpus == 2)
         #expect(spec.memoryBytes == 2048)

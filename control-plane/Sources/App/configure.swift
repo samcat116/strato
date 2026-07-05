@@ -218,6 +218,12 @@ public func configure(_ app: Application) async throws {
     // Index the hottest VM columns scanned by background jobs (issue #182)
     app.migrations.add(AddVMHotColumnIndexes())
 
+    // Multi-NIC support: move the legacy single-NIC columns on vms into
+    // vm_network_interfaces records, then drop them (issue #215)
+    app.migrations.add(CreateVMNetworkInterface())
+    app.migrations.add(MigrateVMNetworkConfigToInterfaces())
+    app.migrations.add(RemoveLegacyVMNetworkFields())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen

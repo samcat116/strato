@@ -25,9 +25,6 @@ struct VMDataTests {
             initramfsPath: "/boot/initrd",
             cmdline: "console=ttyS0",
             firmwarePath: "/fw/OVMF.fd",
-            macAddress: "52:54:00:11:22:33",
-            ipAddress: "10.0.0.20",
-            networkMask: "255.255.255.0",
             consoleMode: .socket,
             serialMode: .file,
             consoleSocket: "/run/strato/console.sock",
@@ -55,9 +52,6 @@ struct VMDataTests {
         #expect(decoded.initramfsPath == "/boot/initrd")
         #expect(decoded.cmdline == "console=ttyS0")
         #expect(decoded.firmwarePath == "/fw/OVMF.fd")
-        #expect(decoded.macAddress == "52:54:00:11:22:33")
-        #expect(decoded.ipAddress == "10.0.0.20")
-        #expect(decoded.networkMask == "255.255.255.0")
         #expect(decoded.consoleMode == .socket)
         #expect(decoded.serialMode == .file)
         #expect(decoded.consoleSocket == "/run/strato/console.sock")
@@ -83,7 +77,6 @@ struct VMDataTests {
         #expect(decoded.hypervisorType == .qemu)
         #expect(decoded.diskPath == nil)
         #expect(decoded.kernelPath == nil)
-        #expect(decoded.macAddress == nil)
         #expect(decoded.consoleSocket == nil)
         #expect(decoded.createdAt == nil)
         #expect(decoded.updatedAt == nil)
@@ -102,7 +95,6 @@ struct VMDataTests {
             status: .running, hypervisorId: "h", cpu: 1, maxCpu: 2,
             memory: 1, disk: 1, diskPath: "p", kernelPath: "k",
             initramfsPath: "ir", cmdline: "c", firmwarePath: "f",
-            macAddress: "m", ipAddress: "ip", networkMask: "nm",
             consoleSocket: "cs", serialSocket: "ss",
             createdAt: Fixtures.timestamp, updatedAt: Fixtures.timestamp
         )
@@ -113,7 +105,6 @@ struct VMDataTests {
             "cpu", "maxCpu", "memory", "hugepages", "sharedMemory",
             "disk", "diskPath", "readonlyDisk",
             "kernelPath", "initramfsPath", "cmdline", "firmwarePath",
-            "macAddress", "ipAddress", "networkMask",
             "consoleMode", "serialMode", "consoleSocket", "serialSocket",
             "createdAt", "updatedAt",
         ]
