@@ -57,15 +57,15 @@ struct CoordinationServiceTests {
     func sweepLockExclusion() async throws {
         let service = makeService()
 
-        #expect(await service.acquireSweepLock("stale_agents", ttlSeconds: 1) == true)
-        // Second pass in the same window — held, must skip.
-        #expect(await service.acquireSweepLock("stale_agents", ttlSeconds: 1) == false)
-        // A different sweep has its own lock.
         #expect(await service.acquireSweepLock("stuck_vms", ttlSeconds: 1) == true)
+        // Second pass in the same window — held, must skip.
+        #expect(await service.acquireSweepLock("stuck_vms", ttlSeconds: 1) == false)
+        // A different sweep has its own lock.
+        #expect(await service.acquireSweepLock("other_sweep", ttlSeconds: 1) == true)
 
         try await Task.sleep(for: .milliseconds(1200))
         // Expired — the next interval's pass may run.
-        #expect(await service.acquireSweepLock("stale_agents", ttlSeconds: 1) == true)
+        #expect(await service.acquireSweepLock("stuck_vms", ttlSeconds: 1) == true)
     }
 
     // MARK: - Placement reservations
@@ -145,6 +145,22 @@ struct CoordinationServiceTests {
         #expect(
             await service.reserveCapacity(
                 agentId: "agent-a", vmId: "vm-2", amounts: wholeAgent, capacity: capacity) == true)
+    }
+
+    @Test("Heartbeat-reported VMs release exactly their reservations")
+    func heartbeatReportedVMsReleaseReservations() async {
+        let service = makeService()
+        let half = ReservationAmounts(cpu: 2, memory: 4096, disk: 25000)
+
+        _ = await service.reserveCapacity(agentId: "agent-a", vmId: "vm-1", amounts: half, capacity: capacity)
+        _ = await service.reserveCapacity(agentId: "agent-a", vmId: "vm-2", amounts: half, capacity: capacity)
+
+        // Heartbeat lists vm-1 (created) and vm-9 (no reservation): only
+        // vm-1's reservation is released; vm-2's placement is still in flight.
+        await service.releaseReservations(agentId: "agent-a", vmIds: ["vm-1", "vm-9"])
+
+        let reserved = await service.activeReservations(agentId: "agent-a")
+        #expect(reserved == half)
     }
 
     @Test("Active reservations sum across VMs and are scoped per agent")

@@ -70,6 +70,10 @@ protocol CoordinationStore: Sendable {
     /// Release the reservation held by `vmId` under `agentKey` (no-op if absent).
     func releaseReservation(agentKey: String, vmId: String) async throws
 
+    /// VM IDs that currently hold (or recently held — expired entries may
+    /// linger until the next prune) reservations under `agentKey`.
+    func reservedVMIds(agentKey: String) async throws -> [String]
+
     /// Sum of all unexpired reservations under `agentKey`.
     func reservedTotal(agentKey: String) async throws -> ReservationAmounts
 }
@@ -227,6 +231,15 @@ struct ValkeyCoordinationStore: CoordinationStore {
         ).get()
     }
 
+    func reservedVMIds(agentKey: String) async throws -> [String] {
+        let response = try await app.redis.send(
+            command: "SMEMBERS",
+            with: [Self.indexKey(agentKey).convertedToRESPValue()]
+        ).get()
+        guard let values = response.array else { return [] }
+        return values.compactMap { $0.string }
+    }
+
     func reservedTotal(agentKey: String) async throws -> ReservationAmounts {
         let response = try await app.redis.send(
             command: "EVAL",
@@ -327,6 +340,10 @@ actor InMemoryCoordinationStore: CoordinationStore {
 
     func releaseReservation(agentKey: String, vmId: String) {
         reservations[agentKey]?.removeValue(forKey: vmId)
+    }
+
+    func reservedVMIds(agentKey: String) -> [String] {
+        Array(activeReservations(agentKey: agentKey).keys)
     }
 
     func reservedTotal(agentKey: String) -> ReservationAmounts {
@@ -495,6 +512,27 @@ actor CoordinationService {
                     "vmId": .string(vmId),
                     "error": .string("\(error)"),
                 ])
+        }
+    }
+
+    /// Release any reservations held for VMs in `vmIds` — the agent's own
+    /// reports now cover them, so keeping the reservation would double-count
+    /// their resources until the TTL. Called on every heartbeat with the
+    /// agent's reported VM list; reads the (usually empty) reservation index
+    /// first so the common case costs one round trip and no deletes.
+    /// Best-effort: the TTL is the backstop.
+    func releaseReservations(agentId: String, vmIds: [String]) async {
+        guard !vmIds.isEmpty else { return }
+        do {
+            let reserved = try await store.reservedVMIds(agentKey: Self.reservationKey(agentId: agentId))
+            guard !reserved.isEmpty else { return }
+            for vmId in Set(reserved).intersection(vmIds) {
+                try await store.releaseReservation(agentKey: Self.reservationKey(agentId: agentId), vmId: vmId)
+            }
+        } catch {
+            logger.warning(
+                "Failed to release reported VMs' reservations; TTL will reclaim them",
+                metadata: ["agentId": .string(agentId), "error": .string("\(error)")])
         }
     }
 

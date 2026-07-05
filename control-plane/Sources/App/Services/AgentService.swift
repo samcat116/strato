@@ -322,6 +322,13 @@ actor AgentService {
         // Refresh the agent's presence key so liveness stays visible cluster-wide.
         await app.coordination.recordAgentPresence(agentName: agentName)
 
+        // This heartbeat's resource report accounts for every VM the agent
+        // lists, so any placement reservation still held for one of them
+        // would double-count from now until its TTL — release them. This is
+        // the release path for successful creates (the dispatch is
+        // fire-and-forget, so no correlated response ever arrives).
+        await app.coordination.releaseReservations(agentId: message.agentId, vmIds: message.runningVMs)
+
         // Update database asynchronously using UUID
         Task {
             do {
@@ -458,14 +465,16 @@ actor AgentService {
             )
         }
 
-        // Cluster-singleton: only one control-plane process may act per interval.
-        // The gauge export above stays outside the lock — every process exports
-        // staleness for the agents it holds sockets for.
-        guard await app.coordination.acquireSweepLock("stale_agents") else {
-            app.logger.debug("Skipping stale-agent sweep; lock held by another control-plane instance")
-            return
-        }
-
+        // Deliberately NOT gated on a sweep lock: this sweep acts on
+        // process-local state (this process's agent map, socket registry, and
+        // pending-request continuations) that no other replica can clean up on
+        // our behalf, so every replica must run its own pass. Cross-replica
+        // disagreement is prevented by the presence check below — an agent
+        // heartbeating through another replica keeps a live presence key and
+        // is skipped here — and the database offline-write is idempotent, so
+        // concurrent passes in different replicas are harmless. (The stuck-VM
+        // sweep below operates purely on shared database state and *is* a
+        // cluster singleton.)
         var staleAgents: [String] = []
         for agentInfo in agents.values {
             guard now.timeIntervalSince(agentInfo.lastHeartbeat) > staleThreshold else { continue }

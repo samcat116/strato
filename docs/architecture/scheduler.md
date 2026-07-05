@@ -183,8 +183,9 @@ and both place against it (oversubscription):
    either lands elsewhere or fails with a clean `insufficientResources` error.
 
 Reservations are released when the create fails to dispatch or when the owning
-agent first reports on the VM (its resource reports then account for it); a
-~120s TTL is the backstop for crashes in between. If Valkey is unavailable,
+agent first reports the VM — via a status update or the heartbeat running-VM
+list, at which point the agent's resource reports account for it; a ~120s TTL
+is the backstop for crashes in between. If Valkey is unavailable,
 reservation calls fail open — placement proceeds unreserved (the
 pre-reservation behavior) rather than coupling VM creation to Valkey uptime.
 
