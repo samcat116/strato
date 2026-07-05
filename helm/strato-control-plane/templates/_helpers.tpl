@@ -237,7 +237,7 @@ Get the Valkey host
 {{- if .Values.valkey.enabled }}
 {{- printf "%s-valkey-master" .Release.Name }}
 {{- else }}
-{{- .Values.externalValkey.host }}
+{{- required "Valkey is required for control-plane coordination: set valkey.enabled=true or provide externalValkey.host" .Values.externalValkey.host }}
 {{- end }}
 {{- end }}
 

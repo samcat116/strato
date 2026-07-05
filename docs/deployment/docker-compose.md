@@ -53,7 +53,7 @@ directly and `docker compose up -d` again.
 | `spicedb-migrate` | one-shot | Migrates the SpiceDB datastore, exits 0 |
 | `spicedb` | Authorization | Persisted to PostgreSQL |
 | `spicedb-schema` | one-shot | Loads the authorization schema on every `up`, exits 0 |
-| `valkey` | Sessions | Password-protected |
+| `valkey` | Coordination + sessions | Required by the control plane (agent presence, sweep locks, scheduler reservations); password-protected |
 | `control-plane` | API + core | Runs DB migrations automatically at startup |
 | `frontend` | Web UI | Next.js |
 | `proxy` | nginx | The only service with a published port |

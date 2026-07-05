@@ -97,6 +97,28 @@ struct SchedulableAgent: Sendable {
         let diskScore = availableDisk / (1024 * 1024 * 1024)  // GB
         return cpuScore + memoryScore + diskScore
     }
+
+    /// A copy of this agent with `reserved` subtracted from its available
+    /// resources (floored at zero). Used to make selection see capacity net of
+    /// placements that are in flight but not yet reflected in the agent's own
+    /// resource reports.
+    func subtractingReservations(_ reserved: ReservationAmounts) -> SchedulableAgent {
+        SchedulableAgent(
+            id: id,
+            name: name,
+            totalCPU: totalCPU,
+            availableCPU: max(0, availableCPU - reserved.cpu),
+            totalMemory: totalMemory,
+            availableMemory: max(0, availableMemory - reserved.memory),
+            totalDisk: totalDisk,
+            availableDisk: max(0, availableDisk - reserved.disk),
+            status: status,
+            runningVMCount: runningVMCount,
+            supportedHypervisors: supportedHypervisors,
+            architecture: architecture,
+            supportsInterVMNetworking: supportsInterVMNetworking
+        )
+    }
 }
 
 /// VM placement requirements for scheduling: hard constraints (hypervisor
@@ -202,24 +224,98 @@ final class SchedulerService: @unchecked Sendable {
         from agents: [SchedulableAgent],
         strategy: SchedulingStrategy? = nil
     ) throws -> String {
-        // Guest architecture is unconstrained until images carry architecture
-        // metadata; once VMs can derive it, the arch hard constraint below
-        // applies automatically.
-        //
-        // Inter-VM networking is likewise unconstrained here: every VM gets a
-        // NIC (a MAC is assigned at creation), and a plain NIC is satisfiable
-        // by user-mode/SLIRP agents (outbound NAT). Deriving the requirement
-        // from NIC presence would make every VM unplaceable on macOS dev
-        // agents. It becomes derivable once VMs can express attachment to a
-        // shared/tenant network at creation time.
-        let requirements = VMPlacementRequirements(
+        return try selectAgent(
+            requirements: Self.placementRequirements(for: vm), from: agents, strategy: strategy, vmName: vm.name)
+    }
+
+    /// The placement requirements a VM implies.
+    ///
+    /// Guest architecture is unconstrained until images carry architecture
+    /// metadata; once VMs can derive it, the arch hard constraint applies
+    /// automatically.
+    ///
+    /// Inter-VM networking is likewise unconstrained here: every VM gets a
+    /// NIC (a MAC is assigned at creation), and a plain NIC is satisfiable
+    /// by user-mode/SLIRP agents (outbound NAT). Deriving the requirement
+    /// from NIC presence would make every VM unplaceable on macOS dev
+    /// agents. It becomes derivable once VMs can express attachment to a
+    /// shared/tenant network at creation time.
+    static func placementRequirements(for vm: VM) -> VMPlacementRequirements {
+        VMPlacementRequirements(
             cpu: vm.cpu,
             memory: vm.memory,
             disk: vm.disk,
             hypervisorType: vm.hypervisorType
         )
+    }
 
-        return try selectAgent(requirements: requirements, from: agents, strategy: strategy, vmName: vm.name)
+    /// Select an agent and atomically reserve the VM's resources on it.
+    ///
+    /// This closes the read-decide-write placement race (issue #258): plain
+    /// `selectAgent` decides on resource numbers that may already be claimed
+    /// by a concurrent placement the agent's resource reports don't reflect
+    /// yet. Here, each attempt subtracts the coordination store's active
+    /// reservations from every agent's availability before selection, then
+    /// atomically reserves the candidate's capacity. If the reservation loses
+    /// a race (another placement consumed the capacity between the read and
+    /// the reserve), selection re-runs with fresh reservation data — the
+    /// now-full agent drops out in the resource filter — until placement
+    /// succeeds or no agent fits.
+    ///
+    /// The reservation is released by the caller on send failure or once the
+    /// agent starts reporting the VM; its TTL is the backstop.
+    func selectAndReserveAgent(
+        requirements: VMPlacementRequirements,
+        vmId: String,
+        from agents: [SchedulableAgent],
+        coordination: CoordinationService,
+        strategy: SchedulingStrategy? = nil,
+        vmName: String = "unnamed"
+    ) async throws -> String {
+        let amounts = ReservationAmounts(
+            cpu: requirements.cpu, memory: requirements.memory, disk: requirements.disk)
+
+        // Each failed attempt means a concurrent reservation landed; with n
+        // agents, capacity can be stolen out from under us at most once per
+        // agent before the resource filter excludes them all, so a small
+        // margin over n bounds the loop without ever cutting a viable retry.
+        let maxAttempts = agents.count + 2
+        for attempt in 1...max(1, maxAttempts) {
+            var adjusted: [SchedulableAgent] = []
+            adjusted.reserveCapacity(agents.count)
+            for agent in agents {
+                let reserved = await coordination.activeReservations(agentId: agent.id)
+                adjusted.append(agent.subtractingReservations(reserved))
+            }
+
+            let selectedId = try selectAgent(
+                requirements: requirements, from: adjusted, strategy: strategy, vmName: vmName)
+
+            // The atomic reserve checks against the agent's *raw* reported
+            // availability — the store re-subtracts reservations itself, so
+            // passing adjusted numbers would double-count them.
+            guard let selectedAgent = agents.first(where: { $0.id == selectedId }) else {
+                throw SchedulerError.noAvailableAgents
+            }
+            let capacity = ReservationAmounts(
+                cpu: selectedAgent.availableCPU,
+                memory: selectedAgent.availableMemory,
+                disk: selectedAgent.availableDisk
+            )
+
+            if await coordination.reserveCapacity(
+                agentId: selectedId, vmId: vmId, amounts: amounts, capacity: capacity)
+            {
+                return selectedId
+            }
+
+            logger.info(
+                "Placement reservation for VM '\(vmName)' on agent '\(selectedAgent.name)' lost a concurrent race; re-running selection (attempt \(attempt))"
+            )
+        }
+
+        // Every attempt lost its reservation race and no agent had room left.
+        throw SchedulerError.insufficientResources(required: requirements, available: agents)
     }
 
     /// Select an agent for a set of placement requirements. Hard constraints

@@ -170,6 +170,10 @@ actor AgentService {
 
         agents[agentUUID.uuidString] = agentInfo
 
+        // Publish liveness to the coordination store so every control-plane
+        // process (not just the one holding this socket) can see the agent.
+        await app.coordination.recordAgentPresence(agentName: agentName)
+
         Telemetry.agentConnected()
         Telemetry.recordAgentUp(agentName: agentName, up: true)
         app.logger.info(
@@ -315,6 +319,16 @@ actor AgentService {
         agentInfo.status = .online
         agents[message.agentId] = agentInfo
 
+        // Refresh the agent's presence key so liveness stays visible cluster-wide.
+        await app.coordination.recordAgentPresence(agentName: agentName)
+
+        // This heartbeat's resource report accounts for every VM the agent
+        // lists, so any placement reservation still held for one of them
+        // would double-count from now until its TTL — release them. This is
+        // the release path for successful creates (the dispatch is
+        // fire-and-forget, so no correlated response ever arrives).
+        await app.coordination.releaseReservations(agentId: message.agentId, vmIds: message.runningVMs)
+
         // Update database asynchronously using UUID
         Task {
             do {
@@ -451,11 +465,34 @@ actor AgentService {
             )
         }
 
-        let staleAgents = agents.values.compactMap { agentInfo -> String? in
-            if now.timeIntervalSince(agentInfo.lastHeartbeat) > staleThreshold {
-                return agentInfo.id  // This is the UUID
+        // Deliberately NOT gated on a sweep lock: this sweep acts on
+        // process-local state (this process's agent map, socket registry, and
+        // pending-request continuations) that no other replica can clean up on
+        // our behalf, so every replica must run its own pass. Cross-replica
+        // disagreement is prevented by the presence check below — an agent
+        // heartbeating through another replica keeps a live presence key and
+        // is skipped here — and the database offline-write is idempotent, so
+        // concurrent passes in different replicas are harmless. (The stuck-VM
+        // sweep below operates purely on shared database state and *is* a
+        // cluster singleton.)
+        var staleAgents: [String] = []
+        for agentInfo in agents.values {
+            guard now.timeIntervalSince(agentInfo.lastHeartbeat) > staleThreshold else { continue }
+
+            // The in-memory timestamp is only this process's view; the presence
+            // key in Valkey is refreshed by whichever process receives the
+            // agent's heartbeats. Only an agent that is stale here AND absent
+            // from the coordination store is treated as gone — a live presence
+            // key means another replica is hearing from it. When the store
+            // can't answer, fall back to the in-memory verdict alone (the
+            // pre-coordination behavior).
+            if await app.coordination.isAgentPresent(agentName: agentInfo.name) == true {
+                app.logger.debug(
+                    "Agent stale in this process but presence key is live; skipping",
+                    metadata: ["agentName": .string(agentInfo.name)])
+                continue
             }
-            return nil
+            staleAgents.append(agentInfo.id)  // This is the UUID
         }
 
         if !staleAgents.isEmpty {
@@ -500,6 +537,12 @@ actor AgentService {
     /// confirmation never arrived — e.g. the agent crashed mid-boot, or the
     /// statusUpdate message was lost.
     private func sweepStuckTransitionalVMs() async {
+        // Cluster-singleton: with multiple replicas, only one may sweep per interval.
+        guard await app.coordination.acquireSweepLock("stuck_vms") else {
+            app.logger.debug("Skipping stuck-VM sweep; lock held by another control-plane instance")
+            return
+        }
+
         let db = app.db
         let timeout: TimeInterval = 120  // a VM may legitimately be transitional this long
         let now = Date()
@@ -547,14 +590,20 @@ actor AgentService {
     {
         // Convert agents to schedulable format
         let schedulableAgents = getSchedulableAgents()
+        let vmId = vm.id?.uuidString ?? ""
 
-        // Use scheduler to select best agent
+        // Use scheduler to select the best agent and atomically reserve the
+        // VM's resources on it, so a concurrent create can't place against
+        // the same capacity (issue #258).
         let agentId: String
         do {
-            agentId = try app.scheduler.selectAgent(
-                for: vm,
+            agentId = try await app.scheduler.selectAndReserveAgent(
+                requirements: SchedulerService.placementRequirements(for: vm),
+                vmId: vmId,
                 from: schedulableAgents,
-                strategy: strategy
+                coordination: app.coordination,
+                strategy: strategy,
+                vmName: vm.name
             )
         } catch let error as SchedulerError {
             app.logger.error("Scheduler failed to find suitable agent: \(error)")
@@ -564,35 +613,43 @@ actor AgentService {
             throw AgentServiceError.schedulingFailed(error.description)
         }
 
-        guard agents[agentId] != nil else {
-            throw AgentServiceError.agentNotFound(agentId)
-        }
-
-        // Build ImageInfo with signed URL now that we know the agent
+        // From here the reservation is held; release it on any failure to
+        // dispatch the create, so a doomed placement doesn't pin capacity
+        // for the full reservation TTL.
         var imageInfo: ImageInfo?
-        if let image = image {
-            do {
-                let controlPlaneURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
-                let signingKey = try URLSigningService.getSigningKey(from: app)
-                imageInfo = try VMSpecBuilder.buildImageInfo(
-                    from: image,
-                    controlPlaneURL: controlPlaneURL,
-                    agentName: agentId,
-                    signingKey: signingKey
-                )
-            } catch {
-                app.logger.error("Failed to build image info: \(error)")
-                throw error
+        do {
+            guard agents[agentId] != nil else {
+                throw AgentServiceError.agentNotFound(agentId)
             }
+
+            // Build ImageInfo with signed URL now that we know the agent
+            if let image = image {
+                do {
+                    let controlPlaneURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
+                    let signingKey = try URLSigningService.getSigningKey(from: app)
+                    imageInfo = try VMSpecBuilder.buildImageInfo(
+                        from: image,
+                        controlPlaneURL: controlPlaneURL,
+                        agentName: agentId,
+                        signingKey: signingKey
+                    )
+                } catch {
+                    app.logger.error("Failed to build image info: \(error)")
+                    throw error
+                }
+            }
+
+            let message = VMCreateMessage(
+                vmData: vm.toVMData(),
+                vmSpec: vmSpec,
+                imageInfo: imageInfo
+            )
+
+            try await sendMessageToAgent(message, agentId: agentId)
+        } catch {
+            await app.coordination.releaseReservation(agentId: agentId, vmId: vmId)
+            throw error
         }
-
-        let message = VMCreateMessage(
-            vmData: vm.toVMData(),
-            vmSpec: vmSpec,
-            imageInfo: imageInfo
-        )
-
-        try await sendMessageToAgent(message, agentId: agentId)
 
         // Map VM to agent (in-memory)
         vmToAgentMapping[vm.id?.uuidString ?? ""] = agentId
@@ -910,6 +967,11 @@ actor AgentService {
                         ])
                     return
                 }
+
+                // The owning agent is reporting on this VM, so its resource
+                // reports now account for it: the placement reservation (if
+                // one is still held) has served its purpose. No-op otherwise.
+                await self.app.coordination.releaseReservation(agentId: senderAgentId, vmId: update.vmId)
 
                 guard vm.status != update.status else { return }
 

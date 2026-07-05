@@ -61,19 +61,29 @@ public func configure(_ app: Application) async throws {
         )
     }
 
-    // Configure Valkey if available, fallback to Fluent sessions
-    if let valkeyConfig = ValkeyConfiguration.fromEnvironment() {
-        do {
-            try app.configureValkey(valkeyConfig)
-            app.sessions.use(.redis)
-            app.logger.info("Using Valkey for session storage")
-        } catch {
-            app.logger.warning("Valkey configuration failed, using Fluent sessions: \(error)")
-            app.sessions.use(.fluent)
-        }
-    } else {
+    // Valkey backs the coordination layer (agent presence, singleton sweep
+    // locks, scheduler placement reservations — issue #258) and session
+    // storage. Coordination *requires* it: without a shared store, replicas
+    // disagree about agent liveness and race on placement, so startup fails
+    // hard when Valkey is missing or unreachable rather than silently
+    // degrading. Tests run without external services and use an in-process
+    // coordination store (and Fluent sessions) instead.
+    if app.environment == .testing {
+        app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
         app.sessions.use(.fluent)
-        app.logger.info("Valkey not configured, using Fluent for session storage")
+    } else {
+        guard let valkeyConfig = ValkeyConfiguration.fromEnvironment() else {
+            let error = CoordinationConfigurationError.valkeyNotConfigured
+            app.logger.critical("\(error.description)")
+            throw error
+        }
+        try app.configureValkey(valkeyConfig)
+        app.sessions.use(.redis)
+        app.coordination = CoordinationService(store: ValkeyCoordinationStore(app: app), logger: app.logger)
+        // Fail fast at boot (after the Redis pools exist) if Valkey is unreachable.
+        app.lifecycle.use(
+            CoordinationLifecycleHandler(hostname: valkeyConfig.hostname, port: valkeyConfig.port))
+        app.logger.info("Using Valkey for coordination and session storage")
     }
     app.middleware.use(app.sessions.middleware)
 

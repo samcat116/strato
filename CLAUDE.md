@@ -64,7 +64,7 @@ The agent uses TOML configuration files to set connection and operational parame
 - `minikube start --memory=4096 --cpus=2` - Start local Kubernetes cluster
 - `cd helm/strato-control-plane && helm dependency build` - Build Helm chart dependencies (run once)
 - `skaffold dev` - Start full development environment with hot reload
-- `skaffold dev --profile=minimal` - Start minimal environment (Control Plane, PostgreSQL, SpiceDB only)
+- `skaffold dev --profile=minimal` - Start minimal environment (Control Plane, PostgreSQL, SpiceDB, Valkey; no observability stack)
 - `skaffold dev --profile=debug` - Start with debug logging and Swift debug builds
 - `skaffold build` - Build container images locally
 - `skaffold delete` - Stop and clean up development environment
