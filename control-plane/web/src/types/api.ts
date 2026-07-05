@@ -62,6 +62,70 @@ export interface OrganizationMember {
   joinedAt: string;
 }
 
+// Groups
+export interface Group {
+  id: string;
+  name: string;
+  description: string;
+  organizationId: string;
+  memberCount?: number;
+  createdAt?: string;
+}
+
+export interface GroupMember {
+  id: string;
+  username: string;
+  displayName: string;
+  email: string;
+  joinedAt?: string;
+}
+
+export interface CreateGroupRequest {
+  name: string;
+  description: string;
+}
+
+export interface UpdateGroupRequest {
+  name?: string;
+  description?: string;
+}
+
+// Organizational Units
+export interface OrganizationalUnit {
+  id: string;
+  name: string;
+  description: string;
+  organizationId: string;
+  parentOuId?: string | null;
+  path: string;
+  depth: number;
+  createdAt?: string;
+  childOuCount?: number;
+  projectCount?: number;
+}
+
+/** Recursive tree node returned by the OU `tree` endpoint. */
+export interface OrganizationalUnitTree {
+  id: string;
+  name: string;
+  description: string;
+  path: string;
+  depth: number;
+  projectCount: number;
+  children: OrganizationalUnitTree[];
+}
+
+export interface CreateOrganizationalUnitRequest {
+  name: string;
+  description: string;
+  parentOuId?: string;
+}
+
+export interface UpdateOrganizationalUnitRequest {
+  name?: string;
+  description?: string;
+}
+
 export type AgentStatus = "online" | "offline" | "connecting" | "error";
 
 export interface AgentResources {
@@ -295,4 +359,144 @@ export interface VMLogsQueryParams {
   direction?: "forward" | "backward";
   start?: number; // Unix timestamp
   end?: number; // Unix timestamp
+}
+
+// Resource Quotas
+export type QuotaEntityType = "organization" | "ou" | "project";
+
+export interface QuotaLimits {
+  maxVCPUs: number;
+  maxMemoryGB: number;
+  maxStorageGB: number;
+  maxVMs: number;
+  maxNetworks: number;
+}
+
+export interface QuotaReservedUsage {
+  reservedVCPUs: number;
+  reservedMemoryGB: number;
+  reservedStorageGB: number;
+  vmCount: number;
+  networkCount: number;
+}
+
+export interface QuotaUtilization {
+  cpuPercent: number;
+  memoryPercent: number;
+  storagePercent: number;
+  vmPercent: number;
+}
+
+export interface ResourceQuota {
+  id: string;
+  name: string;
+  entityType: QuotaEntityType;
+  entityId: string;
+  environment?: string;
+  isEnabled: boolean;
+  limits: QuotaLimits;
+  usage: QuotaReservedUsage;
+  utilization: QuotaUtilization;
+  createdAt?: string;
+}
+
+export interface CreateQuotaRequest {
+  name: string;
+  maxVCPUs: number;
+  maxMemoryGB: number;
+  maxStorageGB: number;
+  maxVMs: number;
+  maxNetworks?: number;
+  environment?: string;
+  isEnabled?: boolean;
+}
+
+export interface UpdateQuotaRequest {
+  name?: string;
+  maxVCPUs?: number;
+  maxMemoryGB?: number;
+  maxStorageGB?: number;
+  maxVMs?: number;
+  maxNetworks?: number;
+  isEnabled?: boolean;
+}
+
+// Hierarchy
+export interface VMSummaryNode {
+  id: string;
+  name: string;
+  environment: string;
+  status: string;
+  cpu: number;
+  memoryGB: number;
+  diskGB: number;
+}
+
+export interface ProjectNode {
+  id: string;
+  name: string;
+  description: string;
+  path: string;
+  environments: string[];
+  defaultEnvironment: string;
+  vms: VMSummaryNode[];
+  quotas: ResourceQuota[];
+}
+
+export interface OrganizationalUnitNode {
+  id: string;
+  name: string;
+  description: string;
+  path: string;
+  depth: number;
+  childOUs: OrganizationalUnitNode[];
+  projects: ProjectNode[];
+  quotas: ResourceQuota[];
+}
+
+export interface OrganizationNode {
+  id: string;
+  name: string;
+  description: string;
+  organizationalUnits: OrganizationalUnitNode[];
+  projects: ProjectNode[];
+  quotas: ResourceQuota[];
+}
+
+export interface HierarchyResourceUsage {
+  totalVCPUs: number;
+  totalMemoryGB: number;
+  totalStorageGB: number;
+  totalVMs: number;
+}
+
+export interface HierarchyStats {
+  totalOUs: number;
+  totalProjects: number;
+  totalVMs: number;
+  totalQuotas: number;
+  maxDepth: number;
+  resourceUtilization: HierarchyResourceUsage;
+}
+
+export interface OrganizationHierarchy {
+  organization: OrganizationNode;
+  stats: HierarchyStats;
+}
+
+export interface HierarchySearchResult {
+  id: string;
+  name: string;
+  type: string;
+  path: string;
+  description: string;
+  parentId?: string;
+  parentType?: string;
+}
+
+export interface HierarchySearchResponse {
+  query: string;
+  organizationId?: string;
+  results: HierarchySearchResult[];
+  totalResults: number;
 }

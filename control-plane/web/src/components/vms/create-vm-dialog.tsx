@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
-import { Loader2, HardDrive, FileText } from "lucide-react";
+import Link from "next/link";
+import { Loader2, HardDrive, FileText, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -33,6 +34,7 @@ export function CreateVMDialog({
   onCreated,
 }: CreateVMDialogProps) {
   const [isLoading, setIsLoading] = useState(false);
+  const [quotaError, setQuotaError] = useState<string | null>(null);
   const [sourceType, setSourceType] = useState<SourceType>("image");
   const [formData, setFormData] = useState({
     name: "",
@@ -96,6 +98,7 @@ export function CreateVMDialog({
     }
 
     setIsLoading(true);
+    setQuotaError(null);
     try {
       const GB = 1024 * 1024 * 1024; // 1 GB in bytes
       await vmsApi.create({
@@ -122,10 +125,17 @@ export function CreateVMDialog({
         disk: "50",
       });
       setSourceType("image");
+      setQuotaError(null);
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to create VM"
-      );
+      const message =
+        error instanceof Error ? error.message : "Failed to create VM";
+      // Quota rejections surface inline with a pointer to the quotas page,
+      // since resolving them means editing a quota rather than the VM form.
+      if (/quota/i.test(message)) {
+        setQuotaError(message);
+      } else {
+        toast.error(message);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -209,6 +219,20 @@ export function CreateVMDialog({
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
+            {quotaError && (
+              <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">
+                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                <div className="space-y-1">
+                  <p>{quotaError}</p>
+                  <Link
+                    href="/quotas"
+                    className="inline-block font-medium text-red-200 underline hover:text-red-100"
+                  >
+                    Review resource quotas
+                  </Link>
+                </div>
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="name" className="text-gray-200">
                 VM Name
@@ -334,7 +358,10 @@ export function CreateVMDialog({
             <Button
               type="button"
               variant="outline"
-              onClick={() => onOpenChange(false)}
+              onClick={() => {
+                setQuotaError(null);
+                onOpenChange(false);
+              }}
               className="border-gray-600 text-gray-300 hover:bg-gray-700"
               disabled={isLoading}
             >

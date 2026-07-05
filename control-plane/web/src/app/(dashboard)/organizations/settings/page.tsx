@@ -13,6 +13,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { organizationsApi } from "@/lib/api/organizations";
 import { useOrganizationMembers } from "@/lib/hooks";
 import { MembersTable, AddMemberDialog } from "@/components/organization-members";
+import { GroupsSection } from "@/components/organization-groups";
+import { OrganizationalUnitsSection } from "@/components/organizational-units";
 import { useAuth, useOrganization } from "@/providers";
 import { toast } from "sonner";
 
@@ -126,6 +128,18 @@ export default function OrganizationSettingsPage() {
           >
             Members
           </TabsTrigger>
+          <TabsTrigger
+            value="groups"
+            className="data-[state=active]:bg-gray-700"
+          >
+            Groups
+          </TabsTrigger>
+          <TabsTrigger
+            value="organizational-units"
+            className="data-[state=active]:bg-gray-700"
+          >
+            Organizational Units
+          </TabsTrigger>
           <TabsTrigger value="auth" className="data-[state=active]:bg-gray-700">
             Authentication
           </TabsTrigger>
@@ -234,6 +248,16 @@ export default function OrganizationSettingsPage() {
               />
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Groups Tab */}
+        <TabsContent value="groups">
+          <GroupsSection orgId={id} canManage={canManageMembers} />
+        </TabsContent>
+
+        {/* Organizational Units Tab */}
+        <TabsContent value="organizational-units">
+          <OrganizationalUnitsSection orgId={id} canManage={canManageMembers} />
         </TabsContent>
 
         {/* Authentication Tab */}
