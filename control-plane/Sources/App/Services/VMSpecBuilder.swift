@@ -53,17 +53,20 @@ struct VMSpecBuilder {
         return .disk(firmware: firmware)
     }
 
-    /// Single NIC on the default network, when the VM has a MAC assigned.
-    private static func networkSpecs(from vm: VM) -> [NetworkSpec] {
-        guard let macAddress = vm.macAddress else { return [] }
-        return [
-            NetworkSpec(
-                network: "default",
-                macAddress: macAddress,
-                ipAddress: vm.ipAddress,
-                netmask: vm.networkMask
-            )
-        ]
+    /// Builds network specs from the VM's interfaces, ordered by order index
+    /// (then device name, for stability when orders collide).
+    static func networkSpecs(from interfaces: [VMNetworkInterface]) -> [NetworkSpec] {
+        interfaces
+            .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
+            .map { interface in
+                NetworkSpec(
+                    network: interface.network,
+                    macAddress: interface.macAddress,
+                    ipAddress: interface.ipAddress,
+                    netmask: interface.netmask,
+                    mtu: interface.mtu
+                )
+            }
     }
 
     /// Legacy single-disk volume list from `vm.diskPath`.
@@ -79,9 +82,9 @@ struct VMSpecBuilder {
     }
 
     /// Builds a VM spec from VM and template (legacy method)
-    /// - Note: This method is deprecated. Use `buildVMSpec(from:image:)` instead.
-    @available(*, deprecated, message: "Use buildVMSpec(from:image:) instead")
-    static func buildVMSpec(from vm: VM, template: VMTemplate) -> VMSpec {
+    /// - Note: This method is deprecated. Use `buildVMSpec(from:image:networkInterfaces:)` instead.
+    @available(*, deprecated, message: "Use buildVMSpec(from:image:networkInterfaces:) instead")
+    static func buildVMSpec(from vm: VM, template: VMTemplate, networkInterfaces: [VMNetworkInterface]) -> VMSpec {
         VMSpec(
             cpus: vm.cpu,
             maxCpus: vm.maxCpu,
@@ -95,7 +98,7 @@ struct VMSpecBuilder {
                 firmware: vm.firmwarePath ?? template.firmwarePath
             ),
             volumes: legacyVolumeSpecs(from: vm),
-            networks: networkSpecs(from: vm),
+            networks: networkSpecs(from: networkInterfaces),
             console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode)
         )
     }
@@ -103,7 +106,7 @@ struct VMSpecBuilder {
     /// Builds a VM spec from VM and Image. The boot volume is materialized by the
     /// agent from the cached image (see `buildImageInfo`), so no volume entry is
     /// sent unless the VM carries a legacy disk path.
-    static func buildVMSpec(from vm: VM, image: Image) -> VMSpec {
+    static func buildVMSpec(from vm: VM, image: Image, networkInterfaces: [VMNetworkInterface]) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
 
@@ -120,7 +123,7 @@ struct VMSpecBuilder {
                 firmware: vm.firmwarePath
             ),
             volumes: legacyVolumeSpecs(from: vm),
-            networks: networkSpecs(from: vm),
+            networks: networkSpecs(from: networkInterfaces),
             console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode)
         )
     }
@@ -130,7 +133,10 @@ struct VMSpecBuilder {
     ///   - vm: The VM to build the spec for (must have volumes eager-loaded with .with(\.$volumes))
     ///   - image: The image used for the boot volume (if no boot volume attached)
     ///   - volumes: Attached volumes (sorted by boot order, then device name)
-    static func buildVMSpecWithVolumes(from vm: VM, image: Image?, volumes: [Volume]) -> VMSpec {
+    ///   - networkInterfaces: The VM's network interfaces
+    static func buildVMSpecWithVolumes(
+        from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface]
+    ) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
 
@@ -152,7 +158,7 @@ struct VMSpecBuilder {
                 firmware: vm.firmwarePath
             ),
             volumes: volumes,
-            networks: networkSpecs(from: vm),
+            networks: networkSpecs(from: networkInterfaces),
             console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode)
         )
     }

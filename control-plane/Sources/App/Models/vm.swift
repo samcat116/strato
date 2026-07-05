@@ -48,6 +48,10 @@ final class VM: Model, @unchecked Sendable {
     @Children(for: \.$vm)
     var volumes: [Volume]
 
+    // Network interfaces attached to this VM (requires eager loading with .with(\.$networkInterfaces))
+    @Children(for: \.$vm)
+    var networkInterfaces: [VMNetworkInterface]
+
     // CPU configuration
     @Field(key: "cpu")
     var cpu: Int  // boot_vcpus
@@ -87,16 +91,6 @@ final class VM: Model, @unchecked Sendable {
 
     @OptionalField(key: "firmware_path")
     var firmwarePath: String?
-
-    // Network configuration
-    @OptionalField(key: "mac_address")
-    var macAddress: String?
-
-    @OptionalField(key: "ip_address")
-    var ipAddress: String?
-
-    @OptionalField(key: "network_mask")
-    var networkMask: String?
 
     // Console configuration
     @Enum(key: "console_mode")
@@ -185,9 +179,6 @@ extension VM {
             initramfsPath: initramfsPath,
             cmdline: cmdline,
             firmwarePath: firmwarePath,
-            macAddress: macAddress,
-            ipAddress: ipAddress,
-            networkMask: networkMask,
             consoleMode: consoleMode,
             serialMode: serialMode,
             consoleSocket: consoleSocket,
@@ -245,12 +236,6 @@ extension VM {
 
     var canResume: Bool {
         return status == .paused
-    }
-
-    /// Generates a random MAC address with VMware OUI (00:0c:29)
-    static func generateMACAddress() -> String {
-        let randomBytes = (0..<3).map { _ in String(format: "%02x", Int.random(in: 0...255)) }
-        return "00:0c:29:\(randomBytes.joined(separator: ":"))"
     }
 }
 

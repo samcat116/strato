@@ -77,11 +77,6 @@ public struct VMData: Codable, Sendable {
     public let cmdline: String?
     public let firmwarePath: String?
 
-    // Network configuration
-    public let macAddress: String?
-    public let ipAddress: String?
-    public let networkMask: String?
-
     // Console configuration
     public let consoleMode: ConsoleMode
     public let serialMode: ConsoleMode
@@ -112,9 +107,6 @@ public struct VMData: Codable, Sendable {
         initramfsPath: String? = nil,
         cmdline: String? = nil,
         firmwarePath: String? = nil,
-        macAddress: String? = nil,
-        ipAddress: String? = nil,
-        networkMask: String? = nil,
         consoleMode: ConsoleMode = .pty,
         serialMode: ConsoleMode = .pty,
         consoleSocket: String? = nil,
@@ -141,9 +133,6 @@ public struct VMData: Codable, Sendable {
         self.initramfsPath = initramfsPath
         self.cmdline = cmdline
         self.firmwarePath = firmwarePath
-        self.macAddress = macAddress
-        self.ipAddress = ipAddress
-        self.networkMask = networkMask
         self.consoleMode = consoleMode
         self.serialMode = serialMode
         self.consoleSocket = consoleSocket
