@@ -1,0 +1,20 @@
+.github/workflows/helm-test.yml
+  s_533413c7c4564b::t_80b7a5e3b42918 400-402,407
+  s_533413c7c4564b::t_c8d02491235a0a 180-184,189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ab474f54d79b390a69aac44bd7d0e8c9d5620620",
+  "prompts": {},
+  "sessions": {
+    "s_533413c7c4564b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "adb76446-5582-4bfa-a681-9b9f70494726",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
