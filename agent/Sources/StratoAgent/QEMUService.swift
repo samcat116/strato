@@ -3,9 +3,12 @@ import Logging
 import StratoShared
 import StratoAgentCore
 
+// QEMUService is the QEMU/KVM/HVF backend. It is compiled only when SwiftQEMU is
+// available; when it is not (e.g. its system dependencies are missing at build
+// time), the agent falls back to `MockHypervisorService` instead of interleaving
+// mock branches through this production code.
 #if canImport(SwiftQEMU)
 import SwiftQEMU
-#endif
 
 actor QEMUService: HypervisorService {
     private let logger: Logger
@@ -14,6 +17,10 @@ actor QEMUService: HypervisorService {
     private let vmStoragePath: String
     private let qemuBinaryPath: String
     private let configuredFirmwarePath: String?
+    /// Whether to back VMs with hardware acceleration (KVM on Linux, HVF on
+    /// macOS). Resolved from `enable_kvm`/`enable_hvf` config; when false, VMs
+    /// run under TCG emulation.
+    private let hardwareAccelerationEnabled: Bool
 
     // Durable record of managed VMs, used to detect VMs orphaned by an agent restart.
     private let manifestStore: VMManifestStore
@@ -31,26 +38,21 @@ actor QEMUService: HypervisorService {
     // HypervisorService protocol requirement
     public let hypervisorType: HypervisorType = .qemu
 
-    #if canImport(SwiftQEMU)
     private var activeVMs: [String: QEMUManager] = [:]
     private var vmSpecs: [String: VMSpec] = [:]
     private var vmNetworkInfo: [String: VMNetworkInfo] = [:]
     private var vmConsoleSocketPaths: [String: String] = [:]
     private var vmSerialSocketPaths: [String: String] = [:]
     private var pendingVMs: Set<String> = []  // Track VMs being created (to handle concurrent boot requests)
-    #else
-    // Mock mode when SwiftQEMU is not available
-    private var mockVMs: [String: MockQEMUVM] = [:]
-    private var pendingVMs: Set<String> = []  // Track VMs being created (to handle concurrent boot requests)
-    #endif
 
-    init(logger: Logger, networkService: (any NetworkServiceProtocol)? = nil, imageCacheService: ImageCacheService? = nil, vmStoragePath: String, qemuBinaryPath: String, firmwarePath: String? = nil) {
+    init(logger: Logger, networkService: (any NetworkServiceProtocol)? = nil, imageCacheService: ImageCacheService? = nil, vmStoragePath: String, qemuBinaryPath: String, firmwarePath: String? = nil, hardwareAccelerationEnabled: Bool = true) {
         self.logger = logger
         self.networkService = networkService
         self.imageCacheService = imageCacheService
         self.vmStoragePath = vmStoragePath
         self.qemuBinaryPath = qemuBinaryPath
         self.configuredFirmwarePath = firmwarePath
+        self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         self.manifestStore = VMManifestStore(
             path: (vmStoragePath as NSString).appendingPathComponent("qemu-manifest.json"),
             logger: logger
@@ -67,16 +69,12 @@ actor QEMUService: HypervisorService {
             ])
         }
 
-        #if canImport(SwiftQEMU)
         #if os(Linux)
         logger.info("QEMU service initialized with KVM acceleration support")
         #elseif os(macOS)
         logger.info("QEMU service initialized with Hypervisor.framework (HVF) acceleration support")
         #else
         logger.info("QEMU service initialized with SwiftQEMU support")
-        #endif
-        #else
-        logger.warning("QEMU service running in mock mode - SwiftQEMU not available")
         #endif
     }
     
@@ -88,7 +86,6 @@ actor QEMUService: HypervisorService {
         pendingVMs.insert(vmId)
         defer { pendingVMs.remove(vmId) }
 
-        #if canImport(SwiftQEMU)
         logger.info("Creating QEMU VM", metadata: ["vmId": .string(vmId)])
 
         // Realize the VM's disks. The boot disk is materialized here from the cached
@@ -229,15 +226,9 @@ actor QEMUService: HypervisorService {
         persistManifest()
 
         logger.info("QEMU VM created successfully", metadata: ["vmId": .string(vmId)])
-        #else
-        // Mock mode
-        logger.info("Creating mock QEMU VM (mock mode)", metadata: ["vmId": .string(vmId)])
-        mockVMs[vmId] = MockQEMUVM(id: vmId)
-        #endif
     }
     
     func bootVM(vmId: String) async throws {
-        #if canImport(SwiftQEMU)
         // Wait for VM to be ready - it may still be creating (downloading image, etc.)
         var retries = 0
         let maxRetries = 120  // 60 seconds total (120 * 0.5s) - creation can take a while
@@ -272,15 +263,9 @@ actor QEMUService: HypervisorService {
         try await vm.start()
 
         logger.info("QEMU VM booted successfully", metadata: ["vmId": .string(vmId)])
-        #else
-        // Mock mode
-        logger.info("Booting mock QEMU VM (mock mode)", metadata: ["vmId": .string(vmId)])
-        try await Task.sleep(for: .milliseconds(500)) // Simulate boot delay
-        #endif
     }
     
     func shutdownVM(vmId: String) async throws {
-        #if canImport(SwiftQEMU)
         guard let vm = activeVMs[vmId] else {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
@@ -291,15 +276,9 @@ actor QEMUService: HypervisorService {
         try await vm.shutdown()
 
         logger.info("QEMU VM shutdown completed", metadata: ["vmId": .string(vmId)])
-        #else
-        // Mock mode
-        logger.info("Shutting down mock QEMU VM (mock mode)", metadata: ["vmId": .string(vmId)])
-        try await Task.sleep(for: .milliseconds(200)) // Simulate shutdown delay
-        #endif
     }
 
     func rebootVM(vmId: String) async throws {
-        #if canImport(SwiftQEMU)
         guard let vm = activeVMs[vmId] else {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
@@ -310,15 +289,9 @@ actor QEMUService: HypervisorService {
         try await vm.reset()
 
         logger.info("QEMU VM reboot initiated", metadata: ["vmId": .string(vmId)])
-        #else
-        // Mock mode
-        logger.info("Rebooting mock QEMU VM (mock mode)", metadata: ["vmId": .string(vmId)])
-        try await Task.sleep(for: .milliseconds(300)) // Simulate reboot delay
-        #endif
     }
 
     func pauseVM(vmId: String) async throws {
-        #if canImport(SwiftQEMU)
         guard let vm = activeVMs[vmId] else {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
@@ -329,14 +302,9 @@ actor QEMUService: HypervisorService {
         try await vm.pause()
 
         logger.info("QEMU VM paused", metadata: ["vmId": .string(vmId)])
-        #else
-        // Mock mode
-        logger.info("Pausing mock QEMU VM (mock mode)", metadata: ["vmId": .string(vmId)])
-        #endif
     }
 
     func resumeVM(vmId: String) async throws {
-        #if canImport(SwiftQEMU)
         guard let vm = activeVMs[vmId] else {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
@@ -347,14 +315,9 @@ actor QEMUService: HypervisorService {
         try await vm.start()
 
         logger.info("QEMU VM resumed", metadata: ["vmId": .string(vmId)])
-        #else
-        // Mock mode
-        logger.info("Resuming mock QEMU VM (mock mode)", metadata: ["vmId": .string(vmId)])
-        #endif
     }
 
     func deleteVM(vmId: String) async throws {
-        #if canImport(SwiftQEMU)
         guard let qemuManager = activeVMs[vmId] else {
             // Deleting an orphaned VM releases its manifest entry and reservation so
             // the control plane can remove the record. The unmanaged QEMU process
@@ -397,17 +360,11 @@ actor QEMUService: HypervisorService {
         }
 
         logger.info("QEMU VM deleted", metadata: ["vmId": .string(vmId)])
-        #else
-        // Mock mode
-        logger.info("Deleting mock QEMU VM (mock mode)", metadata: ["vmId": .string(vmId)])
-        mockVMs.removeValue(forKey: vmId)
-        #endif
     }
     
     // MARK: - VM Information
 
     func getVMInfo(vmId: String) async throws -> VmInfo {
-        #if canImport(SwiftQEMU)
         guard let qemuManager = activeVMs[vmId],
               let spec = vmSpecs[vmId] else {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
@@ -421,31 +378,12 @@ actor QEMUService: HypervisorService {
             state: status.rawValue,
             memoryActualSize: spec.memoryBytes
         )
-        #else
-        // Mock mode - return mock info
-        guard mockVMs[vmId] != nil else {
-            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
-        }
-        let mockSpec = VMSpec(
-            cpus: 2,
-            maxCpus: 4,
-            memoryBytes: 2 * 1024 * 1024 * 1024, // 2GB
-            boot: .directKernel(kernel: "/boot/vmlinuz", initramfs: nil, cmdline: nil)
-        )
-
-        return VmInfo(
-            spec: mockSpec,
-            state: "running",
-            memoryActualSize: mockSpec.memoryBytes
-        )
-        #endif
     }
 
     /// Returns the console socket path for a VM
     /// The path is computed deterministically from vmStoragePath and vmId
     /// Returns nil if the socket file doesn't exist (VM not running or not created)
     func getConsoleSocketPath(vmId: String) -> String? {
-        #if canImport(SwiftQEMU)
         // First check in-memory cache for VMs created this session
         if let cachedPath = vmConsoleSocketPaths[vmId] {
             // Verify socket file exists
@@ -466,17 +404,12 @@ actor QEMUService: HypervisorService {
 
         logger.debug("Console socket not found at: \(consoleSocketPath)")
         return nil
-        #else
-        // Mock mode - return a mock path
-        return mockVMs[vmId] != nil ? "/var/run/strato/vm-\(vmId)-console.sock" : nil
-        #endif
     }
 
     /// Returns the serial console socket path for a VM
     /// The path is computed deterministically from vmStoragePath and vmId
     /// Returns nil if the socket file doesn't exist (VM not running or not created)
     func getSerialSocketPath(vmId: String) -> String? {
-        #if canImport(SwiftQEMU)
         // First check in-memory cache for VMs created this session
         if let cachedPath = vmSerialSocketPaths[vmId] {
             // Verify socket file exists
@@ -497,10 +430,6 @@ actor QEMUService: HypervisorService {
 
         logger.debug("Serial socket not found at: \(serialSocketPath)")
         return nil
-        #else
-        // Mock mode - return a mock path
-        return mockVMs[vmId] != nil ? "/var/run/strato/vm-\(vmId)-serial.sock" : nil
-        #endif
     }
 
     /// Console access for QEMU VMs: the serial and/or virtio-console Unix sockets.
@@ -514,7 +443,6 @@ actor QEMUService: HypervisorService {
     }
 
     func getVMStatus(vmId: String) async throws -> VMStatus {
-        #if canImport(SwiftQEMU)
         // Shut-down VMs stay in activeVMs until deleted, so an absent entry means
         // this service does not manage the VM at all (e.g. lost on agent restart).
         // Report that honestly instead of fabricating `.shutdown` — the control
@@ -543,21 +471,10 @@ actor QEMUService: HypervisorService {
             logger.error("Failed to query VM status: \(error)")
             return .shutdown
         }
-        #else
-        // Mock mode - return mock status
-        guard mockVMs[vmId] != nil else {
-            throw HypervisorServiceError.vmNotFound(vmId)
-        }
-        return .running
-        #endif
     }
 
     func listVMs() async -> [String] {
-        #if canImport(SwiftQEMU)
         return Array(activeVMs.keys)
-        #else
-        return Array(mockVMs.keys)
-        #endif
     }
 
     /// Sum of vCPUs and memory (in bytes) reserved by all VMs this service is managing,
@@ -567,12 +484,10 @@ actor QEMUService: HypervisorService {
     func reservedResources() -> (vcpus: Int, memoryBytes: Int64) {
         var vcpus = 0
         var memoryBytes: Int64 = 0
-        #if canImport(SwiftQEMU)
         for spec in vmSpecs.values {
             vcpus += spec.cpus
             memoryBytes += spec.memoryBytes
         }
-        #endif
         for spec in orphanedVMSpecs.values {
             vcpus += spec.cpus
             memoryBytes += spec.memoryBytes
@@ -584,41 +499,25 @@ actor QEMUService: HypervisorService {
     /// detected as orphaned after an agent restart. Orphaned entries are carried over
     /// (active specs win on ID collision) so a second restart still knows about them.
     private func persistManifest() {
-        #if canImport(SwiftQEMU)
         manifestStore.save(orphanedVMSpecs.merging(vmSpecs) { _, active in active })
-        #endif
     }
 
     // MARK: - Legacy Methods (for backward compatibility)
 
     /// Syncs VM status for the first VM (legacy method)
     func syncVMStatus() async throws -> VMStatus {
-        #if canImport(SwiftQEMU)
         guard let vmId = activeVMs.keys.first else {
             return .shutdown
         }
         return try await getVMStatus(vmId: vmId)
-        #else
-        guard let vmId = mockVMs.keys.first else {
-            return .shutdown
-        }
-        return try await getVMStatus(vmId: vmId)
-        #endif
     }
 
     /// Gets VM info for the first VM (legacy method)
     func getVMInfo() async throws -> VmInfo {
-        #if canImport(SwiftQEMU)
         guard let vmId = activeVMs.keys.first else {
             throw QEMUServiceError.vmNotFound("No VM available for info")
         }
         return try await getVMInfo(vmId: vmId)
-        #else
-        guard let vmId = mockVMs.keys.first else {
-            throw QEMUServiceError.vmNotFound("No VM available for info")
-        }
-        return try await getVMInfo(vmId: vmId)
-        #endif
     }
 
     // MARK: - VM Management Helpers
@@ -645,7 +544,6 @@ actor QEMUService: HypervisorService {
     /// Attaches a disk to a running VM using QMP hot-plug
     /// This uses QEMU's blockdev-add and device_add commands via SwiftQEMU
     func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool = false) async throws {
-        #if canImport(SwiftQEMU)
         guard let manager = activeVMs[vmId] else {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
@@ -673,19 +571,11 @@ actor QEMUService: HypervisorService {
             ])
             throw QEMUServiceError.hotPlugFailed("Failed to attach disk: \(error)")
         }
-        #else
-        logger.info("Mock: Attaching disk to VM (mock mode)", metadata: [
-            "vmId": .string(vmId),
-            "volumeId": .string(volumeId),
-            "deviceName": .string(deviceName)
-        ])
-        #endif
     }
 
     /// Detaches a disk from a running VM using QMP hot-unplug
     /// This uses QEMU's device_del and blockdev-del commands via SwiftQEMU
     func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws {
-        #if canImport(SwiftQEMU)
         guard let manager = activeVMs[vmId] else {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
@@ -711,18 +601,10 @@ actor QEMUService: HypervisorService {
             ])
             throw QEMUServiceError.hotPlugFailed("Failed to detach disk: \(error)")
         }
-        #else
-        logger.info("Mock: Detaching disk from VM (mock mode)", metadata: [
-            "vmId": .string(vmId),
-            "volumeId": .string(volumeId),
-            "deviceName": .string(deviceName)
-        ])
-        #endif
     }
 
     // MARK: - Private Configuration Methods
 
-    #if canImport(SwiftQEMU)
     /// Resolves the UEFI firmware path for the current architecture
     /// Priority: 1) Explicit per-VM firmware path, 2) Agent config file path, 3) Platform default
     /// Returns nil if no firmware is found
@@ -782,16 +664,23 @@ actor QEMUService: HypervisorService {
             firmware = specFirmware
         }
 
+        // Select the CPU model. `host` passes the physical CPU through and is
+        // only valid with a hardware accelerator (KVM/HVF); QEMU rejects it under
+        // TCG ("CPU model 'host' requires KVM or HVF"). When acceleration is
+        // disabled we fall back to `max`, a TCG-safe model that exposes the most
+        // features the emulator can provide.
+        let cpuType = hardwareAccelerationEnabled ? "host" : "max"
+
         // Configure machine type based on architecture and boot mode
         #if arch(arm64)
         // For ARM64 UEFI boot, we need gic-version=3 for EDK2 firmware compatibility
         qemuConfig.machineType = kernelBoot != nil ? "virt" : "virt,gic-version=3"
-        qemuConfig.cpuType = "host"
-        logger.debug("Configuring ARM64 machine type: \(qemuConfig.machineType)")
+        qemuConfig.cpuType = cpuType
+        logger.debug("Configuring ARM64 machine type: \(qemuConfig.machineType), cpu: \(cpuType)")
         #else
         qemuConfig.machineType = "q35"
-        qemuConfig.cpuType = "host"
-        logger.debug("Configuring x86_64 machine type: q35")
+        qemuConfig.cpuType = cpuType
+        logger.debug("Configuring x86_64 machine type: q35, cpu: \(cpuType)")
         #endif
 
         // Configure CPU
@@ -887,16 +776,26 @@ actor QEMUService: HypervisorService {
             }
         }
 
-        // Enable hardware acceleration based on platform
+        // Enable hardware acceleration based on platform and the operator's
+        // `enable_kvm`/`enable_hvf` preference. When disabled, QEMU falls back
+        // to TCG emulation (slow, but useful for dev/test on unaccelerated hosts).
         #if os(Linux)
-        // Enable KVM on Linux
-        qemuConfig.enableKVM = true
-        logger.debug("Enabling KVM acceleration")
+        // KVM on Linux
+        qemuConfig.enableKVM = hardwareAccelerationEnabled
+        if hardwareAccelerationEnabled {
+            logger.debug("Enabling KVM acceleration")
+        } else {
+            logger.info("KVM acceleration disabled by configuration (enable_kvm=false); using TCG emulation")
+        }
         #elseif os(macOS)
-        // Disable KVM (not available on macOS) and enable Hypervisor.framework (HVF)
+        // KVM is never available on macOS; Hypervisor.framework (HVF) is the accelerator.
         qemuConfig.enableKVM = false
-        qemuConfig.additionalArgs.append(contentsOf: ["-accel", "hvf"])
-        logger.debug("Enabling Hypervisor.framework (HVF) acceleration")
+        if hardwareAccelerationEnabled {
+            qemuConfig.additionalArgs.append(contentsOf: ["-accel", "hvf"])
+            logger.debug("Enabling Hypervisor.framework (HVF) acceleration")
+        } else {
+            logger.info("HVF acceleration disabled by configuration (enable_hvf=false); using TCG emulation")
+        }
         #endif
 
         qemuConfig.noGraphic = true
@@ -933,7 +832,7 @@ actor QEMUService: HypervisorService {
         // For disk-based boot, create cloud-init ISO to configure serial console
         // Cloud-init allows configuring the guest without modifying the disk image
         let cloudInitISOPath = (vmDir as NSString).appendingPathComponent("cloud-init.iso")
-        if createCloudInitISO(at: cloudInitISOPath, vmId: vmId) {
+        if CloudInitProvisioner(logger: logger).makeNoCloudISO(at: cloudInitISOPath, vmId: vmId) {
             qemuConfig.additionalArgs.append(contentsOf: [
                 "-drive", "file=\(cloudInitISOPath),format=raw,if=virtio,readonly=on"
             ])
@@ -1007,129 +906,7 @@ actor QEMUService: HypervisorService {
             // Don't throw here to avoid blocking VM deletion
         }
     }
-
-    /// Creates a cloud-init NoCloud ISO for configuring the guest VM
-    /// This enables serial console output by configuring GRUB and systemd
-    private func createCloudInitISO(at isoPath: String, vmId: String) -> Bool {
-        let fileManager = FileManager.default
-        let tempDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("cloud-init-\(vmId)")
-
-        // Clean up any existing temp directory
-        try? fileManager.removeItem(atPath: tempDir)
-
-        do {
-            // Create temp directory structure
-            try fileManager.createDirectory(atPath: tempDir, withIntermediateDirectories: true, attributes: nil)
-
-            // Create meta-data file (required for NoCloud)
-            let metaData = """
-            instance-id: \(vmId)
-            local-hostname: vm-\(vmId.prefix(8))
-            """
-            let metaDataPath = (tempDir as NSString).appendingPathComponent("meta-data")
-            try metaData.write(toFile: metaDataPath, atomically: true, encoding: .utf8)
-
-            // Create user-data file with serial console configuration
-            let userData = """
-            #cloud-config
-            # Enable serial console output
-            bootcmd:
-              # Update GRUB to output to serial console
-              - 'sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\\"console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0\\"/" /etc/default/grub || true'
-              - 'update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg 2>/dev/null || true'
-
-            # Enable getty on serial console
-            runcmd:
-              - systemctl enable --now serial-getty@ttyS0.service || true
-              - systemctl enable --now serial-getty@ttyAMA0.service || true
-              - systemctl enable --now serial-getty@hvc0.service || true
-              # Emit a marker so we can verify console output quickly
-              - "sh -c 'echo [cloud-init] console marker > /dev/ttyS0 2>/dev/null || true'"
-              - "sh -c 'echo [cloud-init] console marker > /dev/ttyAMA0 2>/dev/null || true'"
-              - "sh -c 'echo [cloud-init] console marker > /dev/hvc0 2>/dev/null || true'"
-
-            # Set password for ubuntu/root user for console login (development only)
-            chpasswd:
-              expire: false
-              users:
-                - name: ubuntu
-                  password: ubuntu
-                  type: text
-
-            # Ensure SSH is available
-            ssh_pwauth: true
-            """
-            let userDataPath = (tempDir as NSString).appendingPathComponent("user-data")
-            try userData.write(toFile: userDataPath, atomically: true, encoding: .utf8)
-
-            // Create ISO using hdiutil (macOS) or genisoimage/mkisofs (Linux)
-            let process = Process()
-            #if os(macOS)
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-            process.arguments = [
-                "makehybrid",
-                "-iso",
-                "-joliet",
-                "-o", isoPath,
-                "-default-volume-name", "cidata",
-                tempDir
-            ]
-            #else
-            // Try genisoimage first, then mkisofs
-            let genisoimagePath = "/usr/bin/genisoimage"
-            let mkisofsPath = "/usr/bin/mkisofs"
-            if fileManager.fileExists(atPath: genisoimagePath) {
-                process.executableURL = URL(fileURLWithPath: genisoimagePath)
-            } else {
-                process.executableURL = URL(fileURLWithPath: mkisofsPath)
-            }
-            process.arguments = [
-                "-output", isoPath,
-                "-volid", "cidata",
-                "-joliet",
-                "-rock",
-                tempDir
-            ]
-            #endif
-
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
-
-            try process.run()
-            process.waitUntilExit()
-
-            // Clean up temp directory
-            try? fileManager.removeItem(atPath: tempDir)
-
-            if process.terminationStatus == 0 {
-                logger.debug("Created cloud-init ISO at: \(isoPath)")
-                return true
-            } else {
-                let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                logger.warning("Failed to create cloud-init ISO: \(output)")
-                return false
-            }
-        } catch {
-            logger.warning("Failed to create cloud-init ISO: \(error.localizedDescription)")
-            try? fileManager.removeItem(atPath: tempDir)
-            return false
-        }
-    }
-    #endif
 }
-
-// MARK: - Mock VM for when SwiftQEMU is not available
-
-#if !canImport(SwiftQEMU)
-private class MockQEMUVM {
-    let id: String
-
-    init(id: String) {
-        self.id = id
-    }
-}
-#endif
 
 // MARK: - QEMU Service Error Types
 
@@ -1161,3 +938,4 @@ enum QEMUServiceError: Error, LocalizedError, Sendable {
         }
     }
 }
+#endif

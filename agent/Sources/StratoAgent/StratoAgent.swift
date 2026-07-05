@@ -238,6 +238,17 @@ private func launchAgent(
     // Resolve hypervisor type
     let finalHypervisorType = config.hypervisorType ?? AgentConfig.defaultHypervisorType
 
+    // Resolve hardware acceleration preference. Acceleration is on by default;
+    // operators can disable it (forcing TCG emulation) via config. `enable_kvm`
+    // applies on Linux and `enable_hvf` on macOS — the other is ignored per platform.
+    #if os(macOS)
+    let finalHardwareAcceleration = config.enableHVF ?? true
+    #elseif os(Linux)
+    let finalHardwareAcceleration = config.enableKVM ?? true
+    #else
+    let finalHardwareAcceleration = false
+    #endif
+
     // Update log level based on final configuration
     logger.logLevel = debug ? .debug : Logger.Level(rawValue: finalLogLevel) ?? .info
 
@@ -251,6 +262,7 @@ private func launchAgent(
         "firecrackerBinaryPath": .string(finalFirecrackerBinaryPath),
         "firecrackerSocketDir": .string(finalFirecrackerSocketDir),
         "hypervisorType": .string(finalHypervisorType.rawValue),
+        "hardwareAcceleration": .string(finalHardwareAcceleration ? "enabled" : "disabled"),
         "logLevel": .string(finalLogLevel),
         "stateFile": .string(statePath),
         "registrationMode": .string(isRegistrationMode ? "yes" : "no")
@@ -278,6 +290,7 @@ private func launchAgent(
         firecrackerBinaryPath: finalFirecrackerBinaryPath,
         firecrackerSocketDir: finalFirecrackerSocketDir,
         hypervisorType: finalHypervisorType,
+        hardwareAccelerationEnabled: finalHardwareAcceleration,
         spiffeConfig: config.spiffe,
         stateStore: stateStore
     )

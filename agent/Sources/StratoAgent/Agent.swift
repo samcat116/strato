@@ -55,7 +55,7 @@ actor Agent {
     private let logger: Logger
 
     private var websocketClient: WebSocketClient?
-    private var qemuService: QEMUService?
+    private var qemuService: (any HypervisorService)?
     #if os(Linux)
     private var firecrackerService: FirecrackerService?
     #endif
@@ -111,6 +111,7 @@ actor Agent {
     private let firecrackerBinaryPath: String
     private let firecrackerSocketDir: String
     private let hypervisorType: HypervisorType
+    private let hardwareAccelerationEnabled: Bool
 
     // SPIFFE/SPIRE support
     private let spiffeConfig: SPIFFEConfig?
@@ -138,6 +139,7 @@ actor Agent {
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
         firecrackerSocketDir: String = "/tmp/firecracker",
         hypervisorType: HypervisorType = .qemu,
+        hardwareAccelerationEnabled: Bool = true,
         spiffeConfig: SPIFFEConfig? = nil,
         stateStore: (any AgentStateStore)? = nil
     ) {
@@ -156,6 +158,7 @@ actor Agent {
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.firecrackerSocketDir = firecrackerSocketDir
         self.hypervisorType = hypervisorType
+        self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         self.spiffeConfig = spiffeConfig
         self.stateStore = stateStore
 
@@ -231,7 +234,11 @@ actor Agent {
         )
 
         logger.info("Initializing QEMU service")
-        qemuService = QEMUService(logger: logger, networkService: networkService, imageCacheService: imageCacheService, vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath)
+        #if canImport(SwiftQEMU)
+        qemuService = QEMUService(logger: logger, networkService: networkService, imageCacheService: imageCacheService, vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath, hardwareAccelerationEnabled: hardwareAccelerationEnabled)
+        #else
+        qemuService = MockHypervisorService(logger: logger, hypervisorType: .qemu)
+        #endif
 
         #if os(Linux)
         logger.info("Initializing Firecracker service (Linux only)")
