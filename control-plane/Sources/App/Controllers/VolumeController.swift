@@ -135,6 +135,22 @@ struct VolumeController: RouteCollection {
             guard let image = try await Image.find(sourceImageId, on: req.db) else {
                 throw Abort(.notFound, reason: "Source image not found")
             }
+
+            // The caller must be able to read the image before using it as a
+            // volume source: provisioning hands the agent a signed download URL
+            // for it, so accepting an unauthorized image ID would let a user
+            // materialize another project's image into their own volume.
+            let hasImagePermission = try await req.spicedb.checkPermission(
+                subject: user.id!.uuidString,
+                permission: "read",
+                resource: "image",
+                resourceId: sourceImageId.uuidString
+            )
+
+            guard hasImagePermission else {
+                throw Abort(.forbidden, reason: "Access denied to image")
+            }
+
             guard image.status == .ready else {
                 throw Abort(.badRequest, reason: "Source image is not ready (status: '\(image.status.rawValue)')")
             }

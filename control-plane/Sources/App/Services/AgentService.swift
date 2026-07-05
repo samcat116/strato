@@ -72,6 +72,10 @@ actor AgentService {
         var timeoutTask: Task<Void, Never>?
     }
 
+    /// Set at application shutdown. Guards against the init task arming the
+    /// heartbeat monitor after `shutdown()` already ran.
+    private var isShutDown = false
+
     init(app: Application) {
         self.app = app
         // Start heartbeat monitoring and restore VM mappings after initialization
@@ -79,6 +83,17 @@ actor AgentService {
             await startHeartbeatMonitoring()
             await restoreVMToAgentMappings()
         }
+    }
+
+    /// Cancel the heartbeat monitoring loop. Called from the application's
+    /// shutdown lifecycle (see `AgentServiceLifecycleHandler`): the loop holds
+    /// the `Application` and sweeps the database every 30 seconds, so a tick
+    /// that fires after shutdown would hit Vapor's "Core not configured"
+    /// fatal error — long-lived test processes crash exactly this way.
+    func shutdown() {
+        isShutDown = true
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
     }
 
     // MARK: - VM-to-Agent Mapping Recovery
@@ -395,6 +410,7 @@ actor AgentService {
     // MARK: - Heartbeat Monitoring
 
     private func startHeartbeatMonitoring() {
+        guard !isShutDown else { return }
         heartbeatTask = Task {
             while !Task.isCancelled {
                 do {
@@ -973,6 +989,21 @@ extension Application {
         set {
             storage[AgentServiceKey.self] = newValue
         }
+    }
+
+    /// The `AgentService` if one has already been created, without lazily
+    /// creating it. Shutdown must not instantiate the service (that would arm
+    /// the very heartbeat task shutdown exists to cancel).
+    var agentServiceIfCreated: AgentService? {
+        storage[AgentServiceKey.self]
+    }
+}
+
+/// Cancels the agent heartbeat monitor at application shutdown so its
+/// periodic database sweep never outlives the application.
+struct AgentServiceLifecycleHandler: LifecycleHandler {
+    func shutdownAsync(_ application: Application) async {
+        await application.agentServiceIfCreated?.shutdown()
     }
 }
 
