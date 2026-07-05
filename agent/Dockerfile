@@ -12,8 +12,9 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
 # Set up a build area
 WORKDIR /build
 
-# Copy shared package first
+# Copy local path dependencies first
 COPY ./shared ./shared
+COPY ./SwiftFirecracker ./SwiftFirecracker
 
 # Copy agent package files
 COPY ./agent/Package.* ./agent/
@@ -23,8 +24,11 @@ COPY ./agent/Package.* ./agent/
 # as long as your Package.swift/Package.resolved
 # files do not change.
 WORKDIR /build/agent
-# Update Package.swift to use absolute path for shared package in Docker
-RUN sed -i 's|.package(path: "../shared")|.package(path: "/build/shared")|' Package.swift
+# Update Package.swift to use absolute paths for local packages in Docker
+RUN sed -i \
+    -e 's|.package(path: "../shared")|.package(path: "/build/shared")|' \
+    -e 's|.package(path: "../SwiftFirecracker")|.package(path: "/build/SwiftFirecracker")|' \
+    Package.swift
 RUN swift package resolve \
     $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true)
 
