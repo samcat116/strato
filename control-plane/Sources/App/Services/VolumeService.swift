@@ -352,6 +352,18 @@ actor VolumeService {
             return
         }
 
+        // `volume_snapshot_delete` postdates protocol version 1, so an older
+        // agent can't decode it — the frame is dropped before the agent can
+        // even reply with an error, and the request would burn its full
+        // timeout. Agents that understand the message advertise it as a
+        // capability at registration; fail fast on ones that don't.
+        if let agentInfo = await app.agentService.getAgentInfo(hypervisorId),
+           !agentInfo.capabilities.contains(MessageType.volumeSnapshotDelete.rawValue) {
+            throw VolumeServiceError.operationUnsupportedByAgent(
+                MessageType.volumeSnapshotDelete.rawValue, hypervisorId
+            )
+        }
+
         let message = VolumeSnapshotDeleteMessage(
             volumeId: volume.id!.uuidString,
             snapshotId: snapshot.id!.uuidString,
@@ -491,6 +503,7 @@ enum VolumeServiceError: Error, LocalizedError {
     case volumeNotAttached
     case firecrackerNotSupported
     case agentOperationFailed(String, String?)
+    case operationUnsupportedByAgent(String, String)
 
     var errorDescription: String? {
         switch self {
@@ -513,6 +526,8 @@ enum VolumeServiceError: Error, LocalizedError {
                 return "\(error) (\(details))"
             }
             return error
+        case .operationUnsupportedByAgent(let operation, let agentId):
+            return "Agent '\(agentId)' does not support '\(operation)'; upgrade the agent and retry"
         }
     }
 }

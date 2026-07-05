@@ -666,6 +666,13 @@ actor Agent {
     private func getAgentCapabilities(hypervisors: [HypervisorSupport], networkCapability: NetworkCapability?) -> [String] {
         var capabilities = ["vm_management"]
 
+        // Message-set capabilities: message types added after protocol
+        // version 1 are advertised here so the control plane skips agents
+        // that would silently drop the frame (an undecodable MessageType
+        // fails envelope decoding before any error response can be sent,
+        // leaving the control plane to time out).
+        capabilities.append(MessageType.volumeSnapshotDelete.rawValue)
+
         for hypervisor in hypervisors {
             if hypervisor.available {
                 capabilities.append(hypervisor.type.rawValue)
