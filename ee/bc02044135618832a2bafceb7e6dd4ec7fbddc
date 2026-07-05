@@ -1,0 +1,38 @@
+helm/strato-control-plane/values.yaml
+  s_d3ddaf0d6448fa::t_e6f922a2f9d7e1 167-182
+docker-compose.yml
+  s_d3ddaf0d6448fa::t_e91aa351801c47 71-72
+control-plane/Sources/App/configure.swift
+  s_d3ddaf0d6448fa::t_c667fcea30c9fa 154-157,167
+deploy/compose/.env.example
+  s_d3ddaf0d6448fa::t_777375e993d818 38-43
+helm/strato-control-plane/templates/db-tls-ca-secret.yaml
+  s_d3ddaf0d6448fa::t_87b270041c88e5 1-15
+control-plane/Tests/AppTests/DatabaseTLSConfigurationTests.swift
+  s_d3ddaf0d6448fa::t_2d6441bce66746 1-7,11-15,24-26,33-36,41-44,49,53,57-60,65-68,71-76
+  s_d3ddaf0d6448fa::t_e097ae82d05234 8-10,16-23,27-28,37-38,45-46,50,54,61-62,69-70
+  s_d3ddaf0d6448fa::t_29b992e0547477 29-32,39-40,47-48,51-52,55-56,63-64
+deploy/compose/docker-compose.yml
+  s_d3ddaf0d6448fa::t_e3863734627a26 127-130
+helm/strato-control-plane/templates/deployment.yaml
+  s_d3ddaf0d6448fa::t_c926a34013bd2e 138-147
+  s_d3ddaf0d6448fa::t_cc9185f6a6ecdf 254-259,262,264,272-277
+control-plane/Sources/App/DatabaseTLSConfiguration.swift
+  s_d3ddaf0d6448fa::t_b15cff408eeb42 1-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "eebc02044135618832a2bafceb7e6dd4ec7fbddc",
+  "prompts": {},
+  "sessions": {
+    "s_d3ddaf0d6448fa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6716173-cfeb-4893-a1ea-a5eccbdbcb33",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
