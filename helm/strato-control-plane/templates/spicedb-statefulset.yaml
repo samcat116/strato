@@ -40,6 +40,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "strato-control-plane.spicedb.fullname" . }}-config
                   key: datastore-conn-uri
+          {{- if .Values.strato.database.tlsCACert }}
+          volumeMounts:
+            - name: db-tls-ca
+              mountPath: /etc/spicedb/db-tls
+              readOnly: true
+          {{- end }}
       containers:
         - name: spicedb
           image: "{{ .Values.spicedb.image.repository }}:{{ .Values.spicedb.image.tag }}"
@@ -95,11 +101,24 @@ spec:
           resources:
             {{- toYaml .Values.spicedb.resources | nindent 12 }}
           {{- end }}
-          {{- if .Values.spicedb.persistence.enabled }}
+          {{- if or .Values.spicedb.persistence.enabled .Values.strato.database.tlsCACert }}
           volumeMounts:
+            {{- if .Values.spicedb.persistence.enabled }}
             - name: data
               mountPath: /data
+            {{- end }}
+            {{- if .Values.strato.database.tlsCACert }}
+            - name: db-tls-ca
+              mountPath: /etc/spicedb/db-tls
+              readOnly: true
+            {{- end }}
           {{- end }}
+      {{- if .Values.strato.database.tlsCACert }}
+      volumes:
+        - name: db-tls-ca
+          secret:
+            secretName: {{ include "strato-control-plane.fullname" . }}-db-tls-ca
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

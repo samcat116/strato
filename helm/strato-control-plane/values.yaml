@@ -165,15 +165,21 @@ strato:
     username: vapor_username
     # password is stored in secret
 
-    # TLS mode for the control plane's Postgres connection (issue #56):
-    #   require  - encrypt and fail if the server won't negotiate TLS (default)
+    # TLS mode for the Postgres connection, applied to BOTH the control plane
+    # (DATABASE_TLS) and SpiceDB (sslmode) — issue #56:
+    #   require  - encrypt and fail if the server won't negotiate TLS
     #   prefer   - encrypt if offered, fall back to plaintext otherwise
-    #   disable  - plaintext only (in-cluster Postgres over a trusted network)
-    tls: require
+    #   disable  - plaintext only (trusted network)
+    # Leave empty to pick a safe default by topology: `disable` for the bundled
+    # in-cluster Postgres (which serves no TLS and never leaves the cluster) and
+    # `require` for an external database (postgresql.enabled=false). Set
+    # explicitly to override.
+    tls: ""
     # Optional PEM CA bundle used to verify the database server certificate.
-    # When set, its contents are mounted into the container and the control
-    # plane verifies the server cert against it. Leave empty to use the image's
-    # system trust store (correct for a publicly-rooted managed database).
+    # When set, its contents are mounted into the control plane and SpiceDB and
+    # the server cert is verified against it (SpiceDB is pinned to verify-full).
+    # Leave empty to use the image's system trust store (correct for a
+    # publicly-rooted managed database).
     #   caCert: |
     #     -----BEGIN CERTIFICATE-----
     #     ...

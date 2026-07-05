@@ -135,12 +135,13 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.databaseSecretName" . }}"
                   key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
-            # Encrypt the Postgres connection (issue #56). Defaults to `require`;
-            # set strato.database.tls=disable for an in-cluster DB on a trusted
-            # network. When a CA bundle is supplied it's mounted below and its
-            # path handed to the control plane for server-cert verification.
+            # Encrypt the Postgres connection (issue #56). Defaults by topology
+            # (disable for the bundled in-cluster DB, require for external); set
+            # strato.database.tls to override. When a CA bundle is supplied it's
+            # mounted below and its path handed to the control plane for
+            # server-cert verification.
             - name: DATABASE_TLS
-              value: "{{ .Values.strato.database.tls | default "require" }}"
+              value: "{{ include "strato-control-plane.databaseTLS" . }}"
             {{- if .Values.strato.database.tlsCACert }}
             - name: DATABASE_TLS_CA_CERT_PATH
               value: "/etc/strato/db-tls/ca.crt"
