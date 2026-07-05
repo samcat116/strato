@@ -27,11 +27,20 @@ struct VolumeMessageTests {
     @Test func volumeDeleteRoundTrip() throws {
         let decoded = try throughEnvelope(
             VolumeDeleteMessage(
-                requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, volumeId: "vol-1",
-                volumePath: "/var/lib/strato/vol-1.qcow2")
+                requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, volumeId: "vol-1")
         )
         #expect(decoded.type == .volumeDelete)
         #expect(decoded.volumeId == "vol-1")
+        #expect(decoded.volumePath == nil)
+    }
+
+    /// Older control planes still send the legacy volumePath hint.
+    @Test func volumeDeleteDecodesLegacyPathHint() throws {
+        let decoded = try throughEnvelope(
+            VolumeDeleteMessage(
+                requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, volumeId: "vol-1",
+                volumePath: "/var/lib/strato/vol-1.qcow2")
+        )
         #expect(decoded.volumePath == "/var/lib/strato/vol-1.qcow2")
     }
 
@@ -85,12 +94,26 @@ struct VolumeMessageTests {
                 timestamp: Fixtures.timestamp,
                 volumeId: "vol-1",
                 snapshotId: "snap-1",
-                volumePath: "/var/lib/strato/vol-1.qcow2",
-                snapshotPath: "/var/lib/strato/snap-1.qcow2"
+                volumePath: "/var/lib/strato/vol-1.qcow2"
             )
         )
         #expect(decoded.type == .volumeSnapshot)
         #expect(decoded.snapshotId == "snap-1")
+        #expect(decoded.snapshotPath == nil)
+    }
+
+    /// Older control planes still send the legacy snapshotPath hint.
+    @Test func volumeSnapshotDecodesLegacyPathHint() throws {
+        let decoded = try throughEnvelope(
+            VolumeSnapshotMessage(
+                requestId: Fixtures.requestId,
+                timestamp: Fixtures.timestamp,
+                volumeId: "vol-1",
+                snapshotId: "snap-1",
+                volumePath: "/var/lib/strato/vol-1.qcow2",
+                snapshotPath: "/var/lib/strato/snap-1.qcow2"
+            )
+        )
         #expect(decoded.snapshotPath == "/var/lib/strato/snap-1.qcow2")
     }
 
@@ -101,13 +124,27 @@ struct VolumeMessageTests {
                 timestamp: Fixtures.timestamp,
                 sourceVolumeId: "vol-1",
                 sourceVolumePath: "/var/lib/strato/vol-1.qcow2",
-                targetVolumeId: "vol-2",
-                targetVolumePath: "/var/lib/strato/vol-2.qcow2"
+                targetVolumeId: "vol-2"
             )
         )
         #expect(decoded.type == .volumeClone)
         #expect(decoded.sourceVolumeId == "vol-1")
         #expect(decoded.targetVolumeId == "vol-2")
+        #expect(decoded.targetVolumePath == nil)
+    }
+
+    /// Older control planes still send the legacy targetVolumePath hint.
+    @Test func volumeCloneDecodesLegacyPathHint() throws {
+        let decoded = try throughEnvelope(
+            VolumeCloneMessage(
+                requestId: Fixtures.requestId,
+                timestamp: Fixtures.timestamp,
+                sourceVolumeId: "vol-1",
+                sourceVolumePath: "/var/lib/strato/vol-1.qcow2",
+                targetVolumeId: "vol-2",
+                targetVolumePath: "/var/lib/strato/vol-2.qcow2"
+            )
+        )
         #expect(decoded.targetVolumePath == "/var/lib/strato/vol-2.qcow2")
     }
 
