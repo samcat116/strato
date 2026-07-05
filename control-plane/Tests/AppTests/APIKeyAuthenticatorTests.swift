@@ -20,7 +20,13 @@ struct APIKeyAuthenticatorTests {
         return user
     }
 
-    func createTestAPIKey(for user: User, on db: Database, isActive: Bool = true, expiresAt: Date? = nil) async throws -> (APIKey, String) {
+    func createTestAPIKey(
+        for user: User,
+        on db: Database,
+        isActive: Bool = true,
+        expiresAt: Date? = nil,
+        scopes: [String] = ["read", "write"]
+    ) async throws -> (APIKey, String) {
         let fullKey = APIKey.generateAPIKey()
         let hashedKey = APIKey.hashAPIKey(fullKey)
         let prefix = String(fullKey.prefix(8))
@@ -30,7 +36,7 @@ struct APIKeyAuthenticatorTests {
             name: "Test API Key",
             keyHash: hashedKey,
             keyPrefix: prefix,
-            scopes: ["read", "write"],
+            scopes: scopes,
             isActive: isActive,
             expiresAt: expiresAt
         )
@@ -352,6 +358,146 @@ struct APIKeyAuthenticatorTests {
 
         try await app.asyncShutdown()
         app.cleanupTestDatabase()
+    }
+
+    // MARK: - Scope Enforcement Tests
+
+    /// Registers a read (GET) and a write (POST) route behind the bearer
+    /// authenticator + scope middleware, mirroring the production pipeline.
+    private func registerScopedRoutes(on app: Application) {
+        app.routes.all.removeAll()
+        let protected = app.grouped(
+            BearerAuthorizationHeaderAuthenticator(),
+            APIKeyScopeMiddleware()
+        )
+        protected.get("resource") { _ in "read-ok" }
+        protected.post("resource") { _ in "write-ok" }
+    }
+
+    @Test("Read-only key can perform read requests")
+    func testReadScopeAllowsGet() async throws {
+        let app = try await Application.makeForTesting()
+        try await configure(app)
+        try await app.autoMigrate()
+
+        let user = try await createTestUser(on: app.db)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, scopes: ["read"])
+        registerScopedRoutes(on: app)
+
+        try await app.test(.GET, "/resource", beforeRequest: { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+        }) { res async in
+            #expect(res.status == .ok)
+            #expect(res.body.string == "read-ok")
+        }
+
+        try await app.asyncShutdown()
+        app.cleanupTestDatabase()
+    }
+
+    @Test("Read-only key is forbidden from write requests")
+    func testReadScopeForbidsPost() async throws {
+        let app = try await Application.makeForTesting()
+        try await configure(app)
+        try await app.autoMigrate()
+
+        let user = try await createTestUser(on: app.db)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, scopes: ["read"])
+        registerScopedRoutes(on: app)
+
+        try await app.test(.POST, "/resource", beforeRequest: { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+        }) { res async in
+            #expect(res.status == .forbidden)
+        }
+
+        try await app.asyncShutdown()
+        app.cleanupTestDatabase()
+    }
+
+    @Test("Write key can perform both read and write requests")
+    func testWriteScopeAllowsReadAndWrite() async throws {
+        let app = try await Application.makeForTesting()
+        try await configure(app)
+        try await app.autoMigrate()
+
+        let user = try await createTestUser(on: app.db)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, scopes: ["write"])
+        registerScopedRoutes(on: app)
+
+        try await app.test(.GET, "/resource", beforeRequest: { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+        }) { res async in
+            #expect(res.status == .ok)
+        }
+
+        try await app.test(.POST, "/resource", beforeRequest: { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+        }) { res async in
+            #expect(res.status == .ok)
+            #expect(res.body.string == "write-ok")
+        }
+
+        try await app.asyncShutdown()
+        app.cleanupTestDatabase()
+    }
+
+    @Test("Admin key can perform write requests")
+    func testAdminScopeAllowsWrite() async throws {
+        let app = try await Application.makeForTesting()
+        try await configure(app)
+        try await app.autoMigrate()
+
+        let user = try await createTestUser(on: app.db)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, scopes: ["admin"])
+        registerScopedRoutes(on: app)
+
+        try await app.test(.POST, "/resource", beforeRequest: { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+        }) { res async in
+            #expect(res.status == .ok)
+            #expect(res.body.string == "write-ok")
+        }
+
+        try await app.asyncShutdown()
+        app.cleanupTestDatabase()
+    }
+
+    @Test("APIKeyScope hierarchy grants higher scopes")
+    func testScopeHierarchy() {
+        let readOnly = APIKey(userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p", scopes: ["read"])
+        #expect(readOnly.grants(.read))
+        #expect(!readOnly.grants(.write))
+        #expect(!readOnly.grants(.admin))
+
+        let writer = APIKey(userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p", scopes: ["write"])
+        #expect(writer.grants(.read))
+        #expect(writer.grants(.write))
+        #expect(!writer.grants(.admin))
+
+        let admin = APIKey(userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p", scopes: ["admin"])
+        #expect(admin.grants(.read))
+        #expect(admin.grants(.write))
+        #expect(admin.grants(.admin))
+    }
+
+    @Test("APIKeyScope required(for:) maps methods to scopes")
+    func testRequiredScopeForMethod() {
+        #expect(APIKeyScope.required(for: .GET) == .read)
+        #expect(APIKeyScope.required(for: .HEAD) == .read)
+        #expect(APIKeyScope.required(for: .OPTIONS) == .read)
+        #expect(APIKeyScope.required(for: .POST) == .write)
+        #expect(APIKeyScope.required(for: .PUT) == .write)
+        #expect(APIKeyScope.required(for: .PATCH) == .write)
+        #expect(APIKeyScope.required(for: .DELETE) == .write)
+    }
+
+    @Test("Unknown scope strings do not grant access")
+    func testUnknownScopesIgnored() {
+        let bogus = APIKey(userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p", scopes: ["superuser"])
+        #expect(!bogus.grants(.read))
+        #expect(!bogus.grants(.write))
+        #expect(bogus.grantedScopes.isEmpty)
     }
 
     // MARK: - Hash Function Tests

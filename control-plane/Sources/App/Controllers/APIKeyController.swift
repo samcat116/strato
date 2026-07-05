@@ -59,11 +59,10 @@ struct APIKeyController: RouteCollection {
         let createRequest = try req.content.decode(CreateAPIKeyRequest.self)
 
         // Validate scopes
-        let validScopes = ["read", "write", "admin"]
         let requestedScopes = createRequest.scopes ?? ["read", "write"]
 
         for scope in requestedScopes {
-            guard validScopes.contains(scope) else {
+            guard APIKeyScope.validValues.contains(scope) else {
                 throw Abort(.badRequest, reason: "Invalid scope: \(scope)")
             }
         }
@@ -132,9 +131,8 @@ struct APIKeyController: RouteCollection {
         }
 
         if let scopes = updateRequest.scopes {
-            let validScopes = ["read", "write", "admin"]
             for scope in scopes {
-                guard validScopes.contains(scope) else {
+                guard APIKeyScope.validValues.contains(scope) else {
                     throw Abort(.badRequest, reason: "Invalid scope: \(scope)")
                 }
             }

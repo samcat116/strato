@@ -74,3 +74,34 @@ struct BearerAuthorizationHeaderAuthenticator: AsyncMiddleware {
         return try await next.respond(to: request)
     }
 }
+
+// MARK: - API Key Scope Enforcement
+
+/// Enforces an API key's scopes at request time.
+///
+/// Scopes were validated when a key was created but never checked afterward, so
+/// a key minted as read-only still wielded the full write/admin power of its
+/// owning user (issue #173). This middleware closes that gap: for any request
+/// authenticated with an API key it derives the scope the HTTP method requires
+/// (`read` for safe methods, `write` for mutations) and rejects the request
+/// with 403 when the key lacks it. `admin` is a superset that grants everything.
+///
+/// Requests that are not API-key authenticated (session cookie, dev bypass, or
+/// no credentials at all) carry no `request.apiKey` and pass through untouched.
+struct APIKeyScopeMiddleware: AsyncMiddleware {
+    func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
+        guard let apiKey = request.apiKey else {
+            return try await next.respond(to: request)
+        }
+
+        let required = APIKeyScope.required(for: request.method)
+        guard apiKey.grants(required) else {
+            throw Abort(
+                .forbidden,
+                reason: "API key lacks the required '\(required.rawValue)' scope for this operation"
+            )
+        }
+
+        return try await next.respond(to: request)
+    }
+}
