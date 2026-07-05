@@ -685,7 +685,16 @@ actor AgentService {
         websocket.send(data)
     }
 
-    private func sendMessageToAgentWithResponse<T: WebSocketMessage>(_ message: T, agentId: String) async throws -> AgentServiceResponse {
+    /// Send a message to an agent and await the correlated success/error response.
+    /// Also used by other services (e.g. VolumeService) that must confirm an agent
+    /// completed an operation before reconciling database state. The timeout should
+    /// be sized to the operation: metadata ops finish in seconds, while image-backed
+    /// volume creation or a clone can copy gigabytes.
+    func sendMessageToAgentWithResponse<T: WebSocketMessage>(
+        _ message: T,
+        agentId: String,
+        timeout: Duration = .seconds(30)
+    ) async throws -> AgentServiceResponse {
         return try await withCheckedThrowingContinuation { continuation in
             Task {
                 do {
@@ -696,10 +705,10 @@ actor AgentService {
                     try await self.sendMessageToAgent(message, agentId: agentId)
 
                     // Arm a timeout, tracking its handle so a normal response can
-                    // cancel it instead of leaving a 30s task dangling per request.
+                    // cancel it instead of leaving a task dangling per request.
                     let requestId = message.requestId
                     let timeoutTask = Task {
-                        try? await Task.sleep(for: .seconds(30))
+                        try? await Task.sleep(for: timeout)
                         guard !Task.isCancelled else { return }
                         self.timeoutRequest(requestId)
                     }
