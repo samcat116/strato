@@ -114,6 +114,76 @@ final class ProjectTests {
         }
     }
 
+    @Test("Create project in organization writes SpiceDB project→organization tuple with persisted id")
+    func testCreateProjectWritesOrganizationTuple() async throws {
+        try await withProjectTestApp { app, _, testOrganization, _, authToken in
+            let recorder = SpiceDBMockRecorder()
+            app.spicedbMockRecorder = recorder
+
+            var createdProjectId: UUID?
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/projects") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(CreateProjectRequest(
+                    name: "Perms Project",
+                    description: "Project that should get an org tuple",
+                    organizationalUnitId: nil,
+                    defaultEnvironment: "development",
+                    environments: ["development"]
+                ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                createdProjectId = try res.content.decode(ProjectResponse.self).id
+            }
+
+            // The tuple must reference the *persisted* project id (issue #267): a
+            // mismatch here means project-scoped permissions can't resolve via
+            // organization->admin and the creating admin gets 403s.
+            let projectId = try #require(createdProjectId)
+            let writes = await recorder.writes
+            let orgTuple = writes.first {
+                $0.entity == "project" && $0.relation == "organization"
+            }
+            let tuple = try #require(orgTuple, "expected a project→organization relationship write")
+            #expect(tuple.entityId == projectId.uuidString)
+            #expect(tuple.subject == "organization")
+            #expect(tuple.subjectId == testOrganization.id!.uuidString)
+        }
+    }
+
+    @Test("Create project in OU writes SpiceDB tuple resolving to the root organization")
+    func testCreateProjectInOUWritesOrganizationTuple() async throws {
+        try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
+            let recorder = SpiceDBMockRecorder()
+            app.spicedbMockRecorder = recorder
+
+            var createdProjectId: UUID?
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous/\(testOU.id!)/projects") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(CreateProjectRequest(
+                    name: "OU Perms Project",
+                    description: "OU project that should get an org tuple",
+                    organizationalUnitId: nil,
+                    defaultEnvironment: "development",
+                    environments: ["development"]
+                ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                createdProjectId = try res.content.decode(ProjectResponse.self).id
+            }
+
+            let projectId = try #require(createdProjectId)
+            let writes = await recorder.writes
+            let orgTuple = writes.first {
+                $0.entity == "project" && $0.relation == "organization"
+            }
+            let tuple = try #require(orgTuple, "expected a project→organization relationship write")
+            #expect(tuple.entityId == projectId.uuidString)
+            // OU-scoped projects have no direct organization column, so the tuple
+            // must resolve to the OU's root organization.
+            #expect(tuple.subjectId == testOrganization.id!.uuidString)
+        }
+    }
+
     @Test("Create project with invalid parent fails")
     func testCreateProjectWithInvalidParent() async throws {
         try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
