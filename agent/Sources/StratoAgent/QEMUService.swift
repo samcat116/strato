@@ -664,16 +664,23 @@ actor QEMUService: HypervisorService {
             firmware = specFirmware
         }
 
+        // Select the CPU model. `host` passes the physical CPU through and is
+        // only valid with a hardware accelerator (KVM/HVF); QEMU rejects it under
+        // TCG ("CPU model 'host' requires KVM or HVF"). When acceleration is
+        // disabled we fall back to `max`, a TCG-safe model that exposes the most
+        // features the emulator can provide.
+        let cpuType = hardwareAccelerationEnabled ? "host" : "max"
+
         // Configure machine type based on architecture and boot mode
         #if arch(arm64)
         // For ARM64 UEFI boot, we need gic-version=3 for EDK2 firmware compatibility
         qemuConfig.machineType = kernelBoot != nil ? "virt" : "virt,gic-version=3"
-        qemuConfig.cpuType = "host"
-        logger.debug("Configuring ARM64 machine type: \(qemuConfig.machineType)")
+        qemuConfig.cpuType = cpuType
+        logger.debug("Configuring ARM64 machine type: \(qemuConfig.machineType), cpu: \(cpuType)")
         #else
         qemuConfig.machineType = "q35"
-        qemuConfig.cpuType = "host"
-        logger.debug("Configuring x86_64 machine type: q35")
+        qemuConfig.cpuType = cpuType
+        logger.debug("Configuring x86_64 machine type: q35, cpu: \(cpuType)")
         #endif
 
         // Configure CPU
