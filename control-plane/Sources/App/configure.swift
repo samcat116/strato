@@ -80,6 +80,23 @@ public func configure(_ app: Application) async throws {
     // Configure API key authentication (for Bearer tokens)
     app.middleware.use(BearerAuthorizationHeaderAuthenticator())
 
+    // Rate limiting: throttle per-IP (unauthenticated) and per-user
+    // (authenticated). Registered after the authenticators so it can bucket by
+    // the resolved user, and before authorization/controllers so throttled
+    // requests are rejected before doing real work. Uses Valkey when configured
+    // (shared across replicas), else a process-local counter. See issue #60.
+    let rateLimitConfig = RateLimitConfig.fromEnvironment(for: app.environment)
+    if rateLimitConfig.enabled {
+        app.middleware.use(RateLimitMiddleware(
+            config: rateLimitConfig,
+            fallbackStore: InMemoryRateLimitStore()
+        ))
+        app.logger.info("Rate limiting enabled", metadata: [
+            "authLimit": .stringConvertible(rateLimitConfig.authLimit),
+            "apiLimit": .stringConvertible(rateLimitConfig.apiLimit)
+        ])
+    }
+
     // Enforce the scopes attached to an API key. Must run after the bearer
     // authenticator above (which populates request.apiKey) so it can see the
     // key; a no-op for session-authenticated requests (issue #173).
