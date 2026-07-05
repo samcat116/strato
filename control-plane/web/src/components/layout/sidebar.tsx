@@ -12,6 +12,9 @@ import {
   Settings,
   Plus,
   Key,
+  Building2,
+  FolderTree,
+  Gauge,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -176,13 +179,33 @@ export function Sidebar({ onCreateVM, onAddAgent }: SidebarProps) {
           </button>
         </SidebarSection>
 
+        {/* Organization Section */}
+        <SidebarSection
+          id="organization-section"
+          title="Organization"
+          icon={<Building2 className="h-4 w-4" />}
+        >
+          <SidebarLink href="/hierarchy">
+            <span className="flex items-center">
+              <FolderTree className="h-4 w-4 mr-2" />
+              Hierarchy
+            </span>
+          </SidebarLink>
+          <SidebarLink href="/quotas">
+            <span className="flex items-center">
+              <Gauge className="h-4 w-4 mr-2" />
+              Resource Quotas
+            </span>
+          </SidebarLink>
+          <SidebarLink href="/organizations/settings">Settings</SidebarLink>
+        </SidebarSection>
+
         {/* Settings Section */}
         <SidebarSection
           id="settings-section"
           title="Settings"
           icon={<Settings className="h-4 w-4" />}
         >
-          <SidebarLink href="/organizations/settings">Organization</SidebarLink>
           <SidebarLink href="/settings/api-keys">
             <span className="flex items-center">
               <Key className="h-4 w-4 mr-2" />
