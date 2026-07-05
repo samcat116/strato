@@ -227,6 +227,78 @@ jobs:
         working-directory: agent
         run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent"
 
+  test-agent-macos:
+    name: Build & Test Agent (macOS)
+    needs: changes
+    # macOS coverage for the agent (the self-hosted `test` job builds it on
+    # Linux only). This job builds and tests the full agent — exercising the
+    # macOS-specific virtualization (HVF) / user-mode networking code — on a
+    # macOS runner.
+    #
+    # The toolchain install + verify below are gating (a broken macOS toolchain
+    # setup should fail this job). The actual Build/Test steps are best-effort
+    # (continue-on-error at the step level), so their failure surfaces as a
+    # visible warning but does not fail the job or block merges.
+    #
+    # Why best-effort: the macOS agent graph transitively pulls the Darwin-only
+    # NIOTransportServices → NIOEmbedded, and that swift-nio code does not
+    # compile under the pinned 6.3.2 toolchain on macOS ("inQueueKey is not
+    # concurrency-safe because DispatchSpecificKey is not Sendable"). SwiftPM
+    # builds NIOEmbedded for any agent target on macOS, so there is currently no
+    # green agent build/test here. It compiles cleanly on Swift 6.4, which is
+    # not yet published as a standalone swift.org toolchain. Linux never builds
+    # NIOEmbedded, so its full agent build/test (added in #284) is unaffected.
+    # Drop the step-level continue-on-error once the toolchain pin (or the
+    # swift-nio version) moves past this.
+    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
+    runs-on: macos-14
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install QEMU build dependencies
+        # QEMUKit (via SwiftQEMU) links glib-2.0 and resolves it through
+        # pkg-config; both are needed to compile the StratoAgent executable.
+        run: brew install glib pkg-config
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            agent/.build
+            shared/.build
+          key: macos-agent-swift-${{ hashFiles('agent/Package.resolved', 'shared/Package.resolved') }}
+          restore-keys: |
+            macos-agent-swift-
+
+      # Install the toolchain by dropping the swift.org release .pkg directly.
+      # vapor/swiftly-action's macOS path runs a Linux-only (apt/dnf/yum)
+      # dependency installer and aborts; and `swiftly install` itself currently
+      # crashes (Abort trap: 6) on the macOS runner. A direct .pkg install
+      # avoids both and pins the same toolchain the Linux jobs use. Selecting it
+      # via TOOLCHAINS (rather than PATH) lets xcrun resolve the macOS SDK.
+      - name: Install Swift 6.3.2 toolchain
+        run: |
+          set -euxo pipefail
+          pkg="$RUNNER_TEMP/swift-6.3.2-osx.pkg"
+          curl -fsSL "https://download.swift.org/swift-6.3.2-release/xcode/swift-6.3.2-RELEASE/swift-6.3.2-RELEASE-osx.pkg" -o "$pkg"
+          sudo installer -pkg "$pkg" -target /
+          toolchain="$(ls -d /Library/Developer/Toolchains/swift-6.3.2-RELEASE.xctoolchain 2>/dev/null || ls -dt /Library/Developer/Toolchains/*.xctoolchain | head -1)"
+          echo "TOOLCHAINS=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$toolchain/Info.plist")" >> "$GITHUB_ENV"
+
+      - name: Verify Swift toolchain
+        run: swift --version
+
+      - name: Build Agent
+        working-directory: agent
+        continue-on-error: true
+        run: swift build --build-tests
+
+      - name: Test Agent
+        working-directory: agent
+        continue-on-error: true
+        run: swift test --skip-build --parallel
+
   security:
     name: Security Scan
     needs: changes
