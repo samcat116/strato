@@ -95,10 +95,19 @@ public func configure(_ app: Application) async throws {
     if app.environment != .testing {
         // Fail fast: the SpiceDB service is constructed lazily on every authorized
         // request, so validate its required configuration at boot rather than
-        // letting the first request that touches it error out.
+        // letting the first request that touches it error out. Skipped under
+        // .testing, which resolves `app.spicedb` to an in-memory mock and needs no
+        // real endpoint or preshared key.
         try app.validateSpiceDBConfiguration()
-        app.middleware.use(SpiceDBAuthMiddleware())
     }
+
+    // Register the authorization middleware in every environment — including
+    // .testing. It used to be skipped under .testing, which meant every controller
+    // test ran with authorization off and no test could catch an authz regression
+    // (issue #196). In testing, `app.spicedb` resolves to a mock whose verdict is
+    // controlled by `app.spicedbMockAllows`, so tests can exercise both the
+    // allow and deny paths through the real middleware + handler stack.
+    app.middleware.use(SpiceDBAuthMiddleware())
 
     // Configure database based on environment
     if app.environment == .testing {

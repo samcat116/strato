@@ -819,4 +819,118 @@ final class ImageControllerTests {
             }
         }
     }
+
+    // MARK: - Authorization Tests
+    //
+    // Every ImageController handler gates on `req.spicedb.checkPermission` after
+    // authenticating the caller. These pin the deny path: an authenticated user
+    // whom SpiceDB refuses must get 403, not a leaked image or a mutation. They
+    // regress the whole class of authz bugs that went uncaught while the auth
+    // middleware was disabled under `.testing` (issue #196). `spicedbMockAllows`
+    // drives the mock's verdict for the whole request.
+
+    @Test("List images is denied (403) when SpiceDB withholds view_project")
+    func testListImagesForbiddenWhenDenied() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            app.spicedbMockAllows = false
+
+            try await app.test(.GET, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+        }
+    }
+
+    @Test("Get image is denied (403) when SpiceDB withholds read")
+    func testGetImageForbiddenWhenDenied() async throws {
+        try await withImageTestApp { app, user, _, project, authToken, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+            app.spicedbMockAllows = false
+
+            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+        }
+    }
+
+    @Test("Create image is denied (403) when SpiceDB withholds update_project")
+    func testCreateImageForbiddenWhenDenied() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            app.spicedbMockAllows = false
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .json
+                try req.content.encode(CreateImageRequest(
+                    name: "URL Image",
+                    description: nil,
+                    sourceURL: "https://example.com/image.qcow2",
+                    defaultCpu: nil,
+                    defaultMemory: nil,
+                    defaultDisk: nil,
+                    defaultCmdline: nil
+                ))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+        }
+    }
+
+    @Test("Update image is denied (403) when SpiceDB withholds update")
+    func testUpdateImageForbiddenWhenDenied() async throws {
+        try await withImageTestApp { app, user, _, project, authToken, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+            app.spicedbMockAllows = false
+
+            try await app.test(.PUT, "/api/projects/\(project.id!)/images/\(image.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .json
+                try req.content.encode(UpdateImageRequest(
+                    name: "Renamed",
+                    description: nil,
+                    defaultCpu: nil,
+                    defaultMemory: nil,
+                    defaultDisk: nil,
+                    defaultCmdline: nil
+                ))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+        }
+    }
+
+    @Test("Delete image is denied (403) when SpiceDB withholds delete")
+    func testDeleteImageForbiddenWhenDenied() async throws {
+        try await withImageTestApp { app, user, _, project, authToken, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+            app.spicedbMockAllows = false
+
+            try await app.test(.DELETE, "/api/projects/\(project.id!)/images/\(image.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+        }
+    }
+
+    @Test("Get image status is denied (403) when SpiceDB withholds read")
+    func testGetImageStatusForbiddenWhenDenied() async throws {
+        try await withImageTestApp { app, user, _, project, authToken, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+            app.spicedbMockAllows = false
+
+            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/status") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+        }
+    }
 }

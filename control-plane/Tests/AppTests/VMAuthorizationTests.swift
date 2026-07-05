@@ -13,11 +13,10 @@ final class VMAuthorizationTests {
 
     /// Boots a configured test app with a non-admin user, org, project and one VM.
     ///
-    /// `configure(app)` skips `SpiceDBAuthMiddleware` under `.testing`, so we install it
-    /// explicitly here — otherwise these requests would never traverse the middleware
-    /// whose `/api/vms` prefix regression this suite covers (they'd only exercise the
-    /// per-handler `authorizedVM` checks). Installed last, after configure()'s session /
-    /// bearer authenticators, matching production ordering.
+    /// `configure(app)` installs `SpiceDBAuthMiddleware` in every environment,
+    /// including `.testing` (issue #196), so these requests traverse the same
+    /// middleware whose `/api/vms` prefix regression this suite covers rather than
+    /// only exercising the per-handler `authorizedVM` checks.
     private func withVMTestApp(
         _ test: (Application, User, VM, String) async throws -> Void
     ) async throws {
@@ -25,7 +24,6 @@ final class VMAuthorizationTests {
 
         do {
             try await configure(app)
-            app.middleware.use(SpiceDBAuthMiddleware())
             try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
