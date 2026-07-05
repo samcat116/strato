@@ -16,6 +16,11 @@ export interface CreateUserRequest {
   displayName: string;
 }
 
+export interface UpdateUserRequest {
+  displayName?: string;
+  email?: string;
+}
+
 export type VMStatus =
   | "Running"
   | "Shutdown"
@@ -227,6 +232,42 @@ export interface CreateAPIKeyResponse {
 
 export interface SessionResponse {
   user: User;
+}
+
+// SCIM provisioning tokens (org-scoped, admin only)
+export interface SCIMToken {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  organizationId: string;
+  isActive: boolean;
+  expiresAt?: string;
+  lastUsedAt?: string;
+  createdAt?: string;
+}
+
+export interface CreateSCIMTokenRequest {
+  name: string;
+  expiresInDays?: number;
+}
+
+/**
+ * Response returned when creating a SCIM token. The full `token` is only ever
+ * returned here — it is never retrievable again after creation.
+ */
+export interface CreateSCIMTokenResponse {
+  id: string;
+  name: string;
+  token: string;
+  tokenPrefix: string;
+  organizationId: string;
+  expiresAt?: string;
+  createdAt?: string;
+}
+
+export interface UpdateSCIMTokenRequest {
+  name?: string;
+  isActive?: boolean;
 }
 
 // Request types

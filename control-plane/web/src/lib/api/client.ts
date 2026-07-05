@@ -14,6 +14,17 @@ interface FetchOptions extends RequestInit {
   params?: Record<string, string>;
 }
 
+// The auth provider probes /auth/session on every page (including /login) to
+// hydrate its state, and a 401 there is just the normal signed-out case — so
+// auth endpoints and auth pages never trigger a redirect.
+function redirectToLoginOnSessionExpiry(endpoint: string) {
+  if (typeof window === "undefined") return;
+  if (endpoint.startsWith("/auth/")) return;
+  const path = window.location.pathname;
+  if (path === "/login" || path === "/register") return;
+  window.location.assign("/login");
+}
+
 export async function apiClient<T>(
   endpoint: string,
   options: FetchOptions = {}
@@ -35,14 +46,36 @@ export async function apiClient<T>(
   });
 
   if (!response.ok) {
-    let message = "Request failed";
+    let message = "";
     try {
       const error = await response.json();
-      message = error.reason || error.error || message;
+      if (typeof error.reason === "string") {
+        message = error.reason;
+      } else if (typeof error.error === "string") {
+        message = error.error;
+      }
     } catch {
-      message = response.statusText || message;
+      message = response.statusText;
     }
-    throw new ApiError(response.status, message);
+
+    if (response.status === 401) {
+      redirectToLoginOnSessionExpiry(endpoint);
+      throw new ApiError(401, "Your session has expired. Please sign in again.");
+    }
+
+    if (response.status === 403) {
+      // Vapor's default reason for a bare Abort(.forbidden) is just
+      // "Forbidden" — make it read as a permissions problem instead.
+      const isGeneric = !message || /^forbidden\.?$/i.test(message);
+      throw new ApiError(
+        403,
+        isGeneric
+          ? "You don't have permission to perform this action."
+          : message
+      );
+    }
+
+    throw new ApiError(response.status, message || "Request failed");
   }
 
   // Handle empty responses (204 No Content, or 200 with an empty body,
