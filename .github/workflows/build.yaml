@@ -246,6 +246,12 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # The Dockerfile unconditionally COPYs ./artifacts; with no prebuilt
+      # binaries on PRs it must exist (empty), same as main-build's
+      # "Prepare build context" step.
+      - name: Prepare build context
+        run: mkdir -p ./artifacts
+
       - name: Build Control Plane Image
         uses: docker/build-push-action@v5
         with:
