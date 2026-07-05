@@ -1,0 +1,23 @@
+.claude/commands/pr-comments.md
+  s_a48df706b9c18f::t_4cac2744f69f18 1-24
+CLAUDE.md
+  s_a48df706b9c18f::t_82cb2586edad05 5-17,51-57,83-92
+.claude/settings.json
+  s_a48df706b9c18f::t_b78ce0544297f7 2-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "5c97a8f96ba63a204acfe8c5f456925e9ce009c4",
+  "prompts": {},
+  "sessions": {
+    "s_a48df706b9c18f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac7d1e22-b9e4-49f4-b1da-eda41c76706d",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
