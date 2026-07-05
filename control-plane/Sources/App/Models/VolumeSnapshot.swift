@@ -135,8 +135,11 @@ extension VolumeSnapshot {
         return status == .available
     }
 
+    /// `.deleting` is retryable: a control-plane restart mid-delete leaves the
+    /// record in that state with no sweep to recover it, and agent-side file
+    /// deletion is idempotent, so re-issuing the DELETE is always safe.
     var canDelete: Bool {
-        return status == .available || status == .error
+        return status == .available || status == .error || status == .deleting
     }
 
     /// Builds the storage path for this snapshot

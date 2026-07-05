@@ -734,7 +734,7 @@ struct VolumeController: RouteCollection {
 
         // Validate snapshot can be deleted
         guard snapshot.canDelete else {
-            throw Abort(.conflict, reason: "Snapshot cannot be deleted in status '\(snapshot.status.rawValue)'. Must be 'available' or 'error'")
+            throw Abort(.conflict, reason: "Snapshot cannot be deleted in status '\(snapshot.status.rawValue)'. Must be 'available', 'error', or 'deleting'")
         }
 
         // Mark as deleting
