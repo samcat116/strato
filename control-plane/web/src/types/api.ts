@@ -62,6 +62,70 @@ export interface OrganizationMember {
   joinedAt: string;
 }
 
+// Groups
+export interface Group {
+  id: string;
+  name: string;
+  description: string;
+  organizationId: string;
+  memberCount?: number;
+  createdAt?: string;
+}
+
+export interface GroupMember {
+  id: string;
+  username: string;
+  displayName: string;
+  email: string;
+  joinedAt?: string;
+}
+
+export interface CreateGroupRequest {
+  name: string;
+  description: string;
+}
+
+export interface UpdateGroupRequest {
+  name?: string;
+  description?: string;
+}
+
+// Organizational Units
+export interface OrganizationalUnit {
+  id: string;
+  name: string;
+  description: string;
+  organizationId: string;
+  parentOuId?: string | null;
+  path: string;
+  depth: number;
+  createdAt?: string;
+  childOuCount?: number;
+  projectCount?: number;
+}
+
+/** Recursive tree node returned by the OU `tree` endpoint. */
+export interface OrganizationalUnitTree {
+  id: string;
+  name: string;
+  description: string;
+  path: string;
+  depth: number;
+  projectCount: number;
+  children: OrganizationalUnitTree[];
+}
+
+export interface CreateOrganizationalUnitRequest {
+  name: string;
+  description: string;
+  parentOuId?: string;
+}
+
+export interface UpdateOrganizationalUnitRequest {
+  name?: string;
+  description?: string;
+}
+
 export type AgentStatus = "online" | "offline" | "connecting" | "error";
 
 export interface AgentResources {
