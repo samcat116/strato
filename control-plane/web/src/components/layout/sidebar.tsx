@@ -113,10 +113,9 @@ function SidebarLink({ href, children, onClick }: SidebarLinkProps) {
 interface SidebarProps {
   onCreateVM?: () => void;
   onAddAgent?: () => void;
-  onManageAPIKeys?: () => void;
 }
 
-export function Sidebar({ onCreateVM, onAddAgent, onManageAPIKeys }: SidebarProps) {
+export function Sidebar({ onCreateVM, onAddAgent }: SidebarProps) {
   return (
     <aside className="w-64 bg-gray-800 border-r border-gray-700 overflow-y-auto">
       <nav className="px-3 py-4 space-y-1">
@@ -184,13 +183,12 @@ export function Sidebar({ onCreateVM, onAddAgent, onManageAPIKeys }: SidebarProp
           icon={<Settings className="h-4 w-4" />}
         >
           <SidebarLink href="/organizations/settings">Organization</SidebarLink>
-          <button
-            onClick={onManageAPIKeys}
-            className="flex items-center w-full px-3 py-2 text-sm text-gray-400 hover:bg-gray-700 hover:text-gray-200 rounded-md transition-colors"
-          >
-            <Key className="h-4 w-4 mr-2" />
-            API Keys
-          </button>
+          <SidebarLink href="/settings/api-keys">
+            <span className="flex items-center">
+              <Key className="h-4 w-4 mr-2" />
+              API Keys
+            </span>
+          </SidebarLink>
         </SidebarSection>
       </nav>
     </aside>

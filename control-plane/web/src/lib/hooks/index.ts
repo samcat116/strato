@@ -20,3 +20,4 @@ export {
 } from "./use-projects";
 export { useConsole } from "./use-console";
 export { useVMLogs, useInvalidateVMLogs } from "./use-vm-logs";
+export { useAPIKeys, useCreateAPIKey, useRevokeAPIKey } from "./use-api-keys";

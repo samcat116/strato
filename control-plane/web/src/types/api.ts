@@ -147,6 +147,20 @@ export interface APIKey {
   lastUsedAt?: string;
 }
 
+/**
+ * Response returned when creating an API key. The full `key` is only ever
+ * returned here — it is never retrievable again after creation.
+ */
+export interface CreateAPIKeyResponse {
+  id: string;
+  name: string;
+  key: string;
+  keyPrefix: string;
+  scopes: string[];
+  expiresAt?: string;
+  createdAt?: string;
+}
+
 export interface SessionResponse {
   user: User;
 }
