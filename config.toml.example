@@ -48,6 +48,16 @@ log_level = "info"
 #   Linux x86_64: /usr/bin/qemu-system-x86_64
 # qemu_binary_path = "/opt/homebrew/bin/qemu-system-aarch64"
 
+# Hardware acceleration for QEMU VMs
+# When enabled (the default), VMs are backed by the platform accelerator;
+# when disabled, QEMU falls back to TCG emulation (much slower, but useful for
+# dev/test on hosts without hardware virtualization). Each option applies to a
+# single platform and is ignored on the other.
+#   enable_kvm - KVM on Linux   (default: true)
+#   enable_hvf - Hypervisor.framework on macOS (default: true)
+# enable_kvm = true
+# enable_hvf = true
+
 # UEFI firmware paths for disk-based VM boot
 # These are used when VMs boot from disk images rather than direct kernel boot.
 # Optional - platform and architecture-specific defaults will be used if not set.
