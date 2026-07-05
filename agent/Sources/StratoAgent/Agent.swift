@@ -541,6 +541,14 @@ actor Agent {
 
     /// Handle registration response from control plane
     func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) async {
+        let controlPlaneProtocolVersion = response.protocolVersion ?? 0
+        if controlPlaneProtocolVersion != WireProtocol.currentVersion {
+            logger.warning("Control plane wire protocol version differs from agent", metadata: [
+                "controlPlaneProtocolVersion": .stringConvertible(controlPlaneProtocolVersion),
+                "agentProtocolVersion": .stringConvertible(WireProtocol.currentVersion)
+            ])
+        }
+
         // Adopt the rotated reconnect token (if any) before resuming registration:
         // the token this connection presented was consumed by the control plane, so
         // the reconnect loop must dial with the fresh one to be accepted. The token

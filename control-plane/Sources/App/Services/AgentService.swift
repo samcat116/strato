@@ -670,7 +670,7 @@ actor AgentService {
         }
 
         let envelope = try MessageEnvelope(message: message)
-        let data = try JSONEncoder().encode(envelope)
+        let data = try WireProtocol.makeEncoder().encode(envelope)
 
         websocket.send(data)
     }

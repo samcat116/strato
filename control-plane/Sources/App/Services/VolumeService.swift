@@ -316,7 +316,7 @@ actor VolumeService {
 
         // Use the MessageEnvelope to properly encode the message
         let envelope = try MessageEnvelope(message: message)
-        let encoder = JSONEncoder()
+        let encoder = WireProtocol.makeEncoder()
         let data = try encoder.encode(envelope)
         let json = String(data: data, encoding: .utf8) ?? ""
 

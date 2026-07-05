@@ -85,6 +85,18 @@ struct EnumDecodingTests {
         #expect(try roundTrip(events) == events)
     }
 
+    @Test("telemetry enums tolerate unknown values from a newer protocol version")
+    func telemetryEnumsTolerateUnknownValues() throws {
+        // These are purely informational fields on VMLogMessage; an unrecognized
+        // value must decode to .unknown rather than fail the whole log message.
+        #expect(try decodeJSON([VMLogLevel].self, from: #"["trace"]"#) == [.unknown])
+        #expect(try decodeJSON([VMLogSource].self, from: #"["kernel"]"#) == [.unknown])
+        #expect(try decodeJSON([VMEventType].self, from: #"["migration"]"#) == [.unknown])
+        #expect(VMLogLevel.unknown.rawValue == "unknown")
+        #expect(VMLogSource.unknown.rawValue == "unknown")
+        #expect(VMEventType.unknown.rawValue == "unknown")
+    }
+
     @Test func networkEnumsRoundTrip() throws {
         for status in NetworkPortStatus.allCases {
             #expect(try roundTrip([status]) == [status])
