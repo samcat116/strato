@@ -1,0 +1,19 @@
+agent/Tests/StratoAgentTests/AgentStateTests.swift
+  s_3783100b98d1b5::t_9718c8b1be15ca 5-8,143-148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "442bc10ef2ce8e9c0d82db6e8ce88625c3233228",
+  "prompts": {},
+  "sessions": {
+    "s_3783100b98d1b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3b05595c-3b5f-4cfc-b734-2d2daa1f9a52",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
