@@ -28,11 +28,11 @@ struct QuotaComplianceService {
             percentage: Double(actualUsage.vcpus) / Double(quota.maxVCPUs) * 100
         )
 
-        let memoryLimitGB = Int(Double(quota.maxMemory) / 1024 / 1024 / 1024)
+        let memoryLimitGB = quota.maxMemory.bytesToGB
         let memoryCompliance = QuotaComplianceDetail(
             used: Int(actualUsage.memoryGB),
-            limit: memoryLimitGB,
-            percentage: actualUsage.memoryGB / (Double(quota.maxMemory) / 1024 / 1024 / 1024) * 100
+            limit: Int(memoryLimitGB),
+            percentage: actualUsage.memoryGB / memoryLimitGB * 100
         )
 
         let vmCompliance = QuotaComplianceDetail(

@@ -157,7 +157,7 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         if let maxMemoryGB = updateRequest.maxMemoryGB {
-            let maxMemoryBytes = Int64(maxMemoryGB * 1024 * 1024 * 1024)
+            let maxMemoryBytes = maxMemoryGB.gbToBytes
             if maxMemoryBytes < quota.reservedMemory {
                 let currentReservedGB = Double(quota.reservedMemory) / 1024 / 1024 / 1024
                 throw Abort(.badRequest, reason: "New memory limit (\(String(format: "%.2f", maxMemoryGB))GB) cannot be below current reservation (\(String(format: "%.2f", currentReservedGB))GB)")
@@ -166,7 +166,7 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         if let maxStorageGB = updateRequest.maxStorageGB {
-            let maxStorageBytes = Int64(maxStorageGB * 1024 * 1024 * 1024)
+            let maxStorageBytes = maxStorageGB.gbToBytes
             if maxStorageBytes < quota.reservedStorage {
                 let currentReservedGB = Double(quota.reservedStorage) / 1024 / 1024 / 1024
                 throw Abort(.badRequest, reason: "New storage limit (\(String(format: "%.2f", maxStorageGB))GB) cannot be below current reservation (\(String(format: "%.2f", currentReservedGB))GB)")
@@ -524,8 +524,8 @@ struct ResourceQuotaController: RouteCollection {
         projectID: UUID?,
         on db: Database
     ) async throws -> ResourceQuota {
-        let maxMemoryBytes = Int64(createRequest.maxMemoryGB * 1024 * 1024 * 1024)
-        let maxStorageBytes = Int64(createRequest.maxStorageGB * 1024 * 1024 * 1024)
+        let maxMemoryBytes = createRequest.maxMemoryGB.gbToBytes
+        let maxStorageBytes = createRequest.maxStorageGB.gbToBytes
 
         let quota = ResourceQuota(
             name: createRequest.name,

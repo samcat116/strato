@@ -74,55 +74,57 @@ struct OIDCValidation {
 
     // MARK: - SSRF allow-lists for discovery/JWKS fetching
 
+    /// Hosts allowed for OIDC discovery/JWKS fetches when
+    /// `OIDC_DISCOVERY_ALLOWED_HOSTS` is not set.
+    static let defaultAllowedHosts: Set<String> = [
+        "accounts.google.com",
+        "login.microsoftonline.com",
+        "login.salesforce.com",
+        "auth0.com",
+        "okta.com",
+        "oauth.reddit.com",
+        "github.com",
+        "gitlab.com"
+    ]
+
+    /// Domain suffixes allowed for OIDC discovery/JWKS fetches when
+    /// `OIDC_DISCOVERY_ALLOWED_SUFFIXES` is not set.
+    static let defaultAllowedDomainSuffixes: [String] = [
+        ".auth0.com",
+        ".okta.com",
+        ".oktapreview.com",
+        ".okta-emea.com",
+        ".salesforce.com",
+        ".force.com",
+        ".herokuapp.com",
+        ".amazonaws.com",
+        ".azure.com",
+        ".azurewebsites.net"
+    ]
+
+    /// Splits a comma/semicolon-separated allow-list, trimming and dropping empties.
+    static func parseAllowList(_ raw: String) -> [String] {
+        raw
+            .split(whereSeparator: { $0 == "," || $0 == ";" })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
     /// Hosts allowed for OIDC discovery/JWKS fetches, from
-    /// `OIDC_DISCOVERY_ALLOWED_HOSTS` (comma/semicolon separated) or a built-in default set.
-    static func allowedHosts(from env: Environment) -> Set<String> {
+    /// `OIDC_DISCOVERY_ALLOWED_HOSTS` (comma/semicolon separated) or `defaultAllowedHosts`.
+    static func allowedHosts() -> Set<String> {
         if let hostsString = Environment.get("OIDC_DISCOVERY_ALLOWED_HOSTS") {
-            // Comma or semicolon separated
-            let hosts = hostsString
-                .split(whereSeparator: { $0 == "," || $0 == ";" })
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            return Set(hosts)
-        } else {
-            // Default hosts
-            return [
-                "accounts.google.com",
-                "login.microsoftonline.com",
-                "login.salesforce.com",
-                "auth0.com",
-                "okta.com",
-                "oauth.reddit.com",
-                "github.com",
-                "gitlab.com"
-            ]
+            return Set(parseAllowList(hostsString))
         }
+        return defaultAllowedHosts
     }
 
     /// Domain suffixes allowed for OIDC discovery/JWKS fetches, from
-    /// `OIDC_DISCOVERY_ALLOWED_SUFFIXES` (comma/semicolon separated) or a built-in default set.
-    static func allowedDomainSuffixes(from env: Environment) -> [String] {
+    /// `OIDC_DISCOVERY_ALLOWED_SUFFIXES` (comma/semicolon separated) or `defaultAllowedDomainSuffixes`.
+    static func allowedDomainSuffixes() -> [String] {
         if let suffixesString = Environment.get("OIDC_DISCOVERY_ALLOWED_SUFFIXES") {
-            // Comma or semicolon separated
-            let suffixes = suffixesString
-                .split(whereSeparator: { $0 == "," || $0 == ";" })
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            return suffixes
-        } else {
-            // Default suffixes
-            return [
-                ".auth0.com",
-                ".okta.com",
-                ".oktapreview.com",
-                ".okta-emea.com",
-                ".salesforce.com",
-                ".force.com",
-                ".herokuapp.com",
-                ".amazonaws.com",
-                ".azure.com",
-                ".azurewebsites.net"
-            ]
+            return parseAllowList(suffixesString)
         }
+        return defaultAllowedDomainSuffixes
     }
 }

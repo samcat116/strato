@@ -282,17 +282,12 @@ struct HierarchyController: RouteCollection {
             throw Abort(.notFound, reason: "Organization not found")
         }
 
-        // Perform merge in transaction
-        let mergeResult = try await req.db.transaction { transactionDB in
-            return try await HierarchyMaintenanceService.performOrganizationMerge(
-                sourceOrg: sourceOrg,
-                targetOrg: targetOrg,
-                mergeRequest: mergeRequest,
-                on: transactionDB
-            )
-        }
-
-        return mergeResult
+        return try await HierarchyMaintenanceService.performOrganizationMerge(
+            sourceOrg: sourceOrg,
+            targetOrg: targetOrg,
+            mergeRequest: mergeRequest,
+            on: req.db
+        )
     }
 
     func bulkTransferResources(req: Request) async throws -> BulkTransferResponse {
@@ -309,16 +304,11 @@ struct HierarchyController: RouteCollection {
         // Verify user has admin access
         try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
 
-        // Perform bulk transfer in transaction
-        let transferResult = try await req.db.transaction { transactionDB in
-            return try await HierarchyMaintenanceService.performBulkTransfer(
-                organizationID: organizationID,
-                transferRequest: transferRequest,
-                on: transactionDB
-            )
-        }
-
-        return transferResult
+        return try await HierarchyMaintenanceService.performBulkTransfer(
+            organizationID: organizationID,
+            transferRequest: transferRequest,
+            on: req.db
+        )
     }
 
     // MARK: - Validation and Repair
@@ -359,13 +349,9 @@ struct HierarchyController: RouteCollection {
 
         let repairRequest = try req.content.decode(HierarchyRepairRequest.self)
 
-        let repairResult = try await req.db.transaction { transactionDB in
-            return try await HierarchyMaintenanceService.performHierarchyRepair(
-                repairRequest: repairRequest,
-                on: transactionDB
-            )
-        }
-
-        return repairResult
+        return try await HierarchyMaintenanceService.performHierarchyRepair(
+            repairRequest: repairRequest,
+            on: req.db
+        )
     }
 }

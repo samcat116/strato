@@ -431,8 +431,8 @@ struct OIDCController: RouteCollection {
         }
 
         // Load allowed hosts and suffixes from environment/config, fallback to defaults
-        let allowedHosts = OIDCValidation.allowedHosts(from: req.application.environment)
-        let allowedDomainSuffixes = OIDCValidation.allowedDomainSuffixes(from: req.application.environment)
+        let allowedHosts = OIDCValidation.allowedHosts()
+        let allowedDomainSuffixes = OIDCValidation.allowedDomainSuffixes()
 
         let isHostAllowed = allowedHosts.contains(host) ||
                            allowedDomainSuffixes.contains { host.hasSuffix($0) }

@@ -144,8 +144,8 @@ struct HierarchyTreeBuilder {
                 environment: vm.environment,
                 status: vm.status.rawValue,
                 cpu: vm.cpu,
-                memoryGB: Double(vm.memory) / 1024 / 1024 / 1024,
-                diskGB: Double(vm.disk) / 1024 / 1024 / 1024
+                memoryGB: vm.memory.bytesToGB,
+                diskGB: vm.disk.bytesToGB
             )
         }
 

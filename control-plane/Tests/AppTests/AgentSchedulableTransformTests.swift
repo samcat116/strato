@@ -30,7 +30,7 @@ struct AgentSchedulableTransformTests {
     }
 
     @Test("maps agent fields and derives running VM counts from the mapping")
-    func testSchedulableAgents() {
+    func testSchedulableAgents() throws {
         let agents = [
             makeAgent(id: "agent-1", name: "One", availableCPU: 6),
             makeAgent(id: "agent-2", name: "Two", availableCPU: 2)
@@ -43,8 +43,8 @@ struct AgentSchedulableTransformTests {
 
         let result = AgentService.schedulableAgents(from: agents, vmToAgentMapping: mapping)
 
-        let one = try! #require(result.first { $0.id == "agent-1" })
-        let two = try! #require(result.first { $0.id == "agent-2" })
+        let one = try #require(result.first { $0.id == "agent-1" })
+        let two = try #require(result.first { $0.id == "agent-2" })
 
         #expect(one.name == "One")
         #expect(one.availableCPU == 6)

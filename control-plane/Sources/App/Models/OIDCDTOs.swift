@@ -99,9 +99,9 @@ struct JWK: Codable {
     let alg: String? // Algorithm
     
     func createRSAPublicKey() throws -> RSAKey {
-        // Decode the base64url-encoded modulus and exponent
-        let modulusData = try base64URLDecode(n)
-        let exponentData = try base64URLDecode(e)
+        // Decode the base64url-encoded modulus and exponent (shared, unit-tested decoder)
+        let modulusData = try OIDCValidation.decodeBase64URLSafe(n)
+        let exponentData = try OIDCValidation.decodeBase64URLSafe(e)
         
         // Create DER representation manually since we can't use internal APIs
         let derData = try createRSAPublicKeyDER(modulus: modulusData, exponent: exponentData)
@@ -196,21 +196,6 @@ struct JWK: Codable {
         }
     }
     
-    private func base64URLDecode(_ string: String) throws -> Data {
-        var base64String = string
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        
-        // Add padding if necessary
-        let paddingLength = (4 - base64String.count % 4) % 4
-        base64String += String(repeating: "=", count: paddingLength)
-        
-        guard let data = Data(base64Encoded: base64String) else {
-            throw Abort(.badRequest, reason: "Invalid base64URL encoding in JWK")
-        }
-        
-        return data
-    }
 }
 
 extension String {

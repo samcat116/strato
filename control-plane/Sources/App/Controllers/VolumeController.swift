@@ -123,7 +123,7 @@ struct VolumeController: RouteCollection {
         let volumeType = try VolumeNaming.parseVolumeType(request.volumeType)
 
         // Calculate size in bytes
-        let sizeBytes = Int64(request.sizeGB) * 1024 * 1024 * 1024
+        let sizeBytes = Double(request.sizeGB).gbToBytes
 
         // Create volume record
         let volume = Volume(
@@ -454,7 +454,7 @@ struct VolumeController: RouteCollection {
         }
 
         // Calculate new size in bytes
-        let newSizeBytes = Int64(request.sizeGB) * 1024 * 1024 * 1024
+        let newSizeBytes = Double(request.sizeGB).gbToBytes
 
         // Validate new size is larger
         guard newSizeBytes > volume.size else {

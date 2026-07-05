@@ -17,7 +17,10 @@ struct HierarchyPathResolver {
         }
 
         switch entityType {
-        case "organizational_unit":
+        // Accept both the resolver's canonical token and the "ou" filter token that
+        // HierarchySearchService emits/accepts, so a caller using either vocabulary
+        // gets a real path instead of silently falling through to org-root-only.
+        case "organizational_unit", "ou":
             if let ou = try await OrganizationalUnit.find(entityID, on: db) {
                 // Walk from the target OU up to the root, collecting each ancestor
                 // (including the target) so the chain reads root-first.

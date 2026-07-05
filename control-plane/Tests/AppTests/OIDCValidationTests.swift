@@ -76,19 +76,26 @@ struct OIDCValidationTests {
         }
     }
 
-    // MARK: - SSRF allow-lists (defaults)
+    // MARK: - SSRF allow-lists
 
-    @Test("allowedHosts falls back to the built-in default host set")
-    func testAllowedHostsDefault() {
-        let hosts = OIDCValidation.allowedHosts(from: .testing)
-        #expect(hosts.contains("accounts.google.com"))
-        #expect(hosts.contains("login.microsoftonline.com"))
+    // Assert on the default constants directly so the test is independent of any
+    // OIDC_DISCOVERY_ALLOWED_* environment variables present on the CI host.
+    @Test("default host allow-list contains the well-known providers")
+    func testDefaultAllowedHosts() {
+        #expect(OIDCValidation.defaultAllowedHosts.contains("accounts.google.com"))
+        #expect(OIDCValidation.defaultAllowedHosts.contains("login.microsoftonline.com"))
     }
 
-    @Test("allowedDomainSuffixes falls back to the built-in default suffix set")
-    func testAllowedSuffixesDefault() {
-        let suffixes = OIDCValidation.allowedDomainSuffixes(from: .testing)
-        #expect(suffixes.contains(".okta.com"))
-        #expect(suffixes.contains(".amazonaws.com"))
+    @Test("default suffix allow-list contains the well-known suffixes")
+    func testDefaultAllowedSuffixes() {
+        #expect(OIDCValidation.defaultAllowedDomainSuffixes.contains(".okta.com"))
+        #expect(OIDCValidation.defaultAllowedDomainSuffixes.contains(".amazonaws.com"))
+    }
+
+    @Test("parseAllowList splits on commas and semicolons, trimming and dropping empties")
+    func testParseAllowList() {
+        #expect(OIDCValidation.parseAllowList("a.com, b.com ; c.com") == ["a.com", "b.com", "c.com"])
+        #expect(OIDCValidation.parseAllowList("  only.com  ") == ["only.com"])
+        #expect(OIDCValidation.parseAllowList(",; ,") == [])
     }
 }
