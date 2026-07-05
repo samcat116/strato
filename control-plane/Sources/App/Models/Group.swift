@@ -179,7 +179,7 @@ extension Group {
         // Check if user is already a member
         let exists = try await hasMember(userID, on: db)
         if exists {
-            return // Already a member
+            return  // Already a member
         }
 
         let membership = UserGroup(userID: userID, groupID: self.id!)

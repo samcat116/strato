@@ -8,16 +8,16 @@ public enum MessageType: String, Codable, Sendable {
     case agentRegisterResponse = "agent_register_response"
     case agentHeartbeat = "agent_heartbeat"
     case agentUnregister = "agent_unregister"
-    
+
     // VM lifecycle operations
     case vmCreate = "vm_create"
-    case vmBoot = "vm_boot" 
+    case vmBoot = "vm_boot"
     case vmShutdown = "vm_shutdown"
     case vmReboot = "vm_reboot"
     case vmPause = "vm_pause"
     case vmResume = "vm_resume"
     case vmDelete = "vm_delete"
-    
+
     // VM information queries
     case vmInfo = "vm_info"
     case vmStatus = "vm_status"
@@ -29,7 +29,7 @@ public enum MessageType: String, Codable, Sendable {
     case networkInfo = "network_info"
     case networkAttach = "network_attach"
     case networkDetach = "network_detach"
-    
+
     // Volume operations (QEMU only - not supported for Firecracker)
     case volumeCreate = "volume_create"
     case volumeDelete = "volume_delete"
@@ -158,8 +158,8 @@ public struct AgentHeartbeatMessage: WebSocketMessage {
     public let timestamp: Date
     public let agentId: String
     public let resources: AgentResources
-    public let runningVMs: [String] // VM IDs
-    
+    public let runningVMs: [String]  // VM IDs
+
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
@@ -200,7 +200,7 @@ public struct AgentRegisterResponseMessage: WebSocketMessage {
     public let requestId: String
     public let timestamp: Date
     public let agentId: String  // The database UUID assigned to this agent
-    public let name: String     // The human-readable name
+    public let name: String  // The human-readable name
 
     /// Fresh single-use token for the agent's next (re)connection. Registration
     /// tokens are consumed on connect, so the control plane rotates them here —
@@ -240,7 +240,7 @@ public struct AgentResources: Codable, Sendable {
     public let availableMemory: Int64
     public let totalDisk: Int64
     public let availableDisk: Int64
-    
+
     public init(
         totalCPU: Int,
         availableCPU: Int,
@@ -320,7 +320,7 @@ public struct VMOperationMessage: WebSocketMessage {
     public let requestId: String
     public let timestamp: Date
     public let vmId: String
-    
+
     public init(
         type: MessageType,
         requestId: String = UUID().uuidString,
@@ -339,7 +339,7 @@ public struct VMInfoRequestMessage: WebSocketMessage {
     public let requestId: String
     public let timestamp: Date
     public let vmId: String
-    
+
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
@@ -359,7 +359,7 @@ public struct SuccessMessage: WebSocketMessage {
     public let timestamp: Date
     public let message: String?
     public let data: AnyCodableValue?
-    
+
     public init(
         requestId: String,
         timestamp: Date = Date(),
@@ -414,7 +414,7 @@ public struct StatusUpdateMessage: WebSocketMessage {
     public let vmId: String
     public let status: VMStatus
     public let details: String?
-    
+
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
@@ -434,22 +434,22 @@ public struct StatusUpdateMessage: WebSocketMessage {
 
 public struct AnyCodableValue: Codable, Sendable {
     public let value: CodableValue
-    
+
     public init<T: Codable>(_ value: T) throws {
         let data = try WireProtocol.makeEncoder().encode(value)
         self.value = try WireProtocol.makeDecoder().decode(CodableValue.self, from: data)
     }
-    
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         self.value = try container.decode(CodableValue.self)
     }
-    
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(value)
     }
-    
+
     public func decode<T: Codable>(as type: T.Type) throws -> T {
         let data = try WireProtocol.makeEncoder().encode(value)
         return try WireProtocol.makeDecoder().decode(type, from: data)
@@ -464,10 +464,10 @@ public enum CodableValue: Codable, Sendable {
     case array([CodableValue])
     case object([String: CodableValue])
     case null
-    
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        
+
         if container.decodeNil() {
             self = .null
         } else if let stringValue = try? container.decode(String.self) {
@@ -483,15 +483,17 @@ public enum CodableValue: Codable, Sendable {
         } else if let objectValue = try? container.decode([String: CodableValue].self) {
             self = .object(objectValue)
         } else {
-            throw DecodingError.typeMismatch(CodableValue.self, 
-                DecodingError.Context(codingPath: decoder.codingPath, 
-                                    debugDescription: "Unsupported type"))
+            throw DecodingError.typeMismatch(
+                CodableValue.self,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Unsupported type"))
         }
     }
-    
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        
+
         switch self {
         case .string(let value):
             try container.encode(value)
@@ -523,7 +525,7 @@ public struct NetworkCreateMessage: WebSocketMessage {
     public let vlanId: Int?
     public let dhcpEnabled: Bool
     public let dnsServers: [String]
-    
+
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
@@ -550,7 +552,7 @@ public struct NetworkDeleteMessage: WebSocketMessage {
     public let requestId: String
     public let timestamp: Date
     public let networkName: String
-    
+
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
@@ -566,7 +568,7 @@ public struct NetworkListMessage: WebSocketMessage {
     public var type: MessageType { .networkList }
     public let requestId: String
     public let timestamp: Date
-    
+
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date()
@@ -581,7 +583,7 @@ public struct NetworkInfoMessage: WebSocketMessage {
     public let requestId: String
     public let timestamp: Date
     public let networkName: String
-    
+
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
@@ -600,7 +602,7 @@ public struct NetworkAttachMessage: WebSocketMessage {
     public let vmId: String
     public let networkName: String
     public let config: VMNetworkConfig?
-    
+
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
@@ -621,7 +623,7 @@ public struct NetworkDetachMessage: WebSocketMessage {
     public let requestId: String
     public let timestamp: Date
     public let vmId: String
-    
+
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
@@ -767,10 +769,10 @@ public struct VolumeCreateMessage: WebSocketMessage {
     public let requestId: String
     public let timestamp: Date
     public let volumeId: String
-    public let size: Int64           // Size in bytes
-    public let format: String        // "qcow2" or "raw"
+    public let size: Int64  // Size in bytes
+    public let format: String  // "qcow2" or "raw"
     public let sourceImageInfo: ImageInfo?  // For volumes created from images
-    public let sourceVolumePath: String?    // For cloning existing volumes
+    public let sourceVolumePath: String?  // For cloning existing volumes
 
     public init(
         requestId: String = UUID().uuidString,
@@ -820,7 +822,7 @@ public struct VolumeAttachMessage: WebSocketMessage {
     public let vmId: String
     public let volumeId: String
     public let volumePath: String
-    public let deviceName: String    // e.g., "disk1", "disk2"
+    public let deviceName: String  // e.g., "disk1", "disk2"
     public let readonly: Bool
 
     public init(
@@ -873,7 +875,7 @@ public struct VolumeResizeMessage: WebSocketMessage {
     public let timestamp: Date
     public let volumeId: String
     public let volumePath: String
-    public let newSize: Int64        // New size in bytes
+    public let newSize: Int64  // New size in bytes
 
     public init(
         requestId: String = UUID().uuidString,
@@ -968,10 +970,10 @@ public struct VolumeInfoMessage: WebSocketMessage {
 /// Response with volume information from agent
 public struct VolumeInfoResponse: Codable, Sendable {
     public let volumeId: String
-    public let actualSize: Int64     // Actual disk usage
-    public let virtualSize: Int64    // Provisioned size
+    public let actualSize: Int64  // Actual disk usage
+    public let virtualSize: Int64  // Provisioned size
     public let format: String
-    public let dirty: Bool           // Has uncommitted changes
+    public let dirty: Bool  // Has uncommitted changes
     public let encrypted: Bool
 
     public init(

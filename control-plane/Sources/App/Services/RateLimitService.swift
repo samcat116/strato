@@ -47,12 +47,12 @@ struct RedisRateLimitStore: RateLimitStore {
 
     /// `INCR` the key, set its TTL on the first hit only, and return `{count, ttl}`.
     private static let hitScript = """
-    local count = redis.call('INCR', KEYS[1])
-    if count == 1 then
-        redis.call('EXPIRE', KEYS[1], ARGV[1])
-    end
-    return {count, redis.call('TTL', KEYS[1])}
-    """
+        local count = redis.call('INCR', KEYS[1])
+        if count == 1 then
+            redis.call('EXPIRE', KEYS[1], ARGV[1])
+        end
+        return {count, redis.call('TTL', KEYS[1])}
+        """
 
     func hit(_ key: String, window: Int) async throws -> RateLimitCount {
         let response = try await client.send(
@@ -61,14 +61,15 @@ struct RedisRateLimitStore: RateLimitStore {
                 Self.hitScript.convertedToRESPValue(),
                 1.convertedToRESPValue(),
                 key.convertedToRESPValue(),
-                window.convertedToRESPValue()
+                window.convertedToRESPValue(),
             ]
         ).get()
 
         guard let values = response.array,
-              values.count == 2,
-              let count = values[0].int,
-              let ttl = values[1].int else {
+            values.count == 2,
+            let count = values[0].int,
+            let ttl = values[1].int
+        else {
             throw RateLimitError.unexpectedResponse
         }
 
@@ -92,7 +93,7 @@ struct RedisRateLimitStore: RateLimitStore {
                 key.convertedToRESPValue(),
                 value.convertedToRESPValue(),
                 "EX".convertedToRESPValue(),
-                max(1, ttl).convertedToRESPValue()
+                max(1, ttl).convertedToRESPValue(),
             ]
         ).get()
     }

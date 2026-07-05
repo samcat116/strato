@@ -45,7 +45,7 @@ struct ProjectStatsServiceTests {
         let vms = [
             makeVM(env: "dev", cpu: 2, memoryGB: 2, diskGB: 10),
             makeVM(env: "dev", cpu: 2, memoryGB: 2, diskGB: 10),
-            makeVM(env: "prod", cpu: 4, memoryGB: 4, diskGB: 20)
+            makeVM(env: "prod", cpu: 4, memoryGB: 4, diskGB: 20),
         ]
 
         let stats = ProjectStatsService.stats(for: project, vms: vms)
@@ -100,7 +100,7 @@ struct QuotaUsageServiceTests {
         let vms = [
             makeVM(env: "dev", status: .running),
             makeVM(env: "dev", status: .running),
-            makeVM(env: "prod", status: .shutdown)
+            makeVM(env: "prod", status: .shutdown),
         ]
 
         let response = QuotaUsageService.usageResponse(for: quota, actualUsage: actual, vms: vms)

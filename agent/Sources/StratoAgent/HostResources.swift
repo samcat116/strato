@@ -37,8 +37,9 @@ enum HostResources {
         }
 
         guard let attributes = try? fileManager.attributesOfFileSystem(forPath: probePath),
-              let total = (attributes[.systemSize] as? NSNumber)?.int64Value,
-              let free = (attributes[.systemFreeSize] as? NSNumber)?.int64Value else {
+            let total = (attributes[.systemSize] as? NSNumber)?.int64Value,
+            let free = (attributes[.systemFreeSize] as? NSNumber)?.int64Value
+        else {
             return nil
         }
 

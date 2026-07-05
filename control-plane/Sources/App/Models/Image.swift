@@ -10,12 +10,12 @@ public enum ImageFormat: String, Codable, CaseIterable, Sendable {
 
 /// Represents the status of an image during its lifecycle
 public enum ImageStatus: String, Codable, CaseIterable, Sendable {
-    case pending = "pending"           // Initial state, waiting for upload/fetch
-    case uploading = "uploading"       // File is being uploaded
-    case downloading = "downloading"   // File is being fetched from URL
-    case validating = "validating"     // File is being validated (format, checksum)
-    case ready = "ready"               // Image is ready for use
-    case error = "error"               // An error occurred
+    case pending = "pending"  // Initial state, waiting for upload/fetch
+    case uploading = "uploading"  // File is being uploaded
+    case downloading = "downloading"  // File is being fetched from URL
+    case validating = "validating"  // File is being validated (format, checksum)
+    case ready = "ready"  // Image is ready for use
+    case error = "error"  // An error occurred
 }
 
 final class Image: Model, @unchecked Sendable {
@@ -325,7 +325,7 @@ enum ImageError: Error, LocalizedError, Sendable {
     case downloadFailed(String)
     case checksumMismatch
     case storageFailed(String)
-    case fileTooLarge(Int64, Int64) // actual, max
+    case fileTooLarge(Int64, Int64)  // actual, max
 
     var errorDescription: String? {
         switch self {

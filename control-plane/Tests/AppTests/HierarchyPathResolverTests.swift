@@ -29,7 +29,8 @@ final class HierarchyPathResolverTests {
         try await withApp { app, builder in
             let org = try await builder.createOrganization(name: "Acme")
             let eng = try await builder.createOU(name: "Engineering", description: "d", organization: org)
-            let backend = try await builder.createOU(name: "Backend", description: "d", organization: org, parentOU: eng)
+            let backend = try await builder.createOU(
+                name: "Backend", description: "d", organization: org, parentOU: eng)
             let project = try await builder.createProject(name: "API", description: "d", ou: backend)
 
             let path = try await HierarchyPathResolver.buildEntityPath(

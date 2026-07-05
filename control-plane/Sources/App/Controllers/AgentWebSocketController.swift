@@ -42,17 +42,22 @@ struct AgentWebSocketController: RouteCollection {
         // passed through Envoy's certificate verification and is a spoofing attempt.
         if req.headers.contains(name: "X-Forwarded-Client-Cert") {
             guard requestArrivedViaLocalSidecar(req) else {
-                req.logger.warning("Rejecting X-Forwarded-Client-Cert from non-loopback peer (possible mTLS spoofing)", metadata: [
-                    "remoteAddress": .string(req.remoteAddress?.ipAddress ?? "unknown")
-                ])
-                sendErrorResponse(ws: ws, requestId: "", error: "Client certificate header not accepted from this source", logger: req.logger)
+                req.logger.warning(
+                    "Rejecting X-Forwarded-Client-Cert from non-loopback peer (possible mTLS spoofing)",
+                    metadata: [
+                        "remoteAddress": .string(req.remoteAddress?.ipAddress ?? "unknown")
+                    ])
+                sendErrorResponse(
+                    ws: ws, requestId: "", error: "Client certificate header not accepted from this source",
+                    logger: req.logger)
                 Task { try? await ws.close(code: .policyViolation) }
                 return
             }
 
             guard let spiffeID = extractSPIFFEIDFromXFCC(req: req) else {
                 req.logger.error("XFCC header present but contained no valid SPIFFE URI")
-                sendErrorResponse(ws: ws, requestId: "", error: "Invalid client certificate identity", logger: req.logger)
+                sendErrorResponse(
+                    ws: ws, requestId: "", error: "Invalid client certificate identity", logger: req.logger)
                 Task { try? await ws.close(code: .unacceptableData) }
                 return
             }
@@ -60,16 +65,20 @@ struct AgentWebSocketController: RouteCollection {
             do {
                 let agentID = try await spireService.validateAgentIdentity(spiffeID)
 
-                req.logger.info("Agent authenticated via XFCC header (Envoy mTLS)", metadata: [
-                    "spiffeID": .string(spiffeID.uri),
-                    "agentID": .string(agentID)
-                ])
+                req.logger.info(
+                    "Agent authenticated via XFCC header (Envoy mTLS)",
+                    metadata: [
+                        "spiffeID": .string(spiffeID.uri),
+                        "agentID": .string(agentID),
+                    ])
 
                 // Continue with WebSocket setup using the validated agent ID
                 setupWebSocketConnection(req: req, ws: ws, agentName: agentID, authMethod: "mTLS-XFCC")
             } catch {
                 req.logger.error("SPIFFE ID validation failed: \(error)")
-                sendErrorResponse(ws: ws, requestId: "", error: "SPIFFE identity validation failed: \(error.localizedDescription)", logger: req.logger)
+                sendErrorResponse(
+                    ws: ws, requestId: "", error: "SPIFFE identity validation failed: \(error.localizedDescription)",
+                    logger: req.logger)
                 Task { try? await ws.close(code: .unacceptableData) }
             }
             return
@@ -80,7 +89,9 @@ struct AgentWebSocketController: RouteCollection {
         // let any caller that can reach the port authenticate as an agent.
         if requireClientCert {
             req.logger.error("mTLS required but no client certificate (X-Forwarded-Client-Cert) was presented")
-            sendErrorResponse(ws: ws, requestId: "", error: "Client certificate required for agent authentication", logger: req.logger)
+            sendErrorResponse(
+                ws: ws, requestId: "", error: "Client certificate required for agent authentication", logger: req.logger
+            )
             Task { try? await ws.close(code: .unacceptableData) }
             return
         }
@@ -134,8 +145,10 @@ struct AgentWebSocketController: RouteCollection {
         // Extract token from the Authorization header (Bearer) and agent name from the
         // query. The token is kept out of the URL so it never lands in access logs.
         guard let token = req.headers.bearerAuthorization?.token,
-              let agentName = req.query[String.self, at: "name"] else {
-            sendErrorResponse(ws: ws, requestId: "", error: "Registration token and agent name are required", logger: req.logger)
+            let agentName = req.query[String.self, at: "name"]
+        else {
+            sendErrorResponse(
+                ws: ws, requestId: "", error: "Registration token and agent name are required", logger: req.logger)
             Task { try? await ws.close(code: .unacceptableData) }
             return
         }
@@ -159,7 +172,9 @@ struct AgentWebSocketController: RouteCollection {
         }
 
         ws.onBinary { ws, buffer in
-            req.logger.info("Received WebSocket binary message from agent", metadata: ["agentName": .string(agentName), "bytes": .string("\(buffer.readableBytes)")])
+            req.logger.info(
+                "Received WebSocket binary message from agent",
+                metadata: ["agentName": .string(agentName), "bytes": .string("\(buffer.readableBytes)")])
             // Convert binary buffer to string and process as text message
             if let text = buffer.getString(at: 0, length: buffer.readableBytes) {
                 if state.isValidated {
@@ -176,22 +191,28 @@ struct AgentWebSocketController: RouteCollection {
         ws.onClose.whenComplete { result in
             switch result {
             case .success:
-                req.logger.info("Agent WebSocket connection closed normally", metadata: [
-                    "agentName": .string(agentName)
-                ])
+                req.logger.info(
+                    "Agent WebSocket connection closed normally",
+                    metadata: [
+                        "agentName": .string(agentName)
+                    ])
             case .failure(let error):
-                req.logger.error("Agent WebSocket connection closed with error: \(error)", metadata: [
-                    "agentName": .string(agentName)
-                ])
+                req.logger.error(
+                    "Agent WebSocket connection closed with error: \(error)",
+                    metadata: [
+                        "agentName": .string(agentName)
+                    ])
             }
 
             // Only tear down agent state if this socket is still the agent's current
             // connection — a delayed close from a connection the agent has already
             // replaced (reconnect under the same name) must not remove its successor.
             guard req.application.websocketManager.removeConnection(agentName: agentName, ifCurrent: ws) else {
-                req.logger.debug("Closed WebSocket was already superseded; skipping agent cleanup", metadata: [
-                    "agentName": .string(agentName)
-                ])
+                req.logger.debug(
+                    "Closed WebSocket was already superseded; skipping agent cleanup",
+                    metadata: [
+                        "agentName": .string(agentName)
+                    ])
                 return
             }
 
@@ -208,16 +229,19 @@ struct AgentWebSocketController: RouteCollection {
                     return ws.eventLoop.makeSucceededFuture(())
                 }
 
-                req.logger.info("Agent WebSocket connection established", metadata: [
-                    "agentName": .string(agentName)
-                ])
+                req.logger.info(
+                    "Agent WebSocket connection established",
+                    metadata: [
+                        "agentName": .string(agentName)
+                    ])
 
                 // Store WebSocket for this agent - we're already on the WebSocket's event loop
                 req.application.websocketManager.setConnection(agentName: agentName, websocket: ws)
 
                 // Mark as validated and process buffered messages
                 state.isValidated = true
-                req.logger.info("Processing \(state.buffer.count) buffered messages", metadata: ["agentName": .string(agentName)])
+                req.logger.info(
+                    "Processing \(state.buffer.count) buffered messages", metadata: ["agentName": .string(agentName)])
 
                 for text in state.buffer {
                     self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
@@ -250,14 +274,18 @@ struct AgentWebSocketController: RouteCollection {
                 // The explicit code lets the agent tell a hopeless credential apart
                 // from a transient server error, so only the former stops its
                 // reconnect loop.
-                self.sendErrorResponse(ws: ws, requestId: "", error: "Invalid registration token", code: ErrorMessage.ErrorCode.invalidToken, logger: req.logger)
+                self.sendErrorResponse(
+                    ws: ws, requestId: "", error: "Invalid registration token",
+                    code: ErrorMessage.ErrorCode.invalidToken, logger: req.logger)
                 _ = ws.close(code: .unacceptableData)
                 return req.eventLoop.makeSucceededFuture(false)
             }
 
             guard registrationToken.isValid else {
                 Telemetry.agentRegistrationFailed(reason: "expired_token")
-                self.sendErrorResponse(ws: ws, requestId: "", error: "Registration token is invalid or expired", code: ErrorMessage.ErrorCode.invalidToken, logger: req.logger)
+                self.sendErrorResponse(
+                    ws: ws, requestId: "", error: "Registration token is invalid or expired",
+                    code: ErrorMessage.ErrorCode.invalidToken, logger: req.logger)
                 _ = ws.close(code: .unacceptableData)
                 return req.eventLoop.makeSucceededFuture(false)
             }
@@ -271,34 +299,43 @@ struct AgentWebSocketController: RouteCollection {
             return registrationToken.save(on: req.db).map { _ -> Bool in
                 // Never log the raw token value — logs are lower-trust than the token
                 // store and may be shipped off-host. The agent name is sufficient.
-                req.logger.info("Agent registration token validated", metadata: [
-                    "agentName": .string(agentName)
-                ])
+                req.logger.info(
+                    "Agent registration token validated",
+                    metadata: [
+                        "agentName": .string(agentName)
+                    ])
                 return true
             }.flatMapError { error in
                 Telemetry.agentRegistrationFailed(reason: "token_save_failed")
-                req.logger.error("Failed to persist registration token as used; rejecting connection", metadata: [
-                    "agentName": .string(agentName),
-                    "error": .string("\(error)")
-                ])
-                self.sendErrorResponse(ws: ws, requestId: "", error: "Internal server error persisting registration token", logger: req.logger)
+                req.logger.error(
+                    "Failed to persist registration token as used; rejecting connection",
+                    metadata: [
+                        "agentName": .string(agentName),
+                        "error": .string("\(error)"),
+                    ])
+                self.sendErrorResponse(
+                    ws: ws, requestId: "", error: "Internal server error persisting registration token",
+                    logger: req.logger)
                 _ = ws.close(code: .unexpectedServerError)
                 return req.eventLoop.makeSucceededFuture(false)
             }
         }.flatMapErrorThrowing { error in
             req.logger.error("Error validating registration token: \(error)")
-            self.sendErrorResponse(ws: ws, requestId: "", error: "Internal server error during token validation", logger: req.logger)
+            self.sendErrorResponse(
+                ws: ws, requestId: "", error: "Internal server error during token validation", logger: req.logger)
             _ = ws.close(code: .unexpectedServerError)
             return false
         }
     }
 
     private func handleWebSocketMessage(req: Request, ws: WebSocket, text: String, agentName: String) {
-        req.logger.info("Processing WebSocket message", metadata: [
-            "agentName": .string(agentName),
-            "messageLength": .string("\(text.count)"),
-            "rawTextPreview": .string(String(text.prefix(500)))
-        ])
+        req.logger.info(
+            "Processing WebSocket message",
+            metadata: [
+                "agentName": .string(agentName),
+                "messageLength": .string("\(text.count)"),
+                "rawTextPreview": .string(String(text.prefix(500))),
+            ])
 
         guard let data = text.data(using: .utf8) else {
             req.logger.error("Failed to convert WebSocket text to data")
@@ -307,18 +344,22 @@ struct AgentWebSocketController: RouteCollection {
 
         do {
             let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
-            req.logger.info("Decoded message envelope", metadata: ["type": .string("\(envelope.type)"), "agentName": .string(agentName)])
+            req.logger.info(
+                "Decoded message envelope",
+                metadata: ["type": .string("\(envelope.type)"), "agentName": .string(agentName)])
 
             switch envelope.type {
             case .agentRegister:
                 let message = try envelope.decode(as: AgentRegisterMessage.self)
                 let agentProtocolVersion = message.protocolVersion ?? 0
                 if agentProtocolVersion != WireProtocol.currentVersion {
-                    req.logger.warning("Agent wire protocol version differs from control plane", metadata: [
-                        "agentName": .string(agentName),
-                        "agentProtocolVersion": .stringConvertible(agentProtocolVersion),
-                        "controlPlaneProtocolVersion": .stringConvertible(WireProtocol.currentVersion)
-                    ])
+                    req.logger.warning(
+                        "Agent wire protocol version differs from control plane",
+                        metadata: [
+                            "agentName": .string(agentName),
+                            "agentProtocolVersion": .stringConvertible(agentProtocolVersion),
+                            "controlPlaneProtocolVersion": .stringConvertible(WireProtocol.currentVersion),
+                        ])
                 }
                 let isTokenAuthenticated = req.headers.bearerAuthorization != nil
                 Task {
@@ -366,22 +407,28 @@ struct AgentWebSocketController: RouteCollection {
                                 if let presented = try await AgentRegistrationToken.query(on: req.db)
                                     .filter(\.$token == bearer)
                                     .filter(\.$agentName == agentName)
-                                    .first() {
+                                    .first()
+                                {
                                     presented.isUsed = false
                                     presented.usedAt = nil
                                     try await presented.save(on: req.db)
-                                    req.logger.info("Restored registration token after failed registration", metadata: [
-                                        "agentName": .string(agentName)
-                                    ])
+                                    req.logger.info(
+                                        "Restored registration token after failed registration",
+                                        metadata: [
+                                            "agentName": .string(agentName)
+                                        ])
                                 }
                             } catch {
-                                req.logger.error("Failed to restore registration token for agent \(agentName): \(error)")
+                                req.logger.error(
+                                    "Failed to restore registration token for agent \(agentName): \(error)")
                             }
                         }
 
                         // No `code`: the agent treats unclassified errors as
                         // transient and keeps retrying with backoff.
-                        self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to register agent: \(error.localizedDescription)", logger: req.logger)
+                        self.sendErrorResponse(
+                            ws: ws, requestId: message.requestId,
+                            error: "Failed to register agent: \(error.localizedDescription)", logger: req.logger)
                     }
                 }
 
@@ -390,10 +437,13 @@ struct AgentWebSocketController: RouteCollection {
                 Task {
                     do {
                         try await req.agentService.updateAgentHeartbeat(message, fromAgentNamed: agentName)
-                        self.sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged", logger: req.logger)
+                        self.sendSuccessResponse(
+                            ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged", logger: req.logger)
                     } catch {
                         req.logger.error("Failed to update heartbeat: \(error)")
-                        self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to update heartbeat", logger: req.logger)
+                        self.sendErrorResponse(
+                            ws: ws, requestId: message.requestId, error: "Failed to update heartbeat",
+                            logger: req.logger)
                     }
                 }
 
@@ -402,10 +452,14 @@ struct AgentWebSocketController: RouteCollection {
                 Task {
                     do {
                         try await req.agentService.unregisterAgent(message.agentId)
-                        self.sendSuccessResponse(ws: ws, requestId: message.requestId, message: "Agent unregistered successfully", logger: req.logger)
+                        self.sendSuccessResponse(
+                            ws: ws, requestId: message.requestId, message: "Agent unregistered successfully",
+                            logger: req.logger)
                     } catch {
                         req.logger.error("Failed to unregister agent: \(error)")
-                        self.sendErrorResponse(ws: ws, requestId: message.requestId, error: "Failed to unregister agent", logger: req.logger)
+                        self.sendErrorResponse(
+                            ws: ws, requestId: message.requestId, error: "Failed to unregister agent",
+                            logger: req.logger)
                     }
                 }
 
@@ -434,20 +488,24 @@ struct AgentWebSocketController: RouteCollection {
 
             case .consoleConnected:
                 let message = try envelope.decode(as: ConsoleConnectedMessage.self)
-                req.logger.info("Console connected confirmation from agent", metadata: [
-                    "vmId": .string(message.vmId),
-                    "sessionId": .string(message.sessionId)
-                ])
+                req.logger.info(
+                    "Console connected confirmation from agent",
+                    metadata: [
+                        "vmId": .string(message.vmId),
+                        "sessionId": .string(message.sessionId),
+                    ])
                 // Notify the frontend that the console is ready for input
                 req.consoleSessionManager.notifyFrontendReady(sessionId: message.sessionId)
 
             case .consoleDisconnected:
                 let message = try envelope.decode(as: ConsoleDisconnectedMessage.self)
-                req.logger.info("Console disconnected from agent", metadata: [
-                    "vmId": .string(message.vmId),
-                    "sessionId": .string(message.sessionId),
-                    "reason": .string(message.reason ?? "unknown")
-                ])
+                req.logger.info(
+                    "Console disconnected from agent",
+                    metadata: [
+                        "vmId": .string(message.vmId),
+                        "sessionId": .string(message.sessionId),
+                        "reason": .string(message.reason ?? "unknown"),
+                    ])
                 // Clean up the session
                 req.consoleSessionManager.removeSession(sessionId: message.sessionId)
 
@@ -457,11 +515,13 @@ struct AgentWebSocketController: RouteCollection {
                 Task {
                     do {
                         try await req.lokiService.pushLog(message)
-                        req.logger.debug("VM log pushed to Loki", metadata: [
-                            "vmId": .string(message.vmId),
-                            "level": .string(message.level.rawValue),
-                            "eventType": .string(message.eventType.rawValue)
-                        ])
+                        req.logger.debug(
+                            "VM log pushed to Loki",
+                            metadata: [
+                                "vmId": .string(message.vmId),
+                                "level": .string(message.level.rawValue),
+                                "eventType": .string(message.eventType.rawValue),
+                            ])
                     } catch {
                         req.logger.error("Failed to push VM log to Loki: \(error)")
                     }
@@ -469,12 +529,15 @@ struct AgentWebSocketController: RouteCollection {
 
             default:
                 req.logger.warning("Received unexpected message type from agent: \(envelope.type)")
-                sendErrorResponse(ws: ws, requestId: "", error: "Unexpected message type: \(envelope.type)", logger: req.logger)
+                sendErrorResponse(
+                    ws: ws, requestId: "", error: "Unexpected message type: \(envelope.type)", logger: req.logger)
             }
 
         } catch {
             req.logger.error("Failed to handle WebSocket message: \(error)")
-            sendErrorResponse(ws: ws, requestId: "", error: "Failed to process message: \(error.localizedDescription)", logger: req.logger)
+            sendErrorResponse(
+                ws: ws, requestId: "", error: "Failed to process message: \(error.localizedDescription)",
+                logger: req.logger)
         }
     }
 
@@ -497,14 +560,17 @@ struct AgentWebSocketController: RouteCollection {
             ws.send(data)
         } catch {
             Telemetry.agentSendFailed(kind: "success")
-            logger.error("Failed to send success response to agent", metadata: [
-                "requestId": .string(requestId),
-                "error": .string("\(error)")
-            ])
+            logger.error(
+                "Failed to send success response to agent",
+                metadata: [
+                    "requestId": .string(requestId),
+                    "error": .string("\(error)"),
+                ])
         }
     }
 
-    private func sendErrorResponse(ws: WebSocket, requestId: String, error: String, code: String? = nil, logger: Logger) {
+    private func sendErrorResponse(ws: WebSocket, requestId: String, error: String, code: String? = nil, logger: Logger)
+    {
         do {
             let response = ErrorMessage(requestId: requestId, error: error, code: code)
             let envelope = try MessageEnvelope(message: response)
@@ -512,10 +578,12 @@ struct AgentWebSocketController: RouteCollection {
             ws.send(data)
         } catch {
             Telemetry.agentSendFailed(kind: "error")
-            logger.error("Failed to send error response to agent", metadata: [
-                "requestId": .string(requestId),
-                "error": .string("\(error)")
-            ])
+            logger.error(
+                "Failed to send error response to agent",
+                metadata: [
+                    "requestId": .string(requestId),
+                    "error": .string("\(error)"),
+                ])
         }
     }
 
@@ -526,10 +594,12 @@ struct AgentWebSocketController: RouteCollection {
     private func setupWebSocketConnection(req: Request, ws: WebSocket, agentName: String, authMethod: String) {
         // Execute on the WebSocket's event loop to avoid NIOLoopBound precondition failures
         ws.eventLoop.execute {
-            req.logger.info("Setting up WebSocket connection", metadata: [
-                "agentName": .string(agentName),
-                "authMethod": .string(authMethod)
-            ])
+            req.logger.info(
+                "Setting up WebSocket connection",
+                metadata: [
+                    "agentName": .string(agentName),
+                    "authMethod": .string(authMethod),
+                ])
 
             // Set up message handlers
             ws.onText { [self] ws, text in
@@ -537,10 +607,12 @@ struct AgentWebSocketController: RouteCollection {
             }
 
             ws.onBinary { [self] ws, buffer in
-                req.logger.info("Received WebSocket binary message from agent", metadata: [
-                    "agentName": .string(agentName),
-                    "bytes": .string("\(buffer.readableBytes)")
-                ])
+                req.logger.info(
+                    "Received WebSocket binary message from agent",
+                    metadata: [
+                        "agentName": .string(agentName),
+                        "bytes": .string("\(buffer.readableBytes)"),
+                    ])
                 if let text = buffer.getString(at: 0, length: buffer.readableBytes) {
                     self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
                 } else {
@@ -551,24 +623,30 @@ struct AgentWebSocketController: RouteCollection {
             ws.onClose.whenComplete { result in
                 switch result {
                 case .success:
-                    req.logger.info("Agent WebSocket connection closed normally", metadata: [
-                        "agentName": .string(agentName),
-                        "authMethod": .string(authMethod)
-                    ])
+                    req.logger.info(
+                        "Agent WebSocket connection closed normally",
+                        metadata: [
+                            "agentName": .string(agentName),
+                            "authMethod": .string(authMethod),
+                        ])
                 case .failure(let error):
-                    req.logger.error("Agent WebSocket connection closed with error: \(error)", metadata: [
-                        "agentName": .string(agentName),
-                        "authMethod": .string(authMethod)
-                    ])
+                    req.logger.error(
+                        "Agent WebSocket connection closed with error: \(error)",
+                        metadata: [
+                            "agentName": .string(agentName),
+                            "authMethod": .string(authMethod),
+                        ])
                 }
 
                 // Only tear down agent state if this socket is still the agent's current
                 // connection — a delayed close from a connection the agent has already
                 // replaced (reconnect under the same name) must not remove its successor.
                 guard req.application.websocketManager.removeConnection(agentName: agentName, ifCurrent: ws) else {
-                    req.logger.debug("Closed WebSocket was already superseded; skipping agent cleanup", metadata: [
-                        "agentName": .string(agentName)
-                    ])
+                    req.logger.debug(
+                        "Closed WebSocket was already superseded; skipping agent cleanup",
+                        metadata: [
+                            "agentName": .string(agentName)
+                        ])
                     return
                 }
 
@@ -581,9 +659,11 @@ struct AgentWebSocketController: RouteCollection {
             // Store WebSocket for this agent
             req.application.websocketManager.setConnection(agentName: agentName, websocket: ws)
 
-            req.logger.info("Agent WebSocket connection established via \(authMethod)", metadata: [
-                "agentName": .string(agentName)
-            ])
+            req.logger.info(
+                "Agent WebSocket connection established via \(authMethod)",
+                metadata: [
+                    "agentName": .string(agentName)
+                ])
         }
     }
 }

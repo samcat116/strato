@@ -45,7 +45,11 @@ actor QEMUService: HypervisorService {
     private var vmSerialSocketPaths: [String: String] = [:]
     private var pendingVMs: Set<String> = []  // Track VMs being created (to handle concurrent boot requests)
 
-    init(logger: Logger, networkService: (any NetworkServiceProtocol)? = nil, imageCacheService: ImageCacheService? = nil, vmStoragePath: String, qemuBinaryPath: String, firmwarePath: String? = nil, hardwareAccelerationEnabled: Bool = true) {
+    init(
+        logger: Logger, networkService: (any NetworkServiceProtocol)? = nil,
+        imageCacheService: ImageCacheService? = nil, vmStoragePath: String, qemuBinaryPath: String,
+        firmwarePath: String? = nil, hardwareAccelerationEnabled: Bool = true
+    ) {
         self.logger = logger
         self.networkService = networkService
         self.imageCacheService = imageCacheService
@@ -64,9 +68,11 @@ actor QEMUService: HypervisorService {
         let previousManifest = manifestStore.load()
         if !previousManifest.isEmpty {
             orphanedVMSpecs = previousManifest
-            logger.warning("Found \(previousManifest.count) VM(s) managed before restart; their QEMU processes are now unmanaged but their resources stay reserved", metadata: [
-                "vmIds": .string(previousManifest.keys.sorted().joined(separator: ","))
-            ])
+            logger.warning(
+                "Found \(previousManifest.count) VM(s) managed before restart; their QEMU processes are now unmanaged but their resources stay reserved",
+                metadata: [
+                    "vmIds": .string(previousManifest.keys.sorted().joined(separator: ","))
+                ])
         }
 
         #if os(Linux)
@@ -77,7 +83,7 @@ actor QEMUService: HypervisorService {
         logger.info("QEMU service initialized with SwiftQEMU support")
         #endif
     }
-    
+
     // MARK: - VM Lifecycle Operations
 
     /// Creates a VM from a hypervisor-neutral spec with optional image info for disk caching
@@ -93,17 +99,21 @@ actor QEMUService: HypervisorService {
         // (with agent-reported paths) are used.
         var disks: [ResolvedDisk] = []
         if let imageInfo = imageInfo, let cacheService = imageCacheService {
-            logger.info("Using cached image for VM", metadata: [
-                "vmId": .string(vmId),
-                "imageId": .string(imageInfo.imageId.uuidString)
-            ])
+            logger.info(
+                "Using cached image for VM",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "imageId": .string(imageInfo.imageId.uuidString),
+                ])
 
             do {
                 let cachedImagePath = try await cacheService.getImagePath(imageInfo: imageInfo)
-                logger.info("Image ready at cache path", metadata: [
-                    "vmId": .string(vmId),
-                    "cachedPath": .string(cachedImagePath)
-                ])
+                logger.info(
+                    "Image ready at cache path",
+                    metadata: [
+                        "vmId": .string(vmId),
+                        "cachedPath": .string(cachedImagePath),
+                    ])
 
                 // Create a copy for this VM
                 let vmDiskPath = "\(vmStoragePath)/\(vmId)/disk.qcow2"
@@ -118,18 +128,22 @@ actor QEMUService: HypervisorService {
                 // Copy the cached image to VM-specific location
                 if !FileManager.default.fileExists(atPath: vmDiskPath) {
                     try FileManager.default.copyItem(atPath: cachedImagePath, toPath: vmDiskPath)
-                    logger.info("Created VM disk from cached image", metadata: [
-                        "vmId": .string(vmId),
-                        "diskPath": .string(vmDiskPath)
-                    ])
+                    logger.info(
+                        "Created VM disk from cached image",
+                        metadata: [
+                            "vmId": .string(vmId),
+                            "diskPath": .string(vmDiskPath),
+                        ])
                 }
 
                 disks = [ResolvedDisk(path: vmDiskPath, readonly: false)]
             } catch {
-                logger.error("Failed to get cached image, falling back to spec volumes", metadata: [
-                    "vmId": .string(vmId),
-                    "error": .string(error.localizedDescription)
-                ])
+                logger.error(
+                    "Failed to get cached image, falling back to spec volumes",
+                    metadata: [
+                        "vmId": .string(vmId),
+                        "error": .string(error.localizedDescription),
+                    ])
                 // Continue with the spec's volume references
             }
         }
@@ -145,10 +159,12 @@ actor QEMUService: HypervisorService {
                 let fileManager = FileManager.default
 
                 if !fileManager.fileExists(atPath: diskPath) {
-                    logger.info("Disk image does not exist, creating from base", metadata: [
-                        "diskPath": .string(diskPath),
-                        "vmId": .string(vmId)
-                    ])
+                    logger.info(
+                        "Disk image does not exist, creating from base",
+                        metadata: [
+                            "diskPath": .string(diskPath),
+                            "vmId": .string(vmId),
+                        ])
 
                     // Determine base disk path from the disk path
                     // Disk path format: /images/<template>/UUID.qcow2
@@ -160,16 +176,21 @@ actor QEMUService: HypervisorService {
                     if fileManager.fileExists(atPath: baseDiskPath) {
                         do {
                             try fileManager.copyItem(atPath: baseDiskPath, toPath: diskPath)
-                            logger.info("Disk image created successfully", metadata: [
-                                "from": .string(baseDiskPath),
-                                "to": .string(diskPath)
-                            ])
+                            logger.info(
+                                "Disk image created successfully",
+                                metadata: [
+                                    "from": .string(baseDiskPath),
+                                    "to": .string(diskPath),
+                                ])
                         } catch {
-                            logger.error("Failed to create disk image: \(error)", metadata: [
-                                "from": .string(baseDiskPath),
-                                "to": .string(diskPath)
-                            ])
-                            throw QEMUServiceError.diskCreationFailed("Failed to copy base disk: \(error.localizedDescription)")
+                            logger.error(
+                                "Failed to create disk image: \(error)",
+                                metadata: [
+                                    "from": .string(baseDiskPath),
+                                    "to": .string(diskPath),
+                                ])
+                            throw QEMUServiceError.diskCreationFailed(
+                                "Failed to copy base disk: \(error.localizedDescription)")
                         }
                     } else {
                         logger.error("Base disk not found", metadata: ["baseDiskPath": .string(baseDiskPath)])
@@ -200,8 +221,9 @@ actor QEMUService: HypervisorService {
                 }
 
                 group.addTask {
-                    try await Task.sleep(nanoseconds: 30_000_000_000) // 30 seconds
-                    throw QEMUServiceError.configurationError("QEMU VM creation timed out after 30 seconds - QMP connection may have failed")
+                    try await Task.sleep(nanoseconds: 30_000_000_000)  // 30 seconds
+                    throw QEMUServiceError.configurationError(
+                        "QEMU VM creation timed out after 30 seconds - QMP connection may have failed")
                 }
 
                 // Wait for the first task to complete (either success or timeout)
@@ -209,10 +231,12 @@ actor QEMUService: HypervisorService {
                 group.cancelAll()
             }
         } catch {
-            logger.error("QEMU VM creation failed", metadata: [
-                "vmId": .string(vmId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "QEMU VM creation failed",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "error": .string(error.localizedDescription),
+                ])
             // Clean up the QEMU process if it's still running
             try? await qemuManager.destroy()
             throw error
@@ -227,7 +251,7 @@ actor QEMUService: HypervisorService {
 
         logger.info("QEMU VM created successfully", metadata: ["vmId": .string(vmId)])
     }
-    
+
     func bootVM(vmId: String) async throws {
         // Wait for VM to be ready - it may still be creating (downloading image, etc.)
         var retries = 0
@@ -243,8 +267,10 @@ actor QEMUService: HypervisorService {
 
             // If VM is being created, wait for it
             if pendingVMs.contains(vmId) {
-                logger.debug("VM is being created, waiting...", metadata: ["vmId": .string(vmId), "retry": .stringConvertible(retries)])
-                try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                logger.debug(
+                    "VM is being created, waiting...",
+                    metadata: ["vmId": .string(vmId), "retry": .stringConvertible(retries)])
+                try await Task.sleep(nanoseconds: 500_000_000)  // 0.5 seconds
                 retries += 1
                 continue
             }
@@ -264,7 +290,7 @@ actor QEMUService: HypervisorService {
 
         logger.info("QEMU VM booted successfully", metadata: ["vmId": .string(vmId)])
     }
-    
+
     func shutdownVM(vmId: String) async throws {
         guard let vm = activeVMs[vmId] else {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
@@ -325,9 +351,11 @@ actor QEMUService: HypervisorService {
             // cleanup (or Option B re-adoption).
             if orphanedVMSpecs.removeValue(forKey: vmId) != nil {
                 persistManifest()
-                logger.warning("Deleted orphaned VM from manifest; any surviving QEMU process must be cleaned up manually", metadata: [
-                    "vmId": .string(vmId)
-                ])
+                logger.warning(
+                    "Deleted orphaned VM from manifest; any surviving QEMU process must be cleaned up manually",
+                    metadata: [
+                        "vmId": .string(vmId)
+                    ])
                 return
             }
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
@@ -361,12 +389,13 @@ actor QEMUService: HypervisorService {
 
         logger.info("QEMU VM deleted", metadata: ["vmId": .string(vmId)])
     }
-    
+
     // MARK: - VM Information
 
     func getVMInfo(vmId: String) async throws -> VmInfo {
         guard let qemuManager = activeVMs[vmId],
-              let spec = vmSpecs[vmId] else {
+            let spec = vmSpecs[vmId]
+        else {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
 
@@ -543,32 +572,40 @@ actor QEMUService: HypervisorService {
 
     /// Attaches a disk to a running VM using QMP hot-plug
     /// This uses QEMU's blockdev-add and device_add commands via SwiftQEMU
-    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool = false) async throws {
+    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool = false)
+        async throws
+    {
         guard let manager = activeVMs[vmId] else {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
 
-        logger.info("Attaching disk to VM via QMP hot-plug", metadata: [
-            "vmId": .string(vmId),
-            "volumeId": .string(volumeId),
-            "deviceName": .string(deviceName),
-            "volumePath": .string(volumePath),
-            "readonly": .stringConvertible(readonly)
-        ])
+        logger.info(
+            "Attaching disk to VM via QMP hot-plug",
+            metadata: [
+                "vmId": .string(vmId),
+                "volumeId": .string(volumeId),
+                "deviceName": .string(deviceName),
+                "volumePath": .string(volumePath),
+                "readonly": .stringConvertible(readonly),
+            ])
 
         do {
             try await manager.attachDisk(path: volumePath, deviceName: deviceName, readOnly: readonly)
-            logger.info("Disk attached successfully", metadata: [
-                "vmId": .string(vmId),
-                "volumeId": .string(volumeId),
-                "deviceName": .string(deviceName)
-            ])
+            logger.info(
+                "Disk attached successfully",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "volumeId": .string(volumeId),
+                    "deviceName": .string(deviceName),
+                ])
         } catch {
-            logger.error("Failed to attach disk via QMP hot-plug", metadata: [
-                "vmId": .string(vmId),
-                "volumeId": .string(volumeId),
-                "error": .string(String(describing: error))
-            ])
+            logger.error(
+                "Failed to attach disk via QMP hot-plug",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "volumeId": .string(volumeId),
+                    "error": .string(String(describing: error)),
+                ])
             throw QEMUServiceError.hotPlugFailed("Failed to attach disk: \(error)")
         }
     }
@@ -580,25 +617,31 @@ actor QEMUService: HypervisorService {
             throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
         }
 
-        logger.info("Detaching disk from VM via QMP hot-unplug", metadata: [
-            "vmId": .string(vmId),
-            "volumeId": .string(volumeId),
-            "deviceName": .string(deviceName)
-        ])
+        logger.info(
+            "Detaching disk from VM via QMP hot-unplug",
+            metadata: [
+                "vmId": .string(vmId),
+                "volumeId": .string(volumeId),
+                "deviceName": .string(deviceName),
+            ])
 
         do {
             try await manager.detachDisk(deviceName: deviceName)
-            logger.info("Disk detached successfully", metadata: [
-                "vmId": .string(vmId),
-                "volumeId": .string(volumeId),
-                "deviceName": .string(deviceName)
-            ])
+            logger.info(
+                "Disk detached successfully",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "volumeId": .string(volumeId),
+                    "deviceName": .string(deviceName),
+                ])
         } catch {
-            logger.error("Failed to detach disk via QMP hot-unplug", metadata: [
-                "vmId": .string(vmId),
-                "volumeId": .string(volumeId),
-                "error": .string(String(describing: error))
-            ])
+            logger.error(
+                "Failed to detach disk via QMP hot-unplug",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "volumeId": .string(volumeId),
+                    "error": .string(String(describing: error)),
+                ])
             throw QEMUServiceError.hotPlugFailed("Failed to detach disk: \(error)")
         }
     }
@@ -649,7 +692,9 @@ actor QEMUService: HypervisorService {
         let readonly: Bool
     }
 
-    private func convertToQEMUConfiguration(_ spec: VMSpec, disks: [ResolvedDisk], vmId: String) async -> QEMUConfiguration {
+    private func convertToQEMUConfiguration(_ spec: VMSpec, disks: [ResolvedDisk], vmId: String) async
+        -> QEMUConfiguration
+    {
         var qemuConfig = QEMUConfiguration()
 
         // Determine boot mode: direct kernel boot or UEFI firmware boot
@@ -743,7 +788,7 @@ actor QEMUService: HypervisorService {
                 "console=tty0",
                 "console=ttyS0,115200",
                 "console=ttyAMA0,115200",
-                "console=hvc0"
+                "console=hvc0",
             ]
             if cmdline.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 cmdline = consoleArgs.joined(separator: " ")
@@ -755,24 +800,30 @@ actor QEMUService: HypervisorService {
                 }
             }
             qemuConfig.kernelArgs = cmdline
-            logger.info("Direct kernel boot configured", metadata: [
-                "kernel": .string(kernelBoot.kernel),
-                "cmdline": .string(cmdline)
-            ])
+            logger.info(
+                "Direct kernel boot configured",
+                metadata: [
+                    "kernel": .string(kernelBoot.kernel),
+                    "cmdline": .string(cmdline),
+                ])
         } else {
             // UEFI firmware boot (disk-based)
             // Resolve firmware path: explicit config > platform default
             if let firmwarePath = resolveFirmwarePath(firmware) {
                 qemuConfig.additionalArgs.append(contentsOf: ["-bios", firmwarePath])
-                logger.info("UEFI firmware boot configured", metadata: [
-                    "firmware": .string(firmwarePath),
-                    "vmId": .string(vmId)
-                ])
+                logger.info(
+                    "UEFI firmware boot configured",
+                    metadata: [
+                        "firmware": .string(firmwarePath),
+                        "vmId": .string(vmId),
+                    ])
             } else {
                 // No firmware found - VM may fail to boot without UEFI firmware on ARM64
-                logger.warning("No UEFI firmware configured - VM may fail to boot on ARM64", metadata: [
-                    "vmId": .string(vmId)
-                ])
+                logger.warning(
+                    "No UEFI firmware configured - VM may fail to boot on ARM64",
+                    metadata: [
+                        "vmId": .string(vmId)
+                    ])
             }
         }
 
@@ -822,7 +873,7 @@ actor QEMUService: HypervisorService {
         qemuConfig.additionalArgs.append(contentsOf: [
             "-device", "virtio-serial-pci,id=virtio-serial0",
             "-chardev", "socket,id=console0,path=\(consoleSocketPath),server=on,wait=off",
-            "-device", "virtconsole,chardev=console0,id=virtconsole0"
+            "-device", "virtconsole,chardev=console0,id=virtconsole0",
         ])
 
         // Store the socket path for later access
@@ -834,7 +885,7 @@ actor QEMUService: HypervisorService {
         let cloudInitISOPath = (vmDir as NSString).appendingPathComponent("cloud-init.iso")
         if await CloudInitProvisioner(logger: logger).makeNoCloudISO(at: cloudInitISOPath, vmId: vmId) {
             qemuConfig.additionalArgs.append(contentsOf: [
-                "-drive", "file=\(cloudInitISOPath),format=raw,if=virtio,readonly=on"
+                "-drive", "file=\(cloudInitISOPath),format=raw,if=virtio,readonly=on",
             ])
             logger.info("Cloud-init ISO attached for serial console configuration")
         }
@@ -842,16 +893,16 @@ actor QEMUService: HypervisorService {
         // Configure serial console socket (most Linux distros output to ttyS0 by default)
         let serialSocketPath = (vmDir as NSString).appendingPathComponent("serial.sock")
         qemuConfig.additionalArgs.append(contentsOf: [
-            "-serial", "unix:\(serialSocketPath),server,nowait"
+            "-serial", "unix:\(serialSocketPath),server,nowait",
         ])
         vmSerialSocketPaths[vmId] = serialSocketPath
         logger.debug("Configured serial console socket at: \(serialSocketPath)")
 
         return qemuConfig
     }
-    
+
     // MARK: - VM Network Management
-    
+
     private func setupVMNetworking(vmId: String, networks: [NetworkSpec]) async throws {
         guard let networkService = networkService else {
             logger.warning("Network service not available, skipping network setup")
@@ -871,38 +922,42 @@ actor QEMUService: HypervisorService {
             networkName: firstNetwork.network,
             macAddress: firstNetwork.macAddress,
             ipAddress: firstNetwork.ipAddress,
-            subnet: "192.168.1.0/24", // Default subnet - should be configurable
+            subnet: "192.168.1.0/24",  // Default subnet - should be configurable
             gateway: "192.168.1.1"
         )
-        
+
         // Create VM network through NetworkService
         let networkInfo = try await networkService.createVMNetwork(vmId: vmId, config: networkConfig)
         vmNetworkInfo[vmId] = networkInfo
-        
-        logger.info("VM networking setup completed", metadata: [
-            "vmId": .string(vmId),
-            "networkName": .string(networkInfo.networkName),
-            "macAddress": .string(networkInfo.macAddress),
-            "ipAddress": .string(networkInfo.ipAddress)
-        ])
+
+        logger.info(
+            "VM networking setup completed",
+            metadata: [
+                "vmId": .string(vmId),
+                "networkName": .string(networkInfo.networkName),
+                "macAddress": .string(networkInfo.macAddress),
+                "ipAddress": .string(networkInfo.ipAddress),
+            ])
     }
-    
+
     private func cleanupVMNetworking(vmId: String) async throws {
         guard let networkService = networkService else {
             logger.debug("Network service not available, skipping network cleanup")
             return
         }
-        
+
         logger.info("Cleaning up VM networking", metadata: ["vmId": .string(vmId)])
-        
+
         do {
             try await networkService.detachVMFromNetwork(vmId: vmId)
             logger.info("VM networking cleanup completed", metadata: ["vmId": .string(vmId)])
         } catch {
-            logger.error("Failed to cleanup VM networking", metadata: [
-                "vmId": .string(vmId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to cleanup VM networking",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "error": .string(error.localizedDescription),
+                ])
             // Don't throw here to avoid blocking VM deletion
         }
     }

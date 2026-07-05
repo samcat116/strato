@@ -126,10 +126,12 @@ public actor SVIDManager {
         // Generate TLS config
         currentTLSConfig = try SPIFFETLSConfig.makeClientConfiguration(svid: currentSVID!)
 
-        logger.info("Initial SVID loaded", metadata: [
-            "spiffeID": .string(currentSVID!.spiffeID.uri),
-            "expiresAt": .string(currentSVID!.expiresAt.description)
-        ])
+        logger.info(
+            "Initial SVID loaded",
+            metadata: [
+                "spiffeID": .string(currentSVID!.spiffeID.uri),
+                "expiresAt": .string(currentSVID!.expiresAt.description),
+            ])
 
         // Start watching for rotations
         startWatching()
@@ -195,10 +197,12 @@ public actor SVIDManager {
     }
 
     private func handleNewSVID(_ svid: X509SVID) async {
-        logger.info("SVID rotated", metadata: [
-            "spiffeID": .string(svid.spiffeID.uri),
-            "expiresAt": .string(svid.expiresAt.description)
-        ])
+        logger.info(
+            "SVID rotated",
+            metadata: [
+                "spiffeID": .string(svid.spiffeID.uri),
+                "expiresAt": .string(svid.expiresAt.description),
+            ])
 
         currentSVID = svid
 

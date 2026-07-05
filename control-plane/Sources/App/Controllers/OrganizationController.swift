@@ -331,9 +331,11 @@ struct OrganizationController: RouteCollection {
 
         let addRequest = try req.content.decode(AddMemberRequest.self)
 
-        guard let targetUser = try await User.query(on: req.db)
-            .filter(\.$email == addRequest.userEmail)
-            .first() else {
+        guard
+            let targetUser = try await User.query(on: req.db)
+                .filter(\.$email == addRequest.userEmail)
+                .first()
+        else {
             throw Abort(.notFound, reason: "User not found")
         }
 
@@ -390,10 +392,12 @@ struct OrganizationController: RouteCollection {
             throw Abort(.forbidden, reason: "Only organization admins can remove members")
         }
 
-        guard let membership = try await UserOrganization.query(on: req.db)
-            .filter(\.$user.$id == userID)
-            .filter(\.$organization.$id == organizationID)
-            .first() else {
+        guard
+            let membership = try await UserOrganization.query(on: req.db)
+                .filter(\.$user.$id == userID)
+                .filter(\.$organization.$id == organizationID)
+                .first()
+        else {
             throw Abort(.notFound, reason: "User is not a member of this organization")
         }
 
@@ -444,10 +448,12 @@ struct OrganizationController: RouteCollection {
 
         let updateRequest = try req.content.decode(UpdateRoleRequest.self)
 
-        guard let membership = try await UserOrganization.query(on: req.db)
-            .filter(\.$user.$id == userID)
-            .filter(\.$organization.$id == organizationID)
-            .first() else {
+        guard
+            let membership = try await UserOrganization.query(on: req.db)
+                .filter(\.$user.$id == userID)
+                .filter(\.$organization.$id == organizationID)
+                .first()
+        else {
             throw Abort(.notFound, reason: "User is not a member of this organization")
         }
 

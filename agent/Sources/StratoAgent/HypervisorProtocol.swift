@@ -162,7 +162,8 @@ public enum HypervisorServiceError: Error, LocalizedError, Sendable {
         case .vmNotRunning(let vmId):
             return "VM is not running: \(vmId)"
         case .invalidState(let vmId, let current, let expected):
-            return "VM \(vmId) is in state \(current), expected one of: \(expected.map(\.rawValue).joined(separator: ", "))"
+            return
+                "VM \(vmId) is in state \(current), expected one of: \(expected.map(\.rawValue).joined(separator: ", "))"
         case .invalidConfiguration(let message):
             return "Invalid configuration: \(message)"
         case .diskError(let message):

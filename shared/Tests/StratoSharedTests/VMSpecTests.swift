@@ -28,7 +28,8 @@ struct VMSpecTests {
         let spec = VMSpec(
             cpus: 1,
             memoryBytes: 536_870_912,
-            boot: .directKernel(kernel: "/boot/vmlinux", initramfs: "/boot/initrd", cmdline: "console=ttyS0 root=/dev/vda")
+            boot: .directKernel(
+                kernel: "/boot/vmlinux", initramfs: "/boot/initrd", cmdline: "console=ttyS0 root=/dev/vda")
         )
         let decoded = try roundTrip(spec)
         guard case .directKernel(let kernel, let initramfs, let cmdline) = decoded.boot else {
@@ -49,11 +50,15 @@ struct VMSpecTests {
             hugepages: true,
             boot: .disk(firmware: nil),
             volumes: [
-                VolumeSpec(volumeId: Fixtures.uuidA, deviceName: "disk0", storagePath: "/v/disk0.qcow2", readonly: false, bootOrder: 0),
+                VolumeSpec(
+                    volumeId: Fixtures.uuidA, deviceName: "disk0", storagePath: "/v/disk0.qcow2", readonly: false,
+                    bootOrder: 0),
                 VolumeSpec(volumeId: nil, deviceName: "disk1", storagePath: nil, readonly: true, bootOrder: 1),
             ],
             networks: [
-                NetworkSpec(network: "default", macAddress: "52:54:00:00:00:01", ipAddress: "10.0.0.5", netmask: "255.255.255.0", mtu: 9000),
+                NetworkSpec(
+                    network: "default", macAddress: "52:54:00:00:00:01", ipAddress: "10.0.0.5",
+                    netmask: "255.255.255.0", mtu: 9000),
                 NetworkSpec(network: "storage"),
             ],
             console: ConsoleSpec(console: .off, serial: .null)
@@ -111,9 +116,9 @@ struct VMSpecTests {
     /// a deliberate decision, not an accident.
     @Test func unknownBootSourceCaseThrows() {
         let json = """
-        {"cpus":1,"maxCpus":1,"memoryBytes":1,"sharedMemory":false,"hugepages":false,
-         "boot":{"pxe":{}},"volumes":[],"networks":[]}
-        """
+            {"cpus":1,"maxCpus":1,"memoryBytes":1,"sharedMemory":false,"hugepages":false,
+             "boot":{"pxe":{}},"volumes":[],"networks":[]}
+            """
         #expect(throws: DecodingError.self) {
             try decodeJSON(VMSpec.self, from: json)
         }

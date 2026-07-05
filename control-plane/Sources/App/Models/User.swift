@@ -28,7 +28,7 @@ final class User: Model, @unchecked Sendable {
     var oidcProvider: OIDCProvider?
 
     @OptionalField(key: "oidc_subject")
-    var oidcSubject: String? // The 'sub' claim from the OIDC provider
+    var oidcSubject: String?  // The 'sub' claim from the OIDC provider
 
     // SCIM provisioning fields
     @Field(key: "scim_provisioned")
@@ -191,14 +191,16 @@ final class UserCredential: Model, @unchecked Sendable {
     var transports: [String] {
         get {
             guard let data = transportsJSON.data(using: .utf8),
-                  let array = try? JSONDecoder().decode([String].self, from: data) else {
+                let array = try? JSONDecoder().decode([String].self, from: data)
+            else {
                 return []
             }
             return array
         }
         set {
             guard let data = try? JSONEncoder().encode(newValue),
-                  let string = String(data: data, encoding: .utf8) else {
+                let string = String(data: data, encoding: .utf8)
+            else {
                 transportsJSON = "[]"
                 return
             }
@@ -268,7 +270,7 @@ final class AuthenticationChallenge: Model, @unchecked Sendable {
     var userID: UUID?
 
     @Field(key: "operation")
-    var operation: String // "registration" or "authentication"
+    var operation: String  // "registration" or "authentication"
 
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
@@ -288,7 +290,7 @@ final class AuthenticationChallenge: Model, @unchecked Sendable {
         self.challenge = challenge
         self.userID = userID
         self.operation = operation
-        self.expiresAt = Date().addingTimeInterval(300) // 5 minutes
+        self.expiresAt = Date().addingTimeInterval(300)  // 5 minutes
     }
 }
 

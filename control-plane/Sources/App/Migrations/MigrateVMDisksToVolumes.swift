@@ -52,7 +52,8 @@ struct MigrateVMDisksToVolumes: AsyncMigration {
             let owner: User?
             if let adminUser = try await User.query(on: database)
                 .filter(\.$isSystemAdmin == true)
-                .first() {
+                .first()
+            {
                 owner = adminUser
             } else {
                 owner = try await User.query(on: database).first()
@@ -85,18 +86,22 @@ struct MigrateVMDisksToVolumes: AsyncMigration {
 
             try await volume.save(on: database)
 
-            logger.info("Migrated disk to volume for VM \(vmId)", metadata: [
-                "volumeId": .string(volume.id?.uuidString ?? "unknown"),
-                "diskPath": .string(diskPath)
-            ])
+            logger.info(
+                "Migrated disk to volume for VM \(vmId)",
+                metadata: [
+                    "volumeId": .string(volume.id?.uuidString ?? "unknown"),
+                    "diskPath": .string(diskPath),
+                ])
 
             migratedCount += 1
         }
 
-        logger.info("VM disk to volume migration complete", metadata: [
-            "migrated": .stringConvertible(migratedCount),
-            "skipped": .stringConvertible(skippedCount)
-        ])
+        logger.info(
+            "VM disk to volume migration complete",
+            metadata: [
+                "migrated": .stringConvertible(migratedCount),
+                "skipped": .stringConvertible(skippedCount),
+            ])
     }
 
     func revert(on database: Database) async throws {

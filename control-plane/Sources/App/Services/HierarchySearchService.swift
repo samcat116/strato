@@ -8,7 +8,9 @@ import Fluent
 struct HierarchySearchService {
     /// Searches OUs, projects, and VMs within a single organization.
     /// - Parameter entityType: optional filter — `"ou"`, `"project"`, or `"vm"`.
-    static func search(organizationID: UUID, query: String, entityType: String?, on db: Database) async throws -> [HierarchySearchResult] {
+    static func search(organizationID: UUID, query: String, entityType: String?, on db: Database) async throws
+        -> [HierarchySearchResult]
+    {
         var results: [HierarchySearchResult] = []
 
         // Search OUs if not filtered to specific type
@@ -17,21 +19,24 @@ struct HierarchySearchService {
                 .filter(\.$organization.$id == organizationID)
                 .group(.or) { or in
                     or.filter(.caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "name", value: query))
-                    or.filter(.caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "description", value: query))
+                    or.filter(
+                        .caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "description", value: query)
+                    )
                 }
                 .limit(10)
                 .all()
 
             for ou in ous {
-                results.append(HierarchySearchResult(
-                    id: ou.id!,
-                    name: ou.name,
-                    type: "organizational_unit",
-                    path: ou.path,
-                    description: ou.description,
-                    parentId: ou.$parentOU.id,
-                    parentType: ou.$parentOU.id != nil ? "organizational_unit" : "organization"
-                ))
+                results.append(
+                    HierarchySearchResult(
+                        id: ou.id!,
+                        name: ou.name,
+                        type: "organizational_unit",
+                        path: ou.path,
+                        description: ou.description,
+                        parentId: ou.$parentOU.id,
+                        parentType: ou.$parentOU.id != nil ? "organizational_unit" : "organization"
+                    ))
             }
         }
 
@@ -54,15 +59,16 @@ struct HierarchySearchService {
                 let parentId = project.$organization.id ?? project.$organizationalUnit.id
                 let parentType = project.$organization.id != nil ? "organization" : "organizational_unit"
 
-                results.append(HierarchySearchResult(
-                    id: project.id!,
-                    name: project.name,
-                    type: "project",
-                    path: project.path,
-                    description: project.description,
-                    parentId: parentId,
-                    parentType: parentType
-                ))
+                results.append(
+                    HierarchySearchResult(
+                        id: project.id!,
+                        name: project.name,
+                        type: "project",
+                        path: project.path,
+                        description: project.description,
+                        parentId: parentId,
+                        parentType: parentType
+                    ))
             }
         }
 
@@ -83,15 +89,16 @@ struct HierarchySearchService {
                 .all()
 
             for vm in vms {
-                results.append(HierarchySearchResult(
-                    id: vm.id!,
-                    name: vm.name,
-                    type: "vm",
-                    path: "", // VMs don't have paths, but we could build one
-                    description: vm.description,
-                    parentId: vm.$project.id,
-                    parentType: "project"
-                ))
+                results.append(
+                    HierarchySearchResult(
+                        id: vm.id!,
+                        name: vm.name,
+                        type: "vm",
+                        path: "",  // VMs don't have paths, but we could build one
+                        description: vm.description,
+                        parentId: vm.$project.id,
+                        parentType: "project"
+                    ))
             }
         }
 
@@ -99,7 +106,9 @@ struct HierarchySearchService {
     }
 
     /// Searches OUs and projects across all organizations the user belongs to.
-    static func globalSearch(organizationIDs: [UUID], query: String, entityType: String?, on db: Database) async throws -> [HierarchySearchResult] {
+    static func globalSearch(organizationIDs: [UUID], query: String, entityType: String?, on db: Database) async throws
+        -> [HierarchySearchResult]
+    {
         var results: [HierarchySearchResult] = []
 
         // Search OUs if not filtered to specific type
@@ -108,21 +117,24 @@ struct HierarchySearchService {
                 .filter(\.$organization.$id ~~ organizationIDs)
                 .group(.or) { or in
                     or.filter(.caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "name", value: query))
-                    or.filter(.caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "description", value: query))
+                    or.filter(
+                        .caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "description", value: query)
+                    )
                 }
                 .limit(10)
                 .all()
 
             for ou in ous {
-                results.append(HierarchySearchResult(
-                    id: ou.id!,
-                    name: ou.name,
-                    type: "organizational_unit",
-                    path: ou.path,
-                    description: ou.description,
-                    parentId: ou.$parentOU.id,
-                    parentType: ou.$parentOU.id != nil ? "organizational_unit" : "organization"
-                ))
+                results.append(
+                    HierarchySearchResult(
+                        id: ou.id!,
+                        name: ou.name,
+                        type: "organizational_unit",
+                        path: ou.path,
+                        description: ou.description,
+                        parentId: ou.$parentOU.id,
+                        parentType: ou.$parentOU.id != nil ? "organizational_unit" : "organization"
+                    ))
             }
         }
 
@@ -160,15 +172,16 @@ struct HierarchySearchService {
                     }
                 }()
 
-                results.append(HierarchySearchResult(
-                    id: project.id!,
-                    name: project.name,
-                    type: "project",
-                    path: project.path,
-                    description: project.description,
-                    parentId: parentId,
-                    parentType: parentType
-                ))
+                results.append(
+                    HierarchySearchResult(
+                        id: project.id!,
+                        name: project.name,
+                        type: "project",
+                        path: project.path,
+                        description: project.description,
+                        parentId: parentId,
+                        parentType: parentType
+                    ))
             }
         }
 

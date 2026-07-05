@@ -172,7 +172,7 @@ struct HierarchyController: RouteCollection {
             throw Abort(.badRequest, reason: "Search query parameter 'q' is required")
         }
 
-        let entityType = req.query[String.self, at: "type"] // Optional filter by entity type
+        let entityType = req.query[String.self, at: "type"]  // Optional filter by entity type
 
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
@@ -201,7 +201,7 @@ struct HierarchyController: RouteCollection {
             throw Abort(.badRequest, reason: "Search query parameter 'q' is required")
         }
 
-        let entityType = req.query[String.self, at: "type"] // Optional filter by entity type
+        let entityType = req.query[String.self, at: "type"]  // Optional filter by entity type
 
         // Get all organizations the user belongs to
         try await user.$organizations.load(on: req.db)
@@ -225,7 +225,7 @@ struct HierarchyController: RouteCollection {
 
         return HierarchySearchResponse(
             query: query,
-            organizationId: nil, // Global search across organizations
+            organizationId: nil,  // Global search across organizations
             results: results,
             totalResults: results.count
         )
@@ -237,8 +237,9 @@ struct HierarchyController: RouteCollection {
         }
 
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-              let entityType = req.parameters.get("entityType"),
-              let entityID = req.parameters.get("entityID", as: UUID.self) else {
+            let entityType = req.parameters.get("entityType"),
+            let entityID = req.parameters.get("entityID", as: UUID.self)
+        else {
             throw Abort(.badRequest, reason: "Invalid parameters")
         }
 
@@ -275,10 +276,12 @@ struct HierarchyController: RouteCollection {
 
         // Verify user has admin access to both organizations
         try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
-        try await OrganizationAccessService.requireAdmin(user: user, organizationID: mergeRequest.sourceOrganizationId, on: req.db)
+        try await OrganizationAccessService.requireAdmin(
+            user: user, organizationID: mergeRequest.sourceOrganizationId, on: req.db)
 
         guard let targetOrg = try await Organization.find(organizationID, on: req.db),
-              let sourceOrg = try await Organization.find(mergeRequest.sourceOrganizationId, on: req.db) else {
+            let sourceOrg = try await Organization.find(mergeRequest.sourceOrganizationId, on: req.db)
+        else {
             throw Abort(.notFound, reason: "Organization not found")
         }
 

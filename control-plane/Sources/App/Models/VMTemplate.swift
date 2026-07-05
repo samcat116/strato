@@ -115,11 +115,11 @@ final class VMTemplate: Model, @unchecked Sendable {
         supportsHugepages: Bool = false,
         supportsSharedMemory: Bool = false,
         minCpu: Int = 1,
-        minMemory: Int64 = 512 * 1024 * 1024, // 512MB
-        minDisk: Int64 = 1024 * 1024 * 1024, // 1GB
+        minMemory: Int64 = 512 * 1024 * 1024,  // 512MB
+        minDisk: Int64 = 1024 * 1024 * 1024,  // 1GB
         maxCpu: Int = 32,
-        maxMemory: Int64 = 32 * 1024 * 1024 * 1024, // 32GB
-        maxDisk: Int64 = 1024 * 1024 * 1024 * 1024 // 1TB
+        maxMemory: Int64 = 32 * 1024 * 1024 * 1024,  // 32GB
+        maxDisk: Int64 = 1024 * 1024 * 1024 * 1024  // 1TB
     ) {
         self.id = id
         self.name = name

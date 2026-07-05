@@ -39,11 +39,13 @@ actor ConsoleSocketManager {
 
     /// Connect to a VM's console socket
     func connect(vmId: String, sessionId: String, socketPath: String) async throws {
-        logger.info("Connecting to console socket", metadata: [
-            "vmId": .string(vmId),
-            "sessionId": .string(sessionId),
-            "socketPath": .string(socketPath)
-        ])
+        logger.info(
+            "Connecting to console socket",
+            metadata: [
+                "vmId": .string(vmId),
+                "sessionId": .string(sessionId),
+                "socketPath": .string(socketPath),
+            ])
 
         // Check if socket file exists
         guard FileManager.default.fileExists(atPath: socketPath) else {
@@ -99,16 +101,20 @@ actor ConsoleSocketManager {
             }
             vmSessions[vmId]?.insert(sessionId)
 
-            logger.info("Console socket connected", metadata: [
-                "vmId": .string(vmId),
-                "sessionId": .string(sessionId)
-            ])
+            logger.info(
+                "Console socket connected",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "sessionId": .string(sessionId),
+                ])
         } catch {
-            logger.error("Failed to connect to console socket", metadata: [
-                "vmId": .string(vmId),
-                "sessionId": .string(sessionId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to connect to console socket",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "sessionId": .string(sessionId),
+                    "error": .string(error.localizedDescription),
+                ])
             throw ConsoleError.connectionFailed(error.localizedDescription)
         }
     }
@@ -116,9 +122,11 @@ actor ConsoleSocketManager {
     /// Disconnect a console session
     func disconnect(sessionId: String) async {
         guard let connection = connections.removeValue(forKey: sessionId) else {
-            logger.warning("Attempted to disconnect unknown session", metadata: [
-                "sessionId": .string(sessionId)
-            ])
+            logger.warning(
+                "Attempted to disconnect unknown session",
+                metadata: [
+                    "sessionId": .string(sessionId)
+                ])
             return
         }
 
@@ -133,16 +141,20 @@ actor ConsoleSocketManager {
         do {
             try await connection.channel.close().get()
         } catch {
-            logger.debug("Error closing channel (may already be closed)", metadata: [
-                "sessionId": .string(sessionId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.debug(
+                "Error closing channel (may already be closed)",
+                metadata: [
+                    "sessionId": .string(sessionId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
 
-        logger.info("Console session disconnected", metadata: [
-            "vmId": .string(connection.vmId),
-            "sessionId": .string(sessionId)
-        ])
+        logger.info(
+            "Console session disconnected",
+            metadata: [
+                "vmId": .string(connection.vmId),
+                "sessionId": .string(sessionId),
+            ])
     }
 
     /// Write data to console (user input)
@@ -155,10 +167,12 @@ actor ConsoleSocketManager {
         do {
             try await connection.channel.writeAndFlush(buffer).get()
         } catch {
-            logger.error("Failed to write to console", metadata: [
-                "sessionId": .string(sessionId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to write to console",
+                metadata: [
+                    "sessionId": .string(sessionId),
+                    "error": .string(error.localizedDescription),
+                ])
             throw ConsoleError.writeFailed(error.localizedDescription)
         }
     }
@@ -187,17 +201,21 @@ actor ConsoleSocketManager {
     private func handleIncomingData(sessionId: String, vmId: String, data: Data) async {
         if !firstDataLogged.contains(sessionId) {
             firstDataLogged.insert(sessionId)
-            logger.info("Received first console data", metadata: [
-                "sessionId": .string(sessionId),
-                "vmId": .string(vmId),
-                "bytes": .stringConvertible(data.count)
-            ])
+            logger.info(
+                "Received first console data",
+                metadata: [
+                    "sessionId": .string(sessionId),
+                    "vmId": .string(vmId),
+                    "bytes": .stringConvertible(data.count),
+                ])
         } else {
-            logger.debug("Received console data", metadata: [
-                "sessionId": .string(sessionId),
-                "vmId": .string(vmId),
-                "bytes": .stringConvertible(data.count)
-            ])
+            logger.debug(
+                "Received console data",
+                metadata: [
+                    "sessionId": .string(sessionId),
+                    "vmId": .string(vmId),
+                    "bytes": .stringConvertible(data.count),
+                ])
         }
         if let callback = onConsoleData {
             await callback(vmId, sessionId, data)
@@ -205,9 +223,11 @@ actor ConsoleSocketManager {
     }
 
     private func handleConnectionClosed(sessionId: String) async {
-        logger.info("Console connection closed by remote", metadata: [
-            "sessionId": .string(sessionId)
-        ])
+        logger.info(
+            "Console connection closed by remote",
+            metadata: [
+                "sessionId": .string(sessionId)
+            ])
 
         // Clean up the connection
         if let connection = connections.removeValue(forKey: sessionId) {

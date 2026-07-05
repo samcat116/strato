@@ -33,12 +33,12 @@ struct AgentSchedulableTransformTests {
     func testSchedulableAgents() throws {
         let agents = [
             makeAgent(id: "agent-1", name: "One", availableCPU: 6),
-            makeAgent(id: "agent-2", name: "Two", availableCPU: 2)
+            makeAgent(id: "agent-2", name: "Two", availableCPU: 2),
         ]
         let mapping = [
             "vm1": "agent-1",
             "vm2": "agent-1",
-            "vm3": "agent-2"
+            "vm3": "agent-2",
         ]
 
         let result = AgentService.schedulableAgents(from: agents, vmToAgentMapping: mapping)

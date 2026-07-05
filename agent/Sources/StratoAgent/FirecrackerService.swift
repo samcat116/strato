@@ -39,10 +39,12 @@ actor FirecrackerService: HypervisorService {
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.socketDirectory = socketDirectory
 
-        logger.info("Firecracker service initialized", metadata: [
-            "binaryPath": "\(firecrackerBinaryPath)",
-            "socketDirectory": "\(socketDirectory)"
-        ])
+        logger.info(
+            "Firecracker service initialized",
+            metadata: [
+                "binaryPath": "\(firecrackerBinaryPath)",
+                "socketDirectory": "\(socketDirectory)",
+            ])
     }
 
     // MARK: - HypervisorService Protocol Implementation
@@ -52,7 +54,8 @@ actor FirecrackerService: HypervisorService {
 
         // Validate Firecracker requirements
         guard case .directKernel(let kernelPath, let initramfsPath, let cmdline) = spec.boot else {
-            throw HypervisorServiceError.invalidConfiguration("Firecracker requires direct kernel boot - kernel path must be specified")
+            throw HypervisorServiceError.invalidConfiguration(
+                "Firecracker requires direct kernel boot - kernel path must be specified")
         }
 
         // Initialize client if needed
@@ -72,10 +75,12 @@ actor FirecrackerService: HypervisorService {
         // is provided, otherwise use the spec's first volume reference.
         var rootDrive: (id: String, path: String, readOnly: Bool)?
         if let imageInfo = imageInfo, let cacheService = imageCacheService {
-            logger.info("Using cached image for VM", metadata: [
-                "vmId": .string(vmId),
-                "imageId": .string(imageInfo.imageId.uuidString)
-            ])
+            logger.info(
+                "Using cached image for VM",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "imageId": .string(imageInfo.imageId.uuidString),
+                ])
 
             do {
                 let cachedImagePath = try await cacheService.getImagePath(imageInfo: imageInfo)
@@ -92,24 +97,29 @@ actor FirecrackerService: HypervisorService {
 
                 if !FileManager.default.fileExists(atPath: vmDiskPath) {
                     try FileManager.default.copyItem(atPath: cachedImagePath, toPath: vmDiskPath)
-                    logger.info("Created VM disk from cached image", metadata: [
-                        "vmId": .string(vmId),
-                        "diskPath": .string(vmDiskPath)
-                    ])
+                    logger.info(
+                        "Created VM disk from cached image",
+                        metadata: [
+                            "vmId": .string(vmId),
+                            "diskPath": .string(vmDiskPath),
+                        ])
                 }
 
                 rootDrive = (id: "rootfs", path: vmDiskPath, readOnly: false)
             } catch {
-                logger.error("Failed to get cached image", metadata: [
-                    "vmId": .string(vmId),
-                    "error": .string(error.localizedDescription)
-                ])
+                logger.error(
+                    "Failed to get cached image",
+                    metadata: [
+                        "vmId": .string(vmId),
+                        "error": .string(error.localizedDescription),
+                    ])
             }
         }
 
         if rootDrive == nil,
-           let volume = spec.volumes.first,
-           let storagePath = volume.storagePath {
+            let volume = spec.volumes.first,
+            let storagePath = volume.storagePath
+        {
             rootDrive = (id: volume.deviceName, path: storagePath, readOnly: volume.readonly)
         }
 
@@ -235,7 +245,8 @@ actor FirecrackerService: HypervisorService {
 
     func getVMInfo(vmId: String) async throws -> VmInfo {
         guard let manager = vmManagers[vmId],
-              let spec = vmSpecs[vmId] else {
+            let spec = vmSpecs[vmId]
+        else {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
@@ -293,7 +304,8 @@ actor FirecrackerService: HypervisorService {
     }
 
     /// Firecracker does not support hot-plugging drives into a running microVM.
-    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool) async throws {
+    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool) async throws
+    {
         guard vmManagers[vmId] != nil else {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
@@ -333,11 +345,13 @@ actor FirecrackerService: HypervisorService {
         let networkInfo = try await networkService.createVMNetwork(vmId: vmId, config: networkConfig)
         vmNetworkInfo[vmId] = networkInfo
 
-        logger.info("VM networking setup completed", metadata: [
-            "vmId": .string(vmId),
-            "tapInterface": .string(networkInfo.tapInterface),
-            "macAddress": .string(networkInfo.macAddress)
-        ])
+        logger.info(
+            "VM networking setup completed",
+            metadata: [
+                "vmId": .string(vmId),
+                "tapInterface": .string(networkInfo.tapInterface),
+                "macAddress": .string(networkInfo.macAddress),
+            ])
     }
 
     private func cleanupVMNetworking(vmId: String) async throws {
@@ -353,10 +367,12 @@ actor FirecrackerService: HypervisorService {
             vmNetworkInfo.removeValue(forKey: vmId)
             logger.info("VM networking cleanup completed", metadata: ["vmId": .string(vmId)])
         } catch {
-            logger.error("Failed to cleanup VM networking", metadata: [
-                "vmId": .string(vmId),
-                "error": .string(error.localizedDescription)
-            ])
+            logger.error(
+                "Failed to cleanup VM networking",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 }
@@ -425,7 +441,8 @@ actor FirecrackerService: HypervisorService {
         throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
     }
 
-    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool) async throws {
+    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool) async throws
+    {
         throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
     }
 

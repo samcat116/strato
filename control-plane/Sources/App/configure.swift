@@ -12,17 +12,20 @@ public func configure(_ app: Application) async throws {
     // lacked when a stale duplicate silently intercepted port 8080.
     let identity = InstanceIdentity(environment: app.environment.name)
     app.instanceIdentity = identity
-    app.logger.info("Control plane booting", metadata: [
-        "instanceId": .string(identity.instanceId.uuidString),
-        "version": .string(BuildInfo.version),
-        "gitSHA": .string(BuildInfo.gitSHA),
-        "environment": .string(identity.environment)
-    ])
+    app.logger.info(
+        "Control plane booting",
+        metadata: [
+            "instanceId": .string(identity.instanceId.uuidString),
+            "version": .string(BuildInfo.version),
+            "gitSHA": .string(BuildInfo.gitSHA),
+            "environment": .string(identity.environment),
+        ])
 
     // Request logging: one structured line per HTTP request (method/path/status/
     // duration). Registered first so it's the outermost middleware and times the
     // full request. Default on outside production; override with REQUEST_LOGGING.
-    let requestLoggingEnabled = Environment.get("REQUEST_LOGGING").flatMap(Bool.init)
+    let requestLoggingEnabled =
+        Environment.get("REQUEST_LOGGING").flatMap(Bool.init)
         ?? (app.environment != .production)
     if requestLoggingEnabled {
         app.middleware.use(RequestLoggingMiddleware())
@@ -87,14 +90,17 @@ public func configure(_ app: Application) async throws {
     // (shared across replicas), else a process-local counter. See issue #60.
     let rateLimitConfig = RateLimitConfig.fromEnvironment(for: app.environment)
     if rateLimitConfig.enabled {
-        app.middleware.use(RateLimitMiddleware(
-            config: rateLimitConfig,
-            fallbackStore: InMemoryRateLimitStore()
-        ))
-        app.logger.info("Rate limiting enabled", metadata: [
-            "authLimit": .stringConvertible(rateLimitConfig.authLimit),
-            "apiLimit": .stringConvertible(rateLimitConfig.apiLimit)
-        ])
+        app.middleware.use(
+            RateLimitMiddleware(
+                config: rateLimitConfig,
+                fallbackStore: InMemoryRateLimitStore()
+            ))
+        app.logger.info(
+            "Rate limiting enabled",
+            metadata: [
+                "authLimit": .stringConvertible(rateLimitConfig.authLimit),
+                "apiLimit": .stringConvertible(rateLimitConfig.apiLimit),
+            ])
     }
 
     // Enforce the scopes attached to an API key. Must run after the bearer
@@ -112,7 +118,6 @@ public func configure(_ app: Application) async throws {
         relyingPartyName: relyingPartyName,
         relyingPartyOrigin: relyingPartyOrigin
     )
-
 
     if app.environment != .testing {
         // Fail fast: the SpiceDB service is constructed lazily on every authorized
@@ -145,8 +150,8 @@ public func configure(_ app: Application) async throws {
                     username: Environment.get("DATABASE_USERNAME") ?? "vapor_username",
                     password: Environment.get("DATABASE_PASSWORD") ?? "vapor_password",
                     database: Environment.get("DATABASE_NAME") ?? "vapor_database",
-                tls: .disable)
-        ), as: .psql)
+                    tls: .disable)
+            ), as: .psql)
     }
 
     app.migrations.add(CreateUser())
@@ -230,14 +235,15 @@ public func configure(_ app: Application) async throws {
 
     // Dev auth bypass - create dev user for local development
     if app.environment == .development, Environment.get("DEV_AUTH_BYPASS") == "true" {
-        app.logger.critical("""
-        ============================================================
-        ⚠️  DEV_AUTH_BYPASS ENABLED — AUTHENTICATION IS DISABLED  ⚠️
-        Every request is served as a system-admin 'dev' user with no
-        credentials required. This is for LOCAL DEVELOPMENT ONLY.
-        Never enable DEV_AUTH_BYPASS on a host reachable by anyone else.
-        ============================================================
-        """)
+        app.logger.critical(
+            """
+            ============================================================
+            ⚠️  DEV_AUTH_BYPASS ENABLED — AUTHENTICATION IS DISABLED  ⚠️
+            Every request is served as a system-admin 'dev' user with no
+            credentials required. This is for LOCAL DEVELOPMENT ONLY.
+            Never enable DEV_AUTH_BYPASS on a host reachable by anyone else.
+            ============================================================
+            """)
         let devUser: User
         if let existingUser = try await User.query(on: app.db)
             .filter(\.$username == "dev")
@@ -346,7 +352,8 @@ public func configure(_ app: Application) async throws {
 
     // Configure scheduler service
     // Default strategy can be configured via environment variable
-    let schedulingStrategy = Environment.get("SCHEDULING_STRATEGY")
+    let schedulingStrategy =
+        Environment.get("SCHEDULING_STRATEGY")
         .flatMap { SchedulingStrategy(rawValue: $0) } ?? .leastLoaded
     app.useScheduler(SchedulerService(logger: app.logger, defaultStrategy: schedulingStrategy))
     app.logger.info("Scheduler service initialized with strategy: \(schedulingStrategy.rawValue)")
@@ -384,12 +391,14 @@ public func configure(_ app: Application) async throws {
             otelConfig.traces.otlpExporter.protocol = .grpc
             #endif
 
-            app.logger.info("Bootstrapping OpenTelemetry", metadata: [
-                "service": .string(otelConfig.serviceName),
-                "metrics": .stringConvertible(otelConfig.metrics.enabled),
-                "logs": .stringConvertible(otelConfig.logs.enabled),
-                "traces": .stringConvertible(otelConfig.traces.enabled)
-            ])
+            app.logger.info(
+                "Bootstrapping OpenTelemetry",
+                metadata: [
+                    "service": .string(otelConfig.serviceName),
+                    "metrics": .stringConvertible(otelConfig.metrics.enabled),
+                    "logs": .stringConvertible(otelConfig.logs.enabled),
+                    "traces": .stringConvertible(otelConfig.traces.enabled),
+                ])
 
             let observability = try OTel.bootstrap(configuration: otelConfig)
             app.lifecycle.use(OTelLifecycleHandler(observability: observability))

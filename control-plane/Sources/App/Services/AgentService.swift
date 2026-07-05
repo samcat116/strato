@@ -11,7 +11,7 @@ import NIOConcurrencyHelpers
 /// WebSocket objects are event-loop-bound and must only be accessed from their event loop
 final class WebSocketManager: @unchecked Sendable {
     private let lock = NIOLock()
-    private var connections: [String: WebSocket] = [:] // Agent name -> WebSocket
+    private var connections: [String: WebSocket] = [:]  // Agent name -> WebSocket
 
     /// Must be called from the WebSocket's event loop
     func setConnection(agentName: String, websocket: WebSocket) {
@@ -57,7 +57,7 @@ final class WebSocketManager: @unchecked Sendable {
 actor AgentService {
     private let app: Application
     private var agents: [String: AgentInfo] = [:]
-    private var vmToAgentMapping: [String: String] = [:] // VM ID -> Agent ID
+    private var vmToAgentMapping: [String: String] = [:]  // VM ID -> Agent ID
     private var pendingRequests: [String: PendingRequest] = [:]
     private var heartbeatTask: Task<Void, Never>?
 
@@ -114,7 +114,8 @@ actor AgentService {
         let agent: Agent
         if let existingAgent = try await Agent.query(on: db)
             .filter(\.$name == agentName)
-            .first() {
+            .first()
+        {
             // Update existing agent
             agent = existingAgent
             agent.hostname = message.hostname
@@ -156,12 +157,14 @@ actor AgentService {
 
         Telemetry.agentConnected()
         Telemetry.recordAgentUp(agentName: agentName, up: true)
-        app.logger.info("Agent registered", metadata: [
-            "agentId": .string(agentUUID.uuidString),
-            "agentName": .string(agentName),
-            "hostname": .string(message.hostname),
-            "version": .string(message.version)
-        ])
+        app.logger.info(
+            "Agent registered",
+            metadata: [
+                "agentId": .string(agentUUID.uuidString),
+                "agentName": .string(agentName),
+                "hostname": .string(message.hostname),
+                "version": .string(message.version),
+            ])
 
         return agentUUID
     }
@@ -176,7 +179,8 @@ actor AgentService {
 
         // Update database using UUID
         if let agentUUID = UUID(uuidString: agentId),
-           let agent = try await Agent.find(agentUUID, on: db) {
+            let agent = try await Agent.find(agentUUID, on: db)
+        {
             agent.status = .offline
             try await agent.save(on: db)
         }
@@ -212,7 +216,8 @@ actor AgentService {
     func forceUnregisterAgent(_ agentName: String) async {
         // Find agent UUID by name
         guard let agentId = findAgentIdByName(agentName) else {
-            app.logger.warning("Cannot force unregister: agent not found by name", metadata: ["agentName": .string(agentName)])
+            app.logger.warning(
+                "Cannot force unregister: agent not found by name", metadata: ["agentName": .string(agentName)])
             return
         }
 
@@ -232,7 +237,9 @@ actor AgentService {
             vmToAgentMapping.removeValue(forKey: vmId)
         }
 
-        app.logger.info("Agent force unregistered from memory", metadata: ["agentId": .string(agentId), "agentName": .string(agentName)])
+        app.logger.info(
+            "Agent force unregistered from memory",
+            metadata: ["agentId": .string(agentId), "agentName": .string(agentName)])
     }
 
     func removeAgent(_ agentName: String) async {
@@ -256,7 +263,8 @@ actor AgentService {
             do {
                 let db = self.app.db
                 if let agentUUID = UUID(uuidString: agentId),
-                   let agent = try await Agent.find(agentUUID, on: db) {
+                    let agent = try await Agent.find(agentUUID, on: db)
+                {
                     agent.status = .offline
                     try await agent.save(on: db)
                 }
@@ -276,11 +284,13 @@ actor AgentService {
         }
 
         guard agentInfo.name == agentName else {
-            app.logger.warning("Heartbeat claims an agentId not owned by the authenticated connection; ignoring", metadata: [
-                "claimedAgentId": .string(message.agentId),
-                "claimedAgentName": .string(agentInfo.name),
-                "connectionAgentName": .string(agentName)
-            ])
+            app.logger.warning(
+                "Heartbeat claims an agentId not owned by the authenticated connection; ignoring",
+                metadata: [
+                    "claimedAgentId": .string(message.agentId),
+                    "claimedAgentName": .string(agentInfo.name),
+                    "connectionAgentName": .string(agentName),
+                ])
             return
         }
 
@@ -352,33 +362,38 @@ actor AgentService {
                 divergent += 1
                 Telemetry.vmEnteredError(reason: "reconciliation")
 
-                app.logger.warning("VM missing from agent heartbeat; marking as error", metadata: [
-                    "vmId": .string(vmId),
-                    "agentId": .string(agentId),
-                    "previousStatus": .string(previous.rawValue)
-                ])
+                app.logger.warning(
+                    "VM missing from agent heartbeat; marking as error",
+                    metadata: [
+                        "vmId": .string(vmId),
+                        "agentId": .string(agentId),
+                        "previousStatus": .string(previous.rawValue),
+                    ])
             }
 
             // Orphans: VMs the agent reports that the database does not map to it.
             let knownIds = Set(dbVMs.compactMap { $0.id?.uuidString })
             let orphans = managed.subtracting(knownIds)
             if !orphans.isEmpty {
-                app.logger.warning("Agent reports VMs unknown to control plane", metadata: [
-                    "agentId": .string(agentId),
-                    "orphanVMs": .string(orphans.sorted().joined(separator: ","))
-                ])
+                app.logger.warning(
+                    "Agent reports VMs unknown to control plane",
+                    metadata: [
+                        "agentId": .string(agentId),
+                        "orphanVMs": .string(orphans.sorted().joined(separator: ",")),
+                    ])
             }
 
             if divergent > 0 {
-                app.logger.info("Reconciliation marked \(divergent) VM(s) as error", metadata: ["agentId": .string(agentId)])
+                app.logger.info(
+                    "Reconciliation marked \(divergent) VM(s) as error", metadata: ["agentId": .string(agentId)])
             }
         } catch {
             app.logger.error("VM reconciliation failed for agent \(agentId): \(error)")
         }
     }
-    
+
     // MARK: - Heartbeat Monitoring
-    
+
     private func startHeartbeatMonitoring() {
         heartbeatTask = Task {
             while !Task.isCancelled {
@@ -399,10 +414,10 @@ actor AgentService {
             }
         }
     }
-    
+
     private func checkStaleAgents() async {
         let now = Date()
-        let staleThreshold: TimeInterval = 60 // 60 seconds
+        let staleThreshold: TimeInterval = 60  // 60 seconds
 
         // Export per-agent heartbeat staleness as a gauge every cycle so alerting
         // can watch an agent go quiet before the sweep removes it.
@@ -444,7 +459,8 @@ actor AgentService {
                     do {
                         let db = self.app.db
                         if let agentUUID = UUID(uuidString: agentId),
-                           let agent = try await Agent.find(agentUUID, on: db) {
+                            let agent = try await Agent.find(agentUUID, on: db)
+                        {
                             agent.status = .offline
                             try await agent.save(on: db)
                         }
@@ -462,7 +478,7 @@ actor AgentService {
     /// statusUpdate message was lost.
     private func sweepStuckTransitionalVMs() async {
         let db = app.db
-        let timeout: TimeInterval = 120 // a VM may legitimately be transitional this long
+        let timeout: TimeInterval = 120  // a VM may legitimately be transitional this long
         let now = Date()
 
         do {
@@ -481,11 +497,13 @@ actor AgentService {
                 try await vm.save(on: db)
                 Telemetry.vmEnteredError(reason: "stuck_transition")
 
-                app.logger.warning("VM stuck in transitional state past timeout; marking as error", metadata: [
-                    "vmId": .string(vm.id?.uuidString ?? ""),
-                    "stuckStatus": .string(previous.rawValue),
-                    "timeoutSeconds": .string("\(Int(timeout))")
-                ])
+                app.logger.warning(
+                    "VM stuck in transitional state past timeout; marking as error",
+                    metadata: [
+                        "vmId": .string(vm.id?.uuidString ?? ""),
+                        "stuckStatus": .string(previous.rawValue),
+                        "timeoutSeconds": .string("\(Int(timeout))"),
+                    ])
             }
         } catch {
             app.logger.error("Stuck-VM sweep failed: \(error)")
@@ -501,7 +519,9 @@ actor AgentService {
     ///   - db: Database connection
     ///   - strategy: Optional scheduling strategy override
     ///   - image: Optional image for image-based VM creation (will generate signed download URL)
-    func createVM(vm: VM, vmSpec: VMSpec, db: Database, strategy: SchedulingStrategy? = nil, image: Image? = nil) async throws {
+    func createVM(vm: VM, vmSpec: VMSpec, db: Database, strategy: SchedulingStrategy? = nil, image: Image? = nil)
+        async throws
+    {
         // Convert agents to schedulable format
         let schedulableAgents = getSchedulableAgents()
 
@@ -558,11 +578,13 @@ actor AgentService {
         vm.hypervisorId = agentId
         try await vm.save(on: db)
 
-        app.logger.info("VM creation requested", metadata: [
-            "vmId": .string(vm.id?.uuidString ?? ""),
-            "agentId": .string(agentId),
-            "hasImageInfo": .string(imageInfo != nil ? "yes" : "no")
-        ])
+        app.logger.info(
+            "VM creation requested",
+            metadata: [
+                "vmId": .string(vm.id?.uuidString ?? ""),
+                "agentId": .string(agentId),
+                "hasImageInfo": .string(imageInfo != nil ? "yes" : "no"),
+            ])
     }
 
     func performVMOperation(_ operation: MessageType, vmId: String) async throws {
@@ -577,11 +599,13 @@ actor AgentService {
         let message = VMOperationMessage(type: operation, vmId: vmId)
         try await sendMessageToAgent(message, agentId: agentId)
 
-        app.logger.info("VM operation requested", metadata: [
-            "operation": .string(operation.rawValue),
-            "vmId": .string(vmId),
-            "agentId": .string(agentId)
-        ])
+        app.logger.info(
+            "VM operation requested",
+            metadata: [
+                "operation": .string(operation.rawValue),
+                "vmId": .string(vmId),
+                "agentId": .string(agentId),
+            ])
     }
 
     func getVMInfo(vmId: String) async throws -> VmInfo {
@@ -597,7 +621,8 @@ actor AgentService {
         let response = try await sendMessageToAgentWithResponse(message, agentId: agentId)
 
         guard case .success(let data) = response,
-              let vmInfo = try? data?.decode(as: VmInfo.self) else {
+            let vmInfo = try? data?.decode(as: VmInfo.self)
+        else {
             throw AgentServiceError.invalidResponse("Failed to decode VM info")
         }
 
@@ -617,7 +642,8 @@ actor AgentService {
         let response = try await sendMessageToAgentWithResponse(message, agentId: agentId)
 
         guard case .success(let data) = response,
-              let status = try? data?.decode(as: VMStatus.self) else {
+            let status = try? data?.decode(as: VMStatus.self)
+        else {
             throw AgentServiceError.invalidResponse("Failed to decode VM status")
         }
 
@@ -640,8 +666,8 @@ actor AgentService {
     ) -> [SchedulableAgent] {
         return agents.map { agentInfo in
             SchedulableAgent(
-                id: agentInfo.id,       // Database UUID (as String)
-                name: agentInfo.name,   // Human-readable name
+                id: agentInfo.id,  // Database UUID (as String)
+                name: agentInfo.name,  // Human-readable name
                 totalCPU: agentInfo.resources.totalCPU,
                 availableCPU: agentInfo.resources.availableCPU,
                 totalMemory: agentInfo.resources.totalMemory,
@@ -721,7 +747,9 @@ actor AgentService {
         }
     }
 
-    private func storePendingRequest(_ requestId: String, agentId: String, continuation: CheckedContinuation<AgentServiceResponse, Error>) {
+    private func storePendingRequest(
+        _ requestId: String, agentId: String, continuation: CheckedContinuation<AgentServiceResponse, Error>
+    ) {
         pendingRequests[requestId] = PendingRequest(agentId: agentId, continuation: continuation)
     }
 
@@ -760,9 +788,11 @@ actor AgentService {
             request.continuation.resume(throwing: reason)
         }
 
-        app.logger.info("Failed \(affected.count) in-flight request(s) for disconnected agent", metadata: [
-            "agentId": .string(agentId)
-        ])
+        app.logger.info(
+            "Failed \(affected.count) in-flight request(s) for disconnected agent",
+            metadata: [
+                "agentId": .string(agentId)
+            ])
     }
 
     // MARK: - Response Handling
@@ -825,15 +855,18 @@ actor AgentService {
             }
 
             guard let vmUUID = UUID(uuidString: update.vmId) else {
-                app.logger.warning("Status update referenced an invalid VM id", metadata: ["vmId": .string(update.vmId)])
+                app.logger.warning(
+                    "Status update referenced an invalid VM id", metadata: ["vmId": .string(update.vmId)])
                 return
             }
 
             guard let senderAgentId = self.findAgentIdByName(agentName) else {
-                app.logger.warning("Status update from unregistered agent; ignoring", metadata: [
-                    "vmId": .string(update.vmId),
-                    "agentName": .string(agentName)
-                ])
+                app.logger.warning(
+                    "Status update from unregistered agent; ignoring",
+                    metadata: [
+                        "vmId": .string(update.vmId),
+                        "agentName": .string(agentName),
+                    ])
                 return
             }
 
@@ -844,12 +877,14 @@ actor AgentService {
                 }
 
                 guard vm.hypervisorId == senderAgentId else {
-                    app.logger.warning("Status update from agent that does not own the VM; ignoring", metadata: [
-                        "vmId": .string(update.vmId),
-                        "agentName": .string(agentName),
-                        "senderAgentId": .string(senderAgentId),
-                        "owningAgentId": .string(vm.hypervisorId ?? "none")
-                    ])
+                    app.logger.warning(
+                        "Status update from agent that does not own the VM; ignoring",
+                        metadata: [
+                            "vmId": .string(update.vmId),
+                            "agentName": .string(agentName),
+                            "senderAgentId": .string(senderAgentId),
+                            "owningAgentId": .string(vm.hypervisorId ?? "none"),
+                        ])
                     return
                 }
 
@@ -863,15 +898,18 @@ actor AgentService {
                 // it would mask the in-flight one (e.g. a late `Paused` overwriting
                 // `.stopping`, hiding a lost stop from the sweep).
                 if vm.status.isTransitional {
-                    let expected: Set<VMStatus> = vm.status == .starting
+                    let expected: Set<VMStatus> =
+                        vm.status == .starting
                         ? [.running, .error]
                         : [.shutdown, .error]
                     guard expected.contains(update.status) else {
-                        app.logger.warning("Ignoring stale agent status update during in-flight operation", metadata: [
-                            "vmId": .string(update.vmId),
-                            "current": .string(vm.status.rawValue),
-                            "reported": .string(update.status.rawValue)
-                        ])
+                        app.logger.warning(
+                            "Ignoring stale agent status update during in-flight operation",
+                            metadata: [
+                                "vmId": .string(update.vmId),
+                                "current": .string(vm.status.rawValue),
+                                "reported": .string(update.status.rawValue),
+                            ])
                         return
                     }
                 }
@@ -884,11 +922,13 @@ actor AgentService {
                     Telemetry.vmEnteredError(reason: "agent_reported")
                 }
 
-                app.logger.info("Applied agent status update", metadata: [
-                    "vmId": .string(update.vmId),
-                    "from": .string(previous.rawValue),
-                    "to": .string(update.status.rawValue)
-                ])
+                app.logger.info(
+                    "Applied agent status update",
+                    metadata: [
+                        "vmId": .string(update.vmId),
+                        "from": .string(previous.rawValue),
+                        "to": .string(update.status.rawValue),
+                    ])
             } catch {
                 app.logger.error("Failed to apply status update for VM \(update.vmId): \(error)")
             }
@@ -905,7 +945,6 @@ actor AgentService {
         return agents[agentId]
     }
 }
-
 
 // MARK: - Application Extension
 

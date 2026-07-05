@@ -49,14 +49,18 @@ actor VolumeService {
                 withIntermediateDirectories: true,
                 attributes: nil
             )
-            logger.info("Volume service initialized", metadata: [
-                "storagePath": .string(self.volumeStoragePath),
-                "qemuImgPath": .string(self.qemuImgPath)
-            ])
+            logger.info(
+                "Volume service initialized",
+                metadata: [
+                    "storagePath": .string(self.volumeStoragePath),
+                    "qemuImgPath": .string(self.qemuImgPath),
+                ])
         } catch {
-            logger.error("Failed to create volume storage directory: \(error)", metadata: [
-                "storagePath": .string(self.volumeStoragePath)
-            ])
+            logger.error(
+                "Failed to create volume storage directory: \(error)",
+                metadata: [
+                    "storagePath": .string(self.volumeStoragePath)
+                ])
         }
     }
 
@@ -68,11 +72,13 @@ actor VolumeService {
         let volumeDir = "\(volumeStoragePath)/\(volumeId)"
         let volumePath = "\(volumeDir)/volume.\(format)"
 
-        logger.info("Creating volume", metadata: [
-            "volumeId": .string(volumeId),
-            "size": .stringConvertible(size),
-            "format": .string(format)
-        ])
+        logger.info(
+            "Creating volume",
+            metadata: [
+                "volumeId": .string(volumeId),
+                "size": .stringConvertible(size),
+                "format": .string(format),
+            ])
 
         // Create directory
         try FileManager.default.createDirectory(
@@ -89,17 +95,21 @@ actor VolumeService {
 
         if result.terminationStatus != 0 {
             let output = result.combinedOutput
-            logger.error("qemu-img create failed", metadata: [
-                "volumeId": .string(volumeId),
-                "output": .string(output)
-            ])
+            logger.error(
+                "qemu-img create failed",
+                metadata: [
+                    "volumeId": .string(volumeId),
+                    "output": .string(output),
+                ])
             throw VolumeServiceError.createFailed("qemu-img create failed: \(output)")
         }
 
-        logger.info("Volume created successfully", metadata: [
-            "volumeId": .string(volumeId),
-            "path": .string(volumePath)
-        ])
+        logger.info(
+            "Volume created successfully",
+            metadata: [
+                "volumeId": .string(volumeId),
+                "path": .string(volumePath),
+            ])
 
         return volumePath
     }
@@ -114,10 +124,12 @@ actor VolumeService {
         let volumeDir = "\(volumeStoragePath)/\(volumeId)"
         let volumePath = "\(volumeDir)/volume.qcow2"
 
-        logger.info("Creating volume from image", metadata: [
-            "volumeId": .string(volumeId),
-            "imageId": .string(imageInfo.imageId.uuidString)
-        ])
+        logger.info(
+            "Creating volume from image",
+            metadata: [
+                "volumeId": .string(volumeId),
+                "imageId": .string(imageInfo.imageId.uuidString),
+            ])
 
         // Get the cached image path (downloads if necessary)
         let cachedImagePath = try await cacheService.getImagePath(imageInfo: imageInfo)
@@ -132,11 +144,13 @@ actor VolumeService {
         // Copy the image to the volume location
         try FileManager.default.copyItem(atPath: cachedImagePath, toPath: volumePath)
 
-        logger.info("Volume created from image", metadata: [
-            "volumeId": .string(volumeId),
-            "path": .string(volumePath),
-            "sourceImage": .string(cachedImagePath)
-        ])
+        logger.info(
+            "Volume created from image",
+            metadata: [
+                "volumeId": .string(volumeId),
+                "path": .string(volumePath),
+                "sourceImage": .string(cachedImagePath),
+            ])
 
         return volumePath
     }
@@ -153,10 +167,12 @@ actor VolumeService {
             try FileManager.default.removeItem(atPath: volumeDir)
             logger.info("Volume deleted", metadata: ["volumeId": .string(volumeId)])
         } else {
-            logger.warning("Volume directory not found", metadata: [
-                "volumeId": .string(volumeId),
-                "path": .string(volumeDir)
-            ])
+            logger.warning(
+                "Volume directory not found",
+                metadata: [
+                    "volumeId": .string(volumeId),
+                    "path": .string(volumeDir),
+                ])
         }
     }
 
@@ -164,10 +180,12 @@ actor VolumeService {
 
     /// Resizes a volume (must be detached from any VM)
     func resizeVolume(volumePath: String, newSize: Int64) async throws {
-        logger.info("Resizing volume", metadata: [
-            "path": .string(volumePath),
-            "newSize": .stringConvertible(newSize)
-        ])
+        logger.info(
+            "Resizing volume",
+            metadata: [
+                "path": .string(volumePath),
+                "newSize": .stringConvertible(newSize),
+            ])
 
         // Run qemu-img resize
         let result = try await ProcessRunner.run(
@@ -177,17 +195,21 @@ actor VolumeService {
 
         if result.terminationStatus != 0 {
             let output = result.combinedOutput
-            logger.error("qemu-img resize failed", metadata: [
-                "path": .string(volumePath),
-                "output": .string(output)
-            ])
+            logger.error(
+                "qemu-img resize failed",
+                metadata: [
+                    "path": .string(volumePath),
+                    "output": .string(output),
+                ])
             throw VolumeServiceError.resizeFailed("qemu-img resize failed: \(output)")
         }
 
-        logger.info("Volume resized successfully", metadata: [
-            "path": .string(volumePath),
-            "newSize": .stringConvertible(newSize)
-        ])
+        logger.info(
+            "Volume resized successfully",
+            metadata: [
+                "path": .string(volumePath),
+                "newSize": .stringConvertible(newSize),
+            ])
     }
 
     // MARK: - Snapshots
@@ -198,11 +220,13 @@ actor VolumeService {
         let snapshotDir = "\(volumeStoragePath)/\(volumeId)/snapshots"
         let snapshotPath = "\(snapshotDir)/\(snapshotId).qcow2"
 
-        logger.info("Creating snapshot", metadata: [
-            "volumeId": .string(volumeId),
-            "snapshotId": .string(snapshotId),
-            "volumePath": .string(volumePath)
-        ])
+        logger.info(
+            "Creating snapshot",
+            metadata: [
+                "volumeId": .string(volumeId),
+                "snapshotId": .string(snapshotId),
+                "volumePath": .string(volumePath),
+            ])
 
         // Create snapshot directory
         try FileManager.default.createDirectory(
@@ -219,24 +243,28 @@ actor VolumeService {
                 "-f", "qcow2",
                 "-b", volumePath,
                 "-F", "qcow2",
-                snapshotPath
+                snapshotPath,
             ]
         )
 
         if result.terminationStatus != 0 {
             let output = result.combinedOutput
-            logger.error("qemu-img snapshot create failed", metadata: [
-                "volumeId": .string(volumeId),
-                "output": .string(output)
-            ])
+            logger.error(
+                "qemu-img snapshot create failed",
+                metadata: [
+                    "volumeId": .string(volumeId),
+                    "output": .string(output),
+                ])
             throw VolumeServiceError.snapshotFailed("qemu-img create snapshot failed: \(output)")
         }
 
-        logger.info("Snapshot created successfully", metadata: [
-            "volumeId": .string(volumeId),
-            "snapshotId": .string(snapshotId),
-            "path": .string(snapshotPath)
-        ])
+        logger.info(
+            "Snapshot created successfully",
+            metadata: [
+                "volumeId": .string(volumeId),
+                "snapshotId": .string(snapshotId),
+                "path": .string(snapshotPath),
+            ])
 
         return snapshotPath
     }
@@ -261,11 +289,13 @@ actor VolumeService {
         let targetDir = "\(volumeStoragePath)/\(targetVolumeId)"
         let targetPath = "\(targetDir)/volume.qcow2"
 
-        logger.info("Cloning volume", metadata: [
-            "sourceVolumeId": .string(sourceVolumeId),
-            "targetVolumeId": .string(targetVolumeId),
-            "sourcePath": .string(sourcePath)
-        ])
+        logger.info(
+            "Cloning volume",
+            metadata: [
+                "sourceVolumeId": .string(sourceVolumeId),
+                "targetVolumeId": .string(targetVolumeId),
+                "sourcePath": .string(sourcePath),
+            ])
 
         // Create target directory
         try FileManager.default.createDirectory(
@@ -282,24 +312,28 @@ actor VolumeService {
                 "-f", "qcow2",
                 "-O", "qcow2",
                 sourcePath,
-                targetPath
+                targetPath,
             ]
         )
 
         if result.terminationStatus != 0 {
             let output = result.combinedOutput
-            logger.error("qemu-img clone failed", metadata: [
-                "sourceVolumeId": .string(sourceVolumeId),
-                "output": .string(output)
-            ])
+            logger.error(
+                "qemu-img clone failed",
+                metadata: [
+                    "sourceVolumeId": .string(sourceVolumeId),
+                    "output": .string(output),
+                ])
             throw VolumeServiceError.cloneFailed("qemu-img convert failed: \(output)")
         }
 
-        logger.info("Volume cloned successfully", metadata: [
-            "sourceVolumeId": .string(sourceVolumeId),
-            "targetVolumeId": .string(targetVolumeId),
-            "targetPath": .string(targetPath)
-        ])
+        logger.info(
+            "Volume cloned successfully",
+            metadata: [
+                "sourceVolumeId": .string(sourceVolumeId),
+                "targetVolumeId": .string(targetVolumeId),
+                "targetPath": .string(targetPath),
+            ])
 
         return targetPath
     }

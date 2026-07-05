@@ -39,6 +39,8 @@ func backfillProjectOrganizationRelationships(_ app: Application) async throws {
     }
 
     if backfilled > 0 {
-        app.logger.notice("Backfilled SpiceDB project→organization relationships", metadata: ["count": .stringConvertible(backfilled)])
+        app.logger.notice(
+            "Backfilled SpiceDB project→organization relationships", metadata: ["count": .stringConvertible(backfilled)]
+        )
     }
 }

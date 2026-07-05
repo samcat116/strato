@@ -16,10 +16,11 @@ final class GroupTests: BaseTestCase {
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(CreateGroupRequest(
-                    name: "Test Group",
-                    description: "A test group"
-                ))
+                try req.content.encode(
+                    CreateGroupRequest(
+                        name: "Test Group",
+                        description: "A test group"
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
@@ -48,10 +49,11 @@ final class GroupTests: BaseTestCase {
             // Try to create second group with same name
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(CreateGroupRequest(
-                    name: "Duplicate Group",
-                    description: "Second group"
-                ))
+                try req.content.encode(
+                    CreateGroupRequest(
+                        name: "Duplicate Group",
+                        description: "Second group"
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
@@ -82,10 +84,11 @@ final class GroupTests: BaseTestCase {
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
-                try req.content.encode(CreateGroupRequest(
-                    name: "Unauthorized Group",
-                    description: "Should fail"
-                ))
+                try req.content.encode(
+                    CreateGroupRequest(
+                        name: "Unauthorized Group",
+                        description: "Should fail"
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -169,9 +172,10 @@ final class GroupTests: BaseTestCase {
             // Add members to group
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/groups/\(group.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(AddGroupMemberRequest(
-                    userIds: [user1.id!, user2.id!]
-                ))
+                try req.content.encode(
+                    AddGroupMemberRequest(
+                        userIds: [user1.id!, user2.id!]
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
@@ -213,7 +217,9 @@ final class GroupTests: BaseTestCase {
             try await group.addMember(user.id!, on: app.db)
 
             // Remove member from group
-            try await app.test(.DELETE, "/api/organizations/\(testOrganization.id!)/groups/\(group.id!)/members/\(user.id!)") { req in
+            try await app.test(
+                .DELETE, "/api/organizations/\(testOrganization.id!)/groups/\(group.id!)/members/\(user.id!)"
+            ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -241,10 +247,11 @@ final class GroupTests: BaseTestCase {
 
             try await app.test(.PUT, "/api/organizations/\(testOrganization.id!)/groups/\(group.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(UpdateGroupRequest(
-                    name: "Updated Name",
-                    description: "Updated description"
-                ))
+                try req.content.encode(
+                    UpdateGroupRequest(
+                        name: "Updated Name",
+                        description: "Updated description"
+                    ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
 
