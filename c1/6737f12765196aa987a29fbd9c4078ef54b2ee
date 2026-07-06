@@ -1,0 +1,123 @@
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_6be939981236cc::t_ddd28a6cf81a16 233-236,244-246,251-252
+control-plane/Tests/AppTests/URLSigningServiceArtifactTests.swift
+  s_6be939981236cc::t_94fe08484ca090 1-66
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_6be939981236cc::t_cd1bef30680311 156-157,163-165
+  s_6be939981236cc::t_b5bdba919edd28 181
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_6be939981236cc::t_414ca48f13536d 59-69,85,89,96-104,106-110,114-115,120,135-138
+  s_6be939981236cc::t_0f42f6168e2cb6 33,41
+  s_6be939981236cc::t_128678b887f181 15
+  s_6be939981236cc::t_79972fd7acf84d 139-140
+control-plane/Sources/App/Migrations/AddArchitectureToImage.swift
+  s_6be939981236cc::t_1c48b74a0a88df 1-19
+control-plane/web/src/components/images/edit-image-dialog.tsx
+  s_6be939981236cc::t_43768b61605e33 47-49
+  s_6be939981236cc::t_4bd1eb60c552c1 152-170
+  s_6be939981236cc::t_9d95d53a354974 18,21
+  s_6be939981236cc::t_346a32be2cfe3f 76
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_6be939981236cc::t_8a8621bc3878fe 220,223-269,272,276-279
+shared/Sources/StratoShared/ArtifactKind.swift
+  s_6be939981236cc::t_4b9e18d920acb5 1-39
+control-plane/Sources/App/Services/URLSigningService.swift
+  s_6be939981236cc::t_77a3a1221d1775 75-76,90-91,98-103,110-111,113-116
+  s_6be939981236cc::t_2c60e3d41daf72 6
+  s_6be939981236cc::t_fef9d0202fe17c 31-32,44-45,51-55
+control-plane/Tests/AppTests/VMSpecBuilderImageInfoTests.swift
+  s_6be939981236cc::t_23801995e5760f 1-84
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_6be939981236cc::t_51c063278509a5 435-437
+  s_6be939981236cc::t_518f55aa29abf7 702
+  s_6be939981236cc::t_0cc6a13269842a 5
+  s_6be939981236cc::t_55e68cf1be1435 336,347-359
+  s_6be939981236cc::t_d3898746e72433 55
+  s_6be939981236cc::t_24b47d708d8ca6 526-537,563-564,582,586
+  s_6be939981236cc::t_7cee354ea249ff 178
+  s_6be939981236cc::t_fb15b35410b92f 606,611-613,628-645
+  s_6be939981236cc::t_eaa85b72695030 258
+  s_6be939981236cc::t_4cc20c35cf3a74 290-296
+  s_6be939981236cc::t_f6685d86717f91 78-79
+  s_6be939981236cc::t_43fc581ef278cd 360-361
+  s_6be939981236cc::t_a98a27aecff14d 362
+control-plane/web/src/types/api.ts
+  s_6be939981236cc::t_6c89b095e2a3fa 347-358,368,378-379,389,399
+control-plane/web/src/lib/api/images.ts
+  s_6be939981236cc::t_bd8044b9110fde 36-38
+control-plane/Sources/App/Models/ImageArtifact.swift
+  s_6be939981236cc::t_cefa62248fa463 1-101
+control-plane/web/src/components/images/image-table.tsx
+  s_6be939981236cc::t_66a7181dfbcb7a 54-57
+  s_6be939981236cc::t_553f85c82b9a74 98-117
+agent/Sources/StratoAgent/QEMUService.swift
+  s_6be939981236cc::t_b78fa5343b1eae 85-86
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_6be939981236cc::t_62284ca09d46c1 289-331,341-345,354-356,365-384
+agent/Sources/StratoAgentCore/StorageBackend.swift
+  s_6be939981236cc::t_38b13cbe66f3a3 110,112-119
+  s_6be939981236cc::t_9691be21f0822f 49-50,52-63
+control-plane/Sources/App/configure.swift
+  s_6be939981236cc::t_694fc8ef794947 214-218
+control-plane/Tests/AppTests/BackfillImageArtifactsTests.swift
+  s_6be939981236cc::t_b417bf2b1c066a 1-47
+control-plane/Tests/AppTests/ImageCompatibilityTests.swift
+  s_6be939981236cc::t_4192742b4009e3 1-99
+agent/Sources/StratoAgent/Agent.swift
+  s_6be939981236cc::t_2fb741fd9866a3 288
+control-plane/web/src/components/images/upload-image-dialog.tsx
+  s_6be939981236cc::t_5f87d37f10a6ea 50
+  s_6be939981236cc::t_84eb5c1e2ad882 35
+  s_6be939981236cc::t_15b2fcab998108 19-21
+  s_6be939981236cc::t_d27cef24a75884 204-220
+  s_6be939981236cc::t_384b97d65ed1a2 325-341
+  s_6be939981236cc::t_cd48c1db14ddcd 105
+  s_6be939981236cc::t_1c67c93478ee13 133
+  s_6be939981236cc::t_035ccc58d7d0e3 203,324
+control-plane/Sources/App/Models/Image.swift
+  s_6be939981236cc::t_f3384419e90668 4
+  s_6be939981236cc::t_fa8fac6e2535ad 247-250
+  s_6be939981236cc::t_64265d2095c189 49-59
+  s_6be939981236cc::t_6f59f4553f0f22 276,308,342,352-355,369,379-380
+  s_6be939981236cc::t_75e481f4f8fe92 154,178
+  s_6be939981236cc::t_2caaa266c8f810 114,130
+  s_6be939981236cc::t_3eba5b3bcd02e6 281-302,313-330
+  s_6be939981236cc::t_f8fdb6e6674232 234-246,251-267
+shared/Tests/StratoSharedTests/ImageInfoArtifactTests.swift
+  s_6be939981236cc::t_2743c660b54fd7 1-62
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_6be939981236cc::t_77db1095d97401 118,122,129-145
+  s_6be939981236cc::t_21805f21ec7ce9 146
+agent/Sources/StratoAgent/ImageCacheService.swift
+  s_6be939981236cc::t_eb7be440c4e05d 387,400-401
+  s_6be939981236cc::t_557651a4f14b1c 222,374-377
+  s_6be939981236cc::t_46a040abfb0c76 105,111-221
+  s_6be939981236cc::t_642f0181ff2f91 223
+control-plane/Sources/App/Migrations/CreateImageArtifact.swift
+  s_6be939981236cc::t_35c0f371062b67 1-26
+control-plane/Sources/App/Migrations/BackfillImageArtifacts.swift
+  s_6be939981236cc::t_cae9ca74bfe54d 1-42
+control-plane/Sources/App/Controllers/VMController.swift
+  s_6be939981236cc::t_c1dc3369d235ea 409,417-424
+  s_6be939981236cc::t_685de7ce24d970 301-302
+  s_6be939981236cc::t_c2805a21f55994 410-416
+control-plane/Sources/App/Services/AgentService.swift
+  s_6be939981236cc::t_5b751ed0f85551 693-695
+  s_6be939981236cc::t_c100d77b367c08 666
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c16737f12765196aa987a29fbd9c4078ef54b2ee",
+  "prompts": {},
+  "sessions": {
+    "s_6be939981236cc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "de13cf51-5a0e-4903-b04f-3adbbf89fe2b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
