@@ -1,6 +1,7 @@
 import Fluent
 import Vapor
 import Foundation
+import StratoShared
 
 /// Represents the format of a VM disk image
 public enum ImageFormat: String, Codable, CaseIterable, Sendable {
@@ -44,6 +45,17 @@ final class Image: Model, @unchecked Sendable {
 
     @Enum(key: "format")
     var format: ImageFormat
+
+    /// Guest CPU architecture. Authoritative for scheduling — the scheduler reads
+    /// this single value rather than reconciling per-artifact architectures.
+    @Enum(key: "architecture")
+    var architecture: CPUArchitecture
+
+    /// Typed artifact set backing this image (disk-image, kernel, rootfs, ...).
+    /// Must be eager-loaded (`.with(\.$artifacts)`) before calling
+    /// `compatibleHypervisors()` / `isUsable(by:)` or building `ImageInfo`.
+    @Children(for: \.$image)
+    var artifacts: [ImageArtifact]
 
     @OptionalField(key: "checksum")
     var checksum: String?
@@ -99,6 +111,7 @@ final class Image: Model, @unchecked Sendable {
         filename: String,
         size: Int64 = 0,
         format: ImageFormat = .qcow2,
+        architecture: CPUArchitecture = .x86_64,
         status: ImageStatus = .pending,
         uploadedByID: UUID,
         sourceURL: String? = nil,
@@ -114,6 +127,7 @@ final class Image: Model, @unchecked Sendable {
         self.filename = filename
         self.size = size
         self.format = format
+        self.architecture = architecture
         self.status = status
         self.$uploadedBy.id = uploadedByID
         self.sourceURL = sourceURL
@@ -137,6 +151,7 @@ extension Image {
         let filename: String
         let size: Int64
         let format: ImageFormat
+        let architecture: CPUArchitecture
         let checksum: String?
         let status: ImageStatus
         let sourceURL: String?
@@ -160,6 +175,7 @@ extension Image {
             filename: self.filename,
             size: self.size,
             format: self.format,
+            architecture: self.architecture,
             checksum: self.checksum,
             status: self.status,
             sourceURL: self.sourceURL,
@@ -215,6 +231,40 @@ extension Image {
         guard let disk = defaultDisk else { return nil }
         return Int(disk / 1024 / 1024 / 1024)
     }
+
+    // MARK: - Hypervisor Compatibility
+
+    /// The hypervisor types that can run this image, derived from the artifact
+    /// set and the image architecture.
+    ///
+    /// - QEMU needs a bootable `diskImage` (of matching arch).
+    /// - Firecracker needs a `kernel` + `rootfs` pair (of matching arch);
+    ///   `initramfs` is optional.
+    ///
+    /// Requires `$artifacts` to be eager-loaded; an image with no loaded
+    /// artifacts is compatible with nothing.
+    func compatibleHypervisors() -> Set<HypervisorType> {
+        // `$artifacts.value` is nil when the relation isn't eager-loaded, which
+        // reads as "no known artifacts" rather than crashing on access.
+        let loaded = $artifacts.value ?? []
+        let matching = loaded.filter { $0.architecture == architecture }
+        let kinds = Set(matching.map(\.kind))
+
+        var result: Set<HypervisorType> = []
+        if kinds.contains(.diskImage) {
+            result.insert(.qemu)
+        }
+        if kinds.contains(.kernel) && kinds.contains(.rootfs) {
+            result.insert(.firecracker)
+        }
+        return result
+    }
+
+    /// Whether this image can be run by the given hypervisor type. Requires
+    /// `$artifacts` to be eager-loaded.
+    func isUsable(by hypervisorType: HypervisorType) -> Bool {
+        compatibleHypervisors().contains(hypervisorType)
+    }
 }
 
 // MARK: - Request/Response DTOs
@@ -223,19 +273,61 @@ struct CreateImageRequest: Content {
     let name: String
     let description: String?
     let sourceURL: String?
+    let architecture: CPUArchitecture?
     let defaultCpu: Int?
     let defaultMemory: Int64?
     let defaultDisk: Int64?
     let defaultCmdline: String?
+
+    // Explicit initializer so `architecture` (and the other optionals) can be
+    // omitted by callers; JSON decoding is unaffected (Codable is still synthesized).
+    init(
+        name: String,
+        description: String? = nil,
+        sourceURL: String? = nil,
+        architecture: CPUArchitecture? = nil,
+        defaultCpu: Int? = nil,
+        defaultMemory: Int64? = nil,
+        defaultDisk: Int64? = nil,
+        defaultCmdline: String? = nil
+    ) {
+        self.name = name
+        self.description = description
+        self.sourceURL = sourceURL
+        self.architecture = architecture
+        self.defaultCpu = defaultCpu
+        self.defaultMemory = defaultMemory
+        self.defaultDisk = defaultDisk
+        self.defaultCmdline = defaultCmdline
+    }
 }
 
 struct UpdateImageRequest: Content {
     let name: String?
     let description: String?
+    let architecture: CPUArchitecture?
     let defaultCpu: Int?
     let defaultMemory: Int64?
     let defaultDisk: Int64?
     let defaultCmdline: String?
+
+    init(
+        name: String? = nil,
+        description: String? = nil,
+        architecture: CPUArchitecture? = nil,
+        defaultCpu: Int? = nil,
+        defaultMemory: Int64? = nil,
+        defaultDisk: Int64? = nil,
+        defaultCmdline: String? = nil
+    ) {
+        self.name = name
+        self.description = description
+        self.architecture = architecture
+        self.defaultCpu = defaultCpu
+        self.defaultMemory = defaultMemory
+        self.defaultDisk = defaultDisk
+        self.defaultCmdline = defaultCmdline
+    }
 }
 
 struct ImageResponse: Content {
@@ -247,6 +339,7 @@ struct ImageResponse: Content {
     let size: Int64
     let sizeFormatted: String
     let format: ImageFormat
+    let architecture: CPUArchitecture
     let checksum: String?
     let status: ImageStatus
     let sourceURL: String?
@@ -256,6 +349,10 @@ struct ImageResponse: Content {
     let defaultMemory: Int64?
     let defaultDisk: Int64?
     let defaultCmdline: String?
+    /// Typed artifacts, when eager-loaded; empty otherwise.
+    let artifacts: [ImageArtifact.Public]
+    /// Hypervisor types this image can run on, when artifacts are eager-loaded.
+    let compatibleHypervisors: [HypervisorType]
     let uploadedById: UUID?
     let createdAt: Date?
     let updatedAt: Date?
@@ -269,6 +366,7 @@ struct ImageResponse: Content {
         self.size = image.size
         self.sizeFormatted = ImageResponse.formatSize(image.size)
         self.format = image.format
+        self.architecture = image.architecture
         self.checksum = image.checksum
         self.status = image.status
         self.sourceURL = image.sourceURL
@@ -278,6 +376,8 @@ struct ImageResponse: Content {
         self.defaultMemory = image.defaultMemory
         self.defaultDisk = image.defaultDisk
         self.defaultCmdline = image.defaultCmdline
+        self.artifacts = (image.$artifacts.value ?? []).map { $0.asPublic() }
+        self.compatibleHypervisors = image.compatibleHypervisors().sorted { $0.rawValue < $1.rawValue }
         self.uploadedById = image.$uploadedBy.id
         self.createdAt = image.createdAt
         self.updatedAt = image.updatedAt

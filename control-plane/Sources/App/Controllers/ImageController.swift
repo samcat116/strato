@@ -2,6 +2,7 @@ import Foundation
 import Vapor
 import Fluent
 import NIOCore
+import StratoShared
 
 struct ImageController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
@@ -51,6 +52,7 @@ struct ImageController: RouteCollection {
         // Get all images for the project
         let images = try await Image.query(on: req.db)
             .filter(\.$project.$id == projectID)
+            .with(\.$artifacts)
             .sort(\.$createdAt, .descending)
             .all()
 
@@ -73,6 +75,8 @@ struct ImageController: RouteCollection {
         guard let image = try await Image.find(imageID, on: req.db) else {
             throw Abort(.notFound, reason: "Image not found")
         }
+        // Load artifacts so the response carries compatibility metadata.
+        try await image.$artifacts.load(on: req.db)
 
         // Verify image belongs to the project
         guard image.$project.id == projectID else {
@@ -171,6 +175,7 @@ struct ImageController: RouteCollection {
             description: createRequest.description ?? "",
             projectID: projectID,
             filename: filename,
+            architecture: createRequest.architecture ?? .x86_64,
             status: .pending,
             uploadedByID: userID,
             sourceURL: sourceURL,
@@ -250,6 +255,7 @@ struct ImageController: RouteCollection {
         var name: String = "Unnamed Image"
         var description: String = ""
         var filename: String = "image.qcow2"
+        var architecture: CPUArchitecture = .x86_64
         var defaultCpu: Int?
         var defaultMemory: Int64?
         var defaultDisk: Int64?
@@ -280,6 +286,13 @@ struct ImageController: RouteCollection {
         if let file = formData.file {
             filename = try ImageValidationService.validateFilename(file.filename)
             fileData = file.data
+        }
+        if let archString = formData.architecture {
+            guard let arch = CPUArchitecture(rawValue: archString) else {
+                try await tempImage.delete(on: req.db)
+                throw Abort(.badRequest, reason: "Unknown architecture '\(archString)'")
+            }
+            architecture = arch
         }
         defaultCpu = formData.defaultCpu
         if let memory = formData.defaultMemory {
@@ -320,6 +333,7 @@ struct ImageController: RouteCollection {
         tempImage.filename = filename
         tempImage.size = size
         tempImage.format = format
+        tempImage.architecture = architecture
         tempImage.checksum = checksum
         tempImage.storagePath = relativePath
         tempImage.status = .ready
@@ -329,6 +343,22 @@ struct ImageController: RouteCollection {
         tempImage.defaultCmdline = defaultCmdline
 
         try await tempImage.save(on: req.db)
+
+        // Register the uploaded file as this image's disk-image artifact so the
+        // typed artifact set is the source of truth for what an agent fetches.
+        let diskArtifact = ImageArtifact(
+            imageID: imageID,
+            kind: .diskImage,
+            format: format,
+            architecture: architecture,
+            filename: filename,
+            size: size,
+            checksum: checksum,
+            storagePath: relativePath
+        )
+        try await diskArtifact.save(on: req.db)
+        // Reflect the new artifact in the response (relation isn't auto-loaded).
+        tempImage.$artifacts.value = [diskArtifact]
 
         // Create SpiceDB relationships
         let imageId = imageID.uuidString
@@ -401,6 +431,9 @@ struct ImageController: RouteCollection {
         }
         if let description = updateRequest.description {
             image.description = description
+        }
+        if let architecture = updateRequest.architecture {
+            image.architecture = architecture
         }
         if let cpu = updateRequest.defaultCpu {
             image.defaultCpu = cpu
@@ -490,6 +523,18 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 
+        // Optional artifact selector (kernel/rootfs/initramfs/disk-image). Absent
+        // means the legacy whole-image disk download.
+        let artifactKind: ArtifactKind?
+        if let artifactParam = req.query[String.self, at: "artifact"] {
+            guard let kind = ArtifactKind(rawValue: artifactParam) else {
+                throw Abort(.badRequest, reason: "Unknown artifact kind '\(artifactParam)'")
+            }
+            artifactKind = kind
+        } else {
+            artifactKind = nil
+        }
+
         // Try signed URL authentication first (for agents)
         if let agentName = req.query[String.self, at: "agent"],
             let expiresStr = req.query[String.self, at: "expires"],
@@ -515,7 +560,8 @@ struct ImageController: RouteCollection {
                 agentName: agentName,
                 expires: expires,
                 signature: signature,
-                signingKey: signingKey
+                signingKey: signingKey,
+                artifactKind: artifactKind
             )
 
             guard isValid else {
@@ -533,10 +579,11 @@ struct ImageController: RouteCollection {
                 metadata: [
                     "imageId": .string(imageID.uuidString),
                     "agent": .string(agentName),
+                    "artifact": .string(artifactKind?.rawValue ?? "disk"),
                 ])
 
             // Signature valid - serve the file
-            return try await serveImageFile(req: req, imageID: imageID, projectID: projectID)
+            return try await serveImageFile(req: req, imageID: imageID, projectID: projectID, artifactKind: artifactKind)
         }
 
         // Fall back to user session authentication
@@ -556,12 +603,14 @@ struct ImageController: RouteCollection {
             throw Abort(.forbidden, reason: "Access denied to download image")
         }
 
-        return try await serveImageFile(req: req, imageID: imageID, projectID: projectID)
+        return try await serveImageFile(req: req, imageID: imageID, projectID: projectID, artifactKind: artifactKind)
     }
 
     // MARK: - Serve Image File (shared helper)
 
-    private func serveImageFile(req: Request, imageID: UUID, projectID: UUID) async throws -> Response {
+    private func serveImageFile(
+        req: Request, imageID: UUID, projectID: UUID, artifactKind: ArtifactKind?
+    ) async throws -> Response {
         guard let image = try await Image.find(imageID, on: req.db) else {
             throw Abort(.notFound, reason: "Image not found")
         }
@@ -576,11 +625,27 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "Image is not ready for download. Status: \(image.status.rawValue)")
         }
 
+        let basePath = ImageStorageService.storagePath(from: req.application)
+
+        // Serve a specific typed artifact when requested.
+        if let artifactKind {
+            guard let artifact = try await image.$artifacts.query(on: req.db)
+                .filter(\.$kind == artifactKind)
+                .first() else {
+                throw Abort(.notFound, reason: "Image has no \(artifactKind.rawValue) artifact")
+            }
+            return try await ImageStorageService.streamFile(
+                req: req,
+                storagePath: basePath,
+                relativePath: artifact.storagePath,
+                filename: artifact.filename
+            )
+        }
+
+        // Legacy whole-image disk download.
         guard let storagePath = image.storagePath else {
             throw Abort(.internalServerError, reason: "Image storage path not set")
         }
-
-        let basePath = ImageStorageService.storagePath(from: req.application)
 
         return try await ImageStorageService.streamFile(
             req: req,
@@ -634,6 +699,7 @@ struct ImageUploadForm: Content {
     var name: String?
     var description: String?
     var file: File?
+    var architecture: String?
     var defaultCpu: Int?
     var defaultMemory: Int?
     var defaultDisk: Int?

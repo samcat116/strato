@@ -46,9 +46,21 @@ public struct DiskAttachment: Sendable, Equatable {
 /// and caching as needed). Implemented by the agent's `ImageCacheService`;
 /// abstracted here so the storage layer stays testable without networking.
 public protocol ImageSource: Sendable {
-    /// Returns a local filesystem path holding the image's bytes, downloading
-    /// them first if they are not cached.
+    /// Returns a local filesystem path holding the image's (primary disk) bytes,
+    /// downloading them first if they are not cached.
     func localImagePath(for imageInfo: ImageInfo) async throws -> String
+
+    /// Returns a local filesystem path holding the bytes of a specific typed
+    /// artifact (kernel, rootfs, ...), downloading it first if not cached.
+    /// Defaults to the primary-disk path for sources that don't distinguish
+    /// artifact kinds.
+    func localImagePath(for imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String
+}
+
+extension ImageSource {
+    public func localImagePath(for imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String {
+        try await localImagePath(for: imageInfo)
+    }
 }
 
 // MARK: - Volume Info
@@ -95,13 +107,16 @@ public protocol StorageBackend: Actor {
     func createVolumeFromImage(volumeId: String, imageInfo: ImageInfo, format: DiskFormat) async throws
         -> DiskAttachment
 
-    /// Materializes an image as a disk at an explicit path — the single
+    /// Materializes an image artifact as a disk at an explicit path — the single
     /// image → disk path used by hypervisor drivers for boot disks that live
-    /// in VM directories rather than the volume store. Idempotent: an existing
-    /// disk at `path` is returned as-is. Converts formats when the source
-    /// image's format differs from `format`.
-    func materializeDisk(at path: String, from imageInfo: ImageInfo, format: DiskFormat) async throws
-        -> DiskAttachment
+    /// in VM directories rather than the volume store. `artifactKind` selects
+    /// which typed artifact to materialize (`.diskImage` for a QEMU boot disk,
+    /// `.rootfs` for a Firecracker root drive). Idempotent: an existing disk at
+    /// `path` is returned as-is. Converts formats when the source artifact's
+    /// format differs from `format`.
+    func materializeDisk(
+        at path: String, from imageInfo: ImageInfo, format: DiskFormat, artifactKind: ArtifactKind
+    ) async throws -> DiskAttachment
 
     /// Deletes a volume and everything under its directory (idempotent).
     func deleteVolume(volumeId: String) async throws
