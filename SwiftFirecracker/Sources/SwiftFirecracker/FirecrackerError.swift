@@ -74,7 +74,7 @@ extension FirecrackerError: LocalizedError {
         case .deserializationError(let message):
             return "Deserialization error: \(message)"
         case .binaryNotFound(let path):
-            return "Firecracker binary not found at: \(path)"
+            return "Firecracker binary not found or not executable at: \(path)"
         case .processSpawnFailed(let message):
             return "Failed to spawn Firecracker process: \(message)"
         case .invalidState(let current, let expected):

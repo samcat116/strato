@@ -40,8 +40,9 @@ public actor FirecrackerClient {
             throw FirecrackerError.vmAlreadyRunning(vmId)
         }
 
-        // Verify Firecracker binary exists
-        guard FileManager.default.fileExists(atPath: firecrackerBinaryPath) else {
+        // Verify the Firecracker binary is actually runnable — existence alone
+        // lets a chmod problem surface later as an opaque spawn failure.
+        guard FileManager.default.isExecutableFile(atPath: firecrackerBinaryPath) else {
             throw FirecrackerError.binaryNotFound(firecrackerBinaryPath)
         }
 
@@ -65,7 +66,7 @@ public actor FirecrackerClient {
         process.arguments = [
             "--api-sock", socketPath,
             "--id", vmId,
-            "--level", "Info"
+            "--level", "Info",
         ]
 
         // Capture output for logging
@@ -74,11 +75,13 @@ public actor FirecrackerClient {
         process.standardOutput = outputPipe
         process.standardError = errorPipe
 
-        logger.info("Starting Firecracker process", metadata: [
-            "vm_id": "\(vmId)",
-            "socket": "\(socketPath)",
-            "binary": "\(firecrackerBinaryPath)"
-        ])
+        logger.info(
+            "Starting Firecracker process",
+            metadata: [
+                "vm_id": "\(vmId)",
+                "socket": "\(socketPath)",
+                "binary": "\(firecrackerBinaryPath)",
+            ])
 
         do {
             try process.run()
@@ -161,7 +164,7 @@ public actor FirecrackerClient {
         while Date().timeIntervalSince(startTime) < timeout {
             if FileManager.default.fileExists(atPath: path) {
                 // Socket file exists, try to verify it's ready
-                try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
                 return
             }
             try await Task.sleep(nanoseconds: UInt64(checkInterval * 1_000_000_000))

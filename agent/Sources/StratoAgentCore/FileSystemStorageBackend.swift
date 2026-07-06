@@ -126,7 +126,7 @@ public actor FileSystemStorageBackend: StorageBackend {
                     "volumeId": .string(volumeId),
                     "output": .string(output),
                 ])
-            throw StorageBackendError.createFailed("qemu-img create failed: \(output)")
+            throw qemuImgFailure(output: output, context: "qemu-img create", fallback: StorageBackendError.createFailed)
         }
 
         logger.info(
@@ -180,11 +180,27 @@ public actor FileSystemStorageBackend: StorageBackend {
         let sourcePath = try await imageSource.localImagePath(for: imageInfo, kind: artifactKind)
         let sourceFormat = try await detectFormat(of: sourcePath)
 
+        let destinationDirectory = (path as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(
-            atPath: (path as NSString).deletingLastPathComponent,
+            atPath: destinationDirectory,
             withIntermediateDirectories: true,
             attributes: nil
         )
+
+        // Fail fast with a clear message when the destination filesystem
+        // can't hold the disk — otherwise the copy/convert dies mid-write
+        // with an opaque I/O error. The source's on-disk size is the upper
+        // bound of what gets written (conversion output is sparse-friendly).
+        if let sourceSize = (try? FileManager.default.attributesOfItem(atPath: sourcePath))?[.size] as? Int64,
+            let free = HostPreflight.freeDiskSpace(atPath: destinationDirectory),
+            free < sourceSize
+        {
+            throw StorageBackendError.hostMisconfiguration(
+                "not enough free disk space to materialize \(path): "
+                    + "need \(HostPreflight.byteString(sourceSize)), "
+                    + "have \(HostPreflight.byteString(free)). Free up space on the filesystem backing "
+                    + "\(destinationDirectory).")
+        }
 
         // Discard any partial output left by a previous crashed materialization.
         let stagingPath = path + ".partial"
@@ -212,7 +228,8 @@ public actor FileSystemStorageBackend: StorageBackend {
                             "target": .string(path),
                             "output": .string(output),
                         ])
-                    throw StorageBackendError.createFailed("qemu-img convert failed: \(output)")
+                    throw qemuImgFailure(
+                        output: output, context: "qemu-img convert", fallback: StorageBackendError.createFailed)
                 }
             }
 
@@ -275,7 +292,7 @@ public actor FileSystemStorageBackend: StorageBackend {
                     "path": .string(volumePath),
                     "output": .string(output),
                 ])
-            throw StorageBackendError.resizeFailed("qemu-img resize failed: \(output)")
+            throw qemuImgFailure(output: output, context: "qemu-img resize", fallback: StorageBackendError.resizeFailed)
         }
 
         logger.info(
@@ -325,7 +342,8 @@ public actor FileSystemStorageBackend: StorageBackend {
                     "volumeId": .string(volumeId),
                     "output": .string(output),
                 ])
-            throw StorageBackendError.snapshotFailed("qemu-img create snapshot failed: \(output)")
+            throw qemuImgFailure(
+                output: output, context: "qemu-img create snapshot", fallback: StorageBackendError.snapshotFailed)
         }
 
         logger.info(
@@ -407,7 +425,8 @@ public actor FileSystemStorageBackend: StorageBackend {
                     "sourceVolumeId": .string(sourceVolumeId),
                     "output": .string(output),
                 ])
-            throw StorageBackendError.cloneFailed("qemu-img convert failed: \(output)")
+            throw qemuImgFailure(
+                output: output, context: "qemu-img clone", fallback: StorageBackendError.cloneFailed)
         }
 
         logger.info(
@@ -445,7 +464,40 @@ public actor FileSystemStorageBackend: StorageBackend {
     // MARK: - qemu-img Helpers
 
     private func runQemuImg(_ arguments: [String]) async throws -> ProcessResult {
-        try await runSubprocess(URL(fileURLWithPath: qemuImgPath), arguments)
+        do {
+            return try await runSubprocess(URL(fileURLWithPath: qemuImgPath), arguments)
+        } catch let error as StorageBackendError {
+            throw error
+        } catch {
+            // A spawn failure is a host problem (binary missing, not
+            // executable), not an operation problem: classify it as permanent
+            // with the fix, so the reconciler stops retrying and the operator
+            // sees what to install.
+            throw StorageBackendError.hostMisconfiguration(
+                "failed to launch qemu-img at \(qemuImgPath): \(error.localizedDescription). "
+                    + "If QEMU tools are not installed, install them "
+                    + "(Debian/Ubuntu: `apt install qemu-utils`, macOS: `brew install qemu`).")
+        }
+    }
+
+    /// Classifies a non-zero qemu-img exit: host-level causes (disk full,
+    /// permissions) become permanent `hostMisconfiguration` errors with a
+    /// remediation, everything else keeps its operation-specific error so
+    /// existing handling is unchanged.
+    private func qemuImgFailure(
+        output: String, context: String, fallback: (String) -> StorageBackendError
+    ) -> StorageBackendError {
+        if output.contains("No space left on device") {
+            return .hostMisconfiguration(
+                "\(context) failed: no space left on device (storage path: \(volumeStoragePath)). "
+                    + "Free up disk space or expand the volume storage filesystem. qemu-img output: \(output)")
+        }
+        if output.contains("Permission denied") {
+            return .hostMisconfiguration(
+                "\(context) failed: permission denied. Ensure the agent user can write the storage "
+                    + "directories (default: \(volumeStoragePath)). qemu-img output: \(output)")
+        }
+        return fallback("\(context) failed: \(output)")
     }
 
     /// Detects an image's format string (e.g. "qcow2", "raw") via qemu-img info.
