@@ -92,7 +92,8 @@ public struct CloudInitProvisioner {
             // user. `ssh_authorized_keys` at the cloud-config top level applies
             // to the default user, so no `users:` block is needed.
             var fullUserData = userData
-            let keys = sshAuthorizedKeys
+            let keys =
+                sshAuthorizedKeys
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
             if !keys.isEmpty {
