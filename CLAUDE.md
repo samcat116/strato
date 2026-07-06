@@ -17,70 +17,53 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
-### Control Plane (Swift/Vapor Commands)
-- `cd control-plane && swift build` - Build the control plane application
-- `cd control-plane && swift test` - Run control plane tests
-- `cd control-plane && swift run` - Run the control plane locally
-- `cd control-plane && vapor serve` - Start the Vapor development server (if Vapor CLI is installed)
+### Building and testing (Swift)
 
-### Agent (Swift Commands)
-- `cd agent && swift build` - Build the agent application
-- `cd agent && swift test` - Run agent tests
-- `cd agent && swift run StratoAgent` - Run the agent locally (uses HVF on macOS, KVM on Linux)
-- `cd agent && swift run StratoAgent --config-file /etc/strato/config.toml` - Run agent with custom config file
-- `cd agent && swift run StratoAgent --control-plane-url ws://remote:8080/agent/ws` - Override control plane URL
+Three independent Swift packages: `control-plane/`, `agent/`, `shared/` (plus vendored `SwiftFirecracker/`). Each builds and tests separately:
 
-### Agent Configuration
-The agent uses TOML configuration files to set connection and operational parameters:
-- **Default config path**: `/etc/strato/config.toml` (production)
-- **Fallback config path**: `./config.toml` (development)
-- **Example config**: `config.toml.example` (copy to create your configuration)
-- **Configuration priority**: Command-line arguments override config file values
-- **Required setting**: `control_plane_url` must be specified in config or command line
-- **Optional settings**:
-  - `qemu_socket_dir` - QEMU socket directory (default: `/var/run/qemu`)
-  - `log_level` - Logging level (default: `info`)
-  - `network_mode` - Networking mode: `ovn` (Linux), `user` (macOS) (platform-specific defaults)
-  - `enable_hvf` - Enable Hypervisor.framework on macOS (default: `true` on macOS)
-  - `enable_kvm` - Enable KVM on Linux (default: `true` on Linux)
+- `swift build --package-path <pkg>` / `swift test --package-path <pkg>`
+- `swift test --package-path control-plane --filter <SuiteName>` — run a single suite while iterating; run the full suite once before creating or updating a PR
+- Tests use swift-testing (`@Test`/`#expect`), not XCTest
 
-### Shared Package
-- `cd shared && swift build` - Build the shared package
-- `cd shared && swift test` - Run shared package tests
-
-### Build & test notes
+Build & test notes:
 - Swift builds in a fresh worktree start from a cold `.build` and can take 10+ minutes. Run builds/tests with a generous timeout or in the background — never the default 2-minute timeout.
-- Prefer `swift test --filter <SuiteName>` while iterating; run the full suite once before creating or updating a PR.
 - Control-plane tests run against in-memory SQLite locally — no Postgres/SpiceDB services needed. CI additionally runs a Postgres job, so migrations must work on BOTH (SQLite `ALTER TABLE` cannot combine multiple actions in one migration step; use separate `.update()` calls).
 - Known CI flake: the "Test Control Plane (Postgres)" job can crash with Vapor's `ServeCommand did not shutdown before deinit` teardown race. If a failure doesn't reproduce locally and matches this signature, rerun with `gh run rerun <run-id> --failed` instead of debugging.
 - Swift CI (PR build/test and main-branch release binaries) runs on the `swift-runners-strato` runner scale set managed by actions-runner-controller; Docker image builds still run on the static self-hosted runner on the strato-dev VM (`/home/sam/actions-runner`). If Swift CI fails with missing-symbol errors your diff can't explain, suspect a stale build cache in the runner's persistent `RUNNER_TOOL_CACHE` volume — reproduce locally before debugging source.
 
-### JavaScript/Linting Commands (Control Plane)
-- `cd control-plane && npm run lint` - Check JavaScript files for syntax errors and style issues
-- `cd control-plane && npm run lint:fix` - Automatically fix JavaScript style issues where possible
-- `cd control-plane && npm test` - Run JavaScript linting (alias for lint command)
+### Formatting and linting (CI-enforced)
 
-### Skaffold + Helm Development (Recommended)
-- `minikube start --memory=4096 --cpus=2` - Start local Kubernetes cluster
-- `cd helm/strato-control-plane && helm dependency build` - Build Helm chart dependencies (run once)
-- `skaffold dev` - Start full development environment with hot reload
-- `skaffold dev --profile=minimal` - Start minimal environment (Control Plane, PostgreSQL, SpiceDB, Valkey; no observability stack)
-- `skaffold dev --profile=debug` - Start with debug logging and Swift debug builds
-- `skaffold build` - Build container images locally
-- `skaffold delete` - Stop and clean up development environment
-- `kubectl logs -f deployment/strato-control-plane` - View Control Plane logs
-- `kubectl logs -f deployment/strato-agent` - View Agent logs
-- `kubectl get pods` - Check status of all services
-- `kubectl port-forward service/strato-control-plane 8080:8080` - Access Control Plane at localhost:8080
-- `minikube service strato-control-plane --url` - Get external URL for Control Plane
-- `minikube stop` - Stop Kubernetes cluster
+- **Swift**: CI runs `swift format lint --strict --recursive` over all `Sources/` and `Tests/` directories, using the `.swift-format` config at the repo root (4-space indent, 120-col lines). Format before pushing: `swift format --in-place --recursive <changed dirs>`.
+- **Frontend**: `cd control-plane/web && bun run lint` and `bun run build` — CI runs both with Bun (`bun install --frozen-lockfile`). The frontend uses Bun, not npm.
+- Legacy JS in `control-plane/Public/js`: `cd control-plane && npm run lint` (eslint).
 
-### Docker Compose
-Two compose files with different purposes:
-- **Root `docker-compose.yml`**: local development only (fixed dev credentials, in-memory SpiceDB, `DEV_AUTH_BYPASS`). `docker compose up control-plane` starts the control plane with its dependencies. Database migrations run automatically at control-plane startup — there is no separate migrate step.
-- **`deploy/compose/`**: the supported single-host deployment. `./setup.sh` generates a `.env` with strong random secrets, then `docker compose up -d`. Uses published images, persistent SpiceDB (PostgreSQL datastore), automatic SpiceDB migration/schema loading, and no auth bypass.
+### Local development environment (Taskfile — primary flow)
+
+`task` (go-task) drives local development; see `Taskfile.yml` and DEV-SETUP.md:
+
+- `task dev` — start the full backend: Postgres, SpiceDB (schema auto-loaded), Valkey, Loki, OTel collector in Docker; then builds/starts the control plane and agent natively, creates an agent registration token, test admin user/org/project, and a test VM. Sets `DEV_AUTH_BYPASS=true`.
+- `task dev-frontend` — Next.js dev server at http://localhost:3000 (run in a separate terminal)
+- `task status` / `task logs` / `task stop` / `task clean` — inspect, stop, or tear down everything
+- `task dev-linux` — Linux variant (KVM + Firecracker ready); `task install-firecracker` installs the Firecracker binary
+- `task dev-spiffe` — mTLS variant with SPIRE server/agent + Envoy proxy (agent connects via wss://localhost:8443)
+- Control plane API: http://localhost:8080; logs at `/tmp/strato-control-plane.log` and `/tmp/strato-agent.log`
+- Database migrations run automatically at control-plane startup — there is no separate migrate step.
+
+### Running services directly
+
+- `cd control-plane && swift run` — control plane (needs Postgres/SpiceDB env vars; `task dev` handles this)
+- `cd agent && swift run StratoAgent --config-file ./config.toml` — agent (TOML config; CLI args override config values; `control_plane_url` is required; key options: `qemu_socket_dir`, `log_level`, `network_mode` = `ovn`|`user`, `firecracker_binary_path`). See `config.toml.example`.
+- First-time agent registration uses a one-time token URL: `--registration-url 'ws://host:8080/agent/ws?token=...&name=...'`; the agent persists a rotated reconnect token afterwards.
+
+### Other environments
+
+- **Skaffold + Helm (Kubernetes)**: `minikube start`, `cd helm/strato-control-plane && helm dependency build` (once), then `skaffold dev` (`--profile=minimal` for no observability stack, `--profile=debug` for debug builds).
+- **Root `docker-compose.yml`**: local development only (fixed dev credentials, `DEV_AUTH_BYPASS`). `docker compose up control-plane` starts the control plane with dependencies.
+- **`deploy/compose/`**: the supported single-host production deployment. `./setup.sh` generates `.env` with strong random secrets, then `docker compose up -d`. Published images, persistent SpiceDB, no auth bypass.
+- **Docs site**: VitePress under `docs/` — `npm run docs:dev` / `docs:build` at the repo root.
 
 ### strato-dev VM (remote sessions at /home/sam/strato)
+
 When running on the strato-dev Linux VM (Ubuntu, headless):
 - The user browses from their Mac — never say "open localhost". The UI is served at `https://strato-dev.tail21c16.ts.net` (tailscale serve → nginx :80). k3s occupies :443, so don't try to bind it.
 - There are no published container images for this environment; the compose stack builds from source (long Swift build — always run in the background).
@@ -90,187 +73,89 @@ When running on the strato-dev Linux VM (Ubuntu, headless):
 - `sudo` requires a password on this host. If a command needs root, give the user the exact command to run instead of retrying.
 - This is a disposable dev VM: when asked to "clean up" deployments, removing all strato-* containers and volumes is in scope.
 
-### Frontend/Styling (Control Plane)
-- The frontend is a **Next.js** app (App Router) in `control-plane/web/`, deployed as a separate `strato-frontend` service that consumes the control-plane API.
-- Stack: React 19, TanStack Query (server state), Zustand (client state), shadcn/ui components on Radix primitives, and xterm.js for the VM terminal.
-- Styling: TailwindCSS v4 via `@tailwindcss/postcss` (see `control-plane/web/postcss.config.mjs`); components configured through `control-plane/web/components.json`.
-- Dev server: `cd control-plane/web && npm run dev` (http://localhost:3000).
-
 ## Architecture
 
-Strato is a distributed private cloud platform with a **Control Plane** and **Agent** architecture. The Control Plane manages the web UI, API, database, and user management, while Agents run on hypervisor nodes and manage VMs via QEMU with hardware-accelerated virtualization. Communication between Control Plane and Agents happens via WebSocket.
+Strato is a distributed private cloud platform. The **Control Plane** (Vapor 4 + Fluent/PostgreSQL) owns the API, database, scheduler, and authorization; **Agents** run on hypervisor nodes and manage VMs through hypervisor drivers (QEMU, Firecracker). They communicate over a WebSocket (`/agent/ws`). The **shared/** package defines the wire protocol and DTOs used by both. Design docs live in `docs/architecture/` (`overview.md`, `multi-replica.md`, `scheduler.md`, `storage.md`) and are kept current.
 
-### Core Components
-- **Control Plane**: Vapor 4 web framework with Fluent ORM, web UI, API, user management
-- **Agent**: Swift command-line application that manages VMs on hypervisor nodes (supports both Linux and macOS)
-- **Shared Package**: Common models, DTOs, and WebSocket protocols used by both Control Plane and Agent
-- **Database**: PostgreSQL with Fluent migrations (Control Plane only)
-- **Authorization**: SpiceDB for fine-grained access control and permissions (Control Plane only)
-- **Scheduler**: Intelligent VM placement service with multiple strategies (least-loaded, best-fit, round-robin, random) (Control Plane only)
-- **Frontend**: Next.js (App Router) single-page app in `control-plane/web/`, served as the separate `strato-frontend` service (Control Plane only)
-- **Styling**: TailwindCSS v4 via PostCSS, with shadcn/ui components (Control Plane only)
-- **VM Management**: QEMU integration via SwiftQEMU library (Agent only)
-- **Network Management**: Platform-specific networking (Agent only)
-  - **Linux**: SwiftOVN integration for OVN/OVS software-defined networking
-  - **macOS**: User-mode (SLIRP) networking via QEMU
-- **Communication**: WebSocket-based messaging between Control Plane and Agents
+### Desired state and reconciliation (the core control loop)
 
-### Key Architecture Patterns
-- **Distributed Architecture**: Control Plane handles web UI/API, Agents handle VM operations on hypervisor nodes
-- **WebSocket Communication**: Real-time bidirectional communication between Control Plane and Agents
-- **API + SPA Structure**: Vapor controllers expose a JSON/REST API consumed by the Next.js frontend; Models define data structures (Control Plane)
-- **Database Integration**: Uses Fluent ORM with PostgreSQL driver and automatic migrations (Control Plane)
-- **Authorization**: SpiceDB middleware intercepts all requests, checks permissions via REST API, enforces relationship-based access control (Control Plane)
-- **Agent Management**: Dynamic agent registration, heartbeat monitoring, and VM-to-agent mapping
-- **VM Scheduling**: Intelligent hypervisor selection using configurable strategies (least-loaded, best-fit, round-robin, random) with automatic mapping persistence and recovery (Control Plane)
-- **Frontend**: Next.js App Router app in `control-plane/web/src/` (`app/` routes, `components/`, `lib/api` client) talking to the control-plane API
-- **CSS Processing**: TailwindCSS v4 processed by PostCSS (`control-plane/web/postcss.config.mjs`) as part of the Next.js build
+The control plane is declarative, not imperative:
 
-### Database (Control Plane)
-- VM model includes: name, description, image, CPU, memory, disk specifications
-- Migrations are in `control-plane/Sources/App/Migrations/`
-- Database connection configured via environment variables (see docker-compose.yml)
+- The database stores each VM's **desired state** (`running`, `shutdown`, `paused`, `absent`) alongside observed status. API mutations update desired state; agents converge on it.
+- The control plane periodically sends each agent a full, authoritative `DesiredStateMessage` (see `shared/Sources/StratoShared/ReconciliationProtocol.swift`). Each `DesiredVMState` carries a monotonic `generation` counter guarding against reordering; syncs are level-triggered and safe to drop/replay. Signed image URLs are refreshed at sync-assembly time.
+- The agent-side reconciler (`agent/Sources/StratoAgentCore/Reconciliation.swift`) diffs observed vs desired and converges via per-VM serial lanes, and reports observed state back.
 
-### External Integrations
-- **Control Plane**: SpiceDB authorization service, Next.js frontend (TanStack Query + Zustand), xterm.js for terminal interfaces
-- **Agent**:
-  - **VM Management**: QEMU via SwiftQEMU library for VM lifecycle management
-  - **Networking (Linux)**: OVN/OVS via SwiftOVN for software-defined networking
-  - **Networking (macOS)**: User-mode (SLIRP) networking built into QEMU
-  - **Acceleration (Linux)**: KVM for hardware-assisted virtualization
-  - **Acceleration (macOS)**: Hypervisor.framework (HVF) for hardware-assisted virtualization
-- **Communication**: WebSocket protocol for Control Plane ↔ Agent messaging
+### Async VM operations
 
-### Authorization System
-- **Schema**: Defined in `spicedb/schema.zed` with entities (user, organization, project, vm, ...) and their permissions
-- **Middleware**: `SpiceDBAuthMiddleware` intercepts requests and validates permissions
-- **Service**: `SpiceDBService` provides Swift wrapper around the SpiceDB HTTP API
-- **Authentication**: Session-based authentication with WebAuthn/Passkeys
-- **Relationships**: Automatically creates ownership relationships when VMs are created
+VM mutation endpoints (create/start/stop/delete/reboot/pause/resume) insert a `VMOperation` row in the same transaction as the desired-state change and return **202 Accepted** with the operation object. The operation completes when the agent reports success/error, or a stuck-operation sweep fails it after a kind-specific budget. Operation rows deliberately have no FK to the VM so delete operations survive VM row removal; the frontend polls operations to terminal state.
 
-### Authentication System (WebAuthn/Passkeys)
-- **WebAuthn Library**: Uses swift-server/webauthn-swift for server-side Passkey implementation
-- **User Management**: Full user CRUD with username, email, display name
-- **Passkey Storage**: UserCredential model stores public keys, sign counts, and device metadata
-- **Challenge Management**: Temporary challenge storage for registration/authentication flows
-- **Session Management**: Vapor session-based authentication with Fluent session storage
-- **Frontend Integration**: JavaScript WebAuthn client (`/js/webauthn.js`) handles browser API calls
-- **UI Components**: Registration (`/register`) and login (`/login`) pages with Passkey flows
-- **Middleware Integration**: `SpiceDBAuthMiddleware` uses session-authenticated users
-- **Environment Configuration**: WebAuthn relying party settings via environment variables:
-  - `WEBAUTHN_RELYING_PARTY_ID` (default: localhost)
-  - `WEBAUTHN_RELYING_PARTY_NAME` (default: Strato)
-  - `WEBAUTHN_RELYING_PARTY_ORIGIN` (default: http://localhost:8080)
+### Multi-replica control plane (Valkey coordination)
 
-### VM Scheduler System
-- **Scheduler Service**: Intelligent VM placement on hypervisor nodes based on resource availability and configurable strategies
-- **Scheduling Strategies**:
-  - `least_loaded` (default): Distributes VMs across agents with lowest utilization (load balancing)
-  - `best_fit`: Packs VMs onto agents with least remaining capacity (bin-packing, resource consolidation)
-  - `round_robin`: Evenly distributes VMs in circular fashion
-  - `random`: Random selection from available agents (testing/development)
-- **Resource Tracking**: Real-time monitoring of CPU, memory, and disk availability on each agent
-- **Persistent Mapping**: VM-to-agent assignments stored in database (`vm.hypervisorId`) and restored on startup
-- **Agent Filtering**: Only online agents with sufficient resources are considered for placement
-- **Environment Configuration**: Default strategy via environment variable:
-  - `SCHEDULING_STRATEGY` (default: least_loaded, options: least_loaded, best_fit, round_robin, random)
-- **Documentation**: See `docs/architecture/scheduler.md` for detailed information on algorithms and configuration
+Multiple control-plane replicas are supported (see `docs/architecture/multi-replica.md`; `CoordinationService.swift`):
 
-### Project Structure
+- PostgreSQL is the only source of truth for desired state; Valkey holds ephemeral coordination state and fails open (agents still converge via periodic sync if Valkey is down).
+- Agent liveness: `agent:{name}:presence` keys with 60s TTL. Socket routing: `agent:{name}:replica` records which replica holds the agent's WebSocket.
+- **Sync nudges**: a mutation on replica A for an agent socketed to replica B publishes to B's `replica:{id}:nudges` pub/sub channel; B pushes a fresh sync. Lost nudges are backstopped by the periodic sync timer.
+- Imperative actions that aren't states (volume ops, reboot) forward over `replica:{id}:rpc` channels. Scheduler placement reservations (`resv:*`) and singleton sweep locks (`lock:sweep:*`) also live in Valkey.
+
+### Scheduler
+
+`SchedulerService` places VMs on agents by resource availability with strategies `least_loaded` (default), `best_fit`, `round_robin`, `random` (`SCHEDULING_STRATEGY` env var). Only online agents with sufficient resources are candidates; placement uses Valkey reservations to avoid double-booking across replicas. Details in `docs/architecture/scheduler.md`.
+
+### Agent: hypervisor driver registry
+
+All VM message handling routes through a driver registry keyed by `HypervisorType` (`agent/Sources/StratoAgent/Agent.swift`) — adding a backend means one registration, not new switch sites:
+
+- **QEMU** (`QEMUService`, via SwiftQEMU): Linux (KVM) and macOS (HVF). Same-arch VMs only for acceleration; cross-arch falls back to slow TCG.
+- **Firecracker** (`FirecrackerService`, via the vendored `SwiftFirecracker/` package at the repo root): Linux only, kernel+rootfs boot.
+- **Mock** (`MockHypervisorService`): testing.
+
+A persisted VM manifest tracks which backend owns each VM (survives restarts, enables orphan detection). `agent/Sources/StratoAgentCore/` holds the testable core (no SwiftQEMU dependency); `StratoAgent` is the executable.
+
+### Networking
+
+- Each NIC is a `VMNetworkInterface` row (there are no single-NIC fields on VM anymore): network name, MAC, IP, MTU, stable device name (`net0`, `net1`, ...) ordered by `orderIndex`.
+- **The control plane does IPAM** (`IPAMService`): allocates static IPs/netmask/gateway from a `LogicalNetwork`'s subnet and passes them to the agent.
+- Agent-side, `NetworkOrchestrator` routes to a platform driver behind `NetworkServiceProtocol`; hypervisor drivers receive typed `NetworkAttachment` values (TAP path + driver type) rather than assuming a format.
+- Linux: OVN/OVS (via SwiftOVN) for real SDN — TAP interfaces, VM-to-VM traffic, isolation. macOS: QEMU user-mode SLIRP only (outbound NAT, no inbound, no VM-to-VM) — dev/test only.
+
+### Storage and images
+
+- Agents implement the `StorageBackend` protocol (`agent/Sources/StratoAgentCore/StorageBackend.swift`); the current backend is filesystem + qemu-img. The agent owns all paths — the control plane stores whatever paths the agent reports and passes them back verbatim.
+- **Single image-materialization path**: `materializeDisk(at:from:format:)` converts any image to the format the hypervisor asked for (e.g. qcow2 → raw for Firecracker), writing to a staging path and publishing via atomic rename.
+- Volume snapshots are external qcow2 overlays with detected (not assumed) backing formats. Volumes and their VM must be on the same agent; volumes only place on QEMU-capable agents.
+- Images have an architecture and a set of typed `ImageArtifact`s (`diskImage` for QEMU, `rootfs`/`kernel`/`initramfs` for Firecracker/direct boot), each with format, checksum, and size. Agents filter artifacts by supported backend + host architecture, giving per-hypervisor image compatibility.
+
+### AuthZ, authN, and the org hierarchy
+
+- **SpiceDB** (schema in `spicedb/schema.zed`) enforces relationship-based access control; `SpiceDBAuthMiddleware` intercepts requests, `SpiceDBService` wraps the HTTP API. Ownership relationships are written automatically on resource creation.
+- **Authentication** is WebAuthn/Passkeys (swift-server/webauthn-swift) with Vapor sessions, plus API keys for programmatic access and optional OIDC providers. WebAuthn env vars: `WEBAUTHN_RELYING_PARTY_ID`, `WEBAUTHN_RELYING_PARTY_NAME`, `WEBAUTHN_RELYING_PARTY_ORIGIN` (origin must exactly match the browser URL).
+- Hierarchy: Organization → optional nested **Organizational Units** (materialized `path`/`depth`) → Projects (with environments). **Groups** (optionally SCIM-provisioned, see `SCIMToken`/`SCIMExternalID`) grant access; **ResourceQuotas** (vCPU/memory/storage/VM count, optionally per-environment) attach at org, OU, or project level and are enforced on VM create/delete.
+- Agent transport security (optional): SPIFFE/SPIRE-issued mTLS terminated by Envoy in front of the control plane (`envoy/standalone/`, `task dev-spiffe`).
+
+### Observability
+
+The control plane emits OTLP metrics/logs/traces via swift-otel to an OTel collector (`observability/`), which exports to Prometheus/Loki/Jaeger. Toggled with `OTEL_METRICS_ENABLED` / `OTEL_LOGS_ENABLED` / `OTEL_TRACES_ENABLED` (disabled in `task dev`'s control plane, but the collector and Loki still run for VM console logs).
+
+### Frontend
+
+Next.js App Router app in `control-plane/web/src/` (React 19, TanStack Query for server state, Zustand for client state, shadcn/ui on Radix, TailwindCSS v4 via PostCSS, xterm.js for VM consoles), deployed as a separate `strato-frontend` service consuming the control-plane JSON API. Use Bun for all frontend package/scripting work.
+
+### Project structure
+
 ```
 strato/
-├── control-plane/          # API, database, user management, frontend
-│   ├── Sources/App/         # Vapor application code (JSON/REST API)
-│   ├── Public/              # Static assets (built frontend output)
-│   ├── web/                 # Next.js frontend (App Router) source
-│   ├── Package.swift        # Control plane dependencies
-│   └── Dockerfile           # Control plane container
-├── agent/                   # Hypervisor node agent
-│   ├── Sources/StratoAgent/ # Agent application code
-│   ├── Package.swift        # Agent dependencies
-│   └── Dockerfile           # Agent container
-├── shared/                  # Common models and protocols
-│   ├── Sources/StratoShared/ # Shared Swift code
-│   └── Package.swift        # Shared package definition
-├── docker-compose.yml       # Multi-service setup
-└── CLAUDE.md               # This file
+├── control-plane/        # Vapor app: API, models, migrations, services, scheduler
+│   └── web/              # Next.js frontend (separate strato-frontend service)
+├── agent/                # Hypervisor node agent
+│   ├── Sources/StratoAgentCore/   # testable core (reconciler, storage, manifest)
+│   └── Sources/StratoAgent/       # executable (drivers, WebSocket client)
+├── shared/               # Wire protocol, DTOs (StratoShared)
+├── SwiftFirecracker/     # Vendored Swift wrapper for the Firecracker API
+├── spicedb/schema.zed    # Authorization schema
+├── deploy/compose/       # Supported single-host deployment
+├── helm/ + skaffold.yaml # Kubernetes deployment / dev
+├── envoy/, observability/ # mTLS proxy config, OTel collector config
+├── docs/                 # VitePress site incl. docs/architecture/*.md
+└── Taskfile.yml          # Primary local dev entry point (task dev)
 ```
-
-### QEMU Integration (Agent)
-The agent supports both Linux and macOS platforms with hardware-accelerated virtualization:
-
-#### Linux (KVM)
-- **Acceleration**: KVM (Kernel-based Virtual Machine) for near-native performance
-- **Architecture Support**: x86_64 and ARM64 guests (same-arch only with KVM)
-- **SwiftQEMU Library**: Swift wrapper for QEMU Monitor Protocol (QMP) and guest agent
-- **VM Management**: Full lifecycle operations - create, start, stop, pause, resume, delete via QMP
-- **System Requirements**:
-  - Linux with KVM kernel module (`/dev/kvm` access)
-  - QEMU system packages (`qemu-system-x86_64`, `qemu-system-aarch64`, `qemu-utils`)
-  - glib-2.0 libraries for SwiftQEMU integration
-
-#### macOS (Hypervisor.framework)
-- **Acceleration**: Hypervisor.framework (HVF) for near-native performance
-- **Architecture Support**: x86_64 on Intel Macs, ARM64 on Apple Silicon (same-arch only with HVF)
-- **SwiftQEMU Library**: Same Swift wrapper for QEMU, with `-accel hvf` instead of `-accel kvm`
-- **VM Management**: Full lifecycle operations identical to Linux
-- **Limitations**:
-  - Same-architecture VMs only (no cross-arch acceleration)
-  - User-mode networking only (no TAP/OVN support)
-  - Cross-platform VMs run under TCG emulation (slow)
-- **System Requirements**:
-  - macOS 14.0 or later
-  - QEMU installed via Homebrew: `brew install qemu`
-  - Xcode Command Line Tools
-
-### Networking Integration (Agent)
-
-#### Linux - SwiftOVN (OVN/OVS)
-- **Production-Ready**: Full OVN/OVS integration with software-defined networking
-- **SwiftOVN Library**: Native Swift wrapper for OVN/OVS JSON-RPC APIs over Unix sockets
-- **Network Features**:
-  - Logical switch and port management
-  - VM network attachment/detachment with TAP interfaces
-  - Security groups and ACLs
-  - DHCP and routing services
-  - Multi-tenant network isolation
-- **System Requirements**:
-  - OVN packages (`ovn-central`, `ovn-host`, `ovn-common`)
-  - OVS packages (`openvswitch-switch`, `openvswitch-common`)
-  - Network capabilities (`NET_ADMIN`, `SYS_ADMIN`)
-  - Access to OVN/OVS Unix domain sockets
-
-#### macOS - User-Mode Networking (SLIRP)
-- **User-Mode Only**: QEMU's built-in SLIRP networking (no external dependencies)
-- **Automatic Configuration**: VMs get automatic DHCP in the 10.0.2.0/24 range
-- **Outbound Connectivity**: VMs can access the internet and host via NAT
-- **Limitations**:
-  - No VM-to-VM communication
-  - No inbound connections from host/network to VM
-  - No advanced features (VLANs, ACLs, multi-tenancy)
-  - No TAP interface support (macOS kernel restrictions)
-- **Use Case**: Development and testing, single-VM workloads
-- **Future Enhancement**: VMnet.framework integration possible (requires entitlements)
-
-### Platform Support Matrix
-
-| Feature | Linux | macOS |
-|---------|-------|-------|
-| **VM Management** | ✅ Full | ✅ Full |
-| **Hardware Acceleration** | ✅ KVM | ✅ HVF |
-| **Same-arch VMs** | ✅ Near-native speed | ✅ Near-native speed |
-| **Cross-arch VMs** | ⚠️ TCG only (slow) | ⚠️ TCG only (slow) |
-| **Networking** | ✅ OVN/OVS (TAP) | ⚠️ User-mode only |
-| **VM-to-VM Communication** | ✅ Yes | ❌ No |
-| **Network Isolation** | ✅ Yes | ❌ No |
-| **Inbound Connections** | ✅ Yes | ❌ No |
-| **Production Ready** | ✅ Yes | ⚠️ Dev/Test only |
-
-### Project Structure Notes
-- Swift strict concurrency enabled (Swift 6 language mode, swift-tools-version 6.2, upcoming features `InferIsolatedConformances` and `NonisolatedNonsendingByDefault` enabled)
-- Control Plane: Traditional Vapor web application with database
-- Agent: Cross-platform Swift application for hypervisor nodes
-  - Linux: Production-ready with KVM and OVN/OVS
-  - macOS: Development/testing with HVF and user-mode networking
-- Shared: Common models and WebSocket protocols
-- Frontend in control-plane only: Next.js app source (`control-plane/web/`) and built static assets (`control-plane/Public/`)
