@@ -41,9 +41,6 @@ Tests Helm charts for correctness and security:
 ### Claude Code (`claude.yml`)
 Triggers Claude Code assistant when `@claude` is mentioned in issues or PRs.
 
-### Claude Code Review (`claude-code-review.yml`)
-Automatically reviews pull requests using Claude Code.
-
 ### Docs Deployment (`deploy-docs.yml`)
 Builds the VitePress documentation site (`npm run docs:build`) and deploys it
 when docs change on the main branch.
