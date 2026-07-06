@@ -36,7 +36,10 @@ spec:
         - name: migrate
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["./App", "migrate", "--yes"]
+          # Run as production (matching the Deployment) so Environment.detect()
+          # never resolves to development — the DATABASE_TLS default and other
+          # production behavior then align with the running control plane.
+          command: ["./App", "migrate", "--env", "production", "--yes"]
           env:
             - name: LOG_LEVEL
               value: "{{ .Values.strato.logLevel }}"
@@ -53,6 +56,14 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.databaseSecretName" . }}"
                   key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
+            # Encrypt the Postgres connection for the migration too (issue #56),
+            # matching the control-plane deployment.
+            - name: DATABASE_TLS
+              value: "{{ include "strato-control-plane.databaseTLS" . }}"
+            {{- if .Values.strato.database.tlsCACert }}
+            - name: DATABASE_TLS_CA_CERT_PATH
+              value: "/etc/strato/db-tls/ca.crt"
+            {{- end }}
             # The migrate command boots the full application, which requires
             # Valkey for the coordination layer (issue #258).
             - name: VALKEY_HOST
@@ -68,4 +79,16 @@ spec:
                   name: "{{ include "strato-control-plane.valkeySecretName" . }}"
                   key: "{{ include "strato-control-plane.valkeySecretKey" . }}"
             {{- end }}
+          {{- if .Values.strato.database.tlsCACert }}
+          volumeMounts:
+            - name: db-tls-ca
+              mountPath: /etc/strato/db-tls
+              readOnly: true
+          {{- end }}
+      {{- if .Values.strato.database.tlsCACert }}
+      volumes:
+        - name: db-tls-ca
+          secret:
+            secretName: {{ include "strato-control-plane.fullname" . }}-db-tls-ca
+      {{- end }}
 {{- end }}

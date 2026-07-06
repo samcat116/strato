@@ -71,6 +71,47 @@ Get the database host
 {{- end }}
 
 {{/*
+Effective PostgreSQL TLS mode (disable|prefer|require) for both the control
+plane (DATABASE_TLS) and SpiceDB (sslmode), so a single knob governs both.
+An explicit strato.database.tls wins. Otherwise it defaults by topology: the
+bundled in-cluster Postgres serves no TLS and its traffic never leaves the
+cluster, so `disable`; an external database is presumed remote, so `require`.
+See issue #56.
+*/}}
+{{- define "strato-control-plane.databaseTLS" -}}
+{{- if .Values.strato.database.tls }}
+{{- .Values.strato.database.tls }}
+{{- else if .Values.postgresql.enabled }}
+{{- "disable" }}
+{{- else }}
+{{- "require" }}
+{{- end }}
+{{- end }}
+
+{{/*
+The `sslmode`/`sslrootcert` query string for SpiceDB's datastore-conn-uri,
+derived from the effective TLS mode. SpiceDB uses pgx (libpq semantics), where
+plain `sslmode=require` encrypts but does NOT validate the server certificate
+or hostname — so it would accept any cert and leak the datastore password to a
+MITM. To match the control plane (which verifies under require), `require` maps
+to `verify-full`: pgx then verifies against the system trust roots, or against
+the supplied CA bundle via sslrootcert when one is mounted. `prefer` stays
+best-effort (may fall back to plaintext); `disable` is plaintext.
+*/}}
+{{- define "strato-control-plane.spicedbSslQuery" -}}
+{{- $mode := include "strato-control-plane.databaseTLS" . -}}
+{{- if eq $mode "disable" -}}
+sslmode=disable
+{{- else if .Values.strato.database.tlsCACert -}}
+sslmode=verify-full&sslrootcert=/etc/spicedb/db-tls/ca.crt
+{{- else if eq $mode "require" -}}
+sslmode=verify-full
+{{- else -}}
+sslmode={{ $mode }}
+{{- end -}}
+{{- end }}
+
+{{/*
 Get the database port
 */}}
 {{- define "strato-control-plane.databasePort" -}}
