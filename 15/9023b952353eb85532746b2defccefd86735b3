@@ -1,0 +1,21 @@
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_de96dbd684a309::t_c8f7e9f360b17e 6-7
+agent/Package.resolved
+  s_de96dbd684a309::t_c21f544e18f91c 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "159023b952353eb85532746b2defccefd86735b3",
+  "prompts": {},
+  "sessions": {
+    "s_de96dbd684a309": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "532eac8e-33b7-49a6-8d51-bf6eb51f4d38",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
