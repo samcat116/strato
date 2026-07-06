@@ -1,0 +1,24 @@
+agent/Package.resolved
+  s_a177ee6ff08121::t_44f9932bcc27b9 2
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_a177ee6ff08121::t_d71a2c12092232 248-250
+  s_a177ee6ff08121::t_39ac9249f5fb5d 231-232
+agent/Sources/StratoAgent/Agent.swift
+  s_a177ee6ff08121::t_025beb9c147b64 2483-2484
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "882b083b48377168a3199470f72b1cc66c03ea7c",
+  "prompts": {},
+  "sessions": {
+    "s_a177ee6ff08121": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "28f6c346-2f91-4452-8893-60dd61a33ad0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
