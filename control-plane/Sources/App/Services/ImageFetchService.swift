@@ -115,15 +115,34 @@ actor ImageFetchService: ImageFetchServiceProtocol {
             )
 
             // Update image with results
+            let relativePath = "\(projectId)/\(imageId)/\(image.filename)"
             image.size = size
             image.checksum = checksum
             image.format = format
-            image.storagePath = "\(projectId)/\(imageId)/\(image.filename)"
+            image.storagePath = relativePath
             image.status = .ready
             image.downloadProgress = 100
             image.errorMessage = nil
 
             try await image.save(on: db)
+
+            // Register the fetched file as the image's disk-image artifact so the
+            // typed artifact set matches uploaded images. Replace any prior
+            // disk-image artifact from an earlier fetch attempt.
+            try await image.$artifacts.query(on: db)
+                .filter(\.$kind == .diskImage)
+                .delete()
+            let diskArtifact = ImageArtifact(
+                imageID: imageId,
+                kind: .diskImage,
+                format: format,
+                architecture: image.architecture,
+                filename: image.filename,
+                size: size,
+                checksum: checksum,
+                storagePath: relativePath
+            )
+            try await diskArtifact.save(on: db)
 
             logger.info(
                 "Image fetch completed",

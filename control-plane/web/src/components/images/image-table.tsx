@@ -51,6 +51,10 @@ export function ImageTable({
           <TableHead className="text-gray-400 font-medium">Name</TableHead>
           <TableHead className="text-gray-400 font-medium">Status</TableHead>
           <TableHead className="text-gray-400 font-medium">Format</TableHead>
+          <TableHead className="text-gray-400 font-medium">Arch</TableHead>
+          <TableHead className="text-gray-400 font-medium">
+            Compatible
+          </TableHead>
           <TableHead className="text-gray-400 font-medium">Size</TableHead>
           <TableHead className="text-gray-400 font-medium">
             Created
@@ -90,6 +94,26 @@ export function ImageTable({
             </TableCell>
             <TableCell className="text-gray-300 uppercase">
               {image.format}
+            </TableCell>
+            <TableCell className="text-gray-300">
+              {image.architecture}
+            </TableCell>
+            <TableCell className="text-gray-300">
+              {image.compatibleHypervisors &&
+              image.compatibleHypervisors.length > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                  {image.compatibleHypervisors.map((h) => (
+                    <span
+                      key={h}
+                      className="rounded bg-gray-700 px-1.5 py-0.5 text-xs text-gray-200"
+                    >
+                      {h}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <span className="text-gray-600">—</span>
+              )}
             </TableCell>
             <TableCell className="text-gray-300">
               {image.sizeFormatted || "—"}

@@ -344,6 +344,18 @@ export type ImageStatus =
 
 export type ImageFormat = "qcow2" | "raw";
 
+export type ArtifactKind = "disk-image" | "kernel" | "initramfs" | "rootfs";
+
+export interface ImageArtifact {
+  id?: string;
+  kind: ArtifactKind;
+  format?: ImageFormat;
+  architecture: CPUArchitecture;
+  filename: string;
+  size: number;
+  checksum: string;
+}
+
 export interface Image {
   id?: string;
   name: string;
@@ -353,6 +365,7 @@ export interface Image {
   size: number;
   sizeFormatted: string;
   format: ImageFormat;
+  architecture: CPUArchitecture;
   checksum?: string;
   status: ImageStatus;
   sourceURL?: string;
@@ -362,6 +375,8 @@ export interface Image {
   defaultMemory?: number;
   defaultDisk?: number;
   defaultCmdline?: string;
+  artifacts: ImageArtifact[];
+  compatibleHypervisors: HypervisorType[];
   uploadedById?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -371,6 +386,7 @@ export interface CreateImageRequest {
   name: string;
   description?: string;
   sourceURL?: string;
+  architecture?: CPUArchitecture;
   defaultCpu?: number;
   defaultMemory?: number;
   defaultDisk?: number;
@@ -380,6 +396,7 @@ export interface CreateImageRequest {
 export interface UpdateImageRequest {
   name?: string;
   description?: string;
+  architecture?: CPUArchitecture;
   defaultCpu?: number;
   defaultMemory?: number;
   defaultDisk?: number;

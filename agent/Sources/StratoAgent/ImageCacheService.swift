@@ -102,10 +102,123 @@ actor ImageCacheService {
         return isValid
     }
 
-    /// Builds the local cache path for an image
+    /// Builds the local cache path for an image's primary disk
     /// Structure: {cachePath}/{projectId}/{imageId}/{filename}
     func buildCachePath(imageInfo: ImageInfo) -> String {
         return "\(cachePath)/\(imageInfo.projectId)/\(imageInfo.imageId)/\(imageInfo.filename)"
+    }
+
+    /// Builds the local cache path for a specific typed artifact. Artifacts are
+    /// namespaced by kind so a kernel and a rootfs with colliding filenames
+    /// never overwrite each other.
+    /// Structure: {cachePath}/{projectId}/{imageId}/{kind}/{filename}
+    func buildArtifactCachePath(imageInfo: ImageInfo, artifact: ArtifactInfo) -> String {
+        return "\(cachePath)/\(imageInfo.projectId)/\(imageInfo.imageId)/\(artifact.kind.rawValue)/\(artifact.filename)"
+    }
+
+    // MARK: - Artifact Operations
+
+    /// Returns the local path to a specific typed artifact, downloading and
+    /// verifying it if it isn't cached. Falls back to the primary-disk path when
+    /// the requested kind is `.diskImage` and the image carries no typed artifact
+    /// set (legacy single-file images).
+    func getArtifactPath(imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String {
+        guard let artifact = imageInfo.artifact(ofKind: kind) else {
+            if kind == .diskImage {
+                return try await getImagePath(imageInfo: imageInfo)
+            }
+            throw ImageCacheError.artifactNotFound(kind.rawValue)
+        }
+
+        let cachedPath = buildArtifactCachePath(imageInfo: imageInfo, artifact: artifact)
+
+        if try await isArtifactCached(cachedPath: cachedPath, checksum: artifact.checksum) {
+            logger.info(
+                "Artifact found in cache",
+                metadata: [
+                    "imageId": .string(imageInfo.imageId.uuidString),
+                    "kind": .string(kind.rawValue),
+                    "path": .string(cachedPath),
+                ])
+            return cachedPath
+        }
+
+        logger.info(
+            "Artifact not in cache, downloading",
+            metadata: [
+                "imageId": .string(imageInfo.imageId.uuidString),
+                "kind": .string(kind.rawValue),
+                "url": .string(artifact.downloadURL),
+            ])
+
+        try await downloadArtifact(
+            from: artifact.downloadURL,
+            checksum: artifact.checksum,
+            imageId: imageInfo.imageId,
+            kind: kind,
+            to: cachedPath
+        )
+        return cachedPath
+    }
+
+    /// Checks whether a cached artifact file exists with a matching checksum,
+    /// deleting it if the checksum no longer matches.
+    private func isArtifactCached(cachedPath: String, checksum: String) async throws -> Bool {
+        guard FileManager.default.fileExists(atPath: cachedPath) else {
+            return false
+        }
+        let actualChecksum = try computeChecksum(filePath: cachedPath)
+        let isValid = actualChecksum.lowercased() == checksum.lowercased()
+        if !isValid {
+            try? FileManager.default.removeItem(atPath: cachedPath)
+        }
+        return isValid
+    }
+
+    /// Downloads a single artifact to `localPath` and verifies its checksum.
+    private func downloadArtifact(
+        from downloadURL: String,
+        checksum: String,
+        imageId: UUID,
+        kind: ArtifactKind,
+        to localPath: String
+    ) async throws {
+        let directoryPath = (localPath as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(
+            atPath: directoryPath,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+
+        guard let url = URL(string: downloadURL) else {
+            throw ImageCacheError.invalidURL(downloadURL)
+        }
+
+        let (tempURL, response) = try await URLSession.shared.download(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw ImageCacheError.downloadFailed("HTTP \(statusCode)")
+        }
+
+        if FileManager.default.fileExists(atPath: localPath) {
+            try FileManager.default.removeItem(atPath: localPath)
+        }
+        try FileManager.default.moveItem(at: tempURL, to: URL(fileURLWithPath: localPath))
+
+        let actualChecksum = try computeChecksum(filePath: localPath)
+        guard actualChecksum.lowercased() == checksum.lowercased() else {
+            try? FileManager.default.removeItem(atPath: localPath)
+            throw ImageCacheError.checksumMismatch(expected: checksum, actual: actualChecksum)
+        }
+
+        logger.info(
+            "Artifact downloaded and verified",
+            metadata: [
+                "imageId": .string(imageId.uuidString),
+                "kind": .string(kind.rawValue),
+                "path": .string(localPath),
+            ])
     }
 
     /// Downloads an image from the control plane
@@ -258,6 +371,10 @@ extension ImageCacheService: ImageSource {
     func localImagePath(for imageInfo: ImageInfo) async throws -> String {
         try await getImagePath(imageInfo: imageInfo)
     }
+
+    func localImagePath(for imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String {
+        try await getArtifactPath(imageInfo: imageInfo, kind: kind)
+    }
 }
 
 // MARK: - Errors
@@ -267,6 +384,7 @@ enum ImageCacheError: Error, LocalizedError {
     case downloadFailed(String)
     case checksumMismatch(expected: String, actual: String)
     case fileNotFound(String)
+    case artifactNotFound(String)
     case storageFailed(String)
 
     var errorDescription: String? {
@@ -279,6 +397,8 @@ enum ImageCacheError: Error, LocalizedError {
             return "Checksum mismatch. Expected: \(expected), Actual: \(actual)"
         case .fileNotFound(let path):
             return "File not found: \(path)"
+        case .artifactNotFound(let kind):
+            return "Image has no \(kind) artifact"
         case .storageFailed(let reason):
             return "Storage operation failed: \(reason)"
         }

@@ -16,6 +16,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCreateImageFromURL, useUploadImage } from "@/lib/hooks/use-images";
+import type { CPUArchitecture } from "@/types/api";
+
+const ARCHITECTURES: CPUArchitecture[] = ["x86_64", "arm64"];
 
 interface UploadImageDialogProps {
   projectId: string;
@@ -29,6 +32,7 @@ export function UploadImageDialog({
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [architecture, setArchitecture] = useState<CPUArchitecture>("x86_64");
   const [sourceURL, setSourceURL] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -43,6 +47,7 @@ export function UploadImageDialog({
   const resetForm = () => {
     setName("");
     setDescription("");
+    setArchitecture("x86_64");
     setSourceURL("");
     setSelectedFile(null);
     setUploadProgress(0);
@@ -97,6 +102,7 @@ export function UploadImageDialog({
       await createFromURL.mutateAsync({
         name,
         description: description || undefined,
+        architecture,
         sourceURL,
       });
       handleClose();
@@ -124,6 +130,7 @@ export function UploadImageDialog({
         metadata: {
           name,
           description: description || undefined,
+          architecture,
         },
         onProgress: setUploadProgress,
       });
@@ -191,6 +198,24 @@ export function UploadImageDialog({
                 placeholder="Ubuntu 22.04 LTS server image"
                 className="bg-gray-700 border-gray-600"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="upload-arch">Architecture</Label>
+              <select
+                id="upload-arch"
+                value={architecture}
+                onChange={(e) =>
+                  setArchitecture(e.target.value as CPUArchitecture)
+                }
+                className="w-full rounded-md bg-gray-700 border border-gray-600 px-3 py-2 text-sm text-gray-100"
+              >
+                {ARCHITECTURES.map((arch) => (
+                  <option key={arch} value={arch}>
+                    {arch}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="space-y-2">
@@ -294,6 +319,24 @@ export function UploadImageDialog({
                 placeholder="Ubuntu 22.04 LTS server image"
                 className="bg-gray-700 border-gray-600"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="url-arch">Architecture</Label>
+              <select
+                id="url-arch"
+                value={architecture}
+                onChange={(e) =>
+                  setArchitecture(e.target.value as CPUArchitecture)
+                }
+                className="w-full rounded-md bg-gray-700 border border-gray-600 px-3 py-2 text-sm text-gray-100"
+              >
+                {ARCHITECTURES.map((arch) => (
+                  <option key={arch} value={arch}>
+                    {arch}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="space-y-2">

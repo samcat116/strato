@@ -33,6 +33,9 @@ export const imagesApi = {
     if (metadata.description) {
       formData.append("description", metadata.description);
     }
+    if (metadata.architecture) {
+      formData.append("architecture", metadata.architecture);
+    }
     if (metadata.defaultCpu) {
       formData.append("defaultCpu", metadata.defaultCpu.toString());
     }

@@ -230,9 +230,10 @@ final class SchedulerService: @unchecked Sendable {
 
     /// The placement requirements a VM implies.
     ///
-    /// Guest architecture is unconstrained until images carry architecture
-    /// metadata; once VMs can derive it, the arch hard constraint applies
-    /// automatically.
+    /// Guest architecture comes from the VM's source image (KVM/HVF are
+    /// same-arch only). When no image architecture is available it stays nil
+    /// (unconstrained) — the arch hard constraint only engages once the image
+    /// carries architecture metadata.
     ///
     /// Inter-VM networking is likewise unconstrained here: every VM gets a
     /// NIC (a MAC is assigned at creation), and a plain NIC is satisfiable
@@ -240,12 +241,15 @@ final class SchedulerService: @unchecked Sendable {
     /// from NIC presence would make every VM unplaceable on macOS dev
     /// agents. It becomes derivable once VMs can express attachment to a
     /// shared/tenant network at creation time.
-    static func placementRequirements(for vm: VM) -> VMPlacementRequirements {
+    static func placementRequirements(
+        for vm: VM, architecture: CPUArchitecture? = nil
+    ) -> VMPlacementRequirements {
         VMPlacementRequirements(
             cpu: vm.cpu,
             memory: vm.memory,
             disk: vm.disk,
-            hypervisorType: vm.hypervisorType
+            hypervisorType: vm.hypervisorType,
+            architecture: architecture
         )
     }
 
