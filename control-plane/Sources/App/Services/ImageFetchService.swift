@@ -12,12 +12,15 @@ protocol ImageFetchServiceProtocol: Sendable {
     func startFetch(imageId: UUID) async throws
     func cancelFetch(imageId: UUID) async
     func isFetchActive(imageId: UUID) async -> Bool
+    /// Fetches a single typed artifact from its `sourceURL` in the background.
+    func startArtifactFetch(artifactId: UUID) async throws
 }
 
 /// Actor service for managing background image fetches from URLs
 actor ImageFetchService: ImageFetchServiceProtocol {
     private let app: Application
     private var activeFetches: [UUID: Task<Void, Error>] = [:]
+    private var activeArtifactFetches: [UUID: Task<Void, Error>] = [:]
     private let httpClient: HTTPClient
 
     /// Progress update interval in bytes (update every 1MB)
@@ -109,10 +112,10 @@ actor ImageFetchService: ImageFetchServiceProtocol {
             // Perform the download
             let (size, checksum, format) = try await downloadFile(
                 from: url,
-                to: filePath,
-                imageId: imageId,
-                db: db
-            )
+                to: filePath
+            ) { [weak self] progress in
+                try await self?.updateProgress(imageId: imageId, progress: progress, db: db)
+            }
 
             // Update image with results
             let relativePath = "\(projectId)/\(imageId)/\(image.filename)"
@@ -167,12 +170,141 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         activeFetches.removeValue(forKey: imageId)
     }
 
-    /// Downloads a file from URL to local path with progress updates
+    // MARK: - Artifact Fetch
+
+    /// Starts fetching a single artifact from its source URL.
+    func startArtifactFetch(artifactId: UUID) async throws {
+        if let existing = activeArtifactFetches[artifactId] {
+            existing.cancel()
+            activeArtifactFetches.removeValue(forKey: artifactId)
+        }
+        activeArtifactFetches[artifactId] = Task {
+            try await performArtifactFetch(artifactId: artifactId)
+        }
+    }
+
+    /// Downloads one artifact's bytes, filling in size/checksum/format and
+    /// flipping it to `.ready`, then recomputes the parent image's status.
+    private func performArtifactFetch(artifactId: UUID) async throws {
+        let db = app.db
+        let logger = app.logger
+
+        guard let artifact = try await ImageArtifact.find(artifactId, on: db) else {
+            return  // artifact deleted before the fetch started
+        }
+        let imageId = artifact.$image.id
+
+        guard let sourceURL = artifact.sourceURL, let url = URL(string: sourceURL) else {
+            try await updateArtifactError(artifactId: artifactId, error: "Invalid source URL", db: db)
+            try await recomputeImageStatus(imageId: imageId, db: db)
+            throw ImageError.downloadFailed("Invalid artifact source URL")
+        }
+
+        logger.info(
+            "Starting artifact fetch",
+            metadata: [
+                "artifact_id": .string(artifactId.uuidString),
+                "kind": .string(artifact.kind.rawValue),
+                "source_url": .string(sourceURL),
+            ])
+
+        artifact.status = .downloading
+        artifact.downloadProgress = 0
+        try await artifact.save(on: db)
+
+        let storagePath = ImageStorageService.storagePath(from: app)
+        let fullPath = ImageStorageService.getFilePath(
+            storagePath: storagePath, relativePath: artifact.storagePath)
+
+        do {
+            // The artifact's relative path is {project}/{image}/{kind}/{filename};
+            // make sure its directory exists before writing.
+            try FileManager.default.createDirectory(
+                atPath: (fullPath as NSString).deletingLastPathComponent,
+                withIntermediateDirectories: true)
+
+            let (size, checksum, format) = try await downloadFile(from: url, to: fullPath) {
+                [weak self] progress in
+                try await self?.updateArtifactProgress(artifactId: artifactId, progress: progress, db: db)
+            }
+
+            artifact.size = size
+            artifact.checksum = checksum
+            // Kernel/initramfs are opaque; only disk-like artifacts carry a format.
+            if artifact.kind == .diskImage || artifact.kind == .rootfs {
+                artifact.format = format
+            }
+            artifact.status = .ready
+            artifact.downloadProgress = 100
+            artifact.errorMessage = nil
+            try await artifact.save(on: db)
+
+            // Keep the image's legacy single-file columns pointed at the disk-image.
+            if artifact.kind == .diskImage, let image = try await Image.find(imageId, on: db) {
+                image.filename = artifact.filename
+                image.size = size
+                image.format = format
+                image.checksum = checksum
+                image.storagePath = artifact.storagePath
+                try await image.save(on: db)
+            }
+
+            try await recomputeImageStatus(imageId: imageId, db: db)
+
+            logger.info(
+                "Artifact fetch completed",
+                metadata: [
+                    "artifact_id": .string(artifactId.uuidString),
+                    "size": .stringConvertible(size),
+                ])
+        } catch is CancellationError {
+            try await updateArtifactError(artifactId: artifactId, error: "Download cancelled", db: db)
+            throw CancellationError()
+        } catch {
+            logger.error(
+                "Artifact fetch failed: \(error)",
+                metadata: ["artifact_id": .string(artifactId.uuidString)])
+            try await updateArtifactError(
+                artifactId: artifactId, error: error.localizedDescription, db: db)
+            throw error
+        }
+
+        activeArtifactFetches.removeValue(forKey: artifactId)
+    }
+
+    /// Recomputes the parent image's status from its (freshly loaded) artifact
+    /// set: `.ready` when some hypervisor can boot it, otherwise `.pending`.
+    /// Leaves error/in-progress image states alone.
+    private func recomputeImageStatus(imageId: UUID, db: Database) async throws {
+        guard let image = try await Image.find(imageId, on: db) else { return }
+        try await image.$artifacts.load(on: db)
+        guard image.status == .ready || image.status == .pending else { return }
+        let newStatus: ImageStatus = image.compatibleHypervisors().isEmpty ? .pending : .ready
+        if image.status != newStatus {
+            image.status = newStatus
+            try await image.save(on: db)
+        }
+    }
+
+    private func updateArtifactProgress(artifactId: UUID, progress: Int, db: Database) async throws {
+        guard let artifact = try await ImageArtifact.find(artifactId, on: db) else { return }
+        artifact.downloadProgress = progress
+        try await artifact.save(on: db)
+    }
+
+    private func updateArtifactError(artifactId: UUID, error: String, db: Database) async throws {
+        guard let artifact = try await ImageArtifact.find(artifactId, on: db) else { return }
+        artifact.status = .error
+        artifact.errorMessage = error
+        try await artifact.save(on: db)
+    }
+
+    /// Downloads a file from URL to local path, invoking `onProgress` with a
+    /// 0–99 percentage as bytes arrive.
     private func downloadFile(
         from url: URL,
         to filePath: String,
-        imageId: UUID,
-        db: Database
+        onProgress: @escaping (Int) async throws -> Void
     ) async throws -> (size: Int64, checksum: String, format: ImageFormat) {
         var request = HTTPClientRequest(url: url.absoluteString)
         request.method = .GET
@@ -237,7 +369,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
                     progress = min(99, Int(Double(totalBytesWritten) / Double(1024 * 1024 * 1024) * 100))
                 }
 
-                try await updateProgress(imageId: imageId, progress: progress, db: db)
+                try await onProgress(progress)
             }
         }
 
@@ -293,6 +425,25 @@ actor ImageFetchService: ImageFetchServiceProtocol {
                     ])
 
                 try await startFetch(imageId: imageId)
+            }
+
+            // Resume interrupted per-artifact URL fetches (e.g. after a restart).
+            // Both pending and downloading are re-enqueued; a downloading row was
+            // cut off mid-stream and simply restarts.
+            let pendingArtifacts = try await ImageArtifact.query(on: db)
+                .filter(\.$sourceURL != nil)
+                .group(.or) { group in
+                    group.filter(\.$status == .pending).filter(\.$status == .downloading)
+                }
+                .all()
+
+            for artifact in pendingArtifacts {
+                guard let artifactId = artifact.id else { continue }
+                if activeArtifactFetches[artifactId] != nil { continue }
+                logger.info(
+                    "Resuming pending artifact fetch",
+                    metadata: ["artifact_id": .string(artifactId.uuidString)])
+                try await startArtifactFetch(artifactId: artifactId)
             }
         } catch {
             logger.error("Failed to process pending fetches: \(error)")

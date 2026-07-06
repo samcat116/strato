@@ -3,6 +3,17 @@ import Vapor
 import Foundation
 import StratoShared
 
+/// Lifecycle of a single artifact. Uploaded artifacts are born `.ready`;
+/// URL-sourced artifacts move through `.pending` → `.downloading` →
+/// `.ready`/`.error`. Only `.ready` artifacts count toward image compatibility
+/// and are sent to agents.
+public enum ArtifactStatus: String, Codable, CaseIterable, Sendable {
+    case pending
+    case downloading
+    case ready
+    case error
+}
+
 /// One typed file within an image's artifact set (see `ArtifactKind`).
 ///
 /// Artifacts reference the same stored files as the image's legacy single-file
@@ -41,6 +52,21 @@ final class ImageArtifact: Model, @unchecked Sendable {
     @Field(key: "storage_path")
     var storagePath: String
 
+    /// Fetch lifecycle. `.ready` for uploaded artifacts; URL-sourced artifacts
+    /// progress through pending/downloading before becoming `.ready`.
+    @Enum(key: "status")
+    var status: ArtifactStatus
+
+    /// Source URL for URL-fetched artifacts; nil for uploaded ones.
+    @OptionalField(key: "source_url")
+    var sourceURL: String?
+
+    @OptionalField(key: "download_progress")
+    var downloadProgress: Int?
+
+    @OptionalField(key: "error_message")
+    var errorMessage: String?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -58,7 +84,9 @@ final class ImageArtifact: Model, @unchecked Sendable {
         filename: String,
         size: Int64,
         checksum: String,
-        storagePath: String
+        storagePath: String,
+        status: ArtifactStatus = .ready,
+        sourceURL: String? = nil
     ) {
         self.id = id
         self.$image.id = imageID
@@ -69,6 +97,8 @@ final class ImageArtifact: Model, @unchecked Sendable {
         self.size = size
         self.checksum = checksum
         self.storagePath = storagePath
+        self.status = status
+        self.sourceURL = sourceURL
     }
 }
 
@@ -85,6 +115,10 @@ extension ImageArtifact {
         let filename: String
         let size: Int64
         let checksum: String
+        let status: ArtifactStatus
+        let sourceURL: String?
+        let downloadProgress: Int?
+        let errorMessage: String?
     }
 
     func asPublic() -> Public {
@@ -95,7 +129,11 @@ extension ImageArtifact {
             architecture: self.architecture,
             filename: self.filename,
             size: self.size,
-            checksum: self.checksum
+            checksum: self.checksum,
+            status: self.status,
+            sourceURL: self.sourceURL,
+            downloadProgress: self.downloadProgress,
+            errorMessage: self.errorMessage
         )
     }
 }

@@ -3,6 +3,7 @@
 import { api } from "./client";
 import type {
   Image,
+  ArtifactKind,
   CreateImageRequest,
   UpdateImageRequest,
   ImageStatusResponse,
@@ -19,6 +20,88 @@ export const imagesApi = {
 
   createFromURL(projectId: string, data: CreateImageRequest): Promise<Image> {
     return api.post<Image>(`/api/projects/${projectId}/images`, data);
+  },
+
+  // Creates a metadata-only image shell (no artifacts yet). Used as the first
+  // step of registering a multi-artifact image such as a Firecracker
+  // kernel+rootfs image, whose artifacts are uploaded afterwards.
+  createEmpty(
+    projectId: string,
+    data: Omit<CreateImageRequest, "sourceURL">
+  ): Promise<Image> {
+    return api.post<Image>(`/api/projects/${projectId}/images`, data);
+  },
+
+  // Registers (or replaces) a single typed artifact on an existing image.
+  uploadArtifact(
+    projectId: string,
+    imageId: string,
+    kind: ArtifactKind,
+    file: File,
+    onProgress?: (progress: number) => void
+  ): Promise<Image> {
+    const formData = new FormData();
+    formData.append("kind", kind);
+    formData.append("file", file);
+
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(
+        "POST",
+        `/api/projects/${projectId}/images/${imageId}/artifacts`
+      );
+      xhr.withCredentials = true;
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && onProgress) {
+          onProgress(Math.round((event.loaded / event.total) * 100));
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch {
+            reject(new Error("Invalid response format"));
+          }
+        } else {
+          try {
+            const error = JSON.parse(xhr.responseText);
+            reject(new Error(error.reason || error.message || "Upload failed"));
+          } catch {
+            reject(new Error(`Upload failed with status ${xhr.status}`));
+          }
+        }
+      };
+
+      xhr.onerror = () => reject(new Error("Network error during upload"));
+      xhr.send(formData);
+    });
+  },
+
+  // Registers a typed artifact to be fetched from a URL in the background. The
+  // artifact starts `pending` and becomes `ready` once the download completes.
+  fetchArtifact(
+    projectId: string,
+    imageId: string,
+    kind: ArtifactKind,
+    sourceURL: string
+  ): Promise<Image> {
+    return api.post<Image>(
+      `/api/projects/${projectId}/images/${imageId}/artifacts/fetch`,
+      { kind, sourceURL }
+    );
+  },
+
+  deleteArtifact(
+    projectId: string,
+    imageId: string,
+    kind: ArtifactKind
+  ): Promise<Image> {
+    return api.delete<Image>(
+      `/api/projects/${projectId}/images/${imageId}/artifacts/${kind}`
+    );
   },
 
   async upload(

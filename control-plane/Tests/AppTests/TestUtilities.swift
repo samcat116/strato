@@ -380,6 +380,7 @@ struct TestDataBuilder {
 actor MockImageFetchService: ImageFetchServiceProtocol {
     var startedFetches: [UUID] = []
     var cancelledFetches: [UUID] = []
+    var startedArtifactFetches: [UUID] = []
 
     func startFetch(imageId: UUID) async throws {
         startedFetches.append(imageId)
@@ -392,6 +393,11 @@ actor MockImageFetchService: ImageFetchServiceProtocol {
 
     func isFetchActive(imageId: UUID) async -> Bool {
         return false
+    }
+
+    func startArtifactFetch(artifactId: UUID) async throws {
+        startedArtifactFetches.append(artifactId)
+        // No-op: don't actually fetch anything
     }
 }
 

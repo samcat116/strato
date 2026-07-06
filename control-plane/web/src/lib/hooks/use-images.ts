@@ -1,6 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { imagesApi } from "@/lib/api/images";
-import type { CreateImageRequest, UpdateImageRequest } from "@/types/api";
+import type {
+  ArtifactKind,
+  CreateImageRequest,
+  UpdateImageRequest,
+} from "@/types/api";
 
 export function useImages(projectId: string | undefined) {
   return useQuery({
@@ -19,6 +23,18 @@ export function useImage(projectId: string | undefined, imageId: string | undefi
         ? imagesApi.get(projectId, imageId)
         : Promise.reject("Missing projectId or imageId"),
     enabled: !!projectId && !!imageId,
+    // Poll while the image or any artifact is still settling (e.g. a URL fetch
+    // in progress) so the detail view reflects completion without a manual reload.
+    refetchInterval: (query) => {
+      const image = query.state.data;
+      if (!image) return false;
+      const settling =
+        image.status !== "ready" && image.status !== "error";
+      const artifactSettling = image.artifacts?.some(
+        (a) => a.status === "pending" || a.status === "downloading"
+      );
+      return settling || artifactSettling ? 3000 : false;
+    },
   });
 }
 
@@ -61,6 +77,84 @@ export function useUploadImage(projectId: string) {
     }) => imagesApi.upload(projectId, file, metadata, onProgress),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["images", projectId] });
+    },
+  });
+}
+
+export function useCreateEmptyImage(projectId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: Omit<CreateImageRequest, "sourceURL">) =>
+      imagesApi.createEmpty(projectId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["images", projectId] });
+    },
+  });
+}
+
+export function useUploadArtifact(projectId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      imageId,
+      kind,
+      file,
+      onProgress,
+    }: {
+      imageId: string;
+      kind: ArtifactKind;
+      file: File;
+      onProgress?: (progress: number) => void;
+    }) => imagesApi.uploadArtifact(projectId, imageId, kind, file, onProgress),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["images", projectId] });
+      queryClient.invalidateQueries({
+        queryKey: ["images", projectId, variables.imageId],
+      });
+    },
+  });
+}
+
+export function useFetchArtifact(projectId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      imageId,
+      kind,
+      sourceURL,
+    }: {
+      imageId: string;
+      kind: ArtifactKind;
+      sourceURL: string;
+    }) => imagesApi.fetchArtifact(projectId, imageId, kind, sourceURL),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["images", projectId] });
+      queryClient.invalidateQueries({
+        queryKey: ["images", projectId, variables.imageId],
+      });
+    },
+  });
+}
+
+export function useDeleteArtifact(projectId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      imageId,
+      kind,
+    }: {
+      imageId: string;
+      kind: ArtifactKind;
+    }) => imagesApi.deleteArtifact(projectId, imageId, kind),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["images", projectId] });
+      queryClient.invalidateQueries({
+        queryKey: ["images", projectId, variables.imageId],
+      });
     },
   });
 }

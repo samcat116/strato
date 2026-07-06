@@ -363,6 +363,8 @@ export type ImageFormat = "qcow2" | "raw";
 
 export type ArtifactKind = "disk-image" | "kernel" | "initramfs" | "rootfs";
 
+export type ArtifactStatus = "pending" | "downloading" | "ready" | "error";
+
 export interface ImageArtifact {
   id?: string;
   kind: ArtifactKind;
@@ -371,6 +373,10 @@ export interface ImageArtifact {
   filename: string;
   size: number;
   checksum: string;
+  status: ArtifactStatus;
+  sourceURL?: string;
+  downloadProgress?: number;
+  errorMessage?: string;
 }
 
 export interface Image {
