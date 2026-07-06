@@ -348,6 +348,23 @@ final class ReplicaRoutingAgentServiceTests {
         }
     }
 
+    @Test("Subscription probes round-trip through the replica's own nudge channel")
+    func subscriptionProbeRoundTrips() async throws {
+        try await withApp { app, _, _ in
+            // First call arms the subscriptions (idempotent) and publishes a
+            // probe; delivery is asynchronous, so poll for the round trip.
+            await app.agentService.verifyReplicaSubscriptions()
+
+            var roundTripped = false
+            for _ in 0..<100 {
+                roundTripped = await app.agentService.lastSubscriptionProbeRoundTripped
+                if roundTripped { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(roundTripped)
+        }
+    }
+
     @Test("Schedulable agents are assembled from the shared registry")
     func schedulableAgentsFromDatabase() async throws {
         try await withApp { app, _, _ in

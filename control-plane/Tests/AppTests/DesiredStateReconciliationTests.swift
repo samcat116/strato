@@ -121,6 +121,10 @@ final class DesiredStateReconciliationTests {
     @Test("POST start writes desired running and bumps the generation")
     func startWritesDesiredState() async throws {
         try await withVMTestApp { app, _, vm, token in
+            // An online agent owns the VM, so the desired state persists (an
+            // unreachable agent would fail the operation and realign it).
+            _ = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+
             try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -130,6 +134,41 @@ final class DesiredStateReconciliationTests {
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.desiredStatus == .running)
             #expect(refreshed?.generation == 1)
+        }
+    }
+
+    @Test("POST start against an offline agent fails the operation fast")
+    func startAgainstOfflineAgentFailsFast() async throws {
+        try await withVMTestApp { app, _, vm, token in
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+
+            // The agent went dark: its row is offline cluster-wide.
+            let agent = try #require(await app.agentService.getAgentInfo(agentId))
+            agent.status = .offline
+            try await agent.save(on: app.db)
+
+            var operationId: UUID?
+            try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                operationId = try res.content.decode(OperationResponse.self).id
+            }
+
+            // The dispatch fails immediately — not after the sweep budget.
+            var operation: VMOperation?
+            for _ in 0..<100 {
+                operation = try await VMOperation.find(operationId, on: app.db)
+                if operation?.status == .failed { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(operation?.status == .failed)
+            #expect(operation?.error?.contains("offline") == true)
+
+            // The unachieved intent was realigned: desired reverts to the
+            // observed resting state instead of firing when the agent returns.
+            let refreshed = try await VM.find(vm.id, on: app.db)
+            #expect(refreshed?.desiredStatus == .shutdown)
         }
     }
 

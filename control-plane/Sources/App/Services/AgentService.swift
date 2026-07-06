@@ -129,6 +129,14 @@ actor AgentService {
         var timeoutTask: Task<Void, Never>?
     }
 
+    /// Health bookkeeping for the replica's pub/sub subscriptions (issue
+    /// #261 review): RediStack pins subscriptions to one dedicated connection
+    /// and does not restore them when it drops, so liveness is verified by
+    /// probing our own nudge channel from the heartbeat loop.
+    private var subscriptionsEstablished = false
+    private var lastProbeSent: Date?
+    private var lastProbeReceived: Date?
+
     /// Set at application shutdown. Guards against the init task arming the
     /// heartbeat monitor after `shutdown()` already ran.
     private var isShutDown = false
@@ -471,6 +479,11 @@ actor AgentService {
                     // Check for stale agents
                     await checkStaleAgents()
 
+                    // Probe (and re-arm if dead) this replica's pub/sub
+                    // subscriptions — a dropped Valkey connection loses them
+                    // silently and RediStack does not restore them.
+                    await verifyReplicaSubscriptions()
+
                     // Periodic desired-state sync (~60s): the correctness
                     // backstop of the level-triggered design — a dropped or
                     // failed sync is repaired here, so pushes on mutation are
@@ -738,10 +751,20 @@ actor AgentService {
 
     // MARK: - Replica pub/sub (issue #261)
 
-    /// Subscribe to this replica's nudge and RPC channels. Called once from
-    /// init; failure is logged and fails open — the replica misses nudge
-    /// latency (its periodic timer still converges its own agents) and cannot
-    /// serve cross-replica exchanges, but stays available.
+    /// Sentinel published to our own nudge channel to verify the subscription
+    /// connection is alive. Cannot collide with a real nudge: nudges carry
+    /// agent names, and a leading NUL is not a legal agent name.
+    static let subscriptionProbeMessage = "\u{0}subscription-probe"
+
+    /// Subscribe to this replica's nudge and RPC channels. Called from init
+    /// and re-armed by `verifyReplicaSubscriptions()`; failure is logged and
+    /// fails open — the replica misses nudge latency (its periodic timer
+    /// still converges its own agents) and cannot serve cross-replica
+    /// exchanges, but stays available.
+    ///
+    /// Safe to call repeatedly: RediStack replaces the receiver when the
+    /// channel is already subscribed on a live connection, and leases a fresh
+    /// pub/sub connection when the previous one died.
     private func startReplicaSubscriptions() async {
         guard !isShutDown else { return }
         let replicaId = app.replicaID
@@ -761,13 +784,63 @@ actor AgentService {
             ) { [weak self] payload in
                 Task { await self?.handleRPCReply(payload) }
             }
+            subscriptionsEstablished = true
             app.logger.info(
                 "Replica coordination channels subscribed", metadata: ["replicaId": .string(replicaId)])
         } catch {
+            subscriptionsEstablished = false
             app.logger.error(
                 "Failed to subscribe to replica coordination channels; cross-replica nudges and RPCs are unavailable on this replica: \(error)"
             )
         }
+    }
+
+    /// Verify the pub/sub subscriptions are actually receiving (issue #261
+    /// review finding). RediStack pins subscriptions to one dedicated
+    /// connection and never restores them after a drop (Valkey restart,
+    /// failover, network blip) — and a dead subscription is silent: this
+    /// replica would keep *publishing* RPCs whose replies it can no longer
+    /// hear, failing every cross-replica exchange by timeout. So each
+    /// heartbeat tick publishes a probe to our own nudge channel; a probe
+    /// that hasn't come back by the next tick means the subscription
+    /// connection is dead, and everything is re-armed. Runs on the 30s
+    /// heartbeat tick, bounding the silent window to about two ticks.
+    func verifyReplicaSubscriptions() async {
+        guard !isShutDown else { return }
+
+        if !subscriptionsEstablished {
+            // The initial subscribe failed; keep retrying from here.
+            await startReplicaSubscriptions()
+        } else if let sent = lastProbeSent,
+            (lastProbeReceived ?? .distantPast) < sent,
+            Date().timeIntervalSince(sent) > 20
+        {
+            // The previous tick's probe never arrived: the subscription
+            // connection is dead even though publishes still work.
+            app.logger.warning(
+                "Replica subscription probe was not received; re-establishing channel subscriptions",
+                metadata: ["replicaId": .string(app.replicaID)])
+            await startReplicaSubscriptions()
+        }
+
+        lastProbeSent = Date()
+        do {
+            try await app.coordination.publish(
+                channel: CoordinationService.nudgeChannel(replicaId: app.replicaID),
+                message: Self.subscriptionProbeMessage
+            )
+        } catch {
+            // Publishing needs Valkey too; when it's down entirely the next
+            // tick's missed probe re-arms once it returns.
+            app.logger.warning("Failed to publish subscription probe: \(error)")
+        }
+    }
+
+    /// Test seam: whether the most recently published subscription probe has
+    /// been received back on the nudge channel.
+    var lastSubscriptionProbeRoundTripped: Bool {
+        guard let sent = lastProbeSent else { return false }
+        return (lastProbeReceived ?? .distantPast) >= sent
     }
 
     /// A nudge names an agent whose desired state changed on another replica.
@@ -775,6 +848,10 @@ actor AgentService {
     /// raced a disconnect and the periodic timer wherever the agent lands is
     /// the backstop.
     func handleNudge(agentName: String) async {
+        if agentName == Self.subscriptionProbeMessage {
+            lastProbeReceived = Date()
+            return
+        }
         guard let agentId = app.websocketManager.agentId(agentName: agentName) else {
             app.logger.debug(
                 "Nudge for agent without a local socket; ignoring",

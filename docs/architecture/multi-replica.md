@@ -70,6 +70,12 @@ agent errors propagate; an unroutable agent fails fast.
 - **Valkey outage**: coordination fails open (issue #258 policy). Agents keep
   converging via their socket-holding replica's periodic sync; cross-replica
   nudges and RPC are unavailable until Valkey returns.
+- **Dropped subscription connection**: pub/sub subscriptions live on a
+  dedicated connection that the client library does not restore after a drop
+  (Valkey restart, failover, network blip) — and a dead subscription is
+  silent. Each replica therefore publishes a probe to its own nudge channel
+  every heartbeat tick (30s) and re-arms all channel subscriptions when a
+  probe fails to round-trip, bounding the silent window to about two ticks.
 
 ## Protocol requirements
 

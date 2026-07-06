@@ -108,21 +108,32 @@ struct VMController: RouteCollection {
     /// replica otherwise. Losing this nudge is safe — the periodic sync timer
     /// re-sends the full state.
     ///
-    /// A VM with no agent has nowhere to converge: fail the operation now
-    /// (which also realigns desired state) instead of letting it sit pending
-    /// until the stuck-operation sweep's budget expires.
+    /// A VM with no agent — or one whose agent is offline cluster-wide — has
+    /// nowhere to converge right now: fail the operation immediately (which
+    /// also realigns desired state) instead of letting it sit pending for the
+    /// stuck-operation sweep's multi-minute budget. This mirrors both the old
+    /// imperative path's dispatch failure and `delete`'s offline handling.
     private static func dispatchStateSync(_ operation: VMOperation, vm: VM, app: Application) {
+        guard let operationId = operation.id else { return }
+        let vmID = operation.vmID
+
         guard let agentId = vm.hypervisorId else {
-            guard let operationId = operation.id else { return }
             Task {
                 await completeOperation(
-                    operationId, vmID: operation.vmID, as: .failed,
-                    error: AgentServiceError.vmNotMapped(operation.vmID.uuidString).localizedDescription,
+                    operationId, vmID: vmID, as: .failed,
+                    error: AgentServiceError.vmNotMapped(vmID.uuidString).localizedDescription,
                     settingVMStatus: nil, app: app)
             }
             return
         }
         Task {
+            guard let agent = await app.agentService.getAgentInfo(agentId), agent.status == .online else {
+                await completeOperation(
+                    operationId, vmID: vmID, as: .failed,
+                    error: "Agent \(agentId) is offline; the VM cannot converge to the requested state",
+                    settingVMStatus: nil, app: app)
+                return
+            }
             await app.agentService.syncDesiredState(agentId: agentId)
         }
     }
