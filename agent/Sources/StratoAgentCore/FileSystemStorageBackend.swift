@@ -163,7 +163,10 @@ public actor FileSystemStorageBackend: StorageBackend {
         -> DiskAttachment
     {
         // Idempotent: a disk already materialized for this path (e.g. a VM
-        // re-create after an agent restart) is reused, not overwritten.
+        // re-create after an agent restart) is reused, not overwritten. The
+        // final path only ever holds a complete disk because materialization
+        // writes to a temporary path and publishes via atomic rename below —
+        // an interrupted copy/convert can never satisfy this check.
         if FileManager.default.fileExists(atPath: path) {
             logger.debug("Disk already materialized", metadata: ["path": .string(path)])
             return DiskAttachment(path: path, format: format)
@@ -182,29 +185,42 @@ public actor FileSystemStorageBackend: StorageBackend {
             attributes: nil
         )
 
-        if sourceFormat == format.rawValue {
-            try FileManager.default.copyItem(atPath: sourcePath, toPath: path)
-        } else {
-            // Source and target formats differ — convert instead of copying,
-            // so e.g. a qcow2 image really becomes a raw disk.
-            let result = try await runQemuImg([
-                "convert",
-                "-f", sourceFormat,
-                "-O", format.rawValue,
-                sourcePath,
-                path,
-            ])
-            if result.terminationStatus != 0 {
-                let output = result.combinedOutput
-                logger.error(
-                    "qemu-img convert failed",
-                    metadata: [
-                        "source": .string(sourcePath),
-                        "target": .string(path),
-                        "output": .string(output),
-                    ])
-                throw StorageBackendError.createFailed("qemu-img convert failed: \(output)")
+        // Discard any partial output left by a previous crashed materialization.
+        let stagingPath = path + ".partial"
+        try? FileManager.default.removeItem(atPath: stagingPath)
+
+        do {
+            if sourceFormat == format.rawValue {
+                try FileManager.default.copyItem(atPath: sourcePath, toPath: stagingPath)
+            } else {
+                // Source and target formats differ — convert instead of copying,
+                // so e.g. a qcow2 image really becomes a raw disk.
+                let result = try await runQemuImg([
+                    "convert",
+                    "-f", sourceFormat,
+                    "-O", format.rawValue,
+                    sourcePath,
+                    stagingPath,
+                ])
+                if result.terminationStatus != 0 {
+                    let output = result.combinedOutput
+                    logger.error(
+                        "qemu-img convert failed",
+                        metadata: [
+                            "source": .string(sourcePath),
+                            "target": .string(path),
+                            "output": .string(output),
+                        ])
+                    throw StorageBackendError.createFailed("qemu-img convert failed: \(output)")
+                }
             }
+
+            // Atomic publish: rename within the same directory, so the disk
+            // appears at its final path all-or-nothing.
+            try FileManager.default.moveItem(atPath: stagingPath, toPath: path)
+        } catch {
+            try? FileManager.default.removeItem(atPath: stagingPath)
+            throw error
         }
 
         logger.info(

@@ -35,8 +35,10 @@ It inspects the cached image with `qemu-img info` and converts with
 `qemu-img convert` when the source format differs from the requested one, so
 a qcow2 cloud image really becomes a raw rootfs for Firecracker (previously
 the qcow2 bytes were copied verbatim to `rootfs.ext4`, producing an
-unbootable guest). Materialization is idempotent: an existing disk at the
-target path is reused.
+unbootable guest). Materialization writes to a staging path and publishes via
+atomic rename, so the final path never holds a half-written disk; that makes
+the operation safely idempotent — an existing disk at the target path is
+reused.
 
 ### The agent owns path layout
 

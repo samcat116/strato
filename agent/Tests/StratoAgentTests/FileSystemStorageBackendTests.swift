@@ -25,8 +25,15 @@ private actor SubprocessRecorder {
 
     func record(executable: URL, arguments: [String]) -> ProcessResult {
         invocations.append(Invocation(executable: executable.path, arguments: arguments))
-        return results[arguments.first ?? ""]
+        let result =
+            results[arguments.first ?? ""]
             ?? ProcessResult(terminationStatus: 0, standardOutput: Data(), standardError: Data())
+        // Mirror qemu-img convert's side effect: a successful run produces the
+        // output file (its last argument), which the backend then publishes.
+        if arguments.first == "convert", result.terminationStatus == 0, let output = arguments.last {
+            FileManager.default.createFile(atPath: output, contents: Data("converted-bytes".utf8))
+        }
+        return result
     }
 }
 
@@ -159,8 +166,60 @@ struct FileSystemStorageBackendTests {
         let attachment = try await backend.materializeDisk(at: target, from: makeImageInfo(), format: .raw)
 
         #expect(attachment.format == .raw)
+        // The conversion writes to a staging path, then publishes via rename.
         let convert = await recorder.invocations.first { $0.arguments.first == "convert" }
-        #expect(convert?.arguments == ["convert", "-f", "qcow2", "-O", "raw", sourcePath, target])
+        #expect(convert?.arguments == ["convert", "-f", "qcow2", "-O", "raw", sourcePath, "\(target).partial"])
+        #expect(FileManager.default.fileExists(atPath: target))
+        #expect(!FileManager.default.fileExists(atPath: "\(target).partial"))
+    }
+
+    @Test func materializeDiskFailedConversionLeavesNoDisk() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let sourcePath = "\(root)/cached-image.qcow2"
+        FileManager.default.createFile(atPath: sourcePath, contents: Data("image-bytes".utf8))
+
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2"))
+        await recorder.stub(
+            subcommand: "convert",
+            result: ProcessResult(
+                terminationStatus: 1, standardOutput: Data(), standardError: Data("no space".utf8)))
+        let backend = makeBackend(
+            root: root, recorder: recorder, imageSource: StaticImageSource(path: sourcePath))
+
+        let target = "\(root)/vms/vm-1/rootfs.raw"
+        await #expect(throws: StorageBackendError.self) {
+            _ = try await backend.materializeDisk(at: target, from: makeImageInfo(), format: .raw)
+        }
+        // Nothing published, nothing staged — a retry starts clean instead of
+        // mistaking a partial artifact for a materialized disk.
+        #expect(!FileManager.default.fileExists(atPath: target))
+        #expect(!FileManager.default.fileExists(atPath: "\(target).partial"))
+    }
+
+    @Test func materializeDiskDiscardsStalePartialFromCrashedRun() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let sourcePath = "\(root)/cached-image.qcow2"
+        FileManager.default.createFile(atPath: sourcePath, contents: Data("image-bytes".utf8))
+
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2"))
+        let backend = makeBackend(
+            root: root, recorder: recorder, imageSource: StaticImageSource(path: sourcePath))
+
+        // Simulate a previous materialization that died mid-copy.
+        let target = "\(root)/vms/vm-1/disk.qcow2"
+        try FileManager.default.createDirectory(
+            atPath: (target as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: "\(target).partial", contents: Data("truncated".utf8))
+
+        let attachment = try await backend.materializeDisk(at: target, from: makeImageInfo(), format: .qcow2)
+
+        #expect(attachment.path == target)
+        #expect(FileManager.default.contents(atPath: target) == Data("image-bytes".utf8))
+        #expect(!FileManager.default.fileExists(atPath: "\(target).partial"))
     }
 
     @Test func materializeDiskIsIdempotent() async throws {
