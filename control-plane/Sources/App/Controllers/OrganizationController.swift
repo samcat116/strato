@@ -112,13 +112,14 @@ struct OrganizationController: RouteCollection {
             try await user.save(on: req.db)
         }
 
-        // Create organization in SpiceDB
-        try await req.spicedb.writeRelationship(
-            entity: "organization",
-            entityId: organization.id?.uuidString ?? "",
-            relation: "admin",
-            subject: "user",
-            subjectId: user.id?.uuidString ?? ""
+        // Create organization in SpiceDB. Route the admin grant through the shared
+        // helper (with no previous role) so every org-role write goes through the
+        // same delete-old-then-write path and can never leave a stale tuple.
+        try await req.spicedb.setOrganizationRole(
+            userID: user.id?.uuidString ?? "",
+            organizationID: organization.id?.uuidString ?? "",
+            oldRole: nil,
+            newRole: "admin"
         )
 
         // Create default project for the organization
@@ -134,11 +135,11 @@ struct OrganizationController: RouteCollection {
         defaultProject.path = "/\(organization.id!.uuidString)/\(defaultProject.id!.uuidString)"
         try await defaultProject.save(on: req.db)
 
-        // Create project relationship in SpiceDB
+        // Link the default project to its parent organization in SpiceDB.
         try await req.spicedb.writeRelationship(
             entity: "project",
             entityId: defaultProject.id?.uuidString ?? "",
-            relation: "organization",
+            relation: "parent",
             subject: "organization",
             subjectId: organization.id?.uuidString ?? ""
         )
@@ -356,13 +357,12 @@ struct OrganizationController: RouteCollection {
         )
         try await membership.save(on: req.db)
 
-        // Create SpiceDB relationship
-        try await req.spicedb.writeRelationship(
-            entity: "organization",
-            entityId: organizationID.uuidString,
-            relation: addRequest.role,
-            subject: "user",
-            subjectId: targetUser.id?.uuidString ?? ""
+        // Create SpiceDB relationship (no previous role for a brand-new member).
+        try await req.spicedb.setOrganizationRole(
+            userID: targetUser.id?.uuidString ?? "",
+            organizationID: organizationID.uuidString,
+            oldRole: nil,
+            newRole: addRequest.role
         )
 
         return .created
@@ -413,7 +413,16 @@ struct OrganizationController: RouteCollection {
             }
         }
 
+        let removedRole = membership.role
         try await membership.delete(on: req.db)
+
+        // Delete the SpiceDB tuple too, or the removed user keeps SpiceDB-granted
+        // access even though their relational membership is gone.
+        try await req.spicedb.removeOrganizationMember(
+            userID: userID.uuidString,
+            organizationID: organizationID.uuidString,
+            role: removedRole
+        )
 
         return .noContent
     }
@@ -469,16 +478,17 @@ struct OrganizationController: RouteCollection {
             }
         }
 
+        let previousRole = membership.role
         membership.role = updateRequest.role
         try await membership.save(on: req.db)
 
-        // Update SpiceDB relationship
-        try await req.spicedb.writeRelationship(
-            entity: "organization",
-            entityId: organizationID.uuidString,
-            relation: updateRequest.role,
-            subject: "user",
-            subjectId: userID.uuidString
+        // Update SpiceDB: delete the old role tuple before writing the new one, or
+        // the stale tuple lingers and a demoted admin keeps admin permissions.
+        try await req.spicedb.setOrganizationRole(
+            userID: userID.uuidString,
+            organizationID: organizationID.uuidString,
+            oldRole: previousRole,
+            newRole: updateRequest.role
         )
 
         return .ok
