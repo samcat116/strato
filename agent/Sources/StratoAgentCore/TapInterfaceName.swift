@@ -15,8 +15,16 @@ import Foundation
 /// This lives in `StratoAgentCore` (rather than the platform-gated
 /// `NetworkServiceLinux`) so it is pure, portable, and unit-testable.
 public func tapInterfaceName(for vmId: String) -> String {
+    tapInterfaceName(for: vmId, nicIndex: 0)
+}
+
+/// Per-NIC variant of `tapInterfaceName(for:)`. NIC 0 keeps the historical
+/// vmId-only digest so devices created by older agents are still found and torn
+/// down; additional NICs mix the index into the digest input.
+public func tapInterfaceName(for vmId: String, nicIndex: Int) -> String {
+    let input = nicIndex == 0 ? vmId : "\(vmId)#\(nicIndex)"
     var hash: UInt64 = 0xcbf2_9ce4_8422_2325  // FNV-1a 64-bit offset basis
-    for byte in vmId.utf8 {
+    for byte in input.utf8 {
         hash ^= UInt64(byte)
         hash = hash &* 0x0000_0100_0000_01b3  // FNV-1a 64-bit prime
     }

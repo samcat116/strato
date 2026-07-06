@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import StratoAgentCore
 import StratoShared
 
 /// macOS network service implementation using user-mode (SLIRP) networking
@@ -8,10 +9,9 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
     private let logger: Logger
     private let maxMACGenerationAttempts = 100
 
-    // Track VM network configurations for info queries
+    // Track VM network configurations for info queries, keyed by "<vmId>#<nicIndex>"
     private var vmNetworks: [String: VMNetworkInfo] = [:]
     private var logicalNetworks: [String: NetworkInfo] = [:]
-    private var nextIPSuffix: UInt8 = 15  // Start from 10.0.2.15 (QEMU default)
     private var usedMACs: Set<String> = []
 
     init(logger: Logger) {
@@ -33,34 +33,33 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
 
     // MARK: - VM Network Lifecycle
 
-    func createVMNetwork(vmId: String, config: VMNetworkConfig) async throws -> VMNetworkInfo {
-        logger.info("Creating VM network with user-mode networking", metadata: ["vmId": .string(vmId)])
+    func createVMNetwork(vmId: String, nicIndex: Int, config: VMNetworkConfig) async throws -> VMNetworkInfo {
+        logger.info(
+            "Creating VM network with user-mode networking",
+            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
 
         let macAddress = config.macAddress ?? generateMACAddress()
 
-        // User-mode networking provides automatic DHCP
-        // VMs get IP addresses in the 10.0.2.0/24 range (QEMU default)
-        // Allocate unique IPs for tracking purposes (actual IPs assigned by QEMU)
-        let ipAddress = config.ipAddress ?? allocateNextIP()
-
+        // User-mode networking provides automatic DHCP: VMs get addresses in the
+        // 10.0.2.0/24 range from QEMU's SLIRP, so no IP is allocated (or honored)
+        // here — reporting one would just be fiction.
         let networkInfo = VMNetworkInfo(
             vmId: vmId,
             networkName: config.networkName,
-            portName: "user-\(vmId)",
+            portName: "user-\(vmId)-\(nicIndex)",
             portUUID: nil,  // Not applicable for user-mode networking
-            tapInterface: "n/a",  // User-mode doesn't use TAP
+            attachment: .userMode,
             macAddress: macAddress,
-            ipAddress: ipAddress
+            ipAddress: nil
         )
 
-        vmNetworks[vmId] = networkInfo
+        vmNetworks[Self.nicKey(vmId: vmId, nicIndex: nicIndex)] = networkInfo
 
         logger.info(
             "VM network created with user-mode networking",
             metadata: [
                 "vmId": .string(vmId),
                 "macAddress": .string(macAddress),
-                "ipAddress": .string(ipAddress),
             ])
 
         return networkInfo
@@ -72,17 +71,18 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
             macAddress: macAddress,
             subnet: "10.0.2.0/24"  // QEMU user-mode default
         )
-        return try await createVMNetwork(vmId: vmId, config: config)
+        return try await createVMNetwork(vmId: vmId, nicIndex: 0, config: config)
     }
 
-    func detachVMFromNetwork(vmId: String) async throws {
-        logger.info("Detaching VM from user-mode network", metadata: ["vmId": .string(vmId)])
-        vmNetworks.removeValue(forKey: vmId)
-        logger.info("VM detached from network", metadata: ["vmId": .string(vmId)])
+    func detachVMFromNetwork(vmId: String, nicIndex: Int) async throws {
+        logger.info(
+            "Detaching VM from user-mode network",
+            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
+        vmNetworks.removeValue(forKey: Self.nicKey(vmId: vmId, nicIndex: nicIndex))
     }
 
     func getVMNetworkInfo(vmId: String) async throws -> VMNetworkInfo? {
-        return vmNetworks[vmId]
+        return vmNetworks[Self.nicKey(vmId: vmId, nicIndex: 0)]
     }
 
     // MARK: - Network Topology Management
@@ -120,16 +120,8 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
 
     // MARK: - Helper Methods
 
-    private func allocateNextIP() -> String {
-        // Allocate sequential IPs starting from 10.0.2.15
-        // Note: This is for informational/tracking purposes only.
-        // QEMU's SLIRP will assign actual IPs via DHCP
-        let ip = "10.0.2.\(nextIPSuffix)"
-        nextIPSuffix += 1
-        if nextIPSuffix > 254 {
-            nextIPSuffix = 15  // Wrap around, skip network/broadcast
-        }
-        return ip
+    private static func nicKey(vmId: String, nicIndex: Int) -> String {
+        "\(vmId)#\(nicIndex)"
     }
 
     private func generateMACAddress() -> String {

@@ -64,6 +64,7 @@ struct VMSpecBuilder {
                     macAddress: interface.macAddress,
                     ipAddress: interface.ipAddress,
                     netmask: interface.netmask,
+                    gateway: interface.gateway,
                     mtu: interface.mtu
                 )
             }

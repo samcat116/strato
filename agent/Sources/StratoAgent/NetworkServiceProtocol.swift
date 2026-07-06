@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import StratoAgentCore
 import StratoShared
 
 // MARK: - Network Service Protocol
@@ -10,15 +11,27 @@ protocol NetworkServiceProtocol: Sendable {
     func disconnect() async
 
     // VM Network Lifecycle
-    func createVMNetwork(vmId: String, config: VMNetworkConfig) async throws -> VMNetworkInfo
+    /// Realizes one NIC for a VM on this host. `nicIndex` is the NIC's position
+    /// in the VM's interface list; it namespaces host-side resources (TAP device,
+    /// logical switch port) so multi-NIC VMs don't collide.
+    func createVMNetwork(vmId: String, nicIndex: Int, config: VMNetworkConfig) async throws -> VMNetworkInfo
     func attachVMToNetwork(vmId: String, networkName: String, macAddress: String?) async throws -> VMNetworkInfo
-    func detachVMFromNetwork(vmId: String) async throws
+    /// Tears down the host-side resources of one NIC. Must be idempotent: it is
+    /// called on delete and on create-failure rollback, possibly after a crash.
+    func detachVMFromNetwork(vmId: String, nicIndex: Int) async throws
     func getVMNetworkInfo(vmId: String) async throws -> VMNetworkInfo?
 
     // Network Topology Management
     func createLogicalNetwork(name: String, subnet: String, gateway: String?) async throws -> UUID
     func deleteLogicalNetwork(name: String) async throws
     func listLogicalNetworks() async throws -> [NetworkInfo]
+}
+
+extension NetworkServiceProtocol {
+    /// Detaches a VM's first NIC (the only one pre-multi-NIC agents created).
+    func detachVMFromNetwork(vmId: String) async throws {
+        try await detachVMFromNetwork(vmId: vmId, nicIndex: 0)
+    }
 }
 
 // MARK: - Network Configuration Models
@@ -47,9 +60,13 @@ struct VMNetworkInfo: Codable, Sendable {
     let networkName: String
     let portName: String
     let portUUID: String?
-    let tapInterface: String
+    /// How the hypervisor should realize this NIC on the host.
+    let attachment: NetworkAttachment
     let macAddress: String
-    let ipAddress: String
+    /// The IP bound to the port, when one was assigned (control-plane IPAM or an
+    /// existing port's addresses). Nil when the network hands out addresses
+    /// itself (user-mode SLIRP) or no allocation exists.
+    let ipAddress: String?
 }
 
 struct NetworkInfo: Codable, Sendable {

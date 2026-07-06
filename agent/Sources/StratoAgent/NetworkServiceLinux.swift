@@ -41,6 +41,13 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// Bridge that OVN's `ovn-controller` binds VM ports onto.
     static let ovnIntegrationBridge = "br-int"
 
+    /// OVN logical switch port name for one NIC of a VM. NIC 0 keeps the
+    /// historical `vm-<vmId>` name so ports created by older agents are still
+    /// found and torn down; additional NICs are suffixed with their index.
+    static func portName(vmId: String, nicIndex: Int) -> String {
+        nicIndex == 0 ? "vm-\(vmId)" : "vm-\(vmId)-\(nicIndex)"
+    }
+
     /// Bound on `ovs-vsctl` so a config change can't hang the network actor
     /// forever when `ovs-vswitchd` is down/overloaded (the default waits forever).
     static let ovsCommandTimeoutSeconds = 10
@@ -94,23 +101,22 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
     // MARK: - VM Network Lifecycle
 
-    func createVMNetwork(vmId: String, config: VMNetworkConfig) async throws -> VMNetworkInfo {
+    func createVMNetwork(vmId: String, nicIndex: Int, config: VMNetworkConfig) async throws -> VMNetworkInfo {
         #if os(Linux)
         guard isConnected else {
             throw NetworkError.notConnected("Network service is not connected")
         }
 
-        logger.info("Creating VM network", metadata: ["vmId": .string(vmId)])
+        logger.info(
+            "Creating VM network",
+            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
 
-        // Create logical switch port for the VM
-        let portName = "vm-\(vmId)"
+        // Create logical switch port for the VM's NIC
+        let portName = Self.portName(vmId: vmId, nicIndex: nicIndex)
         var macAddress = config.macAddress ?? generateMACAddress()
-        var ipAddress: String
-        if let configIP = config.ipAddress {
-            ipAddress = configIP
-        } else {
-            ipAddress = await allocateIPAddress(for: config.networkName)
-        }
+        // The control plane owns IPAM; an absent IP means the port is bound by
+        // MAC only. The old fake allocation (random 192.168.1.x) is gone.
+        var ipAddress = config.ipAddress
 
         // Find or create the logical switch
         _ = try await findOrCreateLogicalSwitch(name: config.networkName, subnet: config.subnet ?? "10.0.0.0/24")
@@ -131,13 +137,14 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 metadata: [
                     "portName": .string(portName),
                     "macAddress": .string(macAddress),
-                    "ipAddress": .string(ipAddress),
+                    "ipAddress": .string(ipAddress ?? "none"),
                 ])
         } else {
+            let portAddress = ipAddress.map { "\(macAddress) \($0)" } ?? macAddress
             let logicalPort = OVNLogicalSwitchPort(
                 name: portName,
-                addresses: ["\(macAddress) \(ipAddress)"],
-                port_security: ["\(macAddress) \(ipAddress)"],
+                addresses: [portAddress],
+                port_security: [portAddress],
                 external_ids: [
                     "vm-id": vmId,
                     "network-name": config.networkName,
@@ -148,7 +155,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         }
 
         // Create TAP interface and connect to OVS bridge
-        let tapInterface = try await createTAPInterface(vmId: vmId)
+        let tapInterface = try await createTAPInterface(vmId: vmId, nicIndex: nicIndex)
         try await attachTAPToBridge(tapInterface: tapInterface, portName: portName)
 
         let networkInfo = VMNetworkInfo(
@@ -156,7 +163,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             networkName: config.networkName,
             portName: portName,
             portUUID: portUUID,
-            tapInterface: tapInterface,
+            attachment: .tap(interface: tapInterface),
             macAddress: macAddress,
             ipAddress: ipAddress
         )
@@ -187,7 +194,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             networkName: config.networkName,
             portName: "mock-vm-\(vmId)",
             portUUID: UUID().uuidString,
-            tapInterface: "tap-\(vmId)",
+            attachment: .tap(interface: "tap-\(vmId)"),
             macAddress: mockAttachment.macAddress,
             ipAddress: mockAttachment.ipAddress
         )
@@ -200,19 +207,21 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             macAddress: macAddress,
             subnet: "192.168.1.0/24"  // Default subnet, should be configurable
         )
-        return try await createVMNetwork(vmId: vmId, config: config)
+        return try await createVMNetwork(vmId: vmId, nicIndex: 0, config: config)
     }
 
-    func detachVMFromNetwork(vmId: String) async throws {
+    func detachVMFromNetwork(vmId: String, nicIndex: Int) async throws {
         #if os(Linux)
         guard isConnected else {
             throw NetworkError.notConnected("Network service is not connected")
         }
 
-        logger.info("Detaching VM from network", metadata: ["vmId": .string(vmId)])
+        logger.info(
+            "Detaching VM from network",
+            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
 
-        let portName = "vm-\(vmId)"
-        let tapInterface = tapInterfaceName(for: vmId)
+        let portName = Self.portName(vmId: vmId, nicIndex: nicIndex)
+        let tapInterface = tapInterfaceName(for: vmId, nicIndex: nicIndex)
 
         // Remove logical switch port (OVN northbound). Tolerate absence so a
         // partially-torn-down VM still has its OVS port and TAP cleaned up.
@@ -263,7 +272,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             throw NetworkError.notConnected("Network service is not connected")
         }
 
-        let portName = "vm-\(vmId)"
+        let portName = Self.portName(vmId: vmId, nicIndex: 0)
         guard let port = try await ovnManager.getLogicalSwitchPort(named: portName) else {
             return nil
         }
@@ -276,9 +285,9 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             networkName: port.external_ids?["network-name"] ?? "default",
             portName: portName,
             portUUID: port.uuid,
-            tapInterface: tapInterfaceName(for: vmId),
+            attachment: .tap(interface: tapInterfaceName(for: vmId)),
             macAddress: macAddress,
-            ipAddress: ipAddress
+            ipAddress: ipAddress.isEmpty ? nil : ipAddress
         )
         #else
         // Development mode
@@ -288,7 +297,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 networkName: mockAttachment.networkName,
                 portName: "mock-vm-\(vmId)",
                 portUUID: UUID().uuidString,
-                tapInterface: "tap-\(vmId)",
+                attachment: .tap(interface: "tap-\(vmId)"),
                 macAddress: mockAttachment.macAddress,
                 ipAddress: mockAttachment.ipAddress
             )
@@ -445,8 +454,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         return uuid
     }
 
-    private func createTAPInterface(vmId: String) async throws -> String {
-        let tapName = tapInterfaceName(for: vmId)
+    private func createTAPInterface(vmId: String, nicIndex: Int) async throws -> String {
+        let tapName = tapInterfaceName(for: vmId, nicIndex: nicIndex)
         logger.debug(
             "Creating TAP interface",
             metadata: [
@@ -575,11 +584,6 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         macBytes[0] = (macBytes[0] & 0xFC) | 0x02  // Set locally administered bit
 
         return macBytes.map { String(format: "%02x", $0) }.joined(separator: ":")
-    }
-
-    private func allocateIPAddress(for networkName: String) async -> String {
-        // Simple IP allocation - in production, this would query DHCP or maintain IP pools
-        return "192.168.1.\(Int.random(in: 100...200))"
     }
 
     private func configureDHCP(switchUUID: UUID, subnet: String, gateway: String) async throws {

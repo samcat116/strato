@@ -1,6 +1,5 @@
 import Foundation
 import Logging
-import StratoAgentCore
 
 /// Generates guest-bootstrap media for VMs that boot from a disk image.
 ///
@@ -9,8 +8,12 @@ import StratoAgentCore
 /// configuration through kernel command-line args or the MMDS metadata service
 /// rather than an attached ISO. Keeping this logic out of the hypervisor service
 /// lets each driver opt into the provisioning mechanism it actually needs.
-struct CloudInitProvisioner {
+public struct CloudInitProvisioner {
     let logger: Logger
+
+    public init(logger: Logger) {
+        self.logger = logger
+    }
 
     /// Creates a cloud-init NoCloud ISO at `isoPath` that configures the guest's
     /// serial console (GRUB + getty) so console streaming works without modifying
@@ -22,8 +25,13 @@ struct CloudInitProvisioner {
     /// - Parameters:
     ///   - isoPath: Destination path for the generated ISO.
     ///   - vmId: The VM identifier, used for the instance-id and hostname.
+    ///   - networkAttachments: The VM's resolved NICs; ones carrying a static
+    ///     IP allocation are configured in the guest via a NoCloud
+    ///     `network-config` (v2). User-mode NICs are left on DHCP.
     /// - Returns: true if the ISO was created successfully.
-    func makeNoCloudISO(at isoPath: String, vmId: String) async -> Bool {
+    public func makeNoCloudISO(
+        at isoPath: String, vmId: String, networkAttachments: [ResolvedNetworkAttachment] = []
+    ) async -> Bool {
         let fileManager = FileManager.default
         let tempDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("cloud-init-\(vmId)")
 
@@ -63,6 +71,12 @@ struct CloudInitProvisioner {
                 """
             let userDataPath = (tempDir as NSString).appendingPathComponent("user-data")
             try userData.write(toFile: userDataPath, atomically: true, encoding: .utf8)
+
+            // Static NIC addressing, when the control plane allocated it.
+            if let networkConfig = Self.networkConfigYAML(for: networkAttachments) {
+                let networkConfigPath = (tempDir as NSString).appendingPathComponent("network-config")
+                try networkConfig.write(toFile: networkConfigPath, atomically: true, encoding: .utf8)
+            }
 
             // Create ISO using hdiutil (macOS) or genisoimage/mkisofs (Linux)
             let executableURL: URL
@@ -110,5 +124,48 @@ struct CloudInitProvisioner {
             try? fileManager.removeItem(atPath: tempDir)
             return false
         }
+    }
+
+    /// Renders a NoCloud `network-config` (version 2) that statically configures
+    /// every NIC carrying a control-plane IP allocation, matched by MAC address.
+    ///
+    /// Returns nil when no NIC has a static allocation — in that case no
+    /// `network-config` is written and the guest keeps its default behavior
+    /// (DHCP), which is also what user-mode (SLIRP) NICs need.
+    public static func networkConfigYAML(for attachments: [ResolvedNetworkAttachment]) -> String? {
+        var sections: [String] = []
+
+        for (index, nic) in attachments.enumerated() {
+            // User-mode NICs are addressed by SLIRP's built-in DHCP.
+            guard case .tap = nic.attachment else { continue }
+            guard let macAddress = nic.macAddress,
+                let ipAddress = nic.ipAddress,
+                let prefix = nic.netmask.flatMap({ IPv4Address($0)?.prefixLength })
+            else { continue }
+
+            var section = """
+                  nic\(index):
+                    match:
+                      macaddress: "\(macAddress)"
+                    set-name: nic\(index)
+                    addresses:
+                      - \(ipAddress)/\(prefix)
+                """
+            if let gateway = nic.gateway {
+                section += "\n    gateway4: \(gateway)"
+            }
+            if let mtu = nic.mtu {
+                section += "\n    mtu: \(mtu)"
+            }
+            sections.append(section)
+        }
+
+        guard !sections.isEmpty else { return nil }
+
+        return """
+            version: 2
+            ethernets:
+            \(sections.joined(separator: "\n"))
+            """
     }
 }

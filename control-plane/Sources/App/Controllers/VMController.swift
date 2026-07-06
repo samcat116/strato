@@ -472,11 +472,30 @@ struct VMController: RouteCollection {
             // Update VM with generated paths
             try await vm.update(on: db)
 
-            // Every VM starts with one NIC on the default network
+            // Every VM starts with one NIC on the default network. The control
+            // plane owns IPAM (issue #212): allocate the NIC's address from the
+            // logical network here so agents receive it in the spec instead of
+            // inventing one. A missing network row (pre-migration data) degrades
+            // to an address-less NIC, matching the old behavior.
+            let networkName = LogicalNetwork.defaultNetworkName
+            var allocation: IPAMService.Allocation?
+            var networkGateway: String?
+            if let logicalNetwork = try await LogicalNetwork.query(on: db)
+                .filter(\.$name == networkName)
+                .first()
+            {
+                allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
+                networkGateway = logicalNetwork.gateway
+            }
+
             let networkInterface = VMNetworkInterface(
                 vmID: vmID,
+                network: networkName,
                 macAddress: resolvedTemplate?.generateMacAddress()
-                    ?? VMNetworkInterface.generateMACAddress()
+                    ?? VMNetworkInterface.generateMACAddress(),
+                ipAddress: allocation?.ipAddress,
+                netmask: allocation?.netmask,
+                gateway: networkGateway
             )
             try await networkInterface.save(on: db)
 
