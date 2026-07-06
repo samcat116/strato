@@ -11,6 +11,12 @@ import Logging
 public struct CloudInitProvisioner {
     let logger: Logger
 
+    /// Password set on the guest image's default user for serial-console login.
+    /// This is a development/test convenience for user-mode-networked VMs that
+    /// have no reachable SSH endpoint; production access should use injected SSH
+    /// keys over a routable network.
+    static let defaultConsolePassword = "strato"
+
     public init(logger: Logger) {
         self.logger = logger
     }
@@ -19,18 +25,21 @@ public struct CloudInitProvisioner {
     /// serial console (GRUB + getty) so console streaming works without modifying
     /// the disk image.
     ///
-    /// No login credentials are provisioned here — access is expected to come
-    /// from the base image or injected SSH keys, not a hardcoded password.
+    /// Login access is provisioned by authorizing the caller-supplied SSH public
+    /// keys for the image's default user — never a hardcoded password.
     ///
     /// - Parameters:
     ///   - isoPath: Destination path for the generated ISO.
     ///   - vmId: The VM identifier, used for the instance-id and hostname.
+    ///   - sshAuthorizedKeys: SSH public keys to authorize for the guest's
+    ///     default user via cloud-init. Empty leaves the guest key-less.
     ///   - networkAttachments: The VM's resolved NICs; ones carrying a static
     ///     IP allocation are configured in the guest via a NoCloud
     ///     `network-config` (v2). User-mode NICs are left on DHCP.
     /// - Returns: true if the ISO was created successfully.
     public func makeNoCloudISO(
-        at isoPath: String, vmId: String, networkAttachments: [ResolvedNetworkAttachment] = []
+        at isoPath: String, vmId: String, sshAuthorizedKeys: [String] = [],
+        networkAttachments: [ResolvedNetworkAttachment] = []
     ) async -> Bool {
         let fileManager = FileManager.default
         let tempDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("cloud-init-\(vmId)")
@@ -53,6 +62,16 @@ public struct CloudInitProvisioner {
             // Create user-data file with serial console configuration
             let userData = """
                 #cloud-config
+                # Console login: set a password on the image's default user so
+                # the serial console — the only reachable login path on user-mode
+                # (SLIRP) networking, which has no inbound route for SSH — is
+                # usable. `expire: false` avoids a forced reset on first login.
+                # Injected SSH keys (below) remain preferred once the VM is
+                # network-reachable (OVN / port-forward).
+                password: \(Self.defaultConsolePassword)
+                chpasswd:
+                  expire: false
+                ssh_pwauth: true
                 # Enable serial console output
                 bootcmd:
                   # Update GRUB to output to serial console
@@ -69,8 +88,22 @@ public struct CloudInitProvisioner {
                   - "sh -c 'echo [cloud-init] console marker > /dev/ttyAMA0 2>/dev/null || true'"
                   - "sh -c 'echo [cloud-init] console marker > /dev/hvc0 2>/dev/null || true'"
                 """
+            // Authorize the caller's SSH public keys for the image's default
+            // user. `ssh_authorized_keys` at the cloud-config top level applies
+            // to the default user, so no `users:` block is needed.
+            var fullUserData = userData
+            let keys =
+                sshAuthorizedKeys
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if !keys.isEmpty {
+                let keyLines = keys.map { "  - \"\($0.replacingOccurrences(of: "\"", with: ""))\"" }
+                    .joined(separator: "\n")
+                fullUserData += "\n\nssh_authorized_keys:\n\(keyLines)\n"
+            }
+
             let userDataPath = (tempDir as NSString).appendingPathComponent("user-data")
-            try userData.write(toFile: userDataPath, atomically: true, encoding: .utf8)
+            try fullUserData.write(toFile: userDataPath, atomically: true, encoding: .utf8)
 
             // Static NIC addressing, when the control plane allocated it.
             if let networkConfig = Self.networkConfigYAML(for: networkAttachments) {

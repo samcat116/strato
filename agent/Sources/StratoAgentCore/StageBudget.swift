@@ -19,6 +19,11 @@ public enum StageBudget {
     /// Default budgets per stage of VM creation.
     public static let imageMaterializationSeconds = 1200  // download + qcow2 conversion of multi-GB images
     public static let hypervisorSpawnSeconds = 60  // process launch + QMP handshake
+    // A live QMP query answers in milliseconds; a bound here keeps a dead/hung
+    // QMP channel (e.g. a re-adopted VM whose control socket went inactive) from
+    // blocking the reconcile — and, because status queries share the QEMU
+    // service, from wedging every other operation behind them.
+    public static let statusQuerySeconds = 10
 
     /// Run `operation`, failing with `StageBudgetError.exceeded` if it does
     /// not complete within `seconds`. The operation task is cancelled on

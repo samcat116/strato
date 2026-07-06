@@ -93,7 +93,7 @@ struct OrganizationController: RouteCollection {
 
         let organization = Organization(
             name: createRequest.name,
-            description: createRequest.description
+            description: createRequest.description ?? ""
         )
 
         try await organization.save(on: req.db)

@@ -297,6 +297,8 @@ export interface CreateVMRequest {
   disk?: number;
   /** Logical network the VM's NIC attaches to; defaults to the "default" network. */
   networkId?: string;
+  /** SSH public key authorized for the guest's default user (cloud-init). */
+  sshPublicKey?: string;
 }
 
 export interface UpdateVMRequest {

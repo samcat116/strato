@@ -335,6 +335,8 @@ struct VMController: RouteCollection {
             let cmdline: String?
             let networkId: UUID?
             let networkName: String?
+            // SSH public key authorized for the guest's default user (cloud-init).
+            let sshPublicKey: String?
         }
 
         let createRequest = try req.content.decode(CreateVMRequest.self)
@@ -532,6 +534,11 @@ struct VMController: RouteCollection {
         } else {
             throw Abort(.internalServerError, reason: "Neither template nor image available")
         }
+
+        // Guest login: authorize the caller-provided SSH public key via cloud-init.
+        vm.sshPublicKey = createRequest.sshPublicKey?.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
 
         // Bind an immutable copy for the @Sendable transaction closure below; the
         // template selection is final by this point.
