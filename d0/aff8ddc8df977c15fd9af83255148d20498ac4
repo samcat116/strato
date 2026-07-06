@@ -1,0 +1,35 @@
+control-plane/Tests/AppTests/VMOperationTests.swift
+  s_6be939981236cc::t_ff877f873eff7c 126-147
+control-plane/Sources/App/Controllers/VMController.swift
+  s_ffc4feaf3c1052::t_8d2b23fc5091ad 59-61,73-77,628-635,637
+control-plane/Sources/App/Migrations/CreateVMOperation.swift
+  s_ffc4feaf3c1052::t_1134fe07d05d39 28-35,43
+control-plane/Sources/App/Models/VMOperation.swift
+  s_ffc4feaf3c1052::t_cefa26e93838f1 82-84
+control-plane/Sources/App/Services/AgentService.swift
+  s_ffc4feaf3c1052::t_dfa9befc9a1ddf 610-612
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d0aff8ddc8df977c15fd9af83255148d20498ac4",
+  "prompts": {},
+  "sessions": {
+    "s_6be939981236cc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "de13cf51-5a0e-4903-b04f-3adbbf89fe2b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_ffc4feaf3c1052": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "17d1e043-f1fd-4515-8161-780f6dcc7911",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
