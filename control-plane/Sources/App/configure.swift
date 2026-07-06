@@ -228,6 +228,12 @@ public func configure(_ app: Application) async throws {
     // ordering constraint as above: the VM model selects these columns.
     app.migrations.add(AddDesiredStateToVM())
 
+    // SSH public key column. Same ordering constraint as above: the VM model
+    // selects ssh_public_key, so this must run before any data migration that
+    // loads the VM model (e.g. MigrateVMDisksToVolumes below), or a fresh-DB
+    // migration crashes with "column vms.ssh_public_key does not exist".
+    app.migrations.add(AddSSHPublicKeyToVM())
+
     // App settings migration (for signing keys, etc.)
     app.migrations.add(CreateAppSetting())
 
@@ -253,7 +259,6 @@ public func configure(_ app: Application) async throws {
     // Logical networks + control-plane IPAM (issue #212)
     app.migrations.add(CreateLogicalNetwork())
     app.migrations.add(AddGatewayToVMNetworkInterface())
-    app.migrations.add(AddSSHPublicKeyToVM())
 
     try await app.autoMigrate()
 
