@@ -29,6 +29,19 @@ export function useConsole({
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
+  // Hold the latest callbacks in refs so `connect` can stay memoized on [vmId]
+  // alone. Otherwise a parent re-render (e.g. VM status polling) passes fresh
+  // inline callbacks, changing `connect`'s identity, which re-runs the terminal
+  // mount effect and tears down + reopens the WebSocket on every poll.
+  const onConnectedRef = useRef(onConnected);
+  const onDisconnectedRef = useRef(onDisconnected);
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onConnectedRef.current = onConnected;
+    onDisconnectedRef.current = onDisconnected;
+    onErrorRef.current = onError;
+  }, [onConnected, onDisconnected, onError]);
+
   const connect = useCallback(
     (terminal: Terminal) => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -65,7 +78,7 @@ export function useConsole({
             setIsConnecting(false);
             setIsConnected(true);
             terminal.write("\r\n\x1b[32mConnected to VM console\x1b[0m\r\n\r\n");
-            onConnected?.();
+            onConnectedRef.current?.();
           } else if (event.data.startsWith("error:")) {
             terminal.write(
               `\r\n\x1b[31m${event.data}\x1b[0m\r\n`
@@ -81,7 +94,7 @@ export function useConsole({
         setIsConnected(false);
         setIsConnecting(false);
         terminal.write("\r\n\x1b[33mDisconnected from VM console\x1b[0m\r\n");
-        onDisconnected?.(event.reason || undefined);
+        onDisconnectedRef.current?.(event.reason || undefined);
       };
 
       ws.onerror = () => {
@@ -92,7 +105,7 @@ export function useConsole({
         terminal.write(
           "\r\n\x1b[31mFailed to connect to VM console\x1b[0m\r\n"
         );
-        onError?.(err);
+        onErrorRef.current?.(err);
       };
 
       wsRef.current = ws;
@@ -110,7 +123,7 @@ export function useConsole({
       // Store disposable for cleanup
       (ws as WebSocket & { _termDisposable?: { dispose: () => void } })._termDisposable = disposable;
     },
-    [vmId, onConnected, onDisconnected, onError]
+    [vmId]
   );
 
   const disconnect = useCallback(() => {
