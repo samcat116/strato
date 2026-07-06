@@ -224,6 +224,10 @@ public func configure(_ app: Application) async throws {
     // model (e.g. MigrateVMDisksToVolumes), since the model now selects this column.
     app.migrations.add(AddStatusChangedAtToVM())
 
+    // Desired/observed state split (reconciliation phase 2, issue #260). Same
+    // ordering constraint as above: the VM model selects these columns.
+    app.migrations.add(AddDesiredStateToVM())
+
     // App settings migration (for signing keys, etc.)
     app.migrations.add(CreateAppSetting())
 

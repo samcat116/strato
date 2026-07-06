@@ -105,11 +105,24 @@ public protocol HypervisorService: Actor, Sendable {
     /// Sum of vCPUs and memory (in bytes) committed to VMs this service manages.
     /// Used to compute accurate available-resource figures for the scheduler.
     func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)
+
+    /// Re-adopts a VM whose hypervisor process survived an agent restart
+    /// (reconciliation phase 2, issue #260): reconnects the control session
+    /// and returns the VM's observed status. Backends without a reattachable
+    /// session throw `HypervisorServiceError.notSupported`, in which case the
+    /// VM stays orphaned.
+    func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus
 }
 
 // MARK: - Default Implementations
 
 public extension HypervisorService {
+    /// Backends must opt in to orphan re-adoption; without an explicit
+    /// implementation an orphan cannot be reattached.
+    func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not support re-adopting orphaned VMs")
+    }
     /// Creates and starts a VM in a single operation
     func createAndStartVM(
         vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,

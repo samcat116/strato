@@ -50,6 +50,7 @@ struct VMController: RouteCollection {
         vm: VM,
         user: User,
         settingVMStatus transitionalStatus: VMStatus? = nil,
+        settingDesiredStatus desiredStatus: DesiredVMStatus? = nil,
         on db: Database
     ) async throws -> VMOperation {
         let vmID = try vm.requireID()
@@ -76,12 +77,37 @@ struct VMController: RouteCollection {
                 throw Abort(.conflict, reason: "An operation is already pending for this VM")
             }
 
+            // Desired state and its generation bump commit atomically with the
+            // operation record (issue #260); the sync to the agent is a
+            // fire-and-forget nudge, with the periodic timer as the backstop.
+            if let desiredStatus {
+                vm.setDesiredStatus(desiredStatus)
+            }
             if let transitionalStatus {
                 vm.setStatus(transitionalStatus)
+            }
+            if desiredStatus != nil || transitionalStatus != nil {
                 try await vm.save(on: db)
             }
 
             return operation
+        }
+    }
+
+    /// Whether this VM's owning agent registered with a state-sync protocol
+    /// version (issue #260 dual-mode). False for unassigned VMs and for agents
+    /// that are offline or predate state sync — those keep the imperative path.
+    private static func usesStateSync(vm: VM, app: Application) async -> Bool {
+        guard let agentId = vm.hypervisorId else { return false }
+        return await app.agentService.agentSupportsStateSync(agentId)
+    }
+
+    /// Push the freshly written desired state to the VM's agent. Losing this
+    /// nudge is safe — the periodic sync timer re-sends the full state.
+    private static func nudgeStateSync(vm: VM, app: Application) {
+        guard let agentId = vm.hypervisorId else { return }
+        Task {
+            await app.agentService.syncDesiredState(agentId: agentId)
         }
     }
 
@@ -120,11 +146,24 @@ struct VMController: RouteCollection {
                     ])
             }
 
-            if let vmStatus, let vm = try await VM.find(vmID, on: app.db) {
-                vm.setStatus(vmStatus)
-                try await vm.save(on: app.db)
-                if vmStatus == .error {
-                    Telemetry.vmEnteredError(reason: "operation_failed")
+            if let vm = try await VM.find(vmID, on: app.db) {
+                var changed = false
+                if let vmStatus {
+                    vm.setStatus(vmStatus)
+                    changed = true
+                    if vmStatus == .error {
+                        Telemetry.vmEnteredError(reason: "operation_failed")
+                    }
+                }
+                // A failed operation's intent was not achieved and the user has
+                // been told — realign desired state with observed reality so the
+                // divergence doesn't replay later (e.g. a failed delete's
+                // `.absent` executing after the agent upgrades to state sync).
+                if status == .failed, vm.revertDesiredToObserved() {
+                    changed = true
+                }
+                if changed {
+                    try await vm.save(on: app.db)
                 }
             }
         } catch {
@@ -469,6 +508,11 @@ struct VMController: RouteCollection {
             vm.consoleSocket = Self.socketPath(for: vmID, filename: "console.sock")
             vm.serialSocket = Self.socketPath(for: vmID, filename: "serial.sock")
 
+            // Desired state for a fresh VM: exists but not running. The bump
+            // to generation 1 distinguishes "never confirmed by any agent"
+            // (observed_generation 0) from "confirmed" (issue #260).
+            vm.setDesiredStatus(.shutdown)
+
             // Update VM with generated paths
             try await vm.update(on: db)
 
@@ -585,18 +629,23 @@ struct VMController: RouteCollection {
             do {
                 // The Image object is passed through so AgentService can build an
                 // ImageInfo with a signed URL once the scheduler picks the agent.
-                let response = try await app.agentService.createVM(
+                let dispatch = try await app.agentService.createVM(
                     vm: vm, vmSpec: vmSpec, db: app.db, image: image)
 
-                switch response {
-                case .success:
+                switch dispatch {
+                case .syncing:
+                    // State-sync agent: the desired state is persisted and
+                    // synced; observed-state reports complete the operation
+                    // (the stuck-operation sweep backstops its budget).
+                    break
+                case .completed(.success):
                     // The VM exists on the hypervisor but has not been started;
                     // `.created` is its correct resting state, so only the
                     // operation completes.
                     await completeOperation(
                         operationId, vmID: vmID, as: .succeeded, error: nil,
                         settingVMStatus: nil, app: app)
-                case .error(let message, let details):
+                case .completed(.error(let message, let details)):
                     let reason = details.map { "\(message): \($0)" } ?? message
                     await completeOperation(
                         operationId, vmID: vmID, as: .failed, error: reason,
@@ -639,8 +688,20 @@ struct VMController: RouteCollection {
         let user = try req.auth.require(User.self)
         let vm = try await fetchVMWithPermission(req: req, user: user, permission: "delete")
 
-        let operation = try await beginOperation(.delete, vm: vm, user: user, on: req.db)
-        Self.runVMDeletion(operation, vm: vm, app: req.application)
+        // Deletion via state sync: desired becomes `.absent`, the agent tears
+        // the VM down on its next sync, and the row is removed only once a
+        // report confirms absence — so the delete survives restarts on both
+        // sides. Unassigned VMs and imperative/offline agents keep the direct
+        // path (which also covers "dead agents must not block deletion").
+        let stateSync = await Self.usesStateSync(vm: vm, app: req.application)
+        let operation = try await beginOperation(
+            .delete, vm: vm, user: user, settingDesiredStatus: .absent, on: req.db)
+
+        if stateSync {
+            Self.nudgeStateSync(vm: vm, app: req.application)
+        } else {
+            Self.runVMDeletion(operation, vm: vm, app: req.application)
+        }
         return try Self.accepted(operation)
     }
 
@@ -733,16 +794,22 @@ struct VMController: RouteCollection {
 
         // No transitional status exists for pause; the VM stays `.running` until
         // the agent confirms, and the operation record carries the in-flight state.
-        let operation = try await beginOperation(.pause, vm: vm, user: user, on: req.db)
+        let stateSync = await Self.usesStateSync(vm: vm, app: req.application)
+        let operation = try await beginOperation(
+            .pause, vm: vm, user: user, settingDesiredStatus: .paused, on: req.db)
 
-        Self.runVMOperation(
-            operation,
-            sending: .vmPause,
-            statusOnSuccess: .paused,
-            statusOnFailure: nil,
-            statusOnDispatchFailure: nil,
-            app: req.application
-        )
+        if stateSync {
+            Self.nudgeStateSync(vm: vm, app: req.application)
+        } else {
+            Self.runVMOperation(
+                operation,
+                sending: .vmPause,
+                statusOnSuccess: .paused,
+                statusOnFailure: nil,
+                statusOnDispatchFailure: nil,
+                app: req.application
+            )
+        }
 
         return try Self.accepted(operation)
     }
@@ -756,16 +823,22 @@ struct VMController: RouteCollection {
         }
 
         // Counterpart of pause: the VM stays `.paused` until the agent confirms.
-        let operation = try await beginOperation(.resume, vm: vm, user: user, on: req.db)
+        let stateSync = await Self.usesStateSync(vm: vm, app: req.application)
+        let operation = try await beginOperation(
+            .resume, vm: vm, user: user, settingDesiredStatus: .running, on: req.db)
 
-        Self.runVMOperation(
-            operation,
-            sending: .vmResume,
-            statusOnSuccess: .running,
-            statusOnFailure: nil,
-            statusOnDispatchFailure: nil,
-            app: req.application
-        )
+        if stateSync {
+            Self.nudgeStateSync(vm: vm, app: req.application)
+        } else {
+            Self.runVMOperation(
+                operation,
+                sending: .vmResume,
+                statusOnSuccess: .running,
+                statusOnFailure: nil,
+                statusOnDispatchFailure: nil,
+                app: req.application
+            )
+        }
 
         return try Self.accepted(operation)
     }
@@ -806,23 +879,33 @@ struct VMController: RouteCollection {
         // Decide boot-vs-resume before we overwrite the status with a transitional one.
         let bootFresh = vm.shouldBootOnStart
         let previousStatus = vm.status
+        let stateSync = await Self.usesStateSync(vm: vm, app: req.application)
 
-        // The `.starting` status and the pending operation commit together, so a
-        // crash or lost confirmation leaves a detectable in-flight marker either
-        // way — the stuck-operation sweep resolves both.
+        // State-sync agents (issue #260): the desired status and generation
+        // bump are the mutation; observed-state reports complete the operation.
+        // No transitional `.starting` is stored — in-flight state is derived
+        // from desired != observed plus the pending operation. Imperative
+        // agents keep the transitional marker and the awaited dispatch.
         let operation = try await beginOperation(
-            .boot, vm: vm, user: user, settingVMStatus: .starting, on: req.db)
+            .boot, vm: vm, user: user,
+            settingVMStatus: stateSync ? nil : .starting,
+            settingDesiredStatus: .running,
+            on: req.db)
 
-        Self.runVMOperation(
-            operation,
-            sending: bootFresh ? .vmBoot : .vmResume,
-            statusOnSuccess: .running,
-            statusOnFailure: .error,
-            // Nothing reached an agent (e.g. the VM was never assigned one) —
-            // restore the prior state instead of leaving a phantom `.starting`.
-            statusOnDispatchFailure: previousStatus,
-            app: req.application
-        )
+        if stateSync {
+            Self.nudgeStateSync(vm: vm, app: req.application)
+        } else {
+            Self.runVMOperation(
+                operation,
+                sending: bootFresh ? .vmBoot : .vmResume,
+                statusOnSuccess: .running,
+                statusOnFailure: .error,
+                // Nothing reached an agent (e.g. the VM was never assigned one) —
+                // restore the prior state instead of leaving a phantom `.starting`.
+                statusOnDispatchFailure: previousStatus,
+                app: req.application
+            )
+        }
 
         return try Self.accepted(operation)
     }
@@ -836,18 +919,26 @@ struct VMController: RouteCollection {
         }
 
         let previousStatus = vm.status
+        let stateSync = await Self.usesStateSync(vm: vm, app: req.application)
 
         let operation = try await beginOperation(
-            .shutdown, vm: vm, user: user, settingVMStatus: .stopping, on: req.db)
+            .shutdown, vm: vm, user: user,
+            settingVMStatus: stateSync ? nil : .stopping,
+            settingDesiredStatus: .shutdown,
+            on: req.db)
 
-        Self.runVMOperation(
-            operation,
-            sending: .vmShutdown,
-            statusOnSuccess: .shutdown,
-            statusOnFailure: .error,
-            statusOnDispatchFailure: previousStatus,
-            app: req.application
-        )
+        if stateSync {
+            Self.nudgeStateSync(vm: vm, app: req.application)
+        } else {
+            Self.runVMOperation(
+                operation,
+                sending: .vmShutdown,
+                statusOnSuccess: .shutdown,
+                statusOnFailure: .error,
+                statusOnDispatchFailure: previousStatus,
+                app: req.application
+            )
+        }
 
         return try Self.accepted(operation)
     }

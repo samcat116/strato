@@ -392,6 +392,12 @@ struct AgentWebSocketController: RouteCollection {
                             reconnectToken: reconnectToken
                         )
                         self.sendMessage(ws: ws, message: response, logger: req.logger)
+
+                        // A state-sync agent gets its authoritative desired
+                        // state immediately on (re)registration, so drift
+                        // accumulated while it was away converges without
+                        // waiting for the periodic timer (issue #260).
+                        await req.agentService.syncDesiredState(agentId: agentUUID.uuidString)
                     } catch {
                         Telemetry.agentRegistrationFailed(reason: "register_error")
                         req.logger.error("Failed to register agent: \(error)")
@@ -473,6 +479,15 @@ struct AgentWebSocketController: RouteCollection {
                 // Unsolicited VM state change reported by the agent; persist it
                 Task {
                     await req.agentService.applyStatusUpdate(envelope, fromAgentNamed: agentName)
+                }
+
+            case .observedState:
+                // Full observed-state report from a state-sync agent: updates
+                // observed status/generation, completes operations, confirms
+                // deletions by absence (issue #260). Enqueued rather than
+                // applied directly so same-agent reports apply in send order.
+                Task {
+                    await req.agentService.enqueueObservedStateReport(envelope, fromAgentNamed: agentName)
                 }
 
             case .consoleData:

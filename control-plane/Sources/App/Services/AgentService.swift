@@ -165,7 +165,8 @@ actor AgentService {
             networkCapability: message.networkCapability,
             resources: message.resources,
             lastHeartbeat: Date(),
-            status: .online
+            status: .online,
+            protocolVersion: message.protocolVersion ?? 0
         )
 
         agents[agentUUID.uuidString] = agentInfo
@@ -382,8 +383,7 @@ actor AgentService {
                 // `.shutdown` counts as established: agents keep shut-down-but-not-deleted
                 // VMs in their managed set, so one missing from the heartbeat was lost
                 // (e.g. agent restart) and a later start would fail with vmNotFound.
-                let reconcilable = (vm.status == .running || vm.status == .paused || vm.status == .shutdown)
-                guard reconcilable, !managed.contains(vmId) else { continue }
+                guard vm.status.assertsAgentPresence, !managed.contains(vmId) else { continue }
 
                 let previous = vm.status
                 vm.setStatus(.error)
@@ -433,13 +433,24 @@ actor AgentService {
         // Don't (re)arm the loop if shutdown already raced ahead of init.
         guard !isShutDown else { return }
         heartbeatTask = Task {
+            var tick = 0
             while !Task.isCancelled {
                 do {
                     // Sleep for 30 seconds
                     try await Task.sleep(for: .seconds(30))
+                    tick &+= 1
 
                     // Check for stale agents
                     await checkStaleAgents()
+
+                    // Periodic desired-state sync (~60s): the correctness
+                    // backstop of the level-triggered design — a dropped or
+                    // failed sync is repaired here, so pushes on mutation are
+                    // purely a latency optimization (issue #260). Not a
+                    // cluster singleton: syncs go over this process's sockets.
+                    if tick.isMultiple(of: 2) {
+                        await syncDesiredStateToAllAgents()
+                    }
 
                     // Fail operations stuck pending past their budget and resolve
                     // VMs stuck in a transitional state
@@ -575,12 +586,23 @@ actor AgentService {
                 // Resolve the VM state the operation left in flight. `.created`
                 // only counts as stuck for a create — for every other kind it is
                 // a legitimate resting state.
-                if let vm = try await VM.find(operation.vmID, on: db),
-                    vm.status.isTransitional || (operation.kind == .create && vm.status == .created)
-                {
-                    vm.setStatus(.error)
-                    try await vm.save(on: db)
-                    Telemetry.vmEnteredError(reason: "stuck_operation")
+                if let vm = try await VM.find(operation.vmID, on: db) {
+                    var changed = false
+                    if vm.status.isTransitional || (operation.kind == .create && vm.status == .created) {
+                        vm.setStatus(.error)
+                        changed = true
+                        Telemetry.vmEnteredError(reason: "stuck_operation")
+                    }
+                    // The operation failed: realign desired state with observed
+                    // reality so the unachieved intent (e.g. a delete's
+                    // `.absent`) doesn't linger and replay destructively on a
+                    // later sync or protocol upgrade (issue #260).
+                    if vm.revertDesiredToObserved() {
+                        changed = true
+                    }
+                    if changed {
+                        try await vm.save(on: db)
+                    }
                 }
 
                 app.logger.warning(
@@ -631,6 +653,376 @@ actor AgentService {
         }
     }
 
+    // MARK: - Desired-state sync (issue #260)
+
+    /// Whether the agent registered with a state-sync protocol version and
+    /// should be driven by desired-state syncs instead of imperative messages.
+    func agentSupportsStateSync(_ agentId: String) -> Bool {
+        agents[agentId]?.supportsStateSync ?? false
+    }
+
+    /// Push the authoritative desired state to every connected state-sync
+    /// agent. Called on the periodic timer; failures are logged and repaired
+    /// by the next tick.
+    func syncDesiredStateToAllAgents() async {
+        for agent in agents.values where agent.supportsStateSync && agent.status == .online {
+            await syncDesiredState(agentId: agent.id)
+        }
+    }
+
+    /// Assemble and send the full desired-state sync for one agent. Safe to
+    /// call redundantly: identical syncs diff to nothing on the agent. No-op
+    /// for agents that don't speak state sync.
+    func syncDesiredState(agentId: String) async {
+        guard agentSupportsStateSync(agentId) else { return }
+        do {
+            let message = try await assembleDesiredState(agentId: agentId)
+            try await sendMessageToAgent(message, agentId: agentId)
+            app.logger.debug(
+                "Desired-state sync sent",
+                metadata: [
+                    "agentId": .string(agentId),
+                    "syncId": .string(message.syncId),
+                    "vmCount": .stringConvertible(message.vms.count),
+                ])
+        } catch {
+            // Dropped syncs are safe: the periodic timer re-sends the full
+            // state, so this is logged rather than retried inline.
+            app.logger.warning(
+                "Failed to send desired-state sync (periodic timer will retry)",
+                metadata: [
+                    "agentId": .string(agentId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    /// The full authoritative VM set for an agent, straight from Postgres —
+    /// no in-memory VM-to-agent map involved. Signed image URLs are re-issued
+    /// on every assembly so long-desired VMs never carry expired links.
+    /// Internal rather than private so tests can assert assembly contents.
+    func assembleDesiredState(agentId: String) async throws -> DesiredStateMessage {
+        let db = app.db
+        let vms = try await VM.query(on: db)
+            .filter(\.$hypervisorId == agentId)
+            .with(\.$volumes)
+            .with(\.$networkInterfaces)
+            // Artifacts loaded too so buildImageInfo emits the typed artifact
+            // set (kernel/rootfs distribution, issue #214) rather than the
+            // legacy single-file fallback.
+            .with(\.$sourceImage) { image in
+                image.with(\.$artifacts)
+            }
+            .all()
+
+        var entries: [DesiredVMState] = []
+        for vm in vms {
+            guard let vmId = vm.id else { continue }
+            let image = vm.sourceImage
+            let spec = VMSpecBuilder.buildVMSpecWithVolumes(
+                from: vm,
+                image: image,
+                volumes: vm.volumes,
+                networkInterfaces: vm.networkInterfaces
+            )
+
+            // Image download info lets the agent materialize a VM it doesn't
+            // have yet. Best effort: a VM whose image is missing/not-ready can
+            // still be synced for status changes on its existing disks — but
+            // loudly, because for a not-yet-created VM a nil imageInfo means
+            // the agent will refuse the diskless create and fail the pending
+            // operation with that reason.
+            var imageInfo: ImageInfo?
+            if let image, image.status == .ready {
+                do {
+                    let controlPlaneURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
+                    imageInfo = try VMSpecBuilder.buildImageInfo(
+                        from: image,
+                        controlPlaneURL: controlPlaneURL,
+                        agentName: agentId,
+                        signingKey: URLSigningService.getSigningKey(from: app)
+                    )
+                } catch {
+                    app.logger.warning(
+                        "Failed to build image info for desired-state sync",
+                        metadata: [
+                            "vmId": .string(vmId.uuidString),
+                            "imageId": .string(image.id?.uuidString ?? ""),
+                            "error": .string(error.localizedDescription),
+                        ])
+                }
+            } else if vm.$sourceImage.id != nil {
+                app.logger.warning(
+                    "VM references an image that is missing or not ready; syncing without image info",
+                    metadata: ["vmId": .string(vmId.uuidString)])
+            }
+
+            entries.append(
+                DesiredVMState(
+                    vmId: vmId,
+                    hypervisorType: vm.hypervisorType,
+                    spec: spec,
+                    desiredStatus: vm.desiredStatus,
+                    generation: vm.generation,
+                    imageInfo: imageInfo
+                ))
+        }
+
+        return DesiredStateMessage(vms: entries)
+    }
+
+    // MARK: - Observed-state reports (issue #260)
+
+    /// Tail of the per-agent report-application chain (keyed by agent name)
+    /// plus the id that identifies it, so a finished chain link only retires
+    /// its own bookkeeping.
+    private var reportTails: [String: (id: UInt64, task: Task<Void, Never>)] = [:]
+    private var nextReportTailId: UInt64 = 0
+
+    /// Serialize observed-state report application per agent. `applyObserved-
+    /// StateReport` suspends repeatedly (coordination store, per-VM database
+    /// writes), so applying each report in an independent task would let actor
+    /// reentrancy interleave two reports from the same agent — and a stale
+    /// report finishing last could flip `vm.status` backwards and fire
+    /// spurious drift telemetry. Chaining on the previous report preserves the
+    /// agent's own send order.
+    func enqueueObservedStateReport(_ envelope: MessageEnvelope, fromAgentNamed agentName: String) {
+        nextReportTailId &+= 1
+        let id = nextReportTailId
+        let predecessor = reportTails[agentName]?.task
+        let task = Task { [weak self] in
+            await predecessor?.value
+            await self?.applyObservedStateReport(envelope, fromAgentNamed: agentName)
+            await self?.retireReportTail(agentName: agentName, id: id)
+        }
+        reportTails[agentName] = (id, task)
+    }
+
+    /// Drop the chain bookkeeping once the finishing link is still the tail,
+    /// so idle agents don't pin their last report task forever.
+    private func retireReportTail(agentName: String, id: UInt64) {
+        if reportTails[agentName]?.id == id {
+            reportTails.removeValue(forKey: agentName)
+        }
+    }
+
+    /// Apply an agent's full observed-state report: update observed status and
+    /// generation, complete pending operations whose target state is now
+    /// observed, confirm deletions by absence, and surface drift.
+    ///
+    /// `agentName` identifies the authenticated connection, mirroring the
+    /// heartbeat's ownership check. Callers outside tests should go through
+    /// `enqueueObservedStateReport` so same-agent reports apply in order.
+    func applyObservedStateReport(_ envelope: MessageEnvelope, fromAgentNamed agentName: String) async {
+        let report: ObservedStateReport
+        do {
+            report = try envelope.decode(as: ObservedStateReport.self)
+        } catch {
+            app.logger.error("Failed to decode observed-state report: \(error)")
+            return
+        }
+
+        guard var agentInfo = agents[report.agentId] else {
+            app.logger.warning(
+                "Observed-state report from unknown agent", metadata: ["agentId": .string(report.agentId)])
+            return
+        }
+        guard agentInfo.name == agentName else {
+            app.logger.warning(
+                "Observed-state report claims an agentId not owned by the authenticated connection; ignoring",
+                metadata: [
+                    "claimedAgentId": .string(report.agentId),
+                    "connectionAgentName": .string(agentName),
+                ])
+            return
+        }
+
+        // Reports carry the same resource snapshot as heartbeats; keep the
+        // scheduler's view fresh from whichever arrives.
+        agentInfo.resources = report.resources
+        agentInfo.lastHeartbeat = Date()
+        agentInfo.status = .online
+        agents[report.agentId] = agentInfo
+
+        // Every reported VM is accounted for in the agent's resource figures,
+        // so any placement reservation still held for one would double-count.
+        await app.coordination.releaseReservations(
+            agentId: report.agentId, vmIds: report.vms.map { $0.vmId.uuidString })
+
+        do {
+            try await applyReportToDatabase(report)
+        } catch {
+            app.logger.error(
+                "Failed to apply observed-state report: \(error)",
+                metadata: ["agentId": .string(report.agentId)])
+        }
+    }
+
+    private func applyReportToDatabase(_ report: ObservedStateReport) async throws {
+        let db = app.db
+        let reported = Dictionary(
+            report.vms.map { ($0.vmId, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        let dbVMs = try await VM.query(on: db)
+            .filter(\.$hypervisorId == report.agentId)
+            .all()
+
+        for vm in dbVMs {
+            guard let vmID = vm.id else { continue }
+            if let observed = reported[vmID] {
+                try await applyObservedVMState(vm: vm, observed: observed, on: db)
+            } else {
+                try await handleReportedAbsence(vm: vm, agentId: report.agentId, on: db)
+            }
+        }
+    }
+
+    /// Apply one settled (or failing) observation to its VM row and resolve
+    /// any pending operation it satisfies.
+    private func applyObservedVMState(vm: VM, observed: ObservedVMState, on db: Database) async throws {
+        let vmID = try vm.requireID()
+
+        // Still converging: progress only. The status is not settled, so it
+        // must not overwrite the row or complete operations.
+        if observed.convergencePhase != nil {
+            app.logger.debug(
+                "VM converging on agent",
+                metadata: [
+                    "vmId": .string(vmID.uuidString),
+                    "phase": .string(observed.convergencePhase ?? ""),
+                    "targetGeneration": .stringConvertible(vm.generation),
+                ])
+            return
+        }
+
+        let pendingOperation = try await VMOperation.query(on: db)
+            .filter(\.$vmID == vmID)
+            .filter(\.$status == .pending)
+            .first()
+
+        var changed = false
+        if observed.observedGeneration > vm.observedGeneration {
+            vm.observedGeneration = observed.observedGeneration
+            changed = true
+        }
+
+        if vm.status != observed.status, observed.status != .unknown || vm.status.isTransitional {
+            let previous = vm.status
+            vm.setStatus(observed.status)
+            changed = true
+
+            // Drift telemetry: an out-of-band change (no operation in flight
+            // asked for anything) means agent reality moved on its own — e.g.
+            // a guest powered itself off, or someone paused it over QMP.
+            if pendingOperation == nil, !previous.isTransitional {
+                app.logger.warning(
+                    "VM state drifted without a pending operation",
+                    metadata: [
+                        "vmId": .string(vmID.uuidString),
+                        "previousStatus": .string(previous.rawValue),
+                        "observedStatus": .string(observed.status.rawValue),
+                    ])
+                Telemetry.vmDriftDetected()
+            }
+        }
+        if changed {
+            try await vm.save(on: db)
+        }
+
+        guard let operation = pendingOperation else { return }
+
+        // Deletions complete by absence from the report, never by a status.
+        if operation.kind == .delete || vm.desiredStatus == .absent {
+            return
+        }
+
+        if observed.observedGeneration >= vm.generation, vm.desiredStatus.isSatisfied(by: observed.status) {
+            // The agent converged to the current generation and the observed
+            // status satisfies the desired one: the operation reached its goal.
+            _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
+        } else if let lastError = observed.lastError, observed.failedGeneration == vm.generation {
+            // The agent tried to converge to *this* generation and failed —
+            // the failedGeneration match is what distinguishes that from a
+            // stale error still carried on heartbeats while a newer operation
+            // waits for its first attempt. Fail the operation with the real
+            // reason instead of waiting out its completion budget.
+            if try await operation.completeIfPending(as: .failed, error: lastError, on: db) {
+                var failedChanged = false
+                if observed.status == .unknown {
+                    // The VM has no settled presence on the agent (e.g. the
+                    // create never got off the ground) — surface it as error
+                    // rather than leaving a healthy-looking resting state.
+                    vm.setStatus(.error)
+                    failedChanged = true
+                    Telemetry.vmEnteredError(reason: "convergence_failed")
+                }
+                // The intent was not achieved and the user has been told: stop
+                // pursuing it. Realigning desired with observed keeps a failed
+                // operation from leaving latent divergence that a later sync
+                // (or the reconciler's next generation) would replay.
+                if vm.revertDesiredToObserved() {
+                    failedChanged = true
+                }
+                if failedChanged {
+                    try await vm.save(on: db)
+                }
+            }
+        }
+    }
+
+    /// A VM the database maps to this agent is absent from its full report:
+    /// either a confirmed deletion (desired absent) or genuine loss.
+    private func handleReportedAbsence(vm: VM, agentId: String, on db: Database) async throws {
+        let vmID = try vm.requireID()
+
+        if vm.desiredStatus == .absent {
+            // Deletion confirmed. Complete the operation first, then remove
+            // the row: if we crash in between, the next report retries the
+            // (idempotent) removal, whereas removing first would leave a
+            // pending operation with nothing to resolve it but the sweep.
+            if let operation = try await VMOperation.query(on: db)
+                .filter(\.$vmID == vmID)
+                .filter(\.$status == .pending)
+                .first()
+            {
+                _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
+            }
+
+            try await db.transaction { db in
+                try await vm.delete(on: db)
+                try await QuotaEnforcementService.release(for: vm, on: db)
+            }
+            vmToAgentMapping.removeValue(forKey: vmID.uuidString)
+            await app.coordination.releaseReservation(agentId: agentId, vmId: vmID.uuidString)
+
+            app.logger.info(
+                "VM deletion confirmed by agent report; record removed",
+                metadata: ["vmId": .string(vmID.uuidString), "agentId": .string(agentId)])
+            return
+        }
+
+        // Same established-state rule as the heartbeat reconciliation: only
+        // states that assert live agent presence are safe to escalate on
+        // absence. (`.created` may be mid-create on an agent that hasn't
+        // received the sync yet.) The reconcile loop will re-create the VM on
+        // its next sync; if it succeeds, a later report restores the status.
+        guard vm.status.assertsAgentPresence else { return }
+
+        let previous = vm.status
+        vm.setStatus(.error)
+        try await vm.save(on: db)
+        Telemetry.vmEnteredError(reason: "reconciliation")
+        app.logger.warning(
+            "VM missing from agent observed-state report; marking as error until re-converged",
+            metadata: [
+                "vmId": .string(vmID.uuidString),
+                "agentId": .string(agentId),
+                "previousStatus": .string(previous.rawValue),
+            ])
+    }
+
     // MARK: - VM Operations
 
     /// Creates a VM on an agent selected by the scheduler and awaits the agent's
@@ -652,7 +1044,7 @@ actor AgentService {
         strategy: SchedulingStrategy? = nil,
         image: Image? = nil,
         responseTimeout: Duration = VMOperationKind.create.completionBudget
-    ) async throws -> AgentServiceResponse {
+    ) async throws -> CreateDispatch {
         // Convert agents to schedulable format
         let schedulableAgents = getSchedulableAgents()
         let vmId = vm.id?.uuidString ?? ""
@@ -685,6 +1077,27 @@ actor AgentService {
         do {
             guard agents[agentId] != nil else {
                 throw AgentServiceError.agentNotFound(agentId)
+            }
+
+            // Dual-mode (issue #260): a state-sync agent is driven by a
+            // desired-state sync, not an imperative create. Persist the
+            // placement, sync, and let observed-state reports complete the
+            // operation. The reservation self-releases when the agent's
+            // reports start accounting for the VM (or by TTL on failure).
+            if agentSupportsStateSync(agentId) {
+                vmToAgentMapping[vmId] = agentId
+                vm.hypervisorId = agentId
+                try await vm.save(on: db)
+
+                app.logger.info(
+                    "VM creation dispatched via desired-state sync",
+                    metadata: [
+                        "vmId": .string(vmId),
+                        "agentId": .string(agentId),
+                    ])
+
+                await syncDesiredState(agentId: agentId)
+                return .syncing
             }
 
             // Build ImageInfo with signed URL now that we know the agent
@@ -737,7 +1150,7 @@ actor AgentService {
                 // of pinning capacity until the TTL.
                 await app.coordination.releaseReservation(agentId: agentId, vmId: vmId)
             }
-            return response
+            return .completed(response)
         } catch {
             await app.coordination.releaseReservation(agentId: agentId, vmId: vmId)
             throw error
@@ -1166,5 +1579,16 @@ struct AgentServiceLifecycleHandler: LifecycleHandler {
 extension Request {
     var agentService: AgentService {
         return application.agentService
+    }
+}
+
+extension VMStatus {
+    /// States that assert live agent presence: agents keep running, paused,
+    /// and shut-down-but-not-deleted VMs in their managed set, so one of these
+    /// missing from a heartbeat or observed-state report means the agent lost
+    /// it. `.created` may be mid-create, and transitional/diagnostic states
+    /// are owned by the sweep — absence in those states is expected.
+    var assertsAgentPresence: Bool {
+        self == .running || self == .paused || self == .shutdown
     }
 }

@@ -93,6 +93,16 @@ actor Agent {
     private let messageQueue = SerialTaskQueue()
     private var messageConsumerTask: Task<Void, Never>?
 
+    // Reconciliation phase 2 (issue #260): converges hypervisor reality toward
+    // the control plane's desired-state syncs. Work items run on the same
+    // per-VM lanes as imperative messages, so the two modes can never
+    // interleave operations on one VM.
+    private var reconciler: Reconciler?
+    // Whether the control plane we registered with speaks state sync (wire
+    // protocol >= 2). Gates observed-state reports so an old control plane
+    // isn't sent envelopes it logs as unknown.
+    private var controlPlaneSupportsStateSync = false
+
     // Durable, backend-agnostic record of the VMs this agent owns, keyed by vmId.
     // `managedVMs` are actively managed by this process; `orphanedVMs` were managed
     // by a previous incarnation — their hypervisor processes may still be running,
@@ -290,6 +300,11 @@ actor Agent {
             socketDirectory: firecrackerSocketDir
         )
         #endif
+
+        // The reconciler drives desired-state syncs onto the shared per-VM
+        // lanes; all hypervisor side effects go through this agent (the
+        // actuator), so it must exist before the message consumer starts.
+        reconciler = Reconciler(actuator: self, queue: messageQueue, logger: logger)
 
         logger.info("Initializing console socket manager")
         consoleSocketManager = ConsoleSocketManager(logger: logger, eventLoopGroup: eventLoopGroup)
@@ -549,6 +564,13 @@ actor Agent {
 
         self.assignedAgentID = assignedId
         logger.info("Registration complete, assigned ID: \(assignedId)")
+
+        // Give a state-sync control plane a fresh baseline right away — it
+        // will also send us its desired state on registration, and the two
+        // together converge any drift accumulated while disconnected.
+        if controlPlaneSupportsStateSync {
+            await sendObservedStateReport()
+        }
     }
 
     /// Parks the given continuation as the pending registration wait and arms a
@@ -605,6 +627,7 @@ actor Agent {
                     "agentProtocolVersion": .stringConvertible(WireProtocol.currentVersion),
                 ])
         }
+        controlPlaneSupportsStateSync = WireProtocol.supportsStateSync(controlPlaneProtocolVersion)
 
         // Adopt the rotated reconnect token (if any) before resuming registration:
         // the token this connection presented was consumed by the control plane, so
@@ -900,6 +923,13 @@ actor Agent {
             try await client.sendMessage(message)
         }
         logger.debug("Heartbeat sent", metadata: ["agentId": .string(effectiveAgentID)])
+
+        // On the same cadence, re-assert full observed state to a state-sync
+        // control plane. The heartbeat keeps liveness/presence; the report is
+        // the periodic correctness backstop for VM state (issue #260).
+        if controlPlaneSupportsStateSync {
+            await sendObservedStateReport()
+        }
     }
 
     private func getAgentResources() async -> AgentResources {
@@ -1019,6 +1049,9 @@ extension Agent {
             case .vmDelete:
                 let message = try envelope.decode(as: VMOperationMessage.self)
                 await handleVMDelete(message)
+            case .desiredState:
+                let message = try envelope.decode(as: DesiredStateMessage.self)
+                await reconciler?.apply(message)
             case .vmInfo:
                 let message = try envelope.decode(as: VMInfoRequestMessage.self)
                 await handleVMInfo(message)
@@ -2294,6 +2327,273 @@ extension Agent {
                     "volumeId": .string(message.volumeId),
                     "error": .string(error.localizedDescription),
                 ])
+        }
+    }
+}
+
+// MARK: - Reconciliation (issue #260)
+
+/// Hypervisor side effects for the reconcile loop. These mirror the imperative
+/// handlers (same manifest bookkeeping, same driver-registry routing) minus
+/// the per-request response messaging: convergence outcomes are reported via
+/// `ObservedStateReport` instead of success/error envelopes.
+extension Agent: ReconcileActuator {
+    func observedPresence() async -> [String: VMPresence] {
+        var presence: [String: VMPresence] = [:]
+        for (vmId, entry) in managedVMs {
+            guard let service = hypervisorServices[entry.hypervisorType] else { continue }
+            let status = (try? await service.getVMStatus(vmId: vmId)) ?? .unknown
+            presence[vmId] = .managed(status)
+        }
+        for vmId in orphanedVMs.keys where presence[vmId] == nil {
+            presence[vmId] = .orphaned
+        }
+        return presence
+    }
+
+    func adoptVM(_ item: ReconcileWorkItem) async throws -> VMStatus {
+        guard let entry = orphanedVMs[item.vmId] else {
+            // A replayed sync may race re-adoption; if the VM is already
+            // managed, adoption is satisfied.
+            if let managed = managedVMs[item.vmId],
+                let service = hypervisorServices[managed.hypervisorType]
+            {
+                return try await service.getVMStatus(vmId: item.vmId)
+            }
+            throw HypervisorServiceError.vmNotFound(item.vmId)
+        }
+        guard let service = getHypervisorService(for: entry.hypervisorType) else {
+            throw HypervisorServiceError.hypervisorNotInstalled(entry.hypervisorType.rawValue)
+        }
+
+        // The manifest spec is what the surviving process was actually built
+        // from; prefer the sync's spec only as metadata for future operations.
+        let spec = item.desired?.spec ?? entry.spec
+        let status = try await service.adoptVM(vmId: item.vmId, spec: entry.spec)
+
+        managedVMs[item.vmId] = VMManifestEntry(hypervisorType: entry.hypervisorType, spec: spec)
+        orphanedVMs.removeValue(forKey: item.vmId)
+        persistManifest()
+
+        logger.info(
+            "Orphaned VM re-adopted and managed again",
+            metadata: [
+                "vmId": .string(item.vmId),
+                "status": .string(status.rawValue),
+            ])
+        await sendVMLog(
+            vmId: item.vmId, level: .info, eventType: .operation,
+            message: "VM re-adopted after agent restart", operation: "adopt")
+        return status
+    }
+
+    func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
+        switch step {
+        case .adopt:
+            // Adoption flows through adoptVM (the reconciler needs the
+            // observed status back to plan the remaining steps).
+            _ = try await adoptVM(item)
+        case .create:
+            try await reconcileCreate(item)
+        case .boot:
+            try await reconcileService(for: item.vmId).bootVM(vmId: item.vmId)
+        case .pause:
+            try await reconcileService(for: item.vmId).pauseVM(vmId: item.vmId)
+        case .resume:
+            try await reconcileService(for: item.vmId).resumeVM(vmId: item.vmId)
+        case .shutdown:
+            try await reconcileService(for: item.vmId).shutdownVM(vmId: item.vmId)
+        case .delete:
+            try await reconcileDelete(item)
+        }
+    }
+
+    func convergenceDidChange() async {
+        await sendObservedStateReport()
+    }
+
+    private func reconcileService(for vmId: String) throws -> any HypervisorService {
+        guard let service = getHypervisorServiceForVM(vmId: vmId) else {
+            throw HypervisorServiceError.vmNotFound(vmId)
+        }
+        return service
+    }
+
+    private func reconcileCreate(_ item: ReconcileWorkItem) async throws {
+        guard let desired = item.desired else {
+            throw HypervisorServiceError.invalidConfiguration("create work item without a desired entry")
+        }
+        guard let service = getHypervisorService(for: desired.hypervisorType) else {
+            throw HypervisorServiceError.hypervisorNotInstalled(desired.hypervisorType.rawValue)
+        }
+
+        // Same contract as the imperative path: the orchestrator realizes the
+        // VM's NICs on this host before the driver runs, and rolls them back
+        // if the driver never created the VM.
+        let attachments = try await networkOrchestrator.prepareAttachments(
+            vmId: item.vmId, networks: desired.spec.networks)
+        do {
+            try await service.createVM(
+                vmId: item.vmId, spec: desired.spec, imageInfo: desired.imageInfo,
+                networkAttachments: attachments)
+        } catch {
+            await networkOrchestrator.teardownAttachments(vmId: item.vmId, count: attachments.count)
+            throw error
+        }
+
+        managedVMs[item.vmId] = VMManifestEntry(hypervisorType: desired.hypervisorType, spec: desired.spec)
+        orphanedVMs.removeValue(forKey: item.vmId)
+        persistManifest()
+        await sendVMLog(
+            vmId: item.vmId, level: .info, eventType: .statusChange,
+            message: "VM created by reconciliation", operation: "create", newStatus: .created)
+    }
+
+    private func reconcileDelete(_ item: ReconcileWorkItem) async throws {
+        // Orphan with no live session: try to re-adopt first so the surviving
+        // hypervisor process is actually torn down instead of leaking. If the
+        // session cannot be reattached (pre-deterministic-socket VM, dead
+        // process), fall back to releasing the manifest entry — the same
+        // manual-cleanup contract as the imperative path.
+        if managedVMs[item.vmId] == nil, let entry = orphanedVMs[item.vmId] {
+            if let service = getHypervisorService(for: entry.hypervisorType),
+                (try? await service.adoptVM(vmId: item.vmId, spec: entry.spec)) != nil
+            {
+                managedVMs[item.vmId] = entry
+            } else {
+                orphanedVMs.removeValue(forKey: item.vmId)
+                persistManifest()
+                // Host-side network resources are derived from deterministic
+                // names, so they can be torn down even with no live session.
+                await networkOrchestrator.teardownAttachments(
+                    vmId: item.vmId, count: entry.spec.networks.count)
+                logger.warning(
+                    "Deleted orphaned VM from manifest; any surviving hypervisor process must be cleaned up manually",
+                    metadata: ["vmId": .string(item.vmId)])
+                return
+            }
+        }
+
+        guard let entry = managedVMs[item.vmId] else {
+            return  // already absent — deletion is idempotent
+        }
+        let service = try reconcileService(for: item.vmId)
+
+        // Stop gracefully first when the VM is actually running; deleting a
+        // resting VM skips straight to teardown.
+        let status = (try? await service.getVMStatus(vmId: item.vmId)) ?? .unknown
+        if status == .running || status == .paused {
+            try await service.stopAndDeleteVM(vmId: item.vmId)
+        } else {
+            try await service.deleteVM(vmId: item.vmId)
+        }
+
+        // Tear down the VM's host-side network resources now that the
+        // hypervisor session is gone (best-effort; never blocks deletion).
+        await networkOrchestrator.teardownAttachments(
+            vmId: item.vmId, count: entry.spec.networks.count)
+
+        managedVMs.removeValue(forKey: item.vmId)
+        orphanedVMs.removeValue(forKey: item.vmId)
+        persistManifest()
+        await sendVMLog(
+            vmId: item.vmId, level: .info, eventType: .operation,
+            message: "VM deleted by reconciliation", operation: "delete")
+    }
+
+    /// Assemble and send the full observed state of this host: every managed
+    /// VM with its live status, still-orphaned VMs, and VMs mid-convergence
+    /// that don't exist on a hypervisor yet. Full-list semantics — a VM absent
+    /// from the report does not exist here, which is how the control plane
+    /// confirms deletions.
+    func sendObservedStateReport() async {
+        guard assignedAgentID != nil, let reconciler else { return }
+
+        var observed: [ObservedVMState] = []
+        var reported = Set<String>()
+
+        for (vmId, entry) in managedVMs {
+            guard let uuid = UUID(uuidString: vmId) else { continue }
+            let status: VMStatus
+            if let service = hypervisorServices[entry.hypervisorType] {
+                status = (try? await service.getVMStatus(vmId: vmId)) ?? .unknown
+            } else {
+                status = .unknown
+            }
+            observed.append(
+                ObservedVMState(
+                    vmId: uuid,
+                    status: status,
+                    observedGeneration: await reconciler.observedGeneration(for: vmId),
+                    convergencePhase: await reconciler.convergencePhase(for: vmId),
+                    lastError: await reconciler.lastError(for: vmId),
+                    failedGeneration: await reconciler.failedGeneration(for: vmId)
+                ))
+            reported.insert(vmId)
+        }
+
+        // Orphans carry no synthesized error: fabricating a `lastError` in the
+        // post-registration baseline report (sent while re-adoption is still
+        // queued) would fail pending operations on the control plane seconds
+        // before the registration sync's adopt converges them. Real adoption
+        // failures surface through the reconciler's failure tracking.
+        for vmId in orphanedVMs.keys where !reported.contains(vmId) {
+            guard let uuid = UUID(uuidString: vmId) else { continue }
+            observed.append(
+                ObservedVMState(
+                    vmId: uuid,
+                    status: .unknown,
+                    observedGeneration: await reconciler.observedGeneration(for: vmId),
+                    convergencePhase: await reconciler.convergencePhase(for: vmId),
+                    lastError: await reconciler.lastError(for: vmId),
+                    failedGeneration: await reconciler.failedGeneration(for: vmId)
+                ))
+            reported.insert(vmId)
+        }
+
+        // VMs still converging toward first existence (mid-create): include
+        // them so the control plane sees progress and never mistakes an
+        // in-flight create for an absence.
+        for (vmId, _) in await reconciler.inFlightVMs() where !reported.contains(vmId) {
+            guard let uuid = UUID(uuidString: vmId) else { continue }
+            observed.append(
+                ObservedVMState(
+                    vmId: uuid,
+                    status: .unknown,
+                    observedGeneration: await reconciler.observedGeneration(for: vmId),
+                    convergencePhase: await reconciler.convergencePhase(for: vmId) ?? "converging",
+                    lastError: await reconciler.lastError(for: vmId),
+                    failedGeneration: await reconciler.failedGeneration(for: vmId)
+                ))
+            reported.insert(vmId)
+        }
+
+        // VMs whose convergence failed and that have no hypervisor presence
+        // (e.g. a create that never produced a process): reported with the
+        // error so the control plane can fail the pending operation with the
+        // real reason instead of waiting out its budget.
+        for (vmId, failure) in await reconciler.failedConvergences() where !reported.contains(vmId) {
+            guard let uuid = UUID(uuidString: vmId) else { continue }
+            observed.append(
+                ObservedVMState(
+                    vmId: uuid,
+                    status: .unknown,
+                    observedGeneration: await reconciler.observedGeneration(for: vmId),
+                    convergencePhase: nil,
+                    lastError: failure.error,
+                    failedGeneration: failure.generation
+                ))
+        }
+
+        let report = ObservedStateReport(
+            agentId: effectiveAgentID,
+            vms: observed,
+            resources: await getAgentResources()
+        )
+        do {
+            try await websocketClient?.sendMessage(report)
+        } catch {
+            logger.error("Failed to send observed-state report: \(error)")
         }
     }
 }

@@ -65,4 +65,12 @@ enum Telemetry {
     static func vmEnteredError(reason: String) {
         Counter(label: "strato_vm_errors_total", dimensions: [("reason", reason)]).increment()
     }
+
+    /// A VM's observed state changed with no operation in flight (issue #260):
+    /// agent reality moved out of band — a guest powered itself off, someone
+    /// paused it over QMP, etc. The reconcile loop converges it back; this
+    /// counter tracks how often drift happens at all.
+    static func vmDriftDetected() {
+        Counter(label: "strato_vm_drift_total").increment()
+    }
 }
