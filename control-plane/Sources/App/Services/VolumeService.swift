@@ -193,6 +193,10 @@ actor VolumeService {
     }
 
     /// Request an agent to delete a volume and await its confirmation.
+    /// The message carries only the volume ID — the agent owns path layout
+    /// and derives the volume's location itself — so this also cleans up
+    /// volumes whose create succeeded on the agent but whose response was
+    /// lost (no recorded storage path). Agent-side deletion is idempotent.
     func requestVolumeDeletion(volume: Volume) async throws {
         guard let hypervisorId = volume.hypervisorId else {
             // Volume was never created on an agent, just delete from DB
@@ -204,18 +208,8 @@ actor VolumeService {
             return
         }
 
-        guard let volumePath = volume.storagePath else {
-            logger.info(
-                "Volume has no storage path, skipping agent deletion",
-                metadata: [
-                    "volumeId": .string(volume.id!.uuidString)
-                ])
-            return
-        }
-
         let message = VolumeDeleteMessage(
-            volumeId: volume.id!.uuidString,
-            volumePath: volumePath
+            volumeId: volume.id!.uuidString
         )
 
         _ = try await sendVolumeRequest(message, toAgent: hypervisorId)
@@ -342,17 +336,11 @@ actor VolumeService {
             throw VolumeServiceError.volumeNotOnAgent
         }
 
-        // Build snapshot path based on volume path
-        let snapshotPath =
-            snapshot.buildStoragePath(
-                basePath: volumePath.components(separatedBy: "/").dropLast().joined(separator: "/"),
-                volumeId: volume.id!) ?? "\(volumePath).snap.\(snapshot.id!.uuidString)"
-
+        // The agent owns snapshot placement and reports the path back.
         let message = VolumeSnapshotMessage(
             volumeId: volume.id!.uuidString,
             snapshotId: snapshot.id!.uuidString,
-            volumePath: volumePath,
-            snapshotPath: snapshotPath
+            volumePath: volumePath
         )
 
         let status = try await sendVolumeRequest(message, toAgent: hypervisorId, timeout: Self.snapshotTimeout)
@@ -433,17 +421,11 @@ actor VolumeService {
             throw VolumeServiceError.volumeNotOnAgent
         }
 
-        // Build target volume path based on volume storage convention
-        let targetVolumePath =
-            targetVolume.buildStoragePath(
-                basePath: sourceVolumePath.components(separatedBy: "/").dropLast(2).joined(separator: "/"))
-            ?? "\(sourceVolumePath).clone.\(targetVolume.id!.uuidString)"
-
+        // The agent owns volume placement and reports the clone's path back.
         let message = VolumeCloneMessage(
             sourceVolumeId: sourceVolume.id!.uuidString,
             sourceVolumePath: sourceVolumePath,
-            targetVolumeId: targetVolume.id!.uuidString,
-            targetVolumePath: targetVolumePath
+            targetVolumeId: targetVolume.id!.uuidString
         )
 
         let status = try await sendVolumeRequest(message, toAgent: hypervisorId, timeout: Self.transferTimeout)

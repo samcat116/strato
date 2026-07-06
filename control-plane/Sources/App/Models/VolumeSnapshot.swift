@@ -141,12 +141,6 @@ extension VolumeSnapshot {
     var canDelete: Bool {
         return status == .available || status == .error || status == .deleting
     }
-
-    /// Builds the storage path for this snapshot
-    func buildStoragePath(basePath: String, volumeId: UUID) -> String? {
-        guard let id = self.id else { return nil }
-        return "\(basePath)/\(volumeId)/snapshots/\(id).qcow2"
-    }
 }
 
 // MARK: - Request/Response DTOs

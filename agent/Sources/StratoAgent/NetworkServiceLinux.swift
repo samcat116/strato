@@ -519,7 +519,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
     /// Runs a command via `/usr/bin/env` (PATH resolution) and returns its exit
     /// status and combined stdout/stderr. Mirrors the `Process` usage in
-    /// `VolumeService`.
+    /// `FileSystemStorageBackend`.
     private func runProcess(_ command: String, _ arguments: [String]) throws -> CommandResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
