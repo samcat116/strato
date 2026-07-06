@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import StratoAgentCore
 
 /// Generates guest-bootstrap media for VMs that boot from a disk image.
 ///

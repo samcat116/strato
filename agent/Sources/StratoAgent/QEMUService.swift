@@ -13,7 +13,7 @@ import SwiftQEMU
 actor QEMUService: HypervisorService {
     private let logger: Logger
     private let networkService: (any NetworkServiceProtocol)?
-    private let imageCacheService: ImageCacheService?
+    private let storage: (any StorageBackend)?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
     private let configuredFirmwarePath: String?
@@ -34,12 +34,12 @@ actor QEMUService: HypervisorService {
 
     init(
         logger: Logger, networkService: (any NetworkServiceProtocol)? = nil,
-        imageCacheService: ImageCacheService? = nil, vmStoragePath: String, qemuBinaryPath: String,
+        storage: (any StorageBackend)? = nil, vmStoragePath: String, qemuBinaryPath: String,
         firmwarePath: String? = nil, hardwareAccelerationEnabled: Bool = true
     ) {
         self.logger = logger
         self.networkService = networkService
-        self.imageCacheService = imageCacheService
+        self.storage = storage
         self.vmStoragePath = vmStoragePath
         self.qemuBinaryPath = qemuBinaryPath
         self.configuredFirmwarePath = firmwarePath
@@ -68,48 +68,26 @@ actor QEMUService: HypervisorService {
         // image when imageInfo is provided; otherwise the spec's volume references
         // (with agent-reported paths) are used.
         var disks: [ResolvedDisk] = []
-        if let imageInfo = imageInfo, let cacheService = imageCacheService {
+        if let imageInfo = imageInfo, let storage = storage {
             logger.info(
-                "Using cached image for VM",
+                "Materializing boot disk from image",
                 metadata: [
                     "vmId": .string(vmId),
                     "imageId": .string(imageInfo.imageId.uuidString),
                 ])
 
             do {
-                let cachedImagePath = try await cacheService.getImagePath(imageInfo: imageInfo)
-                logger.info(
-                    "Image ready at cache path",
-                    metadata: [
-                        "vmId": .string(vmId),
-                        "cachedPath": .string(cachedImagePath),
-                    ])
-
-                // Create a copy for this VM
-                let vmDiskPath = "\(vmStoragePath)/\(vmId)/disk.qcow2"
-                let vmDiskDir = (vmDiskPath as NSString).deletingLastPathComponent
-
-                try FileManager.default.createDirectory(
-                    atPath: vmDiskDir,
-                    withIntermediateDirectories: true,
-                    attributes: nil
+                // The storage layer downloads/caches the image and converts it
+                // to qcow2 when the source format differs.
+                let attachment = try await storage.materializeDisk(
+                    at: "\(vmStoragePath)/\(vmId)/disk.qcow2",
+                    from: imageInfo,
+                    format: .qcow2
                 )
-
-                // Copy the cached image to VM-specific location
-                if !FileManager.default.fileExists(atPath: vmDiskPath) {
-                    try FileManager.default.copyItem(atPath: cachedImagePath, toPath: vmDiskPath)
-                    logger.info(
-                        "Created VM disk from cached image",
-                        metadata: [
-                            "vmId": .string(vmId),
-                            "diskPath": .string(vmDiskPath),
-                        ])
-                }
-
-                disks = [ResolvedDisk(path: vmDiskPath, readonly: false)]
+                disks = [ResolvedDisk(path: attachment.path, format: attachment.format, readonly: false)]
             } catch {
                 logger.error(
-                    "Failed to get cached image, falling back to spec volumes",
+                    "Failed to materialize boot disk from image, falling back to spec volumes",
                     metadata: [
                         "vmId": .string(vmId),
                         "error": .string(error.localizedDescription),
@@ -120,7 +98,9 @@ actor QEMUService: HypervisorService {
 
         if disks.isEmpty {
             disks = spec.volumes.compactMap { volume in
-                volume.storagePath.map { ResolvedDisk(path: $0, readonly: volume.readonly) }
+                volume.storagePath.map {
+                    ResolvedDisk(path: $0, format: DiskFormat(volumePath: $0), readonly: volume.readonly)
+                }
             }
 
             // Create disk images from base if they don't exist
@@ -630,6 +610,7 @@ actor QEMUService: HypervisorService {
     /// A disk realized on this host: the agent-resolved path plus attach options.
     private struct ResolvedDisk {
         let path: String
+        let format: DiskFormat
         let readonly: Bool
     }
 
@@ -681,7 +662,7 @@ actor QEMUService: HypervisorService {
         qemuConfig.disks = disks.map { disk in
             QEMUDisk(
                 path: disk.path,
-                format: "qcow2",
+                format: disk.format.rawValue,
                 interface: "virtio",
                 readonly: disk.readonly
             )

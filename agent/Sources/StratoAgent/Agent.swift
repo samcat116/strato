@@ -64,7 +64,7 @@ actor Agent {
     private var hypervisorServices: [HypervisorType: any HypervisorService] = [:]
     private var networkService: (any NetworkServiceProtocol)?
     private var imageCacheService: ImageCacheService?
-    private var volumeService: VolumeService?
+    private var storageBackend: (any StorageBackend)?
     private var consoleSocketManager: ConsoleSocketManager?
     private var reconnectTask: Task<Void, Never>?
     private var isRunning = false
@@ -262,16 +262,17 @@ actor Agent {
                 .replacingOccurrences(of: "/agent/ws", with: "")
         )
 
-        logger.info("Initializing volume service")
-        volumeService = VolumeService(
+        logger.info("Initializing storage backend")
+        let storageBackend = FileSystemStorageBackend(
             logger: logger,
-            imageCacheService: imageCacheService
+            imageSource: imageCacheService
         )
+        self.storageBackend = storageBackend
 
         logger.info("Initializing QEMU service")
         #if canImport(SwiftQEMU)
         hypervisorServices[.qemu] = QEMUService(
-            logger: logger, networkService: networkService, imageCacheService: imageCacheService,
+            logger: logger, networkService: networkService, storage: storageBackend,
             vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath,
             hardwareAccelerationEnabled: hardwareAccelerationEnabled)
         #else
@@ -283,7 +284,7 @@ actor Agent {
         hypervisorServices[.firecracker] = FirecrackerService(
             logger: logger,
             networkService: networkService,
-            imageCacheService: imageCacheService,
+            storage: storageBackend,
             vmStoragePath: vmStoragePath,
             firecrackerBinaryPath: firecrackerBinaryPath,
             socketDirectory: firecrackerSocketDir
@@ -1881,22 +1882,28 @@ extension Agent {
                 "format": .string(message.format),
             ])
 
-        guard let volumeService = volumeService else {
-            await sendError(for: message.requestId, error: "Volume service not available")
+        guard let storageBackend = storageBackend else {
+            await sendError(for: message.requestId, error: "Storage backend not available")
+            return
+        }
+
+        guard let format = DiskFormat(rawValue: message.format) else {
+            await sendError(for: message.requestId, error: "Unsupported volume format: \(message.format)")
             return
         }
 
         do {
-            let volumePath: String
+            let attachment: DiskAttachment
             if let imageInfo = message.sourceImageInfo {
-                // Create volume from image
-                volumePath = try await volumeService.createVolumeFromImage(
-                    volumeId: message.volumeId, imageInfo: imageInfo)
+                // Create volume from image (format-conversion aware)
+                attachment = try await storageBackend.createVolumeFromImage(
+                    volumeId: message.volumeId, imageInfo: imageInfo, format: format)
             } else {
                 // Create empty volume
-                volumePath = try await volumeService.createVolume(
-                    volumeId: message.volumeId, size: message.size, format: message.format)
+                attachment = try await storageBackend.createVolume(
+                    volumeId: message.volumeId, sizeBytes: message.size, format: format)
             }
+            let volumePath = attachment.path
 
             let response = VolumeStatusResponse(
                 volumeId: message.volumeId,
@@ -1929,13 +1936,13 @@ extension Agent {
                 "volumeId": .string(message.volumeId)
             ])
 
-        guard let volumeService = volumeService else {
-            await sendError(for: message.requestId, error: "Volume service not available")
+        guard let storageBackend = storageBackend else {
+            await sendError(for: message.requestId, error: "Storage backend not available")
             return
         }
 
         do {
-            try await volumeService.deleteVolume(volumeId: message.volumeId)
+            try await storageBackend.deleteVolume(volumeId: message.volumeId)
             await sendSuccess(for: message.requestId, message: "Volume deleted successfully")
             logger.info("Volume deleted successfully", metadata: ["volumeId": .string(message.volumeId)])
         } catch {
@@ -2053,13 +2060,13 @@ extension Agent {
                 "newSize": .stringConvertible(message.newSize),
             ])
 
-        guard let volumeService = volumeService else {
-            await sendError(for: message.requestId, error: "Volume service not available")
+        guard let storageBackend = storageBackend else {
+            await sendError(for: message.requestId, error: "Storage backend not available")
             return
         }
 
         do {
-            try await volumeService.resizeVolume(volumePath: message.volumePath, newSize: message.newSize)
+            try await storageBackend.resizeVolume(volumePath: message.volumePath, newSizeBytes: message.newSize)
 
             let response = VolumeStatusResponse(
                 volumeId: message.volumeId,
@@ -2093,13 +2100,13 @@ extension Agent {
                 "snapshotId": .string(message.snapshotId),
             ])
 
-        guard let volumeService = volumeService else {
-            await sendError(for: message.requestId, error: "Volume service not available")
+        guard let storageBackend = storageBackend else {
+            await sendError(for: message.requestId, error: "Storage backend not available")
             return
         }
 
         do {
-            let snapshotPath = try await volumeService.createSnapshot(
+            let snapshotPath = try await storageBackend.createSnapshot(
                 volumeId: message.volumeId,
                 snapshotId: message.snapshotId,
                 volumePath: message.volumePath
@@ -2139,13 +2146,13 @@ extension Agent {
                 "snapshotId": .string(message.snapshotId),
             ])
 
-        guard let volumeService = volumeService else {
-            await sendError(for: message.requestId, error: "Volume service not available")
+        guard let storageBackend = storageBackend else {
+            await sendError(for: message.requestId, error: "Storage backend not available")
             return
         }
 
         do {
-            try await volumeService.deleteSnapshot(volumeId: message.volumeId, snapshotId: message.snapshotId)
+            try await storageBackend.deleteSnapshot(volumeId: message.volumeId, snapshotId: message.snapshotId)
             await sendSuccess(for: message.requestId, message: "Snapshot deleted successfully")
             logger.info(
                 "Volume snapshot deleted successfully",
@@ -2173,17 +2180,17 @@ extension Agent {
                 "targetVolumeId": .string(message.targetVolumeId),
             ])
 
-        guard let volumeService = volumeService else {
-            await sendError(for: message.requestId, error: "Volume service not available")
+        guard let storageBackend = storageBackend else {
+            await sendError(for: message.requestId, error: "Storage backend not available")
             return
         }
 
         do {
-            let targetPath = try await volumeService.cloneVolume(
+            let targetPath = try await storageBackend.cloneVolume(
                 sourceVolumeId: message.sourceVolumeId,
                 sourcePath: message.sourceVolumePath,
                 targetVolumeId: message.targetVolumeId
-            )
+            ).path
 
             let response = VolumeStatusResponse(
                 volumeId: message.targetVolumeId,
@@ -2218,13 +2225,13 @@ extension Agent {
                 "volumeId": .string(message.volumeId)
             ])
 
-        guard let volumeService = volumeService else {
-            await sendError(for: message.requestId, error: "Volume service not available")
+        guard let storageBackend = storageBackend else {
+            await sendError(for: message.requestId, error: "Storage backend not available")
             return
         }
 
         do {
-            let info = try await volumeService.getVolumeInfo(volumePath: message.volumePath)
+            let info = try await storageBackend.volumeInfo(volumePath: message.volumePath)
 
             let response = VolumeInfoResponse(
                 volumeId: message.volumeId,

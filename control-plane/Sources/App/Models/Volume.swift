@@ -226,12 +226,6 @@ extension Volume {
     var canDelete: Bool {
         return status == .available || status == .error || status == .deleting
     }
-
-    /// Builds the storage path for this volume
-    func buildStoragePath(basePath: String) -> String? {
-        guard let id = self.id else { return nil }
-        return "\(basePath)/\(id)/volume.\(format.rawValue)"
-    }
 }
 
 // MARK: - Request/Response DTOs
