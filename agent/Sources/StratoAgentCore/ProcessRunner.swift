@@ -7,15 +7,21 @@ import Darwin
 #endif
 
 /// Result of running a subprocess to completion.
-struct ProcessResult: Sendable {
-    let terminationStatus: Int32
-    let standardOutput: Data
-    let standardError: Data
+public struct ProcessResult: Sendable {
+    public let terminationStatus: Int32
+    public let standardOutput: Data
+    public let standardError: Data
+
+    public init(terminationStatus: Int32, standardOutput: Data, standardError: Data) {
+        self.terminationStatus = terminationStatus
+        self.standardOutput = standardOutput
+        self.standardError = standardError
+    }
 
     /// stdout and stderr decoded and concatenated — convenient for building
     /// human-readable error messages where the two streams were previously
     /// merged into a single pipe.
-    var combinedOutput: String {
+    public var combinedOutput: String {
         let out = String(data: standardOutput, encoding: .utf8) ?? ""
         let err = String(data: standardError, encoding: .utf8) ?? ""
         return out + err
@@ -31,14 +37,14 @@ struct ProcessResult: Sendable {
 /// moves the blocking wait and pipe draining onto global dispatch queues and hands
 /// the result back through continuations, so `await`ing it suspends rather than
 /// blocks.
-enum ProcessRunner {
+public enum ProcessRunner {
     /// Launches `executableURL` with `arguments`, draining stdout and stderr, and
     /// returns once the process exits.
     ///
     /// stdout and stderr are drained concurrently (each from its own file
     /// descriptor), so a process that fills one stream while the other is idle
     /// cannot deadlock.
-    static func run(
+    public static func run(
         executableURL: URL,
         arguments: [String]
     ) async throws -> ProcessResult {

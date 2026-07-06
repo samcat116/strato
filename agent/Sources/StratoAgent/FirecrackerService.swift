@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import StratoAgentCore
 import StratoShared
 
 #if os(Linux)
@@ -10,7 +11,7 @@ import SwiftFirecracker
 actor FirecrackerService: HypervisorService {
     private let logger: Logger
     private let networkService: (any NetworkServiceProtocol)?
-    private let imageCacheService: ImageCacheService?
+    private let storage: (any StorageBackend)?
     private let vmStoragePath: String
     private let firecrackerBinaryPath: String
     private let socketDirectory: String
@@ -27,14 +28,14 @@ actor FirecrackerService: HypervisorService {
     init(
         logger: Logger,
         networkService: (any NetworkServiceProtocol)? = nil,
-        imageCacheService: ImageCacheService? = nil,
+        storage: (any StorageBackend)? = nil,
         vmStoragePath: String,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
         socketDirectory: String = "/tmp/firecracker"
     ) {
         self.logger = logger
         self.networkService = networkService
-        self.imageCacheService = imageCacheService
+        self.storage = storage
         self.vmStoragePath = vmStoragePath
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.socketDirectory = socketDirectory
@@ -74,41 +75,28 @@ actor FirecrackerService: HypervisorService {
         // Realize the root drive: materialize from the cached image when imageInfo
         // is provided, otherwise use the spec's first volume reference.
         var rootDrive: (id: String, path: String, readOnly: Bool)?
-        if let imageInfo = imageInfo, let cacheService = imageCacheService {
+        if let imageInfo = imageInfo, let storage = storage {
             logger.info(
-                "Using cached image for VM",
+                "Materializing root drive from image",
                 metadata: [
                     "vmId": .string(vmId),
                     "imageId": .string(imageInfo.imageId.uuidString),
                 ])
 
             do {
-                let cachedImagePath = try await cacheService.getImagePath(imageInfo: imageInfo)
-
-                // Create VM-specific disk
-                let vmDiskPath = "\(vmStoragePath)/\(vmId)/rootfs.ext4"
-                let vmDiskDir = (vmDiskPath as NSString).deletingLastPathComponent
-
-                try FileManager.default.createDirectory(
-                    atPath: vmDiskDir,
-                    withIntermediateDirectories: true,
-                    attributes: nil
+                // Firecracker attaches drives as raw block devices. The storage
+                // layer converts the image (e.g. a qcow2 cloud image) to raw
+                // during materialization; a plain copy of a qcow2 file would
+                // hand the guest an unbootable rootfs.
+                let attachment = try await storage.materializeDisk(
+                    at: "\(vmStoragePath)/\(vmId)/rootfs.raw",
+                    from: imageInfo,
+                    format: .raw
                 )
-
-                if !FileManager.default.fileExists(atPath: vmDiskPath) {
-                    try FileManager.default.copyItem(atPath: cachedImagePath, toPath: vmDiskPath)
-                    logger.info(
-                        "Created VM disk from cached image",
-                        metadata: [
-                            "vmId": .string(vmId),
-                            "diskPath": .string(vmDiskPath),
-                        ])
-                }
-
-                rootDrive = (id: "rootfs", path: vmDiskPath, readOnly: false)
+                rootDrive = (id: "rootfs", path: attachment.path, readOnly: false)
             } catch {
                 logger.error(
-                    "Failed to get cached image",
+                    "Failed to materialize root drive from image",
                     metadata: [
                         "vmId": .string(vmId),
                         "error": .string(error.localizedDescription),
@@ -389,7 +377,7 @@ actor FirecrackerService: HypervisorService {
     init(
         logger: Logger,
         networkService: (any NetworkServiceProtocol)? = nil,
-        imageCacheService: ImageCacheService? = nil,
+        storage: (any StorageBackend)? = nil,
         vmStoragePath: String,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
         socketDirectory: String = "/tmp/firecracker"

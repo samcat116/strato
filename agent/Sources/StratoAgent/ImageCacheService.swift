@@ -1,6 +1,7 @@
 import Crypto
 import Foundation
 import Logging
+import StratoAgentCore
 import StratoShared
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -247,6 +248,15 @@ actor ImageCacheService {
         }
 
         return totalSize
+    }
+}
+
+// MARK: - ImageSource Conformance
+
+/// The storage layer pulls image bytes through this hook when materializing disks.
+extension ImageCacheService: ImageSource {
+    func localImagePath(for imageInfo: ImageInfo) async throws -> String {
+        try await getImagePath(imageInfo: imageInfo)
     }
 }
 
