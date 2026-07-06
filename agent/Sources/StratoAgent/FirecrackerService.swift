@@ -10,7 +10,6 @@ import SwiftFirecracker
 /// Implements HypervisorService protocol for consistent VM lifecycle management
 actor FirecrackerService: HypervisorService {
     private let logger: Logger
-    private let networkService: (any NetworkServiceProtocol)?
     private let storage: (any StorageBackend)?
     private let vmStoragePath: String
     private let firecrackerBinaryPath: String
@@ -23,18 +22,15 @@ actor FirecrackerService: HypervisorService {
     private var firecrackerClient: FirecrackerClient?
     private var vmManagers: [String: FirecrackerManager] = [:]
     private var vmSpecs: [String: VMSpec] = [:]
-    private var vmNetworkInfo: [String: VMNetworkInfo] = [:]
 
     init(
         logger: Logger,
-        networkService: (any NetworkServiceProtocol)? = nil,
         storage: (any StorageBackend)? = nil,
         vmStoragePath: String,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
         socketDirectory: String = "/tmp/firecracker"
     ) {
         self.logger = logger
-        self.networkService = networkService
         self.storage = storage
         self.vmStoragePath = vmStoragePath
         self.firecrackerBinaryPath = firecrackerBinaryPath
@@ -50,13 +46,26 @@ actor FirecrackerService: HypervisorService {
 
     // MARK: - HypervisorService Protocol Implementation
 
-    func createVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil) async throws {
+    func createVM(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,
+        networkAttachments: [ResolvedNetworkAttachment] = []
+    ) async throws {
         logger.info("Creating Firecracker VM", metadata: ["vmId": .string(vmId)])
 
         // Validate Firecracker requirements
         guard case .directKernel(let kernelPath, let initramfsPath, let cmdline) = spec.boot else {
             throw HypervisorServiceError.invalidConfiguration(
                 "Firecracker requires direct kernel boot - kernel path must be specified")
+        }
+
+        // Firecracker can only realize TAP attachments. Reject anything else up
+        // front instead of silently launching the VM without its NICs.
+        for nic in networkAttachments {
+            guard case .tap = nic.attachment else {
+                throw HypervisorServiceError.notSupported(
+                    "Firecracker only supports tap network attachments; got \(nic.attachment) "
+                        + "for network \(nic.network)")
+            }
         }
 
         // Initialize client if needed
@@ -111,11 +120,6 @@ actor FirecrackerService: HypervisorService {
             rootDrive = (id: volume.deviceName, path: storagePath, readOnly: volume.readonly)
         }
 
-        // Setup networking if configured
-        if !spec.networks.isEmpty {
-            try await setupVMNetworking(vmId: vmId, networks: spec.networks)
-        }
-
         // Create Firecracker VM
         let manager = try await client.createVM(vmId: vmId)
 
@@ -144,12 +148,14 @@ actor FirecrackerService: HypervisorService {
             try await manager.configureDrive(drive)
         }
 
-        // Configure network if available
-        if let networkInfo = vmNetworkInfo[vmId], networkInfo.tapInterface != "n/a" {
+        // Configure networking: one interface per resolved attachment (validated
+        // above to be .tap)
+        for (index, nic) in networkAttachments.enumerated() {
+            guard case .tap(let tapName) = nic.attachment else { continue }
             let networkInterface = NetworkInterface.tap(
-                id: "eth0",
-                tapName: networkInfo.tapInterface,
-                macAddress: networkInfo.macAddress
+                id: "eth\(index)",
+                tapName: tapName,
+                macAddress: nic.macAddress ?? ""
             )
             try await manager.configureNetwork(networkInterface)
         }
@@ -215,10 +221,8 @@ actor FirecrackerService: HypervisorService {
     func deleteVM(vmId: String) async throws {
         logger.info("Deleting Firecracker VM", metadata: ["vmId": .string(vmId)])
 
-        // Cleanup networking
-        try await cleanupVMNetworking(vmId: vmId)
-
-        // Destroy the VM through the client
+        // Destroy the VM through the client (network attachments are torn down
+        // by the agent's NetworkOrchestrator after this returns)
         if let client = firecrackerClient {
             try await client.destroyVM(vmId: vmId)
         }
@@ -226,7 +230,6 @@ actor FirecrackerService: HypervisorService {
         // Clean up local state
         vmManagers.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
-        vmNetworkInfo.removeValue(forKey: vmId)
 
         logger.info("Firecracker VM deleted", metadata: ["vmId": .string(vmId)])
     }
@@ -308,61 +311,6 @@ actor FirecrackerService: HypervisorService {
         throw HypervisorServiceError.notSupported("disk hot-unplug for Firecracker VMs")
     }
 
-    // MARK: - Private Methods
-
-    private func setupVMNetworking(vmId: String, networks: [NetworkSpec]) async throws {
-        guard let networkService = networkService else {
-            logger.warning("Network service not available, skipping network setup")
-            return
-        }
-
-        logger.info("Setting up VM networking", metadata: ["vmId": .string(vmId)])
-
-        guard let firstNetwork = networks.first else {
-            return
-        }
-
-        let networkConfig = VMNetworkConfig(
-            networkName: firstNetwork.network,
-            macAddress: firstNetwork.macAddress,
-            ipAddress: firstNetwork.ipAddress,
-            subnet: "192.168.1.0/24",
-            gateway: "192.168.1.1"
-        )
-
-        let networkInfo = try await networkService.createVMNetwork(vmId: vmId, config: networkConfig)
-        vmNetworkInfo[vmId] = networkInfo
-
-        logger.info(
-            "VM networking setup completed",
-            metadata: [
-                "vmId": .string(vmId),
-                "tapInterface": .string(networkInfo.tapInterface),
-                "macAddress": .string(networkInfo.macAddress),
-            ])
-    }
-
-    private func cleanupVMNetworking(vmId: String) async throws {
-        guard let networkService = networkService else {
-            logger.debug("Network service not available, skipping network cleanup")
-            return
-        }
-
-        logger.info("Cleaning up VM networking", metadata: ["vmId": .string(vmId)])
-
-        do {
-            try await networkService.detachVMFromNetwork(vmId: vmId)
-            vmNetworkInfo.removeValue(forKey: vmId)
-            logger.info("VM networking cleanup completed", metadata: ["vmId": .string(vmId)])
-        } catch {
-            logger.error(
-                "Failed to cleanup VM networking",
-                metadata: [
-                    "vmId": .string(vmId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
 }
 
 #else
@@ -376,7 +324,6 @@ actor FirecrackerService: HypervisorService {
 
     init(
         logger: Logger,
-        networkService: (any NetworkServiceProtocol)? = nil,
         storage: (any StorageBackend)? = nil,
         vmStoragePath: String,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
@@ -385,7 +332,10 @@ actor FirecrackerService: HypervisorService {
         // No-op for non-Linux
     }
 
-    func createVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil) async throws {
+    func createVM(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,
+        networkAttachments: [ResolvedNetworkAttachment] = []
+    ) async throws {
         throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
     }
 

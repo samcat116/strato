@@ -26,6 +26,51 @@ struct MigrateVMNetworkConfigToInterfaces: AsyncMigration {
         init() {}
     }
 
+    /// Point-in-time mapping of `vm_network_interfaces` with only the columns
+    /// that existed when this migration shipped. The live `VMNetworkInterface`
+    /// model has since grown columns (e.g. `gateway`) that are added by later
+    /// migrations, so using it here would reference columns that don't exist
+    /// yet on prepare (fresh database) or no longer exist on revert.
+    private final class MigrationInterface: Model, @unchecked Sendable {
+        static let schema = "vm_network_interfaces"
+
+        @ID(key: .id)
+        var id: UUID?
+
+        @Parent(key: "vm_id")
+        var vm: VM
+
+        @Field(key: "network")
+        var network: String
+
+        @Field(key: "mac_address")
+        var macAddress: String
+
+        @OptionalField(key: "ip_address")
+        var ipAddress: String?
+
+        @OptionalField(key: "netmask")
+        var netmask: String?
+
+        @Field(key: "device_name")
+        var deviceName: String
+
+        @Field(key: "order_index")
+        var orderIndex: Int
+
+        init() {}
+
+        init(vmID: UUID, network: String, macAddress: String, ipAddress: String?, netmask: String?) {
+            self.$vm.id = vmID
+            self.network = network
+            self.macAddress = macAddress
+            self.ipAddress = ipAddress
+            self.netmask = netmask
+            self.deviceName = "net0"
+            self.orderIndex = 0
+        }
+    }
+
     func prepare(on database: Database) async throws {
         let logger = database.logger
 
@@ -44,7 +89,7 @@ struct MigrateVMNetworkConfigToInterfaces: AsyncMigration {
                 continue
             }
 
-            let existingInterface = try await VMNetworkInterface.query(on: database)
+            let existingInterface = try await MigrationInterface.query(on: database)
                 .filter(\.$vm.$id == vmId)
                 .first()
 
@@ -54,14 +99,12 @@ struct MigrateVMNetworkConfigToInterfaces: AsyncMigration {
                 continue
             }
 
-            let interface = VMNetworkInterface(
+            let interface = MigrationInterface(
                 vmID: vmId,
                 network: "default",
                 macAddress: macAddress,
                 ipAddress: vm.ipAddress,
-                netmask: vm.networkMask,
-                deviceName: "net0",
-                orderIndex: 0
+                netmask: vm.networkMask
             )
             try await interface.save(on: database)
             migratedCount += 1
@@ -79,7 +122,7 @@ struct MigrateVMNetworkConfigToInterfaces: AsyncMigration {
         // Runs after RemoveLegacyVMNetworkFields.revert has recreated the legacy
         // columns: copy each VM's first interface back, then remove the records
         // (CreateVMNetworkInterface.revert drops the table afterwards).
-        let interfaces = try await VMNetworkInterface.query(on: database)
+        let interfaces = try await MigrationInterface.query(on: database)
             .sort(\.$orderIndex)
             .all()
 
@@ -96,6 +139,6 @@ struct MigrateVMNetworkConfigToInterfaces: AsyncMigration {
             try await vm.save(on: database)
         }
 
-        try await VMNetworkInterface.query(on: database).delete()
+        try await MigrationInterface.query(on: database).delete()
     }
 }

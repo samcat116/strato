@@ -27,6 +27,21 @@ struct TapInterfaceNameTests {
         }
     }
 
+    @Test("NIC 0 keeps the historical vmId-only name; higher indices differ but stay within limits")
+    func perNICNames() {
+        let vmId = "550e8400-e29b-41d4-a716-446655440000"
+        #expect(tapInterfaceName(for: vmId, nicIndex: 0) == tapInterfaceName(for: vmId))
+
+        var seen: Set<String> = []
+        for index in 0..<8 {
+            let name = tapInterfaceName(for: vmId, nicIndex: index)
+            #expect(name.count <= 15)
+            #expect(name.hasPrefix("tap"))
+            #expect(!seen.contains(name), "NIC \(index) collided with an earlier NIC's name")
+            seen.insert(name)
+        }
+    }
+
     @Test("TAP name is stable for the same vmId (survives process restarts)")
     func tapNameIsStable() {
         // A fixed expectation guards against an accidental change to the digest,

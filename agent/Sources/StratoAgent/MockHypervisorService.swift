@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import StratoAgentCore
 import StratoShared
 
 /// A no-op hypervisor backend used when a real driver's native library is not
@@ -32,7 +33,9 @@ actor MockHypervisorService: HypervisorService {
             ])
     }
 
-    func createVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo?) async throws {
+    func createVM(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo?, networkAttachments: [ResolvedNetworkAttachment]
+    ) async throws {
         logger.info("Creating mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
         vmIds.insert(vmId)
     }

@@ -107,6 +107,8 @@ public struct NetworkSpec: Codable, Sendable {
     /// Static IP assignment, when the control plane has allocated one.
     public let ipAddress: String?
     public let netmask: String?
+    /// Gateway of the logical network, when the control plane knows it.
+    public let gateway: String?
     public let mtu: Int?
 
     public init(
@@ -114,12 +116,14 @@ public struct NetworkSpec: Codable, Sendable {
         macAddress: String? = nil,
         ipAddress: String? = nil,
         netmask: String? = nil,
+        gateway: String? = nil,
         mtu: Int? = nil
     ) {
         self.network = network
         self.macAddress = macAddress
         self.ipAddress = ipAddress
         self.netmask = netmask
+        self.gateway = gateway
         self.mtu = mtu
     }
 }

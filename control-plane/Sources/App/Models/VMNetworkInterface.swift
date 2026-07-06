@@ -27,6 +27,11 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
     @OptionalField(key: "netmask")
     var netmask: String?
 
+    /// Gateway of the logical network, denormalized at allocation time so spec
+    /// building needs no network lookup.
+    @OptionalField(key: "gateway")
+    var gateway: String?
+
     @OptionalField(key: "mtu")
     var mtu: Int?
 
@@ -53,6 +58,7 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
         macAddress: String,
         ipAddress: String? = nil,
         netmask: String? = nil,
+        gateway: String? = nil,
         mtu: Int? = nil,
         deviceName: String = "net0",
         orderIndex: Int = 0
@@ -63,6 +69,7 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
         self.macAddress = macAddress
         self.ipAddress = ipAddress
         self.netmask = netmask
+        self.gateway = gateway
         self.mtu = mtu
         self.deviceName = deviceName
         self.orderIndex = orderIndex

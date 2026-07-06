@@ -1,0 +1,112 @@
+import Foundation
+import Logging
+import StratoAgentCore
+import StratoShared
+
+/// Resolves a VM's `NetworkSpec` list into host-side attachments before the
+/// hypervisor driver runs, and tears them down after the VM is gone.
+///
+/// This used to live copy-pasted inside each hypervisor driver (QEMU,
+/// Firecracker), each with its own hardcoded subnet and first-NIC-only
+/// limitation. Centralizing it means drivers only translate typed
+/// `NetworkAttachment`s into their native config, and a new backend gets
+/// networking for free.
+struct NetworkOrchestrator: Sendable {
+    let networkService: (any NetworkServiceProtocol)?
+    let logger: Logger
+
+    /// Realizes every NIC in `networks` (in spec order). On failure, host-side
+    /// resources of already-realized NICs are rolled back before rethrowing.
+    ///
+    /// Without a network service, every NIC degrades to `.userMode` with the
+    /// spec's addressing passed through — matching the drivers' historical
+    /// "no network service → user-mode fallback" behavior.
+    func prepareAttachments(vmId: String, networks: [NetworkSpec]) async throws -> [ResolvedNetworkAttachment] {
+        guard let networkService else {
+            if !networks.isEmpty {
+                logger.warning(
+                    "Network service not available; falling back to user-mode networking",
+                    metadata: ["vmId": .string(vmId)])
+            }
+            return networks.map { spec in
+                ResolvedNetworkAttachment(
+                    network: spec.network,
+                    attachment: .userMode,
+                    macAddress: spec.macAddress,
+                    ipAddress: spec.ipAddress,
+                    netmask: spec.netmask,
+                    gateway: spec.gateway,
+                    mtu: spec.mtu
+                )
+            }
+        }
+
+        var resolved: [ResolvedNetworkAttachment] = []
+        for (index, spec) in networks.enumerated() {
+            let config = VMNetworkConfig(
+                networkName: spec.network,
+                macAddress: spec.macAddress,
+                ipAddress: spec.ipAddress,
+                subnet: subnetCIDR(ipAddress: spec.ipAddress, netmask: spec.netmask),
+                gateway: spec.gateway
+            )
+
+            do {
+                let info = try await networkService.createVMNetwork(vmId: vmId, nicIndex: index, config: config)
+                resolved.append(
+                    ResolvedNetworkAttachment(
+                        network: info.networkName,
+                        attachment: info.attachment,
+                        macAddress: info.macAddress,
+                        // The network service may have recovered the addresses of an
+                        // existing port (agent restart, retry); its answer wins over
+                        // the spec so the guest boots with what OVN enforces.
+                        ipAddress: info.ipAddress ?? spec.ipAddress,
+                        netmask: spec.netmask,
+                        gateway: spec.gateway,
+                        mtu: spec.mtu
+                    ))
+            } catch {
+                logger.error(
+                    "Failed to realize NIC; rolling back already-realized NICs",
+                    metadata: [
+                        "vmId": .string(vmId),
+                        "nicIndex": .stringConvertible(index),
+                        "network": .string(spec.network),
+                        "error": .string(error.localizedDescription),
+                    ])
+                await teardownAttachments(vmId: vmId, count: resolved.count)
+                throw error
+            }
+        }
+
+        logger.info(
+            "VM networking prepared",
+            metadata: [
+                "vmId": .string(vmId),
+                "nics": .stringConvertible(resolved.count),
+            ])
+        return resolved
+    }
+
+    /// Best-effort teardown of the first `count` NICs of a VM. Failures are
+    /// logged, never thrown — network cleanup must not block VM deletion.
+    func teardownAttachments(vmId: String, count: Int) async {
+        guard let networkService, count > 0 else { return }
+
+        for index in 0..<count {
+            do {
+                try await networkService.detachVMFromNetwork(vmId: vmId, nicIndex: index)
+            } catch {
+                logger.error(
+                    "Failed to tear down VM NIC",
+                    metadata: [
+                        "vmId": .string(vmId),
+                        "nicIndex": .stringConvertible(index),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+        }
+    }
+
+}

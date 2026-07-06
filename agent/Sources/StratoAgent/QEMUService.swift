@@ -12,7 +12,6 @@ import SwiftQEMU
 
 actor QEMUService: HypervisorService {
     private let logger: Logger
-    private let networkService: (any NetworkServiceProtocol)?
     private let storage: (any StorageBackend)?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
@@ -27,18 +26,16 @@ actor QEMUService: HypervisorService {
 
     private var activeVMs: [String: QEMUManager] = [:]
     private var vmSpecs: [String: VMSpec] = [:]
-    private var vmNetworkInfo: [String: VMNetworkInfo] = [:]
     private var vmConsoleSocketPaths: [String: String] = [:]
     private var vmSerialSocketPaths: [String: String] = [:]
     private var pendingVMs: Set<String> = []  // Track VMs being created (to handle concurrent boot requests)
 
     init(
-        logger: Logger, networkService: (any NetworkServiceProtocol)? = nil,
+        logger: Logger,
         storage: (any StorageBackend)? = nil, vmStoragePath: String, qemuBinaryPath: String,
         firmwarePath: String? = nil, hardwareAccelerationEnabled: Bool = true
     ) {
         self.logger = logger
-        self.networkService = networkService
         self.storage = storage
         self.vmStoragePath = vmStoragePath
         self.qemuBinaryPath = qemuBinaryPath
@@ -57,7 +54,10 @@ actor QEMUService: HypervisorService {
     // MARK: - VM Lifecycle Operations
 
     /// Creates a VM from a hypervisor-neutral spec with optional image info for disk caching
-    func createVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil) async throws {
+    func createVM(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,
+        networkAttachments: [ResolvedNetworkAttachment] = []
+    ) async throws {
         // Mark VM as pending to handle concurrent boot requests
         pendingVMs.insert(vmId)
         defer { pendingVMs.remove(vmId) }
@@ -154,13 +154,10 @@ actor QEMUService: HypervisorService {
 
         let qemuManager = QEMUManager(qemuPath: qemuBinaryPath, logger: logger)
 
-        // Set up VM networking first
-        if !spec.networks.isEmpty {
-            try await setupVMNetworking(vmId: vmId, networks: spec.networks)
-        }
-
-        // Translate the neutral spec into QEMU's native configuration
-        let qemuConfig = await convertToQEMUConfiguration(spec, disks: disks, vmId: vmId)
+        // Translate the neutral spec into QEMU's native configuration. Network
+        // attachments were already realized by the agent's NetworkOrchestrator.
+        let qemuConfig = await convertToQEMUConfiguration(
+            spec, disks: disks, networkAttachments: networkAttachments, vmId: vmId)
 
         // Create VM with timeout - QMP connection can hang indefinitely
         logger.info("Starting QEMU VM creation with 30 second timeout", metadata: ["vmId": .string(vmId)])
@@ -296,16 +293,13 @@ actor QEMUService: HypervisorService {
 
         logger.info("Deleting QEMU VM", metadata: ["vmId": .string(vmId)])
 
-        // Destroy VM
+        // Destroy VM (network attachments are torn down by the agent's
+        // NetworkOrchestrator after this returns)
         try await qemuManager.destroy()
-
-        // Clean up VM networking
-        try await cleanupVMNetworking(vmId: vmId)
 
         // Clean up VM resources
         activeVMs.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
-        vmNetworkInfo.removeValue(forKey: vmId)
 
         // Clean up console socket
         if let socketPath = vmConsoleSocketPaths.removeValue(forKey: vmId) {
@@ -472,11 +466,6 @@ actor QEMUService: HypervisorService {
 
     // MARK: - VM Management Helpers
 
-    func createAndStartVM(vmId: String, spec: VMSpec) async throws {
-        try await createVM(vmId: vmId, spec: spec)
-        try await bootVM(vmId: vmId)
-    }
-
     func stopAndDeleteVM(vmId: String) async throws {
         do {
             try await shutdownVM(vmId: vmId)
@@ -614,7 +603,9 @@ actor QEMUService: HypervisorService {
         let readonly: Bool
     }
 
-    private func convertToQEMUConfiguration(_ spec: VMSpec, disks: [ResolvedDisk], vmId: String) async
+    private func convertToQEMUConfiguration(
+        _ spec: VMSpec, disks: [ResolvedDisk], networkAttachments: [ResolvedNetworkAttachment], vmId: String
+    ) async
         -> QEMUConfiguration
     {
         var qemuConfig = QEMUConfiguration()
@@ -668,33 +659,23 @@ actor QEMUService: HypervisorService {
             )
         }
 
-        // Configure networking
-        qemuConfig.networks = spec.networks.map { network in
-            // Get network info for this VM if available
-            if let networkInfo = vmNetworkInfo[vmId] {
-                // Check if we have a real TAP interface or using user-mode
-                if networkInfo.tapInterface != "n/a" {
-                    // Use TAP interface for OVN integration
-                    return QEMUNetwork(
-                        backend: "tap",
-                        model: "virtio-net-pci",
-                        macAddress: networkInfo.macAddress,
-                        options: "ifname=\(networkInfo.tapInterface),script=no,downscript=no"
-                    )
-                } else {
-                    // Use user-mode networking
-                    return QEMUNetwork(
-                        backend: "user",
-                        model: "virtio-net-pci",
-                        macAddress: networkInfo.macAddress
-                    )
-                }
-            } else {
-                // Fallback to user networking
+        // Configure networking: translate each resolved attachment into its
+        // QEMU netdev form. The typed descriptor replaces the old
+        // `tapInterface != "n/a"` sentinel branching.
+        qemuConfig.networks = networkAttachments.map { nic in
+            switch nic.attachment {
+            case .tap(let interface):
+                return QEMUNetwork(
+                    backend: "tap",
+                    model: "virtio-net-pci",
+                    macAddress: nic.macAddress,
+                    options: "ifname=\(interface),script=no,downscript=no"
+                )
+            case .userMode:
                 return QEMUNetwork(
                     backend: "user",
                     model: "virtio-net-pci",
-                    macAddress: network.macAddress
+                    macAddress: nic.macAddress
                 )
             }
         }
@@ -803,9 +784,12 @@ actor QEMUService: HypervisorService {
         logger.debug("Configured virtio-console socket at: \(consoleSocketPath)")
 
         // For disk-based boot, create cloud-init ISO to configure serial console
+        // (and static NIC addressing when the control plane allocated it).
         // Cloud-init allows configuring the guest without modifying the disk image
         let cloudInitISOPath = (vmDir as NSString).appendingPathComponent("cloud-init.iso")
-        if await CloudInitProvisioner(logger: logger).makeNoCloudISO(at: cloudInitISOPath, vmId: vmId) {
+        if await CloudInitProvisioner(logger: logger).makeNoCloudISO(
+            at: cloudInitISOPath, vmId: vmId, networkAttachments: networkAttachments)
+        {
             qemuConfig.additionalArgs.append(contentsOf: [
                 "-drive", "file=\(cloudInitISOPath),format=raw,if=virtio,readonly=on",
             ])
@@ -823,66 +807,6 @@ actor QEMUService: HypervisorService {
         return qemuConfig
     }
 
-    // MARK: - VM Network Management
-
-    private func setupVMNetworking(vmId: String, networks: [NetworkSpec]) async throws {
-        guard let networkService = networkService else {
-            logger.warning("Network service not available, skipping network setup")
-            return
-        }
-
-        logger.info("Setting up VM networking", metadata: ["vmId": .string(vmId)])
-
-        // For now, handle only the first network configuration
-        // In production, this could be expanded to handle multiple networks
-        guard let firstNetwork = networks.first else {
-            return
-        }
-
-        // Create network configuration from the spec's network reference
-        let networkConfig = VMNetworkConfig(
-            networkName: firstNetwork.network,
-            macAddress: firstNetwork.macAddress,
-            ipAddress: firstNetwork.ipAddress,
-            subnet: "192.168.1.0/24",  // Default subnet - should be configurable
-            gateway: "192.168.1.1"
-        )
-
-        // Create VM network through NetworkService
-        let networkInfo = try await networkService.createVMNetwork(vmId: vmId, config: networkConfig)
-        vmNetworkInfo[vmId] = networkInfo
-
-        logger.info(
-            "VM networking setup completed",
-            metadata: [
-                "vmId": .string(vmId),
-                "networkName": .string(networkInfo.networkName),
-                "macAddress": .string(networkInfo.macAddress),
-                "ipAddress": .string(networkInfo.ipAddress),
-            ])
-    }
-
-    private func cleanupVMNetworking(vmId: String) async throws {
-        guard let networkService = networkService else {
-            logger.debug("Network service not available, skipping network cleanup")
-            return
-        }
-
-        logger.info("Cleaning up VM networking", metadata: ["vmId": .string(vmId)])
-
-        do {
-            try await networkService.detachVMFromNetwork(vmId: vmId)
-            logger.info("VM networking cleanup completed", metadata: ["vmId": .string(vmId)])
-        } catch {
-            logger.error(
-                "Failed to cleanup VM networking",
-                metadata: [
-                    "vmId": .string(vmId),
-                    "error": .string(error.localizedDescription),
-                ])
-            // Don't throw here to avoid blocking VM deletion
-        }
-    }
 }
 
 // MARK: - QEMU Service Error Types
