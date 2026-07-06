@@ -49,7 +49,8 @@ struct IPAMServiceTests {
     func broadcastExcluded() throws {
         // /30: hosts are .1 and .2 only; .3 is broadcast.
         let allocation = try IPAMService.allocateIP(
-            networkName: "tiny", subnet: "192.168.1.0/30", gateway: nil, used: [
+            networkName: "tiny", subnet: "192.168.1.0/30", gateway: nil,
+            used: [
                 IPAMService.parseIPv4("192.168.1.1")!
             ])
         #expect(allocation.ipAddress == "192.168.1.2")
