@@ -2,11 +2,12 @@ import Foundation
 import Vapor
 import Fluent
 
-/// Ensures every persisted project has its `project#organization` relationship in
-/// SpiceDB. This backfills projects created before the creation path wrote the
-/// tuple (see issue #267): without it, project-scoped permissions that resolve
-/// via `organization->admin` (update_project, image/VM/volume creation, ...) can't
-/// resolve and the project's own org admin gets 403s.
+/// Ensures every persisted project has its `project#parent` relationship in
+/// SpiceDB, pointing at the project's root organization. This backfills projects
+/// created before the creation path wrote the tuple (see issue #267) and re-derives
+/// tuples after a schema reset: without it, project-scoped permissions that resolve
+/// via the parent organization (view_project/manage_project, image/VM/volume
+/// creation, ...) can't resolve and the project's own org admin gets 403s.
 ///
 /// The write is idempotent — an already-present tuple returns a 409 that we treat
 /// as success — so this is safe to run on every startup.
@@ -28,7 +29,7 @@ func backfillProjectOrganizationRelationships(_ app: Application) async throws {
             try await app.spicedb.writeRelationship(
                 entity: "project",
                 entityId: projectId.uuidString,
-                relation: "organization",
+                relation: "parent",
                 subject: "organization",
                 subjectId: organizationId.uuidString
             )

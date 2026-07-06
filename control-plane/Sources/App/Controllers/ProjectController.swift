@@ -112,7 +112,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has access to project
-        try await OrganizationAccessService.requireProjectMember(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectMember(project: project, on: req)
 
         // Get VM count
         let vmCount = try await VM.query(on: req.db)
@@ -145,7 +145,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has admin access to project
-        try await OrganizationAccessService.requireProjectAdmin(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
 
         // Update fields
         if let name = updateRequest.name {
@@ -233,7 +233,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has admin access to project
-        try await OrganizationAccessService.requireProjectAdmin(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
 
         // Check for dependent resources
         let vmCount = try await VM.query(on: req.db)
@@ -260,7 +260,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         // Return the full project set within the organization's hierarchy so
         // callers (e.g. the project switcher) can reach OU-scoped projects too.
@@ -315,7 +315,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has access to create projects in organization
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         // Check name uniqueness within organization
         try await validateProjectNameUniqueness(
@@ -349,7 +349,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         // Get projects in OU
         let projects = try await Project.query(on: req.db)
@@ -385,7 +385,7 @@ struct ProjectController: RouteCollection {
         let createRequest = try req.content.decode(CreateProjectRequest.self)
 
         // Verify user has access to create projects in organization
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         // Verify OU exists and belongs to organization
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
@@ -434,7 +434,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has admin access to project
-        try await OrganizationAccessService.requireProjectAdmin(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
 
         // Add environment if not already present
         project.addEnvironment(envRequest.environment)
@@ -463,7 +463,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has admin access to project
-        try await OrganizationAccessService.requireProjectAdmin(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
 
         // Check if any VMs use this environment
         let vmsUsingEnv = try await VM.query(on: req.db)
@@ -505,7 +505,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has access to project
-        try await OrganizationAccessService.requireProjectMember(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectMember(project: project, on: req)
 
         // Get all VMs in project
         let vms = try await VM.query(on: req.db)
@@ -529,7 +529,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has access to project
-        try await OrganizationAccessService.requireProjectMember(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectMember(project: project, on: req)
 
         // Build full path with names
         var pathComponents: [ProjectPathComponent] = []
@@ -608,7 +608,7 @@ struct ProjectController: RouteCollection {
         }
 
         // Verify user has admin access to current location
-        try await OrganizationAccessService.requireProjectAdmin(user: user, project: project, on: req.db)
+        try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
 
         // Capture the current root organization so we can migrate the SpiceDB
         // project→organization tuple if the destination resolves to a different one.
@@ -636,9 +636,8 @@ struct ProjectController: RouteCollection {
         // just membership — otherwise a member could relocate projects into orgs
         // they do not administer.
         try await OrganizationAccessService.requireAdmin(
-            user: user,
             organizationID: destinationOrganizationID,
-            on: req.db
+            on: req
         )
 
         // Check name uniqueness at destination
@@ -668,7 +667,7 @@ struct ProjectController: RouteCollection {
                 try await req.spicedb.deleteRelationship(
                     entity: "project",
                     entityId: projectID.uuidString,
-                    relation: "organization",
+                    relation: "parent",
                     subject: "organization",
                     subjectId: oldRootOrganizationID.uuidString
                 )
@@ -677,7 +676,7 @@ struct ProjectController: RouteCollection {
                 try await req.spicedb.writeRelationship(
                     entity: "project",
                     entityId: projectID.uuidString,
-                    relation: "organization",
+                    relation: "parent",
                     subject: "organization",
                     subjectId: newRootOrganizationID.uuidString
                 )
@@ -765,7 +764,7 @@ struct ProjectController: RouteCollection {
         try await req.spicedb.writeRelationship(
             entity: "project",
             entityId: projectId.uuidString,
-            relation: "organization",
+            relation: "parent",
             subject: "organization",
             subjectId: rootOrganizationID.uuidString
         )
