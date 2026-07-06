@@ -103,6 +103,10 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "cmdline")
     var cmdline: String?
 
+    // SSH public key authorized for the guest's default user via cloud-init.
+    @OptionalField(key: "ssh_public_key")
+    var sshPublicKey: String?
+
     @OptionalField(key: "firmware_path")
     var firmwarePath: String?
 

@@ -45,6 +45,7 @@ export function CreateVMDialog({
     cpu: "2",
     memory: "4",
     disk: "50",
+    sshPublicKey: "",
   });
 
   // The VM is created in the project selected in the header switcher.
@@ -111,6 +112,7 @@ export function CreateVMDialog({
         cpu: parseInt(formData.cpu) || 2,
         memory: (parseInt(formData.memory) || 4) * GB,
         disk: (parseInt(formData.disk) || 50) * GB,
+        sshPublicKey: formData.sshPublicKey.trim() || undefined,
       });
       watch(operation, formData.name);
       toast.success(`Creating VM "${formData.name}"`);
@@ -125,6 +127,7 @@ export function CreateVMDialog({
         cpu: "2",
         memory: "4",
         disk: "50",
+        sshPublicKey: "",
       });
       setSourceType("image");
       setQuotaError(null);
@@ -264,6 +267,27 @@ export function CreateVMDialog({
                 className="bg-gray-900 border-gray-700 text-gray-100"
                 disabled={isLoading}
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="sshPublicKey" className="text-gray-200">
+                SSH Public Key{" "}
+                <span className="text-gray-500">(optional)</span>
+              </Label>
+              <Input
+                id="sshPublicKey"
+                placeholder="ssh-ed25519 AAAA... user@host"
+                value={formData.sshPublicKey}
+                onChange={(e) =>
+                  setFormData({ ...formData, sshPublicKey: e.target.value })
+                }
+                className="bg-gray-900 border-gray-700 text-gray-100 font-mono text-xs"
+                disabled={isLoading}
+              />
+              <p className="text-xs text-gray-500">
+                Authorized for the guest&apos;s default user via cloud-init.
+                Leave blank for no SSH login.
+              </p>
             </div>
 
             {/* Source Type Selector */}
