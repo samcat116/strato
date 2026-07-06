@@ -94,12 +94,18 @@ actor FirecrackerService: HypervisorService {
 
             do {
                 // Direct-kernel boot artifacts (kernel, optional initramfs) are
-                // opaque blobs fetched into the cache as-is.
+                // opaque blobs fetched into the cache as-is. When the image
+                // supplies its own kernel it fully owns the direct-kernel boot:
+                // drop any stale spec initramfs so the image kernel is never
+                // paired with a legacy/nonexistent initrd, then use the image's
+                // initramfs only if it provides one.
                 if imageInfo.artifact(ofKind: .kernel) != nil, let imageSource = imageSource {
                     kernelPath = try await imageSource.localImagePath(for: imageInfo, kind: .kernel)
-                }
-                if imageInfo.artifact(ofKind: .initramfs) != nil, let imageSource = imageSource {
-                    initramfsPath = try await imageSource.localImagePath(for: imageInfo, kind: .initramfs)
+                    if imageInfo.artifact(ofKind: .initramfs) != nil {
+                        initramfsPath = try await imageSource.localImagePath(for: imageInfo, kind: .initramfs)
+                    } else {
+                        initramfsPath = nil
+                    }
                 }
 
                 // Firecracker attaches drives as raw block devices. The storage
@@ -116,12 +122,17 @@ actor FirecrackerService: HypervisorService {
                 )
                 rootDrive = (id: "rootfs", path: attachment.path, readOnly: false)
             } catch {
+                // Realizing the image's boot artifacts is all-or-nothing: a
+                // fetched kernel without its matching rootfs would boot the guest
+                // against the wrong or no root filesystem. Fail the create rather
+                // than falling through to the legacy spec-volume path.
                 logger.error(
                     "Failed to realize boot artifacts from image",
                     metadata: [
                         "vmId": .string(vmId),
                         "error": .string(error.localizedDescription),
                     ])
+                throw error
             }
         }
 
