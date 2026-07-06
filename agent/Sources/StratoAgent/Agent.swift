@@ -284,6 +284,7 @@ actor Agent {
         hypervisorServices[.firecracker] = FirecrackerService(
             logger: logger,
             storage: storageBackend,
+            imageSource: imageCacheService,
             vmStoragePath: vmStoragePath,
             firecrackerBinaryPath: firecrackerBinaryPath,
             socketDirectory: firecrackerSocketDir

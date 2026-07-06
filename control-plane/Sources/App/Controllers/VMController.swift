@@ -298,6 +298,8 @@ struct VMController: RouteCollection {
             guard let foundImage = try await Image.find(imageId, on: req.db) else {
                 throw Abort(.badRequest, reason: "Image not found")
             }
+            // Load artifacts for the hypervisor-compatibility check below.
+            try await foundImage.$artifacts.load(on: req.db)
 
             // Verify image is ready
             guard foundImage.status == .ready else {
@@ -404,6 +406,22 @@ struct VMController: RouteCollection {
             vm.cmdline = cmdlineValue
             // Link VM to source image
             vm.$sourceImage.id = image.id
+
+            // When the image carries a typed artifact set, it must include what
+            // the target hypervisor needs (a disk image for QEMU; a kernel +
+            // rootfs for Firecracker of the image's architecture). Images with
+            // no artifacts (legacy, pre-backfill) are left permissive — their
+            // compatibility is unknown, matching pre-#214 behavior.
+            let loadedArtifacts = image.$artifacts.value ?? []
+            if !loadedArtifacts.isEmpty, !image.isUsable(by: vm.hypervisorType) {
+                let available = image.compatibleHypervisors()
+                    .map(\.rawValue).sorted().joined(separator: ", ")
+                throw Abort(
+                    .badRequest,
+                    reason: "Image '\(image.name)' (\(image.architecture.rawValue)) is not usable by "
+                        + "\(vm.hypervisorType.rawValue). Compatible hypervisors: "
+                        + (available.isEmpty ? "none" : available))
+            }
         } else {
             throw Abort(.internalServerError, reason: "Neither template nor image available")
         }

@@ -214,35 +214,70 @@ struct VMSpecBuilder {
             throw Abort(.internalServerError, reason: "Image ID is required")
         }
 
-        guard let checksum = image.checksum else {
-            throw Abort(.internalServerError, reason: "Image checksum is required")
-        }
-
         guard image.status == .ready else {
             throw Abort(.badRequest, reason: "Image is not ready for use")
         }
 
-        // Generate signed URL for agent download
-        let downloadURL = URLSigningService.signImageDownloadURL(
-            imageId: imageId,
-            projectId: image.$project.id,
-            agentName: agentName,
-            baseURL: controlPlaneURL,
-            expiresIn: expiresIn,
-            signingKey: signingKey
-        )
-
-        // Calculate expiration date for agent awareness
+        let projectId = image.$project.id
         let expiresAt = Date().addingTimeInterval(expiresIn)
 
+        func sign(_ kind: ArtifactKind?) -> String {
+            URLSigningService.signImageDownloadURL(
+                imageId: imageId,
+                projectId: projectId,
+                agentName: agentName,
+                baseURL: controlPlaneURL,
+                expiresIn: expiresIn,
+                signingKey: signingKey,
+                artifactKind: kind
+            )
+        }
+
+        // One signed download descriptor per typed artifact.
+        let artifacts = (image.$artifacts.value ?? []).map { artifact in
+            ArtifactInfo(
+                kind: artifact.kind,
+                format: artifact.format?.rawValue,
+                filename: artifact.filename,
+                checksum: artifact.checksum,
+                size: artifact.size,
+                downloadURL: sign(artifact.kind),
+                expiresAt: expiresAt
+            )
+        }
+
+        // Top-level fields describe the primary disk for the QEMU disk path and
+        // legacy agents. Prefer the disk-image artifact; fall back to any artifact,
+        // then to the image's own single-file columns.
+        let primary = artifacts.first { $0.kind == .diskImage } ?? artifacts.first
+        if let primary {
+            return ImageInfo(
+                imageId: imageId,
+                projectId: projectId,
+                filename: primary.filename,
+                checksum: primary.checksum,
+                size: primary.size,
+                downloadURL: primary.downloadURL,
+                expiresAt: expiresAt,
+                architecture: image.architecture,
+                artifacts: artifacts
+            )
+        }
+
+        // No artifacts (image predates the backfill): fall back to legacy fields.
+        guard let checksum = image.checksum else {
+            throw Abort(.internalServerError, reason: "Image checksum is required")
+        }
         return ImageInfo(
             imageId: imageId,
-            projectId: image.$project.id,
+            projectId: projectId,
             filename: image.filename,
             checksum: checksum,
             size: image.size,
-            downloadURL: downloadURL,
-            expiresAt: expiresAt
+            downloadURL: sign(nil),
+            expiresAt: expiresAt,
+            architecture: image.architecture,
+            artifacts: []
         )
     }
 }

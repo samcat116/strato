@@ -153,15 +153,16 @@ public actor FileSystemStorageBackend: StorageBackend {
         return try await materializeDisk(
             at: volumePath(volumeId: volumeId, format: format),
             from: imageInfo,
-            format: format
+            format: format,
+            artifactKind: .diskImage
         )
     }
 
     // MARK: - Image Materialization
 
-    public func materializeDisk(at path: String, from imageInfo: ImageInfo, format: DiskFormat) async throws
-        -> DiskAttachment
-    {
+    public func materializeDisk(
+        at path: String, from imageInfo: ImageInfo, format: DiskFormat, artifactKind: ArtifactKind = .diskImage
+    ) async throws -> DiskAttachment {
         // Idempotent: a disk already materialized for this path (e.g. a VM
         // re-create after an agent restart) is reused, not overwritten. The
         // final path only ever holds a complete disk because materialization
@@ -176,7 +177,7 @@ public actor FileSystemStorageBackend: StorageBackend {
             throw StorageBackendError.imageSourceUnavailable
         }
 
-        let sourcePath = try await imageSource.localImagePath(for: imageInfo)
+        let sourcePath = try await imageSource.localImagePath(for: imageInfo, kind: artifactKind)
         let sourceFormat = try await detectFormat(of: sourcePath)
 
         try FileManager.default.createDirectory(

@@ -211,6 +211,11 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateImage())
     app.migrations.add(AddImageToVM())
 
+    // Image metadata: architecture + typed artifact sets (#214)
+    app.migrations.add(AddArchitectureToImage())
+    app.migrations.add(CreateImageArtifact())
+    app.migrations.add(BackfillImageArtifacts())
+
     // Hypervisor type migration
     app.migrations.add(AddHypervisorTypeToVM())
     app.migrations.add(AddHypervisorTypeToAgent())

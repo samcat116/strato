@@ -153,6 +153,10 @@ actor VolumeService {
         // ImageInfo can only be built after agent selection.
         var sourceImageInfo: ImageInfo?
         if let image = sourceImage {
+            // The artifact set drives which signed URLs are emitted; load it (no-op
+            // if already eager-loaded) so buildImageInfo doesn't fall back to the
+            // legacy single-file branch and drop the typed artifacts.
+            try await image.$artifacts.load(on: app.db)
             let controlPlaneURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
             let signingKey = try URLSigningService.getSigningKey(from: app)
             sourceImageInfo = try VMSpecBuilder.buildImageInfo(

@@ -3,6 +3,7 @@ import Vapor
 import Crypto
 import Fluent
 import NIOConcurrencyHelpers
+import StratoShared
 
 /// Service for signing and verifying URLs for agent image downloads
 struct URLSigningService {
@@ -27,7 +28,8 @@ struct URLSigningService {
         agentName: String,
         baseURL: String,
         expiresIn: TimeInterval = defaultExpiration,
-        signingKey: String
+        signingKey: String,
+        artifactKind: ArtifactKind? = nil
     ) -> String {
         let expires = Int(Date().timeIntervalSince1970 + expiresIn)
         let path = "/api/projects/\(projectId)/images/\(imageId)/download"
@@ -39,13 +41,18 @@ struct URLSigningService {
             projectId: projectId,
             agentName: agentName,
             expires: expires,
-            signingKey: signingKey
+            signingKey: signingKey,
+            artifactKind: artifactKind
         )
 
         // URL-encode the agent name
         let encodedAgentName = agentName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? agentName
 
-        return "\(baseURL)\(path)?agent=\(encodedAgentName)&expires=\(expires)&sig=\(signature)"
+        var url = "\(baseURL)\(path)?agent=\(encodedAgentName)&expires=\(expires)&sig=\(signature)"
+        if let artifactKind {
+            url += "&artifact=\(artifactKind.rawValue)"
+        }
+        return url
     }
 
     /// Verifies a signed URL's signature
@@ -65,7 +72,8 @@ struct URLSigningService {
         agentName: String,
         expires: Int,
         signature: String,
-        signingKey: String
+        signingKey: String,
+        artifactKind: ArtifactKind? = nil
     ) -> Bool {
         // Check expiration first
         guard expires > Int(Date().timeIntervalSince1970) else {
@@ -79,24 +87,33 @@ struct URLSigningService {
             projectId: projectId,
             agentName: agentName,
             expires: expires,
-            signingKey: signingKey
+            signingKey: signingKey,
+            artifactKind: artifactKind
         )
 
         // Constant-time comparison to prevent timing attacks
         return constantTimeCompare(signature.lowercased(), expectedSignature.lowercased())
     }
 
-    /// Generates HMAC-SHA256 signature for the given parameters
+    /// Generates HMAC-SHA256 signature for the given parameters.
+    ///
+    /// When `artifactKind` is nil the signed payload is exactly the legacy
+    /// `path:imageId:projectId:agentName:expires` tuple, so URLs signed before
+    /// per-artifact support remain valid. A non-nil kind appends `:{kind}`,
+    /// binding the signature to that specific artifact.
     private static func generateSignature(
         path: String,
         imageId: UUID,
         projectId: UUID,
         agentName: String,
         expires: Int,
-        signingKey: String
+        signingKey: String,
+        artifactKind: ArtifactKind? = nil
     ) -> String {
-        // Data to sign: path:imageId:projectId:agentName:expires
-        let dataToSign = "\(path):\(imageId):\(projectId):\(agentName):\(expires)"
+        var dataToSign = "\(path):\(imageId):\(projectId):\(agentName):\(expires)"
+        if let artifactKind {
+            dataToSign += ":\(artifactKind.rawValue)"
+        }
 
         // Generate HMAC-SHA256
         let key = SymmetricKey(data: Data(signingKey.utf8))
