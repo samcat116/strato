@@ -697,7 +697,12 @@ actor AgentService {
             .filter(\.$hypervisorId == agentId)
             .with(\.$volumes)
             .with(\.$networkInterfaces)
-            .with(\.$sourceImage)
+            // Artifacts loaded too so buildImageInfo emits the typed artifact
+            // set (kernel/rootfs distribution, issue #214) rather than the
+            // legacy single-file fallback.
+            .with(\.$sourceImage) { image in
+                image.with(\.$artifacts)
+            }
             .all()
 
         var entries: [DesiredVMState] = []
