@@ -264,10 +264,21 @@ public actor Reconciler {
                 failure = ConvergenceFailure(generation: item.generation, attempts: 0, lastError: "")
             }
             failure.attempts += 1
+            // A permanent failure (host misconfiguration: missing binary,
+            // permissions, disk full) cannot succeed on retry — exhaust the
+            // budget now so the remaining attempts aren't burned re-running a
+            // doomed convergence. A new generation (operator retry after
+            // fixing the host) still re-arms the loop as usual.
+            let classification = (error as? ClassifiableError)?.failureClassification ?? .transient
+            if classification == .permanent {
+                failure.attempts = max(failure.attempts, Self.maxAttemptsPerGeneration)
+            }
             failure.lastError = error.localizedDescription
             failures[item.vmId] = failure
             logger.error(
-                "VM convergence failed",
+                classification == .permanent
+                    ? "VM convergence failed permanently; not retrying this generation (operator action required)"
+                    : "VM convergence failed",
                 metadata: [
                     "vmId": .string(item.vmId),
                     "generation": .stringConvertible(item.generation),

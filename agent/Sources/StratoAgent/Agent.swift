@@ -123,11 +123,15 @@ actor Agent {
     // registration: a Linux agent configured for user-mode networking must not
     // claim OVN/VM-to-VM support.
     private var effectiveNetworkMode: NetworkMode = .user
-    // Whether the selected network service connected successfully at startup.
-    // An OVN agent whose OVN/OVS connection failed must not advertise
+    // Whether the selected network service is currently connected. An OVN
+    // agent whose OVN/OVS connection failed must not advertise
     // ovn_networking, or the scheduler would place VM-to-VM workloads on a
-    // backend that will throw notConnected.
+    // backend that will throw notConnected. A failed connection is retried in
+    // the background (`networkConnectTask`) and again at each registration,
+    // so a fixed host recovers the capability without a restart.
     private var networkServiceConnected = false
+    // Background retry loop for a network service that failed to connect.
+    private var networkConnectTask: Task<Void, Never>?
     private let imageCachePath: String?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
@@ -251,15 +255,13 @@ actor Agent {
             effectiveNetworkMode = .user
         }
 
-        do {
-            if let service = networkService {
-                try await service.connect()
-                networkServiceConnected = true
-                logger.info("Network service connected successfully")
-            }
-        } catch {
-            logger.warning("Failed to connect to network service: \(error.localizedDescription)")
-            logger.warning("VM networking will be limited")
+        networkServiceConnected = await connectNetworkService()
+        if !networkServiceConnected {
+            logger.warning("VM networking will be limited until the network service connects")
+            // Keep retrying in the background: OVN/OVS coming up after the
+            // agent (boot ordering, or an operator installing it) restores
+            // networking without an agent restart.
+            startNetworkReconnectLoop()
         }
 
         // Initialize image cache service
@@ -408,6 +410,9 @@ actor Agent {
         reconnectTask?.cancel()
         reconnectTask = nil
 
+        networkConnectTask?.cancel()
+        networkConnectTask = nil
+
         // Fail any in-flight registration wait so a caller parked on it (and its
         // timeout timer) doesn't linger past shutdown.
         if let continuation = takeRegistrationContinuation() {
@@ -529,13 +534,29 @@ actor Agent {
 
     private func registerWithControlPlane() async throws {
         let resources = await getAgentResources()
+
+        // A network service that failed to connect earlier may be fixable by
+        // now (OVS installed, ovn-controller restarted); retry once before
+        // computing the networking capability so a fixed host re-advertises
+        // ovn_networking on reconnect instead of after a restart.
+        if networkService != nil, !networkServiceConnected {
+            networkServiceConnected = await connectNetworkService()
+        }
+
         // Probe on every registration (initial and reconnect) so the control
         // plane sees the host as it is now, not as it was at process start —
         // e.g. Firecracker installed or /dev/kvm permissions fixed since then.
-        let hypervisors = HypervisorProbe.probeAll(
-            qemuBinaryPath: qemuBinaryPath,
-            firecrackerBinaryPath: firecrackerBinaryPath
-        )
+        // The host preflight (storage directories, qemu-img, firmware,
+        // OVN/OVS dependencies) runs on the same cadence and gates the
+        // per-hypervisor probes: a host that cannot store VM disks must not
+        // advertise any hypervisor, whatever the binary probes say.
+        let preflight = runHostPreflight()
+        logHostPreflight(preflight)
+        let hypervisors = preflight.gate(
+            HypervisorProbe.probeAll(
+                qemuBinaryPath: qemuBinaryPath,
+                firecrackerBinaryPath: firecrackerBinaryPath
+            ))
         let networkCapability = currentNetworkCapability()
         let capabilities = getAgentCapabilities(hypervisors: hypervisors, networkCapability: networkCapability)
 
@@ -820,6 +841,141 @@ actor Agent {
             try await client.sendMessage(message)
         }
         logger.info("Unregistration message sent to control plane")
+    }
+
+    // MARK: - Host preflight
+
+    /// Runs the host-readiness checks against this agent's resolved
+    /// configuration. Called at every registration (initial and reconnect) so
+    /// the reported capabilities always reflect the host as it is now.
+    private func runHostPreflight() -> HostPreflight.Report {
+        #if os(Linux)
+        let firecrackerSocketDirectory: String? = firecrackerSocketDir
+        #else
+        let firecrackerSocketDirectory: String? = nil
+        #endif
+
+        // Mirror QEMUService's firmware resolution: explicit config first,
+        // then the platform's default candidates for this architecture.
+        #if arch(arm64)
+        let resolvedFirmwarePath = firmwarePath ?? AgentConfig.defaultFirmwarePathARM64
+        #else
+        let resolvedFirmwarePath = firmwarePath ?? AgentConfig.defaultFirmwarePathX86_64
+        #endif
+
+        return HostPreflight.run(
+            HostPreflight.Inputs(
+                vmStoragePath: vmStoragePath,
+                volumeStoragePath: FileSystemStorageBackend.defaultStoragePath,
+                imageCachePath: imageCachePath ?? ImageCacheService.defaultCachePath,
+                qemuImgPath: FileSystemStorageBackend.defaultQemuImgPath,
+                firecrackerSocketDirectory: firecrackerSocketDirectory,
+                firmwarePath: resolvedFirmwarePath,
+                ovnMode: effectiveNetworkMode == .ovn
+            ))
+    }
+
+    /// Logs every failed preflight check with its remediation — gating
+    /// failures as errors, advisory ones as warnings — so a misconfigured
+    /// host explains itself at startup instead of failing VM operations
+    /// minutes later.
+    private func logHostPreflight(_ report: HostPreflight.Report) {
+        for failure in report.failures {
+            let message: Logger.Message = "Host preflight failed: \(failure.detail ?? failure.kind.rawValue)"
+            let metadata: Logger.Metadata = ["check": .string(failure.kind.rawValue)]
+            switch failure.severity {
+            case .gating:
+                logger.error(message, metadata: metadata)
+            case .advisory:
+                logger.warning(message, metadata: metadata)
+            }
+        }
+    }
+
+    // MARK: - Network service connection
+
+    private struct NetworkConnectTimeout: Error, LocalizedError {
+        let seconds: Int64
+        var errorDescription: String? {
+            "network service connect timed out after \(seconds)s — are the OVN/OVS daemons responsive?"
+        }
+    }
+
+    /// Attempts to connect the network service, bounded by a timeout so a
+    /// hung OVN/OVS database socket cannot stall agent startup indefinitely
+    /// (the underlying connect has no deadline of its own). Returns whether
+    /// the service is connected.
+    private func connectNetworkService(timeoutSeconds: Int64 = 15) async -> Bool {
+        guard let service = networkService else { return false }
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask { try await service.connect() }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(timeoutSeconds))
+                    throw NetworkConnectTimeout(seconds: timeoutSeconds)
+                }
+                defer { group.cancelAll() }
+                try await group.next()
+            }
+            logger.info("Network service connected successfully")
+            return true
+        } catch {
+            logger.warning("Failed to connect to network service: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Starts the background loop that keeps retrying a failed network
+    /// service connection with backoff. Guarded against duplicates.
+    private func startNetworkReconnectLoop() {
+        guard networkConnectTask == nil else { return }
+        networkConnectTask = Task { [weak self] in
+            await self?.runNetworkReconnectLoop()
+        }
+    }
+
+    /// Retries the network service connection with exponential backoff. On
+    /// success, re-registers with the control plane (registration is an
+    /// idempotent upsert) so the recovered networking capability is
+    /// advertised immediately instead of after the next reconnect or restart.
+    private func runNetworkReconnectLoop() async {
+        defer { networkConnectTask = nil }
+
+        var delaySeconds = 5.0
+        let maxDelaySeconds = 60.0
+
+        while !shutdownRequested, !networkServiceConnected {
+            do {
+                try await Task.sleep(for: .seconds(delaySeconds))
+            } catch {
+                return  // cancelled (agent stopping)
+            }
+            guard !shutdownRequested else { return }
+
+            // Reset any half-open state left by the failed (or timed-out)
+            // attempt before dialing again.
+            if let service = networkService {
+                await service.disconnect()
+            }
+
+            if await connectNetworkService() {
+                networkServiceConnected = true
+                logger.info("Network service connected after retry")
+                if assignedAgentID != nil {
+                    do {
+                        try await registerWithControlPlane()
+                        logger.info("Re-registered with control plane to advertise recovered networking capability")
+                    } catch {
+                        logger.warning(
+                            "Could not refresh registration after network recovery; capability updates on next reconnect: \(error)"
+                        )
+                    }
+                }
+                return
+            }
+
+            delaySeconds = min(delaySeconds * 2, maxDelaySeconds)
+        }
     }
 
     // MARK: - Reconnection

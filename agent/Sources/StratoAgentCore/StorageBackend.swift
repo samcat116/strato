@@ -151,6 +151,10 @@ public enum StorageBackendError: Error, LocalizedError, Sendable {
     case volumeNotFound(String)
     case imageSourceUnavailable
     case unsupportedFormat(String)
+    /// The host itself is the problem (qemu-img missing, permission denied,
+    /// disk full): retrying cannot succeed until an operator fixes it, so the
+    /// message must carry the remediation.
+    case hostMisconfiguration(String)
 
     public var errorDescription: String? {
         switch self {
@@ -172,6 +176,8 @@ public enum StorageBackendError: Error, LocalizedError, Sendable {
             return "Image source not available: cannot materialize a disk from an image"
         case .unsupportedFormat(let format):
             return "Unsupported disk format: \(format)"
+        case .hostMisconfiguration(let reason):
+            return "Host misconfiguration: \(reason)"
         }
     }
 }

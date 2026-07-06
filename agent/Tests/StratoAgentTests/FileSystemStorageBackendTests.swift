@@ -130,6 +130,53 @@ struct FileSystemStorageBackendTests {
         }
     }
 
+    @Test func qemuImgDiskFullIsClassifiedAsPermanentHostProblem() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = SubprocessRecorder()
+        await recorder.stub(
+            subcommand: "create",
+            result: ProcessResult(
+                terminationStatus: 1, standardOutput: Data(),
+                standardError: Data("qemu-img: vol: No space left on device".utf8)))
+        let backend = makeBackend(root: root, recorder: recorder)
+
+        do {
+            _ = try await backend.createVolume(volumeId: "vol-1", sizeBytes: 42, format: .qcow2)
+            Issue.record("expected createVolume to throw")
+        } catch let error as StorageBackendError {
+            #expect(error.failureClassification == .permanent)
+            let description = error.localizedDescription
+            #expect(description.contains("no space left on device"))
+        }
+    }
+
+    @Test func qemuImgSpawnFailureIsClassifiedWithInstallHint() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        struct SpawnError: Error {}
+        let backend = FileSystemStorageBackend(
+            logger: Logger(label: "test"),
+            volumeStoragePath: root,
+            qemuImgPath: "/nonexistent/qemu-img",
+            imageSource: nil,
+            runSubprocess: { _, _ in throw SpawnError() }
+        )
+
+        do {
+            _ = try await backend.createVolume(volumeId: "vol-1", sizeBytes: 42, format: .qcow2)
+            Issue.record("expected createVolume to throw")
+        } catch let error as StorageBackendError {
+            #expect(error.failureClassification == .permanent)
+            guard case .hostMisconfiguration(let reason) = error else {
+                Issue.record("expected hostMisconfiguration, got \(error)")
+                return
+            }
+            #expect(reason.contains("qemu-utils"))
+            #expect(reason.contains("/nonexistent/qemu-img"))
+        }
+    }
+
     @Test func materializeDiskCopiesWhenFormatsMatch() async throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }

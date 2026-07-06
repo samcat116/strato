@@ -299,6 +299,38 @@ struct ReconciliationTests {
         #expect(clearedError == nil)
     }
 
+    @Test("Permanent failures exhaust the attempt cap on the first attempt")
+    func permanentFailureStopsRetriesImmediately() async {
+        let vmId = UUID()
+        let actuator = MockActuator()
+        await actuator.setFailure(StorageBackendError.hostMisconfiguration("qemu-img missing"))
+        let reconciler = makeReconciler(actuator)
+        let message = Self.sync([Self.desired(vmId, status: .running, generation: 1)])
+
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(1)
+
+        // Re-driving the same generation is pointless for a host problem —
+        // the convergence must not run again.
+        await reconciler.apply(message)
+        await reconciler.apply(message)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        let reports = await actuator.reportCount
+        #expect(reports == 1)
+        let lastError = await reconciler.lastError(for: vmId.uuidString)
+        #expect(lastError?.contains("qemu-img missing") == true)
+
+        // A new generation (operator retry after fixing the host) re-arms
+        // the loop exactly like a capped transient failure.
+        await actuator.setFailure(nil)
+        await reconciler.apply(Self.sync([Self.desired(vmId, status: .running, generation: 2)]))
+        _ = await actuator.waitForReports(2)
+        let performed = await actuator.performed
+        #expect(performed.map(\.step) == [.create, .boot])
+        let clearedError = await reconciler.lastError(for: vmId.uuidString)
+        #expect(clearedError == nil)
+    }
+
     @Test("Undesired-VM deletes are exempt from the attempt cap")
     func undesiredDeleteRetriesPastCap() async {
         struct Boom: Error {}

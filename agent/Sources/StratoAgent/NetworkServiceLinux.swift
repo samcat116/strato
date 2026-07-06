@@ -545,14 +545,21 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         return CommandResult(status: process.terminationStatus, output: output)
     }
 
-    /// Runs a command and throws `NetworkError.tapError` on a non-zero exit.
+    /// Runs a command and throws `NetworkError.tapError` on a non-zero exit,
+    /// appending the remediation when the output points at a host problem
+    /// (missing privileges) rather than a bad invocation.
     @discardableResult
     private func run(_ command: String, _ arguments: [String]) throws -> String {
         let result = try runProcess(command, arguments)
         if result.status != 0 {
             let detail = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-            throw NetworkError.tapError(
-                "`\(command) \(arguments.joined(separator: " "))` failed (exit \(result.status)): \(detail)")
+            var message = "`\(command) \(arguments.joined(separator: " "))` failed (exit \(result.status)): \(detail)"
+            if detail.contains("Operation not permitted") || detail.contains("Permission denied") {
+                message +=
+                    " — the agent needs root or CAP_NET_ADMIN to manage TAP devices and OVS ports; "
+                    + "run it as root or grant the capability (e.g. systemd AmbientCapabilities=CAP_NET_ADMIN)."
+            }
+            throw NetworkError.tapError(message)
         }
         return result.output
     }
@@ -624,6 +631,25 @@ enum NetworkError: Error, LocalizedError, Sendable {
             return "TAP interface error: \(message)"
         case .platformNotSupported(let message):
             return "Platform not supported: \(message)"
+        }
+    }
+}
+
+extension NetworkError: ClassifiableError {
+    var failureClassification: FailureClassification {
+        switch self {
+        case .platformNotSupported, .invalidConfiguration:
+            return .permanent
+        case .tapError(let message):
+            // A privilege problem can only be fixed by an operator; a plain
+            // command failure might be a transient device/OVS hiccup.
+            let isPrivilegeProblem =
+                message.contains("Operation not permitted") || message.contains("Permission denied")
+            return isPrivilegeProblem ? .permanent : .transient
+        case .notConnected, .networkNotFound, .bridgeNotFound, .ovnError, .ovsError:
+            // OVN/OVS may come back (the agent reconnects in the background),
+            // so these stay retryable.
+            return .transient
         }
     }
 }

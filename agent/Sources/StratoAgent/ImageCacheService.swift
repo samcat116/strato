@@ -154,6 +154,7 @@ actor ImageCacheService {
         try await downloadArtifact(
             from: artifact.downloadURL,
             checksum: artifact.checksum,
+            sizeBytes: artifact.size,
             imageId: imageInfo.imageId,
             kind: kind,
             to: cachedPath
@@ -179,38 +180,13 @@ actor ImageCacheService {
     private func downloadArtifact(
         from downloadURL: String,
         checksum: String,
+        sizeBytes: Int64,
         imageId: UUID,
         kind: ArtifactKind,
         to localPath: String
     ) async throws {
-        let directoryPath = (localPath as NSString).deletingLastPathComponent
-        try FileManager.default.createDirectory(
-            atPath: directoryPath,
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
-
-        guard let url = URL(string: downloadURL) else {
-            throw ImageCacheError.invalidURL(downloadURL)
-        }
-
-        let (tempURL, response) = try await URLSession.shared.download(from: url)
-
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-            throw ImageCacheError.downloadFailed("HTTP \(statusCode)")
-        }
-
-        if FileManager.default.fileExists(atPath: localPath) {
-            try FileManager.default.removeItem(atPath: localPath)
-        }
-        try FileManager.default.moveItem(at: tempURL, to: URL(fileURLWithPath: localPath))
-
-        let actualChecksum = try computeChecksum(filePath: localPath)
-        guard actualChecksum.lowercased() == checksum.lowercased() else {
-            try? FileManager.default.removeItem(atPath: localPath)
-            throw ImageCacheError.checksumMismatch(expected: checksum, actual: actualChecksum)
-        }
+        try await fetchVerifiedFile(
+            from: downloadURL, checksum: checksum, sizeBytes: sizeBytes, to: localPath)
 
         logger.info(
             "Artifact downloaded and verified",
@@ -223,19 +199,6 @@ actor ImageCacheService {
 
     /// Downloads an image from the control plane
     private func downloadImage(imageInfo: ImageInfo, to localPath: String) async throws {
-        // Create directory structure
-        let directoryPath = (localPath as NSString).deletingLastPathComponent
-        try FileManager.default.createDirectory(
-            atPath: directoryPath,
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
-
-        // Build the download URL
-        guard let url = URL(string: imageInfo.downloadURL) else {
-            throw ImageCacheError.invalidURL(imageInfo.downloadURL)
-        }
-
         logger.info(
             "Downloading image",
             metadata: [
@@ -244,39 +207,126 @@ actor ImageCacheService {
                 "size": .stringConvertible(imageInfo.size),
             ])
 
-        // Perform the download
-        let (tempURL, response) = try await URLSession.shared.download(from: url)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-            httpResponse.statusCode == 200
-        else {
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-            throw ImageCacheError.downloadFailed("HTTP \(statusCode)")
-        }
-
-        // Move downloaded file to cache location
-        // First remove existing file if any
-        if FileManager.default.fileExists(atPath: localPath) {
-            try FileManager.default.removeItem(atPath: localPath)
-        }
-
-        try FileManager.default.moveItem(at: tempURL, to: URL(fileURLWithPath: localPath))
-
-        // Verify checksum
-        let actualChecksum = try computeChecksum(filePath: localPath)
-        guard actualChecksum.lowercased() == imageInfo.checksum.lowercased() else {
-            // Delete the corrupted file
-            try? FileManager.default.removeItem(atPath: localPath)
-            throw ImageCacheError.checksumMismatch(expected: imageInfo.checksum, actual: actualChecksum)
-        }
+        try await fetchVerifiedFile(
+            from: imageInfo.downloadURL, checksum: imageInfo.checksum, sizeBytes: imageInfo.size, to: localPath)
 
         logger.info(
             "Image downloaded and verified",
             metadata: [
                 "imageId": .string(imageInfo.imageId.uuidString),
                 "path": .string(localPath),
-                "checksum": .string(actualChecksum),
             ])
+    }
+
+    // MARK: - Download plumbing
+
+    /// Attempts per download before giving up. Transient network failures
+    /// (timeouts, connection resets, 5xx) abort an entire VM create if a
+    /// single attempt is all they get.
+    private static let maxDownloadAttempts = 3
+
+    /// The full download path: free-space precheck, download with retries,
+    /// checksum verification on a staging file, then atomic publish. The
+    /// final path only ever holds verified, complete bytes.
+    private func fetchVerifiedFile(
+        from downloadURL: String, checksum: String, sizeBytes: Int64, to localPath: String
+    ) async throws {
+        let directoryPath = (localPath as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(
+            atPath: directoryPath,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+
+        // Fail fast with a clear message rather than dying mid-download with
+        // an opaque I/O error. The advertised size is known up front.
+        if sizeBytes > 0, let free = HostPreflight.freeDiskSpace(atPath: directoryPath), free < sizeBytes {
+            throw ImageCacheError.insufficientDiskSpace(
+                "need \(sizeBytes) bytes for the download but only \(free) bytes are free on the filesystem "
+                    + "backing \(directoryPath). Free up space or point the image cache at a larger filesystem.")
+        }
+
+        guard let url = URL(string: downloadURL) else {
+            throw ImageCacheError.invalidURL(downloadURL)
+        }
+
+        let tempURL = try await downloadWithRetry(from: url)
+
+        // Stage next to the destination: the system temp directory may be a
+        // different filesystem, in which case moveItem degrades to a copy —
+        // doing that into a `.partial` sibling keeps the final rename atomic
+        // and means an interrupted copy never masquerades as a cached image.
+        let stagingPath = localPath + ".partial"
+        try? FileManager.default.removeItem(atPath: stagingPath)
+        do {
+            try FileManager.default.moveItem(at: tempURL, to: URL(fileURLWithPath: stagingPath))
+
+            // Verify before publishing, so the cache path never holds
+            // corrupted bytes even transiently.
+            let actualChecksum = try computeChecksum(filePath: stagingPath)
+            guard actualChecksum.lowercased() == checksum.lowercased() else {
+                throw ImageCacheError.checksumMismatch(expected: checksum, actual: actualChecksum)
+            }
+
+            if FileManager.default.fileExists(atPath: localPath) {
+                try FileManager.default.removeItem(atPath: localPath)
+            }
+            try FileManager.default.moveItem(atPath: stagingPath, toPath: localPath)
+        } catch {
+            try? FileManager.default.removeItem(atPath: stagingPath)
+            try? FileManager.default.removeItem(at: tempURL)
+            throw error
+        }
+    }
+
+    /// Downloads `url` to a temporary file, retrying transient failures with
+    /// backoff. Returns the temporary file URL of a completed HTTP 200 body.
+    private func downloadWithRetry(from url: URL) async throws -> URL {
+        var lastError: any Error = ImageCacheError.downloadFailed("no download attempt made")
+
+        for attempt in 1...Self.maxDownloadAttempts {
+            if attempt > 1 {
+                let backoffSeconds = Double(1 << (attempt - 1))  // 2s, 4s
+                logger.warning(
+                    "Retrying download after transient failure",
+                    metadata: [
+                        "url": .string(url.absoluteString),
+                        "attempt": .stringConvertible(attempt),
+                        "error": .string(String(describing: lastError)),
+                    ])
+                try? await Task.sleep(for: .seconds(backoffSeconds))
+            }
+
+            do {
+                let (tempURL, response) = try await URLSession.shared.download(from: url)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    try? FileManager.default.removeItem(at: tempURL)
+                    throw ImageCacheError.downloadFailed("non-HTTP response")
+                }
+                guard httpResponse.statusCode == 200 else {
+                    try? FileManager.default.removeItem(at: tempURL)
+                    let error = ImageCacheError.downloadFailed("HTTP \(httpResponse.statusCode)")
+                    // Server-side and throttling failures are worth retrying;
+                    // other statuses (403 expired signature, 404) are not
+                    // going to change within this operation.
+                    if Self.isRetryableStatus(httpResponse.statusCode) {
+                        lastError = error
+                        continue
+                    }
+                    throw error
+                }
+                return tempURL
+            } catch let error as URLError {
+                lastError = ImageCacheError.downloadFailed(error.localizedDescription)
+                continue  // network-level errors are transient by nature
+            }
+        }
+
+        throw lastError
+    }
+
+    private static func isRetryableStatus(_ status: Int) -> Bool {
+        status >= 500 || status == 408 || status == 429
     }
 
     /// Computes SHA256 checksum of a file
@@ -386,6 +436,7 @@ enum ImageCacheError: Error, LocalizedError {
     case fileNotFound(String)
     case artifactNotFound(String)
     case storageFailed(String)
+    case insufficientDiskSpace(String)
 
     var errorDescription: String? {
         switch self {
@@ -401,6 +452,21 @@ enum ImageCacheError: Error, LocalizedError {
             return "Image has no \(kind) artifact"
         case .storageFailed(let reason):
             return "Storage operation failed: \(reason)"
+        case .insufficientDiskSpace(let reason):
+            return "Insufficient disk space: \(reason)"
+        }
+    }
+}
+
+extension ImageCacheError: ClassifiableError {
+    var failureClassification: FailureClassification {
+        switch self {
+        case .invalidURL, .artifactNotFound, .insufficientDiskSpace:
+            // Nothing on this host will change these; retrying the same
+            // operation only delays the report.
+            return .permanent
+        case .downloadFailed, .checksumMismatch, .fileNotFound, .storageFailed:
+            return .transient
         }
     }
 }
