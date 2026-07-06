@@ -42,15 +42,15 @@ struct ImageInfoArtifactTests {
     func legacyPayloadDecodes() throws {
         // A message shaped like the pre-#214 ImageInfo (no architecture/artifacts).
         let legacyJSON = """
-        {
-            "imageId": "\(UUID().uuidString)",
-            "projectId": "\(UUID().uuidString)",
-            "filename": "cloud.qcow2",
-            "checksum": "deadbeef",
-            "size": 42,
-            "downloadURL": "https://cp/legacy"
-        }
-        """
+            {
+                "imageId": "\(UUID().uuidString)",
+                "projectId": "\(UUID().uuidString)",
+                "filename": "cloud.qcow2",
+                "checksum": "deadbeef",
+                "size": 42,
+                "downloadURL": "https://cp/legacy"
+            }
+            """
 
         let decoded = try JSONDecoder().decode(ImageInfo.self, from: Data(legacyJSON.utf8))
 

@@ -13,8 +13,9 @@ struct BackfillImageArtifacts: AsyncMigration {
 
         for image in images {
             guard let imageID = image.id,
-                  let storagePath = image.storagePath,
-                  let checksum = image.checksum else {
+                let storagePath = image.storagePath,
+                let checksum = image.checksum
+            else {
                 continue
             }
 

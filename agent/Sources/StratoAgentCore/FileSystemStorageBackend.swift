@@ -162,8 +162,7 @@ public actor FileSystemStorageBackend: StorageBackend {
 
     public func materializeDisk(
         at path: String, from imageInfo: ImageInfo, format: DiskFormat, artifactKind: ArtifactKind = .diskImage
-    ) async throws -> DiskAttachment
-    {
+    ) async throws -> DiskAttachment {
         // Idempotent: a disk already materialized for this path (e.g. a VM
         // re-create after an agent restart) is reused, not overwritten. The
         // final path only ever holds a complete disk because materialization

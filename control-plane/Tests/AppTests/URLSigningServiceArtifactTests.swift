@@ -31,19 +31,22 @@ struct URLSigningServiceArtifactTests {
         let (expires, sig) = params(url)
 
         // Correct kind verifies.
-        #expect(URLSigningService.verifySignature(
-            path: path(), imageId: imageId, projectId: projectId, agentName: agent,
-            expires: expires, signature: sig, signingKey: key, artifactKind: .kernel))
+        #expect(
+            URLSigningService.verifySignature(
+                path: path(), imageId: imageId, projectId: projectId, agentName: agent,
+                expires: expires, signature: sig, signingKey: key, artifactKind: .kernel))
 
         // A different kind must not verify against a kernel-scoped signature.
-        #expect(!URLSigningService.verifySignature(
-            path: path(), imageId: imageId, projectId: projectId, agentName: agent,
-            expires: expires, signature: sig, signingKey: key, artifactKind: .rootfs))
+        #expect(
+            !URLSigningService.verifySignature(
+                path: path(), imageId: imageId, projectId: projectId, agentName: agent,
+                expires: expires, signature: sig, signingKey: key, artifactKind: .rootfs))
 
         // Neither does the legacy (no-artifact) form.
-        #expect(!URLSigningService.verifySignature(
-            path: path(), imageId: imageId, projectId: projectId, agentName: agent,
-            expires: expires, signature: sig, signingKey: key, artifactKind: nil))
+        #expect(
+            !URLSigningService.verifySignature(
+                path: path(), imageId: imageId, projectId: projectId, agentName: agent,
+                expires: expires, signature: sig, signingKey: key, artifactKind: nil))
     }
 
     @Test("A legacy (no-artifact) signature round-trips and excludes artifact forms")
@@ -55,12 +58,14 @@ struct URLSigningServiceArtifactTests {
 
         #expect(!url.contains("artifact="))
 
-        #expect(URLSigningService.verifySignature(
-            path: path(), imageId: imageId, projectId: projectId, agentName: agent,
-            expires: expires, signature: sig, signingKey: key))
+        #expect(
+            URLSigningService.verifySignature(
+                path: path(), imageId: imageId, projectId: projectId, agentName: agent,
+                expires: expires, signature: sig, signingKey: key))
 
-        #expect(!URLSigningService.verifySignature(
-            path: path(), imageId: imageId, projectId: projectId, agentName: agent,
-            expires: expires, signature: sig, signingKey: key, artifactKind: .kernel))
+        #expect(
+            !URLSigningService.verifySignature(
+                path: path(), imageId: imageId, projectId: projectId, agentName: agent,
+                expires: expires, signature: sig, signingKey: key, artifactKind: .kernel))
     }
 }

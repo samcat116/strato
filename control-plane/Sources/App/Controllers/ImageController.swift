@@ -583,7 +583,8 @@ struct ImageController: RouteCollection {
                 ])
 
             // Signature valid - serve the file
-            return try await serveImageFile(req: req, imageID: imageID, projectID: projectID, artifactKind: artifactKind)
+            return try await serveImageFile(
+                req: req, imageID: imageID, projectID: projectID, artifactKind: artifactKind)
         }
 
         // Fall back to user session authentication
@@ -629,9 +630,11 @@ struct ImageController: RouteCollection {
 
         // Serve a specific typed artifact when requested.
         if let artifactKind {
-            guard let artifact = try await image.$artifacts.query(on: req.db)
-                .filter(\.$kind == artifactKind)
-                .first() else {
+            guard
+                let artifact = try await image.$artifacts.query(on: req.db)
+                    .filter(\.$kind == artifactKind)
+                    .first()
+            else {
                 throw Abort(.notFound, reason: "Image has no \(artifactKind.rawValue) artifact")
             }
             return try await ImageStorageService.streamFile(
