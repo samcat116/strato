@@ -25,6 +25,14 @@ struct CreateVMOperation: AsyncMigration {
             try await sql.raw(
                 "CREATE INDEX IF NOT EXISTS idx_vm_operations_status ON vm_operations (status)"
             ).run()
+            // At most one pending operation per VM, enforced by the database so
+            // two concurrent mutations cannot both slip past the controller's
+            // pending-check (the loser's insert fails and surfaces as 409).
+            // Partial indexes work on both SQLite and Postgres.
+            try await sql.raw(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_vm_operations_pending_vm "
+                    + "ON vm_operations (vm_id) WHERE status = 'pending'"
+            ).run()
         }
     }
 
@@ -32,6 +40,7 @@ struct CreateVMOperation: AsyncMigration {
         if let sql = database as? SQLDatabase {
             try await sql.raw("DROP INDEX IF EXISTS idx_vm_operations_vm_id").run()
             try await sql.raw("DROP INDEX IF EXISTS idx_vm_operations_status").run()
+            try await sql.raw("DROP INDEX IF EXISTS idx_vm_operations_pending_vm").run()
         }
         try await database.schema("vm_operations").delete()
     }

@@ -123,6 +123,28 @@ final class VMOperationTests {
         }
     }
 
+    @Test("The partial unique index allows at most one pending operation per VM")
+    func pendingUniquenessEnforcedByDatabase() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            // The database, not just the controller's read-then-insert check,
+            // must reject a second pending operation — that is what closes the
+            // race between two concurrent mutations.
+            let first = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            try await first.save(on: app.db)
+
+            let second = VMOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
+            await #expect(throws: (any Error).self) {
+                try await second.save(on: app.db)
+            }
+
+            // Terminal operations do not block new pending ones (the index is
+            // partial on status = 'pending').
+            _ = try await first.completeIfPending(as: .failed, error: "boom", on: app.db)
+            let third = VMOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
+            try await third.save(on: app.db)
+        }
+    }
+
     // MARK: - Stuck-operation sweep (restart safety)
 
     @Test("The sweep fails a pending operation past its budget and resolves the VM")

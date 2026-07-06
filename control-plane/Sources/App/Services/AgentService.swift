@@ -607,9 +607,9 @@ actor AgentService {
 
                 let hasPendingOperation =
                     try await VMOperation.query(on: db)
-                        .filter(\.$vmID == vmID)
-                        .filter(\.$status == .pending)
-                        .count() > 0
+                    .filter(\.$vmID == vmID)
+                    .filter(\.$status == .pending)
+                    .count() > 0
                 // A pending operation owns this VM's resolution via its own budget.
                 guard !hasPendingOperation else { continue }
 

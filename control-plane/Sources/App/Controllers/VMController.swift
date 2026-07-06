@@ -56,6 +56,9 @@ struct VMController: RouteCollection {
         let userID = try user.requireID()
 
         return try await db.transaction { db in
+            // Read first for a friendly reason naming the conflicting kind; the
+            // partial unique index on pending operations (CreateVMOperation) is
+            // what actually closes the race when two mutations arrive at once.
             if let pending = try await VMOperation.query(on: db)
                 .filter(\.$vmID == vmID)
                 .filter(\.$status == .pending)
@@ -67,7 +70,11 @@ struct VMController: RouteCollection {
             }
 
             let operation = VMOperation(vmID: vmID, userID: userID, kind: kind)
-            try await operation.save(on: db)
+            do {
+                try await operation.save(on: db)
+            } catch let error as any DatabaseError where error.isConstraintFailure {
+                throw Abort(.conflict, reason: "An operation is already pending for this VM")
+            }
 
             if let transitionalStatus {
                 vm.setStatus(transitionalStatus)
@@ -618,9 +625,16 @@ struct VMController: RouteCollection {
                         .vmShutdown, vmId: vmID.uuidString,
                         timeout: VMOperationKind.shutdown.completionBudget)
 
+                    // The delete phase gets what remains of the operation's budget
+                    // after the shutdown phase's worst case, so the two waits
+                    // combined can never outlive the stuck-operation sweep's budget
+                    // (which would fail the operation while the agent is still
+                    // legitimately working).
+                    let deleteTimeout =
+                        VMOperationKind.delete.completionBudget
+                        - VMOperationKind.shutdown.completionBudget
                     let response = try await app.agentService.performVMOperationAwaitingResponse(
-                        .vmDelete, vmId: vmID.uuidString,
-                        timeout: VMOperationKind.delete.completionBudget)
+                        .vmDelete, vmId: vmID.uuidString, timeout: deleteTimeout)
 
                     if case .error(let message, let details) = response {
                         let reason = details.map { "\(message): \($0)" } ?? message

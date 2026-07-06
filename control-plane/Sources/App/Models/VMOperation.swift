@@ -79,9 +79,9 @@ extension VMOperationKind {
         case .boot:
             return 180
         case .delete:
-            // Deletion first attempts a best-effort guest shutdown (up to the
-            // shutdown budget) before the delete itself, so its overall budget
-            // must cover both phases.
+            // Deletion runs two agent phases inside this one budget: a
+            // best-effort guest shutdown bounded by the shutdown budget, then
+            // the delete itself bounded by the remainder (see runVMDeletion).
             return 300
         case .shutdown, .reboot, .pause, .resume:
             return 120
