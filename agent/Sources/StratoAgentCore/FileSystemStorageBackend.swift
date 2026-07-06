@@ -3,8 +3,8 @@ import Logging
 import StratoShared
 
 /// Runs a subprocess to completion. Injectable so tests can stub qemu-img.
-public typealias SubprocessRunner = @Sendable (_ executableURL: URL, _ arguments: [String]) async throws
-    -> ProcessResult
+public typealias SubprocessRunner =
+    @Sendable (_ executableURL: URL, _ arguments: [String]) async throws -> ProcessResult
 
 /// The "qemu-img on a filesystem directory" storage backend.
 ///
