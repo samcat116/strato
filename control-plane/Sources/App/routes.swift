@@ -42,6 +42,9 @@ func routes(_ app: Application) throws {
     // Volume management controller
     try app.register(collection: VolumeController())
 
+    // Network management controller
+    try app.register(collection: NetworkController())
+
     // Console WebSocket controller for VM console streaming
     try app.register(collection: ConsoleWebSocketController())
 

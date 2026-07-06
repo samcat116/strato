@@ -228,8 +228,9 @@ public func configure(_ app: Application) async throws {
     // ordering constraint as above: the VM model selects these columns.
     app.migrations.add(AddDesiredStateToVM())
 
-    // Same ordering constraint: the VM model selects ssh_public_key, so this must
-    // run before any data migration that loads the VM model (MigrateVMDisksToVolumes).
+    // SSH public key column. Same ordering constraint as above — the VM model
+    // selects this column, so it must exist before any data migration that
+    // loads VM models (e.g. MigrateVMDisksToVolumes) runs on a fresh database.
     app.migrations.add(AddSSHPublicKeyToVM())
 
     // App settings migration (for signing keys, etc.)
@@ -257,6 +258,9 @@ public func configure(_ app: Application) async throws {
     // Logical networks + control-plane IPAM (issue #212)
     app.migrations.add(CreateLogicalNetwork())
     app.migrations.add(AddGatewayToVMNetworkInterface())
+
+    // Project-scoped networks exposed via the API
+    app.migrations.add(AddProjectToLogicalNetwork())
 
     // Project-level roles: user and group grants on individual projects.
     app.migrations.add(CreateProjectMember())

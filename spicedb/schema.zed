@@ -103,10 +103,11 @@ definition project {
     permission manage_quotas = admin + group_admin->member + inherited_admin
 
     // Compatibility aliases for the permission names the control-plane checks.
-    // `update_project` and `create_volume` predate the manage_project/create_resources
-    // naming; keep them resolving to the same underlying permissions.
+    // `update_project`/`create_volume`/`create_network` predate the
+    // manage_project/create_resources naming; keep them resolving to the same perms.
     permission update_project = manage_project
     permission create_volume = create_resources
+    permission create_network = create_resources
 }
 
 /** environment represents a deployment environment within a project */
@@ -203,6 +204,20 @@ definition volume {
     permission snapshot = owner + editor + project->manage_project
     permission clone = owner + editor + project->manage_project
     permission resize = owner + editor + project->manage_project
+}
+
+/** network represents a logical network VMs attach to */
+definition network {
+    /** owner is the user who created the network */
+    relation owner: user
+
+    /** project that contains this network; global networks have none */
+    relation project: project
+
+    // Permissions - combining direct relations and project permissions
+    permission read = owner + project->view_project
+    permission update = owner + project->manage_project
+    permission delete = owner + project->manage_project
 }
 
 /** volume_snapshot represents a point-in-time snapshot of a volume */
