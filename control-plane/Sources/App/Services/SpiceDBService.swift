@@ -9,12 +9,160 @@ protocol SpiceDBServiceProtocol {
         async throws
     func deleteRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String)
         async throws
+    func touchRelationships(_ tuples: [RelationshipTuple]) async throws
+    func setOrganizationRole(userID: String, organizationID: String, oldRole: String?, newRole: String) async throws
+    func removeOrganizationMember(userID: String, organizationID: String, role: String) async throws
     func addUserToGroup(userID: String, groupID: String) async throws
     func removeUserFromGroup(userID: String, groupID: String) async throws
     func addGroupToProject(groupID: String, projectID: String, role: GroupProjectRole) async throws
     func removeGroupFromProject(groupID: String, projectID: String, role: GroupProjectRole) async throws
     func checkGroupBasedPermission(userID: String, permission: String, resource: String, resourceId: String)
         async throws -> Bool
+}
+
+/// A single relationship to write. Used by `touchRelationships` for idempotent
+/// batch writes (backfills), where each tuple may or may not already exist.
+struct RelationshipTuple: Sendable, Equatable {
+    let entity: String
+    let entityId: String
+    let relation: String
+    let subject: String
+    let subjectId: String
+}
+
+// MARK: - Bulk Permission Checks
+
+/// A single permission question for `checkBulk`. `key` is an opaque client-chosen
+/// identifier echoed back in the result map, so the caller can correlate answers
+/// without depending on ordering.
+struct PermissionQuery: Sendable {
+    let key: String
+    let permission: String
+    let resourceType: String
+    let resourceId: String
+}
+
+extension SpiceDBServiceProtocol {
+    /// Answer several permission questions for one subject, returning a map keyed by
+    /// each query's `key`.
+    ///
+    /// Implemented as sequential `checkPermission` calls: version-agnostic (works
+    /// against any SpiceDB) and avoids the Sendable constraints of fanning `self` out
+    /// across a task group. Callers cap the batch size (the authorization endpoint
+    /// rejects > 50), so the sequential cost is bounded. Can be upgraded to SpiceDB's
+    /// native `/v1/permissions/checkbulk` later without changing this signature.
+    func checkBulk(subject: String, _ checks: [PermissionQuery]) async throws -> [String: Bool] {
+        var results: [String: Bool] = [:]
+        results.reserveCapacity(checks.count)
+        for check in checks {
+            results[check.key] = try await checkPermission(
+                subject: subject,
+                permission: check.permission,
+                resource: check.resourceType,
+                resourceId: check.resourceId
+            )
+        }
+        return results
+    }
+}
+
+// MARK: - Organization Role Helpers
+
+/// Default implementations that keep SpiceDB organization-role tuples consistent.
+///
+/// A role change must DELETE the old `organization#<oldRole>@user` tuple before
+/// writing the new one — otherwise the stale tuple lingers and the user retains the
+/// old role's permissions (e.g. a demoted admin keeps admin access). Composing these
+/// out of `deleteRelationship`/`writeRelationship` means both the real service and the
+/// testing mock get identical, correct behavior.
+extension SpiceDBServiceProtocol {
+    /// Set a user's organization role, deleting the previous role tuple first.
+    ///
+    /// Pass `oldRole: nil` when granting a role for the first time (e.g. org create).
+    /// A no-op when `oldRole == newRole` (avoids an `OPERATION_CREATE` on an existing
+    /// tuple, which SpiceDB rejects as already-exists).
+    func setOrganizationRole(
+        userID: String,
+        organizationID: String,
+        oldRole: String?,
+        newRole: String
+    ) async throws {
+        if let oldRole {
+            if oldRole == newRole { return }
+            try await deleteRelationship(
+                entity: "organization",
+                entityId: organizationID,
+                relation: oldRole,
+                subject: "user",
+                subjectId: userID
+            )
+        }
+        try await writeRelationship(
+            entity: "organization",
+            entityId: organizationID,
+            relation: newRole,
+            subject: "user",
+            subjectId: userID
+        )
+    }
+
+    /// Remove a user's organization membership tuple for the given role.
+    func removeOrganizationMember(
+        userID: String,
+        organizationID: String,
+        role: String
+    ) async throws {
+        try await deleteRelationship(
+            entity: "organization",
+            entityId: organizationID,
+            relation: role,
+            subject: "user",
+            subjectId: userID
+        )
+    }
+
+    /// Set a user's project role, deleting the previous role tuple first (same
+    /// stale-tuple-avoiding contract as `setOrganizationRole`). Pass `oldRole: nil`
+    /// when granting for the first time.
+    func setProjectRole(
+        userID: String,
+        projectID: String,
+        oldRole: String?,
+        newRole: String
+    ) async throws {
+        if let oldRole {
+            if oldRole == newRole { return }
+            try await deleteRelationship(
+                entity: "project",
+                entityId: projectID,
+                relation: oldRole,
+                subject: "user",
+                subjectId: userID
+            )
+        }
+        try await writeRelationship(
+            entity: "project",
+            entityId: projectID,
+            relation: newRole,
+            subject: "user",
+            subjectId: userID
+        )
+    }
+
+    /// Remove a user's project role tuple.
+    func removeProjectMember(
+        userID: String,
+        projectID: String,
+        role: String
+    ) async throws {
+        try await deleteRelationship(
+            entity: "project",
+            entityId: projectID,
+            relation: role,
+            subject: "user",
+            subjectId: userID
+        )
+    }
 }
 
 struct SpiceDBService: SpiceDBServiceProtocol {
@@ -203,6 +351,52 @@ struct SpiceDBService: SpiceDBServiceProtocol {
             throw SpiceDBError.relationshipDeleteFailed(response.status)
         }
     }
+
+    /// Idempotently write many relationships in a few HTTP calls using
+    /// OPERATION_TOUCH (create-or-noop), chunked to stay under SpiceDB's
+    /// per-request update cap. Used by startup backfills so re-writing tuples that
+    /// already exist is cheap and never errors — unlike per-row OPERATION_CREATE.
+    func touchRelationships(_ tuples: [RelationshipTuple]) async throws {
+        guard !tuples.isEmpty else { return }
+        let url = URI(string: "\(endpoint)/v1/relationships/write")
+        // SpiceDB caps updates per WriteRelationships request (default 1000); stay well under.
+        let chunkSize = 500
+        var index = 0
+        while index < tuples.count {
+            let chunk = tuples[index..<min(index + chunkSize, tuples.count)]
+            let payload = WriteRelationshipsRequest(
+                updates: chunk.map { tuple in
+                    RelationshipUpdate(
+                        operation: .touch,
+                        relationship: Relationship(
+                            resource: ObjectReference(
+                                objectType: tuple.entity,
+                                objectId: tuple.entityId.uppercased()
+                            ),
+                            relation: tuple.relation,
+                            subject: SubjectReference(
+                                object: ObjectReference(
+                                    objectType: tuple.subject,
+                                    objectId: tuple.subjectId.uppercased()
+                                )
+                            )
+                        )
+                    )
+                }
+            )
+
+            let response = try await client.post(url) { req in
+                try req.content.encode(payload)
+                req.headers.add(name: .contentType, value: "application/json")
+                req.headers.add(name: .authorization, value: "Bearer \(presharedKey)")
+            }
+
+            guard response.status == .ok else {
+                throw SpiceDBError.relationshipWriteFailed(response.status)
+            }
+            index += chunkSize
+        }
+    }
 }
 
 // MARK: - DTOs
@@ -278,6 +472,7 @@ struct RelationshipUpdate: Content {
 
     enum Operation: String, Content {
         case create = "OPERATION_CREATE"
+        case touch = "OPERATION_TOUCH"
         case delete = "OPERATION_DELETE"
     }
 }
@@ -387,9 +582,16 @@ actor SpiceDBMockRecorder {
     }
 
     private(set) var writes: [RelationshipWrite] = []
+    /// Relationship deletes the mock received, so tests can assert stale tuples are
+    /// cleaned up (e.g. the old role is removed on a role change).
+    private(set) var deletes: [RelationshipWrite] = []
 
     func record(_ write: RelationshipWrite) {
         writes.append(write)
+    }
+
+    func recordDelete(_ delete: RelationshipWrite) {
+        deletes.append(delete)
     }
 }
 
@@ -431,23 +633,51 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
     func deleteRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String)
         async throws
     {
-        // Mock implementation - do nothing
+        await recorder?.recordDelete(
+            SpiceDBMockRecorder.RelationshipWrite(
+                entity: entity,
+                entityId: entityId,
+                relation: relation,
+                subject: subject,
+                subjectId: subjectId
+            )
+        )
+    }
+
+    // The group helpers delegate to write/deleteRelationship so the recorder captures
+    // them (tests assert on group grants), mirroring the real service's composition.
+    func touchRelationships(_ tuples: [RelationshipTuple]) async throws {
+        for tuple in tuples {
+            await recorder?.record(
+                SpiceDBMockRecorder.RelationshipWrite(
+                    entity: tuple.entity,
+                    entityId: tuple.entityId,
+                    relation: tuple.relation,
+                    subject: tuple.subject,
+                    subjectId: tuple.subjectId
+                )
+            )
+        }
     }
 
     func addUserToGroup(userID: String, groupID: String) async throws {
-        // Mock implementation - do nothing
+        try await writeRelationship(
+            entity: "group", entityId: groupID, relation: "member", subject: "user", subjectId: userID)
     }
 
     func removeUserFromGroup(userID: String, groupID: String) async throws {
-        // Mock implementation - do nothing
+        try await deleteRelationship(
+            entity: "group", entityId: groupID, relation: "member", subject: "user", subjectId: userID)
     }
 
     func addGroupToProject(groupID: String, projectID: String, role: GroupProjectRole) async throws {
-        // Mock implementation - do nothing
+        try await writeRelationship(
+            entity: "project", entityId: projectID, relation: role.rawValue, subject: "group", subjectId: groupID)
     }
 
     func removeGroupFromProject(groupID: String, projectID: String, role: GroupProjectRole) async throws {
-        // Mock implementation - do nothing
+        try await deleteRelationship(
+            entity: "project", entityId: projectID, relation: role.rawValue, subject: "group", subjectId: groupID)
     }
 
     func checkGroupBasedPermission(userID: String, permission: String, resource: String, resourceId: String)

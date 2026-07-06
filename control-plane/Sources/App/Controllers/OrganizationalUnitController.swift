@@ -39,7 +39,7 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         // Get all OUs in the organization (top-level only)
         let ous = try await OrganizationalUnit.query(on: req.db)
@@ -83,7 +83,7 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
             throw Abort(.notFound, reason: "Organizational unit not found")
@@ -122,7 +122,7 @@ struct OrganizationalUnitController: RouteCollection {
         let createRequest = try req.content.decode(CreateOrganizationalUnitRequest.self)
 
         // Verify user has admin access to organization
-        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         // Validate parent OU if specified
         var parentOU: OrganizationalUnit?
@@ -174,6 +174,8 @@ struct OrganizationalUnitController: RouteCollection {
         ou.path = try await ou.buildPath(on: req.db)
         try await ou.save(on: req.db)
 
+        try await writeOUParent(ou, on: req)
+
         return OrganizationalUnitResponse(from: ou, childOuCount: 0, projectCount: 0)
     }
 
@@ -191,7 +193,7 @@ struct OrganizationalUnitController: RouteCollection {
         let updateRequest = try req.content.decode(UpdateOrganizationalUnitRequest.self)
 
         // Verify user has admin access
-        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
             throw Abort(.notFound, reason: "Organizational unit not found")
@@ -258,7 +260,7 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         // Verify user has admin access
-        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
             throw Abort(.notFound, reason: "Organizational unit not found")
@@ -286,6 +288,17 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.conflict, reason: "Cannot delete OU with projects. Move or delete projects first.")
         }
 
+        // Delete the SpiceDB parent tuple too (the OU has no children/projects left,
+        // guarded above), so no orphan tuple lingers.
+        let parent = ou.spiceDBParentRef
+        try await req.spicedb.deleteRelationship(
+            entity: "organizational_unit",
+            entityId: ouID.uuidString,
+            relation: "parent",
+            subject: parent.subjectType,
+            subjectId: parent.subjectId.uuidString
+        )
+
         try await ou.delete(on: req.db)
         return .noContent
     }
@@ -304,7 +317,7 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         // Verify user has access
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         guard let rootOU = try await OrganizationalUnit.find(ouID, on: req.db) else {
             throw Abort(.notFound, reason: "Organizational unit not found")
@@ -327,7 +340,7 @@ struct OrganizationalUnitController: RouteCollection {
         let moveRequest = try req.content.decode(MoveOrganizationalUnitRequest.self)
 
         // Verify user has admin access
-        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
             throw Abort(.notFound, reason: "Organizational unit not found")
@@ -349,12 +362,32 @@ struct OrganizationalUnitController: RouteCollection {
             newParent = parent
         }
 
+        // Capture the immediate parent before reparenting so we can migrate the
+        // SpiceDB organizational_unit#parent tuple.
+        let oldParentRef = ou.spiceDBParentRef
+
         // Update OU
         ou.$parentOU.id = moveRequest.newParentOuId
         ou.depth = try await calculateDepth(parentOU: newParent, on: req.db)
         ou.path = try await ou.buildPath(on: req.db)
 
         try await ou.save(on: req.db)
+
+        // Migrate the SpiceDB parent tuple (delete old, write new) so the OU — and
+        // every project/descendant under it — inherits from the new parent.
+        let newParentRef = ou.spiceDBParentRef
+        if oldParentRef.subjectType != newParentRef.subjectType
+            || oldParentRef.subjectId != newParentRef.subjectId
+        {
+            try await req.spicedb.deleteRelationship(
+                entity: "organizational_unit",
+                entityId: ouID.uuidString,
+                relation: "parent",
+                subject: oldParentRef.subjectType,
+                subjectId: oldParentRef.subjectId.uuidString
+            )
+            try await writeOUParent(ou, on: req)
+        }
 
         // Update paths for all descendants
         try await updateDescendantPaths(ou: ou, on: req.db)
@@ -387,7 +420,7 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         // Verify user has access
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         // Get sub-OUs
         let subOUs = try await OrganizationalUnit.query(on: req.db)
@@ -431,7 +464,7 @@ struct OrganizationalUnitController: RouteCollection {
         let createRequest = try req.content.decode(CreateOrganizationalUnitRequest.self)
 
         // Verify user has admin access to organization
-        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         // Validate parent OU exists and belongs to organization
         guard let parentOU = try await OrganizationalUnit.find(parentOUID, on: req.db) else {
@@ -473,10 +506,26 @@ struct OrganizationalUnitController: RouteCollection {
         ou.path = try await ou.buildPath(on: req.db)
         try await ou.save(on: req.db)
 
+        try await writeOUParent(ou, on: req)
+
         return OrganizationalUnitResponse(from: ou, childOuCount: 0, projectCount: 0)
     }
 
     // MARK: - Helper Methods
+
+    /// Write the OU's SpiceDB `organizational_unit#parent` tuple against its immediate
+    /// parent (parent OU when nested, else the organization), so the OU — and every
+    /// project beneath it — inherits admin/member access up the hierarchy.
+    private func writeOUParent(_ ou: OrganizationalUnit, on req: Request) async throws {
+        let parent = ou.spiceDBParentRef
+        try await req.spicedb.writeRelationship(
+            entity: "organizational_unit",
+            entityId: try ou.requireID().uuidString,
+            relation: "parent",
+            subject: parent.subjectType,
+            subjectId: parent.subjectId.uuidString
+        )
+    }
 
     private func calculateDepth(parentOU: OrganizationalUnit?, on db: Database) async throws -> Int {
         if let parent = parentOU {

@@ -66,6 +66,19 @@ final class OrganizationalUnit: Model, @unchecked Sendable {
 extension OrganizationalUnit: Content {}
 
 extension OrganizationalUnit {
+    /// The OU's *immediate* parent for the SpiceDB `organizational_unit#parent`
+    /// relation: the parent OU when nested, otherwise the owning organization.
+    /// Writing this chain into SpiceDB is what lets project→parent(OU) resolve up to
+    /// org admins (and any OU admins) via the schema's inherited_admin/member.
+    var spiceDBParentRef: (subjectType: String, subjectId: UUID) {
+        if let parentID = self.$parentOU.id {
+            return ("organizational_unit", parentID)
+        }
+        return ("organization", self.$organization.id)
+    }
+}
+
+extension OrganizationalUnit {
     struct Public: Content {
         let id: UUID?
         let name: String

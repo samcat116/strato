@@ -80,6 +80,42 @@ export interface OrganizationMember {
   joinedAt: string;
 }
 
+// Project-level roles
+export type ProjectRole = "admin" | "member" | "viewer";
+
+export interface ProjectMember {
+  userId: string;
+  username: string;
+  displayName: string;
+  email: string;
+  role: ProjectRole;
+  joinedAt: string | null;
+}
+
+export interface ProjectGroupGrant {
+  groupId: string;
+  name: string;
+  role: ProjectRole;
+  grantedAt: string | null;
+}
+
+export interface ProjectMembers {
+  users: ProjectMember[];
+  groups: ProjectGroupGrant[];
+}
+
+// Batch permission check ("can I?")
+export interface PermissionCheckItem {
+  key: string;
+  resourceType: string;
+  resourceId: string;
+  permission: string;
+}
+
+export interface PermissionCheckResponse {
+  results: Record<string, boolean>;
+}
+
 // Groups
 export interface Group {
   id: string;

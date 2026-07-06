@@ -262,6 +262,10 @@ public func configure(_ app: Application) async throws {
     // Project-scoped networks exposed via the API
     app.migrations.add(AddProjectToLogicalNetwork())
 
+    // Project-level roles: user and group grants on individual projects.
+    app.migrations.add(CreateProjectMember())
+    app.migrations.add(CreateProjectGroupGrant())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen
@@ -269,9 +273,17 @@ public func configure(_ app: Application) async throws {
     // first writer on a fresh stack and crashes with a 400 without a schema.
     if app.environment != .testing {
         try await ensureSpiceDBSchema(app)
-        // Backfill project→organization tuples for projects created before the
-        // creation path wrote them, so project-scoped permissions resolve (issue #267).
+        // Backfill SpiceDB tuples so existing data authorizes correctly after the
+        // schema/tuple reset and now that SpiceDB is the sole authorization source.
+        // Each is a single chunked idempotent (TOUCH) batch. OU parents first so the
+        // project#parent → organizational_unit → organization chain resolves.
+        //  - organizational_unit#parent tuples (parent OU or organization).
+        //  - project#parent tuples against each project's immediate parent.
+        //  - organization#<role>→user tuples for every relational membership, so
+        //    existing members don't 403 once relational role checks are retired.
+        try await backfillOrganizationalUnitParentRelationships(app)
         try await backfillProjectOrganizationRelationships(app)
+        try await backfillOrganizationMemberRelationships(app)
     }
 
     // Initialize the image download signing key (generates if not exists)
@@ -362,7 +374,7 @@ public func configure(_ app: Application) async throws {
             try await app.spicedb.writeRelationship(
                 entity: "project",
                 entityId: defaultProject.id!.uuidString,
-                relation: "organization",
+                relation: "parent",
                 subject: "organization",
                 subjectId: defaultOrg.id!.uuidString
             )

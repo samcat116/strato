@@ -46,7 +46,7 @@ Strato uses [SpiceDB](https://authzed.com/spicedb) for fine-grained, relationshi
 
 **Schema Definition** (`spicedb/schema.zed`):
 
-The schema defines `user`, `organization`, `project`, `image`, `volume`, `volume_snapshot`, and `virtual_machine` object types. Abridged excerpt:
+The schema defines a hierarchy — `organization` → `organizational_unit` → `project` → resources — plus `user`, `group`, `environment`, `virtual_machine`, `image`, `volume`, `volume_snapshot`, `resource_quota`, and `api_key` object types. Permissions inherit down the hierarchy: a `project` attaches to its `parent` (an organization or OU), and resource permissions resolve through the project. Abridged excerpt:
 
 ```zed
 definition user {}
@@ -55,28 +55,34 @@ definition organization {
     relation admin: user
     relation member: user
 
-    permission manage_vms = admin + member
+    permission manage_organization = admin
     permission view_organization = admin + member
     permission manage_members = admin
 }
 
+definition project {
+    relation parent: organization | organizational_unit
+    relation admin: user
+    relation member: user
+    relation viewer: user
+
+    permission manage_project = admin + inherited_admin
+    permission create_resources = admin + member + inherited_admin
+    permission view_project = admin + member + viewer + inherited_admin + inherited_member
+}
+
 definition virtual_machine {
     relation owner: user
-    relation organization: organization
     relation project: project
     relation viewer: user
     relation editor: user
 
-    permission create = organization->manage_vms
-    permission read = owner + viewer + editor + organization->admin
-    permission update = owner + editor + organization->admin
-    permission delete = owner + organization->admin
-    permission start = owner + editor + organization->admin
-    permission stop = owner + editor + organization->admin
-    permission restart = owner + editor + organization->admin
-    permission pause = owner + editor + organization->admin
-    permission resume = owner + editor + organization->admin
-    permission view_console = owner + editor + organization->admin
+    permission create = project->create_resources
+    permission read = owner + viewer + editor + project->view_project
+    permission update = owner + editor + project->manage_project
+    permission delete = owner + project->manage_project
+    permission start = owner + editor + project->create_resources
+    permission view_console = owner + editor + project->manage_project
 }
 ```
 
@@ -84,9 +90,9 @@ definition virtual_machine {
 - `SpiceDBAuthMiddleware` (registered globally in `configure.swift`): Intercepts all HTTP requests
   - Skips public routes (health checks, `/login`, `/register`, `/auth/*`, static assets, the agent WebSocket)
   - Requires a session-authenticated user for everything else; system admins bypass permission checks
-  - For `/vms` routes, maps the HTTP method and path to a permission (`read`, `create`, `update`, `delete`, `start`, `stop`, `restart`, `pause`, `resume`) and checks it against the `virtual_machine` resource; collection-level list/create operations check `view_organization` on the user's current organization
+  - For `/api/vms` routes, maps the HTTP method and path to a permission (`read`, `create`, `update`, `delete`, `start`, `stop`, `restart`, `pause`, `resume`) and checks it against the `virtual_machine` resource; collection-level list/create operations check `view_organization` on the user's current organization
 - `SpiceDBService`: Swift wrapper around the SpiceDB HTTP API (`/v1/permissions/check` with full consistency, `/v1/relationships/write`, `/v1/schemas/write`), authenticated with a preshared key; includes helpers for group membership and group-to-project roles
-- Controllers perform additional per-resource `checkPermission` calls and write relationships on resource creation — e.g. creating a VM writes `owner` (user), `project`, and `organization` relationships for the new `virtual_machine`
+- Controllers perform additional per-resource `checkPermission` calls and write relationships on resource creation — e.g. creating a VM writes `owner` (user) and `project` relationships for the new `virtual_machine`, which inherits organization-admin access transitively through `project->parent`
 - Schema loading: a Helm post-install/post-upgrade Job runs `zed schema write`; for local development, `spicedb/init-schema.sh` posts the schema via the HTTP API
 
 ### Authentication System (WebAuthn/Passkeys)

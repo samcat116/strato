@@ -146,7 +146,7 @@ final class ProjectTests {
             let projectId = try #require(createdProjectId)
             let writes = await recorder.writes
             let orgTuple = writes.first {
-                $0.entity == "project" && $0.relation == "organization"
+                $0.entity == "project" && $0.relation == "parent"
             }
             let tuple = try #require(orgTuple, "expected a project→organization relationship write")
             #expect(tuple.entityId == projectId.uuidString)
@@ -155,8 +155,8 @@ final class ProjectTests {
         }
     }
 
-    @Test("Create project in OU writes SpiceDB tuple resolving to the root organization")
-    func testCreateProjectInOUWritesOrganizationTuple() async throws {
+    @Test("Create project in OU writes a project#parent tuple against the OU")
+    func testCreateProjectInOUWritesOUParentTuple() async throws {
         try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
             let recorder = SpiceDBMockRecorder()
             app.spicedbMockRecorder = recorder
@@ -167,7 +167,7 @@ final class ProjectTests {
                 try req.content.encode(
                     CreateProjectRequest(
                         name: "OU Perms Project",
-                        description: "OU project that should get an org tuple",
+                        description: "OU project that should get an OU parent tuple",
                         organizationalUnitId: nil,
                         defaultEnvironment: "development",
                         environments: ["development"]
@@ -179,14 +179,16 @@ final class ProjectTests {
 
             let projectId = try #require(createdProjectId)
             let writes = await recorder.writes
-            let orgTuple = writes.first {
-                $0.entity == "project" && $0.relation == "organization"
+            let parentTuple = writes.first {
+                $0.entity == "project" && $0.relation == "parent"
             }
-            let tuple = try #require(orgTuple, "expected a project→organization relationship write")
+            let tuple = try #require(parentTuple, "expected a project#parent relationship write")
             #expect(tuple.entityId == projectId.uuidString)
-            // OU-scoped projects have no direct organization column, so the tuple
-            // must resolve to the OU's root organization.
-            #expect(tuple.subjectId == testOrganization.id!.uuidString)
+            // The tuple must point at the *immediate* parent — the OU, not the root
+            // organization — so OU-scoped projects inherit up the OU chain (and OU
+            // admins, not just org admins, can manage them).
+            #expect(tuple.subject == "organizational_unit")
+            #expect(tuple.subjectId == testOU.id!.uuidString)
         }
     }
 
@@ -438,7 +440,7 @@ final class ProjectTests {
             // otherwise destination admins can't resolve project-scoped permissions.
             let writes = await recorder.writes
             let orgTuple = writes.first {
-                $0.entity == "project" && $0.relation == "organization"
+                $0.entity == "project" && $0.relation == "parent"
             }
             let tuple = try #require(orgTuple, "expected a project→organization relationship write")
             #expect(tuple.entityId == project.id!.uuidString)
@@ -456,6 +458,12 @@ final class ProjectTests {
                 organizationID: destinationOrg.id!,
                 role: "member"
             ).save(on: app.db)
+
+            // Authorization is SpiceDB-driven now: withhold the organization
+            // permission so the destination-org admin check fails (the project-scoped
+            // check on the source still passes, since it targets the "project"
+            // resource). Previously the "member" role drove this 403.
+            app.spicedbMockDeniedResources = ["organization"]
 
             let project = Project(
                 name: "Guarded Project",
