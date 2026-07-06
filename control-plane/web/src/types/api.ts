@@ -318,6 +318,8 @@ export interface CreateVMRequest {
   cpu?: number;
   memory?: number;
   disk?: number;
+  /** SSH public key authorized for the guest's default user (cloud-init). */
+  sshPublicKey?: string;
 }
 
 export interface UpdateVMRequest {

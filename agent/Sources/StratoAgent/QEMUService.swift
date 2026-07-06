@@ -444,7 +444,20 @@ actor QEMUService: HypervisorService {
         }
 
         do {
-            return Self.vmStatus(from: try await qemuManager.getStatus())
+            // Bound the QMP round-trip: a re-adopted VM can have a dead control
+            // socket whose query never returns, and QEMUService is an actor
+            // shared with console-endpoint lookups, so an unbounded wait here
+            // stalls the console too. On timeout report `.unknown` rather than
+            // fabricating `.shutdown` for a VM that is likely still running.
+            let qemuStatus = try await StageBudget.run(
+                seconds: StageBudget.statusQuerySeconds, stage: "qmp-status"
+            ) {
+                try await qemuManager.getStatus()
+            }
+            return Self.vmStatus(from: qemuStatus)
+        } catch is StageBudgetError {
+            logger.warning("VM status query timed out; reporting unknown", metadata: ["vmId": .string(vmId)])
+            return .unknown
         } catch {
             logger.error("Failed to query VM status: \(error)")
             return .shutdown
@@ -879,7 +892,8 @@ actor QEMUService: HypervisorService {
         // Cloud-init allows configuring the guest without modifying the disk image
         let cloudInitISOPath = (vmDir as NSString).appendingPathComponent("cloud-init.iso")
         if await CloudInitProvisioner(logger: logger).makeNoCloudISO(
-            at: cloudInitISOPath, vmId: vmId, networkAttachments: networkAttachments)
+            at: cloudInitISOPath, vmId: vmId, sshAuthorizedKeys: spec.sshAuthorizedKeys,
+            networkAttachments: networkAttachments)
         {
             qemuConfig.additionalArgs.append(contentsOf: [
                 "-drive", "file=\(cloudInitISOPath),format=raw,if=virtio,readonly=on",

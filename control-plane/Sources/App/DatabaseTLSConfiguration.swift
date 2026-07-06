@@ -26,7 +26,15 @@ enum DatabaseTLSMode: String, Sendable {
     /// Throws ``DatabaseTLSConfigurationError/invalidMode`` on an unrecognized
     /// `DATABASE_TLS` value rather than silently downgrading to plaintext.
     static func fromEnvironment(for environment: Environment) throws -> DatabaseTLSMode {
-        guard let raw = Environment.get("DATABASE_TLS") else {
+        try resolve(Environment.get("DATABASE_TLS"), for: environment)
+    }
+
+    /// Resolve a raw `DATABASE_TLS` value, defaulting by environment when nil.
+    /// Split out from ``fromEnvironment(for:)`` so tests can exercise the logic
+    /// without mutating the process environment (setenv racing getenv from
+    /// another thread is undefined behavior under parallel test execution).
+    static func resolve(_ raw: String?, for environment: Environment) throws -> DatabaseTLSMode {
+        guard let raw else {
             // Encrypt by default; only local development opts into plaintext.
             return environment == .development ? .disable : .require
         }

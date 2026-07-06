@@ -110,10 +110,12 @@ final class ImageControllerTests {
         let tempStoragePath = try Self.createTempStorageDirectory()
 
         do {
-            // Set storage path environment variable
-            setenv("IMAGE_STORAGE_PATH", tempStoragePath, 1)
-
             try await configure(app)
+
+            // Point image storage at the temp directory via the app-local
+            // override; mutating the process environment would race other
+            // parallel test suites reading it.
+            app.imageStoragePath = tempStoragePath
 
             // Inject mock ImageFetchService to prevent real HTTP requests
             app.imageFetchService = MockImageFetchService()
@@ -165,14 +167,12 @@ final class ImageControllerTests {
             try? await app.autoRevert()
             try await app.asyncShutdown()
             app.cleanupTestDatabase()
-            unsetenv("IMAGE_STORAGE_PATH")
             Self.cleanupTempStorageDirectory(tempStoragePath)
             throw error
         }
 
         try await app.asyncShutdown()
         app.cleanupTestDatabase()
-        unsetenv("IMAGE_STORAGE_PATH")
         Self.cleanupTempStorageDirectory(tempStoragePath)
     }
 

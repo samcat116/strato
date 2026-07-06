@@ -3,6 +3,21 @@ import Vapor
 import NIOCore
 import NIOPosix
 
+extension Application {
+    private struct ImageStoragePathKey: StorageKey {
+        typealias Value = String
+    }
+
+    /// Per-application override for the image storage path, taking precedence
+    /// over `IMAGE_STORAGE_PATH`. Tests set this instead of mutating the
+    /// process environment, which is unsafe while parallel tests read it
+    /// (setenv racing getenv from another thread segfaults on glibc).
+    var imageStoragePath: String? {
+        get { storage[ImageStoragePathKey.self] }
+        set { storage[ImageStoragePathKey.self] = newValue }
+    }
+}
+
 /// Service for managing image file storage
 struct ImageStorageService {
     /// Default storage path for images (platform-specific)
@@ -17,9 +32,10 @@ struct ImageStorageService {
         #endif
     }
 
-    /// Returns the configured storage path from environment or default
+    /// Returns the configured storage path from the per-application override,
+    /// the environment, or the platform default
     static func storagePath(from app: Application) -> String {
-        return Environment.get("IMAGE_STORAGE_PATH") ?? defaultStoragePath
+        return app.imageStoragePath ?? Environment.get("IMAGE_STORAGE_PATH") ?? defaultStoragePath
     }
 
     /// Builds the full file path for an image

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Building2, Loader2, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { organizationsApi } from "@/lib/api/organizations";
-import { useOrganization } from "@/providers";
+import { useAuth, useOrganization } from "@/providers";
 import { toast } from "sonner";
 
 export default function OnboardingPage() {
@@ -22,8 +22,28 @@ export default function OnboardingPage() {
   const [orgDescription, setOrgDescription] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
-  const { refresh } = useOrganization();
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { organizations, isLoading: orgsLoading, refresh } = useOrganization();
   const router = useRouter();
+
+  // Only the first-run case belongs here: send unauthenticated visitors to
+  // login, and anyone who already has an organization back to the dashboard.
+  useEffect(() => {
+    if (!authLoading && !isAuthenticated) {
+      router.replace("/login");
+      return;
+    }
+    // Skip while completing: the success screen handles its own redirect so
+    // the "you're all set" confirmation isn't cut short.
+    if (
+      isAuthenticated &&
+      !orgsLoading &&
+      organizations.length > 0 &&
+      !isComplete
+    ) {
+      router.replace("/dashboard");
+    }
+  }, [authLoading, isAuthenticated, orgsLoading, organizations, isComplete, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

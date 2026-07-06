@@ -228,6 +228,10 @@ public func configure(_ app: Application) async throws {
     // ordering constraint as above: the VM model selects these columns.
     app.migrations.add(AddDesiredStateToVM())
 
+    // Same ordering constraint: the VM model selects ssh_public_key, so this must
+    // run before any data migration that loads the VM model (MigrateVMDisksToVolumes).
+    app.migrations.add(AddSSHPublicKeyToVM())
+
     // App settings migration (for signing keys, etc.)
     app.migrations.add(CreateAppSetting())
 
