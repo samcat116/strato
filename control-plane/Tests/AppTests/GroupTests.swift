@@ -65,6 +65,11 @@ final class GroupTests: BaseTestCase {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
 
+            // Authorization is now SpiceDB-driven: withhold the organization
+            // permission so the non-admin member is denied (previously this was
+            // inferred from the relational "member" role).
+            app.spicedbMockDeniedResources = ["organization"]
+
             // Create member user
             let memberUser = User(
                 username: "memberuser",

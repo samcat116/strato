@@ -4,64 +4,48 @@ import Fluent
 
 /// Centralized organization- and project-scoped access checks shared by controllers.
 ///
-/// These consolidate the `verifyOrganizationAccess` / `verifyOrganizationAdminAccess`
-/// (and project-scoped) helpers that were previously copy-pasted across
-/// `HierarchyController`, `GroupController`, `ResourceQuotaController`,
-/// `OrganizationalUnitController`, and `ProjectController`. Behavior and error
-/// messages are preserved exactly.
+/// SpiceDB is the single source of truth for authorization: these helpers delegate to
+/// `Request.can` (which applies the system-admin bypass and calls SpiceDB) rather than
+/// reading the relational `UserOrganization.role`. The relational role survives only as
+/// a display mirror written alongside the SpiceDB tuple.
+///
+/// Org-scoped checks map to the `organization` object's `view_organization` /
+/// `manage_members` permissions; project-scoped checks map to the `project` object's
+/// `view_project` / `manage_project` permissions, which resolve org/OU inheritance
+/// (and, once granted, project-level roles) through the schema.
 ///
 /// - Note: `OIDCController` deliberately keeps its own request-based variants: they
-///   grant access to system admins and use different error messages, so they are not
-///   interchangeable with the membership-only checks here.
+///   use different error messages and semantics, so they are not interchangeable.
 struct OrganizationAccessService {
-    /// Throws `.forbidden` unless the user is a member of the organization.
-    static func requireMember(user: User, organizationID: UUID, on db: Database) async throws {
-        guard let userID = user.id else {
-            throw Abort(.unauthorized)
-        }
-
-        let userOrg = try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == userID)
-            .filter(\.$organization.$id == organizationID)
-            .first()
-
-        guard userOrg != nil else {
+    /// Throws `.forbidden` unless the current user can view the organization.
+    static func requireMember(organizationID: UUID, on req: Request) async throws {
+        guard try await req.can("view_organization", on: "organization", id: organizationID.uuidString) else {
             throw Abort(.forbidden, reason: "Not a member of this organization")
         }
     }
 
-    /// Throws `.forbidden` unless the user is an admin of the organization.
-    static func requireAdmin(user: User, organizationID: UUID, on db: Database) async throws {
-        guard let userID = user.id else {
-            throw Abort(.unauthorized)
-        }
-
-        let userOrg = try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == userID)
-            .filter(\.$organization.$id == organizationID)
-            .first()
-
-        guard let userOrganization = userOrg, userOrganization.role == "admin" else {
+    /// Throws `.forbidden` unless the current user can manage the organization's members.
+    static func requireAdmin(organizationID: UUID, on req: Request) async throws {
+        guard try await req.can("manage_members", on: "organization", id: organizationID.uuidString) else {
             throw Abort(.forbidden, reason: "Admin access required")
         }
     }
 
-    /// Resolves the project's root organization and requires membership.
-    static func requireProjectMember(user: User, project: Project, on db: Database) async throws {
-        let orgID = try await rootOrganizationID(of: project, on: db)
-        try await requireMember(user: user, organizationID: orgID, on: db)
-    }
-
-    /// Resolves the project's root organization and requires admin role.
-    static func requireProjectAdmin(user: User, project: Project, on db: Database) async throws {
-        let orgID = try await rootOrganizationID(of: project, on: db)
-        try await requireAdmin(user: user, organizationID: orgID, on: db)
-    }
-
-    private static func rootOrganizationID(of project: Project, on db: Database) async throws -> UUID {
-        guard let orgID = try await project.getRootOrganizationId(on: db) else {
-            throw Abort(.internalServerError, reason: "Project has no organization")
+    /// Throws `.forbidden` unless the current user can view the project (via a direct
+    /// project role, a group grant, or inherited org/OU membership).
+    static func requireProjectMember(project: Project, on req: Request) async throws {
+        let projectID = try project.requireID()
+        guard try await req.can("view_project", on: "project", id: projectID.uuidString) else {
+            throw Abort(.forbidden, reason: "Not a member of this organization")
         }
-        return orgID
+    }
+
+    /// Throws `.forbidden` unless the current user can manage the project (via a direct
+    /// project admin role, a group admin grant, or inherited org/OU admin).
+    static func requireProjectAdmin(project: Project, on req: Request) async throws {
+        let projectID = try project.requireID()
+        guard try await req.can("manage_project", on: "project", id: projectID.uuidString) else {
+            throw Abort(.forbidden, reason: "Admin access required")
+        }
     }
 }

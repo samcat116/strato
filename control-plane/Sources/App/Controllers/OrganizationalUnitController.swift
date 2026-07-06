@@ -39,7 +39,7 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         // Get all OUs in the organization (top-level only)
         let ous = try await OrganizationalUnit.query(on: req.db)
@@ -83,7 +83,7 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
             throw Abort(.notFound, reason: "Organizational unit not found")
@@ -122,7 +122,7 @@ struct OrganizationalUnitController: RouteCollection {
         let createRequest = try req.content.decode(CreateOrganizationalUnitRequest.self)
 
         // Verify user has admin access to organization
-        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         // Validate parent OU if specified
         var parentOU: OrganizationalUnit?
@@ -191,7 +191,7 @@ struct OrganizationalUnitController: RouteCollection {
         let updateRequest = try req.content.decode(UpdateOrganizationalUnitRequest.self)
 
         // Verify user has admin access
-        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
             throw Abort(.notFound, reason: "Organizational unit not found")
@@ -258,7 +258,7 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         // Verify user has admin access
-        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
             throw Abort(.notFound, reason: "Organizational unit not found")
@@ -304,7 +304,7 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         // Verify user has access
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         guard let rootOU = try await OrganizationalUnit.find(ouID, on: req.db) else {
             throw Abort(.notFound, reason: "Organizational unit not found")
@@ -327,7 +327,7 @@ struct OrganizationalUnitController: RouteCollection {
         let moveRequest = try req.content.decode(MoveOrganizationalUnitRequest.self)
 
         // Verify user has admin access
-        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
             throw Abort(.notFound, reason: "Organizational unit not found")
@@ -387,7 +387,7 @@ struct OrganizationalUnitController: RouteCollection {
         }
 
         // Verify user has access
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         // Get sub-OUs
         let subOUs = try await OrganizationalUnit.query(on: req.db)
@@ -431,7 +431,7 @@ struct OrganizationalUnitController: RouteCollection {
         let createRequest = try req.content.decode(CreateOrganizationalUnitRequest.self)
 
         // Verify user has admin access to organization
-        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         // Validate parent OU exists and belongs to organization
         guard let parentOU = try await OrganizationalUnit.find(parentOUID, on: req.db) else {
