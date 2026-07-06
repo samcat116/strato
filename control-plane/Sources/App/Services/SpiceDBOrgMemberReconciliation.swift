@@ -11,34 +11,26 @@ import Fluent
 /// tuples from those rows so existing members keep access after a schema/tuple reset,
 /// and so any membership created out-of-band (migrations, fixtures) is reflected.
 ///
-/// The write is idempotent — an already-present tuple returns a 409 that we treat as
-/// success — so this is safe to run on every startup.
+/// Uses a single chunked, idempotent OPERATION_TOUCH batch rather than one HTTP
+/// round-trip per membership, so re-running on every boot stays cheap even at scale.
 func backfillOrganizationMemberRelationships(_ app: Application) async throws {
     let memberships = try await UserOrganization.query(on: app.db).all()
 
-    var backfilled = 0
-    for membership in memberships {
-        let userID = membership.$user.id
-        let organizationID = membership.$organization.id
-
-        do {
-            try await app.spicedb.writeRelationship(
-                entity: "organization",
-                entityId: organizationID.uuidString,
-                relation: membership.role,
-                subject: "user",
-                subjectId: userID.uuidString
-            )
-            backfilled += 1
-        } catch SpiceDBError.relationshipWriteFailed(let status) where status == .conflict {
-            // Relationship already exists, which is the common case.
-        }
+    let tuples = memberships.map { membership in
+        RelationshipTuple(
+            entity: "organization",
+            entityId: membership.$organization.id.uuidString,
+            relation: membership.role,
+            subject: "user",
+            subjectId: membership.$user.id.uuidString
+        )
     }
 
-    if backfilled > 0 {
+    try await app.spicedb.touchRelationships(tuples)
+    if !tuples.isEmpty {
         app.logger.notice(
             "Backfilled SpiceDB organization→member relationships",
-            metadata: ["count": .stringConvertible(backfilled)]
+            metadata: ["count": .stringConvertible(tuples.count)]
         )
     }
 }

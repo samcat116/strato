@@ -610,9 +610,9 @@ struct ProjectController: RouteCollection {
         // Verify user has admin access to current location
         try await OrganizationAccessService.requireProjectAdmin(project: project, on: req)
 
-        // Capture the current root organization so we can migrate the SpiceDB
-        // project→organization tuple if the destination resolves to a different one.
-        let oldRootOrganizationID = try await project.getRootOrganizationId(on: req.db)
+        // Capture the current immediate parent so we can migrate the SpiceDB
+        // project#parent tuple if the destination is a different parent.
+        let oldParentRef = project.spiceDBParentRef
 
         // Resolve and validate the destination, deriving its root organization.
         let destinationOrganizationID: UUID?
@@ -657,28 +657,31 @@ struct ProjectController: RouteCollection {
         try project.validate()
         try await project.save(on: req.db)
 
-        // Migrate the project→organization SpiceDB tuple when the root org changes.
-        // Project-scoped permissions (view_project/update_project, image and VM
-        // creation, ...) resolve via organization->admin, so without this the
-        // destination admins get 403s and the source org retains access (issue #267).
-        let newRootOrganizationID = try await project.getRootOrganizationId(on: req.db)
-        if oldRootOrganizationID != newRootOrganizationID {
-            if let oldRootOrganizationID {
+        // Migrate the project#parent SpiceDB tuple when the *immediate* parent
+        // changes — including org→OU moves within the same root org, which a
+        // root-org comparison would miss. Project-scoped permissions resolve through
+        // this parent, so a stale tuple leaves destination admins with 403s and the
+        // source retaining access (issue #267).
+        let newParentRef = project.spiceDBParentRef
+        if oldParentRef?.subjectType != newParentRef?.subjectType
+            || oldParentRef?.subjectId != newParentRef?.subjectId
+        {
+            if let oldParentRef {
                 try await req.spicedb.deleteRelationship(
                     entity: "project",
                     entityId: projectID.uuidString,
                     relation: "parent",
-                    subject: "organization",
-                    subjectId: oldRootOrganizationID.uuidString
+                    subject: oldParentRef.subjectType,
+                    subjectId: oldParentRef.subjectId.uuidString
                 )
             }
-            if let newRootOrganizationID {
+            if let newParentRef {
                 try await req.spicedb.writeRelationship(
                     entity: "project",
                     entityId: projectID.uuidString,
                     relation: "parent",
-                    subject: "organization",
-                    subjectId: newRootOrganizationID.uuidString
+                    subject: newParentRef.subjectType,
+                    subjectId: newParentRef.subjectId.uuidString
                 )
             }
         }
@@ -750,23 +753,23 @@ struct ProjectController: RouteCollection {
         project.path = try await project.buildPath(on: db)
         try await project.save(on: db)
 
-        // Write the SpiceDB project→organization relationship using the *persisted*
-        // project id. Without this tuple, project-scoped permissions that resolve via
-        // `organization->admin` (update_project, image/VM/volume creation, ...) can't
-        // resolve, so even the org admin who created the project gets 403s. OU-scoped
-        // projects still resolve to their root organization. See issue #267.
+        // Write the SpiceDB project#parent tuple against the *immediate* parent (the
+        // OU when OU-scoped, else the organization) using the persisted project id.
+        // Without it, project-scoped permissions can't resolve and even the creating
+        // admin gets 403s; pointing at the immediate parent is what lets OU-scoped
+        // projects inherit from the OU chain (see issue #267).
         guard let projectId = project.id else {
             throw Abort(.internalServerError, reason: "Project was not assigned an ID after save")
         }
-        guard let rootOrganizationID = try await project.getRootOrganizationId(on: db) else {
-            throw Abort(.internalServerError, reason: "Project has no organization")
+        guard let parent = project.spiceDBParentRef else {
+            throw Abort(.internalServerError, reason: "Project has no parent")
         }
         try await req.spicedb.writeRelationship(
             entity: "project",
             entityId: projectId.uuidString,
             relation: "parent",
-            subject: "organization",
-            subjectId: rootOrganizationID.uuidString
+            subject: parent.subjectType,
+            subjectId: parent.subjectId.uuidString
         )
 
         return project

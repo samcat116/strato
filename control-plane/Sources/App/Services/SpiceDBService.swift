@@ -9,6 +9,7 @@ protocol SpiceDBServiceProtocol {
         async throws
     func deleteRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String)
         async throws
+    func touchRelationships(_ tuples: [RelationshipTuple]) async throws
     func setOrganizationRole(userID: String, organizationID: String, oldRole: String?, newRole: String) async throws
     func removeOrganizationMember(userID: String, organizationID: String, role: String) async throws
     func addUserToGroup(userID: String, groupID: String) async throws
@@ -17,6 +18,16 @@ protocol SpiceDBServiceProtocol {
     func removeGroupFromProject(groupID: String, projectID: String, role: GroupProjectRole) async throws
     func checkGroupBasedPermission(userID: String, permission: String, resource: String, resourceId: String)
         async throws -> Bool
+}
+
+/// A single relationship to write. Used by `touchRelationships` for idempotent
+/// batch writes (backfills), where each tuple may or may not already exist.
+struct RelationshipTuple: Sendable, Equatable {
+    let entity: String
+    let entityId: String
+    let relation: String
+    let subject: String
+    let subjectId: String
 }
 
 // MARK: - Bulk Permission Checks
@@ -340,6 +351,52 @@ struct SpiceDBService: SpiceDBServiceProtocol {
             throw SpiceDBError.relationshipDeleteFailed(response.status)
         }
     }
+
+    /// Idempotently write many relationships in a few HTTP calls using
+    /// OPERATION_TOUCH (create-or-noop), chunked to stay under SpiceDB's
+    /// per-request update cap. Used by startup backfills so re-writing tuples that
+    /// already exist is cheap and never errors — unlike per-row OPERATION_CREATE.
+    func touchRelationships(_ tuples: [RelationshipTuple]) async throws {
+        guard !tuples.isEmpty else { return }
+        let url = URI(string: "\(endpoint)/v1/relationships/write")
+        // SpiceDB caps updates per WriteRelationships request (default 1000); stay well under.
+        let chunkSize = 500
+        var index = 0
+        while index < tuples.count {
+            let chunk = tuples[index..<min(index + chunkSize, tuples.count)]
+            let payload = WriteRelationshipsRequest(
+                updates: chunk.map { tuple in
+                    RelationshipUpdate(
+                        operation: .touch,
+                        relationship: Relationship(
+                            resource: ObjectReference(
+                                objectType: tuple.entity,
+                                objectId: tuple.entityId.uppercased()
+                            ),
+                            relation: tuple.relation,
+                            subject: SubjectReference(
+                                object: ObjectReference(
+                                    objectType: tuple.subject,
+                                    objectId: tuple.subjectId.uppercased()
+                                )
+                            )
+                        )
+                    )
+                }
+            )
+
+            let response = try await client.post(url) { req in
+                try req.content.encode(payload)
+                req.headers.add(name: .contentType, value: "application/json")
+                req.headers.add(name: .authorization, value: "Bearer \(presharedKey)")
+            }
+
+            guard response.status == .ok else {
+                throw SpiceDBError.relationshipWriteFailed(response.status)
+            }
+            index += chunkSize
+        }
+    }
 }
 
 // MARK: - DTOs
@@ -415,6 +472,7 @@ struct RelationshipUpdate: Content {
 
     enum Operation: String, Content {
         case create = "OPERATION_CREATE"
+        case touch = "OPERATION_TOUCH"
         case delete = "OPERATION_DELETE"
     }
 }
@@ -588,6 +646,20 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
 
     // The group helpers delegate to write/deleteRelationship so the recorder captures
     // them (tests assert on group grants), mirroring the real service's composition.
+    func touchRelationships(_ tuples: [RelationshipTuple]) async throws {
+        for tuple in tuples {
+            await recorder?.record(
+                SpiceDBMockRecorder.RelationshipWrite(
+                    entity: tuple.entity,
+                    entityId: tuple.entityId,
+                    relation: tuple.relation,
+                    subject: tuple.subject,
+                    subjectId: tuple.subjectId
+                )
+            )
+        }
+    }
+
     func addUserToGroup(userID: String, groupID: String) async throws {
         try await writeRelationship(
             entity: "group", entityId: groupID, relation: "member", subject: "user", subjectId: userID)

@@ -45,7 +45,9 @@ final class AuthorizationCheckTests {
         app.cleanupTestDatabase()
     }
 
-    private func body(_ items: [(key: String, resourceType: String, permission: String)]) -> AuthorizationController.CheckRequest {
+    private func body(
+        _ items: [(key: String, resourceType: String, permission: String)]
+    ) -> AuthorizationController.CheckRequest {
         AuthorizationController.CheckRequest(
             checks: items.map {
                 AuthorizationController.PermissionCheckItem(

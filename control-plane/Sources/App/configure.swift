@@ -270,11 +270,14 @@ public func configure(_ app: Application) async throws {
     if app.environment != .testing {
         try await ensureSpiceDBSchema(app)
         // Backfill SpiceDB tuples so existing data authorizes correctly after the
-        // schema/tuple reset and now that SpiceDB is the sole authorization source:
-        //  - project→parent tuples (projects created before the creation path wrote
-        //    them, or re-derived after a reset), so project-scoped permissions resolve.
+        // schema/tuple reset and now that SpiceDB is the sole authorization source.
+        // Each is a single chunked idempotent (TOUCH) batch. OU parents first so the
+        // project#parent → organizational_unit → organization chain resolves.
+        //  - organizational_unit#parent tuples (parent OU or organization).
+        //  - project#parent tuples against each project's immediate parent.
         //  - organization#<role>→user tuples for every relational membership, so
         //    existing members don't 403 once relational role checks are retired.
+        try await backfillOrganizationalUnitParentRelationships(app)
         try await backfillProjectOrganizationRelationships(app)
         try await backfillOrganizationMemberRelationships(app)
     }
