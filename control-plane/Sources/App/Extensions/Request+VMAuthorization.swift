@@ -12,29 +12,13 @@ extension Request {
     /// - Throws: `.unauthorized` if unauthenticated, `.notFound` if the VM does not
     ///   exist, `.forbidden` if the user lacks `permission` on this VM.
     func authorizedVM(_ vmID: UUID, permission: String) async throws -> VM {
-        guard let user = auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
-
         guard let vm = try await VM.find(vmID, on: db) else {
             throw Abort(.notFound)
         }
 
-        // System admins bypass all permission checks (matches SpiceDBAuthMiddleware).
-        if user.isSystemAdmin {
-            return vm
-        }
-
-        let hasPermission = try await spicedb.checkPermission(
-            subject: user.id?.uuidString ?? "",
-            permission: permission,
-            resource: "virtual_machine",
-            resourceId: vm.id?.uuidString ?? ""
-        )
-
-        guard hasPermission else {
-            throw Abort(.forbidden, reason: "Insufficient permissions for this VM")
-        }
+        // Delegates to the generic `authorize` helper (system-admin bypass + SpiceDB
+        // check live there); throws `.forbidden` if the user lacks `permission`.
+        try await authorize(permission, on: "virtual_machine", id: vm.id?.uuidString ?? "")
 
         return vm
     }
