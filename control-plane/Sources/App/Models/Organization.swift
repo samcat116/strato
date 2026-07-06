@@ -113,7 +113,9 @@ extension UserOrganization: Content {}
 
 struct CreateOrganizationRequest: Content {
     let name: String
-    let description: String
+    // Optional: the frontend omits this when the description field is left
+    // blank. Decoding a required field here 400s the whole create request.
+    let description: String?
 }
 
 struct UpdateOrganizationRequest: Content {
