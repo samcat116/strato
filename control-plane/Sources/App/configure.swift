@@ -215,6 +215,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddArchitectureToImage())
     app.migrations.add(CreateImageArtifact())
     app.migrations.add(BackfillImageArtifacts())
+    app.migrations.add(AddFetchStateToImageArtifact())
 
     // Hypervisor type migration
     app.migrations.add(AddHypervisorTypeToVM())

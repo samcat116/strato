@@ -20,8 +20,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { EditImageDialog } from "@/components/images/edit-image-dialog";
-import { useImage } from "@/lib/hooks/use-images";
+import { useImage, useDeleteArtifact } from "@/lib/hooks/use-images";
 import { imagesApi } from "@/lib/api/images";
+import type { ArtifactKind } from "@/types/api";
+
+function formatBytes(bytes: number): string {
+  const gb = bytes / 1024 / 1024 / 1024;
+  if (gb >= 1) return `${gb.toFixed(2)} GB`;
+  const mb = bytes / 1024 / 1024;
+  if (mb >= 1) return `${mb.toFixed(2)} MB`;
+  return `${(bytes / 1024).toFixed(2)} KB`;
+}
 
 function ImageStatusBadge({ status }: { status: string }) {
   const statusStyles: Record<string, string> = {
@@ -46,6 +55,7 @@ export default function ImageDetailPage() {
   const projectId = searchParams.get("projectId") || "";
   const { data: image, isLoading, error } = useImage(projectId, id);
   const [editOpen, setEditOpen] = useState(false);
+  const deleteArtifact = useDeleteArtifact(projectId);
 
   if (!id || !projectId) {
     return (
@@ -253,6 +263,89 @@ export default function ImageDetailPage() {
               </p>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Artifacts */}
+      <Card className="bg-gray-800 border-gray-700">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold text-gray-100 flex items-center justify-between">
+            <span>Artifacts</span>
+            {image.compatibleHypervisors &&
+              image.compatibleHypervisors.length > 0 && (
+                <span className="flex items-center gap-1">
+                  {image.compatibleHypervisors.map((h) => (
+                    <Badge
+                      key={h}
+                      variant="outline"
+                      className="border-gray-600 text-gray-300 capitalize"
+                    >
+                      {h}
+                    </Badge>
+                  ))}
+                </span>
+              )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {image.artifacts && image.artifacts.length > 0 ? (
+            <div className="space-y-2">
+              {image.artifacts.map((artifact) => (
+                <div
+                  key={artifact.kind}
+                  className="flex items-center justify-between rounded-md bg-gray-900/50 px-3 py-2"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Badge className="bg-gray-700 text-gray-100">
+                      {artifact.kind}
+                    </Badge>
+                    <span className="text-sm text-gray-100 truncate">
+                      {artifact.filename}
+                    </span>
+                    {artifact.status === "ready" ? (
+                      <span className="text-xs text-gray-500">
+                        {formatBytes(artifact.size)}
+                        {artifact.format ? ` · ${artifact.format}` : ""}
+                      </span>
+                    ) : artifact.status === "error" ? (
+                      <span className="text-xs text-red-400 truncate">
+                        {artifact.errorMessage || "Fetch failed"}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-blue-400">
+                        {artifact.status === "downloading"
+                          ? `Downloading${
+                              artifact.downloadProgress != null
+                                ? ` ${artifact.downloadProgress}%`
+                                : "..."
+                            }`
+                          : "Pending..."}
+                      </span>
+                    )}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-red-400 hover:text-red-300 hover:bg-gray-700"
+                    disabled={deleteArtifact.isPending}
+                    onClick={() =>
+                      deleteArtifact.mutate({
+                        imageId: id,
+                        kind: artifact.kind as ArtifactKind,
+                      })
+                    }
+                  >
+                    Remove
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">
+              No artifacts registered yet. Firecracker images need a kernel and
+              a rootfs; QEMU images need a disk image.
+            </p>
+          )}
         </CardContent>
       </Card>
 

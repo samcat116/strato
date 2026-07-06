@@ -236,8 +236,10 @@ struct VMSpecBuilder {
             )
         }
 
-        // One signed download descriptor per typed artifact.
-        let artifacts = (image.$artifacts.value ?? []).map { artifact in
+        // One signed download descriptor per typed artifact. Exclude any artifact
+        // that isn't fully materialized — a pending/downloading URL fetch has no
+        // real checksum or bytes yet and must never reach an agent.
+        let artifacts = (image.$artifacts.value ?? []).filter { $0.status == .ready }.map { artifact in
             ArtifactInfo(
                 kind: artifact.kind,
                 format: artifact.format?.rawValue,

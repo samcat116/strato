@@ -4,6 +4,7 @@ import Fluent
 import VaporTesting
 import NIOCore
 import NIOHTTP1
+import StratoShared
 @testable import App
 
 @Suite("Image Controller Tests", .serialized)
@@ -99,6 +100,83 @@ final class ImageControllerTests {
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
 
         return (body, boundary)
+    }
+
+    /// Creates multipart form data for a typed-artifact upload (`kind` + `file`).
+    static func createArtifactMultipartFormData(
+        kind: String,
+        filename: String,
+        fileContent: ByteBuffer,
+        boundary: String = "----TestBoundary\(UUID().uuidString)"
+    ) -> (Data, String) {
+        var body = Data()
+
+        // Kind field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"kind\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(kind)\r\n".data(using: .utf8)!)
+
+        // File field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+
+        var tempBuffer = fileContent
+        if let bytes = tempBuffer.readBytes(length: tempBuffer.readableBytes) {
+            body.append(Data(bytes))
+        }
+        body.append("\r\n".data(using: .utf8)!)
+
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        return (body, boundary)
+    }
+
+    /// Creates an empty image shell and returns its ID.
+    static func createEmptyImage(
+        app: Application,
+        project: Project,
+        authToken: String,
+        name: String = "FC Image",
+        architecture: CPUArchitecture = .x86_64
+    ) async throws -> UUID {
+        var imageID: UUID?
+        try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            req.headers.contentType = .json
+            try req.content.encode(
+                CreateImageRequest(name: name, sourceURL: nil, architecture: architecture))
+        } afterResponse: { res in
+            #expect(res.status == .ok)
+            imageID = try res.content.decode(ImageResponse.self).id
+        }
+        return try #require(imageID)
+    }
+
+    /// Uploads a single artifact to an image, returning the decoded response.
+    static func uploadArtifact(
+        app: Application,
+        project: Project,
+        imageID: UUID,
+        authToken: String,
+        kind: String,
+        filename: String,
+        fileContent: ByteBuffer
+    ) async throws -> ImageResponse {
+        let (body, boundary) = createArtifactMultipartFormData(
+            kind: kind, filename: filename, fileContent: fileContent)
+
+        var decoded: ImageResponse?
+        try await app.test(.POST, "/api/projects/\(project.id!)/images/\(imageID)/artifacts") { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            req.headers.contentType = HTTPMediaType(
+                type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+            req.body = ByteBuffer(data: body)
+        } afterResponse: { res in
+            #expect(res.status == .ok)
+            decoded = try res.content.decode(ImageResponse.self)
+        }
+        return try #require(decoded)
     }
 
     // MARK: - Test App Helper
@@ -353,24 +431,28 @@ final class ImageControllerTests {
         }
     }
 
-    @Test("Create image from URL returns 400 for missing sourceURL")
-    func testCreateImageFromURLMissingSourceURL() async throws {
+    @Test("Create image with no sourceURL creates an empty pending shell")
+    func testCreateImageEmptyShell() async throws {
         try await withImageTestApp { app, _, _, project, authToken, _ in
             try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 req.headers.contentType = .json
                 try req.content.encode(
                     CreateImageRequest(
-                        name: "No URL Image",
-                        description: nil,
+                        name: "Firecracker Shell",
+                        description: "Kernel + rootfs to follow",
                         sourceURL: nil,
-                        defaultCpu: nil,
-                        defaultMemory: nil,
-                        defaultDisk: nil,
-                        defaultCmdline: nil
+                        architecture: .arm64
                     ))
             } afterResponse: { res in
-                #expect(res.status == .badRequest)
+                #expect(res.status == .ok)
+
+                let response = try res.content.decode(ImageResponse.self)
+                #expect(response.name == "Firecracker Shell")
+                #expect(response.status == .pending)
+                #expect(response.architecture == .arm64)
+                #expect(response.artifacts.isEmpty)
+                #expect(response.compatibleHypervisors.isEmpty)
             }
         }
     }
@@ -831,6 +913,238 @@ final class ImageControllerTests {
                 // No auth header
             } afterResponse: { res in
                 #expect(res.status == .unauthorized)
+            }
+        }
+    }
+
+    // MARK: - Artifact Registration Tests
+
+    @Test("Registering kernel + rootfs makes an image Firecracker-ready")
+    func testRegisterFirecrackerArtifacts() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageID = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken)
+
+            // Kernel alone is not bootable — image stays pending.
+            let afterKernel = try await Self.uploadArtifact(
+                app: app, project: project, imageID: imageID, authToken: authToken,
+                kind: "kernel", filename: "vmlinux", fileContent: Self.createRawBuffer())
+            #expect(afterKernel.status == .pending)
+            #expect(afterKernel.compatibleHypervisors.isEmpty)
+            #expect(afterKernel.artifacts.contains { $0.kind == .kernel })
+
+            // Adding a rootfs completes the pair — image becomes ready.
+            let afterRootfs = try await Self.uploadArtifact(
+                app: app, project: project, imageID: imageID, authToken: authToken,
+                kind: "rootfs", filename: "rootfs.ext4", fileContent: Self.createRawBuffer())
+            #expect(afterRootfs.status == .ready)
+            #expect(afterRootfs.compatibleHypervisors.contains(.firecracker))
+            #expect(afterRootfs.artifacts.count == 2)
+
+            // The kernel artifact carries no disk format; the rootfs is raw.
+            let kernel = try #require(afterRootfs.artifacts.first { $0.kind == .kernel })
+            #expect(kernel.format == nil)
+            let rootfs = try #require(afterRootfs.artifacts.first { $0.kind == .rootfs })
+            #expect(rootfs.format == .raw)
+        }
+    }
+
+    @Test("Deleting the rootfs reverts a Firecracker image to pending")
+    func testDeleteArtifactRecomputesStatus() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageID = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken)
+            _ = try await Self.uploadArtifact(
+                app: app, project: project, imageID: imageID, authToken: authToken,
+                kind: "kernel", filename: "vmlinux", fileContent: Self.createRawBuffer())
+            let ready = try await Self.uploadArtifact(
+                app: app, project: project, imageID: imageID, authToken: authToken,
+                kind: "rootfs", filename: "rootfs.ext4", fileContent: Self.createRawBuffer())
+            #expect(ready.status == .ready)
+
+            try await app.test(
+                .DELETE, "/api/projects/\(project.id!)/images/\(imageID)/artifacts/rootfs"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(ImageResponse.self)
+                #expect(response.status == .pending)
+                #expect(response.compatibleHypervisors.isEmpty)
+                #expect(response.artifacts.count == 1)
+                #expect(response.artifacts.first?.kind == .kernel)
+            }
+        }
+    }
+
+    @Test("Re-uploading an artifact of the same kind replaces it")
+    func testUploadArtifactReplacesExisting() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageID = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken)
+            _ = try await Self.uploadArtifact(
+                app: app, project: project, imageID: imageID, authToken: authToken,
+                kind: "rootfs", filename: "old.ext4", fileContent: Self.createRawBuffer(size: 512))
+            let replaced = try await Self.uploadArtifact(
+                app: app, project: project, imageID: imageID, authToken: authToken,
+                kind: "rootfs", filename: "new.ext4", fileContent: Self.createRawBuffer(size: 2048))
+
+            let rootfsArtifacts = replaced.artifacts.filter { $0.kind == .rootfs }
+            #expect(rootfsArtifacts.count == 1)
+            #expect(rootfsArtifacts.first?.filename == "new.ext4")
+            #expect(rootfsArtifacts.first?.size == 2048)
+        }
+    }
+
+    @Test("Uploading an unknown artifact kind returns 400")
+    func testUploadArtifactUnknownKind() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageID = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken)
+
+            let (body, boundary) = Self.createArtifactMultipartFormData(
+                kind: "bogus", filename: "x.bin", fileContent: Self.createRawBuffer())
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images/\(imageID)/artifacts") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("Fetching an artifact from a URL creates a pending artifact")
+    func testFetchArtifactCreatesPending() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageID = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken)
+
+            try await app.test(
+                .POST, "/api/projects/\(project.id!)/images/\(imageID)/artifacts/fetch"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .json
+                try req.content.encode(
+                    ArtifactFetchRequest(
+                        kind: "kernel", sourceURL: "https://example.com/vmlinux"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(ImageResponse.self)
+                // The pending kernel exists but does not make the image bootable.
+                #expect(response.status == .pending)
+                #expect(response.compatibleHypervisors.isEmpty)
+                let kernel = try #require(response.artifacts.first { $0.kind == .kernel })
+                #expect(kernel.status == .pending)
+                #expect(kernel.sourceURL == "https://example.com/vmlinux")
+            }
+
+            // The background fetch was scheduled for exactly one artifact.
+            let mock = try #require(app.imageFetchService as? MockImageFetchService)
+            let scheduled = await mock.startedArtifactFetches
+            #expect(scheduled.count == 1)
+        }
+    }
+
+    @Test("Fetching an artifact rejects a non-HTTP URL")
+    func testFetchArtifactInvalidURL() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageID = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken)
+
+            try await app.test(
+                .POST, "/api/projects/\(project.id!)/images/\(imageID)/artifacts/fetch"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .json
+                try req.content.encode(
+                    ArtifactFetchRequest(kind: "rootfs", sourceURL: "ftp://example.com/rootfs"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("Fetch artifact is denied (403) when SpiceDB withholds update")
+    func testFetchArtifactForbiddenWhenDenied() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageID = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken)
+            app.spicedbMockAllows = false
+
+            try await app.test(
+                .POST, "/api/projects/\(project.id!)/images/\(imageID)/artifacts/fetch"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .json
+                try req.content.encode(
+                    ArtifactFetchRequest(kind: "kernel", sourceURL: "https://example.com/vmlinux"))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+        }
+    }
+
+    @Test("A pending URL artifact is not sent to agents by buildImageInfo")
+    func testPendingArtifactExcludedFromImageInfo() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            // A ready Firecracker image (kernel + rootfs uploaded)...
+            let imageID = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken)
+            _ = try await Self.uploadArtifact(
+                app: app, project: project, imageID: imageID, authToken: authToken,
+                kind: "kernel", filename: "vmlinux", fileContent: Self.createRawBuffer())
+            let ready = try await Self.uploadArtifact(
+                app: app, project: project, imageID: imageID, authToken: authToken,
+                kind: "rootfs", filename: "rootfs.ext4", fileContent: Self.createRawBuffer())
+            #expect(ready.status == .ready)
+
+            // ...gains a still-pending disk-image via URL.
+            try await app.test(
+                .POST, "/api/projects/\(project.id!)/images/\(imageID)/artifacts/fetch"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .json
+                try req.content.encode(
+                    ArtifactFetchRequest(
+                        kind: "disk-image", sourceURL: "https://example.com/disk.qcow2"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            let image = try #require(try await Image.find(imageID, on: app.db))
+            try await image.$artifacts.load(on: app.db)
+            let info = try VMSpecBuilder.buildImageInfo(
+                from: image,
+                controlPlaneURL: "http://localhost:8080",
+                agentName: "agent-1",
+                signingKey: String(repeating: "a", count: 64)
+            )
+            // Only the two ready artifacts are offered; the pending disk-image is withheld.
+            #expect(info.artifacts.count == 2)
+            #expect(!info.artifacts.contains { $0.kind == .diskImage })
+        }
+    }
+
+    @Test("Upload artifact is denied (403) when SpiceDB withholds update")
+    func testUploadArtifactForbiddenWhenDenied() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageID = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken)
+            app.spicedbMockAllows = false
+
+            let (body, boundary) = Self.createArtifactMultipartFormData(
+                kind: "kernel", filename: "vmlinux", fileContent: Self.createRawBuffer())
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images/\(imageID)/artifacts") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
             }
         }
     }

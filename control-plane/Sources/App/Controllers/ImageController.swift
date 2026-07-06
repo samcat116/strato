@@ -18,6 +18,12 @@ struct ImageController: RouteCollection {
             image.delete(use: delete)
             image.get("download", use: download)
             image.get("status", use: status)
+
+            // Typed-artifact management (kernel/rootfs/initramfs for Firecracker,
+            // or replacing an image's disk-image).
+            image.on(.POST, "artifacts", body: .stream, use: uploadArtifact)
+            image.post("artifacts", "fetch", use: fetchArtifact)
+            image.delete("artifacts", ":kind", use: deleteArtifact)
         }
     }
 
@@ -156,8 +162,13 @@ struct ImageController: RouteCollection {
     ) async throws -> ImageResponse {
         let createRequest = try req.content.decode(CreateImageRequest.self)
 
+        // No source URL means "create an empty image shell" — a metadata-only
+        // image whose artifacts (kernel/rootfs/initramfs or a disk-image) are
+        // registered afterwards via the artifacts endpoint. This is how a
+        // Firecracker image, which has no single downloadable disk, is created.
         guard let sourceURL = createRequest.sourceURL else {
-            throw Abort(.badRequest, reason: "sourceURL is required for URL fetch")
+            return try await createEmpty(
+                req: req, projectID: projectID, userID: userID, createRequest: createRequest)
         }
 
         // Validate URL
@@ -227,6 +238,64 @@ struct ImageController: RouteCollection {
         }
 
         return ImageResponse(from: image)
+    }
+
+    // MARK: - Create Empty Image Shell
+
+    /// Creates a metadata-only image with no artifacts yet (status `.pending`).
+    /// Artifacts are attached afterwards via `uploadArtifact`; the image becomes
+    /// `.ready` once its artifact set is bootable by some hypervisor.
+    private func createEmpty(
+        req: Request,
+        projectID: UUID,
+        userID: UUID,
+        createRequest: CreateImageRequest
+    ) async throws -> ImageResponse {
+        let image = Image(
+            name: createRequest.name,
+            description: createRequest.description ?? "",
+            projectID: projectID,
+            filename: "",
+            architecture: createRequest.architecture ?? .x86_64,
+            status: .pending,
+            uploadedByID: userID,
+            defaultCpu: createRequest.defaultCpu,
+            defaultMemory: createRequest.defaultMemory,
+            defaultDisk: createRequest.defaultDisk,
+            defaultCmdline: createRequest.defaultCmdline
+        )
+        try await image.save(on: req.db)
+
+        try await writeImageRelationships(
+            req: req, imageID: image.id!, projectID: projectID, userID: userID)
+
+        req.logger.info(
+            "Empty image shell created",
+            metadata: ["image_id": .string(image.id!.uuidString)])
+
+        // Relation isn't loaded yet, but an empty shell has no artifacts anyway.
+        image.$artifacts.value = []
+        return ImageResponse(from: image)
+    }
+
+    /// Writes the standard SpiceDB ownership relationships for a new image.
+    private func writeImageRelationships(
+        req: Request, imageID: UUID, projectID: UUID, userID: UUID
+    ) async throws {
+        try await req.spicedb.writeRelationship(
+            entity: "image",
+            entityId: imageID.uuidString,
+            relation: "project",
+            subject: "project",
+            subjectId: projectID.uuidString
+        )
+        try await req.spicedb.writeRelationship(
+            entity: "image",
+            entityId: imageID.uuidString,
+            relation: "owner",
+            subject: "user",
+            subjectId: userID.uuidString
+        )
     }
 
     // MARK: - Create from File Upload
@@ -388,6 +457,293 @@ struct ImageController: RouteCollection {
             ])
 
         return ImageResponse(from: tempImage)
+    }
+
+    // MARK: - Upload Artifact
+
+    /// Registers (or replaces) a single typed artifact on an existing image.
+    ///
+    /// This is what makes an image usable by direct-kernel-boot hypervisors:
+    /// upload a `kernel` and a `rootfs` (and optionally an `initramfs`) to make
+    /// the image Firecracker-compatible. Uploading a `disk-image` replaces the
+    /// QEMU boot disk. The image transitions to `.ready` once its artifact set
+    /// satisfies at least one hypervisor.
+    func uploadArtifact(req: Request) async throws -> ImageResponse {
+        guard let user = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+        guard let projectID = req.parameters.get("projectID", as: UUID.self),
+            let imageID = req.parameters.get("imageID", as: UUID.self)
+        else {
+            throw Abort(.badRequest, reason: "Invalid project or image ID")
+        }
+
+        guard let image = try await Image.find(imageID, on: req.db) else {
+            throw Abort(.notFound, reason: "Image not found")
+        }
+        guard image.$project.id == projectID else {
+            throw Abort(.notFound, reason: "Image not found in project")
+        }
+
+        let hasPermission = try await req.spicedb.checkPermission(
+            subject: user.id?.uuidString ?? "",
+            permission: "update",
+            resource: "image",
+            resourceId: imageID.uuidString
+        )
+        guard hasPermission else {
+            throw Abort(.forbidden, reason: "Access denied to update image")
+        }
+
+        // Collect and parse the multipart body (mirrors the create-upload path).
+        guard let body = try await req.body.collect(max: nil).get() else {
+            throw Abort(.badRequest, reason: "Empty request body")
+        }
+        guard req.headers.contentType?.parameters["boundary"] != nil else {
+            throw Abort(.badRequest, reason: "Missing boundary in multipart form")
+        }
+        let form = try FormDataDecoder().decode(ArtifactUploadForm.self, from: body, headers: req.headers)
+
+        guard let kindString = form.kind, let kind = ArtifactKind(rawValue: kindString) else {
+            throw Abort(.badRequest, reason: "Missing or unknown artifact kind '\(form.kind ?? "")'")
+        }
+        guard let file = form.file else {
+            throw Abort(.badRequest, reason: "No file uploaded")
+        }
+        let filename = try ImageValidationService.validateArtifactFilename(file.filename)
+
+        // Disk-like artifacts carry a format (qcow2/raw); kernel/initramfs are opaque.
+        let format: ImageFormat?
+        switch kind {
+        case .diskImage, .rootfs:
+            format = ImageValidationService.detectFormat(from: file.data)
+        case .kernel, .initramfs:
+            format = nil
+        }
+
+        let storagePath = ImageStorageService.storagePath(from: req.application)
+        let relativePath = try await ImageStorageService.saveArtifactFile(
+            data: file.data,
+            storagePath: storagePath,
+            projectId: projectID,
+            imageId: imageID,
+            kind: kind.rawValue,
+            filename: filename
+        )
+        let fullPath = ImageStorageService.getFilePath(storagePath: storagePath, relativePath: relativePath)
+        let checksum = try ImageValidationService.computeChecksum(filePath: fullPath)
+        let size = try ImageStorageService.getFileSize(storagePath: storagePath, relativePath: relativePath)
+
+        // Replace any existing artifact of this kind (unique on image_id, kind),
+        // removing its stored file first.
+        if let existing = try await image.$artifacts.query(on: req.db).filter(\.$kind == kind).first() {
+            try? ImageStorageService.deleteFileAt(storagePath: storagePath, relativePath: existing.storagePath)
+            try await existing.delete(on: req.db)
+        }
+
+        let artifact = ImageArtifact(
+            imageID: imageID,
+            kind: kind,
+            format: format,
+            architecture: image.architecture,
+            filename: filename,
+            size: size,
+            checksum: checksum,
+            storagePath: relativePath
+        )
+        try await artifact.save(on: req.db)
+
+        // Keep the image's legacy single-file columns pointed at the disk-image so
+        // the QEMU disk path and pre-artifact agents stay coherent.
+        if kind == .diskImage {
+            image.filename = filename
+            image.size = size
+            image.format = format ?? .raw
+            image.checksum = checksum
+            image.storagePath = relativePath
+            try await image.save(on: req.db)
+        }
+
+        try await recomputeStatus(image: image, on: req.db)
+
+        req.logger.info(
+            "Image artifact uploaded",
+            metadata: [
+                "image_id": .string(imageID.uuidString),
+                "kind": .string(kind.rawValue),
+                "filename": .string(filename),
+                "size": .stringConvertible(size),
+            ])
+
+        try await image.$artifacts.load(on: req.db)
+        return ImageResponse(from: image)
+    }
+
+    // MARK: - Fetch Artifact from URL
+
+    /// Registers a typed artifact to be fetched from a URL in the background.
+    /// Creates a `pending` artifact immediately and returns 200 with the image;
+    /// the artifact becomes `ready` (and the image bootable) once the download
+    /// completes. Replaces any existing artifact of the same kind.
+    func fetchArtifact(req: Request) async throws -> ImageResponse {
+        guard let user = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+        guard let projectID = req.parameters.get("projectID", as: UUID.self),
+            let imageID = req.parameters.get("imageID", as: UUID.self)
+        else {
+            throw Abort(.badRequest, reason: "Invalid project or image ID")
+        }
+
+        guard let image = try await Image.find(imageID, on: req.db) else {
+            throw Abort(.notFound, reason: "Image not found")
+        }
+        guard image.$project.id == projectID else {
+            throw Abort(.notFound, reason: "Image not found in project")
+        }
+
+        let hasPermission = try await req.spicedb.checkPermission(
+            subject: user.id?.uuidString ?? "",
+            permission: "update",
+            resource: "image",
+            resourceId: imageID.uuidString
+        )
+        guard hasPermission else {
+            throw Abort(.forbidden, reason: "Access denied to update image")
+        }
+
+        let fetchRequest = try req.content.decode(ArtifactFetchRequest.self)
+        guard let kind = ArtifactKind(rawValue: fetchRequest.kind) else {
+            throw Abort(.badRequest, reason: "Unknown artifact kind '\(fetchRequest.kind)'")
+        }
+        guard let url = URL(string: fetchRequest.sourceURL),
+            url.scheme == "http" || url.scheme == "https"
+        else {
+            throw Abort(.badRequest, reason: "Invalid source URL")
+        }
+        let filename = try ImageValidationService.validateArtifactFilename(
+            url.lastPathComponent.isEmpty ? kind.rawValue : url.lastPathComponent)
+
+        // The storage layout mirrors uploaded artifacts: {project}/{image}/{kind}/{filename}.
+        let relativePath = "\(projectID)/\(imageID)/\(kind.rawValue)/\(filename)"
+        let storagePath = ImageStorageService.storagePath(from: req.application)
+
+        // Replace any existing artifact of this kind (unique on image_id, kind).
+        if let existing = try await image.$artifacts.query(on: req.db).filter(\.$kind == kind).first() {
+            try? ImageStorageService.deleteFileAt(storagePath: storagePath, relativePath: existing.storagePath)
+            try await existing.delete(on: req.db)
+        }
+
+        // Create the artifact in a pending state; the background fetch fills in
+        // size/checksum/format and flips it to ready.
+        let artifact = ImageArtifact(
+            imageID: imageID,
+            kind: kind,
+            format: nil,
+            architecture: image.architecture,
+            filename: filename,
+            size: 0,
+            checksum: "",
+            storagePath: relativePath,
+            status: .pending,
+            sourceURL: fetchRequest.sourceURL
+        )
+        try await artifact.save(on: req.db)
+
+        // Removing a prior ready artifact may drop the image below bootable.
+        try await recomputeStatus(image: image, on: req.db)
+
+        let artifactId = artifact.id!
+        Task {
+            do {
+                try await req.imageFetchService.startArtifactFetch(artifactId: artifactId)
+            } catch {
+                req.logger.error(
+                    "Failed to start artifact fetch: \(error)",
+                    metadata: ["artifact_id": .string(artifactId.uuidString)])
+            }
+        }
+
+        req.logger.info(
+            "Artifact fetch queued",
+            metadata: [
+                "image_id": .string(imageID.uuidString),
+                "kind": .string(kind.rawValue),
+                "source_url": .string(fetchRequest.sourceURL),
+            ])
+
+        try await image.$artifacts.load(on: req.db)
+        return ImageResponse(from: image)
+    }
+
+    // MARK: - Delete Artifact
+
+    /// Removes a single typed artifact from an image, deleting its stored file
+    /// and recomputing whether the image is still bootable.
+    func deleteArtifact(req: Request) async throws -> ImageResponse {
+        guard let user = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+        guard let projectID = req.parameters.get("projectID", as: UUID.self),
+            let imageID = req.parameters.get("imageID", as: UUID.self),
+            let kindString = req.parameters.get("kind")
+        else {
+            throw Abort(.badRequest, reason: "Invalid project, image, or artifact kind")
+        }
+        guard let kind = ArtifactKind(rawValue: kindString) else {
+            throw Abort(.badRequest, reason: "Unknown artifact kind '\(kindString)'")
+        }
+
+        guard let image = try await Image.find(imageID, on: req.db) else {
+            throw Abort(.notFound, reason: "Image not found")
+        }
+        guard image.$project.id == projectID else {
+            throw Abort(.notFound, reason: "Image not found in project")
+        }
+
+        let hasPermission = try await req.spicedb.checkPermission(
+            subject: user.id?.uuidString ?? "",
+            permission: "update",
+            resource: "image",
+            resourceId: imageID.uuidString
+        )
+        guard hasPermission else {
+            throw Abort(.forbidden, reason: "Access denied to update image")
+        }
+
+        guard let artifact = try await image.$artifacts.query(on: req.db).filter(\.$kind == kind).first() else {
+            throw Abort(.notFound, reason: "Image has no \(kind.rawValue) artifact")
+        }
+
+        let storagePath = ImageStorageService.storagePath(from: req.application)
+        try? ImageStorageService.deleteFileAt(storagePath: storagePath, relativePath: artifact.storagePath)
+        try await artifact.delete(on: req.db)
+
+        try await recomputeStatus(image: image, on: req.db)
+
+        req.logger.info(
+            "Image artifact deleted",
+            metadata: ["image_id": .string(imageID.uuidString), "kind": .string(kind.rawValue)])
+
+        try await image.$artifacts.load(on: req.db)
+        return ImageResponse(from: image)
+    }
+
+    /// Recomputes an image's status from its current artifact set: `.ready` when
+    /// some hypervisor can boot it, otherwise `.pending`. Persists only on change.
+    /// Never overrides an `.error` state or an in-progress download/upload.
+    private func recomputeStatus(image: Image, on db: any Database) async throws {
+        try await image.$artifacts.load(on: db)
+
+        guard image.status == .ready || image.status == .pending else {
+            return  // don't clobber error/downloading/uploading/validating states
+        }
+
+        let newStatus: ImageStatus = image.compatibleHypervisors().isEmpty ? .pending : .ready
+        if image.status != newStatus {
+            image.status = newStatus
+            try await image.save(on: db)
+        }
     }
 
     // MARK: - Update Image
@@ -707,4 +1063,18 @@ struct ImageUploadForm: Content {
     var defaultMemory: Int?
     var defaultDisk: Int?
     var defaultCmdline: String?
+}
+
+/// Multipart form for registering a single typed artifact on an image.
+struct ArtifactUploadForm: Content {
+    /// Raw value of `ArtifactKind` (disk-image/kernel/rootfs/initramfs).
+    var kind: String?
+    var file: File?
+}
+
+/// JSON body for registering a single typed artifact fetched from a URL.
+struct ArtifactFetchRequest: Content {
+    /// Raw value of `ArtifactKind` (disk-image/kernel/rootfs/initramfs).
+    let kind: String
+    let sourceURL: String
 }

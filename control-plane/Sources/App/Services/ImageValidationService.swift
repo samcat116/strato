@@ -138,6 +138,47 @@ struct ImageValidationService {
         return sanitized
     }
 
+    /// Validates a filename for a typed artifact (kernel/rootfs/initramfs/disk-image).
+    ///
+    /// Firecracker artifacts don't fit the disk-image extension whitelist: kernels
+    /// are commonly extensionless (`vmlinux`) or `.bin`/`.elf`, root filesystems can
+    /// be `.ext4`/`.squashfs`, and initramfs images are often `.cpio.gz`. This keeps
+    /// the path-traversal and safe-character guarantees of `validateFilename` while
+    /// accepting the broader set of artifact extensions.
+    static func validateArtifactFilename(_ filename: String) throws -> String {
+        // Remove any path components
+        let sanitized = (filename as NSString).lastPathComponent
+
+        guard !sanitized.isEmpty else {
+            throw ImageError.invalidFormat("Empty filename")
+        }
+
+        guard !sanitized.hasPrefix(".") else {
+            throw ImageError.invalidFormat("Hidden files not allowed")
+        }
+
+        // Broad whitelist covering disk images, kernels, root filesystems, and
+        // initramfs archives. Extensionless names (e.g. `vmlinux`) are allowed.
+        let validExtensions: Set<String> = [
+            "qcow2", "img", "raw", "iso",  // disk / rootfs images
+            "bin", "elf",  // kernels
+            "ext2", "ext3", "ext4", "squashfs",  // root filesystems
+            "cpio", "gz", "xz", "lz4", "zst",  // initramfs archives / compression
+        ]
+        let ext = (sanitized as NSString).pathExtension.lowercased()
+        guard validExtensions.contains(ext) || ext.isEmpty else {
+            throw ImageError.invalidFormat("Invalid file extension: \(ext)")
+        }
+
+        // Ensure filename only contains safe characters
+        let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        guard sanitized.unicodeScalars.allSatisfy({ allowedCharacters.contains($0) }) else {
+            throw ImageError.invalidFormat("Filename contains invalid characters")
+        }
+
+        return sanitized
+    }
+
     /// Gets the QCOW2 virtual size (if applicable)
     static func getQCOW2VirtualSize(filePath: String) throws -> Int64? {
         let format = try detectFormat(filePath: filePath)

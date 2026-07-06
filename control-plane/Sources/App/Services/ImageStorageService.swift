@@ -114,6 +114,47 @@ struct ImageStorageService {
         return "\(projectId)/\(imageId)/\(filename)"
     }
 
+    /// Saves a typed artifact under a per-kind subdirectory so artifacts of
+    /// different kinds can't collide on filename (e.g. a `rootfs` and a
+    /// `disk-image` both named `disk.img`).
+    /// Structure: {storagePath}/{projectId}/{imageId}/{kind}/{filename}
+    /// Returns the relative storage path.
+    static func saveArtifactFile(
+        data: ByteBuffer,
+        storagePath: String,
+        projectId: UUID,
+        imageId: UUID,
+        kind: String,
+        filename: String
+    ) async throws -> String {
+        let directoryPath =
+            "\(buildDirectoryPath(storagePath: storagePath, projectId: projectId, imageId: imageId))/\(kind)"
+        try FileManager.default.createDirectory(
+            atPath: directoryPath,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+
+        let filePath = "\(directoryPath)/\(filename)"
+
+        var buffer = data
+        guard let bytes = buffer.readBytes(length: buffer.readableBytes) else {
+            throw ImageError.storageFailed("Failed to read file data")
+        }
+        try Data(bytes).write(to: URL(fileURLWithPath: filePath))
+
+        return "\(projectId)/\(imageId)/\(kind)/\(filename)"
+    }
+
+    /// Deletes a single stored file by its relative path (leaves the image
+    /// directory in place for its remaining artifacts).
+    static func deleteFileAt(storagePath: String, relativePath: String) throws {
+        let fullPath = getFilePath(storagePath: storagePath, relativePath: relativePath)
+        if FileManager.default.fileExists(atPath: fullPath) {
+            try FileManager.default.removeItem(atPath: fullPath)
+        }
+    }
+
     /// Saves a file from a file handle (for streaming uploads)
     static func saveFileStreaming(
         from fileHandle: FileHandle,

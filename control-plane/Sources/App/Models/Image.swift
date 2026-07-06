@@ -245,9 +245,11 @@ extension Image {
     /// artifacts is compatible with nothing.
     func compatibleHypervisors() -> Set<HypervisorType> {
         // `$artifacts.value` is nil when the relation isn't eager-loaded, which
-        // reads as "no known artifacts" rather than crashing on access.
+        // reads as "no known artifacts" rather than crashing on access. Only
+        // `.ready` artifacts count — a still-downloading rootfs must not make the
+        // image look bootable (or get sent to an agent).
         let loaded = $artifacts.value ?? []
-        let matching = loaded.filter { $0.architecture == architecture }
+        let matching = loaded.filter { $0.architecture == architecture && $0.status == .ready }
         let kinds = Set(matching.map(\.kind))
 
         var result: Set<HypervisorType> = []
