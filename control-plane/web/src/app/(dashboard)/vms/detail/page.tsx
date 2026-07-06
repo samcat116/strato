@@ -21,6 +21,7 @@ import {
   VMActions,
   LogViewer,
   VMVolumesCard,
+  VMNetworkCard,
 } from "@/components/vms";
 import { useVM, useInvalidateVMs } from "@/lib/hooks";
 
@@ -253,6 +254,9 @@ export default function VMDetailPage() {
 
           {/* Attached volumes */}
           <VMVolumesCard vm={vm} />
+
+          {/* Network interfaces */}
+          <VMNetworkCard vm={vm} />
         </TabsContent>
 
         <TabsContent value="console" className="mt-6">

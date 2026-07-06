@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import Vapor
 
 /// Creates the `logical_networks` table and seeds the "default" network every
@@ -48,11 +49,25 @@ struct CreateLogicalNetwork: AsyncMigration {
             gateway = IPAMService.firstHostAddress(inSubnet: subnet)
         }
 
-        try await LogicalNetwork(
-            name: LogicalNetwork.defaultNetworkName,
-            subnet: subnet,
-            gateway: gateway
-        ).save(on: database)
+        // Seed via raw SQL rather than the `LogicalNetwork` model so this
+        // migration stays pinned to the columns that exist at this point in
+        // history: later migrations add columns (e.g. project_id) that the model
+        // now carries, and a model-based insert here would reference them before
+        // they exist.
+        guard let sql = database as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "CreateLogicalNetwork requires an SQL database")
+        }
+        // Timestamps are nullable and omitted here; the @Timestamp fields populate
+        // on the first model save that touches this row.
+        try await sql.insert(into: "logical_networks")
+            .columns("id", "name", "subnet", "gateway")
+            .values(
+                SQLBind(UUID()),
+                SQLBind(LogicalNetwork.defaultNetworkName),
+                SQLBind(subnet),
+                SQLBind(gateway)
+            )
+            .run()
     }
 
     func revert(on database: Database) async throws {

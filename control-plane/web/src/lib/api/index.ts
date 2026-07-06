@@ -15,3 +15,4 @@ export { groupsApi } from "./groups";
 export { organizationalUnitsApi } from "./organizational-units";
 export { quotasApi } from "./quotas";
 export { hierarchyApi } from "./hierarchy";
+export { networksApi } from "./networks";

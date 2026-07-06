@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   Monitor,
   HardDrive,
+  Network,
   Server,
   Settings,
   Plus,
@@ -150,6 +151,15 @@ export function Sidebar({ onCreateVM, onAddAgent }: SidebarProps) {
           <SidebarLink href="/images">Images</SidebarLink>
           <SidebarLink href="/storage/volumes">Volumes</SidebarLink>
           <SidebarLink href="/storage/snapshots">Snapshots</SidebarLink>
+        </SidebarSection>
+
+        {/* Networking Section */}
+        <SidebarSection
+          id="networking-section"
+          title="Networking"
+          icon={<Network className="h-4 w-4" />}
+        >
+          <SidebarLink href="/networks">Networks</SidebarLink>
         </SidebarSection>
 
         {/* Nodes Section */}
