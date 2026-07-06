@@ -73,7 +73,7 @@ export function VMTable({ vms, isLoading, onRefresh }: VMTableProps) {
               )}
             </TableCell>
             <TableCell>
-              <VMStatusBadge status={vm.status} />
+              <VMStatusBadge status={vm.status} vmId={vm.id} />
             </TableCell>
             <TableCell className="text-gray-300">
               {vm.cpu} / {vm.maxCpu} cores

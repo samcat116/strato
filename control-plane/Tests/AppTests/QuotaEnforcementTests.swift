@@ -266,9 +266,11 @@ final class QuotaEnforcementTests {
                         name: "fits", imageId: image.id, projectId: project.id,
                         environment: "development", cpu: 2, memory: gb(4), disk: gb(20)))
             } afterResponse: { res in
-                #expect(res.status == .ok)
-                let vm = try res.content.decode(VM.self)
-                createdVMID = vm.id
+                // Creation is asynchronous (issue #259): the endpoint commits the
+                // VM row + quota reservation, then accepts with an operation record.
+                #expect(res.status == .accepted)
+                let operation = try res.content.decode(OperationResponse.self)
+                createdVMID = operation.vmId
             }
 
             let afterCreate = try await ResourceQuota.find(quota.id, on: app.db)!
@@ -277,11 +279,20 @@ final class QuotaEnforcementTests {
             #expect(afterCreate.reservedStorage == gb(20))
             #expect(afterCreate.vmCount == 1)
 
+            // Wait for the background create dispatch (which fails — no agents run
+            // in tests) to complete its operation, so the DELETE below isn't
+            // rejected by the pending-operation conflict guard.
+            try await waitForNoPendingOperations(vmID: createdVMID!, on: app.db)
+
             try await app.test(.DELETE, "/api/vms/\(createdVMID!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
-                #expect(res.status == .ok)
+                #expect(res.status == .accepted)
             }
+
+            // Deletion is asynchronous too: the row disappears and the quota is
+            // released once the background task completes.
+            try await waitForVMDeletion(createdVMID!, on: app.db)
 
             let afterDelete = try await ResourceQuota.find(quota.id, on: app.db)!
             #expect(afterDelete.reservedVCPUs == 0)
@@ -289,5 +300,25 @@ final class QuotaEnforcementTests {
             #expect(afterDelete.reservedStorage == 0)
             #expect(afterDelete.vmCount == 0)
         }
+    }
+
+    private func waitForNoPendingOperations(vmID: UUID, on db: any Database) async throws {
+        for _ in 0..<100 {
+            let pending = try await VMOperation.query(on: db)
+                .filter(\.$vmID == vmID)
+                .filter(\.$status == .pending)
+                .count()
+            if pending == 0 { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        Issue.record("operations for VM \(vmID) never reached a terminal state")
+    }
+
+    private func waitForVMDeletion(_ vmID: UUID, on db: any Database) async throws {
+        for _ in 0..<100 {
+            if try await VM.find(vmID, on: db) == nil { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        Issue.record("VM \(vmID) was never deleted")
     }
 }

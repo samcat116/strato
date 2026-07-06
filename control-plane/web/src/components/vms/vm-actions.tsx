@@ -28,59 +28,83 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { vmsApi } from "@/lib/api/vms";
 import { friendlyErrorMessage } from "@/lib/errors";
+import {
+  usePendingOperation,
+  useOperationsStore,
+} from "@/lib/stores/operations-store";
 import { toast } from "sonner";
-import type { VM } from "@/types/api";
+import type { VM, OperationKind } from "@/types/api";
 
 interface VMActionsProps {
   vm: VM;
   onActionComplete?: () => void;
 }
 
-export function VMActions({ vm, onActionComplete }: VMActionsProps) {
-  const [isLoading, setIsLoading] = useState(false);
-  const [activeAction, setActiveAction] = useState<string | null>(null);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+type VMAction = "start" | "stop" | "restart" | "pause" | "resume" | "delete";
 
-  const handleAction = async (
-    action: "start" | "stop" | "restart" | "pause" | "resume" | "delete"
-  ) => {
-    setIsLoading(true);
-    setActiveAction(action);
+// Maps an in-flight operation (which may have been started elsewhere, e.g. on
+// the detail page) back to the action button that should show the spinner.
+const kindToAction: Record<OperationKind, VMAction | null> = {
+  create: null,
+  boot: "start",
+  shutdown: "stop",
+  reboot: "restart",
+  pause: "pause",
+  resume: "resume",
+  delete: "delete",
+};
+
+export function VMActions({ vm, onActionComplete }: VMActionsProps) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submittingAction, setSubmittingAction] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const watch = useOperationsStore((state) => state.watch);
+  const pendingOperation = usePendingOperation(vm.id);
+
+  // Busy while the request is in flight OR while an accepted operation is still
+  // pending on the server — mutations no longer resolve synchronously.
+  const isLoading = isSubmitting || !!pendingOperation;
+  const activeAction =
+    submittingAction ??
+    (pendingOperation ? kindToAction[pendingOperation.kind] : null);
+
+  const handleAction = async (action: VMAction) => {
+    setIsSubmitting(true);
+    setSubmittingAction(action);
 
     try {
+      // Each call returns 202 with an operation record; the OperationWatcher
+      // polls it to a terminal state and toasts the outcome.
+      const operation = await vmsApi[action](vm.id);
+      watch(operation, vm.name);
+
       switch (action) {
         case "start":
-          await vmsApi.start(vm.id);
           toast.success(`Starting ${vm.name}`);
           break;
         case "stop":
-          await vmsApi.stop(vm.id);
           toast.success(`Stopping ${vm.name}`);
           break;
         case "restart":
-          await vmsApi.restart(vm.id);
           toast.success(`Restarting ${vm.name}`);
           break;
         case "pause":
-          await vmsApi.pause(vm.id);
           toast.success(`Pausing ${vm.name}`);
           break;
         case "resume":
-          await vmsApi.resume(vm.id);
           toast.success(`Resuming ${vm.name}`);
           break;
         case "delete":
-          await vmsApi.delete(vm.id);
           setShowDeleteConfirm(false);
-          toast.success(`Deleted ${vm.name}`);
+          toast.success(`Deleting ${vm.name}`);
           break;
       }
       onActionComplete?.();
     } catch (error) {
       toast.error(friendlyErrorMessage(error, `Failed to ${action} VM`));
     } finally {
-      setIsLoading(false);
-      setActiveAction(null);
+      setIsSubmitting(false);
+      setSubmittingAction(null);
     }
   };
 
