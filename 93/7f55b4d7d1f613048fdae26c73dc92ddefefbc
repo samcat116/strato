@@ -1,0 +1,107 @@
+shared/Sources/StratoShared/VMSpec.swift
+  s_2ea3015fe4758c::t_7840b1f5ab7c06 110-111,119,126
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_2ea3015fe4758c::t_3876365e36a875 3
+  s_2ea3015fe4758c::t_0623a9fdd1d7c0 114-118
+  s_2ea3015fe4758c::t_19a6279e6a7b06 35-40,45-48
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_2ea3015fe4758c::t_e4a38ea419cc5c 135
+  s_2ea3015fe4758c::t_9d13f6a4af3b4b 11,14-16,170
+  s_2ea3015fe4758c::t_fb8c3657477b35 32
+  s_2ea3015fe4758c::t_ccdde4cdcb8a45 17
+  s_2ea3015fe4758c::t_437f3c6afb005d 33-34
+  s_2ea3015fe4758c::t_287e5231990fb3 132-134
+  s_2ea3015fe4758c::t_3e52657af4c12c 136-138,167-169
+  s_2ea3015fe4758c::t_d460b8cc4710d7 28-30,75-80,128-131,139-166
+agent/Tests/StratoAgentTests/NetworkAttachmentTests.swift
+  s_2ea3015fe4758c::t_f3a4562ed88e9e 1-67
+control-plane/Sources/App/Models/VMNetworkInterface.swift
+  s_2ea3015fe4758c::t_9c26152016b83d 61,72
+  s_2ea3015fe4758c::t_9358e8aa9f615f 30-34
+agent/Sources/StratoAgent/QEMUService.swift
+  s_2ea3015fe4758c::t_a50b964776d5c8 296-297
+  s_2ea3015fe4758c::t_70f211afac72d2 662-674,678
+  s_2ea3015fe4758c::t_a116e77117172d 34
+  s_2ea3015fe4758c::t_cca3635c5d2137 787,790-792
+  s_2ea3015fe4758c::t_3f7ea9626a03c8 57-60
+  s_2ea3015fe4758c::t_217ecb121287ec 606-608
+  s_2ea3015fe4758c::t_af258242c8eb3f 157-160
+control-plane/Sources/App/Controllers/VMController.swift
+  s_2ea3015fe4758c::t_960f11d526cc1b 457-472,475,477-480
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_2ea3015fe4758c::t_fe9c1a99893063 335-338
+  s_2ea3015fe4758c::t_8d4f05813fa6d7 224-225
+  s_2ea3015fe4758c::t_abb348e37746ed 151-154,156-158
+  s_2ea3015fe4758c::t_be0a2ab18715e8 49-52,61-68
+  s_2ea3015fe4758c::t_9c3767ba64abbf 69-70
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_2ea3015fe4758c::t_3f2f5a0623ccf7 275,288,290,300
+  s_2ea3015fe4758c::t_b155f460e81110 44-50
+  s_2ea3015fe4758c::t_6896780923a6e9 457-458
+  s_2ea3015fe4758c::t_351918cbd2635b 210,213,219-221,223-224
+  s_2ea3015fe4758c::t_b98d3852d9d447 104,110-112,114-115,117-119,140,143,146-147,158,166,197
+agent/Sources/StratoAgent/NetworkServiceMacOS.swift
+  s_2ea3015fe4758c::t_989ec1286319fd 3
+  s_2ea3015fe4758c::t_42d584497b1c41 12,36-39,43-45,49,51,53,56,74,77-81,85,123-124
+agent/Sources/StratoAgent/Agent.swift
+  s_2ea3015fe4758c::t_12cfcafb63e0b9 1398,1400-1404
+  s_2ea3015fe4758c::t_2e19116ab20bb0 1424,1426-1428
+  s_2ea3015fe4758c::t_27c126ab00d5b0 275
+  s_2ea3015fe4758c::t_52dbfaeaa1c924 1191-1208,1213-1214,1227-1229
+  s_2ea3015fe4758c::t_ea4477c138f992 1103-1109
+control-plane/Sources/App/Services/IPAMService.swift
+  s_2ea3015fe4758c::t_46f0903bf27856 1-107
+agent/Sources/StratoAgent/NetworkServiceProtocol.swift
+  s_2ea3015fe4758c::t_80d1ae327569ab 3
+  s_2ea3015fe4758c::t_e64262fb844d1b 14-17,19-21,30-36,63-64,66-69
+agent/Tests/StratoAgentTests/CloudInitNetworkConfigTests.swift
+  s_2ea3015fe4758c::t_2c1258498ab19a 1-104
+control-plane/Tests/AppTests/IPAMServiceTests.swift
+  s_2ea3015fe4758c::t_113127ed98d6ab 1-91
+control-plane/Sources/App/Migrations/CreateLogicalNetwork.swift
+  s_2ea3015fe4758c::t_330cbe212ff020 1-39
+control-plane/Sources/App/configure.swift
+  s_2ea3015fe4758c::t_8f183b77cd6d44 244-247
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_2ea3015fe4758c::t_3315cf0a685723 67
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_2ea3015fe4758c::t_08ac3e8acde23d 1-49
+agent/Sources/StratoAgentCore/NetworkAttachment.swift
+  s_2ea3015fe4758c::t_6ec43d9640a0ef 1-102
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_2ea3015fe4758c::t_6b8f8ca982e862 3
+  s_2ea3015fe4758c::t_b872b889e93ec5 36-38
+agent/Tests/StratoAgentTests/TapInterfaceNameTests.swift
+  s_2ea3015fe4758c::t_353f1e1c8dea97 30-44
+agent/Sources/StratoAgentCore/TapInterfaceName.swift
+  s_2ea3015fe4758c::t_5f7f0c96c77b21 18-25,27
+agent/Sources/StratoAgent/NetworkOrchestrator.swift
+  s_2ea3015fe4758c::t_bb3f247096ac0f 50
+  s_2ea3015fe4758c::t_5e8becb81e1bf8 1-2,4-49,51-112
+  s_2ea3015fe4758c::t_93a49bdf688571 3
+control-plane/Sources/App/Migrations/AddGatewayToVMNetworkInterface.swift
+  s_2ea3015fe4758c::t_db222c8e425de1 1-32
+control-plane/Sources/App/Migrations/MigrateVMNetworkConfigToInterfaces.swift
+  s_2ea3015fe4758c::t_1d809c83e13de7 29-73
+  s_2ea3015fe4758c::t_b7ded1f8ef9666 92,102,107
+  s_2ea3015fe4758c::t_322269215c5c61 125,142
+control-plane/Tests/AppTests/VMSpecBuilderTests.swift
+  s_2ea3015fe4758c::t_39db2f6bc9d6ca 330-340
+  s_2ea3015fe4758c::t_2c19fc26f13a0e 100,111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "937f55b4d7d1f613048fdae26c73dc92ddefefbc",
+  "prompts": {},
+  "sessions": {
+    "s_2ea3015fe4758c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "629f6438-37f6-44c7-a528-a8c440c9ee73",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
