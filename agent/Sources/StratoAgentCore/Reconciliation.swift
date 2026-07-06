@@ -228,7 +228,8 @@ public actor Reconciler {
                     // unknowable before the hypervisor session is reconnected.
                     let observed = try await actuator.adoptVM(item)
                     if let desired = item.desired {
-                        steps = Array(steps[...index]) + Self.statusSteps(desired: desired.desiredStatus, observed: observed)
+                        let remaining = Self.statusSteps(desired: desired.desiredStatus, observed: observed)
+                        steps = Array(steps[...index]) + remaining
                     }
                 } else {
                     try await actuator.perform(step, item: item)
@@ -244,7 +245,9 @@ public actor Reconciler {
                     "generation": .stringConvertible(item.generation),
                 ])
         } catch {
-            var failure = failures[item.vmId] ?? ConvergenceFailure(generation: item.generation, attempts: 0, lastError: "")
+            var failure =
+                failures[item.vmId]
+                ?? ConvergenceFailure(generation: item.generation, attempts: 0, lastError: "")
             if failure.generation != item.generation {
                 failure = ConvergenceFailure(generation: item.generation, attempts: 0, lastError: "")
             }

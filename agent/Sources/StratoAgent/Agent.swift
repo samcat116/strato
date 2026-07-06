@@ -2480,7 +2480,8 @@ extension Agent: ReconcileActuator {
                     status: .unknown,
                     observedGeneration: await reconciler.observedGeneration(for: vmId),
                     convergencePhase: await reconciler.convergencePhase(for: vmId),
-                    lastError: await reconciler.lastError(for: vmId) ?? "orphaned by agent restart; awaiting re-adoption or deletion"
+                    lastError: await reconciler.lastError(for: vmId)
+                        ?? "orphaned by agent restart; awaiting re-adoption or deletion"
                 ))
             reported.insert(vmId)
         }
