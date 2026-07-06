@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { organizationsApi } from "@/lib/api/organizations";
-import { useOrganizationMembers } from "@/lib/hooks";
+import { useOrganizationMembers, usePermissions } from "@/lib/hooks";
 import { MembersTable, AddMemberDialog } from "@/components/organization-members";
 import { GroupsSection } from "@/components/organization-groups";
 import { OrganizationalUnitsSection } from "@/components/organizational-units";
@@ -48,7 +48,20 @@ export default function OrganizationSettingsPage() {
   const { data: members = [], isLoading: isMembersLoading } =
     useOrganizationMembers(id);
 
-  const canManageMembers = org?.userRole === "admin";
+  // Permission-driven gating (SpiceDB) rather than a hardcoded role string.
+  const { permissions } = usePermissions(
+    id
+      ? [
+          {
+            key: "manage_members",
+            resourceType: "organization",
+            resourceId: id,
+            permission: "manage_members",
+          },
+        ]
+      : []
+  );
+  const canManageMembers = permissions.manage_members;
 
   // Set form data when org loads
   useEffect(() => {

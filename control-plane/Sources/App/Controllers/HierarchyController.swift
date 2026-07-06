@@ -42,7 +42,7 @@ struct HierarchyController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         guard let organization = try await Organization.find(organizationID, on: req.db) else {
             throw Abort(.notFound, reason: "Organization not found")
@@ -64,7 +64,7 @@ struct HierarchyController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         guard let organization = try await Organization.find(organizationID, on: req.db) else {
             throw Abort(.notFound, reason: "Organization not found")
@@ -135,7 +135,7 @@ struct HierarchyController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         guard let organization = try await Organization.find(organizationID, on: req.db) else {
             throw Abort(.notFound, reason: "Organization not found")
@@ -175,7 +175,7 @@ struct HierarchyController: RouteCollection {
         let entityType = req.query[String.self, at: "type"]  // Optional filter by entity type
 
         // Verify user has access to organization
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         let results = try await HierarchySearchService.search(
             organizationID: organizationID,
@@ -244,7 +244,7 @@ struct HierarchyController: RouteCollection {
         }
 
         // Verify user has access to organization
-        try await OrganizationAccessService.requireMember(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         let pathComponents = try await HierarchyPathResolver.buildEntityPath(
             entityType: entityType,
@@ -275,9 +275,9 @@ struct HierarchyController: RouteCollection {
         let mergeRequest = try req.content.decode(MergeOrganizationsRequest.self)
 
         // Verify user has admin access to both organizations
-        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
         try await OrganizationAccessService.requireAdmin(
-            user: user, organizationID: mergeRequest.sourceOrganizationId, on: req.db)
+            organizationID: mergeRequest.sourceOrganizationId, on: req)
 
         guard let targetOrg = try await Organization.find(organizationID, on: req.db),
             let sourceOrg = try await Organization.find(mergeRequest.sourceOrganizationId, on: req.db)
@@ -305,7 +305,7 @@ struct HierarchyController: RouteCollection {
         let transferRequest = try req.content.decode(BulkTransferRequest.self)
 
         // Verify user has admin access
-        try await OrganizationAccessService.requireAdmin(user: user, organizationID: organizationID, on: req.db)
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         return try await HierarchyMaintenanceService.performBulkTransfer(
             organizationID: organizationID,

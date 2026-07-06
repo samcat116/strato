@@ -148,6 +148,22 @@ extension Project {
         return "/" + pathComponents.joined(separator: "/")
     }
 
+    /// The project's *immediate* parent for the SpiceDB `project#parent` relation:
+    /// the owning organizational unit when OU-scoped, otherwise the organization.
+    ///
+    /// Writing the tuple against the immediate parent (rather than always the root
+    /// org) is what lets OU-scoped projects inherit access from the OU chain —
+    /// project→parent(OU)→parent(org) — so both OU admins and org admins resolve.
+    var spiceDBParentRef: (subjectType: String, subjectId: UUID)? {
+        if let ouId = self.$organizationalUnit.id {
+            return ("organizational_unit", ouId)
+        }
+        if let orgId = self.$organization.id {
+            return ("organization", orgId)
+        }
+        return nil
+    }
+
     /// Gets the root organization ID for this project
     func getRootOrganizationId(on db: Database) async throws -> UUID? {
         if let orgId = self.$organization.id {

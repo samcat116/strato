@@ -337,6 +337,10 @@ struct VMController: RouteCollection {
             let networkName: String?
             // SSH public key authorized for the guest's default user (cloud-init).
             let sshPublicKey: String?
+            // Target hypervisor. Optional: when omitted, it's inferred from the
+            // image's artifact set if that set is compatible with exactly one
+            // hypervisor, else falls back to the platform default (QEMU).
+            let hypervisorType: HypervisorType?
         }
 
         let createRequest = try req.content.decode(CreateVMRequest.self)
@@ -501,6 +505,17 @@ struct VMController: RouteCollection {
             let diskValue = createRequest.disk ?? image.defaultDisk ?? Int64(10 * 1024 * 1024 * 1024)
             let cmdlineValue = createRequest.cmdline ?? image.defaultCmdline
 
+            // Choose the hypervisor: an explicit request wins; otherwise infer
+            // it from the image when its artifact set is compatible with exactly
+            // one hypervisor; otherwise fall back to the model default (QEMU).
+            let chosenHypervisor: HypervisorType
+            if let requested = createRequest.hypervisorType {
+                chosenHypervisor = requested
+            } else {
+                let compatible = image.compatibleHypervisors()
+                chosenHypervisor = compatible.count == 1 ? compatible.first! : .qemu
+            }
+
             vm = VM(
                 name: createRequest.name,
                 description: createRequest.description ?? "",
@@ -510,6 +525,7 @@ struct VMController: RouteCollection {
                 cpu: cpuValue,
                 memory: memoryValue,
                 disk: diskValue,
+                hypervisorType: chosenHypervisor,
                 maxCpu: cpuValue
             )
             vm.cmdline = cmdlineValue
@@ -652,7 +668,9 @@ struct VMController: RouteCollection {
             subjectId: userId
         )
 
-        // Link VM to project
+        // Link VM to its project. Org/OU admins reach the VM transitively via
+        // vm#project → project#parent → organization#admin, so there is no separate
+        // vm→organization tuple to maintain.
         try await req.spicedb.writeRelationship(
             entity: "virtual_machine",
             entityId: vmId,
@@ -660,16 +678,6 @@ struct VMController: RouteCollection {
             subject: "project",
             subjectId: projectId.uuidString
         )
-
-        if let currentOrgId = user.currentOrganizationId {
-            try await req.spicedb.writeRelationship(
-                entity: "virtual_machine",
-                entityId: vmId,
-                relation: "organization",
-                subject: "organization",
-                subjectId: currentOrgId.uuidString
-            )
-        }
 
         // Place the VM in the background: the scheduler selects a hypervisor
         // and persists hypervisorId, and the desired-state sync carries the

@@ -78,4 +78,14 @@ export {
 } from "./use-quotas";
 export type { QuotaCreateTarget } from "./use-quotas";
 export { useHierarchy, useHierarchySearch } from "./use-hierarchy";
+export { usePermissions } from "./use-permissions";
+export {
+  useProjectMembers,
+  useGrantProjectMember,
+  useUpdateProjectMemberRole,
+  useRevokeProjectMember,
+  useGrantProjectGroup,
+  useRevokeProjectGroup,
+  projectMemberErrorMessage,
+} from "./use-project-members";
 export { useNetworks, useNetwork, useInvalidateNetworks } from "./use-networks";

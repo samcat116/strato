@@ -12,6 +12,7 @@ func routes(_ app: Application) throws {
     try app.register(collection: VMController())
     try app.register(collection: OperationController())
     try app.register(collection: OrganizationController())
+    try app.register(collection: AuthorizationController())
     try app.register(collection: APIKeyController())
     try app.register(collection: APIDocumentationController())
     try app.register(collection: AgentWebSocketController())
@@ -19,6 +20,7 @@ func routes(_ app: Application) throws {
     // Hierarchical IAM controllers
     try app.register(collection: OrganizationalUnitController())
     try app.register(collection: ProjectController())
+    try app.register(collection: ProjectMemberController())
     try app.register(collection: ResourceQuotaController())
     try app.register(collection: HierarchyController())
 

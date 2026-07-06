@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { MoreHorizontal, Pencil, ArrowRightLeft, Trash2 } from "lucide-react";
 import {
   Table,
@@ -99,7 +100,12 @@ export function ProjectsTable({
         {projects.map((project) => (
           <TableRow key={project.id} className="border-gray-700">
             <TableCell>
-              <div className="font-medium text-gray-100">{project.name}</div>
+              <Link
+                href={`/projects/${project.id}`}
+                className="font-medium text-gray-100 hover:text-blue-400 hover:underline"
+              >
+                {project.name}
+              </Link>
               {project.description && (
                 <div className="text-sm text-gray-400">
                   {project.description}
