@@ -254,6 +254,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateLogicalNetwork())
     app.migrations.add(AddGatewayToVMNetworkInterface())
 
+    // Project-level roles: user and group grants on individual projects.
+    app.migrations.add(CreateProjectMember())
+    app.migrations.add(CreateProjectGroupGrant())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen
@@ -261,9 +265,14 @@ public func configure(_ app: Application) async throws {
     // first writer on a fresh stack and crashes with a 400 without a schema.
     if app.environment != .testing {
         try await ensureSpiceDBSchema(app)
-        // Backfill project→organization tuples for projects created before the
-        // creation path wrote them, so project-scoped permissions resolve (issue #267).
+        // Backfill SpiceDB tuples so existing data authorizes correctly after the
+        // schema/tuple reset and now that SpiceDB is the sole authorization source:
+        //  - project→parent tuples (projects created before the creation path wrote
+        //    them, or re-derived after a reset), so project-scoped permissions resolve.
+        //  - organization#<role>→user tuples for every relational membership, so
+        //    existing members don't 403 once relational role checks are retired.
         try await backfillProjectOrganizationRelationships(app)
+        try await backfillOrganizationMemberRelationships(app)
     }
 
     // Initialize the image download signing key (generates if not exists)
@@ -354,7 +363,7 @@ public func configure(_ app: Application) async throws {
             try await app.spicedb.writeRelationship(
                 entity: "project",
                 entityId: defaultProject.id!.uuidString,
-                relation: "organization",
+                relation: "parent",
                 subject: "organization",
                 subjectId: defaultOrg.id!.uuidString
             )

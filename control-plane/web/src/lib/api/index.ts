@@ -6,6 +6,8 @@ export { usersApi } from "./users";
 export { vmsApi } from "./vms";
 export { operationsApi } from "./operations";
 export { organizationsApi } from "./organizations";
+export { authorizationApi } from "./authorization";
+export { projectMembersApi } from "./project-members";
 export { agentsApi } from "./agents";
 export { imagesApi } from "./images";
 export { projectsApi } from "./projects";
