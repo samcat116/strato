@@ -238,6 +238,14 @@ struct AgentWebSocketController: RouteCollection {
                 // Store WebSocket for this agent - we're already on the WebSocket's event loop
                 req.application.websocketManager.setConnection(agentName: agentName, websocket: ws)
 
+                // Advertise which replica holds this agent's socket so other
+                // replicas can route sync nudges here (issue #261). Refreshed
+                // by every heartbeat; a crashed replica's claim expires by TTL.
+                Task {
+                    await req.application.coordination.recordAgentRoute(
+                        agentName: agentName, replicaId: req.application.replicaID)
+                }
+
                 // Mark as validated and process buffered messages
                 state.isValidated = true
                 req.logger.info(
@@ -430,11 +438,20 @@ struct AgentWebSocketController: RouteCollection {
                             }
                         }
 
-                        // No `code`: the agent treats unclassified errors as
-                        // transient and keeps retrying with backoff.
+                        // A protocol-version rejection is permanent until the
+                        // agent is upgraded — classify it so the agent can stop
+                        // its reconnect loop. Everything else stays unclassified
+                        // (treated as transient; the agent retries with backoff).
+                        let errorCode: String?
+                        if case AgentServiceError.unsupportedProtocolVersion = error {
+                            errorCode = ErrorMessage.ErrorCode.unsupportedProtocolVersion
+                        } else {
+                            errorCode = nil
+                        }
                         self.sendErrorResponse(
                             ws: ws, requestId: message.requestId,
-                            error: "Failed to register agent: \(error.localizedDescription)", logger: req.logger)
+                            error: "Failed to register agent: \(error.localizedDescription)",
+                            code: errorCode, logger: req.logger)
                     }
                 }
 
@@ -673,6 +690,14 @@ struct AgentWebSocketController: RouteCollection {
 
             // Store WebSocket for this agent
             req.application.websocketManager.setConnection(agentName: agentName, websocket: ws)
+
+            // Advertise which replica holds this agent's socket so other
+            // replicas can route sync nudges here (issue #261). Refreshed
+            // by every heartbeat; a crashed replica's claim expires by TTL.
+            Task {
+                await req.application.coordination.recordAgentRoute(
+                    agentName: agentName, replicaId: req.application.replicaID)
+            }
 
             req.logger.info(
                 "Agent WebSocket connection established via \(authMethod)",

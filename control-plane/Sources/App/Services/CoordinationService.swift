@@ -76,6 +76,27 @@ protocol CoordinationStore: Sendable {
 
     /// Sum of all unexpired reservations under `agentKey`.
     func reservedTotal(agentKey: String) async throws -> ReservationAmounts
+
+    /// Write `key` = `value` with a TTL (SET EX semantics), replacing any
+    /// existing value and TTL.
+    func setValue(_ key: String, value: String, ttlSeconds: Int) async throws
+
+    /// Current value of `key`, or nil when the key is absent or expired.
+    func getValue(_ key: String) async throws -> String?
+
+    /// Atomically delete `key` only if it currently holds `value`. Lets a
+    /// stale owner (e.g. a replica processing a delayed socket close) clear
+    /// its own claim without tearing down a successor's.
+    func deleteValue(_ key: String, ifEquals value: String) async throws
+
+    /// Publish `message` to `channel` — fire-and-forget fan-out to current
+    /// subscribers, no persistence. Losing a message must always be safe for
+    /// callers (pub/sub here carries latency optimizations, never truth).
+    func publish(channel: String, message: String) async throws
+
+    /// Subscribe to `channel`, invoking `handler` for every message for the
+    /// lifetime of the process.
+    func subscribe(channel: String, handler: @escaping @Sendable (String) -> Void) async throws
 }
 
 // MARK: - Valkey backend
@@ -263,6 +284,70 @@ struct ValkeyCoordinationStore: CoordinationStore {
         return ReservationAmounts(cpu: cpu, memory: Int64(memory), disk: Int64(disk))
     }
 
+    func setValue(_ key: String, value: String, ttlSeconds: Int) async throws {
+        _ = try await app.redis.send(
+            command: "SET",
+            with: [
+                key.convertedToRESPValue(),
+                value.convertedToRESPValue(),
+                "EX".convertedToRESPValue(),
+                max(1, ttlSeconds).convertedToRESPValue(),
+            ]
+        ).get()
+    }
+
+    func getValue(_ key: String) async throws -> String? {
+        let response = try await app.redis.send(
+            command: "GET",
+            with: [key.convertedToRESPValue()]
+        ).get()
+        return response.isNull ? nil : response.string
+    }
+
+    /// GET-compare-DEL as a Lua script so the check and the delete are atomic:
+    /// a replica clearing its own stale claim can never race a successor's
+    /// fresh write in between.
+    private static let deleteIfEqualsScript = """
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('DEL', KEYS[1])
+        end
+        return 0
+        """
+
+    func deleteValue(_ key: String, ifEquals value: String) async throws {
+        _ = try await app.redis.send(
+            command: "EVAL",
+            with: [
+                Self.deleteIfEqualsScript.convertedToRESPValue(),
+                1.convertedToRESPValue(),
+                key.convertedToRESPValue(),
+                value.convertedToRESPValue(),
+            ]
+        ).get()
+    }
+
+    func publish(channel: String, message: String) async throws {
+        _ = try await app.redis.send(
+            command: "PUBLISH",
+            with: [
+                channel.convertedToRESPValue(),
+                message.convertedToRESPValue(),
+            ]
+        ).get()
+    }
+
+    func subscribe(channel: String, handler: @escaping @Sendable (String) -> Void) async throws {
+        try await app.redis.subscribe(
+            to: [RedisChannelName(channel)],
+            messageReceiver: { _, message in
+                guard let text = message.string else { return }
+                handler(text)
+            },
+            onSubscribe: nil,
+            onUnsubscribe: nil
+        ).get()
+    }
+
     private static func indexKey(_ agentKey: String) -> String { agentKey + ":index" }
     private static func vmKeyPrefix(_ agentKey: String) -> String { agentKey + ":vm:" }
 }
@@ -286,6 +371,8 @@ actor InMemoryCoordinationStore: CoordinationStore {
     private var keys: [String: Date] = [:]
     private var locks: [String: Date] = [:]
     private var reservations: [String: [String: Reservation]] = [:]
+    private var values: [String: (value: String, expiresAt: Date)] = [:]
+    private var subscribers: [String: [@Sendable (String) -> Void]] = [:]
 
     func setKey(_ key: String, ttlSeconds: Int) {
         keys[key] = Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds)))
@@ -355,6 +442,36 @@ actor InMemoryCoordinationStore: CoordinationStore {
         )
     }
 
+    func setValue(_ key: String, value: String, ttlSeconds: Int) {
+        values[key] = (value, Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds))))
+    }
+
+    func getValue(_ key: String) -> String? {
+        guard let entry = values[key] else { return nil }
+        guard entry.expiresAt > Date() else {
+            values.removeValue(forKey: key)
+            return nil
+        }
+        return entry.value
+    }
+
+    func deleteValue(_ key: String, ifEquals value: String) {
+        guard getValue(key) == value else { return }
+        values.removeValue(forKey: key)
+    }
+
+    func publish(channel: String, message: String) {
+        // Deliver off the actor, mirroring Valkey's asynchronous fan-out, so a
+        // handler that re-enters this store never deadlocks the publisher.
+        for handler in subscribers[channel] ?? [] {
+            Task { handler(message) }
+        }
+    }
+
+    func subscribe(channel: String, handler: @escaping @Sendable (String) -> Void) {
+        subscribers[channel, default: []].append(handler)
+    }
+
     /// Prune and return the unexpired reservations for an agent.
     private func activeReservations(agentKey: String) -> [String: Reservation] {
         let now = Date()
@@ -366,15 +483,27 @@ actor InMemoryCoordinationStore: CoordinationStore {
 
 // MARK: - Coordination service
 
-/// Thin coordination layer over Valkey (issue #258, reconciliation phase 0).
+/// Thin coordination layer over Valkey (issue #258, reconciliation phase 0;
+/// routing and nudges added in phase 3, issue #261).
 ///
-/// Three concerns, three key families:
+/// The key families:
 /// - `agent:{name}:presence` — agent liveness visible to every control-plane
 ///   process, written on registration and refreshed on every heartbeat.
+/// - `agent:{name}:replica` — which replica holds the agent's WebSocket,
+///   written on socket accept and refreshed with presence. Lets any replica
+///   route a sync nudge to the process that can actually reach the agent.
 /// - `lock:sweep:{name}` — expiring locks that make the background sweeps
 ///   cluster-singletons without leader election.
 /// - `resv:agent:{agentId}:*` — placement reservations the scheduler holds
 ///   between selecting an agent and the agent's resource reports catching up.
+///
+/// And the channel families (pub/sub, latency optimization only — the agent's
+/// periodic sync is the correctness backstop, so lost messages are safe):
+/// - `replica:{id}:nudges` — agent names whose desired state changed; the
+///   subscribing replica pushes a sync over its local socket.
+/// - `replica:{id}:rpc` / `replica:{id}:rpc-replies` — correlated
+///   request/response forwarding for the few remaining imperative exchanges
+///   (volume operations, reboot) when the caller doesn't hold the socket.
 ///
 /// Degradation policy: coordination improves correctness but must never make
 /// the control plane less available than it was without it. Store errors are
@@ -536,6 +665,101 @@ actor CoordinationService {
         }
     }
 
+    // MARK: Socket routing (issue #261)
+
+    /// Route TTL matches the presence TTL: both are refreshed together by the
+    /// heartbeat path, and a crashed replica's stale route expires in one
+    /// window (the agent is effectively offline until it reconnects anyway).
+    static let routeTTLSeconds = presenceTTLSeconds
+
+    nonisolated static func routeKey(agentName: String) -> String {
+        "agent:\(agentName):replica"
+    }
+
+    nonisolated static func nudgeChannel(replicaId: String) -> String {
+        "replica:\(replicaId):nudges"
+    }
+
+    nonisolated static func rpcChannel(replicaId: String) -> String {
+        "replica:\(replicaId):rpc"
+    }
+
+    nonisolated static func rpcReplyChannel(replicaId: String) -> String {
+        "replica:\(replicaId):rpc-replies"
+    }
+
+    /// Record (or refresh) which replica holds an agent's WebSocket. Failures
+    /// are logged, not thrown: without the route, cross-replica mutations lose
+    /// only their nudge latency — the periodic sync converges the agent.
+    func recordAgentRoute(
+        agentName: String, replicaId: String, ttlSeconds: Int = CoordinationService.routeTTLSeconds
+    ) async {
+        do {
+            try await store.setValue(
+                Self.routeKey(agentName: agentName), value: replicaId, ttlSeconds: ttlSeconds)
+        } catch {
+            logger.warning(
+                "Failed to record agent socket route in coordination store",
+                metadata: ["agentName": .string(agentName), "error": .string("\(error)")])
+        }
+    }
+
+    /// The replica currently holding the agent's socket, or nil when unknown
+    /// (agent offline, route expired, or store unavailable).
+    func agentRoute(agentName: String) async -> String? {
+        do {
+            return try await store.getValue(Self.routeKey(agentName: agentName))
+        } catch {
+            logger.warning(
+                "Failed to read agent socket route from coordination store",
+                metadata: ["agentName": .string(agentName), "error": .string("\(error)")])
+            return nil
+        }
+    }
+
+    /// Clear the agent's route only if this replica still owns it, so a
+    /// delayed close after the agent reconnected elsewhere cannot erase the
+    /// successor's claim. Best-effort: the TTL is the backstop.
+    func clearAgentRoute(agentName: String, replicaId: String) async {
+        do {
+            try await store.deleteValue(Self.routeKey(agentName: agentName), ifEquals: replicaId)
+        } catch {
+            logger.warning(
+                "Failed to clear agent socket route; TTL will reclaim it",
+                metadata: ["agentName": .string(agentName), "error": .string("\(error)")])
+        }
+    }
+
+    // MARK: Replica pub/sub (issue #261)
+
+    /// Publish a sync nudge for `agentName` to the replica holding its socket.
+    /// Best-effort by design: a lost nudge costs one periodic-sync interval of
+    /// latency, never correctness.
+    func publishNudge(agentName: String, toReplica replicaId: String) async {
+        do {
+            try await store.publish(channel: Self.nudgeChannel(replicaId: replicaId), message: agentName)
+        } catch {
+            logger.warning(
+                "Failed to publish sync nudge; periodic sync will converge the agent",
+                metadata: [
+                    "agentName": .string(agentName),
+                    "replicaId": .string(replicaId),
+                    "error": .string("\(error)"),
+                ])
+        }
+    }
+
+    /// Publish on an arbitrary replica channel. Unlike nudges this throws:
+    /// RPC callers must learn that their request never left the process.
+    func publish(channel: String, message: String) async throws {
+        try await store.publish(channel: channel, message: message)
+    }
+
+    /// Subscribe to a replica channel for the lifetime of the process.
+    func subscribe(channel: String, handler: @escaping @Sendable (String) -> Void) async throws {
+        try await store.subscribe(channel: channel, handler: handler)
+    }
+
     /// Sum of the agent's active reservations, for subtracting from its
     /// reported availability before selection. Returns zero on store errors —
     /// selection then sees optimistic numbers, and the atomic reserve step is
@@ -555,6 +779,17 @@ actor CoordinationService {
 // MARK: - Application extension
 
 extension Application {
+    private struct ReplicaIDKey: StorageKey, LockKey {
+        typealias Value = String
+    }
+
+    /// This control-plane process's identity for socket routing (issue #261).
+    /// Generated fresh at every process start — a restarted replica is a new
+    /// replica, and any routes naming the old identity expire by TTL.
+    var replicaID: String {
+        lazyService(ReplicaIDKey.self) { UUID().uuidString }
+    }
+
     private struct CoordinationServiceKey: StorageKey, LockKey {
         typealias Value = CoordinationService
     }

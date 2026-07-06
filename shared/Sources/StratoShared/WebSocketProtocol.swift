@@ -9,7 +9,15 @@ public enum MessageType: String, Codable, Sendable {
     case agentHeartbeat = "agent_heartbeat"
     case agentUnregister = "agent_unregister"
 
-    // VM lifecycle operations
+    // VM lifecycle operations.
+    //
+    // DEPRECATED (issue #261, kept one release for older control planes):
+    // the control plane drives VM lifecycle exclusively through desired-state
+    // sync (`desiredState`/`observedState`) and no longer sends `vmCreate`,
+    // `vmBoot`, `vmShutdown`, `vmPause`, `vmResume`, `vmDelete`, `vmInfo`,
+    // or `vmStatus`. Agents still handle them for compatibility with control
+    // planes that predate the removal. `vmReboot` remains live: a reboot is
+    // an action, not a state, so it cannot ride the level-triggered sync.
     case vmCreate = "vm_create"
     case vmBoot = "vm_boot"
     case vmShutdown = "vm_shutdown"
@@ -18,7 +26,8 @@ public enum MessageType: String, Codable, Sendable {
     case vmResume = "vm_resume"
     case vmDelete = "vm_delete"
 
-    // VM information queries
+    // VM information queries (deprecated, see above — the database's
+    // observed state answers these now)
     case vmInfo = "vm_info"
     case vmStatus = "vm_status"
 
@@ -464,6 +473,11 @@ public struct ErrorMessage: WebSocketMessage {
         /// expired, or already used). Retrying with the same token can never
         /// succeed.
         public static let invalidToken = "invalid_token"
+
+        /// The agent's wire protocol version predates desired-state sync,
+        /// which the control plane requires (issue #261). Retrying without
+        /// upgrading the agent can never succeed.
+        public static let unsupportedProtocolVersion = "unsupported_protocol_version"
     }
 
     public init(

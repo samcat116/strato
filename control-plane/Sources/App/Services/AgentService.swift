@@ -10,20 +10,50 @@ import NIOConcurrencyHelpers
 /// This is NOT an actor to avoid event loop conflicts with NIO
 /// WebSocket objects are event-loop-bound and must only be accessed from their event loop
 final class WebSocketManager: @unchecked Sendable {
+    private struct Connection {
+        let websocket: WebSocket
+        /// Database UUID of the agent, learned at registration (the socket is
+        /// accepted before the register message arrives, so it starts nil).
+        var agentId: String?
+    }
+
     private let lock = NIOLock()
-    private var connections: [String: WebSocket] = [:]  // Agent name -> WebSocket
+    private var connections: [String: Connection] = [:]  // Agent name -> connection
 
     /// Must be called from the WebSocket's event loop
     func setConnection(agentName: String, websocket: WebSocket) {
         lock.withLock {
-            connections[agentName] = websocket
+            connections[agentName] = Connection(websocket: websocket, agentId: nil)
+        }
+    }
+
+    /// Attach the agent's database UUID to its live connection once
+    /// registration resolves it. No-op if the socket is already gone.
+    func associate(agentName: String, agentId: String) {
+        lock.withLock {
+            connections[agentName]?.agentId = agentId
         }
     }
 
     /// Returns the WebSocket for an agent - must be used on WebSocket's event loop
     func getConnection(agentName: String) -> WebSocket? {
         lock.withLock {
-            connections[agentName]
+            connections[agentName]?.websocket
+        }
+    }
+
+    /// The locally connected agent's name for a database UUID, or nil when
+    /// this process doesn't hold the agent's socket (another replica may).
+    func agentName(agentId: String) -> String? {
+        lock.withLock {
+            connections.first(where: { $0.value.agentId == agentId })?.key
+        }
+    }
+
+    /// The database UUID a locally connected agent registered with, if any.
+    func agentId(agentName: String) -> String? {
+        lock.withLock {
+            connections[agentName]?.agentId
         }
     }
 
@@ -40,7 +70,7 @@ final class WebSocketManager: @unchecked Sendable {
     /// under the same name). Returns true when the connection was removed.
     func removeConnection(agentName: String, ifCurrent websocket: WebSocket) -> Bool {
         lock.withLock {
-            guard connections[agentName] === websocket else { return false }
+            guard connections[agentName]?.websocket === websocket else { return false }
             connections.removeValue(forKey: agentName)
             return true
         }
@@ -52,13 +82,34 @@ final class WebSocketManager: @unchecked Sendable {
             Array(connections.keys)
         }
     }
+
+    /// Every locally connected agent that has completed registration, as
+    /// (name, database UUID) pairs. This is the periodic sync's work list:
+    /// each replica syncs exactly the agents whose sockets it holds.
+    func registeredAgents() -> [(name: String, agentId: String)] {
+        lock.withLock {
+            connections.compactMap { name, connection in
+                connection.agentId.map { (name: name, agentId: $0) }
+            }
+        }
+    }
 }
 
 actor AgentService {
     private let app: Application
-    private var agents: [String: AgentInfo] = [:]
-    private var vmToAgentMapping: [String: String] = [:]  // VM ID -> Agent ID
+
+    /// In-flight request/response exchanges on *this process's* sockets, keyed
+    /// by request ID. This is per-connection correlation state, not a registry:
+    /// requests are only ever armed for locally socketed agents, and every
+    /// entry dies with its socket (or its timeout). Cross-replica callers reach
+    /// it through the RPC bridge below, never directly.
     private var pendingRequests: [String: PendingRequest] = [:]
+
+    /// Requester-side halves of cross-replica RPCs awaiting a reply on this
+    /// replica's reply channel, keyed by RPC ID. Request-scoped: an entry
+    /// lives for one HTTP request's await and resolves by reply or timeout.
+    private var pendingRPCs: [String: PendingRPC] = [:]
+
     private var heartbeatTask: Task<Void, Never>?
 
     /// A request awaiting a response from a specific agent.
@@ -66,11 +117,25 @@ actor AgentService {
     private struct PendingRequest {
         let agentId: String
         let continuation: CheckedContinuation<AgentServiceResponse, Error>
-        /// The 30s timeout armed for this request, cancelled whenever the request
+        /// The timeout armed for this request, cancelled whenever the request
         /// is removed (normal response, disconnect, or the timeout firing itself)
         /// so a completed request never leaves a timer sleeping to no purpose.
         var timeoutTask: Task<Void, Never>?
     }
+
+    /// A cross-replica RPC awaiting its reply message.
+    private struct PendingRPC {
+        let continuation: CheckedContinuation<AgentServiceResponse, Error>
+        var timeoutTask: Task<Void, Never>?
+    }
+
+    /// Health bookkeeping for the replica's pub/sub subscriptions (issue
+    /// #261 review): RediStack pins subscriptions to one dedicated connection
+    /// and does not restore them when it drops, so liveness is verified by
+    /// probing our own nudge channel from the heartbeat loop.
+    private var subscriptionsEstablished = false
+    private var lastProbeSent: Date?
+    private var lastProbeReceived: Date?
 
     /// Set at application shutdown. Guards against the init task arming the
     /// heartbeat monitor after `shutdown()` already ran.
@@ -78,10 +143,11 @@ actor AgentService {
 
     init(app: Application) {
         self.app = app
-        // Start heartbeat monitoring and restore VM mappings after initialization
+        // Start heartbeat monitoring and the replica's pub/sub subscriptions
+        // after initialization
         Task {
             await startHeartbeatMonitoring()
-            await restoreVMToAgentMappings()
+            await startReplicaSubscriptions()
         }
     }
 
@@ -96,33 +162,20 @@ actor AgentService {
         heartbeatTask = nil
     }
 
-    // MARK: - VM-to-Agent Mapping Recovery
-
-    /// Restore VM-to-agent mappings from database on startup
-    /// This ensures that if the control plane restarts, we don't lose track of which VMs are on which agents
-    private func restoreVMToAgentMappings() async {
-        do {
-            let db = app.db
-            let vms = try await VM.query(on: db)
-                .filter(\.$hypervisorId != nil)
-                .all()
-
-            for vm in vms {
-                if let vmId = vm.id?.uuidString, let hypervisorId = vm.hypervisorId {
-                    vmToAgentMapping[vmId] = hypervisorId
-                }
-            }
-
-            app.logger.info("Restored VM-to-agent mappings for \(vms.count) VMs from database")
-        } catch {
-            app.logger.error("Failed to restore VM-to-agent mappings from database: \(error)")
-        }
-    }
-
     // MARK: - Agent Registration
 
     /// Registers an agent and returns its database UUID
     func registerAgent(_ message: AgentRegisterMessage, agentName: String) async throws -> UUID {
+        // The imperative message path is gone (issue #261): an agent that
+        // cannot be driven by desired-state syncs would register successfully
+        // and then never converge anything — every operation would time out
+        // against its budget. Refuse it up front with the real reason.
+        let protocolVersion = message.protocolVersion ?? 0
+        guard WireProtocol.supportsStateSync(protocolVersion) else {
+            Telemetry.agentRegistrationFailed(reason: "unsupported_protocol")
+            throw AgentServiceError.unsupportedProtocolVersion(agentName: agentName, version: protocolVersion)
+        }
+
         let db = app.db
 
         // Find existing agent or create new one
@@ -153,27 +206,16 @@ actor AgentService {
             throw AgentServiceError.invalidResponse("Failed to get agent ID after save")
         }
 
-        // Update in-memory tracking using UUID as the key
-        let agentInfo = AgentInfo(
-            id: agentUUID.uuidString,
-            name: agentName,
-            hostname: message.hostname,
-            version: message.version,
-            capabilities: message.capabilities,
-            architecture: message.architecture,
-            hypervisors: message.effectiveHypervisors,
-            networkCapability: message.networkCapability,
-            resources: message.resources,
-            lastHeartbeat: Date(),
-            status: .online,
-            protocolVersion: message.protocolVersion ?? 0
-        )
+        // Attach the UUID to the live socket so local routing (sync pushes,
+        // RPC forwarding, the periodic sync's work list) can resolve it
+        // without a database read. No-op when no socket exists (tests).
+        app.websocketManager.associate(agentName: agentName, agentId: agentUUID.uuidString)
 
-        agents[agentUUID.uuidString] = agentInfo
-
-        // Publish liveness to the coordination store so every control-plane
-        // process (not just the one holding this socket) can see the agent.
+        // Publish liveness and socket location to the coordination store so
+        // every control-plane process — not just the one holding this socket —
+        // can see the agent and route mutations to it.
         await app.coordination.recordAgentPresence(agentName: agentName)
+        await app.coordination.recordAgentRoute(agentName: agentName, replicaId: app.replicaID)
 
         Telemetry.agentConnected()
         Telemetry.recordAgentUp(agentName: agentName, up: true)
@@ -189,41 +231,48 @@ actor AgentService {
         return agentUUID
     }
 
-    /// Find agent UUID by name in the in-memory agents dictionary
-    private func findAgentIdByName(_ agentName: String) -> String? {
-        return agents.first(where: { $0.value.name == agentName })?.key
+    /// Resolve an agent's database UUID from its name: the local socket's
+    /// registration first (no I/O), the database otherwise.
+    private func agentId(forName agentName: String) async -> String? {
+        if let local = app.websocketManager.agentId(agentName: agentName) {
+            return local
+        }
+        let agent = try? await Agent.query(on: app.db)
+            .filter(\.$name == agentName)
+            .first()
+        return agent?.id?.uuidString
+    }
+
+    /// Resolve an agent's name from its database UUID: the local socket's
+    /// registration first (no I/O), the database otherwise.
+    private func agentName(forId agentId: String) async -> String? {
+        if let local = app.websocketManager.agentName(agentId: agentId) {
+            return local
+        }
+        guard let agentUUID = UUID(uuidString: agentId) else { return nil }
+        let agent = try? await Agent.find(agentUUID, on: app.db)
+        return agent?.name
     }
 
     func unregisterAgent(_ agentId: String) async throws {
         let db = app.db
 
         // Update database using UUID
+        var agentName: String?
         if let agentUUID = UUID(uuidString: agentId),
             let agent = try await Agent.find(agentUUID, on: db)
         {
             agent.status = .offline
             try await agent.save(on: db)
+            agentName = agent.name
         }
-
-        // Get agent name for WebSocket cleanup
-        let agentName = agents[agentId]?.name
 
         // Fail any in-flight requests waiting on this agent before we drop it
         failPendingRequests(for: agentId)
 
-        // Remove from in-memory tracking
-        agents.removeValue(forKey: agentId)
         if let name = agentName {
             app.websocketManager.removeConnection(agentName: name)
-        }
-
-        // Remove VM mappings for this agent
-        let vmIds = vmToAgentMapping.compactMap { (vmId, mappedAgentId) in
-            mappedAgentId == agentId ? vmId : nil
-        }
-
-        for vmId in vmIds {
-            vmToAgentMapping.removeValue(forKey: vmId)
+            await app.coordination.clearAgentRoute(agentName: name, replicaId: app.replicaID)
         }
 
         Telemetry.agentDisconnected(reason: "unregister")
@@ -234,8 +283,7 @@ actor AgentService {
     }
 
     func forceUnregisterAgent(_ agentName: String) async {
-        // Find agent UUID by name
-        guard let agentId = findAgentIdByName(agentName) else {
+        guard let agentId = await agentId(forName: agentName) else {
             app.logger.warning(
                 "Cannot force unregister: agent not found by name", metadata: ["agentName": .string(agentName)])
             return
@@ -244,36 +292,34 @@ actor AgentService {
         // Fail any in-flight requests waiting on this agent before we drop it
         failPendingRequests(for: agentId)
 
-        // Remove from in-memory tracking
-        agents.removeValue(forKey: agentId)
         app.websocketManager.removeConnection(agentName: agentName)
-
-        // Remove VM mappings for this agent
-        let vmIds = vmToAgentMapping.compactMap { (vmId, mappedAgentId) in
-            mappedAgentId == agentId ? vmId : nil
-        }
-
-        for vmId in vmIds {
-            vmToAgentMapping.removeValue(forKey: vmId)
-        }
+        await app.coordination.clearAgentRoute(agentName: agentName, replicaId: app.replicaID)
 
         app.logger.info(
-            "Agent force unregistered from memory",
+            "Agent force unregistered",
             metadata: ["agentId": .string(agentId), "agentName": .string(agentName)])
     }
 
+    /// Socket-close cleanup. The agent may have already reconnected to another
+    /// replica: its route key then names that replica, and this (delayed)
+    /// close must not mark the agent offline underneath a live connection.
     func removeAgent(_ agentName: String) async {
-        // Find agent UUID by name
-        guard let agentId = findAgentIdByName(agentName) else {
-            app.logger.debug("Cannot remove agent: not found by name", metadata: ["agentName": .string(agentName)])
+        // Local pending requests die with the local socket regardless of
+        // where the agent lives now.
+        if let agentId = await agentId(forName: agentName) {
+            failPendingRequests(for: agentId)
+        }
+
+        if let route = await app.coordination.agentRoute(agentName: agentName),
+            route != app.replicaID
+        {
+            app.logger.debug(
+                "Agent socket closed here but agent is routed to another replica; skipping offline mark",
+                metadata: ["agentName": .string(agentName)])
             return
         }
 
-        // Fail any in-flight requests waiting on this agent before we drop it
-        failPendingRequests(for: agentId)
-
-        // Mark agent as offline in memory
-        agents.removeValue(forKey: agentId)
+        await app.coordination.clearAgentRoute(agentName: agentName, replicaId: app.replicaID)
 
         Telemetry.agentDisconnected(reason: "connection_closed")
         Telemetry.recordAgentUp(agentName: agentName, up: false)
@@ -282,8 +328,9 @@ actor AgentService {
         Task {
             do {
                 let db = self.app.db
-                if let agentUUID = UUID(uuidString: agentId),
-                    let agent = try await Agent.find(agentUUID, on: db)
+                if let agent = try await Agent.query(on: db)
+                    .filter(\.$name == agentName)
+                    .first()
                 {
                     agent.status = .offline
                     try await agent.save(on: db)
@@ -298,30 +345,37 @@ actor AgentService {
     /// the claimed `agentId` must belong to it, so one agent cannot drive another
     /// agent's resource tracking or VM reconciliation.
     func updateAgentHeartbeat(_ message: AgentHeartbeatMessage, fromAgentNamed agentName: String) async throws {
-        guard var agentInfo = agents[message.agentId] else {
+        let db = app.db
+        guard let agentUUID = UUID(uuidString: message.agentId),
+            let agent = try await Agent.find(agentUUID, on: db)
+        else {
             app.logger.warning("Received heartbeat from unknown agent", metadata: ["agentId": .string(message.agentId)])
             return
         }
 
-        guard agentInfo.name == agentName else {
+        guard agent.name == agentName else {
             app.logger.warning(
                 "Heartbeat claims an agentId not owned by the authenticated connection; ignoring",
                 metadata: [
                     "claimedAgentId": .string(message.agentId),
-                    "claimedAgentName": .string(agentInfo.name),
+                    "claimedAgentName": .string(agent.name),
                     "connectionAgentName": .string(agentName),
                 ])
             return
         }
 
-        // Update in-memory tracking
-        agentInfo.resources = message.resources
-        agentInfo.lastHeartbeat = Date()
-        agentInfo.status = .online
-        agents[message.agentId] = agentInfo
+        // The database row is the registry (issue #261): the scheduler and
+        // every other replica read resources and liveness from here, so the
+        // write is awaited, not fire-and-forget.
+        agent.updateResources(message.resources)
+        agent.status = .online
+        try await agent.save(on: db)
 
-        // Refresh the agent's presence key so liveness stays visible cluster-wide.
+        // Refresh the agent's presence and socket-route keys so liveness and
+        // routing stay visible cluster-wide. The heartbeat arrived over this
+        // process's socket, so the route is ours to claim.
         await app.coordination.recordAgentPresence(agentName: agentName)
+        await app.coordination.recordAgentRoute(agentName: agentName, replicaId: app.replicaID)
 
         // This heartbeat's resource report accounts for every VM the agent
         // lists, so any placement reservation still held for one of them
@@ -329,24 +383,6 @@ actor AgentService {
         // the release path for successful creates (the dispatch is
         // fire-and-forget, so no correlated response ever arrives).
         await app.coordination.releaseReservations(agentId: message.agentId, vmIds: message.runningVMs)
-
-        // Update database asynchronously using UUID
-        Task {
-            do {
-                let db = self.app.db
-                guard let agentUUID = UUID(uuidString: message.agentId) else {
-                    self.app.logger.error("Invalid agent UUID in heartbeat: \(message.agentId)")
-                    return
-                }
-                if let agent = try await Agent.find(agentUUID, on: db) {
-                    agent.updateResources(message.resources)
-                    agent.status = .online
-                    try await agent.save(on: db)
-                }
-            } catch {
-                self.app.logger.error("Failed to update agent heartbeat in database: \(error)")
-            }
-        }
 
         // Reconcile the VMs the agent reports against what the database expects.
         Task {
@@ -443,6 +479,11 @@ actor AgentService {
                     // Check for stale agents
                     await checkStaleAgents()
 
+                    // Probe (and re-arm if dead) this replica's pub/sub
+                    // subscriptions — a dropped Valkey connection loses them
+                    // silently and RediStack does not restore them.
+                    await verifyReplicaSubscriptions()
+
                     // Periodic desired-state sync (~60s): the correctness
                     // backstop of the level-triggered design — a dropped or
                     // failed sync is repaired here, so pushes on mutation are
@@ -468,79 +509,58 @@ actor AgentService {
         let now = Date()
         let staleThreshold: TimeInterval = 60  // 60 seconds
 
-        // Export per-agent heartbeat staleness as a gauge every cycle so alerting
-        // can watch an agent go quiet before the sweep removes it.
-        for agentInfo in agents.values {
-            Telemetry.recordHeartbeatStaleness(
-                agentName: agentInfo.name,
-                seconds: now.timeIntervalSince(agentInfo.lastHeartbeat)
-            )
-        }
+        do {
+            let onlineAgents = try await Agent.query(on: app.db)
+                .filter(\.$status == .online)
+                .all()
 
-        // Deliberately NOT gated on a sweep lock: this sweep acts on
-        // process-local state (this process's agent map, socket registry, and
-        // pending-request continuations) that no other replica can clean up on
-        // our behalf, so every replica must run its own pass. Cross-replica
-        // disagreement is prevented by the presence check below — an agent
-        // heartbeating through another replica keeps a live presence key and
-        // is skipped here — and the database offline-write is idempotent, so
-        // concurrent passes in different replicas are harmless. (The stuck-VM
-        // sweep below operates purely on shared database state and *is* a
-        // cluster singleton.)
-        var staleAgents: [String] = []
-        for agentInfo in agents.values {
-            guard now.timeIntervalSince(agentInfo.lastHeartbeat) > staleThreshold else { continue }
-
-            // The in-memory timestamp is only this process's view; the presence
-            // key in Valkey is refreshed by whichever process receives the
-            // agent's heartbeats. Only an agent that is stale here AND absent
-            // from the coordination store is treated as gone — a live presence
-            // key means another replica is hearing from it. When the store
-            // can't answer, fall back to the in-memory verdict alone (the
-            // pre-coordination behavior).
-            if await app.coordination.isAgentPresent(agentName: agentInfo.name) == true {
-                app.logger.debug(
-                    "Agent stale in this process but presence key is live; skipping",
-                    metadata: ["agentName": .string(agentInfo.name)])
-                continue
+            // Export per-agent heartbeat staleness as a gauge every cycle so
+            // alerting can watch an agent go quiet before the sweep removes
+            // it. Every heartbeat lands in the database regardless of which
+            // replica received it, so `last_heartbeat` is the cluster view.
+            for agent in onlineAgents {
+                guard let lastHeartbeat = agent.lastHeartbeat else { continue }
+                Telemetry.recordHeartbeatStaleness(
+                    agentName: agent.name,
+                    seconds: now.timeIntervalSince(lastHeartbeat)
+                )
             }
-            staleAgents.append(agentInfo.id)  // This is the UUID
-        }
 
-        if !staleAgents.isEmpty {
-            app.logger.info("Found \(staleAgents.count) stale agents, marking as offline")
+            // Not gated on a sweep lock even though the state is shared:
+            // in-flight requests on this process's sockets can only be failed
+            // here, the offline write is idempotent, and the presence check
+            // keeps replicas from disagreeing — an agent heartbeating through
+            // any replica keeps a live presence key and is skipped.
+            for agent in onlineAgents {
+                let heartbeatAge = agent.lastHeartbeat.map { now.timeIntervalSince($0) } ?? .infinity
+                guard heartbeatAge > staleThreshold else { continue }
 
-            for agentId in staleAgents {
-                // Fail any in-flight requests waiting on this agent before we drop it
-                failPendingRequests(for: agentId)
+                // A live presence key means *some* replica is hearing from
+                // the agent even though the row hasn't been touched — e.g. a
+                // write raced this read. When the store can't answer, fall
+                // back to the heartbeat-age verdict alone.
+                if await app.coordination.isAgentPresent(agentName: agent.name) == true {
+                    app.logger.debug(
+                        "Agent heartbeat is stale in the database but presence key is live; skipping",
+                        metadata: ["agentName": .string(agent.name)])
+                    continue
+                }
 
-                // Capture the name before removal so the up/down gauge keeps a
-                // durable `0` for this specific agent after it leaves memory.
-                let staleAgentName = agents[agentId]?.name
+                if let agentId = agent.id?.uuidString {
+                    failPendingRequests(for: agentId)
+                }
 
-                // Remove from memory
-                agents.removeValue(forKey: agentId)
+                agent.status = .offline
+                try await agent.save(on: app.db)
 
                 Telemetry.agentDisconnected(reason: "stale")
-                if let name = staleAgentName {
-                    Telemetry.recordAgentUp(agentName: name, up: false)
-                }
-
-                // Update database using UUID
-                Task {
-                    do {
-                        let db = self.app.db
-                        if let agentUUID = UUID(uuidString: agentId),
-                            let agent = try await Agent.find(agentUUID, on: db)
-                        {
-                            agent.status = .offline
-                            try await agent.save(on: db)
-                        }
-                    } catch {
-                        self.app.logger.error("Failed to update stale agent status in database: \(error)")
-                    }
-                }
+                Telemetry.recordAgentUp(agentName: agent.name, up: false)
+                app.logger.info(
+                    "Agent heartbeat stale past threshold; marked offline",
+                    metadata: ["agentName": .string(agent.name)])
             }
+        } catch {
+            app.logger.error("Stale-agent sweep failed: \(error)")
         }
     }
 
@@ -653,31 +673,63 @@ actor AgentService {
         }
     }
 
-    // MARK: - Desired-state sync (issue #260)
+    // MARK: - Desired-state sync (issues #260, #261)
 
-    /// Whether the agent registered with a state-sync protocol version and
-    /// should be driven by desired-state syncs instead of imperative messages.
-    func agentSupportsStateSync(_ agentId: String) -> Bool {
-        agents[agentId]?.supportsStateSync ?? false
-    }
-
-    /// Push the authoritative desired state to every connected state-sync
-    /// agent. Called on the periodic timer; failures are logged and repaired
-    /// by the next tick.
+    /// Push the authoritative desired state to every registered agent whose
+    /// socket this process holds. Called on the periodic timer; failures are
+    /// logged and repaired by the next tick. Each replica syncs exactly its
+    /// own sockets, so no cluster coordination is needed here.
     func syncDesiredStateToAllAgents() async {
-        for agent in agents.values where agent.supportsStateSync && agent.status == .online {
-            await syncDesiredState(agentId: agent.id)
+        for (name, agentId) in app.websocketManager.registeredAgents() {
+            await syncDesiredStateLocally(agentId: agentId, agentName: name)
         }
     }
 
-    /// Assemble and send the full desired-state sync for one agent. Safe to
-    /// call redundantly: identical syncs diff to nothing on the agent. No-op
-    /// for agents that don't speak state sync.
+    /// Trigger a desired-state sync for an agent from any replica. When this
+    /// process holds the agent's socket the sync is assembled and pushed
+    /// directly (the local short-circuit); otherwise the replica named by the
+    /// routing key is nudged over pub/sub and assembles it from Postgres
+    /// there. Both halves are latency optimizations — a lost nudge is
+    /// repaired by the holder's periodic sync timer.
     func syncDesiredState(agentId: String) async {
-        guard agentSupportsStateSync(agentId) else { return }
+        if let localName = app.websocketManager.agentName(agentId: agentId) {
+            await syncDesiredStateLocally(agentId: agentId, agentName: localName)
+            return
+        }
+
+        guard let name = await agentName(forId: agentId) else {
+            app.logger.warning(
+                "Cannot route sync for unknown agent", metadata: ["agentId": .string(agentId)])
+            return
+        }
+
+        guard let route = await app.coordination.agentRoute(agentName: name) else {
+            // No route: the agent is offline everywhere. The sync it missed
+            // is delivered by the registration-triggered sync on reconnect.
+            app.logger.debug(
+                "No socket route for agent; sync deferred to reconnect",
+                metadata: ["agentName": .string(name)])
+            return
+        }
+
+        if route == app.replicaID {
+            // The route says us, but no local socket exists — a connection
+            // torn down before its route expired. The reconnect sync (or the
+            // holder's periodic timer, wherever the agent lands) is the
+            // backstop; nudging ourselves would find the same missing socket.
+            return
+        }
+
+        await app.coordination.publishNudge(agentName: name, toReplica: route)
+    }
+
+    /// Assemble and send the full desired-state sync over a locally held
+    /// socket. Safe to call redundantly: identical syncs diff to nothing on
+    /// the agent.
+    private func syncDesiredStateLocally(agentId: String, agentName: String) async {
         do {
             let message = try await assembleDesiredState(agentId: agentId)
-            try await sendMessageToAgent(message, agentId: agentId)
+            try await sendMessageToLocalAgent(message, agentName: agentName)
             app.logger.debug(
                 "Desired-state sync sent",
                 metadata: [
@@ -695,6 +747,118 @@ actor AgentService {
                     "error": .string(error.localizedDescription),
                 ])
         }
+    }
+
+    // MARK: - Replica pub/sub (issue #261)
+
+    /// Sentinel published to our own nudge channel to verify the subscription
+    /// connection is alive. Cannot collide with a real nudge: nudges carry
+    /// agent names, and a leading NUL is not a legal agent name.
+    static let subscriptionProbeMessage = "\u{0}subscription-probe"
+
+    /// Subscribe to this replica's nudge and RPC channels. Called from init
+    /// and re-armed by `verifyReplicaSubscriptions()`; failure is logged and
+    /// fails open — the replica misses nudge latency (its periodic timer
+    /// still converges its own agents) and cannot serve cross-replica
+    /// exchanges, but stays available.
+    ///
+    /// Safe to call repeatedly: RediStack replaces the receiver when the
+    /// channel is already subscribed on a live connection, and leases a fresh
+    /// pub/sub connection when the previous one died.
+    private func startReplicaSubscriptions() async {
+        guard !isShutDown else { return }
+        let replicaId = app.replicaID
+        do {
+            try await app.coordination.subscribe(
+                channel: CoordinationService.nudgeChannel(replicaId: replicaId)
+            ) { [weak self] agentName in
+                Task { await self?.handleNudge(agentName: agentName) }
+            }
+            try await app.coordination.subscribe(
+                channel: CoordinationService.rpcChannel(replicaId: replicaId)
+            ) { [weak self] payload in
+                Task { await self?.handleRPCRequest(payload) }
+            }
+            try await app.coordination.subscribe(
+                channel: CoordinationService.rpcReplyChannel(replicaId: replicaId)
+            ) { [weak self] payload in
+                Task { await self?.handleRPCReply(payload) }
+            }
+            subscriptionsEstablished = true
+            app.logger.info(
+                "Replica coordination channels subscribed", metadata: ["replicaId": .string(replicaId)])
+        } catch {
+            subscriptionsEstablished = false
+            app.logger.error(
+                "Failed to subscribe to replica coordination channels; cross-replica nudges and RPCs are unavailable on this replica: \(error)"
+            )
+        }
+    }
+
+    /// Verify the pub/sub subscriptions are actually receiving (issue #261
+    /// review finding). RediStack pins subscriptions to one dedicated
+    /// connection and never restores them after a drop (Valkey restart,
+    /// failover, network blip) — and a dead subscription is silent: this
+    /// replica would keep *publishing* RPCs whose replies it can no longer
+    /// hear, failing every cross-replica exchange by timeout. So each
+    /// heartbeat tick publishes a probe to our own nudge channel; a probe
+    /// that hasn't come back by the next tick means the subscription
+    /// connection is dead, and everything is re-armed. Runs on the 30s
+    /// heartbeat tick, bounding the silent window to about two ticks.
+    func verifyReplicaSubscriptions() async {
+        guard !isShutDown else { return }
+
+        if !subscriptionsEstablished {
+            // The initial subscribe failed; keep retrying from here.
+            await startReplicaSubscriptions()
+        } else if let sent = lastProbeSent,
+            (lastProbeReceived ?? .distantPast) < sent,
+            Date().timeIntervalSince(sent) > 20
+        {
+            // The previous tick's probe never arrived: the subscription
+            // connection is dead even though publishes still work.
+            app.logger.warning(
+                "Replica subscription probe was not received; re-establishing channel subscriptions",
+                metadata: ["replicaId": .string(app.replicaID)])
+            await startReplicaSubscriptions()
+        }
+
+        lastProbeSent = Date()
+        do {
+            try await app.coordination.publish(
+                channel: CoordinationService.nudgeChannel(replicaId: app.replicaID),
+                message: Self.subscriptionProbeMessage
+            )
+        } catch {
+            // Publishing needs Valkey too; when it's down entirely the next
+            // tick's missed probe re-arms once it returns.
+            app.logger.warning("Failed to publish subscription probe: \(error)")
+        }
+    }
+
+    /// Test seam: whether the most recently published subscription probe has
+    /// been received back on the nudge channel.
+    var lastSubscriptionProbeRoundTripped: Bool {
+        guard let sent = lastProbeSent else { return false }
+        return (lastProbeReceived ?? .distantPast) >= sent
+    }
+
+    /// A nudge names an agent whose desired state changed on another replica.
+    /// If we (still) hold its socket, push a fresh sync; if not, the nudge
+    /// raced a disconnect and the periodic timer wherever the agent lands is
+    /// the backstop.
+    func handleNudge(agentName: String) async {
+        if agentName == Self.subscriptionProbeMessage {
+            lastProbeReceived = Date()
+            return
+        }
+        guard let agentId = app.websocketManager.agentId(agentName: agentName) else {
+            app.logger.debug(
+                "Nudge for agent without a local socket; ignoring",
+                metadata: ["agentName": .string(agentName)])
+            return
+        }
+        await syncDesiredStateLocally(agentId: agentId, agentName: agentName)
     }
 
     /// The full authoritative VM set for an agent, straight from Postgres —
@@ -822,12 +986,14 @@ actor AgentService {
             return
         }
 
-        guard var agentInfo = agents[report.agentId] else {
+        guard let agentUUID = UUID(uuidString: report.agentId),
+            let agent = try? await Agent.find(agentUUID, on: app.db)
+        else {
             app.logger.warning(
                 "Observed-state report from unknown agent", metadata: ["agentId": .string(report.agentId)])
             return
         }
-        guard agentInfo.name == agentName else {
+        guard agent.name == agentName else {
             app.logger.warning(
                 "Observed-state report claims an agentId not owned by the authenticated connection; ignoring",
                 metadata: [
@@ -839,10 +1005,20 @@ actor AgentService {
 
         // Reports carry the same resource snapshot as heartbeats; keep the
         // scheduler's view fresh from whichever arrives.
-        agentInfo.resources = report.resources
-        agentInfo.lastHeartbeat = Date()
-        agentInfo.status = .online
-        agents[report.agentId] = agentInfo
+        agent.updateResources(report.resources)
+        agent.status = .online
+        do {
+            try await agent.save(on: app.db)
+        } catch {
+            app.logger.warning(
+                "Failed to persist agent resources from observed-state report: \(error)",
+                metadata: ["agentId": .string(report.agentId)])
+        }
+
+        // The report arrived over this process's socket: refresh liveness and
+        // routing alongside, mirroring the heartbeat path.
+        await app.coordination.recordAgentPresence(agentName: agentName)
+        await app.coordination.recordAgentRoute(agentName: agentName, replicaId: app.replicaID)
 
         // Every reported VM is accounted for in the agent's resource figures,
         // so any placement reservation still held for one would double-count.
@@ -994,7 +1170,6 @@ actor AgentService {
                 try await vm.delete(on: db)
                 try await QuotaEnforcementService.release(for: vm, on: db)
             }
-            vmToAgentMapping.removeValue(forKey: vmID.uuidString)
             await app.coordination.releaseReservation(agentId: agentId, vmId: vmID.uuidString)
 
             app.logger.info(
@@ -1025,28 +1200,24 @@ actor AgentService {
 
     // MARK: - VM Operations
 
-    /// Creates a VM on an agent selected by the scheduler and awaits the agent's
-    /// correlated success/error response (the agent replies only once the create —
-    /// including any image download — has finished or failed, so `responseTimeout`
-    /// must be the operation's full completion budget, not a dispatch timeout).
-    /// The caller records the returned verdict on the VM's `create` operation.
+    /// Places a VM on an agent selected by the scheduler, persists the
+    /// placement, and pushes (or nudges) a desired-state sync. The pending
+    /// create operation completes from the agent's observed-state reports,
+    /// with the stuck-operation sweep as the budget backstop. The placement
+    /// reservation self-releases once the agent's reports account for the VM
+    /// (or by TTL on failure).
     /// - Parameters:
     ///   - vm: The VM to create
-    ///   - vmSpec: Hypervisor-neutral VM specification
     ///   - db: Database connection
     ///   - strategy: Optional scheduling strategy override
-    ///   - image: Optional image for image-based VM creation (will generate signed download URL)
-    ///   - responseTimeout: How long to wait for the agent's completion response
+    ///   - image: Optional source image (its architecture constrains placement)
     func createVM(
         vm: VM,
-        vmSpec: VMSpec,
         db: Database,
         strategy: SchedulingStrategy? = nil,
-        image: Image? = nil,
-        responseTimeout: Duration = VMOperationKind.create.completionBudget
-    ) async throws -> CreateDispatch {
-        // Convert agents to schedulable format
-        let schedulableAgents = getSchedulableAgents()
+        image: Image? = nil
+    ) async throws {
+        let schedulableAgents = await schedulableAgentsFromDatabase()
         let vmId = vm.id?.uuidString ?? ""
 
         // Use scheduler to select the best agent and atomically reserve the
@@ -1070,109 +1241,46 @@ actor AgentService {
             throw AgentServiceError.schedulingFailed(error.description)
         }
 
-        // From here the reservation is held; release it on any failure to
-        // dispatch the create, so a doomed placement doesn't pin capacity
-        // for the full reservation TTL.
-        var imageInfo: ImageInfo?
         do {
-            guard agents[agentId] != nil else {
-                throw AgentServiceError.agentNotFound(agentId)
-            }
-
-            // Dual-mode (issue #260): a state-sync agent is driven by a
-            // desired-state sync, not an imperative create. Persist the
-            // placement, sync, and let observed-state reports complete the
-            // operation. The reservation self-releases when the agent's
-            // reports start accounting for the VM (or by TTL on failure).
-            if agentSupportsStateSync(agentId) {
-                vmToAgentMapping[vmId] = agentId
-                vm.hypervisorId = agentId
-                try await vm.save(on: db)
-
-                app.logger.info(
-                    "VM creation dispatched via desired-state sync",
-                    metadata: [
-                        "vmId": .string(vmId),
-                        "agentId": .string(agentId),
-                    ])
-
-                await syncDesiredState(agentId: agentId)
-                return .syncing
-            }
-
-            // Build ImageInfo with signed URL now that we know the agent
-            if let image = image {
-                do {
-                    // The artifact set drives which signed URLs are emitted; make
-                    // sure it's loaded (no-op if the caller already eager-loaded).
-                    try await image.$artifacts.load(on: db)
-                    let controlPlaneURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
-                    let signingKey = try URLSigningService.getSigningKey(from: app)
-                    imageInfo = try VMSpecBuilder.buildImageInfo(
-                        from: image,
-                        controlPlaneURL: controlPlaneURL,
-                        agentName: agentId,
-                        signingKey: signingKey
-                    )
-                } catch {
-                    app.logger.error("Failed to build image info: \(error)")
-                    throw error
-                }
-            }
-
-            let message = VMCreateMessage(
-                vmData: vm.toVMData(),
-                vmSpec: vmSpec,
-                imageInfo: imageInfo
-            )
-
-            // Persist the placement before dispatching, so a control-plane
-            // restart mid-create still knows which agent owns the VM (the
-            // stuck-operation sweep and a later retry both rely on it).
-            vmToAgentMapping[vmId] = agentId
+            // Persist the placement, then sync: from here the VM is part of
+            // the agent's desired state and every path (nudge now, periodic
+            // timer later, reconnect sync) will carry it.
             vm.hypervisorId = agentId
             try await vm.save(on: db)
 
             app.logger.info(
-                "VM creation dispatched",
+                "VM creation dispatched via desired-state sync",
                 metadata: [
                     "vmId": .string(vmId),
                     "agentId": .string(agentId),
-                    "hasImageInfo": .string(imageInfo != nil ? "yes" : "no"),
                 ])
 
-            let response = try await sendMessageToAgentWithResponse(
-                message, agentId: agentId, timeout: responseTimeout)
-
-            if case .error = response {
-                // The agent reported the create failed: nothing will ever show up
-                // in its resource reports, so release the reservation now instead
-                // of pinning capacity until the TTL.
-                await app.coordination.releaseReservation(agentId: agentId, vmId: vmId)
-            }
-            return .completed(response)
+            await syncDesiredState(agentId: agentId)
         } catch {
+            // The placement never became desired state, so nothing will ever
+            // account for the reservation — release it rather than pinning
+            // capacity until the TTL.
             await app.coordination.releaseReservation(agentId: agentId, vmId: vmId)
             throw error
         }
     }
 
-    /// Dispatch a VM lifecycle operation and await the agent's correlated
-    /// success/error response. The agent replies only after the operation ran
-    /// on the hypervisor, so `timeout` should be the operation kind's full
-    /// completion budget. Callers record the verdict on the operation row
-    /// (issue #259) — this method no longer gates any HTTP response.
+    /// Dispatch a correlated VM command (reboot — an action, not a state, so
+    /// it cannot ride the level-triggered sync) and await the agent's
+    /// success/error response, routing through the socket-holding replica if
+    /// it isn't us. The agent replies only after the operation ran on the
+    /// hypervisor, so `timeout` should be the operation kind's full completion
+    /// budget. Callers record the verdict on the operation row (issue #259).
     func performVMOperationAwaitingResponse(
         _ operation: MessageType,
         vmId: String,
         timeout: Duration
     ) async throws -> AgentServiceResponse {
-        guard let agentId = vmToAgentMapping[vmId] else {
+        guard let vmUUID = UUID(uuidString: vmId),
+            let vm = try await VM.find(vmUUID, on: app.db),
+            let agentId = vm.hypervisorId
+        else {
             throw AgentServiceError.vmNotMapped(vmId)
-        }
-
-        guard agents[agentId] != nil else {
-            throw AgentServiceError.agentNotFound(agentId)
         }
 
         let message = VMOperationMessage(type: operation, vmId: vmId)
@@ -1188,131 +1296,145 @@ actor AgentService {
         return try await sendMessageToAgentWithResponse(message, agentId: agentId, timeout: timeout)
     }
 
-    func getVMInfo(vmId: String) async throws -> VmInfo {
-        guard let agentId = vmToAgentMapping[vmId] else {
-            throw AgentServiceError.vmNotMapped(vmId)
-        }
-
-        guard agents[agentId] != nil else {
-            throw AgentServiceError.agentNotFound(agentId)
-        }
-
-        let message = VMInfoRequestMessage(vmId: vmId)
-        let response = try await sendMessageToAgentWithResponse(message, agentId: agentId)
-
-        guard case .success(let data) = response,
-            let vmInfo = try? data?.decode(as: VmInfo.self)
-        else {
-            throw AgentServiceError.invalidResponse("Failed to decode VM info")
-        }
-
-        return vmInfo
-    }
-
-    func getVMStatus(vmId: String) async throws -> VMStatus {
-        guard let agentId = vmToAgentMapping[vmId] else {
-            throw AgentServiceError.vmNotMapped(vmId)
-        }
-
-        guard agents[agentId] != nil else {
-            throw AgentServiceError.agentNotFound(agentId)
-        }
-
-        let message = VMOperationMessage(type: .vmStatus, vmId: vmId)
-        let response = try await sendMessageToAgentWithResponse(message, agentId: agentId)
-
-        guard case .success(let data) = response,
-            let status = try? data?.decode(as: VMStatus.self)
-        else {
-            throw AgentServiceError.invalidResponse("Failed to decode VM status")
-        }
-
-        return status
-    }
-
     // MARK: - Agent Selection
 
-    /// Convert in-memory agents to schedulable format for the scheduler service
-    private func getSchedulableAgents() -> [SchedulableAgent] {
-        Self.schedulableAgents(from: Array(agents.values), vmToAgentMapping: vmToAgentMapping)
+    /// The scheduler's view of the fleet, assembled from the shared registry:
+    /// agent rows (resources refreshed by heartbeats through any replica) and
+    /// per-agent VM counts, filtered to agents whose presence key is live.
+    func schedulableAgentsFromDatabase() async -> [SchedulableAgent] {
+        do {
+            let agents = try await Agent.query(on: app.db)
+                .filter(\.$status == .online)
+                .all()
+
+            let placedVMs = try await VM.query(on: app.db)
+                .filter(\.$hypervisorId != nil)
+                .all()
+            var runningVMCounts: [String: Int] = [:]
+            for vm in placedVMs {
+                if let hypervisorId = vm.hypervisorId {
+                    runningVMCounts[hypervisorId, default: 0] += 1
+                }
+            }
+
+            var present: [Agent] = []
+            for agent in agents {
+                // Fail open on nil (store unavailable): the row said online,
+                // and refusing all placement would couple VM creation to
+                // Valkey harder than issue #258's degradation policy allows.
+                if await app.coordination.isAgentPresent(agentName: agent.name) == false {
+                    continue
+                }
+                present.append(agent)
+            }
+
+            return Self.schedulableAgents(from: present, runningVMCounts: runningVMCounts)
+        } catch {
+            app.logger.error("Failed to load schedulable agents from database: \(error)")
+            return []
+        }
     }
 
-    /// Pure transform from in-memory agent state to the scheduler's view. The
-    /// running-VM count for each agent is derived from `vmToAgentMapping`. Kept
+    /// Pure transform from agent rows to the scheduler's view. Kept
     /// `nonisolated static` so it can be unit-tested without the actor.
     nonisolated static func schedulableAgents(
-        from agents: [AgentInfo],
-        vmToAgentMapping: [String: String]
+        from agents: [Agent],
+        runningVMCounts: [String: Int]
     ) -> [SchedulableAgent] {
-        return agents.map { agentInfo in
-            SchedulableAgent(
-                id: agentInfo.id,  // Database UUID (as String)
-                name: agentInfo.name,  // Human-readable name
-                totalCPU: agentInfo.resources.totalCPU,
-                availableCPU: agentInfo.resources.availableCPU,
-                totalMemory: agentInfo.resources.totalMemory,
-                availableMemory: agentInfo.resources.availableMemory,
-                totalDisk: agentInfo.resources.totalDisk,
-                availableDisk: agentInfo.resources.availableDisk,
-                status: agentInfo.status,
-                runningVMCount: vmToAgentMapping.values.filter { $0 == agentInfo.id }.count,
-                supportedHypervisors: agentInfo.supportedHypervisors,
-                architecture: agentInfo.architecture,
-                supportsInterVMNetworking: agentInfo.supportsInterVMNetworking
+        return agents.compactMap { agent in
+            guard let agentId = agent.id?.uuidString else { return nil }
+            return SchedulableAgent(
+                id: agentId,  // Database UUID (as String)
+                name: agent.name,  // Human-readable name
+                totalCPU: agent.totalCPU,
+                availableCPU: agent.availableCPU,
+                totalMemory: agent.totalMemory,
+                availableMemory: agent.availableMemory,
+                totalDisk: agent.totalDisk,
+                availableDisk: agent.availableDisk,
+                status: agent.status,
+                runningVMCount: runningVMCounts[agentId] ?? 0,
+                supportedHypervisors: agent.supportedHypervisors,
+                architecture: agent.cpuArchitecture,
+                supportsInterVMNetworking: agent.supportsInterVMNetworking
             )
         }
     }
 
-    /// Get VM-to-agent mapping (for diagnostics and recovery)
-    func getVMToAgentMapping() -> [String: String] {
-        return vmToAgentMapping
-    }
-
-    /// Manually set VM-to-agent mapping (for recovery scenarios)
-    func setVMToAgentMapping(vmId: String, agentId: String) {
-        vmToAgentMapping[vmId] = agentId
-    }
-
     // MARK: - Message Sending
 
-    private func sendMessageToAgent<T: WebSocketMessage>(_ message: T, agentId: String) async throws {
-        // Look up agent info to get the name for WebSocket lookup
-        guard let agentInfo = agents[agentId] else {
-            throw AgentServiceError.agentNotFound(agentId)
+    /// Encode and push an envelope over a locally held socket.
+    private func sendEnvelope(_ envelope: MessageEnvelope, toLocalAgent agentName: String) throws {
+        guard let websocket = app.websocketManager.getConnection(agentName: agentName) else {
+            throw AgentServiceError.agentNotFound(agentName)
         }
-
-        guard let websocket = app.websocketManager.getConnection(agentName: agentInfo.name) else {
-            throw AgentServiceError.agentNotFound(agentId)
-        }
-
-        let envelope = try MessageEnvelope(message: message)
         let data = try WireProtocol.makeEncoder().encode(envelope)
-
         websocket.send(data)
     }
 
-    /// Send a message to an agent and await the correlated success/error response.
-    /// Also used by other services (e.g. VolumeService) that must confirm an agent
-    /// completed an operation before reconciling database state. The timeout should
-    /// be sized to the operation: metadata ops finish in seconds, while image-backed
-    /// volume creation or a clone can copy gigabytes.
+    private func sendMessageToLocalAgent<T: WebSocketMessage>(_ message: T, agentName: String) async throws {
+        try sendEnvelope(MessageEnvelope(message: message), toLocalAgent: agentName)
+    }
+
+    /// Send a message to an agent and await the correlated success/error
+    /// response, wherever the agent's socket lives: a locally armed
+    /// continuation when this process holds it, or an exchange forwarded to
+    /// the socket-holding replica over the coordination store's RPC channels
+    /// otherwise. This is the path for the few remaining imperative exchanges
+    /// — volume operations and reboot, which are actions rather than states
+    /// and so cannot ride the level-triggered sync. The timeout should be
+    /// sized to the operation: metadata ops finish in seconds, while
+    /// image-backed volume creation or a clone can copy gigabytes.
     func sendMessageToAgentWithResponse<T: WebSocketMessage>(
         _ message: T,
         agentId: String,
         timeout: Duration = .seconds(30)
     ) async throws -> AgentServiceResponse {
+        let envelope = try MessageEnvelope(message: message)
+
+        if let localName = app.websocketManager.agentName(agentId: agentId) {
+            return try await sendEnvelopeAwaitingLocalResponse(
+                envelope, requestId: message.requestId, agentId: agentId,
+                agentName: localName, timeout: timeout)
+        }
+
+        guard let name = await agentName(forId: agentId) else {
+            throw AgentServiceError.agentNotFound(agentId)
+        }
+        guard let route = await app.coordination.agentRoute(agentName: name),
+            route != app.replicaID
+        else {
+            // No route: the agent is offline everywhere. A route naming this
+            // replica without a local socket is a stale claim from a torn-down
+            // connection — the agent is equally unreachable from here.
+            throw AgentServiceError.agentNotFound(agentId)
+        }
+
+        return try await sendRPC(
+            envelope, requestId: message.requestId, agentId: agentId,
+            agentName: name, toReplica: route, timeout: timeout)
+    }
+
+    /// Arm a pending-request continuation, push the envelope over the local
+    /// socket, and await the agent's correlated response (or the timeout).
+    private func sendEnvelopeAwaitingLocalResponse(
+        _ envelope: MessageEnvelope,
+        requestId: String,
+        agentId: String,
+        agentName: String,
+        timeout: Duration
+    ) async throws -> AgentServiceResponse {
         return try await withCheckedThrowingContinuation { continuation in
             Task {
                 do {
                     // Store continuation for response handling
-                    self.storePendingRequest(message.requestId, agentId: agentId, continuation: continuation)
+                    self.storePendingRequest(requestId, agentId: agentId, continuation: continuation)
 
                     // Send message
-                    try await self.sendMessageToAgent(message, agentId: agentId)
+                    try self.sendEnvelope(envelope, toLocalAgent: agentName)
 
                     // Arm a timeout, tracking its handle so a normal response can
                     // cancel it instead of leaving a task dangling per request.
-                    let requestId = message.requestId
                     let timeoutTask = Task {
                         try? await Task.sleep(for: timeout)
                         guard !Task.isCancelled else { return }
@@ -1320,11 +1442,180 @@ actor AgentService {
                     }
                     self.attachTimeout(timeoutTask, to: requestId)
                 } catch {
-                    _ = self.removePendingRequest(message.requestId)
+                    _ = self.removePendingRequest(requestId)
                     continuation.resume(throwing: error)
                 }
             }
         }
+    }
+
+    // MARK: - Cross-replica RPC bridge (issue #261)
+
+    /// Wire format for forwarding a correlated agent exchange to the replica
+    /// holding the agent's socket. Serialized as JSON on the RPC channels.
+    struct AgentRPCRequest: Codable {
+        let rpcId: String
+        let replyChannel: String
+        let agentId: String
+        let agentName: String
+        let envelope: MessageEnvelope
+        let timeoutSeconds: Double
+    }
+
+    enum AgentRPCOutcome: String, Codable {
+        case success
+        case error
+        /// The routed replica could not complete the exchange (socket gone,
+        /// send failure, or its local timeout).
+        case unreachable
+    }
+
+    struct AgentRPCReply: Codable {
+        let rpcId: String
+        let outcome: AgentRPCOutcome
+        let data: AnyCodableValue?
+        let error: String?
+        let details: String?
+    }
+
+    /// Requester half: publish the exchange to the holder's RPC channel and
+    /// await the reply on our own reply channel. The local deadline runs a
+    /// little past the holder's, so the holder's specific verdict (agent
+    /// error, its own timeout) normally wins over our generic one.
+    private func sendRPC(
+        _ envelope: MessageEnvelope,
+        requestId: String,
+        agentId: String,
+        agentName: String,
+        toReplica replicaId: String,
+        timeout: Duration
+    ) async throws -> AgentServiceResponse {
+        let request = AgentRPCRequest(
+            rpcId: requestId,
+            replyChannel: CoordinationService.rpcReplyChannel(replicaId: app.replicaID),
+            agentId: agentId,
+            agentName: agentName,
+            envelope: envelope,
+            timeoutSeconds: Self.seconds(of: timeout)
+        )
+        let payload = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
+        let channel = CoordinationService.rpcChannel(replicaId: replicaId)
+
+        return try await withCheckedThrowingContinuation { continuation in
+            Task {
+                self.pendingRPCs[requestId] = PendingRPC(continuation: continuation)
+                do {
+                    try await self.app.coordination.publish(channel: channel, message: payload)
+                } catch {
+                    // The request never left this process; fail fast.
+                    if let pending = self.removePendingRPC(requestId) {
+                        pending.resume(throwing: error)
+                    }
+                    return
+                }
+                let timeoutTask = Task {
+                    try? await Task.sleep(for: timeout + .seconds(5))
+                    guard !Task.isCancelled else { return }
+                    self.timeoutRPC(requestId)
+                }
+                self.attachRPCTimeout(timeoutTask, to: requestId)
+            }
+        }
+    }
+
+    /// Holder half: run the forwarded exchange over our local socket and
+    /// publish the verdict to the requester's reply channel.
+    func handleRPCRequest(_ payload: String) async {
+        let request: AgentRPCRequest
+        do {
+            request = try JSONDecoder().decode(AgentRPCRequest.self, from: Data(payload.utf8))
+        } catch {
+            app.logger.error("Failed to decode cross-replica RPC request: \(error)")
+            return
+        }
+
+        let reply: AgentRPCReply
+        if app.websocketManager.getConnection(agentName: request.agentName) != nil {
+            do {
+                let response = try await sendEnvelopeAwaitingLocalResponse(
+                    request.envelope, requestId: request.rpcId, agentId: request.agentId,
+                    agentName: request.agentName, timeout: .seconds(request.timeoutSeconds))
+                switch response {
+                case .success(let data):
+                    reply = AgentRPCReply(
+                        rpcId: request.rpcId, outcome: .success, data: data, error: nil, details: nil)
+                case .error(let error, let details):
+                    reply = AgentRPCReply(
+                        rpcId: request.rpcId, outcome: .error, data: nil, error: error, details: details)
+                }
+            } catch {
+                reply = AgentRPCReply(
+                    rpcId: request.rpcId, outcome: .unreachable, data: nil,
+                    error: error.localizedDescription, details: nil)
+            }
+        } else {
+            // The route pointed here but the socket is gone (disconnect racing
+            // the routing key's TTL); tell the requester promptly instead of
+            // letting it wait out its deadline.
+            reply = AgentRPCReply(
+                rpcId: request.rpcId, outcome: .unreachable, data: nil,
+                error: "agent socket is not held by the routed replica", details: nil)
+        }
+
+        do {
+            let data = try JSONEncoder().encode(reply)
+            try await app.coordination.publish(
+                channel: request.replyChannel, message: String(decoding: data, as: UTF8.self))
+        } catch {
+            app.logger.error(
+                "Failed to publish cross-replica RPC reply; requester will time out: \(error)",
+                metadata: ["rpcId": .string(request.rpcId)])
+        }
+    }
+
+    /// Requester half, reply side: resolve the awaiting continuation.
+    func handleRPCReply(_ payload: String) async {
+        let reply: AgentRPCReply
+        do {
+            reply = try JSONDecoder().decode(AgentRPCReply.self, from: Data(payload.utf8))
+        } catch {
+            app.logger.error("Failed to decode cross-replica RPC reply: \(error)")
+            return
+        }
+
+        guard let continuation = removePendingRPC(reply.rpcId) else { return }
+        switch reply.outcome {
+        case .success:
+            continuation.resume(returning: .success(reply.data))
+        case .error:
+            continuation.resume(returning: .error(reply.error ?? "unknown agent error", reply.details))
+        case .unreachable:
+            continuation.resume(throwing: AgentServiceError.connectionLost)
+        }
+    }
+
+    private func removePendingRPC(_ rpcId: String) -> CheckedContinuation<AgentServiceResponse, Error>? {
+        guard let pending = pendingRPCs.removeValue(forKey: rpcId) else { return nil }
+        pending.timeoutTask?.cancel()
+        return pending.continuation
+    }
+
+    private func attachRPCTimeout(_ task: Task<Void, Never>, to rpcId: String) {
+        guard pendingRPCs[rpcId] != nil else {
+            task.cancel()
+            return
+        }
+        pendingRPCs[rpcId]?.timeoutTask = task
+    }
+
+    private func timeoutRPC(_ rpcId: String) {
+        if let continuation = removePendingRPC(rpcId) {
+            continuation.resume(throwing: AgentServiceError.requestTimeout)
+        }
+    }
+
+    private static func seconds(of duration: Duration) -> Double {
+        Double(duration.components.seconds) + Double(duration.components.attoseconds) * 1e-18
     }
 
     private func storePendingRequest(
@@ -1440,7 +1731,7 @@ actor AgentService {
                 return
             }
 
-            guard let senderAgentId = self.findAgentIdByName(agentName) else {
+            guard let senderAgentId = await self.agentId(forName: agentName) else {
                 app.logger.warning(
                     "Status update from unregistered agent; ignoring",
                     metadata: [
@@ -1522,12 +1813,21 @@ actor AgentService {
 
     // MARK: - Agent Status
 
-    func getAgentList() -> [AgentInfo] {
-        return Array(agents.values)
+    /// Every agent known to the cluster, from the shared registry. Rows are
+    /// written by whichever replica hears from an agent, so this view is the
+    /// same on all replicas.
+    func getAgentList() async -> [Agent] {
+        do {
+            return try await Agent.query(on: app.db).all()
+        } catch {
+            app.logger.error("Failed to load agent list from database: \(error)")
+            return []
+        }
     }
 
-    func getAgentInfo(_ agentId: String) -> AgentInfo? {
-        return agents[agentId]
+    func getAgentInfo(_ agentId: String) async -> Agent? {
+        guard let agentUUID = UUID(uuidString: agentId) else { return nil }
+        return try? await Agent.find(agentUUID, on: app.db)
     }
 }
 
@@ -1568,9 +1868,18 @@ extension Application {
     }
 }
 
-/// Cancels the agent heartbeat monitor at application shutdown so its
-/// periodic database sweep never outlives the application.
+/// Instantiates the agent service at boot and cancels its heartbeat monitor
+/// at shutdown so the periodic database sweep never outlives the application.
 struct AgentServiceLifecycleHandler: LifecycleHandler {
+    /// Force creation at boot: the service's heartbeat/sweep loop and — since
+    /// issue #261 — this replica's nudge/RPC channel subscriptions must be
+    /// live even before the first request or agent connection would have
+    /// created it lazily. Runs in `didBootAsync` so the Redis pools the
+    /// subscriptions need already exist.
+    func didBootAsync(_ application: Application) async throws {
+        _ = application.agentService
+    }
+
     func shutdownAsync(_ application: Application) async {
         await application.agentServiceIfCreated?.shutdown()
     }

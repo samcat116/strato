@@ -145,7 +145,9 @@ actor VolumeService {
 
         let agents = await agentService.getAgentList()
 
-        guard let selectedAgent = Self.selectVolumeAgent(from: agents) else {
+        guard let selectedAgent = Self.selectVolumeAgent(from: agents),
+            let selectedAgentId = selectedAgent.id?.uuidString
+        else {
             throw VolumeServiceError.noAgentsAvailable
         }
 
@@ -162,7 +164,7 @@ actor VolumeService {
             sourceImageInfo = try VMSpecBuilder.buildImageInfo(
                 from: image,
                 controlPlaneURL: controlPlaneURL,
-                agentName: selectedAgent.id,
+                agentName: selectedAgentId,
                 signingKey: signingKey
             )
         }
@@ -175,24 +177,24 @@ actor VolumeService {
         )
 
         let timeout = sourceImageInfo != nil ? Self.transferTimeout : Self.createTimeout
-        let status = try await sendVolumeRequest(message, toAgent: selectedAgent.id, timeout: timeout)
+        let status = try await sendVolumeRequest(message, toAgent: selectedAgentId, timeout: timeout)
 
         logger.info(
             "Agent confirmed volume creation",
             metadata: [
                 "volumeId": .string(volume.id!.uuidString),
-                "agentId": .string(selectedAgent.id),
+                "agentId": .string(selectedAgentId),
                 "hasSourceImage": .stringConvertible(sourceImageInfo != nil),
             ])
 
-        return (selectedAgent.id, status?.storagePath)
+        return (selectedAgentId, status?.storagePath)
     }
 
     /// Pick the agent that should host a new volume. Volume attachment goes
     /// through QEMU's block layer and requires the volume to live on the same
     /// agent as the VM, so only online agents that can run QEMU are eligible —
     /// a volume placed on a Firecracker-only agent could never be attached.
-    static func selectVolumeAgent(from agents: [AgentInfo]) -> AgentInfo? {
+    static func selectVolumeAgent(from agents: [Agent]) -> Agent? {
         agents.first { $0.status == .online && $0.supportedHypervisors.contains(.qemu) }
     }
 

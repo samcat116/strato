@@ -5,11 +5,12 @@ import VaporTesting
 import StratoShared
 @testable import App
 
-/// Tests for the desired/observed state split and reconciliation phase 2
-/// (issue #260): mutations write desired state and bump the generation,
+/// Tests for the desired/observed state split and reconciliation phases 2-3
+/// (issues #260, #261): mutations write desired state and bump the generation,
 /// desired-state syncs are assembled from the database, observed-state reports
 /// update status/generation and complete operations, deletions are confirmed
-/// by absence, and dual-mode dispatch keys on the agent's protocol version.
+/// by absence, and registration requires a state-sync protocol version (the
+/// imperative path is gone).
 @Suite("Desired State Reconciliation Tests", .serialized)
 final class DesiredStateReconciliationTests {
 
@@ -120,6 +121,10 @@ final class DesiredStateReconciliationTests {
     @Test("POST start writes desired running and bumps the generation")
     func startWritesDesiredState() async throws {
         try await withVMTestApp { app, _, vm, token in
+            // An online agent owns the VM, so the desired state persists (an
+            // unreachable agent would fail the operation and realign it).
+            _ = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+
             try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -132,8 +137,43 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("State-sync agents skip the transitional status; imperative agents keep it")
-    func dualModeTransitionalStatus() async throws {
+    @Test("POST start against an offline agent fails the operation fast")
+    func startAgainstOfflineAgentFailsFast() async throws {
+        try await withVMTestApp { app, _, vm, token in
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+
+            // The agent went dark: its row is offline cluster-wide.
+            let agent = try #require(await app.agentService.getAgentInfo(agentId))
+            agent.status = .offline
+            try await agent.save(on: app.db)
+
+            var operationId: UUID?
+            try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                operationId = try res.content.decode(OperationResponse.self).id
+            }
+
+            // The dispatch fails immediately — not after the sweep budget.
+            var operation: VMOperation?
+            for _ in 0..<100 {
+                operation = try await VMOperation.find(operationId, on: app.db)
+                if operation?.status == .failed { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(operation?.status == .failed)
+            #expect(operation?.error?.contains("offline") == true)
+
+            // The unachieved intent was realigned: desired reverts to the
+            // observed resting state instead of firing when the agent returns.
+            let refreshed = try await VM.find(vm.id, on: app.db)
+            #expect(refreshed?.desiredStatus == .shutdown)
+        }
+    }
+
+    @Test("Start stores no transitional status; in-flight state is derived")
+    func noTransitionalStatusOnStart() async throws {
         try await withVMTestApp { app, _, vm, token in
             _ = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
 
@@ -159,23 +199,30 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("agentSupportsStateSync keys on the registered protocol version")
+    @Test("Registration requires a state-sync protocol version")
     func protocolVersionGate() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let v1Agent = try await self.registerAgent(
-                app: app, vm: vm, named: "old-agent", protocolVersion: 1)
-            let supportsV1 = await app.agentService.agentSupportsStateSync(v1Agent)
-            #expect(!supportsV1)
+            // The imperative path is gone (issue #261): agents that predate
+            // desired-state sync are refused at registration.
+            await #expect(throws: AgentServiceError.self) {
+                _ = try await self.registerAgent(
+                    app: app, vm: vm, named: "old-agent", protocolVersion: 1)
+            }
+            await #expect(throws: AgentServiceError.self) {
+                _ = try await self.registerAgent(
+                    app: app, vm: vm, named: "legacy-agent", protocolVersion: nil)
+            }
 
+            // Refused agents leave no registry row behind.
+            let rows = try await Agent.query(on: app.db).all()
+            #expect(rows.isEmpty)
+
+            // A state-sync agent registers fine.
             let v2Agent = try await self.registerAgent(
                 app: app, vm: vm, named: "new-agent", protocolVersion: 2)
-            let supportsV2 = await app.agentService.agentSupportsStateSync(v2Agent)
-            #expect(supportsV2)
-
-            let legacyAgent = try await self.registerAgent(
-                app: app, vm: vm, named: "legacy-agent", protocolVersion: nil)
-            let supportsLegacy = await app.agentService.agentSupportsStateSync(legacyAgent)
-            #expect(!supportsLegacy)
+            let registered = await app.agentService.getAgentInfo(v2Agent)
+            #expect(registered?.name == "new-agent")
+            #expect(registered?.status == .online)
         }
     }
 

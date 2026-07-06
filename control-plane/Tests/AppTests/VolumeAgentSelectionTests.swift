@@ -19,16 +19,14 @@ struct VolumeAgentSelectionTests {
         id: String,
         hypervisors: [HypervisorSupport],
         status: AgentStatus = .online
-    ) -> AgentInfo {
-        AgentInfo(
-            id: id,
+    ) -> Agent {
+        Agent(
+            id: UUID(),
             name: id,
             hostname: "host-\(id)",
             version: "1.0",
             capabilities: [],
-            architecture: nil,
-            hypervisors: hypervisors,
-            networkCapability: nil,
+            status: status,
             resources: AgentResources(
                 totalCPU: 8,
                 availableCPU: 4,
@@ -37,8 +35,8 @@ struct VolumeAgentSelectionTests {
                 totalDisk: 100,
                 availableDisk: 50
             ),
-            lastHeartbeat: Date(),
-            status: status
+            hypervisors: hypervisors,
+            lastHeartbeat: Date()
         )
     }
 
@@ -50,7 +48,7 @@ struct VolumeAgentSelectionTests {
         ]
 
         let selected = try #require(VolumeService.selectVolumeAgent(from: agents))
-        #expect(selected.id == "qemu-capable")
+        #expect(selected.name == "qemu-capable")
     }
 
     @Test("returns nil when only Firecracker-only agents are online")
@@ -80,7 +78,7 @@ struct VolumeAgentSelectionTests {
             makeAgent(id: "qemu-good", hypervisors: [hypervisor(.qemu)]),
         ]
 
-        #expect(VolumeService.selectVolumeAgent(from: agents)?.id == "qemu-good")
+        #expect(VolumeService.selectVolumeAgent(from: agents)?.name == "qemu-good")
     }
 
     @Test("accepts an agent that supports both Firecracker and QEMU")
@@ -89,6 +87,6 @@ struct VolumeAgentSelectionTests {
             makeAgent(id: "dual", hypervisors: [hypervisor(.firecracker), hypervisor(.qemu)])
         ]
 
-        #expect(VolumeService.selectVolumeAgent(from: agents)?.id == "dual")
+        #expect(VolumeService.selectVolumeAgent(from: agents)?.name == "dual")
     }
 }

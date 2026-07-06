@@ -146,6 +146,31 @@ extension Agent {
         return Date().timeIntervalSince(lastHeartbeat) < 60  // 60 seconds timeout
     }
 
+    /// Host CPU architecture as a typed value; nil for agents that registered
+    /// before architecture reporting (or an unrecognized raw value).
+    var cpuArchitecture: CPUArchitecture? {
+        architecture.flatMap(CPUArchitecture.init(rawValue:))
+    }
+
+    /// Hypervisor backends this agent can actually run. Agents probe each
+    /// backend before reporting it, so an empty list means the agent cannot
+    /// run VMs at all — it stays registered but is never eligible for
+    /// placement. No QEMU fallback here: assuming QEMU for an empty list
+    /// would defeat the agent-side probe in exactly the case it exists for.
+    var supportedHypervisors: [HypervisorType] {
+        hypervisors.filter(\.available).map(\.type)
+    }
+
+    /// Only OVN-backed agents can provide VM-to-VM networking; user-mode
+    /// (SLIRP) agents cannot. Agents that predate structured network
+    /// capability reporting are judged by their legacy capability strings.
+    var supportsInterVMNetworking: Bool {
+        if let capability = networkCapability.flatMap(NetworkCapability.init(rawValue:)) {
+            return capability == .overlay
+        }
+        return capabilities.contains("ovn_networking")
+    }
+
     /// Update agent status based on heartbeat age
     func updateStatusBasedOnHeartbeat() {
         if isOnline && status == .offline {

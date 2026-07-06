@@ -692,12 +692,16 @@ actor Agent {
 
         if let continuation = takeRegistrationContinuation() {
             logger.error("Registration failed: \(message.error)\(detailSuffix)")
-            // Only an explicit invalid_token code is a genuine credential
-            // rejection (terminal — retrying the same token can never work).
-            // Anything else, including envelopes from control planes that
-            // predate the code field, is treated as transient so the reconnect
-            // loop keeps backing off instead of exiting.
-            if message.code == ErrorMessage.ErrorCode.invalidToken {
+            // Only an explicit terminal code — a credential rejection, or a
+            // protocol version the control plane refuses to drive — should
+            // stop the reconnect loop; retrying either can never succeed
+            // without operator action. Anything else, including envelopes
+            // from control planes that predate the code field, is treated as
+            // transient so the reconnect loop keeps backing off instead of
+            // exiting.
+            if message.code == ErrorMessage.ErrorCode.invalidToken
+                || message.code == ErrorMessage.ErrorCode.unsupportedProtocolVersion
+            {
                 continuation.resume(throwing: AgentError.registrationRejected(message.error))
             } else {
                 continuation.resume(throwing: AgentError.registrationFailed(message.error))
