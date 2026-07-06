@@ -254,6 +254,9 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateLogicalNetwork())
     app.migrations.add(AddGatewayToVMNetworkInterface())
 
+    // Project-scoped networks exposed via the API
+    app.migrations.add(AddProjectToLogicalNetwork())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen

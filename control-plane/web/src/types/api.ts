@@ -31,6 +31,18 @@ export type VMStatus =
   | "Error"
   | "Unknown";
 
+export interface VMNetworkInterface {
+  id?: string;
+  network: string;
+  macAddress: string;
+  ipAddress?: string;
+  netmask?: string;
+  gateway?: string;
+  mtu?: number;
+  deviceName: string;
+  orderIndex: number;
+}
+
 export interface VM {
   id: string;
   name: string;
@@ -46,6 +58,7 @@ export interface VM {
   memoryFormatted: string;
   disk: number;
   diskFormatted: string;
+  networkInterfaces: VMNetworkInterface[];
   createdAt: string;
   updatedAt: string;
 }
@@ -282,6 +295,8 @@ export interface CreateVMRequest {
   cpu?: number;
   memory?: number;
   disk?: number;
+  /** Logical network the VM's NIC attaches to; defaults to the "default" network. */
+  networkId?: string;
 }
 
 export interface UpdateVMRequest {
@@ -676,4 +691,33 @@ export interface HierarchySearchResponse {
   organizationId?: string;
   results: HierarchySearchResult[];
   totalResults: number;
+}
+
+// Networks
+
+export interface Network {
+  id?: string;
+  name: string;
+  subnet: string;
+  gateway?: string;
+  projectId?: string;
+  /** The seeded global "default" network, which cannot be renamed or deleted. */
+  isDefault: boolean;
+  /** Number of VM interfaces attached; a network in use cannot be deleted. */
+  attachedInterfaceCount: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CreateNetworkRequest {
+  name: string;
+  subnet: string;
+  gateway?: string;
+  projectId?: string;
+}
+
+export interface UpdateNetworkRequest {
+  name?: string;
+  subnet?: string;
+  gateway?: string;
 }

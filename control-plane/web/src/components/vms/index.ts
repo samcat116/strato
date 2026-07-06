@@ -4,4 +4,5 @@ export { VMActions } from "./vm-actions";
 export { CreateVMDialog } from "./create-vm-dialog";
 export { LogViewer } from "./log-viewer";
 export { VMVolumesCard } from "./vm-volumes-card";
+export { VMNetworkCard } from "./vm-network-card";
 export { OperationWatcher } from "./operation-watcher";
