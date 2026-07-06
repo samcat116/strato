@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import StratoAgentCore
 import StratoShared
 
 /// Console access points a hypervisor exposes for a VM.
@@ -31,11 +32,20 @@ public protocol HypervisorService: Actor, Sendable {
 
     /// Creates a VM from a hypervisor-neutral spec. The service translates the
     /// spec into its driver-native configuration (paths, sockets, machine types).
+    ///
+    /// Network attachments are resolved by the agent's `NetworkOrchestrator`
+    /// before this call and torn down by it after `deleteVM` — drivers only
+    /// translate each `NetworkAttachment` into their native NIC configuration,
+    /// throwing `HypervisorServiceError.notSupported` for kinds their backend
+    /// cannot realize.
     /// - Parameters:
     ///   - vmId: Unique identifier for the VM
     ///   - spec: Hypervisor-neutral VM specification
     ///   - imageInfo: Optional image info for disk caching
-    func createVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo?) async throws
+    ///   - networkAttachments: Host-realized NICs, in `spec.networks` order
+    func createVM(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo?, networkAttachments: [ResolvedNetworkAttachment]
+    ) async throws
 
     /// Boots (starts) a VM
     /// - Parameter vmId: The VM identifier
@@ -114,8 +124,11 @@ public extension HypervisorService {
             "\(hypervisorType.displayName) does not support re-adopting orphaned VMs")
     }
     /// Creates and starts a VM in a single operation
-    func createAndStartVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil) async throws {
-        try await createVM(vmId: vmId, spec: spec, imageInfo: imageInfo)
+    func createAndStartVM(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,
+        networkAttachments: [ResolvedNetworkAttachment] = []
+    ) async throws {
+        try await createVM(vmId: vmId, spec: spec, imageInfo: imageInfo, networkAttachments: networkAttachments)
         try await bootVM(vmId: vmId)
     }
 

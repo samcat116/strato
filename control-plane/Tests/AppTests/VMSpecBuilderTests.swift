@@ -97,6 +97,7 @@ struct VMSpecBuilderTests {
         macAddress: String = "52:54:00:12:34:56",
         ipAddress: String? = "192.168.1.10",
         netmask: String? = "255.255.255.0",
+        gateway: String? = nil,
         mtu: Int? = nil,
         deviceName: String = "net0",
         orderIndex: Int = 0
@@ -107,6 +108,7 @@ struct VMSpecBuilderTests {
             macAddress: macAddress,
             ipAddress: ipAddress,
             netmask: netmask,
+            gateway: gateway,
             mtu: mtu,
             deviceName: deviceName,
             orderIndex: orderIndex
@@ -323,6 +325,17 @@ struct VMSpecBuilderTests {
         #expect(spec.networks.first?.macAddress == "52:54:00:12:34:56")
         #expect(spec.networks.first?.ipAddress == "192.168.1.10")
         #expect(spec.networks.first?.netmask == "255.255.255.0")
+    }
+
+    @Test("VMSpecBuilder passes the NIC's gateway through to the network spec")
+    func testGatewayPassthrough() throws {
+        let template = createTestTemplate()
+        let vm = createTestVM()
+        let interface = createTestInterface(gateway: "192.168.1.1")
+
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, template: template, networkInterfaces: [interface])
+
+        #expect(spec.networks.first?.gateway == "192.168.1.1")
     }
 
     @Test("VMSpecBuilder does not fabricate an IP when none is assigned")

@@ -250,6 +250,10 @@ public func configure(_ app: Application) async throws {
     // Async VM operations (issue #259)
     app.migrations.add(CreateVMOperation())
 
+    // Logical networks + control-plane IPAM (issue #212)
+    app.migrations.add(CreateLogicalNetwork())
+    app.migrations.add(AddGatewayToVMNetworkInterface())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen

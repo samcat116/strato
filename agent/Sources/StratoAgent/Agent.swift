@@ -282,7 +282,7 @@ actor Agent {
         logger.info("Initializing QEMU service")
         #if canImport(SwiftQEMU)
         hypervisorServices[.qemu] = QEMUService(
-            logger: logger, networkService: networkService, storage: storageBackend,
+            logger: logger, storage: storageBackend,
             vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath,
             hardwareAccelerationEnabled: hardwareAccelerationEnabled)
         #else
@@ -293,7 +293,6 @@ actor Agent {
         logger.info("Initializing Firecracker service (Linux only)")
         hypervisorServices[.firecracker] = FirecrackerService(
             logger: logger,
-            networkService: networkService,
             storage: storageBackend,
             imageSource: imageCacheService,
             vmStoragePath: vmStoragePath,
@@ -1135,6 +1134,13 @@ extension Agent {
         }
     }
 
+    /// Resolves VM network attachments before hypervisor drivers run and tears
+    /// them down after VMs are deleted. Rebuilt per use because `networkService`
+    /// is only set once the agent has started.
+    private var networkOrchestrator: NetworkOrchestrator {
+        NetworkOrchestrator(networkService: networkService, logger: logger)
+    }
+
     /// Get the hypervisor service for a VM based on its type. A missing
     /// registry entry means no driver for that backend runs on this host
     /// (e.g. Firecracker on macOS). No silent fallback to another driver: the
@@ -1216,11 +1222,30 @@ extension Agent {
             return
         }
 
+        // Realize the VM's NICs on this host before the driver runs; the driver
+        // only translates the resolved attachments into its native config.
+        let attachments: [ResolvedNetworkAttachment]
+        do {
+            attachments = try await networkOrchestrator.prepareAttachments(
+                vmId: vmId, networks: message.vmSpec.networks)
+        } catch {
+            await sendError(
+                for: message.requestId, error: "Failed to prepare VM networking: \(error.localizedDescription)")
+            await sendVMLog(
+                vmId: vmId, level: .error, eventType: .error,
+                message: "Failed to prepare VM networking: \(error.localizedDescription)", operation: "create")
+            logger.error(
+                "Failed to prepare VM networking",
+                metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
+            return
+        }
+
         do {
             try await service.createVM(
                 vmId: vmId,
                 spec: message.vmSpec,
-                imageInfo: message.imageInfo
+                imageInfo: message.imageInfo,
+                networkAttachments: attachments
             )
             // Record the owning backend in the durable manifest; a re-created VM
             // is actively managed again, so any orphan record is dropped.
@@ -1233,6 +1258,9 @@ extension Agent {
                 operation: "create", newStatus: .created)
             logger.info("VM created successfully", metadata: ["vmId": .string(vmId)])
         } catch {
+            // The driver never created the VM, so its NICs won't see a delete —
+            // roll back their host-side resources here.
+            await networkOrchestrator.teardownAttachments(vmId: vmId, count: attachments.count)
             await sendError(for: message.requestId, error: "Failed to create VM: \(error.localizedDescription)")
             await sendVMLog(
                 vmId: vmId, level: .error, eventType: .error,
@@ -1401,8 +1429,13 @@ extension Agent {
         // down. Deleting it releases its manifest entry and reservation so the
         // control plane can remove the record; any surviving hypervisor process
         // must be cleaned up manually (or via Option B re-adoption, #260).
-        if managedVMs[message.vmId] == nil, orphanedVMs.removeValue(forKey: message.vmId) != nil {
+        if managedVMs[message.vmId] == nil, let orphan = orphanedVMs.removeValue(forKey: message.vmId) {
             persistManifest()
+            // Host-side network resources (OVN ports, TAP devices) are derived
+            // from deterministic names, so they can be torn down even though no
+            // hypervisor session survives. Best-effort by design.
+            await networkOrchestrator.teardownAttachments(
+                vmId: message.vmId, count: orphan.spec.networks.count)
             logger.warning(
                 "Deleted orphaned VM from manifest; any surviving hypervisor process must be cleaned up manually",
                 metadata: ["vmId": .string(message.vmId)])
@@ -1422,7 +1455,11 @@ extension Agent {
         }
 
         do {
+            let nicCount = managedVMs[message.vmId]?.spec.networks.count ?? 0
             try await service.deleteVM(vmId: message.vmId)
+            // Tear down the VM's host-side network resources now that the
+            // hypervisor session is gone (best-effort; never blocks deletion).
+            await networkOrchestrator.teardownAttachments(vmId: message.vmId, count: nicCount)
             // Clean up the hypervisor mapping
             managedVMs.removeValue(forKey: message.vmId)
             persistManifest()
@@ -2390,7 +2427,19 @@ extension Agent: ReconcileActuator {
             throw HypervisorServiceError.hypervisorNotInstalled(desired.hypervisorType.rawValue)
         }
 
-        try await service.createVM(vmId: item.vmId, spec: desired.spec, imageInfo: desired.imageInfo)
+        // Same contract as the imperative path: the orchestrator realizes the
+        // VM's NICs on this host before the driver runs, and rolls them back
+        // if the driver never created the VM.
+        let attachments = try await networkOrchestrator.prepareAttachments(
+            vmId: item.vmId, networks: desired.spec.networks)
+        do {
+            try await service.createVM(
+                vmId: item.vmId, spec: desired.spec, imageInfo: desired.imageInfo,
+                networkAttachments: attachments)
+        } catch {
+            await networkOrchestrator.teardownAttachments(vmId: item.vmId, count: attachments.count)
+            throw error
+        }
 
         managedVMs[item.vmId] = VMManifestEntry(hypervisorType: desired.hypervisorType, spec: desired.spec)
         orphanedVMs.removeValue(forKey: item.vmId)
@@ -2414,6 +2463,10 @@ extension Agent: ReconcileActuator {
             } else {
                 orphanedVMs.removeValue(forKey: item.vmId)
                 persistManifest()
+                // Host-side network resources are derived from deterministic
+                // names, so they can be torn down even with no live session.
+                await networkOrchestrator.teardownAttachments(
+                    vmId: item.vmId, count: entry.spec.networks.count)
                 logger.warning(
                     "Deleted orphaned VM from manifest; any surviving hypervisor process must be cleaned up manually",
                     metadata: ["vmId": .string(item.vmId)])
@@ -2421,7 +2474,7 @@ extension Agent: ReconcileActuator {
             }
         }
 
-        guard managedVMs[item.vmId] != nil else {
+        guard let entry = managedVMs[item.vmId] else {
             return  // already absent — deletion is idempotent
         }
         let service = try reconcileService(for: item.vmId)
@@ -2434,6 +2487,11 @@ extension Agent: ReconcileActuator {
         } else {
             try await service.deleteVM(vmId: item.vmId)
         }
+
+        // Tear down the VM's host-side network resources now that the
+        // hypervisor session is gone (best-effort; never blocks deletion).
+        await networkOrchestrator.teardownAttachments(
+            vmId: item.vmId, count: entry.spec.networks.count)
 
         managedVMs.removeValue(forKey: item.vmId)
         orphanedVMs.removeValue(forKey: item.vmId)
