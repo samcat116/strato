@@ -18,17 +18,25 @@ enum IPAMService {
 
     enum IPAMError: Error, LocalizedError, Equatable {
         case invalidSubnet(String)
+        case invalidGateway(String)
         case poolExhausted(network: String, subnet: String)
 
         var errorDescription: String? {
             switch self {
             case .invalidSubnet(let subnet):
                 return "Logical network has an invalid subnet: \(subnet)"
+            case .invalidGateway(let gateway):
+                return "Logical network has an invalid gateway: \(gateway)"
             case .poolExhausted(let network, let subnet):
                 return "No free IP addresses left in network \(network) (\(subnet))"
             }
         }
     }
+
+    /// Prefix lengths a network may allocate from. /31 and /32 have no host
+    /// range; anything wider than /8 is no legitimate deployment and would make
+    /// the exhaustion scan unreasonably large.
+    static let allocatablePrefixRange = 8...30
 
     /// Allocates the lowest free host address in `network`'s subnet.
     static func allocateIP(for network: LogicalNetwork, on db: Database) async throws -> Allocation {
@@ -49,14 +57,25 @@ enum IPAMService {
     static func allocateIP(
         networkName: String, subnet: String, gateway: String?, used: Set<UInt32>
     ) throws -> Allocation {
-        guard let (base, prefix) = parseCIDR(subnet), prefix <= 30 else {
+        guard let (base, prefix) = parseCIDR(subnet), allocatablePrefixRange.contains(prefix) else {
             throw IPAMError.invalidSubnet(subnet)
         }
 
         let mask: UInt32 = ~UInt32(0) << (32 - prefix)
         let networkAddress = base & mask
         let broadcastAddress = networkAddress | ~mask
-        let gatewayValue = gateway.flatMap(parseIPv4)
+
+        // A malformed gateway must fail loudly: silently treating it as absent
+        // would hand the gateway's real address out to a VM.
+        let gatewayValue: UInt32?
+        if let gateway {
+            guard let parsed = parseIPv4(gateway) else {
+                throw IPAMError.invalidGateway(gateway)
+            }
+            gatewayValue = parsed
+        } else {
+            gatewayValue = nil
+        }
 
         for candidate in (networkAddress + 1)..<broadcastAddress {
             if candidate == gatewayValue { continue }
@@ -71,7 +90,7 @@ enum IPAMService {
     /// "192.168.1.0/24" → "192.168.1.1". Used when seeding networks without an
     /// explicit gateway.
     static func firstHostAddress(inSubnet subnet: String) -> String? {
-        guard let (base, prefix) = parseCIDR(subnet), prefix <= 30 else { return nil }
+        guard let (base, prefix) = parseCIDR(subnet), allocatablePrefixRange.contains(prefix) else { return nil }
         let mask: UInt32 = ~UInt32(0) << (32 - prefix)
         return formatIPv4((base & mask) + 1)
     }

@@ -75,7 +75,11 @@ struct NetworkOrchestrator: Sendable {
                         "network": .string(spec.network),
                         "error": .string(error.localizedDescription),
                     ])
-                await teardownAttachments(vmId: vmId, count: resolved.count)
+                // Include the NIC that just failed: createVMNetwork may have
+                // created some of its resources (e.g. the OVN port exists but
+                // the TAP/OVS step threw). Teardown is idempotent, so covering
+                // a NIC that never got started is harmless.
+                await teardownAttachments(vmId: vmId, count: index + 1)
                 throw error
             }
         }

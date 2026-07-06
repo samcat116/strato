@@ -58,9 +58,23 @@ struct IPAMServiceTests {
 
     @Test("invalid subnets are rejected")
     func invalidSubnet() {
-        for subnet in ["not-a-cidr", "192.168.1.0", "192.168.1.0/33", "192.168.1.0/31", "1.2.3/24"] {
+        // Includes prefixes outside the allocatable /8–/30 range: /31–/32 have
+        // no host range, and wider-than-/8 would make exhaustion scans huge.
+        for subnet in ["not-a-cidr", "192.168.1.0", "192.168.1.0/33", "192.168.1.0/31", "0.0.0.0/1", "1.2.3/24"] {
             #expect(throws: IPAMService.IPAMError.invalidSubnet(subnet)) {
                 try IPAMService.allocateIP(networkName: "x", subnet: subnet, gateway: nil, used: [])
+            }
+        }
+    }
+
+    @Test("a malformed gateway is rejected rather than silently allocatable")
+    func invalidGateway() {
+        // A typo like "192.168.1.1/24" must not degrade to "no gateway" — that
+        // would hand the real gateway's address to the first VM.
+        for gateway in ["192.168.1.1/24", "gateway", ""] {
+            #expect(throws: IPAMService.IPAMError.invalidGateway(gateway)) {
+                try IPAMService.allocateIP(
+                    networkName: "default", subnet: "192.168.1.0/24", gateway: gateway, used: [])
             }
         }
     }
