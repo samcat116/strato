@@ -39,6 +39,7 @@ definition project {
     permission update_project = admin + organization->admin
     permission delete_project = organization->admin
     permission create_volume = admin + organization->admin
+    permission create_network = admin + organization->admin
     permission read = view_project
 }
 
@@ -89,6 +90,20 @@ definition volume {
     permission snapshot = owner + editor + project->admin
     permission clone = owner + editor + project->admin
     permission resize = owner + editor + project->admin
+}
+
+/** network represents a logical network VMs attach to */
+definition network {
+    /** owner is the user who created the network */
+    relation owner: user
+
+    /** project that contains this network; global networks have none */
+    relation project: project
+
+    // Permissions - combining direct relations and project permissions
+    permission read = owner + project->view_project
+    permission update = owner + project->update_project
+    permission delete = owner + project->delete_project
 }
 
 /** volume_snapshot represents a point-in-time snapshot of a volume */

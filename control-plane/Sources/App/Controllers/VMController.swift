@@ -277,7 +277,7 @@ struct VMController: RouteCollection {
         }
 
         // Filter VMs based on user permissions
-        let allVMs = try await VM.query(on: req.db).all()
+        let allVMs = try await VM.query(on: req.db).with(\.$networkInterfaces).all()
         var authorizedVMs: [VMDetailResponse] = []
 
         for vm in allVMs {
@@ -312,6 +312,7 @@ struct VMController: RouteCollection {
     func show(req: Request) async throws -> VMDetailResponse {
         let user = try req.auth.require(User.self)
         let vm = try await fetchVMWithPermission(req: req, user: user, permission: "read")
+        try await vm.$networkInterfaces.load(on: req.db)
 
         return VMDetailResponse(from: vm)
     }
@@ -332,6 +333,8 @@ struct VMController: RouteCollection {
             let memory: Int64?
             let disk: Int64?
             let cmdline: String?
+            let networkId: UUID?
+            let networkName: String?
             // SSH public key authorized for the guest's default user (cloud-init).
             let sshPublicKey: String?
         }
@@ -438,6 +441,44 @@ struct VMController: RouteCollection {
             )
         }
 
+        // Resolve which logical network the VM's NIC attaches to. Omitting both
+        // fields keeps the historical default-network behavior (including the
+        // degrade-to-addressless-NIC fallback when the row is missing); an
+        // explicit selection is a hard requirement that never degrades.
+        if createRequest.networkId != nil && createRequest.networkName != nil {
+            throw Abort(.badRequest, reason: "Specify either 'networkId' or 'networkName', not both")
+        }
+
+        let resolvedNetworkName: String
+        let networkExplicitlyRequested: Bool
+        if createRequest.networkId != nil || createRequest.networkName != nil {
+            let network: LogicalNetwork?
+            if let networkId = createRequest.networkId {
+                network = try await LogicalNetwork.find(networkId, on: req.db)
+            } else {
+                network = try await LogicalNetwork.query(on: req.db)
+                    .filter(\.$name == createRequest.networkName!)
+                    .first()
+            }
+            guard let network else {
+                throw Abort(.badRequest, reason: "Network not found")
+            }
+
+            // The caller already proved membership in this VM's project above, so
+            // no extra SpiceDB check is needed: a global network (nil project) is
+            // usable by anyone, and a project-scoped network is usable only by the
+            // project it belongs to.
+            if let networkProjectId = network.$project.id, networkProjectId != projectId {
+                throw Abort(.forbidden, reason: "Network belongs to a different project")
+            }
+
+            resolvedNetworkName = network.name
+            networkExplicitlyRequested = true
+        } else {
+            resolvedNetworkName = LogicalNetwork.defaultNetworkName
+            networkExplicitlyRequested = false
+        }
+
         // Create VM instance - either from template or image
         let vm: VM
         if let template = template {
@@ -508,81 +549,92 @@ struct VMController: RouteCollection {
         // transaction: enforcement checks, the reservation bump, the initial insert,
         // the path update, and the operation record all commit together or roll back
         // together, so a quota rejection leaves nothing behind.
-        let operation: VMOperation = try await req.db.transaction { db in
-            // Enforce and reserve applicable project/OU/org quotas before the VM row
-            // exists. Throws Abort(.forbidden) naming the quota if it would be exceeded.
-            try await QuotaEnforcementService.reserve(
-                for: project,
-                environment: environment,
-                vcpus: vm.cpu,
-                memory: vm.memory,
-                storage: vm.disk,
-                on: db
-            )
+        let operation: VMOperation
+        do {
+            operation = try await req.db.transaction { db in
+                // Enforce and reserve applicable project/OU/org quotas before the VM row
+                // exists. Throws Abort(.forbidden) naming the quota if it would be exceeded.
+                try await QuotaEnforcementService.reserve(
+                    for: project,
+                    environment: environment,
+                    vcpus: vm.cpu,
+                    memory: vm.memory,
+                    storage: vm.disk,
+                    on: db
+                )
 
-            // Save VM to database first to generate ID
-            try await vm.save(on: db)
+                // Save VM to database first to generate ID
+                try await vm.save(on: db)
 
-            // Generate unique paths and configurations using the generated ID
-            let vmID = try vm.requireID()
+                // Generate unique paths and configurations using the generated ID
+                let vmID = try vm.requireID()
 
-            if let template = resolvedTemplate {
-                // Template-based paths
-                vm.diskPath = template.generateDiskPath(for: vmID)
-                vm.kernelPath = template.kernelPath
-                vm.initramfsPath = template.initramfsPath
-                vm.firmwarePath = template.firmwarePath
-                vm.cmdline = vm.cmdline ?? template.defaultCmdline
-            } else {
-                // Image-based paths - disk will be created by agent from cached image
-                vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
+                if let template = resolvedTemplate {
+                    // Template-based paths
+                    vm.diskPath = template.generateDiskPath(for: vmID)
+                    vm.kernelPath = template.kernelPath
+                    vm.initramfsPath = template.initramfsPath
+                    vm.firmwarePath = template.firmwarePath
+                    vm.cmdline = vm.cmdline ?? template.defaultCmdline
+                } else {
+                    // Image-based paths - disk will be created by agent from cached image
+                    vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
+                }
+
+                // Set up console sockets to align with agent VM storage path
+                vm.consoleSocket = Self.socketPath(for: vmID, filename: "console.sock")
+                vm.serialSocket = Self.socketPath(for: vmID, filename: "serial.sock")
+
+                // Desired state for a fresh VM: exists but not running. The bump
+                // to generation 1 distinguishes "never confirmed by any agent"
+                // (observed_generation 0) from "confirmed" (issue #260).
+                vm.setDesiredStatus(.shutdown)
+
+                // Update VM with generated paths
+                try await vm.update(on: db)
+
+                // Every VM starts with one NIC on the resolved network (the default
+                // network unless the caller picked one). The control plane owns IPAM
+                // (issue #212): allocate the NIC's address from the logical network
+                // here so agents receive it in the spec instead of inventing one.
+                // For the implicit default, a missing network row (pre-migration
+                // data) degrades to an address-less NIC, matching the old behavior;
+                // an explicitly requested network must exist, so its absence fails.
+                let networkName = resolvedNetworkName
+                var allocation: IPAMService.Allocation?
+                var networkGateway: String?
+                if let logicalNetwork = try await LogicalNetwork.query(on: db)
+                    .filter(\.$name == networkName)
+                    .first()
+                {
+                    allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
+                    networkGateway = logicalNetwork.gateway
+                } else if networkExplicitlyRequested {
+                    throw Abort(.badRequest, reason: "Network '\(networkName)' no longer exists")
+                }
+
+                let networkInterface = VMNetworkInterface(
+                    vmID: vmID,
+                    network: networkName,
+                    macAddress: resolvedTemplate?.generateMacAddress()
+                        ?? VMNetworkInterface.generateMACAddress(),
+                    ipAddress: allocation?.ipAddress,
+                    netmask: allocation?.netmask,
+                    gateway: networkGateway
+                )
+                try await networkInterface.save(on: db)
+
+                // The pending create operation is the client's handle on the
+                // asynchronous agent work that follows (issue #259).
+                let operation = VMOperation(vmID: vmID, userID: userID, kind: .create)
+                try await operation.save(on: db)
+
+                return operation
             }
-
-            // Set up console sockets to align with agent VM storage path
-            vm.consoleSocket = Self.socketPath(for: vmID, filename: "console.sock")
-            vm.serialSocket = Self.socketPath(for: vmID, filename: "serial.sock")
-
-            // Desired state for a fresh VM: exists but not running. The bump
-            // to generation 1 distinguishes "never confirmed by any agent"
-            // (observed_generation 0) from "confirmed" (issue #260).
-            vm.setDesiredStatus(.shutdown)
-
-            // Update VM with generated paths
-            try await vm.update(on: db)
-
-            // Every VM starts with one NIC on the default network. The control
-            // plane owns IPAM (issue #212): allocate the NIC's address from the
-            // logical network here so agents receive it in the spec instead of
-            // inventing one. A missing network row (pre-migration data) degrades
-            // to an address-less NIC, matching the old behavior.
-            let networkName = LogicalNetwork.defaultNetworkName
-            var allocation: IPAMService.Allocation?
-            var networkGateway: String?
-            if let logicalNetwork = try await LogicalNetwork.query(on: db)
-                .filter(\.$name == networkName)
-                .first()
-            {
-                allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
-                networkGateway = logicalNetwork.gateway
-            }
-
-            let networkInterface = VMNetworkInterface(
-                vmID: vmID,
-                network: networkName,
-                macAddress: resolvedTemplate?.generateMacAddress()
-                    ?? VMNetworkInterface.generateMACAddress(),
-                ipAddress: allocation?.ipAddress,
-                netmask: allocation?.netmask,
-                gateway: networkGateway
-            )
-            try await networkInterface.save(on: db)
-
-            // The pending create operation is the client's handle on the
-            // asynchronous agent work that follows (issue #259).
-            let operation = VMOperation(vmID: vmID, userID: userID, kind: .create)
-            try await operation.save(on: db)
-
-            return operation
+        } catch let error as IPAMService.IPAMError {
+            // The chosen network's subnet is full; the whole transaction rolled
+            // back, so no VM was created.
+            throw Abort(.conflict, reason: error.errorDescription ?? "No free IP addresses in the selected network")
         }
 
         let vmID = try vm.requireID()

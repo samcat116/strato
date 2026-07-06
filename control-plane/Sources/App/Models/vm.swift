@@ -298,6 +298,30 @@ extension VM {
 
 // MARK: - Response DTO
 
+struct NetworkInterfaceResponse: Content {
+    let id: UUID?
+    let network: String
+    let macAddress: String
+    let ipAddress: String?
+    let netmask: String?
+    let gateway: String?
+    let mtu: Int?
+    let deviceName: String
+    let orderIndex: Int
+
+    init(from nic: VMNetworkInterface) {
+        self.id = nic.id
+        self.network = nic.network
+        self.macAddress = nic.macAddress
+        self.ipAddress = nic.ipAddress
+        self.netmask = nic.netmask
+        self.gateway = nic.gateway
+        self.mtu = nic.mtu
+        self.deviceName = nic.deviceName
+        self.orderIndex = nic.orderIndex
+    }
+}
+
 struct VMDetailResponse: Content {
     let id: UUID?
     let name: String
@@ -313,6 +337,7 @@ struct VMDetailResponse: Content {
     let memoryFormatted: String
     let disk: Int64
     let diskFormatted: String
+    let networkInterfaces: [NetworkInterfaceResponse]
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -331,6 +356,11 @@ struct VMDetailResponse: Content {
         self.memoryFormatted = VMDetailResponse.formatSize(vm.memory)
         self.disk = vm.disk
         self.diskFormatted = VMDetailResponse.formatSize(vm.disk)
+        // `.value ?? []` tolerates callers that didn't eager-load the children;
+        // sorted to match the deterministic ordering agents receive in the spec.
+        self.networkInterfaces = (vm.$networkInterfaces.value ?? [])
+            .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
+            .map(NetworkInterfaceResponse.init)
         self.createdAt = vm.createdAt
         self.updatedAt = vm.updatedAt
     }

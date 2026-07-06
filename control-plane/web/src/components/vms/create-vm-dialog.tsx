@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { vmsApi } from "@/lib/api/vms";
 import { useImages } from "@/lib/hooks/use-images";
+import { useNetworks } from "@/lib/hooks/use-networks";
 import { useOperationsStore } from "@/lib/stores/operations-store";
 import { useProjectContext } from "@/providers";
 import { toast } from "sonner";
@@ -45,6 +46,7 @@ export function CreateVMDialog({
     cpu: "2",
     memory: "4",
     disk: "50",
+    networkId: "",
     sshPublicKey: "",
   });
 
@@ -52,6 +54,9 @@ export function CreateVMDialog({
   const { currentProject } = useProjectContext();
   const projectId = currentProject?.id;
   const { data: images, isLoading: imagesLoading } = useImages(projectId);
+  // The list always includes the global "default" network, so it is present
+  // even when scoped to a project.
+  const { data: networks = [] } = useNetworks(projectId);
 
   // Filter to only show ready images with valid IDs (memoized to prevent dependency changes on every render)
   const readyImages = useMemo(
@@ -112,6 +117,7 @@ export function CreateVMDialog({
         cpu: parseInt(formData.cpu) || 2,
         memory: (parseInt(formData.memory) || 4) * GB,
         disk: (parseInt(formData.disk) || 50) * GB,
+        ...(formData.networkId ? { networkId: formData.networkId } : {}),
         sshPublicKey: formData.sshPublicKey.trim() || undefined,
       });
       watch(operation, formData.name);
@@ -127,6 +133,7 @@ export function CreateVMDialog({
         cpu: "2",
         memory: "4",
         disk: "50",
+        networkId: "",
         sshPublicKey: "",
       });
       setSourceType("image");
@@ -378,6 +385,34 @@ export function CreateVMDialog({
                   disabled={isLoading}
                 />
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="network" className="text-gray-200">
+                Network
+              </Label>
+              <select
+                id="network"
+                value={formData.networkId}
+                onChange={(e) =>
+                  setFormData({ ...formData, networkId: e.target.value })
+                }
+                disabled={isLoading}
+                className="w-full h-9 px-3 py-2 bg-gray-900 border border-gray-700 text-gray-100 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <option value="">default (auto)</option>
+                {networks
+                  .filter((network) => network.id && !network.isDefault)
+                  .map((network) => (
+                    <option key={network.id} value={network.id!}>
+                      {network.name} ({network.subnet})
+                    </option>
+                  ))}
+              </select>
+              <p className="text-xs text-gray-500">
+                The VM&apos;s IP is allocated automatically from the selected
+                network.
+              </p>
             </div>
           </div>
           <DialogFooter>
