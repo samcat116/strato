@@ -1,0 +1,19 @@
+control-plane/Tests/AppTests/IPAMServiceTests.swift
+  s_2ea3015fe4758c::t_9b5fa557719878 52-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c1226908a2f16574b5433224bf315dbb5b930b20",
+  "prompts": {},
+  "sessions": {
+    "s_2ea3015fe4758c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "629f6438-37f6-44c7-a528-a8c440c9ee73",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
