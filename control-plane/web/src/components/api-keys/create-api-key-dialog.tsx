@@ -105,7 +105,7 @@ export function CreateAPIKeyDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100 max-h-[85vh] overflow-y-auto">
+      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100 sm:max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {createdKey ? "API Key Created" : "Create API Key"}
@@ -118,11 +118,11 @@ export function CreateAPIKeyDialog({
         </DialogHeader>
 
         {createdKey ? (
-          <div className="space-y-4 py-4">
+          <div className="space-y-4 py-4 min-w-0">
             <div className="p-4 bg-gray-900 rounded-lg border border-gray-700">
               <Label className="text-gray-400 text-sm">Your new API key</Label>
-              <div className="flex items-center gap-2 mt-2">
-                <code className="flex-1 min-w-0 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono overflow-x-auto whitespace-nowrap">
+              <div className="flex items-start gap-2 mt-2">
+                <code className="flex-1 min-w-0 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono whitespace-pre-wrap break-all">
                   {createdKey.key}
                 </code>
                 <Button

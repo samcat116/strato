@@ -92,7 +92,7 @@ export function CreateTokenDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100 max-h-[85vh] overflow-y-auto">
+      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100 sm:max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {createdToken ? "Registration Token Created" : "Add Compute Agent"}
@@ -105,13 +105,13 @@ export function CreateTokenDialog({
         </DialogHeader>
 
         {createdToken ? (
-          <div className="space-y-4 py-4">
+          <div className="space-y-4 py-4 min-w-0">
             <div className="p-4 bg-gray-900 rounded-lg border border-gray-700">
               <Label className="text-gray-400 text-sm">
                 Run this command on your hypervisor host:
               </Label>
-              <div className="flex items-center gap-2 mt-2">
-                <code className="flex-1 min-w-0 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono overflow-x-auto whitespace-nowrap">
+              <div className="flex items-start gap-2 mt-2">
+                <code className="flex-1 min-w-0 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono whitespace-pre-wrap break-all">
                   {joinCommand}
                 </code>
                 <Button
@@ -147,8 +147,8 @@ export function CreateTokenDialog({
               <Label className="text-gray-400 text-sm">
                 Or run the agent in Docker (Linux hosts):
               </Label>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 min-w-0 p-3 bg-gray-950 rounded text-sm text-gray-300 font-mono overflow-x-auto whitespace-nowrap">
+              <div className="flex items-start gap-2">
+                <code className="flex-1 min-w-0 p-3 bg-gray-950 rounded text-sm text-gray-300 font-mono whitespace-pre-wrap break-all">
                   {dockerJoinCommand}
                 </code>
                 <Button
