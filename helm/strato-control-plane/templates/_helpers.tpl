@@ -90,10 +90,13 @@ See issue #56.
 
 {{/*
 The `sslmode`/`sslrootcert` query string for SpiceDB's datastore-conn-uri,
-derived from the effective TLS mode. SpiceDB uses pgx (libpq semantics): a CA
-bundle is only honored under verify-ca/verify-full, so when a CA cert is
-supplied we upgrade to verify-full (matching the control plane, which verifies
-the server cert against that CA) and point sslrootcert at the mounted file.
+derived from the effective TLS mode. SpiceDB uses pgx (libpq semantics), where
+plain `sslmode=require` encrypts but does NOT validate the server certificate
+or hostname — so it would accept any cert and leak the datastore password to a
+MITM. To match the control plane (which verifies under require), `require` maps
+to `verify-full`: pgx then verifies against the system trust roots, or against
+the supplied CA bundle via sslrootcert when one is mounted. `prefer` stays
+best-effort (may fall back to plaintext); `disable` is plaintext.
 */}}
 {{- define "strato-control-plane.spicedbSslQuery" -}}
 {{- $mode := include "strato-control-plane.databaseTLS" . -}}
@@ -101,6 +104,8 @@ the server cert against that CA) and point sslrootcert at the mounted file.
 sslmode=disable
 {{- else if .Values.strato.database.tlsCACert -}}
 sslmode=verify-full&sslrootcert=/etc/spicedb/db-tls/ca.crt
+{{- else if eq $mode "require" -}}
+sslmode=verify-full
 {{- else -}}
 sslmode={{ $mode }}
 {{- end -}}

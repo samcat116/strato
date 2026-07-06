@@ -180,7 +180,7 @@ strato:
     # the server cert is verified against it (SpiceDB is pinned to verify-full).
     # Leave empty to use the image's system trust store (correct for a
     # publicly-rooted managed database).
-    #   caCert: |
+    #   tlsCACert: |
     #     -----BEGIN CERTIFICATE-----
     #     ...
     #     -----END CERTIFICATE-----
