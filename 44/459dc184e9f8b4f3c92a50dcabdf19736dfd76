@@ -1,0 +1,24 @@
+docs/architecture/storage.md
+  s_de96dbd684a309::t_f1465fc5ab8eee 38-41
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_de96dbd684a309::t_1b8dd604c61948 166-169,188-215,217-223
+agent/Tests/StratoAgentTests/FileSystemStorageBackendTests.swift
+  s_de96dbd684a309::t_84a70cbf9c8d05 28-29,31-36
+  s_de96dbd684a309::t_d806d4a7938e89 169,171-222
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "44459dc184e9f8b4f3c92a50dcabdf19736dfd76",
+  "prompts": {},
+  "sessions": {
+    "s_de96dbd684a309": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "532eac8e-33b7-49a6-8d51-bf6eb51f4d38",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
