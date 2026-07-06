@@ -146,11 +146,24 @@ struct VMController: RouteCollection {
                     ])
             }
 
-            if let vmStatus, let vm = try await VM.find(vmID, on: app.db) {
-                vm.setStatus(vmStatus)
-                try await vm.save(on: app.db)
-                if vmStatus == .error {
-                    Telemetry.vmEnteredError(reason: "operation_failed")
+            if let vm = try await VM.find(vmID, on: app.db) {
+                var changed = false
+                if let vmStatus {
+                    vm.setStatus(vmStatus)
+                    changed = true
+                    if vmStatus == .error {
+                        Telemetry.vmEnteredError(reason: "operation_failed")
+                    }
+                }
+                // A failed operation's intent was not achieved and the user has
+                // been told — realign desired state with observed reality so the
+                // divergence doesn't replay later (e.g. a failed delete's
+                // `.absent` executing after the agent upgrades to state sync).
+                if status == .failed, vm.revertDesiredToObserved() {
+                    changed = true
+                }
+                if changed {
+                    try await vm.save(on: app.db)
                 }
             }
         } catch {

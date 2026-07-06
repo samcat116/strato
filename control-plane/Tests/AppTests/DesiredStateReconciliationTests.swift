@@ -241,13 +241,15 @@ final class DesiredStateReconciliationTests {
             let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
             try await operation.save(on: app.db)
 
-            // Generation 1 was never reached; the agent reports the failure.
+            // Generation 1 was attempted and failed; the agent reports the
+            // failure tagged with the generation that produced it.
             let envelope = try self.report(
                 agentId: agentId,
                 vms: [
                     ObservedVMState(
                         vmId: vm.id!, status: .shutdown, observedGeneration: 0,
-                        lastError: "boot failed: no bootable device")
+                        lastError: "boot failed: no bootable device",
+                        failedGeneration: 1)
                 ]
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
@@ -255,6 +257,44 @@ final class DesiredStateReconciliationTests {
             let failed = try await VMOperation.find(operation.id, on: app.db)
             #expect(failed?.status == .failed)
             #expect(failed?.error == "boot failed: no bootable device")
+
+            // The unachieved intent must not linger: desired realigns with the
+            // observed resting state (and bumps the generation).
+            let refreshed = try await VM.find(vm.id, on: app.db)
+            #expect(refreshed?.desiredStatus == .shutdown)
+            #expect(refreshed?.generation == 2)
+        }
+    }
+
+    @Test("A stale error from a previous generation does not fail a fresh operation")
+    func staleErrorFromPreviousGenerationIgnored() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+
+            // Boot at generation 1 failed and capped out; the user retried,
+            // minting generation 2 and a fresh pending operation.
+            vm.setDesiredStatus(.running)  // gen 1
+            vm.setDesiredStatus(.running)  // gen 2 (retry)
+            try await vm.save(on: app.db)
+            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            try await operation.save(on: app.db)
+
+            // A heartbeat report still carrying generation 1's error arrives
+            // before the agent attempts generation 2.
+            let envelope = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .shutdown, observedGeneration: 1,
+                        lastError: "boot failed at generation 1",
+                        failedGeneration: 1)
+                ]
+            )
+            await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
+
+            // The fresh operation must not be failed by the stale error.
+            let stillPending = try await VMOperation.find(operation.id, on: app.db)
+            #expect(stillPending?.status == .pending)
         }
     }
 

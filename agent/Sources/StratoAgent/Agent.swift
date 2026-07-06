@@ -2468,11 +2468,17 @@ extension Agent: ReconcileActuator {
                     status: status,
                     observedGeneration: await reconciler.observedGeneration(for: vmId),
                     convergencePhase: await reconciler.convergencePhase(for: vmId),
-                    lastError: await reconciler.lastError(for: vmId)
+                    lastError: await reconciler.lastError(for: vmId),
+                    failedGeneration: await reconciler.failedGeneration(for: vmId)
                 ))
             reported.insert(vmId)
         }
 
+        // Orphans carry no synthesized error: fabricating a `lastError` in the
+        // post-registration baseline report (sent while re-adoption is still
+        // queued) would fail pending operations on the control plane seconds
+        // before the registration sync's adopt converges them. Real adoption
+        // failures surface through the reconciler's failure tracking.
         for vmId in orphanedVMs.keys where !reported.contains(vmId) {
             guard let uuid = UUID(uuidString: vmId) else { continue }
             observed.append(
@@ -2481,8 +2487,8 @@ extension Agent: ReconcileActuator {
                     status: .unknown,
                     observedGeneration: await reconciler.observedGeneration(for: vmId),
                     convergencePhase: await reconciler.convergencePhase(for: vmId),
-                    lastError: await reconciler.lastError(for: vmId)
-                        ?? "orphaned by agent restart; awaiting re-adoption or deletion"
+                    lastError: await reconciler.lastError(for: vmId),
+                    failedGeneration: await reconciler.failedGeneration(for: vmId)
                 ))
             reported.insert(vmId)
         }
@@ -2498,7 +2504,8 @@ extension Agent: ReconcileActuator {
                     status: .unknown,
                     observedGeneration: await reconciler.observedGeneration(for: vmId),
                     convergencePhase: await reconciler.convergencePhase(for: vmId) ?? "converging",
-                    lastError: await reconciler.lastError(for: vmId)
+                    lastError: await reconciler.lastError(for: vmId),
+                    failedGeneration: await reconciler.failedGeneration(for: vmId)
                 ))
             reported.insert(vmId)
         }
@@ -2507,7 +2514,7 @@ extension Agent: ReconcileActuator {
         // (e.g. a create that never produced a process): reported with the
         // error so the control plane can fail the pending operation with the
         // real reason instead of waiting out its budget.
-        for (vmId, error) in await reconciler.failedConvergences() where !reported.contains(vmId) {
+        for (vmId, failure) in await reconciler.failedConvergences() where !reported.contains(vmId) {
             guard let uuid = UUID(uuidString: vmId) else { continue }
             observed.append(
                 ObservedVMState(
@@ -2515,7 +2522,8 @@ extension Agent: ReconcileActuator {
                     status: .unknown,
                     observedGeneration: await reconciler.observedGeneration(for: vmId),
                     convergencePhase: nil,
-                    lastError: error
+                    lastError: failure.error,
+                    failedGeneration: failure.generation
                 ))
         }
 

@@ -299,6 +299,33 @@ struct ReconciliationTests {
         #expect(clearedError == nil)
     }
 
+    @Test("Undesired-VM deletes are exempt from the attempt cap")
+    func undesiredDeleteRetriesPastCap() async {
+        struct Boom: Error {}
+        let vmId = UUID().uuidString
+        let actuator = MockActuator(presence: [vmId: .managed(.running)])
+        await actuator.setFailure(Boom())
+        let reconciler = makeReconciler(actuator)
+
+        // These VMs have no control-plane row, so nothing can ever mint a new
+        // generation to re-arm a capped failure — every sync must keep
+        // retrying the delete or the stray process leaks until restart.
+        let rounds = Reconciler.maxAttemptsPerGeneration + 2
+        for attempt in 1...rounds {
+            await reconciler.apply(Self.sync([]))
+            _ = await actuator.waitForReports(attempt)
+        }
+        let reports = await actuator.reportCount
+        #expect(reports == rounds)
+
+        // Once the failure clears, the delete converges.
+        await actuator.setFailure(nil)
+        await reconciler.apply(Self.sync([]))
+        _ = await actuator.waitForReports(rounds + 1)
+        let presence = await actuator.presence
+        #expect(presence.isEmpty)
+    }
+
     @Test("Deletion of an undesired VM removes it and reports")
     func undesiredVMDeleted() async {
         let vmId = UUID().uuidString

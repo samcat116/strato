@@ -122,19 +122,28 @@ public struct ObservedVMState: Codable, Sendable {
     /// failed. Lets the control plane fail a pending operation with a real
     /// error instead of waiting for its completion budget to expire.
     public let lastError: String?
+    /// The generation whose convergence produced `lastError`. The control
+    /// plane fails a pending operation on `lastError` only when this matches
+    /// the VM's current generation — otherwise a stale error from a previous
+    /// generation (still carried on heartbeat reports until the new
+    /// generation's work item runs) would fail a brand-new operation before
+    /// the agent ever attempted it.
+    public let failedGeneration: Int64?
 
     public init(
         vmId: UUID,
         status: VMStatus,
         observedGeneration: Int64,
         convergencePhase: String? = nil,
-        lastError: String? = nil
+        lastError: String? = nil,
+        failedGeneration: Int64? = nil
     ) {
         self.vmId = vmId
         self.status = status
         self.observedGeneration = observedGeneration
         self.convergencePhase = convergencePhase
         self.lastError = lastError
+        self.failedGeneration = failedGeneration
     }
 }
 

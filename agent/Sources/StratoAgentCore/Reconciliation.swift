@@ -134,19 +134,26 @@ public actor Reconciler {
         failures[vmId]?.lastError
     }
 
+    /// The generation whose convergence produced `lastError(for:)`. Reported
+    /// alongside the error so the control plane can tell a failure of the
+    /// *current* generation from a stale one still carried on heartbeats.
+    public func failedGeneration(for vmId: String) -> Int64? {
+        failures[vmId]?.generation
+    }
+
     /// VMs currently converging that may not exist on the hypervisor yet
     /// (mid-create), so report assembly can still surface their progress.
     public func inFlightVMs() -> [String: Int64] {
         inFlight
     }
 
-    /// VMs whose last convergence attempt failed, with the error. Report
-    /// assembly includes these even when the VM has no hypervisor presence at
-    /// all (e.g. a create that never got off the ground) — otherwise the
-    /// control plane could never learn why and would wait out the operation's
-    /// full completion budget.
-    public func failedConvergences() -> [String: String] {
-        failures.mapValues { $0.lastError }
+    /// VMs whose last convergence attempt failed, with the failing generation
+    /// and error. Report assembly includes these even when the VM has no
+    /// hypervisor presence at all (e.g. a create that never got off the
+    /// ground) — otherwise the control plane could never learn why and would
+    /// wait out the operation's full completion budget.
+    public func failedConvergences() -> [String: (generation: Int64, error: String)] {
+        failures.mapValues { ($0.generation, $0.lastError) }
     }
 
     // MARK: Applying a sync
@@ -200,7 +207,12 @@ public actor Reconciler {
             // level-triggered timer will pick up any residual drift afterward.
             return false
         }
+        // Undesired-VM deletes (no control-plane row, generation 0) are exempt
+        // from the attempt cap: nothing can ever mint a new generation for
+        // them, so a cap would permanently leak the stray process. They are
+        // level-triggered and cheap, so retrying on every sync is fine.
         if let failure = failures[item.vmId],
+            item.desired != nil,
             failure.generation == item.generation,
             failure.attempts >= Self.maxAttemptsPerGeneration
         {
@@ -263,8 +275,15 @@ public actor Reconciler {
                     "error": .string(error.localizedDescription),
                 ])
         }
-        inFlight.removeValue(forKey: item.vmId)
-        currentPhase.removeValue(forKey: item.vmId)
+        // Only clear the marker this item owns: a newer-generation item may
+        // already be queued behind this one (shouldExecute admits it and
+        // apply() re-keyed the entry), and clearing unconditionally would both
+        // re-admit duplicate work for that generation and hide a mid-create VM
+        // from the observed-state report's in-flight section.
+        if inFlight[item.vmId] == item.generation {
+            inFlight.removeValue(forKey: item.vmId)
+            currentPhase.removeValue(forKey: item.vmId)
+        }
         await actuator.convergenceDidChange()
     }
 

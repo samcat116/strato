@@ -180,6 +180,17 @@ actor QEMUService: HypervisorService {
             }
         }
 
+        // A disk-boot VM with no disks can only produce an unbootable shell —
+        // e.g. the image download failed (or the sync carried no usable
+        // imageInfo) and the spec had no volume references to fall back on.
+        // Fail the create with the real problem instead of "converging" to a
+        // diskless VM that reports success.
+        if disks.isEmpty, case .disk = spec.boot {
+            throw QEMUServiceError.diskCreationFailed(
+                "no disks resolved for disk-boot VM \(vmId): image materialization failed or the spec carried no volumes"
+            )
+        }
+
         let qemuManager = QEMUManager(qemuPath: qemuBinaryPath, logger: logger)
 
         // Set up VM networking first
@@ -439,24 +450,25 @@ actor QEMUService: HypervisorService {
         }
 
         do {
-            let status = try await qemuManager.getStatus()
-
-            // Map SwiftQEMU QEMUVMStatus to StratoShared VMStatus
-            switch status {
-            case .running:
-                return .running
-            case .paused:
-                return .paused
-            case .stopped, .shuttingDown:
-                return .shutdown
-            case .creating:
-                return .created
-            case .unknown:
-                return .created
-            }
+            return Self.vmStatus(from: try await qemuManager.getStatus())
         } catch {
             logger.error("Failed to query VM status: \(error)")
             return .shutdown
+        }
+    }
+
+    /// The single SwiftQEMU `QEMUVMStatus` → `VMStatus` mapping, shared by
+    /// status queries and re-adoption so the two can never drift apart.
+    static func vmStatus(from qemuStatus: QEMUVMStatus) -> VMStatus {
+        switch qemuStatus {
+        case .running:
+            return .running
+        case .paused:
+            return .paused
+        case .stopped, .shuttingDown:
+            return .shutdown
+        case .creating, .unknown:
+            return .created
         }
     }
 
@@ -503,16 +515,7 @@ actor QEMUService: HypervisorService {
         activeVMs[vmId] = adopted
         vmSpecs[vmId] = spec
 
-        switch qemuStatus {
-        case .running:
-            return .running
-        case .paused:
-            return .paused
-        case .stopped, .shuttingDown:
-            return .shutdown
-        case .creating, .unknown:
-            return .created
-        }
+        return Self.vmStatus(from: qemuStatus)
     }
 
     /// Sum of vCPUs and memory (in bytes) reserved by all VMs this service is managing.

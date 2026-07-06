@@ -484,9 +484,10 @@ struct AgentWebSocketController: RouteCollection {
             case .observedState:
                 // Full observed-state report from a state-sync agent: updates
                 // observed status/generation, completes operations, confirms
-                // deletions by absence (issue #260).
+                // deletions by absence (issue #260). Enqueued rather than
+                // applied directly so same-agent reports apply in send order.
                 Task {
-                    await req.agentService.applyObservedStateReport(envelope, fromAgentNamed: agentName)
+                    await req.agentService.enqueueObservedStateReport(envelope, fromAgentNamed: agentName)
                 }
 
             case .consoleData:

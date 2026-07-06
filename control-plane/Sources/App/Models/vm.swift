@@ -261,6 +261,28 @@ extension VM {
         observedGeneration >= generation && desiredStatus.isSatisfied(by: status)
     }
 
+    /// Realigns desired state with observed reality after a failed operation,
+    /// bumping the generation. Without this, the unachieved intent lingers —
+    /// e.g. a delete that failed on a pre-state-sync agent leaves
+    /// `desired_status = .absent`, which a later sync (say, after the agent
+    /// upgrades to the state-sync protocol) would replay destructively without
+    /// any new user action. Returns whether anything changed; does not persist.
+    @discardableResult
+    func revertDesiredToObserved() -> Bool {
+        let resting: DesiredVMStatus
+        switch status {
+        case .running, .starting:
+            resting = .running
+        case .paused:
+            resting = .paused
+        case .created, .shutdown, .stopping, .error, .unknown:
+            resting = .shutdown
+        }
+        guard desiredStatus != resting else { return false }
+        setDesiredStatus(resting)
+        return true
+    }
+
     var canPause: Bool {
         return status == .running
     }

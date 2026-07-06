@@ -61,7 +61,8 @@ struct ReconciliationProtocolTests {
                     status: .unknown,
                     observedGeneration: 0,
                     convergencePhase: "downloading image",
-                    lastError: "previous attempt: disk full"
+                    lastError: "previous attempt: disk full",
+                    failedGeneration: 3
                 ),
             ],
             resources: AgentResources(
@@ -79,6 +80,7 @@ struct ReconciliationProtocolTests {
         #expect(decoded.vms[0].observedGeneration == 7)
         #expect(decoded.vms[1].convergencePhase == "downloading image")
         #expect(decoded.vms[1].lastError == "previous attempt: disk full")
+        #expect(decoded.vms[1].failedGeneration == 3)
     }
 
     @Test("DesiredVMStatus decoding is strict: unknown values fail the sync")
