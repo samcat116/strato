@@ -44,7 +44,24 @@ public enum WireProtocol {
     ///
     /// Version 1: decoder accepts both numeric and ISO-8601 dates; encoder still
     /// emits the legacy numeric form. See the type-level note on the migration.
-    public static let currentVersion = 1
+    ///
+    /// Version 2: reconciliation state sync. The peer understands
+    /// `DesiredStateMessage`/`ObservedStateReport` and, for agents, runs a
+    /// reconcile loop instead of the imperative VM lifecycle messages. The
+    /// control plane keys dual-mode dispatch on this: agents registering with
+    /// an older version keep receiving imperative messages. The date encoder is
+    /// unchanged (still the legacy numeric form).
+    public static let currentVersion = 2
+
+    /// The lowest protocol version that speaks reconciliation state sync
+    /// (see `currentVersion` version 2 notes).
+    public static let stateSyncMinimumVersion = 2
+
+    /// Whether a peer registering with `version` should be driven with
+    /// desired-state syncs rather than imperative VM lifecycle messages.
+    public static func supportsStateSync(_ version: Int) -> Bool {
+        version >= stateSyncMinimumVersion
+    }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and
     /// from this single definition — to Foundation's `deferredToDate` numeric

@@ -48,6 +48,10 @@ public enum MessageType: String, Codable, Sendable {
     case consoleConnected = "console_connected"
     case consoleDisconnected = "console_disconnected"
 
+    // Reconciliation state sync (protocol version >= 2)
+    case desiredState = "desired_state"
+    case observedState = "observed_state"
+
     // Responses
     case success = "success"
     case error = "error"

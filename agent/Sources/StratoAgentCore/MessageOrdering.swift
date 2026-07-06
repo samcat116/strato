@@ -73,6 +73,11 @@ extension MessageEnvelope {
     /// it can't collide with a real network name.
     public static let networkVisibilityLane = "__strato_networks__"
 
+    /// Lane for desired-state syncs (reconciliation phase 2). Successive syncs diff and
+    /// enqueue in arrival order; the per-VM work they fan out runs on the VM lanes, so a
+    /// sync is never blocked behind a long convergence action.
+    public static let reconcileLane = "__strato_reconcile__"
+
     /// The serial lanes used to order this inbound frame relative to others.
     ///
     /// Frames acting on the same resource share a lane and are therefore applied in the order
@@ -125,6 +130,10 @@ extension MessageEnvelope {
             // Reads a single named network; the per-name lane already orders it after that
             // network's create/delete.
             raws = [fields?.networkName.map { "network:\($0)" }]
+        case .desiredState:
+            // Full-fleet syncs diff quickly and fan per-VM work out onto the VM lanes, so
+            // they get their own lane: ordered among themselves, never stuck behind a VM.
+            raws = [Self.reconcileLane]
         default:
             // VM lifecycle, console, network detach, and info/status queries all carry vmId.
             raws = [fields?.vmId]

@@ -42,6 +42,8 @@ struct MessageTypeTests {
         case .consoleData: return "console_data"
         case .consoleConnected: return "console_connected"
         case .consoleDisconnected: return "console_disconnected"
+        case .desiredState: return "desired_state"
+        case .observedState: return "observed_state"
         case .success: return "success"
         case .error: return "error"
         case .statusUpdate: return "status_update"
@@ -57,6 +59,7 @@ struct MessageTypeTests {
         .volumeCreate, .volumeDelete, .volumeAttach, .volumeDetach, .volumeResize,
         .volumeSnapshot, .volumeSnapshotDelete, .volumeClone, .volumeInfo,
         .consoleConnect, .consoleDisconnect, .consoleData, .consoleConnected, .consoleDisconnected,
+        .desiredState, .observedState,
         .success, .error, .statusUpdate, .vmLog,
     ]
 

@@ -26,6 +26,18 @@ struct AgentInfo: Sendable {
     var resources: AgentResources
     var lastHeartbeat: Date
     var status: AgentStatus
+    /// Wire protocol version the agent registered with (0 for agents that
+    /// predate versioning). Defaulted so existing construction sites (tests)
+    /// keep compiling; `registerAgent` always sets it explicitly. Keys the
+    /// dual-mode dispatch: state-sync agents get desired-state syncs, older
+    /// agents keep the imperative message flow (issue #260).
+    var protocolVersion: Int = 0
+
+    /// Whether this agent is driven by desired-state syncs rather than
+    /// imperative VM lifecycle messages.
+    var supportsStateSync: Bool {
+        WireProtocol.supportsStateSync(protocolVersion)
+    }
 
     /// Hypervisor backends this agent can actually run. Agents probe each
     /// backend before reporting it, so an empty list means the agent cannot
@@ -50,6 +62,17 @@ struct AgentInfo: Sendable {
 enum AgentServiceResponse: Sendable {
     case success(AnyCodableValue?)
     case error(String, String?)
+}
+
+/// How a VM create was dispatched to its agent (issue #260 dual-mode).
+enum CreateDispatch: Sendable {
+    /// Imperative path (pre-state-sync agent): the agent's correlated
+    /// response decided the outcome and the caller records it.
+    case completed(AgentServiceResponse)
+    /// State-sync path: desired state was written and synced; the pending
+    /// operation completes from observed-state reports (with the
+    /// stuck-operation sweep as the budget backstop).
+    case syncing
 }
 
 enum AgentServiceError: Error, LocalizedError, Sendable {

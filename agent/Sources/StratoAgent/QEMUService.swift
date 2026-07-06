@@ -25,7 +25,10 @@ actor QEMUService: HypervisorService {
     // HypervisorService protocol requirement
     public let hypervisorType: HypervisorType = .qemu
 
-    private var activeVMs: [String: QEMUManager] = [:]
+    // Handles are `QEMUManager` for VMs spawned by this process and
+    // `AdoptedQEMUVM` for orphans re-adopted over their deterministic QMP
+    // socket after an agent restart (see AdoptedQEMUVM.swift).
+    private var activeVMs: [String: any QEMUVMHandle] = [:]
     private var vmSpecs: [String: VMSpec] = [:]
     private var vmNetworkInfo: [String: VMNetworkInfo] = [:]
     private var vmConsoleSocketPaths: [String: String] = [:]
@@ -56,8 +59,25 @@ actor QEMUService: HypervisorService {
 
     // MARK: - VM Lifecycle Operations
 
-    /// Creates a VM from a hypervisor-neutral spec with optional image info for disk caching
+    /// Creates a VM from a hypervisor-neutral spec with optional image info for disk caching.
+    ///
+    /// Idempotent: a VM already managed under this id is left untouched. A
+    /// resent or replayed create must never spawn a second QEMU process
+    /// against the same disk paths (issue #260).
     func createVM(vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil) async throws {
+        if activeVMs[vmId] != nil {
+            logger.info(
+                "VM already exists, treating create as a no-op",
+                metadata: ["vmId": .string(vmId)])
+            return
+        }
+        guard !pendingVMs.contains(vmId) else {
+            logger.info(
+                "VM creation already in progress, treating create as a no-op",
+                metadata: ["vmId": .string(vmId)])
+            return
+        }
+
         // Mark VM as pending to handle concurrent boot requests
         pendingVMs.insert(vmId)
         defer { pendingVMs.remove(vmId) }
@@ -78,12 +98,19 @@ actor QEMUService: HypervisorService {
 
             do {
                 // The storage layer downloads/caches the image and converts it
-                // to qcow2 when the source format differs.
-                let attachment = try await storage.materializeDisk(
-                    at: "\(vmStoragePath)/\(vmId)/disk.qcow2",
-                    from: imageInfo,
-                    format: .qcow2
-                )
+                // to qcow2 when the source format differs. This stage gets its
+                // own generous budget — multi-GB downloads are legitimate and
+                // must not be squeezed into the process-spawn envelope.
+                let attachment = try await StageBudget.run(
+                    seconds: StageBudget.imageMaterializationSeconds,
+                    stage: "image materialization"
+                ) { [storage] in
+                    try await storage.materializeDisk(
+                        at: "\(self.vmStoragePath)/\(vmId)/disk.qcow2",
+                        from: imageInfo,
+                        format: .qcow2
+                    )
+                }
                 disks = [ResolvedDisk(path: attachment.path, format: attachment.format, readonly: false)]
             } catch {
                 logger.error(
@@ -162,24 +189,18 @@ actor QEMUService: HypervisorService {
         // Translate the neutral spec into QEMU's native configuration
         let qemuConfig = await convertToQEMUConfiguration(spec, disks: disks, vmId: vmId)
 
-        // Create VM with timeout - QMP connection can hang indefinitely
-        logger.info("Starting QEMU VM creation with 30 second timeout", metadata: ["vmId": .string(vmId)])
+        // Spawn the process under its own stage budget — QMP connection can
+        // hang indefinitely, but this stage no longer shares its envelope with
+        // the image download above.
+        logger.info(
+            "Starting QEMU VM creation",
+            metadata: [
+                "vmId": .string(vmId),
+                "spawnBudgetSeconds": .stringConvertible(StageBudget.hypervisorSpawnSeconds),
+            ])
         do {
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask {
-                    try await qemuManager.createVM(config: qemuConfig)
-                }
-
-                group.addTask {
-                    try await Task.sleep(nanoseconds: 30_000_000_000)  // 30 seconds
-                    throw QEMUServiceError.configurationError(
-                        "QEMU VM creation timed out after 30 seconds - QMP connection may have failed")
-                }
-
-                // Wait for the first task to complete (either success or timeout)
-                try await group.next()
-                group.cancelAll()
-            }
+            try await qemuManager.createVM(
+                config: qemuConfig, timeout: TimeInterval(StageBudget.hypervisorSpawnSeconds))
         } catch {
             logger.error(
                 "QEMU VM creation failed",
@@ -202,7 +223,7 @@ actor QEMUService: HypervisorService {
         // Wait for VM to be ready - it may still be creating (downloading image, etc.)
         var retries = 0
         let maxRetries = 120  // 60 seconds total (120 * 0.5s) - creation can take a while
-        var vm: QEMUManager?
+        var vm: (any QEMUVMHandle)?
 
         while retries < maxRetries {
             // Check if VM is ready
@@ -318,6 +339,10 @@ actor QEMUService: HypervisorService {
             try? FileManager.default.removeItem(atPath: socketPath)
             logger.debug("Removed serial socket: \(socketPath)")
         }
+
+        // Clean up the deterministic re-adoption QMP socket
+        try? FileManager.default.removeItem(
+            atPath: Self.adoptionSocketPath(vmStoragePath: vmStoragePath, vmId: vmId))
 
         logger.info("QEMU VM deleted", metadata: ["vmId": .string(vmId)])
     }
@@ -436,6 +461,57 @@ actor QEMUService: HypervisorService {
 
     func listVMs() async -> [String] {
         return Array(activeVMs.keys)
+    }
+
+    // MARK: - Orphan Re-adoption (issue #260)
+
+    /// The deterministic QMP socket every VM exposes for re-adoption.
+    static func adoptionSocketPath(vmStoragePath: String, vmId: String) -> String {
+        let vmDir = (vmStoragePath as NSString).appendingPathComponent(vmId)
+        return (vmDir as NSString).appendingPathComponent("qmp.sock")
+    }
+
+    /// Re-adopts a VM whose QEMU process survived an agent restart by
+    /// attaching to its deterministic QMP socket, and returns the observed
+    /// status. Fails (leaving the VM orphaned) when the socket is missing —
+    /// e.g. the VM predates deterministic sockets — or cannot be connected.
+    func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus {
+        if activeVMs[vmId] != nil {
+            // Already managed (e.g. a replayed sync raced re-adoption): adoption
+            // is satisfied, just report the current status.
+            return try await getVMStatus(vmId: vmId)
+        }
+
+        let socketPath = Self.adoptionSocketPath(vmStoragePath: vmStoragePath, vmId: vmId)
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            throw HypervisorServiceError.notSupported(
+                "VM \(vmId) has no re-adoption QMP socket at \(socketPath) (created before deterministic sockets, or its process is gone)"
+            )
+        }
+
+        logger.info(
+            "Re-adopting orphaned QEMU VM",
+            metadata: [
+                "vmId": .string(vmId),
+                "socket": .string(socketPath),
+            ])
+
+        let adopted = AdoptedQEMUVM(socketPath: socketPath, logger: logger)
+        let qemuStatus = try await adopted.connect()
+
+        activeVMs[vmId] = adopted
+        vmSpecs[vmId] = spec
+
+        switch qemuStatus {
+        case .running:
+            return .running
+        case .paused:
+            return .paused
+        case .stopped, .shuttingDown:
+            return .shutdown
+        case .creating, .unknown:
+            return .created
+        }
     }
 
     /// Sum of vCPUs and memory (in bytes) reserved by all VMs this service is managing.
@@ -796,6 +872,17 @@ actor QEMUService: HypervisorService {
             "-device", "virtio-serial-pci,id=virtio-serial0",
             "-chardev", "socket,id=console0,path=\(consoleSocketPath),server=on,wait=off",
             "-device", "virtconsole,chardev=console0,id=virtconsole0",
+        ])
+
+        // Second QMP monitor at a deterministic path. QEMUManager's own QMP
+        // socket lives at a random /tmp path that dies with this process's
+        // memory, so orphan re-adoption after an agent restart reattaches via
+        // this one instead (see AdoptedQEMUVM). QEMU supports multiple -qmp
+        // monitors.
+        let adoptionSocketPath = Self.adoptionSocketPath(vmStoragePath: vmStoragePath, vmId: vmId)
+        try? FileManager.default.removeItem(atPath: adoptionSocketPath)  // stale socket from a dead process
+        qemuConfig.additionalArgs.append(contentsOf: [
+            "-qmp", "unix:\(adoptionSocketPath),server,wait=off",
         ])
 
         // Store the socket path for later access

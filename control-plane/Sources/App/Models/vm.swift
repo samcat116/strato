@@ -30,6 +30,20 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "status_changed_at")
     var statusChangedAt: Date?
 
+    // Desired/observed state split (reconciliation phase 2, issue #260).
+    // `desiredStatus` is the goal written by API mutations; `status` above is
+    // purely observed. `generation` bumps on every desired change and
+    // `observedGeneration` records the last generation the owning agent
+    // confirmed converging to.
+    @Enum(key: "desired_status")
+    var desiredStatus: DesiredVMStatus
+
+    @Field(key: "generation")
+    var generation: Int64
+
+    @Field(key: "observed_generation")
+    var observedGeneration: Int64
+
     @Enum(key: "hypervisor_type")
     var hypervisorType: HypervisorType
 
@@ -144,6 +158,9 @@ final class VM: Model, @unchecked Sendable {
         self.memory = memory
         self.disk = disk
         self.status = status
+        self.desiredStatus = .shutdown
+        self.generation = 0
+        self.observedGeneration = 0
         self.hypervisorType = hypervisorType
         self.hugepages = hugepages
         self.sharedMemory = sharedMemory
@@ -228,6 +245,20 @@ extension VM {
     func setStatus(_ newStatus: VMStatus, at date: Date = Date()) {
         status = newStatus
         statusChangedAt = date
+    }
+
+    /// Records a new desired state and bumps the generation so agents treat it
+    /// as newer than anything they have applied. Does not persist — call
+    /// `save(on:)` afterwards.
+    func setDesiredStatus(_ newDesired: DesiredVMStatus) {
+        desiredStatus = newDesired
+        generation += 1
+    }
+
+    /// True once the owning agent has confirmed converging to the current
+    /// generation and the observed status satisfies the desired one.
+    var isConverged: Bool {
+        observedGeneration >= generation && desiredStatus.isSatisfied(by: status)
     }
 
     var canPause: Bool {
