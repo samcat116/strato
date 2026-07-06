@@ -290,7 +290,49 @@ public struct VMCreateMessage: WebSocketMessage {
 
 // MARK: - Image Information
 
-/// Contains information for the agent to download and cache an image
+/// Download information for a single typed artifact within an image's set.
+///
+/// The `downloadURL` is individually signed per artifact — an agent authorized
+/// for the kernel is not implicitly authorized for the rootfs.
+public struct ArtifactInfo: Codable, Sendable {
+    public let kind: ArtifactKind
+    /// Disk format raw string ("qcow2"/"raw") for `diskImage`/`rootfs`; nil for
+    /// opaque blobs (`kernel`/`initramfs`). Kept as a string to avoid coupling
+    /// the wire contract to the control plane's `ImageFormat` enum.
+    public let format: String?
+    public let filename: String
+    public let checksum: String
+    public let size: Int64
+    public let downloadURL: String
+    /// When the signed download URL expires (optional, for agent awareness).
+    public let expiresAt: Date?
+
+    public init(
+        kind: ArtifactKind,
+        format: String? = nil,
+        filename: String,
+        checksum: String,
+        size: Int64,
+        downloadURL: String,
+        expiresAt: Date? = nil
+    ) {
+        self.kind = kind
+        self.format = format
+        self.filename = filename
+        self.checksum = checksum
+        self.size = size
+        self.downloadURL = downloadURL
+        self.expiresAt = expiresAt
+    }
+}
+
+/// Contains information for the agent to download and cache an image.
+///
+/// The top-level `filename`/`checksum`/`size`/`downloadURL`/`expiresAt` describe
+/// the primary disk image and are retained for the QEMU disk path and for
+/// backward compatibility. Multi-backend drivers read `artifacts` to fetch the
+/// specific typed files they need. `architecture` and `artifacts` decode as
+/// absent (nil / empty) from legacy single-file payloads.
 public struct ImageInfo: Codable, Sendable {
     public let imageId: UUID
     public let projectId: UUID
@@ -300,6 +342,11 @@ public struct ImageInfo: Codable, Sendable {
     public let downloadURL: String
     /// When the signed download URL expires (optional, for agent awareness)
     public let expiresAt: Date?
+    /// Guest CPU architecture of the image; nil only for legacy payloads.
+    public let architecture: CPUArchitecture?
+    /// Typed artifact set. Empty for legacy single-file payloads, in which case
+    /// the top-level fields describe the (disk) image.
+    public let artifacts: [ArtifactInfo]
 
     public init(
         imageId: UUID,
@@ -308,7 +355,9 @@ public struct ImageInfo: Codable, Sendable {
         checksum: String,
         size: Int64,
         downloadURL: String,
-        expiresAt: Date? = nil
+        expiresAt: Date? = nil,
+        architecture: CPUArchitecture? = nil,
+        artifacts: [ArtifactInfo] = []
     ) {
         self.imageId = imageId
         self.projectId = projectId
@@ -317,6 +366,26 @@ public struct ImageInfo: Codable, Sendable {
         self.size = size
         self.downloadURL = downloadURL
         self.expiresAt = expiresAt
+        self.architecture = architecture
+        self.artifacts = artifacts
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        imageId = try container.decode(UUID.self, forKey: .imageId)
+        projectId = try container.decode(UUID.self, forKey: .projectId)
+        filename = try container.decode(String.self, forKey: .filename)
+        checksum = try container.decode(String.self, forKey: .checksum)
+        size = try container.decode(Int64.self, forKey: .size)
+        downloadURL = try container.decode(String.self, forKey: .downloadURL)
+        expiresAt = try container.decodeIfPresent(Date.self, forKey: .expiresAt)
+        architecture = try container.decodeIfPresent(CPUArchitecture.self, forKey: .architecture)
+        artifacts = try container.decodeIfPresent([ArtifactInfo].self, forKey: .artifacts) ?? []
+    }
+
+    /// The artifact of a given kind, if present in the set.
+    public func artifact(ofKind kind: ArtifactKind) -> ArtifactInfo? {
+        artifacts.first { $0.kind == kind }
     }
 }
 

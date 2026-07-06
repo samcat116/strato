@@ -15,9 +15,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useUpdateImage } from "@/lib/hooks/use-images";
 import { toast } from "sonner";
-import type { Image, UpdateImageRequest } from "@/types/api";
+import type { CPUArchitecture, Image, UpdateImageRequest } from "@/types/api";
 
 const BYTES_PER_GB = 1024 * 1024 * 1024;
+const ARCHITECTURES: CPUArchitecture[] = ["x86_64", "arm64"];
 
 function bytesToGBString(bytes: number | undefined): string {
   if (!bytes) return "";
@@ -43,6 +44,9 @@ export function EditImageDialog({
   // from the latest image data on every open.
   const [name, setName] = useState(image.name);
   const [description, setDescription] = useState(image.description ?? "");
+  const [architecture, setArchitecture] = useState<CPUArchitecture>(
+    image.architecture ?? "x86_64"
+  );
   const [defaultCpu, setDefaultCpu] = useState(
     image.defaultCpu ? String(image.defaultCpu) : ""
   );
@@ -69,6 +73,7 @@ export function EditImageDialog({
     const data: UpdateImageRequest = {
       name: name.trim(),
       description: description.trim(),
+      architecture,
     };
 
     if (defaultCpu.trim()) {
@@ -142,6 +147,25 @@ export function EditImageDialog({
               className="bg-gray-700 border-gray-600"
               disabled={updateImage.isPending}
             />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="edit-image-arch">Architecture</Label>
+            <select
+              id="edit-image-arch"
+              value={architecture}
+              onChange={(e) =>
+                setArchitecture(e.target.value as CPUArchitecture)
+              }
+              className="w-full rounded-md bg-gray-700 border border-gray-600 px-3 py-2 text-sm text-gray-100"
+              disabled={updateImage.isPending}
+            >
+              {ARCHITECTURES.map((arch) => (
+                <option key={arch} value={arch}>
+                  {arch}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>

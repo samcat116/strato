@@ -977,7 +977,7 @@ actor AgentService {
         let agentId: String
         do {
             agentId = try await app.scheduler.selectAndReserveAgent(
-                requirements: SchedulerService.placementRequirements(for: vm),
+                requirements: SchedulerService.placementRequirements(for: vm, architecture: image?.architecture),
                 vmId: vmId,
                 from: schedulableAgents,
                 coordination: app.coordination,
@@ -1025,6 +1025,9 @@ actor AgentService {
             // Build ImageInfo with signed URL now that we know the agent
             if let image = image {
                 do {
+                    // The artifact set drives which signed URLs are emitted; make
+                    // sure it's loaded (no-op if the caller already eager-loaded).
+                    try await image.$artifacts.load(on: db)
                     let controlPlaneURL = Environment.get("CONTROL_PLANE_URL") ?? "http://localhost:8080"
                     let signingKey = try URLSigningService.getSigningKey(from: app)
                     imageInfo = try VMSpecBuilder.buildImageInfo(

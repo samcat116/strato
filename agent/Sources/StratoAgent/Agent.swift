@@ -295,6 +295,7 @@ actor Agent {
             logger: logger,
             networkService: networkService,
             storage: storageBackend,
+            imageSource: imageCacheService,
             vmStoragePath: vmStoragePath,
             firecrackerBinaryPath: firecrackerBinaryPath,
             socketDirectory: firecrackerSocketDir

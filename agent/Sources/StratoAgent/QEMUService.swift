@@ -108,7 +108,8 @@ actor QEMUService: HypervisorService {
                     try await storage.materializeDisk(
                         at: "\(self.vmStoragePath)/\(vmId)/disk.qcow2",
                         from: imageInfo,
-                        format: .qcow2
+                        format: .qcow2,
+                        artifactKind: .diskImage
                     )
                 }
                 disks = [ResolvedDisk(path: attachment.path, format: attachment.format, readonly: false)]
