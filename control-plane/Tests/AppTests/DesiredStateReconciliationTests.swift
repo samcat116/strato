@@ -5,11 +5,12 @@ import VaporTesting
 import StratoShared
 @testable import App
 
-/// Tests for the desired/observed state split and reconciliation phase 2
-/// (issue #260): mutations write desired state and bump the generation,
+/// Tests for the desired/observed state split and reconciliation phases 2-3
+/// (issues #260, #261): mutations write desired state and bump the generation,
 /// desired-state syncs are assembled from the database, observed-state reports
 /// update status/generation and complete operations, deletions are confirmed
-/// by absence, and dual-mode dispatch keys on the agent's protocol version.
+/// by absence, and registration requires a state-sync protocol version (the
+/// imperative path is gone).
 @Suite("Desired State Reconciliation Tests", .serialized)
 final class DesiredStateReconciliationTests {
 
@@ -132,8 +133,8 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("State-sync agents skip the transitional status; imperative agents keep it")
-    func dualModeTransitionalStatus() async throws {
+    @Test("Start stores no transitional status; in-flight state is derived")
+    func noTransitionalStatusOnStart() async throws {
         try await withVMTestApp { app, _, vm, token in
             _ = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
 
@@ -159,23 +160,30 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("agentSupportsStateSync keys on the registered protocol version")
+    @Test("Registration requires a state-sync protocol version")
     func protocolVersionGate() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let v1Agent = try await self.registerAgent(
-                app: app, vm: vm, named: "old-agent", protocolVersion: 1)
-            let supportsV1 = await app.agentService.agentSupportsStateSync(v1Agent)
-            #expect(!supportsV1)
+            // The imperative path is gone (issue #261): agents that predate
+            // desired-state sync are refused at registration.
+            await #expect(throws: AgentServiceError.self) {
+                _ = try await self.registerAgent(
+                    app: app, vm: vm, named: "old-agent", protocolVersion: 1)
+            }
+            await #expect(throws: AgentServiceError.self) {
+                _ = try await self.registerAgent(
+                    app: app, vm: vm, named: "legacy-agent", protocolVersion: nil)
+            }
 
+            // Refused agents leave no registry row behind.
+            let rows = try await Agent.query(on: app.db).all()
+            #expect(rows.isEmpty)
+
+            // A state-sync agent registers fine.
             let v2Agent = try await self.registerAgent(
                 app: app, vm: vm, named: "new-agent", protocolVersion: 2)
-            let supportsV2 = await app.agentService.agentSupportsStateSync(v2Agent)
-            #expect(supportsV2)
-
-            let legacyAgent = try await self.registerAgent(
-                app: app, vm: vm, named: "legacy-agent", protocolVersion: nil)
-            let supportsLegacy = await app.agentService.agentSupportsStateSync(legacyAgent)
-            #expect(!supportsLegacy)
+            let registered = await app.agentService.getAgentInfo(v2Agent)
+            #expect(registered?.name == "new-agent")
+            #expect(registered?.status == .online)
         }
     }
 
