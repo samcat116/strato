@@ -134,8 +134,14 @@ extension MessageEnvelope {
             // Full-fleet syncs diff quickly and fan per-VM work out onto the VM lanes, so
             // they get their own lane: ordered among themselves, never stuck behind a VM.
             raws = [Self.reconcileLane]
+        case .consoleConnect, .consoleDisconnect, .consoleData:
+            // Interactive console I/O is independent of a VM's lifecycle/reconcile work.
+            // Keep it on a dedicated per-VM console lane so opening/streaming the console
+            // is never serialized behind (or stuck waiting on) a slow VM operation, while
+            // still ordering console frames for the same VM among themselves.
+            raws = [fields?.vmId.map { "console:\($0)" }]
         default:
-            // VM lifecycle, console, network detach, and info/status queries all carry vmId.
+            // VM lifecycle, network detach, and info/status queries all carry vmId.
             raws = [fields?.vmId]
         }
 

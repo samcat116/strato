@@ -30,6 +30,10 @@ public struct VMSpec: Codable, Sendable {
     public let networks: [NetworkSpec]
     /// Console preference. Drivers may realize this however their backend allows.
     public let console: ConsoleSpec?
+    /// SSH public keys to authorize for the guest's default user. Injected via
+    /// the backend's guest-provisioning mechanism (cloud-init `ssh_authorized_keys`
+    /// for QEMU disk boot). Empty when the caller provided none.
+    public let sshAuthorizedKeys: [String]
 
     public init(
         cpus: Int,
@@ -40,7 +44,8 @@ public struct VMSpec: Codable, Sendable {
         boot: BootSource,
         volumes: [VolumeSpec] = [],
         networks: [NetworkSpec] = [],
-        console: ConsoleSpec? = nil
+        console: ConsoleSpec? = nil,
+        sshAuthorizedKeys: [String] = []
     ) {
         self.cpus = cpus
         self.maxCpus = maxCpus ?? cpus
@@ -51,6 +56,26 @@ public struct VMSpec: Codable, Sendable {
         self.volumes = volumes
         self.networks = networks
         self.console = console
+        self.sshAuthorizedKeys = sshAuthorizedKeys
+    }
+
+    // Custom decode so `sshAuthorizedKeys` tolerates absence: a spec produced by
+    // an older control plane (before this field existed) decodes to [] rather
+    // than throwing, keeping agent↔control-plane compatible across version skew.
+    // `encode(to:)` stays synthesized. All other keys remain required, matching
+    // the existing wire contract.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        cpus = try c.decode(Int.self, forKey: .cpus)
+        maxCpus = try c.decode(Int.self, forKey: .maxCpus)
+        memoryBytes = try c.decode(Int64.self, forKey: .memoryBytes)
+        sharedMemory = try c.decode(Bool.self, forKey: .sharedMemory)
+        hugepages = try c.decode(Bool.self, forKey: .hugepages)
+        boot = try c.decode(BootSource.self, forKey: .boot)
+        volumes = try c.decode([VolumeSpec].self, forKey: .volumes)
+        networks = try c.decode([NetworkSpec].self, forKey: .networks)
+        console = try c.decodeIfPresent(ConsoleSpec.self, forKey: .console)
+        sshAuthorizedKeys = try c.decodeIfPresent([String].self, forKey: .sshAuthorizedKeys) ?? []
     }
 }
 
