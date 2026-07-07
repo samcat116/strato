@@ -218,10 +218,16 @@ struct AgentController: RouteCollection {
         // - An existing Agent row with this name means the node registered over
         //   mTLS, which never redeems the WebSocket token: the token looks
         //   unused, but the SPIRE entries now belong to a live agent.
-        // - An *expired* token's join token is equally expired (they share a
-        //   lifetime), so its grant is inert — and because expired tokens can
-        //   be superseded by a replacement for the same name, the entries that
-        //   exist now may belong to the successor.
+        // - A *valid unused successor* token for the same name means the grant
+        //   was reissued; the entries (and the stable node identity a current
+        //   bootstrap may already have attested with) belong to the successor,
+        //   so touching SPIRE here would sabotage it.
+        //
+        // Expiry alone does NOT make a grant inert: the join token may have
+        // been redeemed before it expired (spire-agent attests first; the
+        // Agent row only appears once strato-agent registers), leaving entries
+        // and an attested node that can still mint SVIDs. An expired token
+        // with no successor therefore still owns — and must revoke — its grant.
         //
         // Fail closed: if SPIRE is unreachable the token stays revocable later.
         let agentIsRegistered =
@@ -229,11 +235,20 @@ struct AgentController: RouteCollection {
             .filter(\.$name == token.agentName)
             .first() != nil
 
-        if token.isValid, !agentIsRegistered {
+        let validSuccessorExists = try await AgentRegistrationToken.query(on: req.db)
+            .filter(\.$agentName == token.agentName)
+            .filter(\.$isUsed == false)
+            .filter(\.$id != token.requireID())
+            .all()
+            .contains { $0.isValid }
+
+        let tokenOwnsGrant = !token.isUsed && !agentIsRegistered && !validSuccessorExists
+
+        if tokenOwnsGrant {
             try await requireSPIREDeprovisioningOrOverride(req, action: "registration token")
         }
 
-        if token.isValid, !agentIsRegistered, let spire = req.application.spireRegistrationService {
+        if tokenOwnsGrant, let spire = req.application.spireRegistrationService {
             do {
                 try await spire.deprovisionAgent(named: token.agentName)
             } catch {

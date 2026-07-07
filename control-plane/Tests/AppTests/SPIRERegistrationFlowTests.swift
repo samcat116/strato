@@ -200,14 +200,15 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
         }
     }
 
-    @Test("Revoking an expired token does not touch SPIRE")
-    func revokeExpiredTokenSkipsSPIRE() async throws {
+    @Test("Revoking an expired token without a successor still deprovisions")
+    func revokeExpiredTokenWithoutSuccessorDeprovisions() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            // Expired: its join token is equally expired, and a replacement
-            // token for the same name may own the current SPIRE entries.
+            // Expired but never superseded: the join token may have been
+            // redeemed before expiry (spire-agent attests before strato-agent
+            // registers), so the grant can still be live and must be revoked.
             let token = AgentRegistrationToken(agentName: "node-a")
             token.expiresAt = Date().addingTimeInterval(-3600)
             try await token.save(on: app.db)
@@ -219,10 +220,43 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             }
 
             let deleted = await fake.deletedSPIFFEIDs
-            #expect(deleted.isEmpty)
+            #expect(deleted == ["spiffe://strato.local/agent/node-a", "spiffe://strato.local/node/node-a"])
+            let evicted = await fake.evictedAgentIDs
+            #expect(evicted == ["spiffe://strato.local/node/node-a"])
 
             let remaining = try await AgentRegistrationToken.query(on: app.db).count()
             #expect(remaining == 0)
+        }
+    }
+
+    @Test("Revoking a superseded expired token leaves the successor's grant alone")
+    func revokeSupersededTokenSkipsSPIRE() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+
+            let stale = AgentRegistrationToken(agentName: "node-a")
+            stale.expiresAt = Date().addingTimeInterval(-3600)
+            try await stale.save(on: app.db)
+
+            // A valid replacement now owns the SPIRE grant (and the node may
+            // already have attested with it against the same stable node ID).
+            let successor = AgentRegistrationToken(agentName: "node-a")
+            try await successor.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/registration-tokens/\(stale.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            let deleted = await fake.deletedSPIFFEIDs
+            #expect(deleted.isEmpty)
+            let evicted = await fake.evictedAgentIDs
+            #expect(evicted.isEmpty)
+
+            let remaining = try await AgentRegistrationToken.query(on: app.db).count()
+            #expect(remaining == 1)
         }
     }
 
@@ -355,11 +389,20 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let remaining = try await AgentRegistrationToken.query(on: app.db).count()
             #expect(remaining == 1)
 
-            // A token whose grant is inert (expired) is not blocked
+            // Expiry doesn't unblock it — the join token may have been
+            // redeemed before expiry. Only the explicit override does.
             token.expiresAt = Date().addingTimeInterval(-3600)
             try await token.save(on: app.db)
 
             try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .serviceUnavailable)
+            }
+
+            try await app.test(
+                .DELETE, "/api/agents/registration-tokens/\(token.id!)?skipSpireDeprovision=true"
+            ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
