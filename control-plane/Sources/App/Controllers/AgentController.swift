@@ -98,13 +98,52 @@ struct AgentController: RouteCollection {
                 .conflict, reason: "A valid registration token already exists for agent '\(createRequest.agentName)'")
         }
 
+        let expirationHours = createRequest.expirationHours ?? 1
+
+        // Provision the node in SPIRE first (join token + workload entry).
+        // SPIRE is not transactional with our database, so order matters: if
+        // provisioning fails nothing was persisted here, and if the save below
+        // fails the provisioning is rolled back best-effort (a leftover entry
+        // is reused on retry; the unredeemed join token just expires). The
+        // join token shares the WS token's lifetime — one provisioning window.
+        var spireProvisioning: SPIREAgentProvisioning?
+        if let spire = req.application.spireRegistrationService {
+            do {
+                spireProvisioning = try await spire.provisionAgent(
+                    named: createRequest.agentName,
+                    joinTokenTTLSeconds: Int32(expirationHours * 3600)
+                )
+            } catch let error as SPIRERegistrationError {
+                throw Abort(.badRequest, reason: error.localizedDescription)
+            } catch {
+                req.logger.error(
+                    "SPIRE provisioning failed while creating registration token",
+                    metadata: [
+                        "agentName": .string(createRequest.agentName),
+                        "error": .string("\(error)"),
+                    ])
+                throw Abort(
+                    .badGateway,
+                    reason:
+                        "SPIRE provisioning failed; no registration token was created. \(error.localizedDescription)"
+                )
+            }
+        }
+
         // Create new registration token
         let token = AgentRegistrationToken(
             agentName: createRequest.agentName,
-            expirationHours: createRequest.expirationHours ?? 1
+            expirationHours: expirationHours
         )
 
-        try await token.save(on: req.db)
+        do {
+            try await token.save(on: req.db)
+        } catch {
+            if let spire = req.application.spireRegistrationService, spireProvisioning != nil {
+                await spire.rollbackProvisioning(agentName: createRequest.agentName)
+            }
+            throw error
+        }
 
         let baseURL = webSocketBaseURL(req: req)
 
@@ -114,9 +153,10 @@ struct AgentController: RouteCollection {
                 "agentName": .string(createRequest.agentName),
                 "tokenId": .string(token.id?.uuidString ?? "unknown"),
                 "expiresAt": .string(token.expiresAt?.description ?? "no expiration"),
+                "spireProvisioned": .string(spireProvisioning == nil ? "no" : "yes"),
             ])
 
-        return try AgentRegistrationTokenResponse(from: token, baseURL: baseURL)
+        return try AgentRegistrationTokenResponse(from: token, baseURL: baseURL, spire: spireProvisioning)
     }
 
     func listRegistrationTokens(req: Request) async throws -> [AgentRegistrationTokenListItem] {
@@ -140,6 +180,30 @@ struct AgentController: RouteCollection {
 
         guard let token = try await AgentRegistrationToken.find(tokenId, on: req.db) else {
             throw Abort(.notFound, reason: "Registration token not found")
+        }
+
+        // Revoking an *unused* token withdraws the whole provisioning grant,
+        // including the SPIRE entry created alongside it — otherwise the node
+        // could still attest with its join token and obtain agent SVIDs. Fail
+        // closed: if SPIRE is unreachable the token stays revocable later. A
+        // *used* token belongs to a registered agent whose entry must survive;
+        // that entry is removed by deregistering the agent instead.
+        if !token.isUsed, let spire = req.application.spireRegistrationService {
+            do {
+                try await spire.deprovisionAgent(named: token.agentName)
+            } catch {
+                req.logger.error(
+                    "SPIRE deprovisioning failed while revoking registration token",
+                    metadata: [
+                        "agentName": .string(token.agentName),
+                        "error": .string("\(error)"),
+                    ])
+                throw Abort(
+                    .badGateway,
+                    reason:
+                        "SPIRE deprovisioning failed; the registration token was not revoked. Retry when the SPIRE server is reachable."
+                )
+            }
         }
 
         try await token.delete(on: req.db)
@@ -199,6 +263,28 @@ struct AgentController: RouteCollection {
 
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
+        }
+
+        // Remove the SPIRE workload entry before anything else, and fail
+        // closed if that doesn't succeed: deregistering is the operator's
+        // revocation lever, and deleting the row while the node can still
+        // renew its SVID would leave a live credential with no visible owner.
+        if let spire = req.application.spireRegistrationService {
+            do {
+                try await spire.deprovisionAgent(named: agent.name)
+            } catch {
+                req.logger.error(
+                    "SPIRE deprovisioning failed while deregistering agent",
+                    metadata: [
+                        "agentName": .string(agent.name),
+                        "error": .string("\(error)"),
+                    ])
+                throw Abort(
+                    .badGateway,
+                    reason:
+                        "SPIRE deprovisioning failed; the agent was not deregistered. Retry when the SPIRE server is reachable."
+                )
+            }
         }
 
         // Remove from in-memory registry if present

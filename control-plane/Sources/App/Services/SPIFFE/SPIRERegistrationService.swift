@@ -1,392 +1,257 @@
 import Foundation
+import SPIREServerAPI
 import Vapor
 
 // MARK: - SPIRE Registration Service
 
-/// Service for managing SPIRE registration entries
-/// This service communicates with the SPIRE Server API to create and manage
-/// agent registration entries, replacing the token-based registration flow.
-public actor SPIRERegistrationService {
+/// Provisions hypervisor nodes in SPIRE as part of the agent registration
+/// flow. Creating an agent registration token also creates, via the SPIRE
+/// Server registration API:
+///
+/// - a one-time **join token** the node's spire-agent uses for node
+///   attestation, bound to the stable node ID `spiffe://<td>/node/<name>`
+///   (so re-provisioning the same node keeps the same identity), and
+/// - a **workload registration entry** entitling the node's strato-agent to
+///   `spiffe://<td>/agent/<name>` — the identity `SPIREService` expects on
+///   the mTLS WebSocket path.
+///
+/// Deleting an unused registration token or deregistering an agent removes
+/// the entry again, which stops SVID issuance for that node.
+public struct SPIRERegistrationService: Sendable {
+    private let api: any SPIREServerAPI
     private let config: SPIRERegistrationConfig
     private let logger: Logger
-    private let httpClient: Client
 
-    public init(config: SPIRERegistrationConfig, logger: Logger, httpClient: Client) {
+    public init(api: any SPIREServerAPI, config: SPIRERegistrationConfig, logger: Logger) {
+        self.api = api
         self.config = config
         self.logger = logger
-        self.httpClient = httpClient
     }
 
-    // MARK: - Agent Registration
-
-    /// Create a SPIRE registration entry for a new agent
-    /// This replaces the token generation flow - instead of generating a token,
-    /// we create a SPIRE entry and return a join token for initial attestation.
-    ///
-    /// - Parameters:
-    ///   - agentName: The name/identifier for the agent
-    ///   - selectors: Workload attestation selectors (e.g., unix:uid:0, unix:path:/usr/bin/strato-agent)
-    /// - Returns: Join token for the agent to use for initial attestation
-    public func registerAgent(
-        agentName: String,
-        selectors: [WorkloadSelector] = []
-    ) async throws -> AgentRegistrationResult {
-        guard config.enabled else {
-            throw SPIRERegistrationError.notConfigured
-        }
-
-        logger.info(
-            "Creating SPIRE registration entry for agent",
-            metadata: [
-                "agentName": .string(agentName)
-            ])
-
-        // Create the SPIFFE ID for this agent
-        let spiffeID = "spiffe://\(config.trustDomain)/agent/\(agentName)"
-
-        // First, create a join token for the agent to use for node attestation
-        let joinToken = try await createJoinToken(agentName: agentName)
-
-        // Then create the workload registration entry
-        let entryID = try await createRegistrationEntry(
-            spiffeID: spiffeID,
-            parentID: "spiffe://\(config.trustDomain)/spire/agent/join_token/\(joinToken.token)",
-            selectors: selectors.isEmpty ? defaultSelectors(for: agentName) : selectors
-        )
-
-        logger.info(
-            "SPIRE registration entry created",
-            metadata: [
-                "agentName": .string(agentName),
-                "spiffeID": .string(spiffeID),
-                "entryID": .string(entryID),
-            ])
-
-        return AgentRegistrationResult(
-            spiffeID: spiffeID,
-            entryID: entryID,
-            joinToken: joinToken.token,
-            joinTokenExpiry: joinToken.expiresAt
-        )
+    /// The workload SVID identity for an agent, matching what
+    /// `SPIREService.validateAgentIdentity` accepts.
+    public func agentSPIFFEID(agentName: String) -> String {
+        "spiffe://\(config.trustDomain)/agent/\(agentName)"
     }
 
-    /// Revoke an agent's SPIRE registration
-    /// This removes the registration entry, preventing the agent from obtaining new SVIDs.
-    ///
-    /// - Parameter agentName: The name of the agent to revoke
-    public func revokeAgent(agentName: String) async throws {
-        guard config.enabled else {
-            throw SPIRERegistrationError.notConfigured
+    /// The stable node identity assigned at join-token attestation.
+    public func nodeSPIFFEID(agentName: String) -> String {
+        "spiffe://\(config.trustDomain)/node/\(agentName)"
+    }
+
+    /// Provision a node in SPIRE: mint a join token and create the workload
+    /// entry. An entry identical to an existing one is reused (idempotent
+    /// re-issue after a token expired unredeemed).
+    public func provisionAgent(named agentName: String, joinTokenTTLSeconds: Int32) async throws
+        -> SPIREAgentProvisioning
+    {
+        guard Self.isValidAgentName(agentName) else {
+            throw SPIRERegistrationError.invalidAgentName(agentName)
         }
 
-        let spiffeID = "spiffe://\(config.trustDomain)/agent/\(agentName)"
+        let nodeID = nodeSPIFFEID(agentName: agentName)
+        let spiffeID = agentSPIFFEID(agentName: agentName)
 
-        logger.info(
-            "Revoking SPIRE registration for agent",
-            metadata: [
-                "agentName": .string(agentName),
-                "spiffeID": .string(spiffeID),
-            ])
+        let joinToken = try await api.createJoinToken(ttlSeconds: joinTokenTTLSeconds, agentID: nodeID)
 
-        // Find and delete the registration entry
-        let entryID = try await findEntryBySpiffeID(spiffeID)
-
-        if let entryID = entryID {
-            try await deleteRegistrationEntry(entryID: entryID)
-            logger.info(
-                "SPIRE registration revoked",
+        let entryResult: SPIREEntryCreationResult
+        do {
+            entryResult = try await api.createEntry(
+                spiffeID: spiffeID,
+                parentID: nodeID,
+                selectors: config.agentSelectors,
+                x509SVIDTTLSeconds: Int32(config.svidTTLSeconds)
+            )
+        } catch {
+            // The minted join token cannot be revoked through the API; it is
+            // single-use and expires on its own, so the failed provisioning
+            // leaves nothing an attacker can redeem for a workload identity.
+            logger.error(
+                "SPIRE workload entry creation failed after join token was minted",
                 metadata: [
                     "agentName": .string(agentName),
-                    "entryID": .string(entryID),
+                    "error": .string("\(error)"),
                 ])
-        } else {
+            throw error
+        }
+
+        let entryReused: Bool
+        if case .alreadyExists = entryResult { entryReused = true } else { entryReused = false }
+
+        logger.info(
+            "Provisioned agent in SPIRE",
+            metadata: [
+                "agentName": .string(agentName),
+                "spiffeID": .string(spiffeID),
+                "entryID": .string(entryResult.entryID),
+                "entryReused": .string(entryReused ? "yes" : "no"),
+            ])
+
+        return SPIREAgentProvisioning(
+            joinToken: joinToken.value,
+            joinTokenExpiresAt: joinToken.expiresAt,
+            spiffeID: spiffeID,
+            nodeID: nodeID,
+            trustDomain: config.trustDomain,
+            serverAddress: config.serverPublicAddress
+        )
+    }
+
+    /// Best-effort rollback of `provisionAgent` (used when the registration
+    /// token could not be persisted after SPIRE was provisioned). Failures are
+    /// logged, not thrown — the caller is already propagating the original
+    /// error, and an orphaned entry is recreated/reused on retry.
+    public func rollbackProvisioning(agentName: String) async {
+        do {
+            _ = try await api.deleteEntries(spiffeID: agentSPIFFEID(agentName: agentName))
+        } catch {
             logger.warning(
-                "No SPIRE registration entry found for agent",
+                "Failed to roll back SPIRE provisioning; the entry will be reused on retry",
                 metadata: [
-                    "agentName": .string(agentName)
+                    "agentName": .string(agentName),
+                    "error": .string("\(error)"),
                 ])
         }
     }
 
-    /// List all agent registrations
-    public func listAgentRegistrations() async throws -> [AgentRegistrationInfo] {
-        guard config.enabled else {
-            throw SPIRERegistrationError.notConfigured
-        }
+    /// Remove the agent's workload entry, stopping further SVID issuance for
+    /// the node. Throws when SPIRE cannot be reached — callers must fail
+    /// closed rather than report a revocation that did not happen.
+    public func deprovisionAgent(named agentName: String) async throws {
+        let spiffeID = agentSPIFFEID(agentName: agentName)
+        let deleted = try await api.deleteEntries(spiffeID: spiffeID)
 
-        let entries = try await listRegistrationEntries()
-
-        return entries.compactMap { entry -> AgentRegistrationInfo? in
-            // Only return agent entries
-            guard entry.spiffeID.contains("/agent/") else { return nil }
-
-            let agentName = entry.spiffeID
-                .replacingOccurrences(of: "spiffe://\(config.trustDomain)/agent/", with: "")
-
-            return AgentRegistrationInfo(
-                agentName: agentName,
-                spiffeID: entry.spiffeID,
-                entryID: entry.id,
-                selectors: entry.selectors,
-                createdAt: entry.createdAt
-            )
-        }
+        logger.info(
+            "Deprovisioned agent in SPIRE",
+            metadata: [
+                "agentName": .string(agentName),
+                "spiffeID": .string(spiffeID),
+                "entriesDeleted": .string("\(deleted)"),
+            ])
     }
 
-    // MARK: - SPIRE Server API Calls
-
-    private func createJoinToken(agentName: String) async throws -> JoinToken {
-        let url = URI(string: "\(config.serverURL)/v1/jointoken")
-
-        let body = JoinTokenRequest(
-            ttl: config.joinTokenTTL,
-            token: nil  // Let SPIRE generate the token
-        )
-
-        let response = try await httpClient.post(url) { req in
-            try req.content.encode(body)
-            req.headers.add(name: .contentType, value: "application/json")
-        }
-
-        guard response.status == .ok || response.status == .created else {
-            throw SPIRERegistrationError.serverError("Failed to create join token: HTTP \(response.status.code)")
-        }
-
-        let result = try response.content.decode(JoinTokenResponse.self)
-
-        return JoinToken(
-            token: result.value,
-            expiresAt: Date().addingTimeInterval(TimeInterval(config.joinTokenTTL))
-        )
-    }
-
-    private func createRegistrationEntry(
-        spiffeID: String,
-        parentID: String,
-        selectors: [WorkloadSelector]
-    ) async throws -> String {
-        let url = URI(string: "\(config.serverURL)/v1/entry")
-
-        let body = CreateEntryRequest(
-            spiffe_id: SpiffeIDPayload(trust_domain: config.trustDomain, path: extractPath(from: spiffeID)),
-            parent_id: SpiffeIDPayload(trust_domain: config.trustDomain, path: extractPath(from: parentID)),
-            selectors: selectors.map { SelectorPayload(type: $0.type, value: $0.value) },
-            x509_svid_ttl: config.svidTTL,
-            jwt_svid_ttl: config.svidTTL
-        )
-
-        let response = try await httpClient.post(url) { req in
-            try req.content.encode(body)
-            req.headers.add(name: .contentType, value: "application/json")
-        }
-
-        guard response.status == .ok || response.status == .created else {
-            throw SPIRERegistrationError.serverError("Failed to create entry: HTTP \(response.status.code)")
-        }
-
-        let result = try response.content.decode(CreateEntryResponse.self)
-        return result.id
-    }
-
-    private func deleteRegistrationEntry(entryID: String) async throws {
-        let url = URI(string: "\(config.serverURL)/v1/entry/\(entryID)")
-
-        let response = try await httpClient.delete(url)
-
-        guard response.status == .ok || response.status == .noContent else {
-            throw SPIRERegistrationError.serverError("Failed to delete entry: HTTP \(response.status.code)")
+    /// Agent names become SPIFFE ID path segments; restrict them to the
+    /// characters the SPIFFE spec allows there so a name can never alter the
+    /// meaning of the ID (path separators, dot segments, …).
+    static func isValidAgentName(_ name: String) -> Bool {
+        guard !name.isEmpty, name != ".", name != ".." else { return false }
+        return name.allSatisfy { character in
+            character.isASCII
+                && (character.isLetter || character.isNumber || character == "-" || character == "_"
+                    || character == ".")
         }
     }
+}
 
-    private func findEntryBySpiffeID(_ spiffeID: String) async throws -> String? {
-        let entries = try await listRegistrationEntries()
-        return entries.first { $0.spiffeID == spiffeID }?.id
-    }
+// MARK: - Provisioning result
 
-    private func listRegistrationEntries() async throws -> [RegistrationEntry] {
-        let url = URI(string: "\(config.serverURL)/v1/entry")
-
-        let response = try await httpClient.get(url)
-
-        guard response.status == .ok else {
-            throw SPIRERegistrationError.serverError("Failed to list entries: HTTP \(response.status.code)")
-        }
-
-        let result = try response.content.decode(ListEntriesResponse.self)
-        return result.entries.map { entry in
-            RegistrationEntry(
-                id: entry.id,
-                spiffeID: "spiffe://\(entry.spiffe_id.trust_domain)\(entry.spiffe_id.path)",
-                parentID: "spiffe://\(entry.parent_id.trust_domain)\(entry.parent_id.path)",
-                selectors: entry.selectors.map { WorkloadSelector(type: $0.type, value: $0.value) },
-                createdAt: Date()  // API doesn't always return creation time
-            )
-        }
-    }
-
-    // MARK: - Helper Methods
-
-    private func defaultSelectors(for agentName: String) -> [WorkloadSelector] {
-        // Default selectors for Strato Agent
-        [
-            WorkloadSelector(type: "unix", value: "uid:0"),
-            WorkloadSelector(type: "unix", value: "path:/usr/local/bin/strato-agent"),
-        ]
-    }
-
-    private func extractPath(from spiffeID: String) -> String {
-        guard let range = spiffeID.range(of: "spiffe://[^/]+", options: .regularExpression) else {
-            return spiffeID
-        }
-        return String(spiffeID[range.upperBound...])
-    }
+/// Everything a new hypervisor node needs to attest to SPIRE, returned once
+/// alongside the WebSocket registration token and never persisted.
+public struct SPIREAgentProvisioning: Sendable {
+    public let joinToken: String
+    public let joinTokenExpiresAt: Date
+    public let spiffeID: String
+    public let nodeID: String
+    public let trustDomain: String
+    /// The SPIRE server address (host:port) nodes dial for attestation.
+    public let serverAddress: String
 }
 
 // MARK: - Configuration
 
 public struct SPIRERegistrationConfig: Sendable {
-    /// Whether SPIRE registration is enabled
-    public let enabled: Bool
-
-    /// SPIRE Server API URL (e.g., "http://spire-server:8081")
-    public let serverURL: String
-
-    /// Trust domain for SPIFFE IDs
+    /// Trust domain for SPIFFE IDs.
     public let trustDomain: String
 
-    /// TTL for join tokens (seconds)
-    public let joinTokenTTL: Int
+    /// Where the control plane reaches the SPIRE server registration API
+    /// (`unix:///path/to/api.sock`, or `host:port` for a loopback dev bridge).
+    public let serverAPIAddress: SPIREServerAPIAddress
 
-    /// TTL for SVIDs (seconds)
-    public let svidTTL: Int
+    /// The SPIRE server address handed to nodes for attestation (host:port).
+    public let serverPublicAddress: String
+
+    /// Workload attestation selectors for strato-agent entries.
+    public let agentSelectors: [SPIRESelector]
+
+    /// TTL for issued X.509 SVIDs (seconds).
+    public let svidTTLSeconds: Int
 
     public init(
-        enabled: Bool = false,
-        serverURL: String = "http://localhost:8081",
-        trustDomain: String = "strato.local",
-        joinTokenTTL: Int = 600,  // 10 minutes
-        svidTTL: Int = 3600  // 1 hour
+        trustDomain: String,
+        serverAPIAddress: SPIREServerAPIAddress,
+        serverPublicAddress: String,
+        agentSelectors: [SPIRESelector],
+        svidTTLSeconds: Int
     ) {
-        self.enabled = enabled
-        self.serverURL = serverURL
         self.trustDomain = trustDomain
-        self.joinTokenTTL = joinTokenTTL
-        self.svidTTL = svidTTL
+        self.serverAPIAddress = serverAPIAddress
+        self.serverPublicAddress = serverPublicAddress
+        self.agentSelectors = agentSelectors
+        self.svidTTLSeconds = svidTTLSeconds
     }
 
-    public static func fromEnvironment() -> SPIRERegistrationConfig {
-        SPIRERegistrationConfig(
-            enabled: Environment.get("SPIRE_ENABLED")?.lowercased() == "true",
-            serverURL: Environment.get("SPIRE_SERVER_URL") ?? "http://localhost:8081",
-            trustDomain: Environment.get("SPIRE_TRUST_DOMAIN") ?? "strato.local",
-            joinTokenTTL: Int(Environment.get("SPIRE_JOIN_TOKEN_TTL") ?? "600") ?? 600,
-            svidTTL: Int(Environment.get("SPIRE_SVID_TTL") ?? "3600") ?? 3600
+    /// Build from the environment, or nil when SPIRE registration is not
+    /// configured (`SPIRE_ENABLED` unset/false, or no
+    /// `SPIRE_SERVER_API_ADDRESS`). Throws when configured but invalid —
+    /// starting up with silently-broken provisioning would surface as
+    /// confusing 502s later.
+    public static func fromEnvironment() throws -> SPIRERegistrationConfig? {
+        guard Environment.get("SPIRE_ENABLED")?.lowercased() == "true" else { return nil }
+        guard let apiAddressString = Environment.get("SPIRE_SERVER_API_ADDRESS"), !apiAddressString.isEmpty
+        else { return nil }
+
+        let apiAddress = try SPIREServerAPIAddress(parsing: apiAddressString)
+        let trustDomain = Environment.get("SPIRE_TRUST_DOMAIN") ?? "strato.local"
+
+        // The address nodes dial for attestation. Falls back to the
+        // externally visible control-plane host with SPIRE's conventional
+        // node-API port, which matches the single-host compose deployment.
+        let publicAddress: String
+        if let configured = Environment.get("SPIRE_SERVER_PUBLIC_ADDRESS"), !configured.isEmpty {
+            publicAddress = configured
+        } else if let external = Environment.get("EXTERNAL_HOSTNAME") {
+            publicAddress = "\(AgentController.sanitizedHost(external).split(separator: ":").first ?? "localhost"):8085"
+        } else {
+            publicAddress = "localhost:8085"
+        }
+
+        let selectorsString = Environment.get("SPIRE_AGENT_SELECTORS") ?? "unix:uid:0"
+        var selectors: [SPIRESelector] = []
+        for part in selectorsString.split(separator: ",") {
+            let trimmed = part.trimmingCharacters(in: .whitespaces)
+            guard let selector = SPIRESelector(string: trimmed) else {
+                throw SPIRERegistrationError.invalidConfiguration(
+                    "SPIRE_AGENT_SELECTORS entry is not type:value: \(trimmed)")
+            }
+            selectors.append(selector)
+        }
+        guard !selectors.isEmpty else {
+            throw SPIRERegistrationError.invalidConfiguration("SPIRE_AGENT_SELECTORS must not be empty")
+        }
+
+        return SPIRERegistrationConfig(
+            trustDomain: trustDomain,
+            serverAPIAddress: apiAddress,
+            serverPublicAddress: publicAddress,
+            agentSelectors: selectors,
+            svidTTLSeconds: Int(Environment.get("SPIRE_SVID_TTL") ?? "3600") ?? 3600
         )
     }
-}
-
-// MARK: - Data Types
-
-public struct WorkloadSelector: Sendable, Codable {
-    public let type: String
-    public let value: String
-
-    public init(type: String, value: String) {
-        self.type = type
-        self.value = value
-    }
-}
-
-public struct AgentRegistrationResult: Sendable {
-    public let spiffeID: String
-    public let entryID: String
-    public let joinToken: String
-    public let joinTokenExpiry: Date
-}
-
-public struct AgentRegistrationInfo: Sendable {
-    public let agentName: String
-    public let spiffeID: String
-    public let entryID: String
-    public let selectors: [WorkloadSelector]
-    public let createdAt: Date
-}
-
-public struct JoinToken: Sendable {
-    public let token: String
-    public let expiresAt: Date
-}
-
-public struct RegistrationEntry: Sendable {
-    public let id: String
-    public let spiffeID: String
-    public let parentID: String
-    public let selectors: [WorkloadSelector]
-    public let createdAt: Date
-}
-
-// MARK: - API Request/Response Types
-
-private struct JoinTokenRequest: Content {
-    let ttl: Int
-    let token: String?
-}
-
-private struct JoinTokenResponse: Content {
-    let value: String
-}
-
-private struct SpiffeIDPayload: Content {
-    let trust_domain: String
-    let path: String
-}
-
-private struct SelectorPayload: Content {
-    let type: String
-    let value: String
-}
-
-private struct CreateEntryRequest: Content {
-    let spiffe_id: SpiffeIDPayload
-    let parent_id: SpiffeIDPayload
-    let selectors: [SelectorPayload]
-    let x509_svid_ttl: Int
-    let jwt_svid_ttl: Int
-}
-
-private struct CreateEntryResponse: Content {
-    let id: String
-}
-
-private struct ListEntriesResponse: Content {
-    let entries: [EntryPayload]
-}
-
-private struct EntryPayload: Content {
-    let id: String
-    let spiffe_id: SpiffeIDPayload
-    let parent_id: SpiffeIDPayload
-    let selectors: [SelectorPayload]
 }
 
 // MARK: - Errors
 
 public enum SPIRERegistrationError: Error, LocalizedError {
-    case notConfigured
-    case serverError(String)
-    case entryNotFound(String)
-    case invalidResponse(String)
+    case invalidAgentName(String)
+    case invalidConfiguration(String)
 
     public var errorDescription: String? {
         switch self {
-        case .notConfigured:
-            return "SPIRE registration service is not configured"
-        case .serverError(let message):
-            return "SPIRE Server error: \(message)"
-        case .entryNotFound(let spiffeID):
-            return "Registration entry not found: \(spiffeID)"
-        case .invalidResponse(let details):
-            return "Invalid response from SPIRE Server: \(details)"
+        case .invalidAgentName(let name):
+            return
+                "Agent name '\(name)' cannot be used as a SPIFFE ID path segment (allowed: ASCII letters, digits, '-', '_', '.')"
+        case .invalidConfiguration(let details):
+            return "Invalid SPIRE registration configuration: \(details)"
         }
     }
 }
@@ -403,27 +268,28 @@ extension Application {
         set { storage[SPIRERegistrationServiceKey.self] = newValue }
     }
 
-    /// Configure SPIRE registration service
-    public func configureSPIRERegistration() {
-        let config = SPIRERegistrationConfig.fromEnvironment()
-
-        guard config.enabled else {
-            logger.info("SPIRE registration service is disabled")
+    /// Configure SPIRE join-token provisioning for the agent registration
+    /// flow. No-op unless `SPIRE_ENABLED=true` and `SPIRE_SERVER_API_ADDRESS`
+    /// is set, so token-auth deployments and mTLS deployments that provision
+    /// SPIRE out of band keep working unchanged.
+    public func configureSPIRERegistration() throws {
+        guard let config = try SPIRERegistrationConfig.fromEnvironment() else {
+            if Environment.get("SPIRE_ENABLED")?.lowercased() == "true" {
+                logger.notice(
+                    "SPIRE is enabled but SPIRE_SERVER_API_ADDRESS is not set; registration tokens will not include SPIRE join tokens"
+                )
+            }
             return
         }
 
-        let service = SPIRERegistrationService(
-            config: config,
-            logger: logger,
-            httpClient: client
-        )
+        let client = SPIREServerAPIClient(address: config.serverAPIAddress, logger: logger)
+        spireRegistrationService = SPIRERegistrationService(api: client, config: config, logger: logger)
 
-        spireRegistrationService = service
         logger.info(
-            "SPIRE registration service configured",
+            "SPIRE registration provisioning configured",
             metadata: [
-                "serverURL": .string(config.serverURL),
                 "trustDomain": .string(config.trustDomain),
+                "serverPublicAddress": .string(config.serverPublicAddress),
             ])
     }
 }

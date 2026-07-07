@@ -98,3 +98,37 @@ For production fleets, agents can authenticate with X.509 SVIDs instead of
 tokens via SPIRE — see the `[spiffe]` section of `config.toml.example` and
 the SPIRE options in the Helm chart. Token join remains the simplest path
 and is secure by default (single-use, expiring, rotating tokens).
+
+### One-command node bootstrap
+
+When the control plane is configured with access to the SPIRE server
+registration API (`SPIRE_ENABLED=true` plus `SPIRE_SERVER_API_ADDRESS`,
+e.g. `unix:///run/spire/server/api.sock` on a shared socket volume),
+creating a registration token also provisions the node in SPIRE:
+
+- a one-time **join token** for `spire-agent` node attestation, valid for
+  the same window as the registration token, bound to the stable node
+  identity `spiffe://<trust-domain>/node/<name>`, and
+- a **workload registration entry** entitling the node's `strato-agent`
+  to `spiffe://<trust-domain>/agent/<name>` (selectors configurable via
+  `SPIRE_AGENT_SELECTORS`, default `unix:uid:0`).
+
+The API response (and the UI dialog) then includes a ready-to-paste
+bootstrap command using
+[`deploy/agent/strato-node-bootstrap.sh`](https://github.com/samcat116/strato/blob/main/deploy/agent/strato-node-bootstrap.sh),
+which writes the spire-agent config, waits for the Workload API socket,
+and joins the control plane — one command per new hypervisor node. Both
+secrets are shown exactly once, at creation time.
+
+Revoking an unused registration token also removes the SPIRE entry, as
+does deregistering an agent; both operations fail closed when the SPIRE
+server is unreachable so a removed node can never keep renewing SVIDs.
+
+Control-plane environment reference:
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `SPIRE_SERVER_API_ADDRESS` | SPIRE server registration API (`unix:///path` or loopback `host:port` bridge) | unset (provisioning off) |
+| `SPIRE_SERVER_PUBLIC_ADDRESS` | Address nodes dial for attestation | `EXTERNAL_HOSTNAME:8085` |
+| `SPIRE_AGENT_SELECTORS` | Comma-separated workload selectors | `unix:uid:0` |
+| `SPIRE_SVID_TTL` | X.509 SVID TTL for agent entries (seconds) | `3600` |

@@ -418,6 +418,10 @@ public func configure(_ app: Application) async throws {
     // Configure SPIFFE/SPIRE authentication (if enabled via environment)
     try await app.configureSPIRE()
 
+    // Configure SPIRE join-token provisioning for the agent registration flow
+    // (requires SPIRE_ENABLED plus SPIRE_SERVER_API_ADDRESS)
+    try app.configureSPIRERegistration()
+
     // Configure OpenTelemetry observability (metrics, logs, traces)
     if app.environment != .testing {
         let metricsEnabled = Environment.get("OTEL_METRICS_ENABLED").flatMap(Bool.init) ?? true

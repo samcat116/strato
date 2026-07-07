@@ -1,0 +1,405 @@
+import Fluent
+import Foundation
+import SPIREServerAPI
+import StratoShared
+import Testing
+import Vapor
+import VaporTesting
+
+@testable import App
+
+/// Tests for SPIRE join-token provisioning folded into the agent registration
+/// flow: creating a registration token also provisions the node in SPIRE
+/// (join token + workload entry), revocation deprovisions it and fails closed
+/// when the SPIRE server is unreachable.
+@Suite("SPIRE Registration Flow Tests")
+final class SPIRERegistrationFlowTests: BaseTestCase {
+
+    // MARK: - Helpers
+
+    private func makeAdmin(on db: Database) async throws -> String {
+        let admin = User(
+            username: "spire-admin",
+            email: "spire-admin@example.com",
+            displayName: "SPIRE Admin",
+            isSystemAdmin: true
+        )
+        try await admin.save(on: db)
+        return try await admin.generateAPIKey(on: db)
+    }
+
+    private func makeConfig() -> SPIRERegistrationConfig {
+        SPIRERegistrationConfig(
+            trustDomain: "strato.local",
+            serverAPIAddress: .tcp(host: "127.0.0.1", port: 1),
+            serverPublicAddress: "spire.example.com:8085",
+            agentSelectors: [SPIRESelector(type: "unix", value: "uid:0")],
+            svidTTLSeconds: 1800
+        )
+    }
+
+    @discardableResult
+    private func installFakeSPIRE(on app: Application, fake: FakeSPIREServerAPI) -> FakeSPIREServerAPI {
+        app.spireRegistrationService = SPIRERegistrationService(
+            api: fake, config: makeConfig(), logger: app.logger)
+        return fake
+    }
+
+    private struct CreateTokenBody: Content {
+        let agentName: String
+        var expirationHours: Int? = nil
+    }
+
+    // MARK: - Token creation
+
+    @Test("Creating a registration token provisions SPIRE and returns the join token once")
+    func createTokenProvisionsSPIRE() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+
+            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(CreateTokenBody(agentName: "node-a", expirationHours: 2))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(AgentRegistrationTokenResponse.self)
+
+                let spire = try #require(response.spire)
+                #expect(spire.joinToken == "fake-join-token")
+                #expect(spire.spiffeID == "spiffe://strato.local/agent/node-a")
+                #expect(spire.nodeID == "spiffe://strato.local/node/node-a")
+                #expect(spire.trustDomain == "strato.local")
+                #expect(spire.serverAddress == "spire.example.com:8085")
+
+                let command = try #require(response.bootstrapCommand)
+                #expect(command.contains(response.registrationURL))
+                #expect(command.contains("fake-join-token"))
+                #expect(command.contains("spire.example.com:8085"))
+            }
+
+            // The join token lifetime matches the WS token's expirationHours
+            let joinTokenRequests = await fake.joinTokenRequests
+            #expect(joinTokenRequests.count == 1)
+            #expect(joinTokenRequests.first?.ttlSeconds == 7200)
+            #expect(joinTokenRequests.first?.agentID == "spiffe://strato.local/node/node-a")
+
+            // The workload entry matches what the mTLS WebSocket path expects
+            let entries = await fake.createdEntries
+            #expect(entries.count == 1)
+            #expect(entries.first?.spiffeID == "spiffe://strato.local/agent/node-a")
+            #expect(entries.first?.parentID == "spiffe://strato.local/node/node-a")
+            #expect(entries.first?.selectors == [SPIRESelector(type: "unix", value: "uid:0")])
+            #expect(entries.first?.x509SVIDTTLSeconds == 1800)
+        }
+    }
+
+    @Test("An existing identical SPIRE entry is reused, not an error")
+    func createTokenReusesExistingEntry() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = FakeSPIREServerAPI()
+            await fake.setEntryResult(.alreadyExists(entryID: "existing-entry"))
+            installFakeSPIRE(on: app, fake: fake)
+
+            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(CreateTokenBody(agentName: "node-a"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(AgentRegistrationTokenResponse.self)
+                #expect(response.spire != nil)
+            }
+        }
+    }
+
+    @Test("SPIRE provisioning failure returns 502 and persists nothing")
+    func createTokenFailsClosedWhenSPIREUnreachable() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = FakeSPIREServerAPI()
+            await fake.setFailJoinToken(true)
+            installFakeSPIRE(on: app, fake: fake)
+
+            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(CreateTokenBody(agentName: "node-a"))
+            } afterResponse: { res in
+                #expect(res.status == .badGateway)
+            }
+
+            let tokenCount = try await AgentRegistrationToken.query(on: app.db).count()
+            #expect(tokenCount == 0)
+        }
+    }
+
+    @Test("Agent names unusable as SPIFFE path segments are rejected with 400")
+    func createTokenRejectsInvalidSPIFFEName() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+
+            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(CreateTokenBody(agentName: "node/../evil"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let tokenCount = try await AgentRegistrationToken.query(on: app.db).count()
+            #expect(tokenCount == 0)
+        }
+    }
+
+    @Test("Without SPIRE registration configured the response is unchanged")
+    func createTokenWithoutSPIRE() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+
+            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(CreateTokenBody(agentName: "node-a"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(AgentRegistrationTokenResponse.self)
+                #expect(response.spire == nil)
+                #expect(response.bootstrapCommand == nil)
+            }
+        }
+    }
+
+    // MARK: - Token revocation
+
+    @Test("Revoking an unused token deletes the SPIRE entry")
+    func revokeUnusedTokenDeprovisions() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+
+            let token = AgentRegistrationToken(agentName: "node-a")
+            try await token.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            let deleted = await fake.deletedSPIFFEIDs
+            #expect(deleted == ["spiffe://strato.local/agent/node-a"])
+
+            let remaining = try await AgentRegistrationToken.query(on: app.db).count()
+            #expect(remaining == 0)
+        }
+    }
+
+    @Test("Revocation fails closed when SPIRE is unreachable")
+    func revokeFailsClosedWhenSPIREUnreachable() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = FakeSPIREServerAPI()
+            await fake.setFailDelete(true)
+            installFakeSPIRE(on: app, fake: fake)
+
+            let token = AgentRegistrationToken(agentName: "node-a")
+            try await token.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .badGateway)
+            }
+
+            // The token must remain revocable after SPIRE recovers
+            let remaining = try await AgentRegistrationToken.query(on: app.db).count()
+            #expect(remaining == 1)
+        }
+    }
+
+    @Test("Revoking a used token leaves the registered agent's entry alone")
+    func revokeUsedTokenKeepsEntry() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+
+            let token = AgentRegistrationToken(agentName: "node-a")
+            token.markAsUsed()
+            try await token.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            let deleted = await fake.deletedSPIFFEIDs
+            #expect(deleted.isEmpty)
+        }
+    }
+
+    // MARK: - Agent deregistration
+
+    @Test("Deregistering an agent deletes its SPIRE entry")
+    func deregisterAgentDeprovisions() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+
+            let agent = makeAgent(named: "node-a")
+            try await agent.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            let deleted = await fake.deletedSPIFFEIDs
+            #expect(deleted == ["spiffe://strato.local/agent/node-a"])
+
+            let remaining = try await Agent.query(on: app.db).count()
+            #expect(remaining == 0)
+        }
+    }
+
+    @Test("Deregistration fails closed when SPIRE is unreachable")
+    func deregisterFailsClosedWhenSPIREUnreachable() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = FakeSPIREServerAPI()
+            await fake.setFailDelete(true)
+            installFakeSPIRE(on: app, fake: fake)
+
+            let agent = makeAgent(named: "node-a")
+            try await agent.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .badGateway)
+            }
+
+            // The agent (and thus the operator's revocation lever) must survive
+            let remaining = try await Agent.query(on: app.db).count()
+            #expect(remaining == 1)
+        }
+    }
+
+    private func makeAgent(named name: String) -> Agent {
+        Agent(
+            name: name,
+            hostname: "\(name).example.com",
+            version: "1.0.0",
+            capabilities: [],
+            resources: AgentResources(
+                totalCPU: 8, availableCPU: 8,
+                totalMemory: 16_000_000_000, availableMemory: 16_000_000_000,
+                totalDisk: 100_000_000_000, availableDisk: 100_000_000_000
+            )
+        )
+    }
+}
+
+// MARK: - Unit tests
+
+@Suite("SPIRE Registration Service Unit Tests")
+struct SPIRERegistrationServiceUnitTests {
+
+    @Test("Agent names are restricted to SPIFFE path segment characters")
+    func agentNameValidation() {
+        #expect(SPIRERegistrationService.isValidAgentName("node-a"))
+        #expect(SPIRERegistrationService.isValidAgentName("Node_1.internal"))
+        #expect(!SPIRERegistrationService.isValidAgentName(""))
+        #expect(!SPIRERegistrationService.isValidAgentName("."))
+        #expect(!SPIRERegistrationService.isValidAgentName(".."))
+        #expect(!SPIRERegistrationService.isValidAgentName("node/a"))
+        #expect(!SPIRERegistrationService.isValidAgentName("node a"))
+        #expect(!SPIRERegistrationService.isValidAgentName("node:a"))
+        #expect(!SPIRERegistrationService.isValidAgentName("nöde"))
+    }
+
+    @Test("Selector strings parse as type:value")
+    func selectorParsing() {
+        let simple = SPIRESelector(string: "unix:uid:0")
+        #expect(simple?.type == "unix")
+        #expect(simple?.value == "uid:0")
+
+        let path = SPIRESelector(string: "unix:path:/usr/local/bin/strato-agent")
+        #expect(path?.type == "unix")
+        #expect(path?.value == "path:/usr/local/bin/strato-agent")
+
+        #expect(SPIRESelector(string: "no-separator") == nil)
+        #expect(SPIRESelector(string: ":empty-type") == nil)
+        #expect(SPIRESelector(string: "empty-value:") == nil)
+    }
+}
+
+// MARK: - Fake SPIRE server API
+
+/// In-memory `SPIREServerAPI` with switchable failure modes, recording every
+/// call so tests can assert exactly what was provisioned.
+actor FakeSPIREServerAPI: SPIREServerAPI {
+    struct JoinTokenRequest: Sendable {
+        let ttlSeconds: Int32
+        let agentID: String?
+    }
+
+    struct CreateEntryRequest: Sendable {
+        let spiffeID: String
+        let parentID: String
+        let selectors: [SPIRESelector]
+        let x509SVIDTTLSeconds: Int32
+    }
+
+    private(set) var joinTokenRequests: [JoinTokenRequest] = []
+    private(set) var createdEntries: [CreateEntryRequest] = []
+    private(set) var deletedSPIFFEIDs: [String] = []
+
+    private var failJoinToken = false
+    private var failCreateEntry = false
+    private var failDelete = false
+    private var entryResult: SPIREEntryCreationResult = .created(entryID: "entry-1")
+
+    func setFailJoinToken(_ fail: Bool) { failJoinToken = fail }
+    func setFailCreateEntry(_ fail: Bool) { failCreateEntry = fail }
+    func setFailDelete(_ fail: Bool) { failDelete = fail }
+    func setEntryResult(_ result: SPIREEntryCreationResult) { entryResult = result }
+
+    func createJoinToken(ttlSeconds: Int32, agentID: String?) async throws -> SPIREJoinToken {
+        if failJoinToken {
+            throw SPIREServerAPIError.unreachable("fake: SPIRE server down")
+        }
+        joinTokenRequests.append(JoinTokenRequest(ttlSeconds: ttlSeconds, agentID: agentID))
+        return SPIREJoinToken(
+            value: "fake-join-token",
+            expiresAt: Date().addingTimeInterval(TimeInterval(ttlSeconds))
+        )
+    }
+
+    func createEntry(
+        spiffeID: String,
+        parentID: String,
+        selectors: [SPIRESelector],
+        x509SVIDTTLSeconds: Int32
+    ) async throws -> SPIREEntryCreationResult {
+        if failCreateEntry {
+            throw SPIREServerAPIError.unreachable("fake: SPIRE server down")
+        }
+        createdEntries.append(
+            CreateEntryRequest(
+                spiffeID: spiffeID,
+                parentID: parentID,
+                selectors: selectors,
+                x509SVIDTTLSeconds: x509SVIDTTLSeconds
+            ))
+        return entryResult
+    }
+
+    func deleteEntries(spiffeID: String) async throws -> Int {
+        if failDelete {
+            throw SPIREServerAPIError.unreachable("fake: SPIRE server down")
+        }
+        deletedSPIFFEIDs.append(spiffeID)
+        return 1
+    }
+}

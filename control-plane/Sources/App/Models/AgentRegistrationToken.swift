@@ -62,8 +62,14 @@ struct AgentRegistrationTokenResponse: Content {
     let registrationURL: String
     let expiresAt: Date
     let isValid: Bool
+    /// SPIRE node-attestation material, present only when the control plane
+    /// provisions SPIRE as part of registration. Returned once, never listed.
+    let spire: SPIREProvisioningResponse?
+    /// Copy-paste one-liner for bootstrapping the node (spire-agent
+    /// attestation + strato-agent join). Present only with `spire`.
+    let bootstrapCommand: String?
 
-    init(from tokenModel: AgentRegistrationToken, baseURL: String) throws {
+    init(from tokenModel: AgentRegistrationToken, baseURL: String, spire: SPIREAgentProvisioning? = nil) throws {
         guard let id = tokenModel.id else {
             throw Abort(.internalServerError, reason: "Registration token missing ID")
         }
@@ -78,6 +84,40 @@ struct AgentRegistrationTokenResponse: Content {
         self.registrationURL = "\(baseURL)/agent/ws?token=\(tokenModel.token)&name=\(encodedName)"
         self.expiresAt = tokenModel.expiresAt ?? Date()
         self.isValid = tokenModel.isValid
+
+        if let spire {
+            self.spire = SPIREProvisioningResponse(from: spire)
+            self.bootstrapCommand =
+                "sudo strato-node-bootstrap"
+                + " --registration-url '\(self.registrationURL)'"
+                + " --spire-join-token '\(spire.joinToken)'"
+                + " --spire-server-address '\(spire.serverAddress)'"
+                + " --trust-domain '\(spire.trustDomain)'"
+        } else {
+            self.spire = nil
+            self.bootstrapCommand = nil
+        }
+    }
+}
+
+/// The SPIRE half of a registration response. Like the WebSocket token, the
+/// join token is a one-time bearer secret: it is returned only from the
+/// create endpoint and never persisted or re-exposed.
+struct SPIREProvisioningResponse: Content {
+    let joinToken: String
+    let joinTokenExpiresAt: Date
+    let spiffeID: String
+    let nodeID: String
+    let trustDomain: String
+    let serverAddress: String
+
+    init(from provisioning: SPIREAgentProvisioning) {
+        self.joinToken = provisioning.joinToken
+        self.joinTokenExpiresAt = provisioning.joinTokenExpiresAt
+        self.spiffeID = provisioning.spiffeID
+        self.nodeID = provisioning.nodeID
+        self.trustDomain = provisioning.trustDomain
+        self.serverAddress = provisioning.serverAddress
     }
 }
 
