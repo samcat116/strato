@@ -2529,7 +2529,21 @@ extension Agent: ReconcileActuator {
         // The manifest spec is what the surviving process was actually built
         // from; prefer the sync's spec only as metadata for future operations.
         let spec = item.desired?.spec ?? entry.spec
-        let status = try await service.adoptVM(vmId: item.vmId, spec: entry.spec)
+        let status: VMStatus
+        do {
+            status = try await service.adoptVM(vmId: item.vmId, spec: entry.spec)
+        } catch HypervisorServiceError.adoptionTargetGone(let reason) {
+            // The orphan's hypervisor process is gone, so there is nothing to
+            // re-attach — but its disks persist and materialization reuses an
+            // existing disk, so a fresh create rebuilds the same VM in the
+            // "exists, not running" state. The next sync plans any remaining
+            // power-state steps from `.created`.
+            logger.warning(
+                "Orphaned VM has no live process; re-creating it from the manifest spec",
+                metadata: ["vmId": .string(item.vmId), "reason": .string(reason)])
+            try await reconcileCreate(item)
+            return .created
+        }
 
         managedVMs[item.vmId] = VMManifestEntry(hypervisorType: entry.hypervisorType, spec: spec)
         orphanedVMs.removeValue(forKey: item.vmId)
