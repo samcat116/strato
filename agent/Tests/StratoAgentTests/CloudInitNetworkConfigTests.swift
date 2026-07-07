@@ -76,6 +76,51 @@ struct CloudInitNetworkConfigTests {
         #expect(CloudInitProvisioner.networkConfigYAML(for: []) == nil)
     }
 
+    @Test("DHCP-managed NIC renders dhcp4:true and no static address")
+    func dhcpManagedNIC() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                gateway: "192.168.1.1",
+                dhcpEnabled: true,
+                dnsServers: ["1.1.1.1"]
+            )
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml != nil)
+        #expect(yaml?.contains("macaddress: \"52:54:00:aa:bb:cc\"") == true)
+        #expect(yaml?.contains("dhcp4: true") == true)
+        // OVN's responder delivers the address/DNS, so no static block is written.
+        #expect(yaml?.contains("addresses:") == false)
+        #expect(yaml?.contains("nameservers:") == false)
+    }
+
+    @Test("static NIC with DNS renders nameservers")
+    func staticNICWithDNS() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                gateway: "192.168.1.1",
+                dhcpEnabled: false,
+                dnsServers: ["1.1.1.1", "8.8.8.8"]
+            )
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("- 192.168.1.5/24") == true)
+        #expect(yaml?.contains("nameservers:") == true)
+        #expect(yaml?.contains("addresses: [1.1.1.1, 8.8.8.8]") == true)
+    }
+
     @Test("multiple NICs render as separate entries with stable names")
     func multipleNICs() {
         let attachments = [

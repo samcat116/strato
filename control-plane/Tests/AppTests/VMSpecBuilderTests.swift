@@ -338,6 +338,39 @@ struct VMSpecBuilderTests {
         #expect(spec.networks.first?.gateway == "192.168.1.1")
     }
 
+    @Test("networkSpecs populates DHCP/DNS from the matching logical network")
+    func testDHCPConfigFromNetwork() throws {
+        let interface = createTestInterface(network: "default")
+        let network = LogicalNetwork(
+            name: "default",
+            subnet: "192.168.1.0/24",
+            gateway: "192.168.1.1",
+            dhcpEnabled: true,
+            dnsServers: ["1.1.1.1", "8.8.8.8"],
+            domainName: "corp.example.com",
+            leaseTime: 7200
+        )
+
+        let specs = VMSpecBuilder.networkSpecs(from: [interface], networks: ["default": network])
+
+        #expect(specs.first?.dhcpEnabled == true)
+        #expect(specs.first?.dnsServers == ["1.1.1.1", "8.8.8.8"])
+        #expect(specs.first?.domainName == "corp.example.com")
+        #expect(specs.first?.leaseTime == 7200)
+    }
+
+    @Test("networkSpecs defaults DHCP off when no network is supplied")
+    func testDHCPDefaultsOffWithoutNetwork() throws {
+        let interface = createTestInterface(network: "default")
+
+        let specs = VMSpecBuilder.networkSpecs(from: [interface])
+
+        #expect(specs.first?.dhcpEnabled == false)
+        #expect(specs.first?.dnsServers == [])
+        #expect(specs.first?.domainName == nil)
+        #expect(specs.first?.leaseTime == nil)
+    }
+
     @Test("VMSpecBuilder does not fabricate an IP when none is assigned")
     func testNoFabricatedIPAddress() throws {
         let template = createTestTemplate()

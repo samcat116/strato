@@ -879,6 +879,15 @@ actor AgentService {
             }
             .all()
 
+        // DHCP/DNS config the agent programs into OVN lives on the logical
+        // network, not the NIC row, so fetch the networks once and index by name
+        // for the spec builder. Few rows; a full scan is cheaper than per-VM
+        // lookups.
+        let networksByName = try await Dictionary(
+            LogicalNetwork.query(on: db).all().map { ($0.name, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
         var entries: [DesiredVMState] = []
         for vm in vms {
             guard let vmId = vm.id else { continue }
@@ -887,7 +896,8 @@ actor AgentService {
                 from: vm,
                 image: image,
                 volumes: vm.volumes,
-                networkInterfaces: vm.networkInterfaces
+                networkInterfaces: vm.networkInterfaces,
+                networks: networksByName
             )
 
             // Image download info lets the agent materialize a VM it doesn't

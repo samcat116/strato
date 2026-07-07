@@ -37,6 +37,27 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     @OptionalField(key: "gateway")
     var gateway: String?
 
+    /// When true, agents program OVN's native DHCP responder to deliver the
+    /// control-plane-allocated IP, gateway, DNS, and MTU to guests, and cloud-init
+    /// omits static L3 config. When false, guests are configured statically via
+    /// cloud-init (the pre-DHCP behavior, and the fallback for non-OVN platforms).
+    @Field(key: "dhcp_enabled")
+    var dhcpEnabled: Bool
+
+    /// DNS resolvers advertised to guests over DHCP, stored comma-separated.
+    /// Use `dnsServers` for the parsed list.
+    @OptionalField(key: "dns_servers")
+    var dnsServersRaw: String?
+
+    /// DNS search domain advertised over DHCP (`domain_name` option).
+    @OptionalField(key: "domain_name")
+    var domainName: String?
+
+    /// DHCP lease time in seconds (`lease_time` option). Agents apply a default
+    /// when nil.
+    @OptionalField(key: "lease_time")
+    var leaseTime: Int?
+
     /// Project this network belongs to; nil means global (visible to everyone,
     /// managed by system admins only).
     @OptionalParent(key: "project_id")
@@ -60,7 +81,11 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         subnet: String,
         gateway: String? = nil,
         projectID: UUID? = nil,
-        createdByID: UUID? = nil
+        createdByID: UUID? = nil,
+        dhcpEnabled: Bool = true,
+        dnsServers: [String] = [],
+        domainName: String? = nil,
+        leaseTime: Int? = nil
     ) {
         self.id = id
         self.name = name
@@ -68,6 +93,31 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         self.gateway = gateway
         self.$project.id = projectID
         self.$createdBy.id = createdByID
+        self.dhcpEnabled = dhcpEnabled
+        self.dnsServersRaw = LogicalNetwork.joinDNS(dnsServers)
+        self.domainName = domainName
+        self.leaseTime = leaseTime
+    }
+
+    /// Parsed DNS resolver list, backed by the comma-separated `dns_servers` column.
+    var dnsServers: [String] {
+        get { LogicalNetwork.splitDNS(dnsServersRaw) }
+        set { dnsServersRaw = LogicalNetwork.joinDNS(newValue) }
+    }
+
+    static func splitDNS(_ raw: String?) -> [String] {
+        guard let raw else { return [] }
+        return raw.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    static func joinDNS(_ servers: [String]) -> String? {
+        let cleaned =
+            servers
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return cleaned.isEmpty ? nil : cleaned.joined(separator: ",")
     }
 }
 
@@ -83,6 +133,31 @@ struct CreateNetworkRequest: Content {
     let gateway: String?
     /// Defaults to the caller's default project when omitted.
     let projectId: UUID?
+    /// Whether agents program OVN DHCP for this network. Defaults true.
+    let dhcpEnabled: Bool?
+    /// DNS resolvers advertised over DHCP.
+    let dnsServers: [String]?
+    /// DNS search domain advertised over DHCP.
+    let domainName: String?
+    /// DHCP lease time in seconds.
+    let leaseTime: Int?
+
+    // Explicit init so the DHCP fields default when omitted (e.g. in tests) while
+    // JSON decoding still populates them via the synthesized Codable conformance.
+    init(
+        name: String, subnet: String, gateway: String? = nil, projectId: UUID? = nil,
+        dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
+        leaseTime: Int? = nil
+    ) {
+        self.name = name
+        self.subnet = subnet
+        self.gateway = gateway
+        self.projectId = projectId
+        self.dhcpEnabled = dhcpEnabled
+        self.dnsServers = dnsServers
+        self.domainName = domainName
+        self.leaseTime = leaseTime
+    }
 }
 
 struct UpdateNetworkRequest: Content {
@@ -92,6 +167,25 @@ struct UpdateNetworkRequest: Content {
     let subnet: String?
     /// May change anytime, but only affects future allocations.
     let gateway: String?
+    /// DHCP settings; applied to the network and re-synced to affected agents.
+    let dhcpEnabled: Bool?
+    let dnsServers: [String]?
+    let domainName: String?
+    let leaseTime: Int?
+
+    init(
+        name: String? = nil, subnet: String? = nil, gateway: String? = nil,
+        dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
+        leaseTime: Int? = nil
+    ) {
+        self.name = name
+        self.subnet = subnet
+        self.gateway = gateway
+        self.dhcpEnabled = dhcpEnabled
+        self.dnsServers = dnsServers
+        self.domainName = domainName
+        self.leaseTime = leaseTime
+    }
 }
 
 struct NetworkResponse: Content {
@@ -102,6 +196,10 @@ struct NetworkResponse: Content {
     let projectId: UUID?
     let isDefault: Bool
     let attachedInterfaceCount: Int
+    let dhcpEnabled: Bool
+    let dnsServers: [String]
+    let domainName: String?
+    let leaseTime: Int?
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -113,6 +211,10 @@ struct NetworkResponse: Content {
         self.projectId = network.$project.id
         self.isDefault = network.name == LogicalNetwork.defaultNetworkName
         self.attachedInterfaceCount = attachedInterfaceCount
+        self.dhcpEnabled = network.dhcpEnabled
+        self.dnsServers = network.dnsServers
+        self.domainName = network.domainName
+        self.leaseTime = network.leaseTime
         self.createdAt = network.createdAt
         self.updatedAt = network.updatedAt
     }
