@@ -1,0 +1,51 @@
+agent/Sources/StratoAgentCore/HostPreflight.swift
+  s_4f1e9a0cef4975::t_6142d3e31a8b69 236-240
+  s_4f1e9a0cef4975::t_0fcdefbdecbf11 316-318,324,326
+  s_4f1e9a0cef4975::t_00f9eb49bc031b 37
+agent/Sources/StratoAgentCore/OVNChassisBootstrap.swift
+  s_4f1e9a0cef4975::t_a2c3fc5413b7af 1-204
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_4f1e9a0cef4975::t_1d7a860c1efe61 85-131
+config.toml.example
+  s_4f1e9a0cef4975::t_2727ba2d76cc98 93-118
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_4f1e9a0cef4975::t_2c339779cfaa56 300
+agent/Tests/StratoAgentTests/HostPreflightTests.swift
+  s_4f1e9a0cef4975::t_ba2e45900a2710 145-174
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_4f1e9a0cef4975::t_36a452753da801 77-84
+  s_4f1e9a0cef4975::t_a75fb4c59978a5 14,29,34
+  s_4f1e9a0cef4975::t_27972072ccf408 439-557
+agent/Sources/StratoAgent/Agent.swift
+  s_4f1e9a0cef4975::t_a18a8b6b2fe99a 911-915
+  s_4f1e9a0cef4975::t_09f8ee8837efeb 184
+  s_4f1e9a0cef4975::t_e96e48fd06f30a 250
+  s_4f1e9a0cef4975::t_a84f9458d4cde6 121-123
+  s_4f1e9a0cef4975::t_86ec5d86358e37 164
+agent/Tests/StratoAgentTests/OVNChassisBootstrapTests.swift
+  s_4f1e9a0cef4975::t_342b79b6b40a59 1-160
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_4f1e9a0cef4975::t_513312ae97d0e6 157-166
+  s_4f1e9a0cef4975::t_f860eb1724a816 140-143
+  s_4f1e9a0cef4975::t_8a3bc1b977c8e9 185-188
+  s_4f1e9a0cef4975::t_445414706e03e3 77-80
+  s_4f1e9a0cef4975::t_99e1d0a5cf6192 98-101
+  s_4f1e9a0cef4975::t_607f1f227c7419 273-276
+  s_4f1e9a0cef4975::t_9aeb8c06df253b 120-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b973aeb1fd9a98e0ac14fe605667dbf0339a2a2c",
+  "prompts": {},
+  "sessions": {
+    "s_4f1e9a0cef4975": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8ab1da88-ef78-42c8-879a-77778dea4975",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
