@@ -128,33 +128,27 @@ jobs:
         working-directory: control-plane/web
         run: bun run build
 
+  # The three Swift test jobs below run concurrently on the ARC scale set —
+  # the wall-clock win that used to be impossible when everything shared one
+  # job. Each keeps its own scratch dir under RUNNER_TOOL_CACHE (see the
+  # comment on the prune step) so two jobs never write the same build tree.
+  #
+  # ARC (actions-runner-controller) runner scale set. Scale-set runners
+  # match on exactly one label — the installation name — so do not add
+  # `self-hosted` or arch labels here.
+  #
+  # Jobs build inside the official Swift image instead of installing a
+  # toolchain on the ephemeral runner each job. vapor/swiftly-action breaks on
+  # the ARC pods ($USER is unset, so it sources /home//.local/.../env.sh), and
+  # this pins the exact toolchain the Dockerfiles build with — agent/Dockerfile
+  # uses this same image. The runner image needs nothing Swift-related.
   test:
     name: Build and Test Swift Packages
     needs: changes
-    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
-    # ARC (actions-runner-controller) runner scale set. Scale-set runners
-    # match on exactly one label — the installation name — so do not add
-    # `self-hosted` or arch labels here.
+    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: swift-runners-strato
-    # Build inside the official Swift image instead of installing a toolchain
-    # on the ephemeral runner each job. vapor/swiftly-action breaks on the ARC
-    # pods ($USER is unset, so it sources /home//.local/.../env.sh), and this
-    # pins the exact toolchain the Dockerfiles build with — agent/Dockerfile
-    # uses this same image. The runner image needs nothing Swift-related.
     container:
       image: swift:6.3.2-noble
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_DB: strato_test
-          POSTGRES_USER: strato
-          POSTGRES_PASSWORD: strato_password
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -186,25 +180,99 @@ jobs:
         working-directory: shared
         run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/shared"
 
+      - name: Build Agent
+        # Run even if the shared tests failed — agent coverage should
+        # always report on PRs that touch it.
+        id: build-agent
+        if: ${{ !cancelled() }}
+        working-directory: agent
+        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent"
+
+      - name: Test Agent
+        if: ${{ !cancelled() && steps.build-agent.outcome == 'success' }}
+        working-directory: agent
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent"
+
+  # Two control-plane jobs, one suite each: fast engine-independent coverage
+  # on SQLite, and the identical suite against the real engine production
+  # uses, validating migrations and Postgres-specific SQL (issue #195).
+  # Separate jobs (not steps or a matrix on a shared runner) because each ARC
+  # pod is its own container network — the old single-job layout existed only
+  # so two Postgres services wouldn't fight over one shared runner's port.
+  test-control-plane-sqlite:
+    name: Test Control Plane (SQLite)
+    needs: changes
+    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
+    runs-on: swift-runners-strato
+    container:
+      image: swift:6.3.2-noble
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Prune build scratch dir if oversized
+        run: |
+          scratch="$RUNNER_TOOL_CACHE/strato-swift-build"
+          if [ -d "$scratch" ]; then
+            size_kb=$(du -sk "$scratch" | cut -f1)
+            if [ "$size_kb" -gt $((25 * 1024 * 1024)) ]; then
+              echo "Scratch dir is $((size_kb / 1024 / 1024))GB (>25GB); wiping for a cold rebuild"
+              rm -rf "$scratch"
+            fi
+          fi
+
       - name: Build Control Plane
         working-directory: control-plane
         run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
 
-      # Two legs, one build: fast engine-independent coverage on SQLite, then
-      # the identical suite against the real engine production uses, validating
-      # migrations and Postgres-specific SQL (issue #195). Kept as sequential
-      # steps in one job rather than a matrix so only a single Postgres service
-      # container starts — a matrix would fan out two containers that both try
-      # to bind the port on this shared self-hosted runner.
       - name: Test Control Plane (SQLite)
         working-directory: control-plane
         env:
           STRATO_TEST_DATABASE: sqlite
         run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
 
+  test-control-plane-postgres:
+    name: Test Control Plane (Postgres)
+    needs: changes
+    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
+    runs-on: swift-runners-strato
+    container:
+      image: swift:6.3.2-noble
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: strato_test
+          POSTGRES_USER: strato
+          POSTGRES_PASSWORD: strato_password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Prune build scratch dir if oversized
+        run: |
+          scratch="$RUNNER_TOOL_CACHE/strato-swift-build"
+          if [ -d "$scratch" ]; then
+            size_kb=$(du -sk "$scratch" | cut -f1)
+            if [ "$size_kb" -gt $((25 * 1024 * 1024)) ]; then
+              echo "Scratch dir is $((size_kb / 1024 / 1024))GB (>25GB); wiping for a cold rebuild"
+              rm -rf "$scratch"
+            fi
+          fi
+
+      # Separate scratch dir from the SQLite job: the two run concurrently,
+      # possibly against the same persistent tool-cache volume, and SwiftPM
+      # build trees don't tolerate concurrent writers.
+      - name: Build Control Plane
+        working-directory: control-plane
+        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane-postgres"
+
       - name: Test Control Plane (Postgres)
-        # Run even if the SQLite leg failed, so both engines always report.
-        if: ${{ !cancelled() }}
         working-directory: control-plane
         env:
           STRATO_TEST_DATABASE: postgres
@@ -216,28 +284,13 @@ jobs:
           DATABASE_NAME: strato_test
           DATABASE_USERNAME: strato
           DATABASE_PASSWORD: strato_password
-        # --no-parallel: every parallel test holds its own Vapor app whose
-        # pool opens up to one connection per event loop, so on a many-core
-        # runner the suite blows past Postgres's max_connections=100
-        # ("sorry, too many clients already", sqlState 53300) — and a service
-        # container can't be given -c max_connections=N (no command args).
-        # Engine validation is this leg's job, not speed; the SQLite leg
-        # above keeps full parallelism. (swift-testing ignores --num-workers,
-        # so on/off is the only knob here.)
-        run: swift test --skip-build --no-parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
-
-      - name: Build Agent
-        # Run even if a control-plane leg failed — agent coverage should
-        # always report on PRs that touch it.
-        id: build-agent
-        if: ${{ !cancelled() }}
-        working-directory: agent
-        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent"
-
-      - name: Test Agent
-        if: ${{ !cancelled() && steps.build-agent.outcome == 'success' }}
-        working-directory: agent
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent"
+        # Fully parallel: each test app runs on a 2-loop event-loop group
+        # (1 pooled connection per loop), and per-test database clones are
+        # minted through one serialized admin connection — see
+        # control-plane/Tests/AppTests/TestUtilities.swift — so the suite
+        # stays far under Postgres's default max_connections=100. This leg
+        # used to be forced to --no-parallel and took ~8 minutes.
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane-postgres"
 
   test-agent-macos:
     name: Build & Test Agent (macOS)

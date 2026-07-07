@@ -48,16 +48,12 @@ final class VMAuthorizationTests {
 
             try await test(app, user, vm, token)
 
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             throw error
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("GET /api/vms/:id is denied (403) when SpiceDB withholds read")

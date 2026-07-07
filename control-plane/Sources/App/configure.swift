@@ -21,6 +21,11 @@ public func configure(_ app: Application) async throws {
             "environment": .string(identity.environment),
         ])
 
+    // Track fire-and-forget background work (async VM operations) so shutdown
+    // can drain it before Fluent closes its connection pools. Registered
+    // before anything that can spawn work.
+    app.setUpBackgroundTaskRegistry()
+
     // Request logging: one structured line per HTTP request (method/path/status/
     // duration). Registered first so it's the outermost middleware and times the
     // full request. Default on outside production; override with REQUEST_LOGGING.

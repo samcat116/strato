@@ -1,9 +1,13 @@
-import Vapor
 import Fluent
-import FluentSQLiteDriver
 import FluentPostgresDriver
+import FluentSQLiteDriver
+import NIOCore
+import NIOPosix
+import PostgresNIO
 import SQLKit
+import Vapor
 import VaporTesting
+
 @testable import App
 
 // MARK: - Test Database Backend
@@ -28,6 +32,220 @@ enum TestDatabaseBackend {
     }
 }
 
+// MARK: - Test Database Templates
+//
+// Booting a test app used to replay every migration up (via `configure()`'s
+// trailing `autoMigrate()`) against an empty database, and most teardowns
+// replayed them all back down with `autoRevert()` — two full migration passes
+// per test, which dominated suite runtime on both engines. Instead, migrations
+// run ONCE per test process into a template, and every test gets a cheap clone
+// of the migrated result:
+//
+//  - SQLite: the template is a database file; each test copies it.
+//  - Postgres: the template is a database; each test clones it server-side
+//    with `CREATE DATABASE ... TEMPLATE ...`.
+//
+// `configure(app)` still calls `autoMigrate()` in every test, but against a
+// pre-migrated clone that is a no-op scan of the migration log. Full up/down
+// migration coverage lives in MigrationRoundTripTests.
+
+private let testProcessID = ProcessInfo.processInfo.processIdentifier
+
+/// Whether the test process that embedded `pid` in a leftover template's name
+/// is still alive on this machine (a parallel run in another worktree we must
+/// not disturb). Anything else is debris from a finished or crashed run.
+private func isTestProcessAlive(_ pid: Int32) -> Bool {
+    kill(pid, 0) == 0 || errno == EPERM
+}
+
+/// Migrated SQLite template, built once per process. Value is the file path.
+private let sqliteTemplate = Task { () -> String in
+    // Sweep templates left by dead runs — there is no reliable async hook at
+    // process exit to self-delete, so each run cleans up after previous ones.
+    let fileManager = FileManager.default
+    for entry in (try? fileManager.contentsOfDirectory(atPath: "/tmp")) ?? []
+    where entry.hasPrefix("strato-test-template-") && entry.hasSuffix(".db") {
+        let pidText = entry.dropFirst("strato-test-template-".count).dropLast(".db".count)
+        if let pid = Int32(pidText), pid != testProcessID, !isTestProcessAlive(pid) {
+            try? fileManager.removeItem(atPath: "/tmp/\(entry)")
+        }
+    }
+
+    let path = "/tmp/strato-test-template-\(testProcessID).db"
+    try? fileManager.removeItem(atPath: path)
+
+    var env = Environment.testing
+    env.arguments = ["vapor"]
+    let app = try await Application.make(env)
+    app.logger.logLevel = .error
+    app.databases.use(.sqlite(.file(path)), as: .sqlite)
+    do {
+        // configure() registers every migration and runs autoMigrate().
+        try await configure(app)
+        try await app.asyncShutdown()
+    } catch {
+        try? await app.asyncShutdown()
+        throw error
+    }
+    return path
+}
+
+/// Builds the per-process Postgres template database and hands out per-test
+/// clones of it, serializing all CREATE/DROP DATABASE statements through a
+/// single admin connection: `CREATE DATABASE ... TEMPLATE` requires that the
+/// template has no other users, so clones must be minted one at a time.
+actor PostgresTestDatabases {
+    static let shared = PostgresTestDatabases()
+
+    /// Small event-loop group shared by every test app on the Postgres leg.
+    /// Fluent's pool opens at most one connection per event loop, so this caps
+    /// each app at two connections and keeps the fully parallel suite well
+    /// under the server's default max_connections=100 — the constraint that
+    /// used to force CI's Postgres leg to run --no-parallel.
+    static let appEventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
+
+    /// Connection parameters from the environment. `DATABASE_NAME` is only the
+    /// anchor database the admin connection logs into — tests themselves run
+    /// in throwaway clones of the template.
+    static func configuration(database: String) -> SQLPostgresConfiguration {
+        SQLPostgresConfiguration(
+            hostname: Environment.get("DATABASE_HOST") ?? "localhost",
+            port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
+                ?? SQLPostgresConfiguration.ianaPortNumber,
+            username: Environment.get("DATABASE_USERNAME") ?? "strato",
+            password: Environment.get("DATABASE_PASSWORD") ?? "strato_password",
+            database: database,
+            tls: .disable
+        )
+    }
+
+    private static let logger: Logger = {
+        var logger = Logger(label: "strato.test.pg-admin")
+        logger.logLevel = .error
+        return logger
+    }()
+
+    private let templateName = "strato_test_tpl_\(testProcessID)"
+    private var connection: PostgresConnection?
+    private var template: Task<Void, Error>?
+    /// FIFO chain serializing admin statements; actor methods interleave at
+    /// suspension points, so ordering needs an explicit chain, not just `self`.
+    private var lastAdminOperation: Task<Void, Never>?
+
+    /// Mint a fresh clone of the migrated template for one test.
+    func createDatabaseForTest() async throws -> String {
+        if template == nil {
+            template = Task { try await self.buildTemplate() }
+        }
+        try await template!.value
+
+        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let name = "strato_test_db_\(testProcessID)_\(suffix)"
+        try await run(#"CREATE DATABASE "\#(name)" TEMPLATE "\#(templateName)""#)
+        return name
+    }
+
+    /// Destroy one test's clone. Best effort — leftovers are swept by the
+    /// next run's buildTemplate().
+    func dropDatabase(_ name: String) async {
+        try? await run(#"DROP DATABASE IF EXISTS "\#(name)" WITH (FORCE)"#)
+    }
+
+    private func buildTemplate() async throws {
+        // Sweep templates and clones left by dead runs (crashed teardowns,
+        // killed processes); skip names whose embedded pid is still alive —
+        // that's a parallel run in another worktree sharing this server.
+        for name in try await allDatabaseNames() {
+            let pidText: Substring
+            if name.hasPrefix("strato_test_tpl_") {
+                pidText = name.dropFirst("strato_test_tpl_".count)
+            } else if name.hasPrefix("strato_test_db_") {
+                pidText = name.dropFirst("strato_test_db_".count).prefix(while: { $0 != "_" })
+            } else {
+                continue
+            }
+            if let pid = Int32(pidText), pid != testProcessID, isTestProcessAlive(pid) { continue }
+            try await run(#"DROP DATABASE IF EXISTS "\#(name)" WITH (FORCE)"#)
+        }
+
+        try await run(#"CREATE DATABASE "\#(templateName)""#)
+
+        // Boot a throwaway app against the template: configure() registers
+        // every migration and its trailing autoMigrate() applies them. The app
+        // is shut down before the first clone, so the template has no live
+        // sessions when CREATE DATABASE reads it.
+        var env = Environment.testing
+        env.arguments = ["vapor"]
+        let app = try await Application.make(env, .shared(Self.appEventLoopGroup))
+        app.logger.logLevel = .error
+        app.databases.use(.postgres(configuration: Self.configuration(database: templateName)), as: .psql)
+        do {
+            try await configure(app)
+            try await app.asyncShutdown()
+        } catch {
+            try? await app.asyncShutdown()
+            throw error
+        }
+    }
+
+    private func allDatabaseNames() async throws -> [String] {
+        let connection = try await adminConnection()
+        let rows = try await connection.query(
+            PostgresQuery(unsafeSQL: "SELECT datname FROM pg_database WHERE NOT datistemplate"),
+            logger: Self.logger
+        )
+        var names: [String] = []
+        for try await row in rows {
+            names.append(try row.decode(String.self))
+        }
+        return names
+    }
+
+    /// Run one admin statement strictly after every previously enqueued one.
+    private func run(_ sql: String) async throws {
+        let previous = lastAdminOperation
+        let operation = Task {
+            await previous?.value
+            let connection = try await self.adminConnection()
+            let rows = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: Self.logger)
+            for try await _ in rows {}  // drain to completion
+        }
+        lastAdminOperation = Task { try? await operation.value }
+        do {
+            try await operation.value
+        } catch {
+            // The connection may have died; discard it so the next statement
+            // reconnects. (Plain SQL failures pay a harmless reconnect.)
+            if let connection {
+                self.connection = nil
+                try? await connection.close()
+            }
+            throw error
+        }
+    }
+
+    private func adminConnection() async throws -> PostgresConnection {
+        if let connection, !connection.isClosed { return connection }
+        let configuration = PostgresConnection.Configuration(
+            host: Environment.get("DATABASE_HOST") ?? "localhost",
+            port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
+                ?? SQLPostgresConfiguration.ianaPortNumber,
+            username: Environment.get("DATABASE_USERNAME") ?? "strato",
+            password: Environment.get("DATABASE_PASSWORD") ?? "strato_password",
+            database: Environment.get("DATABASE_NAME") ?? "strato_test",
+            tls: .disable
+        )
+        let connection = try await PostgresConnection.connect(
+            on: Self.appEventLoopGroup.next(),
+            configuration: configuration,
+            id: 0,
+            logger: Self.logger
+        )
+        self.connection = connection
+        return connection
+    }
+}
+
 // MARK: - Test Extensions
 
 extension Application {
@@ -35,48 +253,33 @@ extension Application {
         var env = environment
         env.arguments = ["vapor"]
 
-        let app = try await Application.make(env)
-        app.logger.logLevel = .debug
-
         switch TestDatabaseBackend.current {
         case .sqlite:
-            // Use file-based SQLite with unique names for better isolation.
-            // Generate a unique database file for each test.
+            // Each test gets its own copy of the migrated template file.
+            let templatePath = try await sqliteTemplate.value
             let testDBPath = "/tmp/strato-test-\(UUID().uuidString).db"
+            try FileManager.default.copyItem(atPath: templatePath, toPath: testDBPath)
+
+            let app = try await Application.make(env)
+            app.logger.logLevel = .debug
             app.databases.use(.sqlite(.file(testDBPath)), as: .sqlite)
             app.storage[TestDatabasePathKey.self] = testDBPath
+            return app
 
         case .postgres:
-            // Isolate each test in its own Postgres schema on a shared database.
-            // This mirrors the per-file isolation SQLite gets while running the
-            // suite in parallel against a single Postgres instance. The schema is
-            // created here (before configure()/autoMigrate) and dropped on teardown.
-            let schema = "test_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+            // Each test gets its own server-side clone of the migrated
+            // template database.
+            let databaseName = try await PostgresTestDatabases.shared.createDatabaseForTest()
 
-            var configuration = SQLPostgresConfiguration(
-                hostname: Environment.get("DATABASE_HOST") ?? "localhost",
-                port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
-                    ?? SQLPostgresConfiguration.ianaPortNumber,
-                username: Environment.get("DATABASE_USERNAME") ?? "strato",
-                password: Environment.get("DATABASE_PASSWORD") ?? "strato_password",
-                database: Environment.get("DATABASE_NAME") ?? "strato_test",
-                tls: .disable
+            let app = try await Application.make(env, .shared(PostgresTestDatabases.appEventLoopGroup))
+            app.logger.logLevel = .debug
+            app.databases.use(
+                .postgres(configuration: PostgresTestDatabases.configuration(database: databaseName)),
+                as: .psql
             )
-            // All unqualified DDL/DML from migrations and models lands in this
-            // per-test schema, keeping parallel tests from colliding.
-            configuration.searchPath = [schema]
-
-            app.databases.use(.postgres(configuration: configuration), as: .psql)
-            app.storage[TestDatabaseSchemaKey.self] = schema
-
-            // CREATE SCHEMA is search_path-independent, so it succeeds even though
-            // the schema in the configured search_path does not exist yet.
-            try await (app.db(.psql) as! SQLDatabase)
-                .raw("CREATE SCHEMA IF NOT EXISTS \(ident: schema)")
-                .run()
+            app.storage[TestDatabaseNameKey.self] = databaseName
+            return app
         }
-
-        return app
     }
 }
 
@@ -85,86 +288,51 @@ struct TestDatabasePathKey: StorageKey {
     typealias Value = String
 }
 
-// Storage key for per-test Postgres schema name
-struct TestDatabaseSchemaKey: StorageKey {
+// Storage key for the per-test Postgres database clone's name
+struct TestDatabaseNameKey: StorageKey {
     typealias Value = String
 }
 
 extension Application {
-    /// Drop the per-test Postgres schema. Must run while the database connection
-    /// is still live, i.e. *before* `asyncShutdown()`. No-op for SQLite.
-    func dropTestSchemaIfNeeded() async {
-        guard let schema = self.storage[TestDatabaseSchemaKey.self] else { return }
-        try? await (self.db(.psql) as! SQLDatabase)
-            .raw("DROP SCHEMA IF EXISTS \(ident: schema) CASCADE")
-            .run()
-    }
+    /// Tear down an app made by `makeForTesting`: shut Vapor down (closing its
+    /// database pool), then destroy the test's database clone.
+    func shutdownForTesting() async throws {
+        let databaseName = storage[TestDatabaseNameKey.self]
+        let sqlitePath = storage[TestDatabasePathKey.self]
 
-    /// Remove the SQLite database file. Safe to call after `asyncShutdown()`.
-    /// No-op when running against Postgres.
-    func cleanupTestDatabase() {
-        if let dbPath = self.storage[TestDatabasePathKey.self] {
-            try? FileManager.default.removeItem(atPath: dbPath)
-            try? FileManager.default.removeItem(atPath: dbPath + "-shm")
-            try? FileManager.default.removeItem(atPath: dbPath + "-wal")
+        try await asyncShutdown()
+
+        if let databaseName {
+            await PostgresTestDatabases.shared.dropDatabase(databaseName)
+        }
+        if let sqlitePath {
+            try? FileManager.default.removeItem(atPath: sqlitePath)
+            try? FileManager.default.removeItem(atPath: sqlitePath + "-shm")
+            try? FileManager.default.removeItem(atPath: sqlitePath + "-wal")
         }
     }
 }
 
-// Helper function to run tests with proper database lifecycle
+// Helper function to run tests with proper database lifecycle. configure()
+// runs autoMigrate(), which is a no-op scan against the pre-migrated clone.
 func withTestApp(_ test: (Application) async throws -> Void) async throws {
     let app = try await Application.makeForTesting()
 
     do {
         try await configure(app)
-        try await app.autoMigrate()
         try await test(app)
-        try await app.autoRevert()
     } catch {
-        try? await app.autoRevert()
-        await app.dropTestSchemaIfNeeded()
-        // asyncShutdown() awaits full teardown (event loops, thread pool, DB
-        // connection pool), so the database file is safe to remove immediately.
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try? await app.shutdownForTesting()
         throw error
     }
 
-    await app.dropTestSchemaIfNeeded()
-    try await app.asyncShutdown()
-    app.cleanupTestDatabase()
+    try await app.shutdownForTesting()
 }
 
-// Helper function to run a test with automatic app cleanup
+// Historical alias: the two helpers only differed in a teardown-time
+// autoRevert(), which per-test database clones made obsolete.
 func withApp(_ test: (Application) async throws -> Void) async throws {
-    let app = try await Application.makeForTesting()
-
-    do {
-        try await configure(app)
-        try await app.autoMigrate()
-        try await test(app)
-    } catch {
-        await app.dropTestSchemaIfNeeded()
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
-        throw error
-    }
-
-    await app.dropTestSchemaIfNeeded()
-    try await app.asyncShutdown()
-    app.cleanupTestDatabase()
-}
-
-// Extension to safely shutdown Vapor apps
-extension Application {
-    func safeShutdown() {
-        // This is deprecated - use asyncShutdown() instead
-        // Kept for backward compatibility but should be replaced
-        let app = self
-        Task {
-            try? await app.asyncShutdown()
-        }
-    }
+    try await withTestApp(test)
 }
 
 extension User {

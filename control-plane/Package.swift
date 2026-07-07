@@ -75,6 +75,7 @@ let package = Package(
                 .target(name: "App"),
                 .product(name: "VaporTesting", package: "vapor"),
                 .product(name: "FluentSQLiteDriver", package: "fluent-sqlite-driver"),
+                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
                 .product(name: "X509", package: "swift-certificates")
             ],
             swiftSettings: testSwiftSettings

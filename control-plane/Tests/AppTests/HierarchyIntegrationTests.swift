@@ -29,16 +29,12 @@ final class HierarchyIntegrationTests {
             let authToken = try await testUser.generateAPIKey(on: app.db)
 
             try await test(app, builder, testUser, testOrganization, authToken)
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             throw error
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     // MARK: - Complete Hierarchy Tests

@@ -55,16 +55,12 @@ final class OrgMemberSpiceDBMirrorTests {
 
             try await test(app, org, admin, target, adminToken, recorder)
 
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             throw error
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("Demoting admin→member deletes the old tuple and writes the new one")

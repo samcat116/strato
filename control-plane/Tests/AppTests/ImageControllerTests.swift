@@ -240,17 +240,13 @@ final class ImageControllerTests {
 
             try await test(app, testUser, testOrganization, testProject, authToken, tempStoragePath)
 
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             Self.cleanupTempStorageDirectory(tempStoragePath)
             throw error
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
         Self.cleanupTempStorageDirectory(tempStoragePath)
     }
 
