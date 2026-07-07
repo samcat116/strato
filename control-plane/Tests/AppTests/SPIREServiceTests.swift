@@ -202,6 +202,45 @@ struct SPIREServiceTests {
         await service.stop()
     }
 
+    @Test("Startup tolerates a missing trust bundle and picks it up on refresh")
+    func lateTrustBundleIsPickedUp() async throws {
+        let pki = try TestPKI()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("spire-tests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let bundlePath = dir.appendingPathComponent("bundle.pem").path
+
+        // Kubernetes boot order: the control plane may start before SPIRE's
+        // k8sbundle notifier publishes the bundle. Startup must not fail...
+        let config = SPIREServiceConfig(
+            enabled: true,
+            trustDomain: "strato.local",
+            trustBundlePath: bundlePath,
+            bundleRefreshInterval: 0.05
+        )
+        let service = SPIREService(
+            config: config,
+            logger: Logger(label: "test.spire"),
+            httpClient: NoopClient()
+        )
+        try await service.start()
+        #expect(await !service.hasTrustBundle)
+
+        // ...and the periodic refresh must load the bundle once it appears.
+        try pki.caPEM.write(toFile: bundlePath, atomically: true, encoding: .utf8)
+        for _ in 0..<200 {
+            if await service.hasTrustBundle { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(await service.hasTrustBundle)
+
+        let leafPEM = try pki.issueLeafPEM(spiffeURI: "spiffe://strato.local/agent/agent-1")
+        let id = try await service.validateCertificate(leafPEM)
+        #expect(id.agentID == "agent-1")
+
+        await service.stop()
+    }
+
     @Test("Rejects validation when no trust bundle is loaded")
     func rejectsWithoutTrustBundle() async throws {
         let pki = try TestPKI()
