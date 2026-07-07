@@ -132,6 +132,12 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // Find or create the logical switch
         _ = try await findOrCreateLogicalSwitch(name: config.networkName, subnet: config.subnet ?? "10.0.0.0/24")
 
+        // Program OVN's native DHCP responder for this network when enabled, so
+        // the guest learns the control-plane-pinned IP, gateway, and DNS over
+        // DHCP instead of via cloud-init static config. Nil when DHCP is off or
+        // the subnet/gateway aren't known — the static path is used then.
+        let dhcpOptionsUUID = try await resolveDHCPOptions(for: config)
+
         // Create the logical switch port (idempotent: reuse on re-attach). A
         // port only exists to OVN when its UUID is referenced by its switch's
         // `ports` column — ovn-northd ignores unreferenced rows (no
@@ -152,6 +158,14 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             let attachedPorts = logicalSwitch?.ports ?? []
             if let existingUUID = existingPort.uuid, attachedPorts.contains(existingUUID) {
                 portUUID = existingPort.uuid
+                // Re-assert the DHCP binding on reconvergence. The row encoder
+                // omits nil fields, so this updates only dhcpv4_options and
+                // leaves the port's addresses/port_security intact.
+                if let dhcpOptionsUUID, existingPort.dhcpv4_options != dhcpOptionsUUID {
+                    try await ovnManager?.updateLogicalSwitchPort(
+                        uuid: existingUUID,
+                        OVNLogicalSwitchPort(name: portName, dhcpv4_options: dhcpOptionsUUID))
+                }
                 logger.debug(
                     "Reusing existing logical switch port",
                     metadata: [
@@ -169,12 +183,12 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 try await ovnManager?.deleteLogicalSwitchPort(named: portName)
                 portUUID = try await createAttachedLogicalSwitchPort(
                     portName: portName, vmId: vmId, networkName: config.networkName,
-                    macAddress: macAddress, ipAddress: ipAddress)
+                    macAddress: macAddress, ipAddress: ipAddress, dhcpOptionsUUID: dhcpOptionsUUID)
             }
         } else {
             portUUID = try await createAttachedLogicalSwitchPort(
                 portName: portName, vmId: vmId, networkName: config.networkName,
-                macAddress: macAddress, ipAddress: ipAddress)
+                macAddress: macAddress, ipAddress: ipAddress, dhcpOptionsUUID: dhcpOptionsUUID)
         }
 
         // Create TAP interface and connect to OVS bridge
@@ -354,9 +368,13 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             throw NetworkError.invalidConfiguration("Invalid UUID returned from OVN: \(switchUUIDString)")
         }
 
-        // Configure DHCP if needed
+        // Pre-create the network's DHCP_Options row so the responder is ready
+        // before any VM attaches. DNS/lease are filled in per-network when VMs
+        // attach with their spec's config (see resolveDHCPOptions).
         if let gateway = gateway {
-            try await configureDHCP(switchUUID: switchUUID, subnet: subnet, gateway: gateway)
+            _ = try await ensureDHCPOptions(
+                networkName: name, subnet: subnet, gateway: gateway,
+                dnsServers: [], domainName: nil, leaseTime: nil)
         }
 
         logger.info(
@@ -542,9 +560,12 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 return
             }
             if result.status == 127 {
-                logger.warning(
+                // Bind the message as a String first: `Logger.Message` is not
+                // `+`-composable, so concatenated literals must be interpolated in.
+                let detail =
                     "ovn-appctl not found; skipping ovn-controller connection verification "
-                        + "(install ovn-host to enable it)")
+                    + "(install ovn-host to enable it)"
+                logger.warning("\(detail)")
                 return
             }
 
@@ -571,13 +592,15 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// OVSDB transaction (`ovn-nbctl lsp-add` semantics) — the two steps must
     /// never diverge or the port is an orphan ovn-northd ignores.
     private func createAttachedLogicalSwitchPort(
-        portName: String, vmId: String, networkName: String, macAddress: String, ipAddress: String?
+        portName: String, vmId: String, networkName: String, macAddress: String, ipAddress: String?,
+        dhcpOptionsUUID: String? = nil
     ) async throws -> String? {
         let portAddress = ipAddress.map { "\(macAddress) \($0)" } ?? macAddress
         let logicalPort = OVNLogicalSwitchPort(
             name: portName,
             addresses: [portAddress],
             port_security: [portAddress],
+            dhcpv4_options: dhcpOptionsUUID,
             external_ids: [
                 "vm-id": vmId,
                 "network-name": networkName,
@@ -755,10 +778,50 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         return macBytes.map { String(format: "%02x", $0) }.joined(separator: ":")
     }
 
-    private func configureDHCP(switchUUID: UUID, subnet: String, gateway: String) async throws {
-        // Configure OVN DHCP for the logical switch
-        logger.debug(
-            "Configuring DHCP for network", metadata: ["subnet": .string(subnet), "gateway": .string(gateway)])
+    /// Resolves the OVN `DHCP_Options` UUID a VM's port should bind to, or nil
+    /// when DHCP is disabled for the network or the subnet/gateway aren't known
+    /// (OVN needs both a CIDR and a `server_id`/`router` to answer). A nil result
+    /// leaves the guest on the static cloud-init path.
+    private func resolveDHCPOptions(for config: VMNetworkConfig) async throws -> String? {
+        guard config.dhcpEnabled else { return nil }
+        guard let subnet = config.subnet, let gateway = config.gateway else {
+            logger.warning(
+                "DHCP enabled but subnet/gateway unknown; using static guest config",
+                metadata: ["network": .string(config.networkName)])
+            return nil
+        }
+        return try await ensureDHCPOptions(
+            networkName: config.networkName, subnet: subnet, gateway: gateway,
+            dnsServers: config.dnsServers, domainName: config.domainName, leaseTime: config.leaseTime)
+    }
+
+    /// Find-or-update the `DHCP_Options` row for `subnet` and return its UUID.
+    /// Idempotent across restarts and reconvergence: an existing row for the
+    /// same CIDR is updated in place (so DNS/lease edits converge) rather than
+    /// duplicated.
+    private func ensureDHCPOptions(
+        networkName: String, subnet: String, gateway: String,
+        dnsServers: [String], domainName: String?, leaseTime: Int?
+    ) async throws -> String? {
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        let options = OVNDHCPOptionsBuilder.v4Options(
+            gateway: gateway, dnsServers: dnsServers, domainName: domainName, leaseTime: leaseTime,
+            subnet: subnet)
+        let dhcp = OVNDHCPOptions(
+            cidr: subnet, options: options,
+            external_ids: ["network-name": networkName, "strato-managed": "true"])
+
+        if let existing = try await ovnManager.getDHCPOptions().first(where: { $0.cidr == subnet }),
+            let uuid = existing.uuid
+        {
+            if existing.options != options {
+                try await ovnManager.updateDHCPOptions(uuid: uuid, dhcp)
+            }
+            return uuid
+        }
+        return try await ovnManager.createDHCPOptions(dhcp)
     }
     #endif
 }

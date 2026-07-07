@@ -36,7 +36,11 @@ struct NetworkOrchestrator: Sendable {
                     ipAddress: spec.ipAddress,
                     netmask: spec.netmask,
                     gateway: spec.gateway,
-                    mtu: spec.mtu
+                    mtu: spec.mtu,
+                    // No OVN here (user-mode SLIRP), so its DHCP responder can't
+                    // run; fall back to static guest config.
+                    dhcpEnabled: false,
+                    dnsServers: spec.dnsServers
                 )
             }
         }
@@ -48,11 +52,19 @@ struct NetworkOrchestrator: Sendable {
                 macAddress: spec.macAddress,
                 ipAddress: spec.ipAddress,
                 subnet: subnetCIDR(ipAddress: spec.ipAddress, netmask: spec.netmask),
-                gateway: spec.gateway
+                gateway: spec.gateway,
+                dhcpEnabled: spec.dhcpEnabled,
+                dnsServers: spec.dnsServers,
+                domainName: spec.domainName,
+                leaseTime: spec.leaseTime
             )
 
             do {
                 let info = try await networkService.createVMNetwork(vmId: vmId, nicIndex: index, config: config)
+                // OVN can only serve DHCP for a real TAP-backed port; a service
+                // that degraded this NIC to user-mode did not program DHCP, so
+                // don't tell the guest to expect it.
+                let dhcpRealized = spec.dhcpEnabled && info.attachment.isTap
                 resolved.append(
                     ResolvedNetworkAttachment(
                         network: info.networkName,
@@ -64,7 +76,9 @@ struct NetworkOrchestrator: Sendable {
                         ipAddress: info.ipAddress ?? spec.ipAddress,
                         netmask: spec.netmask,
                         gateway: spec.gateway,
-                        mtu: spec.mtu
+                        mtu: spec.mtu,
+                        dhcpEnabled: dhcpRealized,
+                        dnsServers: spec.dnsServers
                     ))
             } catch {
                 logger.error(

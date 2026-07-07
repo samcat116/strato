@@ -105,13 +105,19 @@ struct NetworkController: RouteCollection {
         }
 
         let (subnet, gateway) = try Self.validateAddressing(subnet: request.subnet, gateway: request.gateway)
+        let dnsServers = try Self.validatedDNS(request.dnsServers ?? [])
+        try Self.validateLeaseTime(request.leaseTime)
 
         let network = LogicalNetwork(
             name: name,
             subnet: subnet,
             gateway: gateway,
             projectID: projectId,
-            createdByID: user.id!
+            createdByID: user.id!,
+            dhcpEnabled: request.dhcpEnabled ?? true,
+            dnsServers: dnsServers,
+            domainName: request.domainName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            leaseTime: request.leaseTime
         )
 
         do {
@@ -213,11 +219,33 @@ struct NetworkController: RouteCollection {
         network.subnet = subnet
         network.gateway = gateway
 
+        // DHCP/DNS settings — validated then applied.
+        if let dhcpEnabled = request.dhcpEnabled {
+            network.dhcpEnabled = dhcpEnabled
+        }
+        if let dnsServers = request.dnsServers {
+            network.dnsServers = try Self.validatedDNS(dnsServers)
+        }
+        if let domainName = request.domainName {
+            network.domainName = domainName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        }
+        if let leaseTime = request.leaseTime {
+            try Self.validateLeaseTime(leaseTime)
+            network.leaseTime = leaseTime
+        }
+
         do {
             try await network.save(on: req.db)
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A network named '\(network.name)' already exists")
         }
+
+        // Push the new DHCP config to the fleet: agents reprogram OVN's
+        // DHCP_Options for the subnet, and running guests pick up new DNS/lease
+        // on their next renew. Level-triggered and cluster-wide, so a network
+        // shared across agents converges everywhere; a lost nudge is caught by
+        // the periodic sync timer.
+        await req.application.agentService.syncDesiredStateToAllAgents()
 
         req.logger.info(
             "Network updated",
@@ -328,6 +356,28 @@ struct NetworkController: RouteCollection {
         return (trimmedSubnet, resolvedGateway)
     }
 
+    /// Validates a list of DNS resolver addresses, dropping blanks. Each must be
+    /// a valid IPv4 address.
+    static func validatedDNS(_ servers: [String]) throws -> [String] {
+        var cleaned: [String] = []
+        for server in servers {
+            let trimmed = server.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            guard IPAMService.parseIPv4(trimmed) != nil else {
+                throw Abort(.badRequest, reason: "DNS server is not an IPv4 address: '\(server)'")
+            }
+            cleaned.append(trimmed)
+        }
+        return cleaned
+    }
+
+    static func validateLeaseTime(_ leaseTime: Int?) throws {
+        guard let leaseTime else { return }
+        guard leaseTime > 0 else {
+            throw Abort(.badRequest, reason: "leaseTime must be a positive number of seconds")
+        }
+    }
+
     /// Number of VM interfaces attached to the network. NICs reference networks
     /// by name string (no FK), so this is the in-use check for delete/rename.
     private func attachedInterfaceCount(for network: LogicalNetwork, on db: Database) async throws -> Int {
@@ -399,4 +449,8 @@ struct NetworkController: RouteCollection {
 
         return accessibleProjectIds
     }
+}
+
+extension String {
+    fileprivate var nilIfEmpty: String? { isEmpty ? nil : self }
 }

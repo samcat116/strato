@@ -42,16 +42,30 @@ struct VMNetworkConfig: Sendable {
     let ipAddress: String?
     let subnet: String?
     let gateway: String?
+    /// When true, program OVN's native DHCP responder for this NIC's subnet so
+    /// the guest learns its `ipAddress`, `gateway`, and `dnsServers` over DHCP.
+    let dhcpEnabled: Bool
+    /// DNS resolvers to advertise over DHCP (`dns_server` option).
+    let dnsServers: [String]
+    /// DNS search domain to advertise over DHCP (`domain_name` option).
+    let domainName: String?
+    /// DHCP lease time in seconds; a default is applied when nil.
+    let leaseTime: Int?
 
     init(
         networkName: String, macAddress: String? = nil, ipAddress: String? = nil, subnet: String? = nil,
-        gateway: String? = nil
+        gateway: String? = nil, dhcpEnabled: Bool = false, dnsServers: [String] = [],
+        domainName: String? = nil, leaseTime: Int? = nil
     ) {
         self.networkName = networkName
         self.macAddress = macAddress
         self.ipAddress = ipAddress
         self.subnet = subnet
         self.gateway = gateway
+        self.dhcpEnabled = dhcpEnabled
+        self.dnsServers = dnsServers
+        self.domainName = domainName
+        self.leaseTime = leaseTime
     }
 }
 
