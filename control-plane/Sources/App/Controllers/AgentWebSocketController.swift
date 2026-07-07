@@ -22,6 +22,12 @@ struct AgentWebSocketController: RouteCollection {
         var buffer: [String] = []
         /// Set exactly once, when authentication succeeds; nil means "buffer".
         var agentName: String?
+        /// Whether this connection authenticated by redeeming a registration
+        /// token — the only path that may mint a rotated bearer reconnect
+        /// credential. mTLS connections carry the join URL's bearer header
+        /// too, but presenting a header is not the same as being validated by
+        /// it: an mTLS-only node must never accrete token-auth credentials.
+        var tokenAuthenticated = false
     }
 
     // Non-async handler - runs on WebSocket's event loop
@@ -32,7 +38,7 @@ struct AgentWebSocketController: RouteCollection {
 
         ws.onText { ws, text in
             if let agentName = state.agentName {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
             } else {
                 state.buffer.append(text)
             }
@@ -44,7 +50,7 @@ struct AgentWebSocketController: RouteCollection {
                 return
             }
             if let agentName = state.agentName {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
             } else {
                 state.buffer.append(text)
             }
@@ -79,7 +85,7 @@ struct AgentWebSocketController: RouteCollection {
                 )
             }
             for text in state.buffer {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
             }
             state.buffer.removeAll()
         }
@@ -298,7 +304,10 @@ struct AgentWebSocketController: RouteCollection {
                         agentName: agentName, replicaId: req.application.replicaID)
                 }
 
-                // Mark as validated and process buffered messages
+                // Mark as validated and process buffered messages. This is
+                // the only path where token auth actually validated the
+                // connection, so only here may registration rotate the token.
+                state.tokenAuthenticated = true
                 self.activateMessageRouting(req: req, ws: ws, state: state, agentName: agentName)
 
                 return ws.eventLoop.makeSucceededFuture(())
@@ -381,7 +390,9 @@ struct AgentWebSocketController: RouteCollection {
         }
     }
 
-    private func handleWebSocketMessage(req: Request, ws: WebSocket, text: String, agentName: String) {
+    private func handleWebSocketMessage(
+        req: Request, ws: WebSocket, text: String, agentName: String, state: MessageState
+    ) {
         req.logger.info(
             "Processing WebSocket message",
             metadata: [
@@ -414,7 +425,11 @@ struct AgentWebSocketController: RouteCollection {
                             "controlPlaneProtocolVersion": .stringConvertible(WireProtocol.currentVersion),
                         ])
                 }
-                let isTokenAuthenticated = req.headers.bearerAuthorization != nil
+                // Keyed on the auth *path*, not on bearer-header presence: an
+                // mTLS bootstrap still carries the join URL's token in the
+                // header, and rotating for it would mint a long-lived bearer
+                // credential for a node meant to authenticate by SVID only.
+                let isTokenAuthenticated = state.tokenAuthenticated
                 Task {
                     do {
                         let agentUUID = try await req.agentService.registerAgent(message, agentName: agentName)

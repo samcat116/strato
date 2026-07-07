@@ -210,26 +210,31 @@ EOF
   systemctl daemon-reload
 
   STATE_FILE=/var/lib/strato/agent-state.json
+  JOIN_LOG=/var/log/strato-agent-join.log
   if [ -f "$STATE_FILE" ]; then
     log "Join state already present at $STATE_FILE; skipping registration"
   else
     # `join` registers and then keeps running as the agent. Run it just long
-    # enough to see the rotated reconnect credential persisted, then hand off
-    # to the systemd unit.
+    # enough to see registration confirmed, then hand off to the systemd
+    # unit. The confirmation signal is the agent's "Registration complete"
+    # log line, which fires on both auth paths — over mTLS the control plane
+    # deliberately mints no reconnect token, so no state file appears (the
+    # SVID is the reconnect credential).
     log "Joining the control plane"
+    : > "$JOIN_LOG"
     "$STRATO_AGENT_BIN" join --config-file "$STRATO_CONF_DIR/config.toml" "$REGISTRATION_URL" \
-      >> /var/log/strato-agent-join.log 2>&1 &
+      >> "$JOIN_LOG" 2>&1 &
     JOIN_PID=$!
     for _ in $(seq 1 60); do
-      if [ -f "$STATE_FILE" ]; then break; fi
+      if grep -q "Registration complete" "$JOIN_LOG" 2>/dev/null; then break; fi
       if ! kill -0 "$JOIN_PID" 2>/dev/null; then
-        die "strato-agent join exited before registering; see /var/log/strato-agent-join.log"
+        die "strato-agent join exited before registering; see $JOIN_LOG"
       fi
       sleep 1
     done
-    if [ ! -f "$STATE_FILE" ]; then
+    if ! grep -q "Registration complete" "$JOIN_LOG" 2>/dev/null; then
       kill "$JOIN_PID" 2>/dev/null || true
-      die "registration did not complete within 60s; see /var/log/strato-agent-join.log"
+      die "registration did not complete within 60s; see $JOIN_LOG"
     fi
     kill "$JOIN_PID" 2>/dev/null || true
     wait "$JOIN_PID" 2>/dev/null || true
