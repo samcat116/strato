@@ -190,6 +190,11 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let deleted = await fake.deletedSPIFFEIDs
             #expect(deleted == ["spiffe://strato.local/agent/node-a", "spiffe://strato.local/node/node-a"])
 
+            // And an already-attested node is evicted, so it cannot regain
+            // issuance when a replacement grant recreates the entries.
+            let evicted = await fake.evictedAgentIDs
+            #expect(evicted == ["spiffe://strato.local/node/node-a"])
+
             let remaining = try await AgentRegistrationToken.query(on: app.db).count()
             #expect(remaining == 0)
         }
@@ -382,6 +387,9 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let deleted = await fake.deletedSPIFFEIDs
             #expect(deleted == ["spiffe://strato.local/agent/node-a", "spiffe://strato.local/node/node-a"])
 
+            let evicted = await fake.evictedAgentIDs
+            #expect(evicted == ["spiffe://strato.local/node/node-a"])
+
             let remaining = try await Agent.query(on: app.db).count()
             #expect(remaining == 0)
         }
@@ -479,6 +487,7 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     private(set) var joinTokenRequests: [JoinTokenRequest] = []
     private(set) var createdEntries: [CreateEntryRequest] = []
     private(set) var deletedSPIFFEIDs: [String] = []
+    private(set) var evictedAgentIDs: [String] = []
 
     private var failJoinToken = false
     private var failCreateEntry = false
@@ -526,5 +535,13 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
         }
         deletedSPIFFEIDs.append(spiffeID)
         return 1
+    }
+
+    func evictAgent(spiffeID: String) async throws -> Bool {
+        if failDelete {
+            throw SPIREServerAPIError.unreachable("fake: SPIRE server down")
+        }
+        evictedAgentIDs.append(spiffeID)
+        return true
     }
 }

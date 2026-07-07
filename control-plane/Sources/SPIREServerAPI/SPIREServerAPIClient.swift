@@ -38,6 +38,11 @@ public protocol SPIREServerAPI: Sendable {
     /// Delete all registration entries whose SPIFFE ID matches. Returns the
     /// number of entries deleted (0 when none matched).
     func deleteEntries(spiffeID: String) async throws -> Int
+
+    /// Evict an attested agent, forcing it to re-attest (which, for join-token
+    /// nodes, requires a fresh join token). Returns false when no agent with
+    /// that ID is currently attested — eviction is idempotent.
+    func evictAgent(spiffeID: String) async throws -> Bool
 }
 
 // MARK: - Data types
@@ -88,6 +93,7 @@ public enum SPIREServerAPIError: Error, LocalizedError {
     case invalidAddress(String)
     case unreachable(String)
     case requestFailed(String)
+    case notFound(String)
     case invalidSPIFFEID(String)
 
     public var errorDescription: String? {
@@ -98,6 +104,8 @@ public enum SPIREServerAPIError: Error, LocalizedError {
             return "SPIRE server unreachable: \(details)"
         case .requestFailed(let details):
             return "SPIRE server request failed: \(details)"
+        case .notFound(let details):
+            return "SPIRE server reports no such resource: \(details)"
         case .invalidSPIFFEID(let id):
             return "Invalid SPIFFE ID: \(id)"
         }
@@ -175,6 +183,11 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
     private static let batchDeleteEntryDescriptor = MethodDescriptor(
         service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.entry.v1.Entry"),
         method: "BatchDeleteEntry"
+    )
+
+    private static let deleteAgentDescriptor = MethodDescriptor(
+        service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.agent.v1.Agent"),
+        method: "DeleteAgent"
     )
 
     /// google.rpc.Code values SPIRE reports in per-entry batch results.
@@ -284,6 +297,19 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
         return entryIDs.count
     }
 
+    public func evictAgent(spiffeID: String) async throws -> Bool {
+        var request = Spire_Api_Server_Agent_V1_DeleteAgentRequest()
+        request.id = try Self.spiffeIDPayload(spiffeID)
+
+        do {
+            let _: Google_Protobuf_Empty = try await unary(request, descriptor: Self.deleteAgentDescriptor)
+            return true
+        } catch SPIREServerAPIError.notFound {
+            // The node never attested (or was already evicted): nothing to do.
+            return false
+        }
+    }
+
     // MARK: Transport
 
     private func unary<Request: SwiftProtobuf.Message, Response: SwiftProtobuf.Message>(
@@ -334,6 +360,8 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
             switch error.code {
             case .unavailable, .deadlineExceeded:
                 throw SPIREServerAPIError.unreachable("\(descriptor.method): \(error.message)")
+            case .notFound:
+                throw SPIREServerAPIError.notFound("\(descriptor.method): \(error.message)")
             default:
                 throw SPIREServerAPIError.requestFailed("\(descriptor.method): \(error.code) \(error.message)")
             }

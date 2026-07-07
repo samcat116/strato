@@ -129,6 +129,12 @@ public struct SPIRERegistrationService: Sendable {
         let workloadDeleted = try await api.deleteEntries(spiffeID: spiffeID)
         let aliasesDeleted = try await api.deleteEntries(spiffeID: nodeID)
 
+        // Entry deletion stops issuance, but a node that already attested
+        // keeps renewing its *agent* SVID for the stable node ID — and would
+        // regain workload issuance the moment a replacement grant recreates
+        // the entry. Evict it so re-joining requires a fresh join token.
+        let evicted = try await api.evictAgent(spiffeID: nodeID)
+
         logger.info(
             "Deprovisioned agent in SPIRE",
             metadata: [
@@ -136,6 +142,7 @@ public struct SPIRERegistrationService: Sendable {
                 "spiffeID": .string(spiffeID),
                 "workloadEntriesDeleted": .string("\(workloadDeleted)"),
                 "nodeAliasesDeleted": .string("\(aliasesDeleted)"),
+                "attestedAgentEvicted": .string(evicted ? "yes" : "no"),
             ])
     }
 

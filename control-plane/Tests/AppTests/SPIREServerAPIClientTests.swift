@@ -3,6 +3,7 @@ import GRPCCore
 import GRPCNIOTransportHTTP2Posix
 import GRPCProtobuf
 import Logging
+import SwiftProtobuf
 import Testing
 
 @testable import SPIREServerAPI
@@ -189,6 +190,28 @@ struct SPIREServerAPIClientTests {
         }
     }
 
+    @Test("DeleteAgent evicts an attested agent", .timeLimit(.minutes(1)))
+    func evictAgentEvicts() async throws {
+        let state = FakeSPIREServerState()
+        try await withFakeSPIREServer(state: state) { client in
+            let evicted = try await client.evictAgent(spiffeID: "spiffe://strato.local/node/node-a")
+            #expect(evicted)
+
+            let requests = await state.deleteAgentRequests
+            #expect(requests.first?.id.path == "/node/node-a")
+        }
+    }
+
+    @Test("DeleteAgent maps NOT_FOUND to a no-op eviction", .timeLimit(.minutes(1)))
+    func evictAgentNotFound() async throws {
+        let state = FakeSPIREServerState()
+        await state.setDeleteAgentNotFound(true)
+        try await withFakeSPIREServer(state: state) { client in
+            let evicted = try await client.evictAgent(spiffeID: "spiffe://strato.local/node/absent")
+            #expect(!evicted)
+        }
+    }
+
     @Test("A missing Unix socket is reported as unreachable")
     func missingSocketUnreachable() async throws {
         let client = SPIREServerAPIClient(
@@ -239,6 +262,16 @@ private actor FakeSPIREServerState {
     private(set) var createdEntries: [Spire_Api_Types_Entry] = []
     private(set) var listRequests: [Spire_Api_Server_Entry_V1_ListEntriesRequest] = []
     private(set) var deleteRequests: [Spire_Api_Server_Entry_V1_BatchDeleteEntryRequest] = []
+    private(set) var deleteAgentRequests: [Spire_Api_Server_Agent_V1_DeleteAgentRequest] = []
+    private(set) var deleteAgentNotFound = false
+
+    func setDeleteAgentNotFound(_ notFound: Bool) {
+        self.deleteAgentNotFound = notFound
+    }
+
+    func recordDeleteAgent(_ request: Spire_Api_Server_Agent_V1_DeleteAgentRequest) {
+        deleteAgentRequests.append(request)
+    }
 
     private(set) var createEntryStatusCode: Int32 = 0
     private(set) var existingEntryID = ""
@@ -303,6 +336,22 @@ private struct FakeSPIREServerService: RegistrableRPCService {
             token.value = "generated-join-token"
             token.expiresAt = Int64(Date().addingTimeInterval(TimeInterval(message.ttl)).timeIntervalSince1970)
             return Self.singleResponse(token)
+        }
+
+        router.registerHandler(
+            forMethod: MethodDescriptor(
+                service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.agent.v1.Agent"),
+                method: "DeleteAgent"
+            ),
+            deserializer: ProtobufDeserializer<Spire_Api_Server_Agent_V1_DeleteAgentRequest>(),
+            serializer: ProtobufSerializer<Google_Protobuf_Empty>()
+        ) { request, _ in
+            let message = try await Self.singleMessage(request)
+            if await self.state.deleteAgentNotFound {
+                throw RPCError(code: .notFound, message: "agent not found")
+            }
+            await self.state.recordDeleteAgent(message)
+            return Self.singleResponse(Google_Protobuf_Empty())
         }
 
         router.registerHandler(
