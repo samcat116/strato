@@ -34,6 +34,7 @@ public enum HostPreflight {
         case ovsDatabaseSocket = "ovsdb_socket"
         case ipTool = "ip"
         case ovsVsctlTool = "ovs-vsctl"
+        case ovnAppctlTool = "ovn-appctl"
         case storageFreeSpace = "storage_free_space"
     }
 
@@ -232,6 +233,11 @@ public enum HostPreflight {
                     "ovs-vsctl", kind: .ovsVsctlTool, searchPath: inputs.searchPath,
                     hint: "install openvswitch-switch; the agent needs it to attach VM NICs to the integration bridge"
                 ))
+            checks.append(
+                checkTool(
+                    "ovn-appctl", kind: .ovnAppctlTool, severity: .advisory, searchPath: inputs.searchPath,
+                    hint: "install ovn-host; without it the agent cannot verify ovn-controller is connected "
+                        + "to the southbound database"))
         }
 
         checks.append(checkFreeSpace(inputs.vmStoragePath, minimum: inputs.minimumFreeDiskBytes))
@@ -307,15 +313,17 @@ public enum HostPreflight {
 
     /// Looks a tool up on `searchPath`, mirroring how the network service
     /// invokes it (`/usr/bin/env <tool>`).
-    static func checkTool(_ tool: String, kind: CheckKind, searchPath: String, hint: String) -> Check {
+    static func checkTool(
+        _ tool: String, kind: CheckKind, severity: Severity = .gating, searchPath: String, hint: String
+    ) -> Check {
         let fileManager = FileManager.default
         let found = searchPath.split(separator: ":").contains { directory in
             fileManager.isExecutableFile(atPath: "\(directory)/\(tool)")
         }
         guard found else {
-            return .fail(kind, "`\(tool)` not found on PATH — \(hint)")
+            return .fail(kind, severity: severity, "`\(tool)` not found on PATH — \(hint)")
         }
-        return .pass(kind)
+        return .pass(kind, severity: severity)
     }
 
     static func checkFreeSpace(_ path: String, minimum: Int64) -> Check {

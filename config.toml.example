@@ -90,6 +90,32 @@ log_level = "info"
 # Optional - defaults to /tmp/firecracker
 # firecracker_socket_dir = "/tmp/firecracker"
 
+# OVN chassis bootstrap (Linux, network_mode = "ovn" only)
+#
+# ovn-controller only works once the local Open vSwitch carries the chassis
+# external_ids (ovn-remote, ovn-encap-type, ovn-encap-ip). The agent ensures
+# them at startup: values set here always win, values already present on the
+# host are respected, and anything missing gets a default (encap IP is
+# auto-detected from the default route). After bootstrapping, the agent
+# verifies ovn-controller is actually connected to the southbound database
+# and withholds the ovn_networking capability until it is.
+#
+# Where the OVN southbound database lives. The default assumes ovn-central
+# runs on this host; point it at tcp:<central-host>:6642 otherwise.
+# ovn_remote = "unix:/var/run/ovn/ovnsb_db.sock"
+#
+# Tunnel encapsulation between hypervisor hosts (default: geneve)
+# ovn_encap_type = "geneve"
+#
+# This host's tunnel endpoint IP. Auto-detected from the default route when
+# unset — set it explicitly on multi-homed hosts where VM tunnel traffic
+# should use a specific network.
+# ovn_encap_ip = "10.0.0.5"
+#
+# Set to false if an operator or config management owns the chassis
+# external_ids and the agent must never touch them.
+# ovn_bootstrap_chassis = true
+
 # Additional configuration options can be added here as needed
 # Examples:
 # heartbeat_interval = 30

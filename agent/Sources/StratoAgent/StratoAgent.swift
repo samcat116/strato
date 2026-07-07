@@ -297,6 +297,7 @@ private func launchAgent(
         registrationToken: finalRegistrationToken,
         qemuSocketDir: finalQemuSocketDir,
         networkMode: config.networkMode,
+        ovnChassisConfig: config.ovnChassisConfig,
         isRegistrationMode: isRegistrationMode,
         logger: logger,
         vmStoragePath: finalVMStoragePath,

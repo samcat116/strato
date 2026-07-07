@@ -74,6 +74,10 @@ public struct AgentConfig: Codable {
     public let qemuSocketDir: String?
     public let logLevel: String?
     public let networkMode: NetworkMode?
+    public let ovnEncapIP: String?
+    public let ovnEncapType: String?
+    public let ovnRemote: String?
+    public let ovnBootstrapChassis: Bool?
     public let enableHVF: Bool?
     public let enableKVM: Bool?
     public let vmStoragePath: String?
@@ -91,6 +95,10 @@ public struct AgentConfig: Codable {
         case qemuSocketDir = "qemu_socket_dir"
         case logLevel = "log_level"
         case networkMode = "network_mode"
+        case ovnEncapIP = "ovn_encap_ip"
+        case ovnEncapType = "ovn_encap_type"
+        case ovnRemote = "ovn_remote"
+        case ovnBootstrapChassis = "ovn_bootstrap_chassis"
         case enableHVF = "enable_hvf"
         case enableKVM = "enable_kvm"
         case vmStoragePath = "vm_storage_dir"
@@ -109,6 +117,10 @@ public struct AgentConfig: Codable {
         qemuSocketDir: String? = nil,
         logLevel: String? = nil,
         networkMode: NetworkMode? = nil,
+        ovnEncapIP: String? = nil,
+        ovnEncapType: String? = nil,
+        ovnRemote: String? = nil,
+        ovnBootstrapChassis: Bool? = nil,
         enableHVF: Bool? = nil,
         enableKVM: Bool? = nil,
         vmStoragePath: String? = nil,
@@ -125,6 +137,10 @@ public struct AgentConfig: Codable {
         self.qemuSocketDir = qemuSocketDir
         self.logLevel = logLevel
         self.networkMode = networkMode
+        self.ovnEncapIP = ovnEncapIP
+        self.ovnEncapType = ovnEncapType
+        self.ovnRemote = ovnRemote
+        self.ovnBootstrapChassis = ovnBootstrapChassis
         self.enableHVF = enableHVF
         self.enableKVM = enableKVM
         self.vmStoragePath = vmStoragePath
@@ -136,6 +152,16 @@ public struct AgentConfig: Codable {
         self.firecrackerSocketDir = firecrackerSocketDir
         self.hypervisorType = hypervisorType
         self.stateFilePath = stateFilePath
+    }
+
+    /// The OVN chassis bootstrap settings derived from this configuration.
+    public var ovnChassisConfig: OVNChassisConfig {
+        OVNChassisConfig(
+            encapIP: ovnEncapIP,
+            encapType: ovnEncapType,
+            remote: ovnRemote,
+            bootstrapEnabled: ovnBootstrapChassis ?? true
+        )
     }
 
     public static func load(from path: String, logger: Logger? = nil) throws -> AgentConfig {
@@ -156,6 +182,10 @@ public struct AgentConfig: Codable {
         let qemuSocketDir = tomlData.string("qemu_socket_dir")
         let logLevel = tomlData.string("log_level")
         let networkModeString = tomlData.string("network_mode")
+        let ovnEncapIP = tomlData.string("ovn_encap_ip")
+        let ovnEncapType = tomlData.string("ovn_encap_type")
+        let ovnRemote = tomlData.string("ovn_remote")
+        let ovnBootstrapChassis = tomlData.bool("ovn_bootstrap_chassis")
         let enableHVF = tomlData.bool("enable_hvf")
         let enableKVM = tomlData.bool("enable_kvm")
         let vmStoragePath = tomlData.string("vm_storage_dir")
@@ -240,6 +270,10 @@ public struct AgentConfig: Codable {
             qemuSocketDir: qemuSocketDir,
             logLevel: logLevel,
             networkMode: networkMode,
+            ovnEncapIP: ovnEncapIP,
+            ovnEncapType: ovnEncapType,
+            ovnRemote: ovnRemote,
+            ovnBootstrapChassis: ovnBootstrapChassis,
             enableHVF: enableHVF,
             enableKVM: enableKVM,
             vmStoragePath: vmStoragePath,
