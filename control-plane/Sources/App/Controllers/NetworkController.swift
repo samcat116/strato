@@ -31,7 +31,7 @@ struct NetworkController: RouteCollection {
         {
             let hasAccess = try await req.spicedb.checkPermission(
                 subject: user.id!.uuidString,
-                permission: "read",
+                permission: "view_project",
                 resource: "project",
                 resourceId: projectId.uuidString
             )
@@ -388,7 +388,7 @@ struct NetworkController: RouteCollection {
         for project in allProjects {
             let hasAccess = try await req.spicedb.checkPermission(
                 subject: user.id!.uuidString,
-                permission: "read",
+                permission: "view_project",
                 resource: "project",
                 resourceId: project.id!.uuidString
             )
