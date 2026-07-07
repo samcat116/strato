@@ -157,7 +157,7 @@ final class DesiredStateReconciliationTests {
 
             // The dispatch fails immediately — not after the sweep budget.
             var operation: VMOperation?
-            for _ in 0..<100 {
+            for _ in 0..<250 {
                 operation = try await VMOperation.find(operationId, on: app.db)
                 if operation?.status == .failed { break }
                 try await Task.sleep(for: .milliseconds(20))
@@ -167,7 +167,14 @@ final class DesiredStateReconciliationTests {
 
             // The unachieved intent was realigned: desired reverts to the
             // observed resting state instead of firing when the agent returns.
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            // The revert is a separate write that lands just after the
+            // operation flips to failed, so poll for it rather than racing it.
+            var refreshed: VM?
+            for _ in 0..<250 {
+                refreshed = try await VM.find(vm.id, on: app.db)
+                if refreshed?.desiredStatus == .shutdown { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
             #expect(refreshed?.desiredStatus == .shutdown)
         }
     }

@@ -94,12 +94,21 @@ final class VMOperationTests {
             // No agent is mapped to the VM, so the background dispatch fails
             // immediately: the operation must record it and the VM must be
             // restored to its pre-operation status (not left `.starting`).
-            try await pollVMStatus(vm.id!, until: .created, on: app.db)
-
-            let operation = try await VMOperation.find(operationId, on: app.db)
+            // Poll the operation itself — the VM both starts and ends this
+            // test as `.created`, so polling the VM status can return before
+            // the background dispatch has even run.
+            var operation: VMOperation?
+            for _ in 0..<250 {
+                operation = try await VMOperation.find(operationId, on: app.db)
+                if operation?.status == .failed { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
             #expect(operation?.status == .failed)
             #expect(operation?.error?.isEmpty == false)
             #expect(operation?.completedAt != nil)
+
+            let refreshed = try await VM.find(vm.id, on: app.db)
+            #expect(refreshed?.status == .created)
         }
     }
 
