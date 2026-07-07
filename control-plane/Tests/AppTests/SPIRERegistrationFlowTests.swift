@@ -176,7 +176,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let adminToken = try await makeAdmin(on: app.db)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            let token = AgentRegistrationToken(agentName: "node-a")
+            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
             try await token.save(on: app.db)
 
             try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
@@ -209,7 +209,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             // Expired but never superseded: the join token may have been
             // redeemed before expiry (spire-agent attests before strato-agent
             // registers), so the grant can still be live and must be revoked.
-            let token = AgentRegistrationToken(agentName: "node-a")
+            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
             token.expiresAt = Date().addingTimeInterval(-3600)
             try await token.save(on: app.db)
 
@@ -235,13 +235,13 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let adminToken = try await makeAdmin(on: app.db)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            let stale = AgentRegistrationToken(agentName: "node-a")
+            let stale = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
             stale.expiresAt = Date().addingTimeInterval(-3600)
             try await stale.save(on: app.db)
 
             // A valid replacement now owns the SPIRE grant (and the node may
             // already have attested with it against the same stable node ID).
-            let successor = AgentRegistrationToken(agentName: "node-a")
+            let successor = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
             try await successor.save(on: app.db)
 
             try await app.test(.DELETE, "/api/agents/registration-tokens/\(stale.id!)") { req in
@@ -268,7 +268,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
             // The mTLS path never redeems the WebSocket token, so the token
             // stays "unused" even though the agent is registered and live.
-            let token = AgentRegistrationToken(agentName: "node-a")
+            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
             try await token.save(on: app.db)
             let agent = makeAgent(named: "node-a")
             try await agent.save(on: app.db)
@@ -292,7 +292,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             await fake.setFailDelete(true)
             installFakeSPIRE(on: app, fake: fake)
 
-            let token = AgentRegistrationToken(agentName: "node-a")
+            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
             try await token.save(on: app.db)
 
             try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
@@ -313,7 +313,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let adminToken = try await makeAdmin(on: app.db)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            let token = AgentRegistrationToken(agentName: "node-a")
+            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
             token.markAsUsed()
             try await token.save(on: app.db)
 
@@ -325,6 +325,35 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
             let deleted = await fake.deletedSPIFFEIDs
             #expect(deleted.isEmpty)
+        }
+    }
+
+    @Test("A successor minted without a SPIRE grant does not take ownership")
+    func unprovisionedSuccessorDoesNotOwnGrant() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+
+            // The original grant, expired but possibly redeemed.
+            let stale = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
+            stale.expiresAt = Date().addingTimeInterval(-3600)
+            try await stale.save(on: app.db)
+
+            // Replacement issued while the registration API was unconfigured:
+            // it carries no SPIRE grant, so it cannot absorb the old one.
+            let successor = AgentRegistrationToken(agentName: "node-a", spireProvisioned: false)
+            try await successor.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/registration-tokens/\(stale.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            let deleted = await fake.deletedSPIFFEIDs
+            #expect(deleted == ["spiffe://strato.local/agent/node-a", "spiffe://strato.local/node/node-a"])
+            let evicted = await fake.evictedAgentIDs
+            #expect(evicted == ["spiffe://strato.local/node/node-a"])
         }
     }
 
@@ -377,7 +406,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let adminToken = try await makeAdmin(on: app.db)
             installSPIREAuthWithoutRegistrationAPI(on: app)
 
-            let token = AgentRegistrationToken(agentName: "node-a")
+            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
             try await token.save(on: app.db)
 
             try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in

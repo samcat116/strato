@@ -47,8 +47,19 @@ struct AgentController: RouteCollection {
         return await spireService.isEnabled
     }
 
-    private func requireSPIREDeprovisioningOrOverride(_ req: Request, action: String) async throws {
-        guard await spireDeprovisioningUnavailable(req) else { return }
+    /// Pass `grantKnown: true` when a persisted record proves a SPIRE grant
+    /// exists (a `spireProvisioned` token): the guard then applies whenever
+    /// the registration API is missing, regardless of how SPIRE auth happens
+    /// to be configured right now. Without it, the guard falls back to
+    /// inferring from SPIRE auth being enabled.
+    private func requireSPIREDeprovisioningOrOverride(
+        _ req: Request, action: String, grantKnown: Bool = false
+    ) async throws {
+        if grantKnown {
+            guard req.application.spireRegistrationService == nil else { return }
+        } else {
+            guard await spireDeprovisioningUnavailable(req) else { return }
+        }
         guard req.query[Bool.self, at: "skipSpireDeprovision"] == true else {
             throw Abort(
                 .serviceUnavailable,
@@ -157,10 +168,13 @@ struct AgentController: RouteCollection {
             }
         }
 
-        // Create new registration token
+        // Create new registration token, recording whether it carries a SPIRE
+        // grant — revocation decides ownership from this fact, not from
+        // whatever the process configuration happens to be at revoke time.
         let token = AgentRegistrationToken(
             agentName: createRequest.agentName,
-            expirationHours: expirationHours
+            expirationHours: expirationHours,
+            spireProvisioned: spireProvisioning != nil
         )
 
         do {
@@ -218,10 +232,12 @@ struct AgentController: RouteCollection {
         // - An existing Agent row with this name means the node registered over
         //   mTLS, which never redeems the WebSocket token: the token looks
         //   unused, but the SPIRE entries now belong to a live agent.
-        // - A *valid unused successor* token for the same name means the grant
-        //   was reissued; the entries (and the stable node identity a current
-        //   bootstrap may already have attested with) belong to the successor,
-        //   so touching SPIRE here would sabotage it.
+        // - A *valid unused SPIRE-provisioned successor* token for the same
+        //   name means the grant was reissued; the entries (and the stable
+        //   node identity a current bootstrap may already have attested with)
+        //   belong to the successor, so touching SPIRE here would sabotage it.
+        //   A successor minted while the registration API was unconfigured
+        //   carries no grant and does not take ownership.
         //
         // Expiry alone does NOT make a grant inert: the join token may have
         // been redeemed before it expired (spire-agent attests first; the
@@ -235,17 +251,19 @@ struct AgentController: RouteCollection {
             .filter(\.$name == token.agentName)
             .first() != nil
 
-        let validSuccessorExists = try await AgentRegistrationToken.query(on: req.db)
+        let provisionedSuccessorExists = try await AgentRegistrationToken.query(on: req.db)
             .filter(\.$agentName == token.agentName)
             .filter(\.$isUsed == false)
+            .filter(\.$spireProvisioned == true)
             .filter(\.$id != token.requireID())
             .all()
             .contains { $0.isValid }
 
-        let tokenOwnsGrant = !token.isUsed && !agentIsRegistered && !validSuccessorExists
+        let tokenOwnsGrant =
+            token.spireProvisioned && !token.isUsed && !agentIsRegistered && !provisionedSuccessorExists
 
         if tokenOwnsGrant {
-            try await requireSPIREDeprovisioningOrOverride(req, action: "registration token")
+            try await requireSPIREDeprovisioningOrOverride(req, action: "registration token", grantKnown: true)
         }
 
         if tokenOwnsGrant, let spire = req.application.spireRegistrationService {

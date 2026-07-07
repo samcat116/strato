@@ -198,6 +198,7 @@ public func configure(_ app: Application) async throws {
     // Agent migrations
     app.migrations.add(CreateAgent())
     app.migrations.add(CreateAgentRegistrationToken())
+    app.migrations.add(AddSPIREProvisionedToAgentRegistrationToken())
 
     // SCIM migrations
     app.migrations.add(CreateSCIMToken())

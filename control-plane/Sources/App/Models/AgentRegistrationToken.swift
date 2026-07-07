@@ -16,6 +16,12 @@ final class AgentRegistrationToken: Model, Content, @unchecked Sendable {
     @Field(key: "is_used")
     var isUsed: Bool
 
+    /// Whether creating this token also provisioned the node in SPIRE (join
+    /// token + workload entry). Grant ownership during revocation is decided
+    /// from this recorded fact, never from the current process configuration.
+    @Field(key: "spire_provisioned")
+    var spireProvisioned: Bool
+
     @Timestamp(key: "expires_at", on: .none)
     var expiresAt: Date?
 
@@ -31,12 +37,14 @@ final class AgentRegistrationToken: Model, Content, @unchecked Sendable {
         id: UUID? = nil,
         token: String = UUID().uuidString,
         agentName: String,
-        expirationHours: Int = 1
+        expirationHours: Int = 1,
+        spireProvisioned: Bool = false
     ) {
         self.id = id
         self.token = token
         self.agentName = agentName
         self.isUsed = false
+        self.spireProvisioned = spireProvisioned
         self.expiresAt = Date().addingTimeInterval(TimeInterval(expirationHours * 3600))
     }
 
