@@ -7,19 +7,30 @@ import StratoShared
 /// Service for pushing and querying VM logs from Loki
 actor LokiService {
     private let app: Application
-    private let lokiEndpoint: String
+    /// Loki push/query endpoint, or `nil` when `LOKI_ENDPOINT` is unset (Loki not deployed).
+    private let lokiEndpoint: String?
     private let httpClient: HTTPClient
 
     init(app: Application) {
         self.app = app
-        self.lokiEndpoint = Environment.get("LOKI_ENDPOINT") ?? "http://loki:3100"
+        self.lokiEndpoint = Environment.get("LOKI_ENDPOINT")
         self.httpClient = app.http.client.shared
+    }
+
+    /// Whether a Loki endpoint is configured. Pushes are no-ops and queries throw when this is false.
+    var isEnabled: Bool {
+        lokiEndpoint != nil
     }
 
     // MARK: - Push Logs to Loki
 
-    /// Push a VM log message to Loki
+    /// Push a VM log message to Loki. No-ops when Loki is not configured.
     func pushLog(_ logMessage: VMLogMessage) async throws {
+        guard let lokiEndpoint else {
+            // Loki not deployed — silently drop rather than spamming DNS errors.
+            return
+        }
+
         let labels = [
             "service_name": "strato-agent",
             "vm_id": logMessage.vmId,
@@ -114,6 +125,10 @@ actor LokiService {
         limit: Int,
         direction: QueryDirection
     ) async throws -> [LogEntry] {
+        guard let lokiEndpoint else {
+            throw LokiError.notConfigured
+        }
+
         var urlComponents = URLComponents(string: "\(lokiEndpoint)/loki/api/v1/query_range")!
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "query", value: query),
@@ -178,6 +193,7 @@ struct LogEntry: Content {
 
 enum LokiError: Error, LocalizedError {
     case invalidURL
+    case notConfigured
     case queryFailed(String)
     case connectionFailed(String)
 
@@ -185,6 +201,8 @@ enum LokiError: Error, LocalizedError {
         switch self {
         case .invalidURL:
             return "Invalid Loki URL"
+        case .notConfigured:
+            return "Loki is not configured (LOKI_ENDPOINT unset)"
         case .queryFailed(let reason):
             return "Loki query failed: \(reason)"
         case .connectionFailed(let reason):
