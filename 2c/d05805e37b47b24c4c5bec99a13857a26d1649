@@ -1,0 +1,26 @@
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_cfe661b849c7e9::t_ab008dfd1509f1 231
+  s_cfe661b849c7e9::t_c7ce661aa8ae5c 670-676
+  s_cfe661b849c7e9::t_7fe9473c96dfb0 302
+  s_cfe661b849c7e9::t_dc3b093a8632dc 134
+  s_cfe661b849c7e9::t_4f38431c98a014 13-26,29-52,58,60,67-85
+  s_cfe661b849c7e9::t_f6164ba52889ba 90-92
+  s_cfe661b849c7e9::t_543cee2f1e999d 733-736
+  s_cfe661b849c7e9::t_21e45d7cfdfb60 159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2cd05805e37b47b24c4c5bec99a13857a26d1649",
+  "prompts": {},
+  "sessions": {
+    "s_cfe661b849c7e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "72a931f5-a31b-47d9-9bf8-f821c524c05e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
