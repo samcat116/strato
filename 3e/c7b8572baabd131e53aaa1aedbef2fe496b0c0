@@ -1,0 +1,71 @@
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_cfe661b849c7e9::t_d4cd34c13c7cf1 470-477,479-482,488
+  s_cfe661b849c7e9::t_9e7c65bd55accf 4
+  s_cfe661b849c7e9::t_c3cd07a62a8ed8 252-264,271,275-304
+agent/Package.swift
+  s_cfe661b849c7e9::t_24bbb3254a4eea 43-59,64,80,82-87
+  s_cfe661b849c7e9::t_bd8c1a699af329 7-8,23-29
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_cfe661b849c7e9::t_b0bd7a977874c8 115-121,126-142,145-157,159-163,167-168
+  s_cfe661b849c7e9::t_560283da49e11a 57-58
+  s_cfe661b849c7e9::t_11eceab490e419 143-144
+envoy/standalone/envoy.yaml
+  s_cfe661b849c7e9::t_64d6706a1782fd 61-64,68-69
+agent/Sources/StratoAgent/Agent.swift
+  s_cfe661b849c7e9::t_d97dec399f135d 330
+  s_cfe661b849c7e9::t_3401300310dade 8
+Taskfile.yml
+  s_cfe661b849c7e9::t_813039238676e7 581-582
+control-plane/Package.swift
+  s_cfe661b849c7e9::t_204e0bb7ea7366 60
+  s_cfe661b849c7e9::t_ccb48f2efdea47 77-78
+  s_cfe661b849c7e9::t_18fe0093f497df 30-31
+agent/Sources/StratoAgentSPIFFE/SPIFFEClient.swift
+  s_cfe661b849c7e9::t_9387903b2f1e2e 3
+  s_cfe661b849c7e9::t_2ea294b7a99166 72,81-88,138,147,202,208,210,212,214,234,253,261,269,286,306
+control-plane/Tests/AppTests/SPIREServiceTests.swift
+  s_cfe661b849c7e9::t_269dd2cad7c9ac 1-2,5
+  s_cfe661b849c7e9::t_724c571d29c85f 94-290
+control-plane/Sources/App/Services/SPIFFE/XFCC.swift
+  s_cfe661b849c7e9::t_085b522969f94d 1-115
+control-plane/Tests/AppTests/XFCCTests.swift
+  s_cfe661b849c7e9::t_1bbe8801705af6 1-92
+agent/Tests/StratoAgentTests/WorkloadAPIClientTests.swift
+  s_cfe661b849c7e9::t_2a2e08ef1b924a 1-382
+agent/Sources/StratoAgentSPIFFE/WorkloadAPIClient.swift
+  s_cfe661b849c7e9::t_8c82dd6ef7da87 65-66,93-94,136-137
+  s_cfe661b849c7e9::t_baf8e5af4dfc53 1-64,67-92,95-135,138-297
+agent/Sources/StratoAgentSPIFFE/Generated/workload.proto
+  s_cfe661b849c7e9::t_5a2bcd6e281652 1-2,7-225
+  s_cfe661b849c7e9::t_ac8f69db5d64e6 3-6
+agent/Sources/StratoAgentSPIFFE/Generated/README.md
+  s_cfe661b849c7e9::t_b9bf0b9ca392e7 1-23
+agent/Sources/StratoAgentSPIFFE/Generated/workload.pb.swift
+  s_cfe661b849c7e9::t_2caa91d05ec665 1-883
+agent/Package.resolved
+  s_a32d2af4101b35::t_21f8757b59e2d6 2,4-30,63-64,185,187,189-190
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3ec7b8572baabd131e53aaa1aedbef2fe496b0c0",
+  "prompts": {},
+  "sessions": {
+    "s_a32d2af4101b35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0d48f545-fff9-4339-84f4-fea5b71554d5",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_cfe661b849c7e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "72a931f5-a31b-47d9-9bf8-f821c524c05e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
