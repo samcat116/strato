@@ -1,0 +1,92 @@
+agent/Sources/StratoAgent/NetworkOrchestrator.swift
+  s_a32d2af4101b35::t_119feffceccc69 39-43,55-59,64-67,79-81
+agent/Sources/StratoAgentCore/NetworkAttachment.swift
+  s_a32d2af4101b35::t_2e22579ca07101 44-50,59-61,70-71
+  s_a32d2af4101b35::t_4929a9f6113ec8 19-25
+control-plane/Sources/App/configure.swift
+  s_a32d2af4101b35::t_2951eec051a6b3 266-268
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_a32d2af4101b35::t_3f1ae6b2904d63 162-165,167-169,176,178,185-200,204-207
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_a32d2af4101b35::t_71d309b76c18b4 180
+  s_a32d2af4101b35::t_ee36ebaecbecbc 156-157
+  s_a32d2af4101b35::t_08da8562c3e7ce 58-65,69-70,76-80
+  s_a32d2af4101b35::t_c56851caea728d 123-126,143
+control-plane/web/src/components/networks/network-table.tsx
+  s_a32d2af4101b35::t_d2cbcde5f150ef 79
+  s_a32d2af4101b35::t_b8c51d1d6cdcc8 151-157
+  s_a32d2af4101b35::t_5e9a426f215988 4
+  s_a32d2af4101b35::t_cc464db0ec5f86 24,31
+  s_a32d2af4101b35::t_232cbf35d82aab 120-140
+  s_a32d2af4101b35::t_65cb750f0fe275 148-150
+control-plane/web/src/types/api.ts
+  s_a32d2af4101b35::t_166cfdaf0ddc8a 752-759,769-772,779-782
+control-plane/Tests/AppTests/VMSpecBuilderTests.swift
+  s_a32d2af4101b35::t_3adf0558eb0d9d 341-373
+control-plane/web/src/components/networks/dhcp-fields.tsx
+  s_a32d2af4101b35::t_bc5fb1a65ee1d4 1-126
+control-plane/web/src/app/(dashboard)/networks/page.tsx
+  s_a32d2af4101b35::t_1b318e7e9f69cc 7-11,14,18
+  s_a32d2af4101b35::t_07672aece94685 58,68-75
+  s_a32d2af4101b35::t_f66551dbb38ed0 76
+agent/Sources/StratoAgent/NetworkServiceProtocol.swift
+  s_a32d2af4101b35::t_5f9ddc77c6c182 45-53,57-58,65-68
+control-plane/Sources/App/Migrations/AddDHCPConfigToLogicalNetwork.swift
+  s_a32d2af4101b35::t_29516ad4db1cb0 1-39
+control-plane/web/src/components/networks/create-network-dialog.tsx
+  s_a32d2af4101b35::t_d1a977472fc5de 19-24
+  s_a32d2af4101b35::t_83fdb2f0350a88 46,54
+  s_a32d2af4101b35::t_602a407c885b01 160
+  s_a32d2af4101b35::t_30179e066a2136 79
+shared/Sources/StratoShared/VMSpec.swift
+  s_a32d2af4101b35::t_04445f0e53ebe8 139-151,158-162,170-195
+agent/Tests/StratoAgentTests/CloudInitNetworkConfigTests.swift
+  s_a32d2af4101b35::t_802b2d40eeefbb 79-123
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_a32d2af4101b35::t_d4fe502d1d33ec 136-143,170-174,199-202,214-217
+  s_a32d2af4101b35::t_e75c5061077fa9 116-117
+  s_a32d2af4101b35::t_c716bfff53b13d 84-88,96-115,118-120
+  s_a32d2af4101b35::t_9937aab76a70c3 40-60
+  s_a32d2af4101b35::t_8c15d4a7625585 144-160,175-188
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_a32d2af4101b35::t_6c67544bb7da89 592-593,600
+  s_a32d2af4101b35::t_1abe023c6ddfed 806
+  s_a32d2af4101b35::t_684e71a2637768 371-373,375-377
+  s_a32d2af4101b35::t_7b6c7e978638fd 135-140
+  s_a32d2af4101b35::t_6f567585865814 778-805,807-821
+  s_a32d2af4101b35::t_bf317f28cdfdcb 161-168,186,191
+agent/Sources/StratoAgentCore/DHCPOptions.swift
+  s_a32d2af4101b35::t_98bda10be54fdc 1-42
+control-plane/web/src/components/networks/edit-network-dialog.tsx
+  s_a32d2af4101b35::t_2d43d61670dac7 1-2,4-51,69,82-84,86-105,126,161-162
+  s_a32d2af4101b35::t_a8b456ebb8fc67 3
+  s_a32d2af4101b35::t_dd7e8cf2f1a329 52-68,70-81,85,106-125,127-160
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_a32d2af4101b35::t_85b4db04f1bc5f 108-109,116-120
+  s_a32d2af4101b35::t_b68d8848f3e9e2 453-456
+  s_a32d2af4101b35::t_4de72305d630c8 222-236,243-248
+  s_a32d2af4101b35::t_0a99b5b0a98864 359-380
+  s_a32d2af4101b35::t_3c7fe2aa06d463 249
+control-plane/Sources/App/Services/AgentService.swift
+  s_a32d2af4101b35::t_a29e29d4d766f9 882-890,899-900
+agent/Tests/StratoAgentTests/DHCPOptionsTests.swift
+  s_a32d2af4101b35::t_0e40d1ad6f1169 1-51
+control-plane/web/src/components/networks/index.ts
+  s_a32d2af4101b35::t_bad6859cf92763 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "137715e45b9adb005b223b09b924392c0daa40b1",
+  "prompts": {},
+  "sessions": {
+    "s_a32d2af4101b35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0d48f545-fff9-4339-84f4-fea5b71554d5",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
