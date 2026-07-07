@@ -132,10 +132,14 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // Find or create the logical switch
         _ = try await findOrCreateLogicalSwitch(name: config.networkName, subnet: config.subnet ?? "10.0.0.0/24")
 
-        // Create the logical switch port (idempotent: reuse on re-attach)
+        // Create the logical switch port (idempotent: reuse on re-attach). A
+        // port only exists to OVN when its UUID is referenced by its switch's
+        // `ports` column — ovn-northd ignores unreferenced rows (no
+        // Port_Binding, no dataplane). Older agents created exactly such
+        // orphans, so a found port is verified and recreated attached when
+        // necessary, keeping its addresses.
         let portUUID: String?
         if let existingPort = try await ovnManager?.getLogicalSwitchPort(named: portName) {
-            portUUID = existingPort.uuid
             // Reuse the existing port's allowed addresses so the VM boots with a
             // MAC/IP that matches OVN's port_security. Otherwise a recovery path
             // (agent restart, or retry after a failed TAP/OVS step) would launch
@@ -143,26 +147,34 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             let (existingMAC, existingIP) = Self.parsePortAddress(existingPort.addresses)
             if !existingMAC.isEmpty { macAddress = existingMAC }
             if !existingIP.isEmpty { ipAddress = existingIP }
-            logger.debug(
-                "Reusing existing logical switch port",
-                metadata: [
-                    "portName": .string(portName),
-                    "macAddress": .string(macAddress),
-                    "ipAddress": .string(ipAddress ?? "none"),
-                ])
+
+            let logicalSwitch = try await ovnManager?.getLogicalSwitch(named: config.networkName)
+            let attachedPorts = logicalSwitch?.ports ?? []
+            if let existingUUID = existingPort.uuid, attachedPorts.contains(existingUUID) {
+                portUUID = existingPort.uuid
+                logger.debug(
+                    "Reusing existing logical switch port",
+                    metadata: [
+                        "portName": .string(portName),
+                        "macAddress": .string(macAddress),
+                        "ipAddress": .string(ipAddress ?? "none"),
+                    ])
+            } else {
+                logger.warning(
+                    "Existing logical switch port is not attached to its switch (orphaned by an older agent); recreating it attached",
+                    metadata: [
+                        "portName": .string(portName),
+                        "networkName": .string(config.networkName),
+                    ])
+                try await ovnManager?.deleteLogicalSwitchPort(named: portName)
+                portUUID = try await createAttachedLogicalSwitchPort(
+                    portName: portName, vmId: vmId, networkName: config.networkName,
+                    macAddress: macAddress, ipAddress: ipAddress)
+            }
         } else {
-            let portAddress = ipAddress.map { "\(macAddress) \($0)" } ?? macAddress
-            let logicalPort = OVNLogicalSwitchPort(
-                name: portName,
-                addresses: [portAddress],
-                port_security: [portAddress],
-                external_ids: [
-                    "vm-id": vmId,
-                    "network-name": config.networkName,
-                    "description": "VM network interface",
-                ]
-            )
-            portUUID = try await ovnManager?.createLogicalSwitchPort(logicalPort)
+            portUUID = try await createAttachedLogicalSwitchPort(
+                portName: portName, vmId: vmId, networkName: config.networkName,
+                macAddress: macAddress, ipAddress: ipAddress)
         }
 
         // Create TAP interface and connect to OVS bridge
@@ -553,6 +565,26 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 + "check that ovn-controller is running and that external_ids:ovn-remote on the local OVS "
                 + "points at the right southbound database. VM ports would come up with no dataplane, so "
                 + "OVN networking is not being advertised.")
+    }
+
+    /// Creates the VM NIC's logical switch port attached to its switch in one
+    /// OVSDB transaction (`ovn-nbctl lsp-add` semantics) — the two steps must
+    /// never diverge or the port is an orphan ovn-northd ignores.
+    private func createAttachedLogicalSwitchPort(
+        portName: String, vmId: String, networkName: String, macAddress: String, ipAddress: String?
+    ) async throws -> String? {
+        let portAddress = ipAddress.map { "\(macAddress) \($0)" } ?? macAddress
+        let logicalPort = OVNLogicalSwitchPort(
+            name: portName,
+            addresses: [portAddress],
+            port_security: [portAddress],
+            external_ids: [
+                "vm-id": vmId,
+                "network-name": networkName,
+                "description": "VM network interface",
+            ]
+        )
+        return try await ovnManager?.createLogicalSwitchPort(logicalPort, onSwitch: networkName)
     }
 
     private func findOrCreateLogicalSwitch(name: String, subnet: String) async throws -> UUID {
