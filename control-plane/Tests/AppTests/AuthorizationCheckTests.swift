@@ -34,15 +34,11 @@ final class AuthorizationCheckTests {
             let token = try await user.generateAPIKey(on: app.db)
             try await test(app, user, token)
 
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             throw error
         }
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     private func body(

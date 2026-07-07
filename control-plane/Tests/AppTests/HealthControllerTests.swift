@@ -17,8 +17,7 @@ struct HealthControllerTests {
         try await app.test(.GET, "/health") { res async throws in
             #expect(res.status == .ok)
         }
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     // MARK: - Liveness Check Tests
@@ -41,8 +40,7 @@ struct HealthControllerTests {
             #expect(appCheck?.status == "up")
             #expect(appCheck?.error == nil)
         }
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("Liveness endpoint includes timestamp")
@@ -59,8 +57,7 @@ struct HealthControllerTests {
             let timeDifference = abs(now.timeIntervalSince(health.timestamp))
             #expect(timeDifference < 60)
         }
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     // MARK: - Readiness Check Tests
@@ -83,8 +80,7 @@ struct HealthControllerTests {
             #expect(dbCheck?.status == "up")
             #expect(dbCheck?.error == nil)
         }
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("Readiness endpoint includes timestamp")
@@ -102,8 +98,7 @@ struct HealthControllerTests {
             let timeDifference = abs(now.timeIntervalSince(health.timestamp))
             #expect(timeDifference < 60)
         }
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     // MARK: - Response Structure Tests
@@ -127,8 +122,7 @@ struct HealthControllerTests {
                 #expect(!check.status.isEmpty)
             }
         }
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     // MARK: - Content Type Tests
@@ -153,8 +147,7 @@ struct HealthControllerTests {
             #expect(contentType?.type.description == "application")
             #expect(contentType?.subType == "json")
         }
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     // MARK: - Multiple Checks Tests
@@ -177,8 +170,7 @@ struct HealthControllerTests {
             let uniqueNames = Set(checkNames)
             #expect(checkNames.count == uniqueNames.count)
         }
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     // MARK: - Overall Status Tests
@@ -200,8 +192,7 @@ struct HealthControllerTests {
                 #expect(check.status == "up")
             }
         }
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
 }

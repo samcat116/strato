@@ -4,7 +4,9 @@ import PackageDescription
 let package = Package(
     name: "strato",
     platforms: [
-        .macOS(.v14)
+        // macOS 15+ required by grpc-swift-2 (SPIRE server API client);
+        // production runs on Linux, so this only affects local dev builds.
+        .macOS(.v15)
     ],
     dependencies: [
         // StratoShared for common models and protocols
@@ -38,12 +40,35 @@ let package = Package(
         // 📈 swift-metrics facade (backed by swift-otel when OTEL_METRICS_ENABLED)
         .package(url: "https://github.com/apple/swift-metrics.git", from: "2.0.0"),
         // 🔴 Valkey/Redis support for caching and sessions
-        .package(url: "https://github.com/vapor/redis.git", from: "4.0.0")
+        .package(url: "https://github.com/vapor/redis.git", from: "4.0.0"),
+        // SPIRE Server registration API (gRPC over Unix socket / loopback TCP)
+        .package(url: "https://github.com/grpc/grpc-swift-2.git", from: "2.0.0"),
+        .package(url: "https://github.com/grpc/grpc-swift-nio-transport.git", from: "2.0.0"),
+        .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "2.0.0"),
+        .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0")
     ],
     targets: [
+        // SPIRE Server registration API client (join tokens + registration
+        // entries). A separate library target so tests can exercise it against
+        // an in-process gRPC server and so the generated protobuf code stays
+        // out of the App target.
+        .target(
+            name: "SPIREServerAPI",
+            dependencies: [
+                .product(name: "GRPCCore", package: "grpc-swift-2"),
+                .product(name: "GRPCNIOTransportHTTP2Posix", package: "grpc-swift-nio-transport"),
+                .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
+                .product(name: "SwiftProtobuf", package: "swift-protobuf"),
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            exclude: ["Generated/README.md", "Generated/proto"],
+            swiftSettings: swiftSettings
+        ),
         .executableTarget(
             name: "App",
             dependencies: [
+                .target(name: "SPIREServerAPI"),
                 .product(name: "StratoShared", package: "shared"),
                 .product(name: "Fluent", package: "fluent"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
@@ -73,9 +98,14 @@ let package = Package(
             name: "AppTests",
             dependencies: [
                 .target(name: "App"),
+                .target(name: "SPIREServerAPI"),
                 .product(name: "VaporTesting", package: "vapor"),
                 .product(name: "FluentSQLiteDriver", package: "fluent-sqlite-driver"),
-                .product(name: "X509", package: "swift-certificates")
+                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
+                .product(name: "X509", package: "swift-certificates"),
+                .product(name: "GRPCCore", package: "grpc-swift-2"),
+                .product(name: "GRPCNIOTransportHTTP2Posix", package: "grpc-swift-nio-transport"),
+                .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf")
             ],
             swiftSettings: testSwiftSettings
         )

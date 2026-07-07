@@ -42,15 +42,11 @@ final class ProjectMemberTests {
 
             try await test(app, project, actor, target, group, token, recorder)
 
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             throw error
         }
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("Granting a user role writes a row and a SpiceDB tuple")

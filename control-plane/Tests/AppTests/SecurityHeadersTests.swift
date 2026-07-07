@@ -20,8 +20,7 @@ struct SecurityHeadersTests {
                     == SecurityHeadersMiddleware.defaultContentSecurityPolicy)
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("Security headers are present on synthesized error responses")
@@ -47,8 +46,7 @@ struct SecurityHeadersTests {
             #expect(res.headers.first(name: "X-Frame-Options") == "DENY")
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("HSTS is not sent from a plaintext (non-TLS) server")
@@ -62,8 +60,7 @@ struct SecurityHeadersTests {
             #expect(res.headers.first(name: "Strict-Transport-Security") == nil)
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("Bundled frontend HTML is not given the strict same-origin CSP")
@@ -92,8 +89,7 @@ struct SecurityHeadersTests {
             #expect(res.headers.first(name: "X-Content-Type-Options") == "nosniff")
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("API docs page supplies its own CSP allowing Swagger CDN")
@@ -108,7 +104,6 @@ struct SecurityHeadersTests {
             #expect(csp?.contains("https://unpkg.com") == true)
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 }

@@ -22,11 +22,11 @@ struct AgentWebSocketController: RouteCollection {
         var buffer: [String] = []
         /// Set exactly once, when authentication succeeds; nil means "buffer".
         var agentName: String?
-        /// Whether this connection authenticated via the registration-token path
-        /// (rather than mTLS/XFCC). Only a token-authenticated agent may be
-        /// issued a rotated single-use reconnect token; an mTLS-authenticated
-        /// connection must never mint one, even if it also happens to carry a
-        /// bearer header. Set on the WebSocket's event loop alongside `agentName`.
+        /// Whether this connection authenticated by redeeming a registration
+        /// token — the only path that may mint a rotated bearer reconnect
+        /// credential. mTLS connections carry the join URL's bearer header
+        /// too, but presenting a header is not the same as being validated by
+        /// it: an mTLS-only node must never accrete token-auth credentials.
         var tokenAuthenticated = false
     }
 
@@ -38,9 +38,7 @@ struct AgentWebSocketController: RouteCollection {
 
         ws.onText { ws, text in
             if let agentName = state.agentName {
-                self.handleWebSocketMessage(
-                    req: req, ws: ws, text: text, agentName: agentName,
-                    tokenAuthenticated: state.tokenAuthenticated)
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
             } else {
                 state.buffer.append(text)
             }
@@ -52,9 +50,7 @@ struct AgentWebSocketController: RouteCollection {
                 return
             }
             if let agentName = state.agentName {
-                self.handleWebSocketMessage(
-                    req: req, ws: ws, text: text, agentName: agentName,
-                    tokenAuthenticated: state.tokenAuthenticated)
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
             } else {
                 state.buffer.append(text)
             }
@@ -80,20 +76,16 @@ struct AgentWebSocketController: RouteCollection {
     /// Switch a connection from buffering to routing: record the authenticated
     /// agent name and replay any frames that arrived during authentication.
     /// Hops to the WebSocket's event loop, where all `state` access lives.
-    private func activateMessageRouting(
-        req: Request, ws: WebSocket, state: MessageState, agentName: String, tokenAuthenticated: Bool
-    ) {
+    private func activateMessageRouting(req: Request, ws: WebSocket, state: MessageState, agentName: String) {
         ws.eventLoop.execute {
             state.agentName = agentName
-            state.tokenAuthenticated = tokenAuthenticated
             if !state.buffer.isEmpty {
                 req.logger.info(
                     "Processing \(state.buffer.count) buffered messages", metadata: ["agentName": .string(agentName)]
                 )
             }
             for text in state.buffer {
-                self.handleWebSocketMessage(
-                    req: req, ws: ws, text: text, agentName: agentName, tokenAuthenticated: tokenAuthenticated)
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
             }
             state.buffer.removeAll()
         }
@@ -312,9 +304,11 @@ struct AgentWebSocketController: RouteCollection {
                         agentName: agentName, replicaId: req.application.replicaID)
                 }
 
-                // Mark as validated and process buffered messages
-                self.activateMessageRouting(
-                    req: req, ws: ws, state: state, agentName: agentName, tokenAuthenticated: true)
+                // Mark as validated and process buffered messages. This is
+                // the only path where token auth actually validated the
+                // connection, so only here may registration rotate the token.
+                state.tokenAuthenticated = true
+                self.activateMessageRouting(req: req, ws: ws, state: state, agentName: agentName)
 
                 return ws.eventLoop.makeSucceededFuture(())
             }
@@ -397,7 +391,7 @@ struct AgentWebSocketController: RouteCollection {
     }
 
     private func handleWebSocketMessage(
-        req: Request, ws: WebSocket, text: String, agentName: String, tokenAuthenticated: Bool
+        req: Request, ws: WebSocket, text: String, agentName: String, state: MessageState
     ) {
         req.logger.info(
             "Processing WebSocket message",
@@ -431,11 +425,11 @@ struct AgentWebSocketController: RouteCollection {
                             "controlPlaneProtocolVersion": .stringConvertible(WireProtocol.currentVersion),
                         ])
                 }
-                // Gate reconnect-token rotation on the authentication *path*, not
-                // on the mere presence of a bearer header: an mTLS-authenticated
-                // connection that also carries an Authorization header must not be
-                // handed a token-auth reconnect credential (issue #334).
-                let isTokenAuthenticated = tokenAuthenticated
+                // Keyed on the auth *path*, not on bearer-header presence: an
+                // mTLS bootstrap still carries the join URL's token in the
+                // header, and rotating for it would mint a long-lived bearer
+                // credential for a node meant to authenticate by SVID only.
+                let isTokenAuthenticated = state.tokenAuthenticated
                 Task {
                     do {
                         let agentUUID = try await req.agentService.registerAgent(message, agentName: agentName)
@@ -752,10 +746,8 @@ struct AgentWebSocketController: RouteCollection {
             }
 
             // Switch from buffering to routing, replaying any frames that
-            // arrived while authentication was in flight. mTLS connections are
-            // never token-authenticated, so they must not mint a reconnect token.
-            self.activateMessageRouting(
-                req: req, ws: ws, state: state, agentName: agentName, tokenAuthenticated: false)
+            // arrived while authentication was in flight.
+            self.activateMessageRouting(req: req, ws: ws, state: state, agentName: agentName)
 
             req.logger.info(
                 "Agent WebSocket connection established via \(authMethod)",

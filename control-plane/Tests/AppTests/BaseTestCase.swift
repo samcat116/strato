@@ -13,28 +13,10 @@ class BaseTestCase {
     var testOrganization: Organization!
     var authToken: String!
 
-    /// Run a test with a fresh application instance and file-based database
+    /// Run a test with a fresh application instance and a pre-migrated
+    /// per-test database clone (see TestUtilities.swift).
     func withApp(_ test: (Application) async throws -> Void) async throws {
-        let app = try await Application.makeForTesting()
-
-        do {
-            try await configure(app)
-            try await app.autoMigrate()
-            try await test(app)
-            try await app.autoRevert()
-        } catch {
-            try? await app.autoRevert()
-            await app.dropTestSchemaIfNeeded()
-            // asyncShutdown() awaits full teardown (event loops, thread pool, DB
-            // connection pool), so the database file is safe to remove immediately.
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
-            throw error
-        }
-
-        await app.dropTestSchemaIfNeeded()
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await withTestApp(test)
     }
 
     /// Set up common test data
