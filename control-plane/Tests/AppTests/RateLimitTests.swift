@@ -33,10 +33,10 @@ struct RateLimitTests {
 
             try await test(app)
         } catch {
-            try await app.asyncShutdown()
+            try await app.shutdownForTesting()
             throw error
         }
-        try await app.asyncShutdown()
+        try await app.shutdownForTesting()
     }
 
     private func baseConfig(
