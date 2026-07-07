@@ -110,6 +110,15 @@ actor AgentService {
     /// lives for one HTTP request's await and resolves by reply or timeout.
     private var pendingRPCs: [String: PendingRPC] = [:]
 
+    /// Exchange IDs whose awaiting task was cancelled before the exchange was
+    /// armed (the arming runs in a separate task, so cancellation can win the
+    /// race). Consumed at arming time so the continuation resumes immediately
+    /// instead of suspending until its timeout. Entries that miss both the
+    /// pending maps and the arming (cancellation racing a normal completion)
+    /// linger, but the only canceller of these waits is shutdown's
+    /// background-task drain, so the set is bounded to process teardown.
+    private var cancelledExchanges: Set<String> = []
+
     private var heartbeatTask: Task<Void, Never>?
 
     /// A request awaiting a response from a specific agent.
@@ -879,6 +888,15 @@ actor AgentService {
             }
             .all()
 
+        // DHCP/DNS config the agent programs into OVN lives on the logical
+        // network, not the NIC row, so fetch the networks once and index by name
+        // for the spec builder. Few rows; a full scan is cheaper than per-VM
+        // lookups.
+        let networksByName = try await Dictionary(
+            LogicalNetwork.query(on: db).all().map { ($0.name, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
         var entries: [DesiredVMState] = []
         for vm in vms {
             guard let vmId = vm.id else { continue }
@@ -887,7 +905,8 @@ actor AgentService {
                 from: vm,
                 image: image,
                 volumes: vm.volumes,
-                networkInterfaces: vm.networkInterfaces
+                networkInterfaces: vm.networkInterfaces,
+                networks: networksByName
             )
 
             // Image download info lets the agent materialize a VM it doesn't
@@ -1417,6 +1436,11 @@ actor AgentService {
 
     /// Arm a pending-request continuation, push the envelope over the local
     /// socket, and await the agent's correlated response (or the timeout).
+    ///
+    /// Cancellation-aware: cancelling the awaiting task resumes the
+    /// continuation with `CancellationError` instead of leaving it suspended
+    /// until the timeout — shutdown's background-task drain relies on this to
+    /// cut multi-minute agent-response budgets short.
     private func sendEnvelopeAwaitingLocalResponse(
         _ envelope: MessageEnvelope,
         requestId: String,
@@ -1424,29 +1448,56 @@ actor AgentService {
         agentName: String,
         timeout: Duration
     ) async throws -> AgentServiceResponse {
-        return try await withCheckedThrowingContinuation { continuation in
-            Task {
-                do {
-                    // Store continuation for response handling
-                    self.storePendingRequest(requestId, agentId: agentId, continuation: continuation)
-
-                    // Send message
-                    try self.sendEnvelope(envelope, toLocalAgent: agentName)
-
-                    // Arm a timeout, tracking its handle so a normal response can
-                    // cancel it instead of leaving a task dangling per request.
-                    let timeoutTask = Task {
-                        try? await Task.sleep(for: timeout)
-                        guard !Task.isCancelled else { return }
-                        self.timeoutRequest(requestId)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                Task {
+                    guard !self.consumeExchangeCancellation(requestId) else {
+                        continuation.resume(throwing: CancellationError())
+                        return
                     }
-                    self.attachTimeout(timeoutTask, to: requestId)
-                } catch {
-                    _ = self.removePendingRequest(requestId)
-                    continuation.resume(throwing: error)
+                    do {
+                        // Store continuation for response handling
+                        self.storePendingRequest(requestId, agentId: agentId, continuation: continuation)
+
+                        // Send message
+                        try self.sendEnvelope(envelope, toLocalAgent: agentName)
+
+                        // Arm a timeout, tracking its handle so a normal response can
+                        // cancel it instead of leaving a task dangling per request.
+                        let timeoutTask = Task {
+                            try? await Task.sleep(for: timeout)
+                            guard !Task.isCancelled else { return }
+                            self.timeoutRequest(requestId)
+                        }
+                        self.attachTimeout(timeoutTask, to: requestId)
+                    } catch {
+                        _ = self.removePendingRequest(requestId)
+                        continuation.resume(throwing: error)
+                    }
                 }
             }
+        } onCancel: {
+            Task { await self.cancelPendingExchange(requestId) }
         }
+    }
+
+    /// Resume a pending exchange's continuation with `CancellationError`, or
+    /// record a tombstone if the exchange hasn't been armed yet (the arming
+    /// task consumes it and resumes immediately).
+    private func cancelPendingExchange(_ requestId: String) {
+        if let continuation = removePendingRequest(requestId) {
+            continuation.resume(throwing: CancellationError())
+        } else if let continuation = removePendingRPC(requestId) {
+            continuation.resume(throwing: CancellationError())
+        } else {
+            cancelledExchanges.insert(requestId)
+        }
+    }
+
+    /// Whether the awaiting task was cancelled before the exchange was armed;
+    /// consumes the tombstone.
+    private func consumeExchangeCancellation(_ requestId: String) -> Bool {
+        cancelledExchanges.remove(requestId) != nil
     }
 
     // MARK: - Cross-replica RPC bridge (issue #261)
@@ -1501,25 +1552,35 @@ actor AgentService {
         let payload = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
         let channel = CoordinationService.rpcChannel(replicaId: replicaId)
 
-        return try await withCheckedThrowingContinuation { continuation in
-            Task {
-                self.pendingRPCs[requestId] = PendingRPC(continuation: continuation)
-                do {
-                    try await self.app.coordination.publish(channel: channel, message: payload)
-                } catch {
-                    // The request never left this process; fail fast.
-                    if let pending = self.removePendingRPC(requestId) {
-                        pending.resume(throwing: error)
+        // Cancellation-aware for the same reason as the local path: shutdown's
+        // background-task drain must be able to cut this wait short.
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                Task {
+                    guard !self.consumeExchangeCancellation(requestId) else {
+                        continuation.resume(throwing: CancellationError())
+                        return
                     }
-                    return
+                    self.pendingRPCs[requestId] = PendingRPC(continuation: continuation)
+                    do {
+                        try await self.app.coordination.publish(channel: channel, message: payload)
+                    } catch {
+                        // The request never left this process; fail fast.
+                        if let pending = self.removePendingRPC(requestId) {
+                            pending.resume(throwing: error)
+                        }
+                        return
+                    }
+                    let timeoutTask = Task {
+                        try? await Task.sleep(for: timeout + .seconds(5))
+                        guard !Task.isCancelled else { return }
+                        self.timeoutRPC(requestId)
+                    }
+                    self.attachRPCTimeout(timeoutTask, to: requestId)
                 }
-                let timeoutTask = Task {
-                    try? await Task.sleep(for: timeout + .seconds(5))
-                    guard !Task.isCancelled else { return }
-                    self.timeoutRPC(requestId)
-                }
-                self.attachRPCTimeout(timeoutTask, to: requestId)
             }
+        } onCancel: {
+            Task { await self.cancelPendingExchange(requestId) }
         }
     }
 

@@ -136,13 +136,30 @@ public struct NetworkSpec: Codable, Sendable {
     public let gateway: String?
     public let mtu: Int?
 
+    /// When true, the agent programs OVN's native DHCP responder to hand the
+    /// control-plane-allocated `ipAddress` (plus `dnsServers`/`gateway`/`mtu`) to
+    /// the guest, and cloud-init omits static L3 config. When false (or on
+    /// platforms without OVN), the guest is configured statically via cloud-init.
+    /// Defaults false so older agents and non-OVN paths keep today's behavior.
+    public let dhcpEnabled: Bool
+    /// DNS resolvers advertised to the guest over DHCP (`dns_server` option).
+    public let dnsServers: [String]
+    /// DNS search domain advertised over DHCP (`domain_name` option), if set.
+    public let domainName: String?
+    /// DHCP lease time in seconds (`lease_time` option), if set.
+    public let leaseTime: Int?
+
     public init(
         network: String,
         macAddress: String? = nil,
         ipAddress: String? = nil,
         netmask: String? = nil,
         gateway: String? = nil,
-        mtu: Int? = nil
+        mtu: Int? = nil,
+        dhcpEnabled: Bool = false,
+        dnsServers: [String] = [],
+        domainName: String? = nil,
+        leaseTime: Int? = nil
     ) {
         self.network = network
         self.macAddress = macAddress
@@ -150,6 +167,32 @@ public struct NetworkSpec: Codable, Sendable {
         self.netmask = netmask
         self.gateway = gateway
         self.mtu = mtu
+        self.dhcpEnabled = dhcpEnabled
+        self.dnsServers = dnsServers
+        self.domainName = domainName
+        self.leaseTime = leaseTime
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case network, macAddress, ipAddress, netmask, gateway, mtu
+        case dhcpEnabled, dnsServers, domainName, leaseTime
+    }
+
+    /// Tolerates specs from an older control plane that predates the DHCP fields:
+    /// missing keys fall back to the static-config defaults rather than failing
+    /// the whole decode.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.network = try container.decode(String.self, forKey: .network)
+        self.macAddress = try container.decodeIfPresent(String.self, forKey: .macAddress)
+        self.ipAddress = try container.decodeIfPresent(String.self, forKey: .ipAddress)
+        self.netmask = try container.decodeIfPresent(String.self, forKey: .netmask)
+        self.gateway = try container.decodeIfPresent(String.self, forKey: .gateway)
+        self.mtu = try container.decodeIfPresent(Int.self, forKey: .mtu)
+        self.dhcpEnabled = try container.decodeIfPresent(Bool.self, forKey: .dhcpEnabled) ?? false
+        self.dnsServers = try container.decodeIfPresent([String].self, forKey: .dnsServers) ?? []
+        self.domainName = try container.decodeIfPresent(String.self, forKey: .domainName)
+        self.leaseTime = try container.decodeIfPresent(Int.self, forKey: .leaseTime)
     }
 }
 

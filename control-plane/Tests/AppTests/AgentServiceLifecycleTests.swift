@@ -32,20 +32,14 @@ final class AgentServiceLifecycleTests {
             }
             #expect(await service.isHeartbeatActive)
 
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            await app.dropTestSchemaIfNeeded()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             throw error
         }
 
-        await app.dropTestSchemaIfNeeded()
         // asyncShutdown runs the registered AgentServiceLifecycleHandler, which must
         // cancel the loop before `app.core` is torn down.
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
 
         #expect(await !service.isHeartbeatActive)
     }

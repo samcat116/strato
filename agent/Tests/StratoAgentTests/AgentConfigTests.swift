@@ -82,6 +82,53 @@ struct AgentConfigTests {
         }
     }
 
+    @Test("Load OVN chassis bootstrap settings")
+    func loadOVNChassisSettings() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                network_mode = "ovn"
+                ovn_remote = "tcp:central:6642"
+                ovn_encap_type = "geneve"
+                ovn_encap_ip = "10.0.0.5"
+                ovn_bootstrap_chassis = false
+                """
+
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+
+            #expect(config.ovnRemote == "tcp:central:6642")
+            #expect(config.ovnEncapType == "geneve")
+            #expect(config.ovnEncapIP == "10.0.0.5")
+            #expect(config.ovnBootstrapChassis == false)
+
+            let chassis = config.ovnChassisConfig
+            #expect(chassis.remote == "tcp:central:6642")
+            #expect(chassis.encapIP == "10.0.0.5")
+            #expect(!chassis.bootstrapEnabled)
+        }
+    }
+
+    @Test("Chassis bootstrap defaults to enabled when keys are absent")
+    func ovnChassisSettingsDefault() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://minimal:8080/ws"
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+            #expect(config.ovnBootstrapChassis == nil)
+            let chassis = config.ovnChassisConfig
+            #expect(chassis.bootstrapEnabled)
+            #expect(chassis.encapIP == nil)
+            #expect(chassis.remote == nil)
+        }
+    }
+
     @Test("Load minimal TOML configuration")
     func loadMinimalConfig() throws {
         try withTempDirectory { tempDirectory in

@@ -1,0 +1,16 @@
+{{- if and .Values.spire.enabled .Values.spire.notifier.k8sbundle.enabled }}
+# Placeholder for the SPIRE trust bundle: the SPIRE server's k8sbundle
+# notifier requires this ConfigMap to already exist and patches the bundle
+# into it under the `bundle.crt` key. The control-plane deployment mounts it
+# so forwarded client certificates can be re-verified against the bundle.
+# This manifest deliberately sets no `data`, so Helm upgrades leave the
+# notifier-written bundle untouched (three-way merge only patches fields the
+# chart manages).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spire-bundle
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-server
+{{- end }}

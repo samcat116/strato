@@ -5,6 +5,7 @@ import NIOPosix
 import NIOSSL
 import StratoShared
 import StratoAgentCore
+import StratoAgentSPIFFE
 
 enum AgentError: Error, LocalizedError {
     case registrationTimeout
@@ -118,6 +119,9 @@ actor Agent {
     private var manifestPersistFailed = false
 
     private let networkMode: NetworkMode?
+    // Chassis-level OVN settings (ovn-remote/encap external_ids) the network
+    // service bootstraps onto the local OVS at connect time.
+    private let ovnChassisConfig: OVNChassisConfig
     // The networking backend actually selected at startup (config value plus
     // platform fallbacks). Drives the networking capability advertised at
     // registration: a Linux agent configured for user-mode networking must not
@@ -158,6 +162,7 @@ actor Agent {
         registrationToken: String? = nil,
         qemuSocketDir: String,
         networkMode: NetworkMode?,
+        ovnChassisConfig: OVNChassisConfig = OVNChassisConfig(),
         isRegistrationMode: Bool,
         logger: Logger,
         imageCachePath: String? = nil,
@@ -177,6 +182,7 @@ actor Agent {
         self.currentRegistrationToken = registrationToken
         self.qemuSocketDir = qemuSocketDir
         self.networkMode = networkMode
+        self.ovnChassisConfig = ovnChassisConfig
         self.isRegistrationMode = isRegistrationMode
         self.logger = logger
         self.imageCachePath = imageCachePath
@@ -242,7 +248,7 @@ actor Agent {
         case .ovn:
             #if os(Linux)
             logger.info("Network service initialized with SwiftOVN support")
-            networkService = NetworkServiceLinux(logger: logger)
+            networkService = NetworkServiceLinux(chassisConfig: ovnChassisConfig, logger: logger)
             effectiveNetworkMode = .ovn
             #else
             logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
@@ -321,7 +327,7 @@ actor Agent {
                 "Initializing SPIFFE authentication",
                 metadata: [
                     "trustDomain": .string(spiffe.trustDomain ?? SPIFFEConfig.defaultTrustDomain),
-                    "sourceType": .string(spiffe.sourceType ?? "files"),
+                    "sourceType": .string(spiffe.sourceType ?? "workload_api"),
                 ])
 
             do {
@@ -903,9 +909,11 @@ actor Agent {
 
     /// Attempts to connect the network service, bounded by a timeout so a
     /// hung OVN/OVS database socket cannot stall agent startup indefinitely
-    /// (the underlying connect has no deadline of its own). Returns whether
-    /// the service is connected.
-    private func connectNetworkService(timeoutSeconds: Int64 = 15) async -> Bool {
+    /// (the underlying connect has no deadline of its own). The budget covers
+    /// the database connects plus chassis bootstrap and the ovn-controller
+    /// connection check (which polls for several seconds on an unhealthy
+    /// host). Returns whether the service is connected.
+    private func connectNetworkService(timeoutSeconds: Int64 = 30) async -> Bool {
         guard let service = networkService else { return false }
         do {
             try await withThrowingTaskGroup(of: Void.self) { group in

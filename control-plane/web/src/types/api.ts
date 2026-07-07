@@ -241,6 +241,19 @@ export interface AgentRegistrationToken {
   expiresAt: string;
   registrationURL: string;
   isValid: boolean;
+  // Present only when the control plane provisions SPIRE during registration.
+  // Like the token itself, the join token is shown once and never re-exposed.
+  spire?: SPIREProvisioning;
+  bootstrapCommand?: string;
+}
+
+export interface SPIREProvisioning {
+  joinToken: string;
+  joinTokenExpiresAt: string;
+  spiffeID: string;
+  nodeID: string;
+  trustDomain: string;
+  serverAddress: string;
 }
 
 // Returned when listing tokens — the secret is intentionally absent.
@@ -749,6 +762,14 @@ export interface Network {
   isDefault: boolean;
   /** Number of VM interfaces attached; a network in use cannot be deleted. */
   attachedInterfaceCount: number;
+  /** Whether agents program OVN's DHCP responder to configure guests. */
+  dhcpEnabled: boolean;
+  /** DNS resolvers advertised to guests over DHCP. */
+  dnsServers: string[];
+  /** DNS search domain advertised over DHCP. */
+  domainName?: string;
+  /** DHCP lease time in seconds. */
+  leaseTime?: number;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -758,10 +779,18 @@ export interface CreateNetworkRequest {
   subnet: string;
   gateway?: string;
   projectId?: string;
+  dhcpEnabled?: boolean;
+  dnsServers?: string[];
+  domainName?: string;
+  leaseTime?: number;
 }
 
 export interface UpdateNetworkRequest {
   name?: string;
   subnet?: string;
   gateway?: string;
+  dhcpEnabled?: boolean;
+  dnsServers?: string[];
+  domainName?: string;
+  leaseTime?: number;
 }

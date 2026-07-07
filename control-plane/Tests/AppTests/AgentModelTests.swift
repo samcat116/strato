@@ -386,8 +386,7 @@ struct AgentModelTests {
         #expect(fetched.architecture == "x86_64")
         #expect(fetched.networkCapability == "overlay")
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("AgentResponse throws when agent has no ID")

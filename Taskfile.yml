@@ -10,6 +10,7 @@ vars:
   OTEL_COLLECTOR_CONTAINER: strato-otel-collector
   SPIRE_SERVER_CONTAINER: strato-spire-server
   SPIRE_AGENT_CONTAINER: strato-spire-agent
+  SPIRE_API_BRIDGE_CONTAINER: strato-spire-api-bridge
   ENVOY_CONTAINER: strato-envoy
   POSTGRES_DB: vapor_database
   POSTGRES_USER: vapor_username
@@ -321,12 +322,14 @@ tasks:
         }
         EOF
 
-        # Start SPIRE Server
+        # Start SPIRE Server. The registration API socket lives in a named
+        # volume so the socat bridge (start-spire-api-bridge) can reach it.
         docker run -d \
           --name {{.SPIRE_SERVER_CONTAINER}} \
           --network host \
           -v /tmp/spire-server:/etc/spire/server:ro \
           -v spire-server-data:/var/lib/spire/server \
+          -v spire-server-api:/tmp/spire-server/private \
           ghcr.io/spiffe/spire-server:1.9.6 \
           -config /etc/spire/server/server.conf
       - echo "⏳ Waiting for SPIRE Server to be ready..."
@@ -341,6 +344,29 @@ tasks:
         done
         echo "❌ SPIRE Server did not become ready in time"
         exit 1
+
+  start-spire-api-bridge:
+    desc: Expose the SPIRE server registration API socket on loopback TCP
+    cmds:
+      - echo "🌉 Starting SPIRE server API bridge (localhost:8087)..."
+      - |
+        EXISTING=$(docker ps -a --filter "name={{.SPIRE_API_BRIDGE_CONTAINER}}" --format "{{`{{.Names}}`}}")
+        if [ "$EXISTING" = "{{.SPIRE_API_BRIDGE_CONTAINER}}" ]; then
+          docker rm -f {{.SPIRE_API_BRIDGE_CONTAINER}}
+        fi
+      - |
+        # The control plane runs natively on macOS, where a Unix socket cannot
+        # cross the Docker VM boundary — bridge the SPIRE server API socket to
+        # loopback TCP instead. The API carries no authentication (local
+        # callers are implicitly admin), so bind strictly to 127.0.0.1.
+        docker run -d \
+          --name {{.SPIRE_API_BRIDGE_CONTAINER}} \
+          --network host \
+          -v spire-server-api:/tmp/spire-server/private \
+          alpine/socat \
+          tcp-listen:8087,fork,reuseaddr,bind=127.0.0.1 \
+          unix-connect:/tmp/spire-server/private/api.sock
+      - echo "✅ SPIRE server API reachable at 127.0.0.1:8087"
 
   create-spire-join-token:
     desc: Create SPIRE join token for agent attestation
@@ -578,6 +604,8 @@ tasks:
                         forward_client_cert_details: SANITIZE_SET
                         set_current_client_cert_details:
                           uri: true
+                          cert: true
+                          chain: true
                           subject: true
                         route_config:
                           name: agent_route
@@ -700,6 +728,7 @@ tasks:
       - task: start-loki
       - task: start-otel-collector
       - task: start-spire-server
+      - task: start-spire-api-bridge
       - task: start-spire-agent
       - task: create-spire-entries
       - task: start-envoy
@@ -804,6 +833,7 @@ tasks:
       - task: stop
       - docker stop {{.ENVOY_CONTAINER}} 2>/dev/null || true
       - docker stop {{.SPIRE_AGENT_CONTAINER}} 2>/dev/null || true
+      - docker stop {{.SPIRE_API_BRIDGE_CONTAINER}} 2>/dev/null || true
       - docker stop {{.SPIRE_SERVER_CONTAINER}} 2>/dev/null || true
       - echo "✅ SPIFFE services stopped!"
 
@@ -814,9 +844,11 @@ tasks:
       - echo "🧹 Cleaning up SPIFFE resources..."
       - docker rm -f {{.ENVOY_CONTAINER}} 2>/dev/null || true
       - docker rm -f {{.SPIRE_AGENT_CONTAINER}} 2>/dev/null || true
+      - docker rm -f {{.SPIRE_API_BRIDGE_CONTAINER}} 2>/dev/null || true
       - docker rm -f {{.SPIRE_SERVER_CONTAINER}} 2>/dev/null || true
       - docker volume rm spire-server-data 2>/dev/null || true
       - docker volume rm spire-agent-data 2>/dev/null || true
+      - docker volume rm spire-server-api 2>/dev/null || true
       - rm -rf /tmp/spire-server /tmp/spire-agent /tmp/spire-sockets /tmp/envoy
       - rm -f /tmp/spire-join-token.txt
       - task: clean
@@ -933,6 +965,8 @@ tasks:
         SPIRE_ENABLED=true \
         SPIRE_TRUST_DOMAIN={{.SPIRE_TRUST_DOMAIN}} \
         SPIRE_TRUST_BUNDLE_PATH=/tmp/strato-spiffe/bundle.pem \
+        SPIRE_SERVER_API_ADDRESS=127.0.0.1:8087 \
+        SPIRE_SERVER_PUBLIC_ADDRESS=localhost:8085 \
         nohup $LINEBUF swift run > /tmp/strato-control-plane.log 2>&1 &
         echo $! > /tmp/strato-control-plane.pid
       - echo "⏳ Waiting for control-plane to be ready..."

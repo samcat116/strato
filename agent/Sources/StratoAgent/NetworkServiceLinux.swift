@@ -11,6 +11,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     private let logger: Logger
     private let ovnSocketPath: String
     private let ovsSocketPath: String
+    private let chassisConfig: OVNChassisConfig
 
     #if os(Linux)
     private var ovnManager: OVNManager?
@@ -25,10 +26,12 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     init(
         ovnSocketPath: String = "/var/run/ovn/ovnnb_db.sock",
         ovsSocketPath: String = "/var/run/openvswitch/db.sock",
+        chassisConfig: OVNChassisConfig = OVNChassisConfig(),
         logger: Logger
     ) {
         self.ovnSocketPath = ovnSocketPath
         self.ovsSocketPath = ovsSocketPath
+        self.chassisConfig = chassisConfig
         self.logger = logger
 
         #if os(Linux)
@@ -70,6 +73,14 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
         // Ensure integration bridge exists
         try await ensureIntegrationBridge()
+
+        // Ensure the chassis is registered with OVN (ovn-remote/encap
+        // external_ids), then prove ovn-controller actually connected — a
+        // chassis that never registers means ports get created but no flows
+        // are ever programmed, which must gate the capability, not pass
+        // silently (issue #328).
+        try ensureChassisConfiguration()
+        try await verifyOVNControllerConnected()
 
         isConnected = true
         logger.info("Network service connected successfully")
@@ -121,10 +132,20 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // Find or create the logical switch
         _ = try await findOrCreateLogicalSwitch(name: config.networkName, subnet: config.subnet ?? "10.0.0.0/24")
 
-        // Create the logical switch port (idempotent: reuse on re-attach)
+        // Program OVN's native DHCP responder for this network when enabled, so
+        // the guest learns the control-plane-pinned IP, gateway, and DNS over
+        // DHCP instead of via cloud-init static config. Nil when DHCP is off or
+        // the subnet/gateway aren't known — the static path is used then.
+        let dhcpOptionsUUID = try await resolveDHCPOptions(for: config)
+
+        // Create the logical switch port (idempotent: reuse on re-attach). A
+        // port only exists to OVN when its UUID is referenced by its switch's
+        // `ports` column — ovn-northd ignores unreferenced rows (no
+        // Port_Binding, no dataplane). Older agents created exactly such
+        // orphans, so a found port is verified and recreated attached when
+        // necessary, keeping its addresses.
         let portUUID: String?
         if let existingPort = try await ovnManager?.getLogicalSwitchPort(named: portName) {
-            portUUID = existingPort.uuid
             // Reuse the existing port's allowed addresses so the VM boots with a
             // MAC/IP that matches OVN's port_security. Otherwise a recovery path
             // (agent restart, or retry after a failed TAP/OVS step) would launch
@@ -132,26 +153,42 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             let (existingMAC, existingIP) = Self.parsePortAddress(existingPort.addresses)
             if !existingMAC.isEmpty { macAddress = existingMAC }
             if !existingIP.isEmpty { ipAddress = existingIP }
-            logger.debug(
-                "Reusing existing logical switch port",
-                metadata: [
-                    "portName": .string(portName),
-                    "macAddress": .string(macAddress),
-                    "ipAddress": .string(ipAddress ?? "none"),
-                ])
+
+            let logicalSwitch = try await ovnManager?.getLogicalSwitch(named: config.networkName)
+            let attachedPorts = logicalSwitch?.ports ?? []
+            if let existingUUID = existingPort.uuid, attachedPorts.contains(existingUUID) {
+                portUUID = existingPort.uuid
+                // Re-assert the DHCP binding on reconvergence. The row encoder
+                // omits nil fields, so this updates only dhcpv4_options and
+                // leaves the port's addresses/port_security intact.
+                if let dhcpOptionsUUID, existingPort.dhcpv4_options != dhcpOptionsUUID {
+                    try await ovnManager?.updateLogicalSwitchPort(
+                        uuid: existingUUID,
+                        OVNLogicalSwitchPort(name: portName, dhcpv4_options: dhcpOptionsUUID))
+                }
+                logger.debug(
+                    "Reusing existing logical switch port",
+                    metadata: [
+                        "portName": .string(portName),
+                        "macAddress": .string(macAddress),
+                        "ipAddress": .string(ipAddress ?? "none"),
+                    ])
+            } else {
+                logger.warning(
+                    "Existing logical switch port is not attached to its switch (orphaned by an older agent); recreating it attached",
+                    metadata: [
+                        "portName": .string(portName),
+                        "networkName": .string(config.networkName),
+                    ])
+                try await ovnManager?.deleteLogicalSwitchPort(named: portName)
+                portUUID = try await createAttachedLogicalSwitchPort(
+                    portName: portName, vmId: vmId, networkName: config.networkName,
+                    macAddress: macAddress, ipAddress: ipAddress, dhcpOptionsUUID: dhcpOptionsUUID)
+            }
         } else {
-            let portAddress = ipAddress.map { "\(macAddress) \($0)" } ?? macAddress
-            let logicalPort = OVNLogicalSwitchPort(
-                name: portName,
-                addresses: [portAddress],
-                port_security: [portAddress],
-                external_ids: [
-                    "vm-id": vmId,
-                    "network-name": config.networkName,
-                    "description": "VM network interface",
-                ]
-            )
-            portUUID = try await ovnManager?.createLogicalSwitchPort(logicalPort)
+            portUUID = try await createAttachedLogicalSwitchPort(
+                portName: portName, vmId: vmId, networkName: config.networkName,
+                macAddress: macAddress, ipAddress: ipAddress, dhcpOptionsUUID: dhcpOptionsUUID)
         }
 
         // Create TAP interface and connect to OVS bridge
@@ -331,9 +368,13 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             throw NetworkError.invalidConfiguration("Invalid UUID returned from OVN: \(switchUUIDString)")
         }
 
-        // Configure DHCP if needed
+        // Pre-create the network's DHCP_Options row so the responder is ready
+        // before any VM attaches. DNS/lease are filled in per-network when VMs
+        // attach with their spec's config (see resolveDHCPOptions).
         if let gateway = gateway {
-            try await configureDHCP(switchUUID: switchUUID, subnet: subnet, gateway: gateway)
+            _ = try await ensureDHCPOptions(
+                networkName: name, subnet: subnet, gateway: gateway,
+                dnsServers: [], domainName: nil, leaseTime: nil)
         }
 
         logger.info(
@@ -423,6 +464,147 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 "Integration bridge already exists or creation failed",
                 metadata: ["error": .string(error.localizedDescription)])
         }
+    }
+
+    /// Ensures the local OVS carries the chassis `external_ids` that
+    /// `ovn-controller` needs (`ovn-remote`, `ovn-encap-type`, `ovn-encap-ip`,
+    /// and a `system-id`). Idempotent: explicit agent config is reapplied on
+    /// every connect, values an operator already set are left alone, and
+    /// missing values get defaults (encap IP auto-detected from the default
+    /// route). Without these a fresh host looks fully wired but programs no
+    /// flows, ever.
+    private func ensureChassisConfiguration() throws {
+        guard chassisConfig.bootstrapEnabled else {
+            logger.info("OVN chassis bootstrap disabled by configuration; assuming operator-managed external_ids")
+            return
+        }
+
+        let current = try runProcess(
+            "ovs-vsctl",
+            ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
+        guard current.status == 0 else {
+            throw NetworkError.ovsError(
+                "cannot read chassis external_ids (exit \(current.status)): "
+                    + current.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        let existing = OVNChassisBootstrap.parseExternalIDs(current.output)
+
+        var detectedEncapIP: String?
+        if chassisConfig.encapIP == nil, existing["ovn-encap-ip"] == nil {
+            detectedEncapIP = detectEncapIP()
+        }
+
+        let plan = OVNChassisBootstrap.plan(
+            config: chassisConfig,
+            existing: existing,
+            detectedEncapIP: detectedEncapIP,
+            generatedSystemID: UUID().uuidString.lowercased())
+
+        if plan.encapIPUnresolved {
+            throw NetworkError.invalidConfiguration(
+                "cannot determine this host's tunnel endpoint IP: the chassis has no ovn-encap-ip, none is "
+                    + "configured, and auto-detection from the default route failed. Set ovn_encap_ip in the "
+                    + "agent configuration.")
+        }
+
+        guard !plan.settings.isEmpty else {
+            logger.debug("OVN chassis external_ids already configured")
+            return
+        }
+
+        let arguments =
+            ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "set", "open_vswitch", "."]
+            + plan.settings.map(\.vsctlArgument)
+        let result = try runProcess("ovs-vsctl", arguments)
+        guard result.status == 0 else {
+            throw NetworkError.ovsError(
+                "failed to set chassis external_ids (exit \(result.status)): "
+                    + result.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        logger.info(
+            "Bootstrapped OVN chassis configuration",
+            metadata: [
+                "applied": .string(plan.settings.map { "\($0.key)=\($0.value)" }.joined(separator: " "))
+            ])
+    }
+
+    /// The IP the kernel would use as the source for off-host traffic — the
+    /// sensible default tunnel endpoint on single-NIC hosts. Multi-homed
+    /// hosts must set `ovn_encap_ip` explicitly.
+    private func detectEncapIP() -> String? {
+        guard let result = try? runProcess("ip", ["-j", "route", "get", "1.1.1.1"]), result.status == 0 else {
+            return nil
+        }
+        return OVNChassisBootstrap.parseRouteSourceIP(result.output)
+    }
+
+    /// Confirms `ovn-controller` has an active southbound connection, polling
+    /// briefly to ride out a controller that is still dialing after the
+    /// chassis was (re)configured. Throwing here keeps `connect()` failed, so
+    /// the agent does not advertise `ovn_networking` for a host whose ports
+    /// would never get flows; the background retry loop picks it up when the
+    /// controller comes up. A missing `ovn-appctl` only logs — we don't gate
+    /// the capability on a diagnostic tool (preflight reports it separately).
+    private func verifyOVNControllerConnected() async throws {
+        let attempts = 5
+        var lastDetail = "unknown"
+
+        for attempt in 1...attempts {
+            let result: CommandResult
+            do {
+                result = try runProcess("ovn-appctl", ["-t", "ovn-controller", "connection-status"])
+            } catch {
+                logger.warning(
+                    "Cannot verify ovn-controller connection status: \(error.localizedDescription)")
+                return
+            }
+            if result.status == 127 {
+                logger.warning(
+                    "ovn-appctl not found; skipping ovn-controller connection verification (install ovn-host to enable it)"
+                )
+                return
+            }
+
+            let output = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if result.status == 0, output == "connected" {
+                logger.info("ovn-controller is connected to the southbound database")
+                return
+            }
+
+            lastDetail = output.isEmpty ? "exit \(result.status)" : output
+            if attempt < attempts {
+                try? await Task.sleep(for: .milliseconds(1500))
+            }
+        }
+
+        throw NetworkError.ovnError(
+            "ovn-controller is not connected to the southbound database (last status: \(lastDetail)) — "
+                + "check that ovn-controller is running and that external_ids:ovn-remote on the local OVS "
+                + "points at the right southbound database. VM ports would come up with no dataplane, so "
+                + "OVN networking is not being advertised.")
+    }
+
+    /// Creates the VM NIC's logical switch port attached to its switch in one
+    /// OVSDB transaction (`ovn-nbctl lsp-add` semantics) — the two steps must
+    /// never diverge or the port is an orphan ovn-northd ignores.
+    private func createAttachedLogicalSwitchPort(
+        portName: String, vmId: String, networkName: String, macAddress: String, ipAddress: String?,
+        dhcpOptionsUUID: String? = nil
+    ) async throws -> String? {
+        let portAddress = ipAddress.map { "\(macAddress) \($0)" } ?? macAddress
+        let logicalPort = OVNLogicalSwitchPort(
+            name: portName,
+            addresses: [portAddress],
+            port_security: [portAddress],
+            dhcpv4_options: dhcpOptionsUUID,
+            external_ids: [
+                "vm-id": vmId,
+                "network-name": networkName,
+                "description": "VM network interface",
+            ]
+        )
+        return try await ovnManager?.createLogicalSwitchPort(logicalPort, onSwitch: networkName)
     }
 
     private func findOrCreateLogicalSwitch(name: String, subnet: String) async throws -> UUID {
@@ -593,10 +775,50 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         return macBytes.map { String(format: "%02x", $0) }.joined(separator: ":")
     }
 
-    private func configureDHCP(switchUUID: UUID, subnet: String, gateway: String) async throws {
-        // Configure OVN DHCP for the logical switch
-        logger.debug(
-            "Configuring DHCP for network", metadata: ["subnet": .string(subnet), "gateway": .string(gateway)])
+    /// Resolves the OVN `DHCP_Options` UUID a VM's port should bind to, or nil
+    /// when DHCP is disabled for the network or the subnet/gateway aren't known
+    /// (OVN needs both a CIDR and a `server_id`/`router` to answer). A nil result
+    /// leaves the guest on the static cloud-init path.
+    private func resolveDHCPOptions(for config: VMNetworkConfig) async throws -> String? {
+        guard config.dhcpEnabled else { return nil }
+        guard let subnet = config.subnet, let gateway = config.gateway else {
+            logger.warning(
+                "DHCP enabled but subnet/gateway unknown; using static guest config",
+                metadata: ["network": .string(config.networkName)])
+            return nil
+        }
+        return try await ensureDHCPOptions(
+            networkName: config.networkName, subnet: subnet, gateway: gateway,
+            dnsServers: config.dnsServers, domainName: config.domainName, leaseTime: config.leaseTime)
+    }
+
+    /// Find-or-update the `DHCP_Options` row for `subnet` and return its UUID.
+    /// Idempotent across restarts and reconvergence: an existing row for the
+    /// same CIDR is updated in place (so DNS/lease edits converge) rather than
+    /// duplicated.
+    private func ensureDHCPOptions(
+        networkName: String, subnet: String, gateway: String,
+        dnsServers: [String], domainName: String?, leaseTime: Int?
+    ) async throws -> String? {
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        let options = OVNDHCPOptionsBuilder.v4Options(
+            gateway: gateway, dnsServers: dnsServers, domainName: domainName, leaseTime: leaseTime,
+            subnet: subnet)
+        let dhcp = OVNDHCPOptions(
+            cidr: subnet, options: options,
+            external_ids: ["network-name": networkName, "strato-managed": "true"])
+
+        if let existing = try await ovnManager.getDHCPOptions().first(where: { $0.cidr == subnet }),
+            let uuid = existing.uuid
+        {
+            if existing.options != options {
+                try await ovnManager.updateDHCPOptions(uuid: uuid, dhcp)
+            }
+            return uuid
+        }
+        return try await ovnManager.createDHCPOptions(dhcp)
     }
     #endif
 }

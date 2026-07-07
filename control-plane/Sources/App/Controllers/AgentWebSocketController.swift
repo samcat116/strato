@@ -10,28 +10,92 @@ struct AgentWebSocketController: RouteCollection {
         agentRoutes.webSocket("ws", onUpgrade: websocketHandler)
     }
 
+    /// Frames received before authentication completes are buffered here and
+    /// replayed once the agent's identity is established. Both auth paths hop
+    /// actors/event loops before they know the agent name (mTLS additionally
+    /// performs certificate chain verification), and the agent sends its
+    /// register frame immediately after the upgrade — without this buffer that
+    /// first frame would be dropped and registration would stall until the
+    /// agent times out and reconnects.
+    /// All access happens on the WebSocket's event loop, so no actual concurrency.
+    private final class MessageState: @unchecked Sendable {
+        var buffer: [String] = []
+        /// Set exactly once, when authentication succeeds; nil means "buffer".
+        var agentName: String?
+        /// Whether this connection authenticated by redeeming a registration
+        /// token — the only path that may mint a rotated bearer reconnect
+        /// credential. mTLS connections carry the join URL's bearer header
+        /// too, but presenting a header is not the same as being validated by
+        /// it: an mTLS-only node must never accrete token-auth credentials.
+        var tokenAuthenticated = false
+    }
+
     // Non-async handler - runs on WebSocket's event loop
     private func websocketHandler(req: Request, ws: WebSocket) {
+        // Register message handlers IMMEDIATELY (before any await) so no frame
+        // can slip through while authentication is in flight.
+        let state = MessageState()
+
+        ws.onText { ws, text in
+            if let agentName = state.agentName {
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
+            } else {
+                state.buffer.append(text)
+            }
+        }
+
+        ws.onBinary { ws, buffer in
+            guard let text = buffer.getString(at: 0, length: buffer.readableBytes) else {
+                req.logger.error("Failed to convert binary buffer to string")
+                return
+            }
+            if let agentName = state.agentName {
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
+            } else {
+                state.buffer.append(text)
+            }
+        }
+
         // Check for SPIFFE/mTLS authentication first
         if let spireService = req.application.spireService {
             Task {
                 let isEnabled = await spireService.isEnabled
                 if isEnabled {
-                    await self.handleMTLSAuthentication(req: req, ws: ws, spireService: spireService)
+                    await self.handleMTLSAuthentication(req: req, ws: ws, spireService: spireService, state: state)
                 } else {
-                    self.handleTokenAuthentication(req: req, ws: ws)
+                    self.handleTokenAuthentication(req: req, ws: ws, state: state)
                 }
             }
             return
         }
 
         // Fall back to token-based authentication
-        handleTokenAuthentication(req: req, ws: ws)
+        handleTokenAuthentication(req: req, ws: ws, state: state)
+    }
+
+    /// Switch a connection from buffering to routing: record the authenticated
+    /// agent name and replay any frames that arrived during authentication.
+    /// Hops to the WebSocket's event loop, where all `state` access lives.
+    private func activateMessageRouting(req: Request, ws: WebSocket, state: MessageState, agentName: String) {
+        ws.eventLoop.execute {
+            state.agentName = agentName
+            if !state.buffer.isEmpty {
+                req.logger.info(
+                    "Processing \(state.buffer.count) buffered messages", metadata: ["agentName": .string(agentName)]
+                )
+            }
+            for text in state.buffer {
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
+            }
+            state.buffer.removeAll()
+        }
     }
 
     // MARK: - mTLS Authentication (SPIFFE/SPIRE)
 
-    private func handleMTLSAuthentication(req: Request, ws: WebSocket, spireService: SPIREService) async {
+    private func handleMTLSAuthentication(
+        req: Request, ws: WebSocket, spireService: SPIREService, state: MessageState
+    ) async {
         let requireClientCert = await spireService.requireClientCert
 
         // The X-Forwarded-Client-Cert (XFCC) header is only trustworthy when the
@@ -54,8 +118,8 @@ struct AgentWebSocketController: RouteCollection {
                 return
             }
 
-            guard let spiffeID = extractSPIFFEIDFromXFCC(req: req) else {
-                req.logger.error("XFCC header present but contained no valid SPIFFE URI")
+            guard let spiffeID = await extractVerifiedSPIFFEID(req: req, spireService: spireService) else {
+                // extractVerifiedSPIFFEID already logged the specific failure
                 sendErrorResponse(
                     ws: ws, requestId: "", error: "Invalid client certificate identity", logger: req.logger)
                 Task { try? await ws.close(code: .unacceptableData) }
@@ -73,7 +137,7 @@ struct AgentWebSocketController: RouteCollection {
                     ])
 
                 // Continue with WebSocket setup using the validated agent ID
-                setupWebSocketConnection(req: req, ws: ws, agentName: agentID, authMethod: "mTLS-XFCC")
+                setupWebSocketConnection(req: req, ws: ws, agentName: agentID, authMethod: "mTLS-XFCC", state: state)
             } catch {
                 req.logger.error("SPIFFE ID validation failed: \(error)")
                 sendErrorResponse(
@@ -98,7 +162,7 @@ struct AgentWebSocketController: RouteCollection {
 
         // requireClientCert is explicitly disabled: permit legacy token authentication.
         req.logger.warning("SPIRE enabled without requireClientCert; falling back to token authentication")
-        handleTokenAuthentication(req: req, ws: ws)
+        handleTokenAuthentication(req: req, ws: ws, state: state)
     }
 
     /// Whether the request arrived over the pod-local loopback interface, i.e. from
@@ -112,36 +176,65 @@ struct AgentWebSocketController: RouteCollection {
 
     // MARK: - XFCC Header Parsing
 
-    /// Extract SPIFFE ID from X-Forwarded-Client-Cert header set by Envoy
-    /// XFCC format: By=spiffe://...;Hash=...;URI=spiffe://strato.local/agent/xxx;Subject="..."
-    private func extractSPIFFEIDFromXFCC(req: Request) -> SPIFFEIdentity? {
+    /// Extract the client's SPIFFE ID from the X-Forwarded-Client-Cert header and,
+    /// when Envoy also forwarded the certificate itself (`Cert=`/`Chain=`),
+    /// independently re-verify that certificate against the SPIRE trust bundle and
+    /// require its SAN URI to match the `URI=` field. This means a compromised or
+    /// misconfigured proxy cannot assert an identity it does not hold a
+    /// SPIRE-issued certificate for. Returns nil (after logging why) on any failure.
+    private func extractVerifiedSPIFFEID(req: Request, spireService: SPIREService) async -> SPIFFEIdentity? {
         guard let xfcc = req.headers.first(name: "X-Forwarded-Client-Cert") else {
             return nil
         }
 
-        req.logger.debug("Parsing XFCC header", metadata: ["xfcc": .string(xfcc)])
+        guard let element = XFCCElement.parseNearestHop(header: xfcc) else {
+            req.logger.warning("XFCC header present but unparseable", metadata: ["xfcc": .string(xfcc)])
+            return nil
+        }
 
-        // Parse URI field from XFCC
-        // The header can contain multiple certificates separated by commas
-        // Each certificate's fields are separated by semicolons
-        for component in xfcc.split(separator: ";") {
-            let trimmed = component.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("URI=") {
-                let uri = String(trimmed.dropFirst("URI=".count))
-                if let spiffeID = SPIFFEIdentity(uri: uri) {
-                    req.logger.debug("Extracted SPIFFE ID from XFCC", metadata: ["spiffeID": .string(spiffeID.uri)])
-                    return spiffeID
+        guard let uriString = element.uri, let claimedID = SPIFFEIdentity(uri: uriString) else {
+            req.logger.warning("XFCC header present but no valid SPIFFE URI found", metadata: ["xfcc": .string(xfcc)])
+            return nil
+        }
+
+        // Chain= includes the leaf (leaf first); Cert= is the leaf alone.
+        if let certificatePEM = element.chainPEM ?? element.certPEM {
+            guard await spireService.hasTrustBundle else {
+                // No bundle to verify against: accept Envoy's verification alone,
+                // as before cert forwarding was enabled. Deployments that configure
+                // a trust bundle get the stronger check automatically.
+                req.logger.warning(
+                    "XFCC forwarded a client certificate but no SPIRE trust bundle is configured; relying on Envoy's verification only"
+                )
+                return claimedID
+            }
+
+            do {
+                let verifiedID = try await spireService.validateCertificate(certificatePEM)
+                guard verifiedID == claimedID else {
+                    req.logger.error(
+                        "XFCC URI does not match the SAN URI of the forwarded client certificate",
+                        metadata: [
+                            "claimed": .string(claimedID.uri),
+                            "verified": .string(verifiedID.uri),
+                        ])
+                    return nil
                 }
+            } catch {
+                req.logger.error(
+                    "Forwarded client certificate failed verification against the SPIRE trust bundle: \(error)",
+                    metadata: ["claimed": .string(claimedID.uri)])
+                return nil
             }
         }
 
-        req.logger.warning("XFCC header present but no valid SPIFFE URI found", metadata: ["xfcc": .string(xfcc)])
-        return nil
+        req.logger.debug("Extracted SPIFFE ID from XFCC", metadata: ["spiffeID": .string(claimedID.uri)])
+        return claimedID
     }
 
     // MARK: - Token Authentication (Legacy)
 
-    private func handleTokenAuthentication(req: Request, ws: WebSocket) {
+    private func handleTokenAuthentication(req: Request, ws: WebSocket, state: MessageState) {
         // Extract token from the Authorization header (Bearer) and agent name from the
         // query. The token is kept out of the URL so it never lands in access logs.
         guard let token = req.headers.bearerAuthorization?.token,
@@ -151,41 +244,6 @@ struct AgentWebSocketController: RouteCollection {
                 ws: ws, requestId: "", error: "Registration token and agent name are required", logger: req.logger)
             Task { try? await ws.close(code: .unacceptableData) }
             return
-        }
-
-        // Set up message handlers IMMEDIATELY to prevent message loss
-        // Messages will be buffered until validation completes
-        // Note: All access to these variables happens on ws.eventLoop, so no actual concurrency
-        final class MessageState: @unchecked Sendable {
-            var buffer: [String] = []
-            var isValidated = false
-        }
-        let state = MessageState()
-
-        ws.onText { ws, text in
-            if state.isValidated {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
-            } else {
-                // Buffer messages until validation completes
-                state.buffer.append(text)
-            }
-        }
-
-        ws.onBinary { ws, buffer in
-            req.logger.info(
-                "Received WebSocket binary message from agent",
-                metadata: ["agentName": .string(agentName), "bytes": .string("\(buffer.readableBytes)")])
-            // Convert binary buffer to string and process as text message
-            if let text = buffer.getString(at: 0, length: buffer.readableBytes) {
-                if state.isValidated {
-                    self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
-                } else {
-                    // Buffer messages until validation completes
-                    state.buffer.append(text)
-                }
-            } else {
-                req.logger.error("Failed to convert binary buffer to string")
-            }
         }
 
         ws.onClose.whenComplete { result in
@@ -246,15 +304,11 @@ struct AgentWebSocketController: RouteCollection {
                         agentName: agentName, replicaId: req.application.replicaID)
                 }
 
-                // Mark as validated and process buffered messages
-                state.isValidated = true
-                req.logger.info(
-                    "Processing \(state.buffer.count) buffered messages", metadata: ["agentName": .string(agentName)])
-
-                for text in state.buffer {
-                    self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
-                }
-                state.buffer.removeAll()
+                // Mark as validated and process buffered messages. This is
+                // the only path where token auth actually validated the
+                // connection, so only here may registration rotate the token.
+                state.tokenAuthenticated = true
+                self.activateMessageRouting(req: req, ws: ws, state: state, agentName: agentName)
 
                 return ws.eventLoop.makeSucceededFuture(())
             }
@@ -336,7 +390,9 @@ struct AgentWebSocketController: RouteCollection {
         }
     }
 
-    private func handleWebSocketMessage(req: Request, ws: WebSocket, text: String, agentName: String) {
+    private func handleWebSocketMessage(
+        req: Request, ws: WebSocket, text: String, agentName: String, state: MessageState
+    ) {
         req.logger.info(
             "Processing WebSocket message",
             metadata: [
@@ -369,7 +425,11 @@ struct AgentWebSocketController: RouteCollection {
                             "controlPlaneProtocolVersion": .stringConvertible(WireProtocol.currentVersion),
                         ])
                 }
-                let isTokenAuthenticated = req.headers.bearerAuthorization != nil
+                // Keyed on the auth *path*, not on bearer-header presence: an
+                // mTLS bootstrap still carries the join URL's token in the
+                // header, and rotating for it would mint a long-lived bearer
+                // credential for a node meant to authenticate by SVID only.
+                let isTokenAuthenticated = state.tokenAuthenticated
                 Task {
                     do {
                         let agentUUID = try await req.agentService.registerAgent(message, agentName: agentName)
@@ -626,8 +686,13 @@ struct AgentWebSocketController: RouteCollection {
     // MARK: - WebSocket Connection Setup (shared by both auth methods)
 
     /// Set up WebSocket connection - MUST be called from WebSocket's event loop
-    /// This method schedules the actual setup on the event loop to ensure handlers are registered correctly
-    private func setupWebSocketConnection(req: Request, ws: WebSocket, agentName: String, authMethod: String) {
+    /// This method schedules the actual setup on the event loop to ensure handlers are registered correctly.
+    /// Message handlers were already registered (buffering) at upgrade time; this
+    /// registers close handling, records the connection, and switches the
+    /// connection from buffering to routing.
+    private func setupWebSocketConnection(
+        req: Request, ws: WebSocket, agentName: String, authMethod: String, state: MessageState
+    ) {
         // Execute on the WebSocket's event loop to avoid NIOLoopBound precondition failures
         ws.eventLoop.execute {
             req.logger.info(
@@ -636,25 +701,6 @@ struct AgentWebSocketController: RouteCollection {
                     "agentName": .string(agentName),
                     "authMethod": .string(authMethod),
                 ])
-
-            // Set up message handlers
-            ws.onText { [self] ws, text in
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
-            }
-
-            ws.onBinary { [self] ws, buffer in
-                req.logger.info(
-                    "Received WebSocket binary message from agent",
-                    metadata: [
-                        "agentName": .string(agentName),
-                        "bytes": .string("\(buffer.readableBytes)"),
-                    ])
-                if let text = buffer.getString(at: 0, length: buffer.readableBytes) {
-                    self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName)
-                } else {
-                    req.logger.error("Failed to convert binary buffer to string")
-                }
-            }
 
             ws.onClose.whenComplete { result in
                 switch result {
@@ -702,6 +748,10 @@ struct AgentWebSocketController: RouteCollection {
                 await req.application.coordination.recordAgentRoute(
                     agentName: agentName, replicaId: req.application.replicaID)
             }
+
+            // Switch from buffering to routing, replaying any frames that
+            // arrived while authentication was in flight.
+            self.activateMessageRouting(req: req, ws: ws, state: state, agentName: agentName)
 
             req.logger.info(
                 "Agent WebSocket connection established via \(authMethod)",

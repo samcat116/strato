@@ -21,6 +21,11 @@ public func configure(_ app: Application) async throws {
             "environment": .string(identity.environment),
         ])
 
+    // Track fire-and-forget background work (async VM operations) so shutdown
+    // can drain it before Fluent closes its connection pools. Registered
+    // before anything that can spawn work.
+    app.setUpBackgroundTaskRegistry()
+
     // Request logging: one structured line per HTTP request (method/path/status/
     // duration). Registered first so it's the outermost middleware and times the
     // full request. Default on outside production; override with REQUEST_LOGGING.
@@ -198,6 +203,7 @@ public func configure(_ app: Application) async throws {
     // Agent migrations
     app.migrations.add(CreateAgent())
     app.migrations.add(CreateAgentRegistrationToken())
+    app.migrations.add(AddSPIREProvisionedToAgentRegistrationToken())
 
     // SCIM migrations
     app.migrations.add(CreateSCIMToken())
@@ -262,6 +268,9 @@ public func configure(_ app: Application) async throws {
 
     // Project-scoped networks exposed via the API
     app.migrations.add(AddProjectToLogicalNetwork())
+
+    // OVN DHCP/DNS configuration on logical networks
+    app.migrations.add(AddDHCPConfigToLogicalNetwork())
 
     // Project-level roles: user and group grants on individual projects.
     app.migrations.add(CreateProjectMember())
@@ -417,6 +426,10 @@ public func configure(_ app: Application) async throws {
 
     // Configure SPIFFE/SPIRE authentication (if enabled via environment)
     try await app.configureSPIRE()
+
+    // Configure SPIRE join-token provisioning for the agent registration flow
+    // (requires SPIRE_ENABLED plus SPIRE_SERVER_API_ADDRESS)
+    try app.configureSPIRERegistration()
 
     // Configure OpenTelemetry observability (metrics, logs, traces)
     if app.environment != .testing {

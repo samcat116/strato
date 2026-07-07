@@ -76,8 +76,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.body.string == "testuser")
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("APIKeyAuthenticator rejects invalid API key")
@@ -109,8 +108,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .unauthorized)
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("APIKeyAuthenticator rejects request without API key")
@@ -134,8 +132,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .unauthorized)
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     // MARK: - API Key Format Tests
@@ -170,8 +167,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .unauthorized)
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     // MARK: - API Key Status Tests
@@ -205,8 +201,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .unauthorized)
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("APIKeyAuthenticator rejects expired API key")
@@ -239,8 +234,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .unauthorized)
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("APIKeyAuthenticator accepts API key with future expiration")
@@ -274,8 +268,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.body.string == "testuser")
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     // MARK: - User Association Tests
@@ -310,8 +303,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.body.string == "testuser:test@example.com")
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     // MARK: - API Key Storage Tests
@@ -346,8 +338,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.body.string == "Test API Key")
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("Request isAPIKeyAuthenticated property works correctly")
@@ -392,8 +383,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.body.string == "false")
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     // MARK: - Scope Enforcement Tests
@@ -430,8 +420,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.body.string == "read-ok")
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("Read-only key is forbidden from write requests")
@@ -453,8 +442,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .forbidden)
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("Write key can perform both read and write requests")
@@ -486,8 +474,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.body.string == "write-ok")
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("Admin key can perform write requests")
@@ -510,8 +497,7 @@ struct APIKeyAuthenticatorTests {
             #expect(res.body.string == "write-ok")
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("APIKeyScope hierarchy grants higher scopes")

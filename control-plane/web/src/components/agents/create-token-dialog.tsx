@@ -32,7 +32,9 @@ export function CreateTokenDialog({
   const [agentName, setAgentName] = useState("");
   const [expirationHours, setExpirationHours] = useState("24");
   const [createdToken, setCreatedToken] = useState<AgentRegistrationToken | null>(null);
-  const [copiedCommand, setCopiedCommand] = useState<"join" | "docker" | null>(null);
+  const [copiedCommand, setCopiedCommand] = useState<
+    "join" | "docker" | "bootstrap" | null
+  >(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,16 +67,24 @@ export function CreateTokenDialog({
   const dockerJoinCommand = createdToken
     ? `docker run -d --name strato-agent --restart unless-stopped --device /dev/kvm -v /var/lib/strato:/var/lib/strato -v /etc/strato:/etc/strato ghcr.io/samcat116/strato-agent:latest join '${createdToken.registrationURL}'`
     : "";
+  const bootstrapCommand = createdToken?.bootstrapCommand ?? "";
 
-  const handleCopy = async (command: "join" | "docker") => {
-    const text = command === "join" ? joinCommand : dockerJoinCommand;
+  const handleCopy = async (command: "join" | "docker" | "bootstrap") => {
+    const text =
+      command === "join"
+        ? joinCommand
+        : command === "docker"
+          ? dockerJoinCommand
+          : bootstrapCommand;
     if (!text) return;
     await navigator.clipboard.writeText(text);
     setCopiedCommand(command);
     toast.success(
       command === "join"
         ? "Join command copied to clipboard"
-        : "Docker command copied to clipboard"
+        : command === "docker"
+          ? "Docker command copied to clipboard"
+          : "Bootstrap command copied to clipboard"
     );
     setTimeout(() => setCopiedCommand(null), 2000);
   };
@@ -106,9 +116,42 @@ export function CreateTokenDialog({
 
         {createdToken ? (
           <div className="space-y-4 py-4 min-w-0">
+            {bootstrapCommand && (
+              <div className="p-4 bg-gray-900 rounded-lg border border-gray-700">
+                <Label className="text-gray-400 text-sm">
+                  Bootstrap the node (SPIRE attestation + agent join) with one
+                  command:
+                </Label>
+                <div className="flex items-start gap-2 mt-2">
+                  <code className="flex-1 min-w-0 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono whitespace-pre-wrap break-all">
+                    {bootstrapCommand}
+                  </code>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-gray-600 shrink-0"
+                    onClick={() => handleCopy("bootstrap")}
+                  >
+                    {copiedCommand === "bootstrap" ? (
+                      <Check className="h-4 w-4 text-green-400" />
+                    ) : (
+                      <Copy className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
+                <p className="text-sm text-gray-400 mt-2">
+                  Starts spire-agent with the one-time join token, waits for
+                  the node&apos;s SVID, then joins the control plane. Both
+                  tokens are single-use and expire together.
+                </p>
+              </div>
+            )}
+
             <div className="p-4 bg-gray-900 rounded-lg border border-gray-700">
               <Label className="text-gray-400 text-sm">
-                Run this command on your hypervisor host:
+                {bootstrapCommand
+                  ? "Or join without SPIRE (token auth only):"
+                  : "Run this command on your hypervisor host:"}
               </Label>
               <div className="flex items-start gap-2 mt-2">
                 <code className="flex-1 min-w-0 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono whitespace-pre-wrap break-all">
