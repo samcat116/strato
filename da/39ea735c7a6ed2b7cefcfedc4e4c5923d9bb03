@@ -1,0 +1,32 @@
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_a587f81d483352::t_c9025875ba59bc 50-62
+  s_a587f81d483352::t_f9a0a6d0b7f594 171-173,176-177
+  s_a587f81d483352::t_0b554532cf1bf4 235-240,254,257,262-263,266
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_a587f81d483352::t_20f903321fecdb 238,244
+  s_a587f81d483352::t_e741a59e1d9ad8 331-359
+  s_a587f81d483352::t_636f011999a2f3 179,212,271,295,316,409
+control-plane/Sources/App/Migrations/AddSPIREProvisionedToAgentRegistrationToken.swift
+  s_a587f81d483352::t_9d37c2f9322114 1-22
+control-plane/Sources/App/Models/AgentRegistrationToken.swift
+  s_a587f81d483352::t_ac6a3a35a682f5 40-41,47
+  s_a587f81d483352::t_54810edaa78f6f 19-24
+control-plane/Sources/App/configure.swift
+  s_a587f81d483352::t_32c5f47d933c23 201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "da39ea735c7a6ed2b7cefcfedc4e4c5923d9bb03",
+  "prompts": {},
+  "sessions": {
+    "s_a587f81d483352": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc6066aa-332b-4561-b79f-cda35143be82",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
