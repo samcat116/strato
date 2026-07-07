@@ -185,11 +185,63 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .noContent)
             }
 
+            // Both the workload entry and the join-token node alias go: the
+            // alias is what an unredeemed join token would attest through.
             let deleted = await fake.deletedSPIFFEIDs
-            #expect(deleted == ["spiffe://strato.local/agent/node-a"])
+            #expect(deleted == ["spiffe://strato.local/agent/node-a", "spiffe://strato.local/node/node-a"])
 
             let remaining = try await AgentRegistrationToken.query(on: app.db).count()
             #expect(remaining == 0)
+        }
+    }
+
+    @Test("Revoking an expired token does not touch SPIRE")
+    func revokeExpiredTokenSkipsSPIRE() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+
+            // Expired: its join token is equally expired, and a replacement
+            // token for the same name may own the current SPIRE entries.
+            let token = AgentRegistrationToken(agentName: "node-a")
+            token.expiresAt = Date().addingTimeInterval(-3600)
+            try await token.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            let deleted = await fake.deletedSPIFFEIDs
+            #expect(deleted.isEmpty)
+
+            let remaining = try await AgentRegistrationToken.query(on: app.db).count()
+            #expect(remaining == 0)
+        }
+    }
+
+    @Test("Revoking an unused token for an mTLS-registered agent leaves its entries alone")
+    func revokeTokenForRegisteredAgentSkipsSPIRE() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+
+            // The mTLS path never redeems the WebSocket token, so the token
+            // stays "unused" even though the agent is registered and live.
+            let token = AgentRegistrationToken(agentName: "node-a")
+            try await token.save(on: app.db)
+            let agent = makeAgent(named: "node-a")
+            try await agent.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            let deleted = await fake.deletedSPIFFEIDs
+            #expect(deleted.isEmpty)
         }
     }
 
@@ -255,7 +307,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             }
 
             let deleted = await fake.deletedSPIFFEIDs
-            #expect(deleted == ["spiffe://strato.local/agent/node-a"])
+            #expect(deleted == ["spiffe://strato.local/agent/node-a", "spiffe://strato.local/node/node-a"])
 
             let remaining = try await Agent.query(on: app.db).count()
             #expect(remaining == 0)

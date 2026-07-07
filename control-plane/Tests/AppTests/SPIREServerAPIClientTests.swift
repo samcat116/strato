@@ -157,6 +157,26 @@ struct SPIREServerAPIClientTests {
         }
     }
 
+    @Test("deleteEntries pages through the full ListEntries result set", .timeLimit(.minutes(1)))
+    func deleteEntriesPaginates() async throws {
+        let state = FakeSPIREServerState()
+        await state.setListedEntryPages([["entry-1"], ["entry-2", "entry-3"]])
+        try await withFakeSPIREServer(state: state) { client in
+            let deleted = try await client.deleteEntries(spiffeID: "spiffe://strato.local/agent/node-a")
+            #expect(deleted == 3)
+
+            // Two list calls: the second carries the server's page token
+            let listRequests = await state.listRequests
+            #expect(listRequests.count == 2)
+            #expect(listRequests.first?.pageToken == "")
+            let secondToken = listRequests.dropFirst().first?.pageToken ?? ""
+            #expect(!secondToken.isEmpty)
+
+            let deleteRequests = await state.deleteRequests
+            #expect(deleteRequests.first?.ids == ["entry-1", "entry-2", "entry-3"])
+        }
+    }
+
     @Test("deleteEntries with no matches deletes nothing", .timeLimit(.minutes(1)))
     func deleteEntriesNoMatches() async throws {
         let state = FakeSPIREServerState()
@@ -222,7 +242,7 @@ private actor FakeSPIREServerState {
 
     private(set) var createEntryStatusCode: Int32 = 0
     private(set) var existingEntryID = ""
-    private(set) var listedEntryIDs: [String] = []
+    private var listedEntryPages: [[String]] = []
 
     func setCreateEntryStatus(code: Int32, existingEntryID: String) {
         self.createEntryStatusCode = code
@@ -230,7 +250,19 @@ private actor FakeSPIREServerState {
     }
 
     func setListedEntryIDs(_ ids: [String]) {
-        self.listedEntryIDs = ids
+        self.listedEntryPages = ids.isEmpty ? [] : [ids]
+    }
+
+    /// Serve ListEntries results one page per call, with a nextPageToken on
+    /// every page but the last — like a server imposing its own page size.
+    func setListedEntryPages(_ pages: [[String]]) {
+        self.listedEntryPages = pages
+    }
+
+    func nextListPage() -> (ids: [String], nextPageToken: String) {
+        guard !listedEntryPages.isEmpty else { return ([], "") }
+        let page = listedEntryPages.removeFirst()
+        return (page, listedEntryPages.isEmpty ? "" : "page-\(listedEntryPages.count)")
     }
 
     func recordJoinToken(_ request: Spire_Api_Server_Agent_V1_CreateJoinTokenRequest) {
@@ -309,14 +341,15 @@ private struct FakeSPIREServerService: RegistrableRPCService {
             let message = try await Self.singleMessage(request)
             await self.state.recordList(message)
 
-            let entryIDs = await self.state.listedEntryIDs
+            let page = await self.state.nextListPage()
             var response = Spire_Api_Server_Entry_V1_ListEntriesResponse()
-            response.entries = entryIDs.map { id in
+            response.entries = page.ids.map { id in
                 var entry = Spire_Api_Types_Entry()
                 entry.id = id
                 entry.spiffeID = message.filter.bySpiffeID
                 return entry
             }
+            response.nextPageToken = page.nextPageToken
             return Self.singleResponse(response)
         }
 

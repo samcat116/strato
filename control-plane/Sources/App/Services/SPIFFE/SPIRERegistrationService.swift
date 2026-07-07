@@ -104,6 +104,7 @@ public struct SPIRERegistrationService: Sendable {
     public func rollbackProvisioning(agentName: String) async {
         do {
             _ = try await api.deleteEntries(spiffeID: agentSPIFFEID(agentName: agentName))
+            _ = try await api.deleteEntries(spiffeID: nodeSPIFFEID(agentName: agentName))
         } catch {
             logger.warning(
                 "Failed to roll back SPIRE provisioning; the entry will be reused on retry",
@@ -114,19 +115,27 @@ public struct SPIRERegistrationService: Sendable {
         }
     }
 
-    /// Remove the agent's workload entry, stopping further SVID issuance for
-    /// the node. Throws when SPIRE cannot be reached — callers must fail
-    /// closed rather than report a revocation that did not happen.
+    /// Remove the agent's workload entry *and* its join-token node alias,
+    /// stopping further SVID issuance for the node. Deleting the alias is what
+    /// actually kills an outstanding join token: SPIRE join tokens cannot be
+    /// revoked, so without this a reissued grant for the same name would let
+    /// the previously revoked bootstrap command attest as the same stable node
+    /// ID and reach the recreated workload entry. Throws when SPIRE cannot be
+    /// reached — callers must fail closed rather than report a revocation that
+    /// did not happen.
     public func deprovisionAgent(named agentName: String) async throws {
         let spiffeID = agentSPIFFEID(agentName: agentName)
-        let deleted = try await api.deleteEntries(spiffeID: spiffeID)
+        let nodeID = nodeSPIFFEID(agentName: agentName)
+        let workloadDeleted = try await api.deleteEntries(spiffeID: spiffeID)
+        let aliasesDeleted = try await api.deleteEntries(spiffeID: nodeID)
 
         logger.info(
             "Deprovisioned agent in SPIRE",
             metadata: [
                 "agentName": .string(agentName),
                 "spiffeID": .string(spiffeID),
-                "entriesDeleted": .string("\(deleted)"),
+                "workloadEntriesDeleted": .string("\(workloadDeleted)"),
+                "nodeAliasesDeleted": .string("\(aliasesDeleted)"),
             ])
     }
 

@@ -251,13 +251,23 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
     }
 
     public func deleteEntries(spiffeID: String) async throws -> Int {
-        var listRequest = Spire_Api_Server_Entry_V1_ListEntriesRequest()
-        listRequest.filter.bySpiffeID = try Self.spiffeIDPayload(spiffeID)
+        // Page through the full result set: the server may impose its own page
+        // size even when none is requested, and deleting only the first page
+        // would silently leave later entries (and thus SVID issuance) intact.
+        var entryIDs: [String] = []
+        var pageToken = ""
+        repeat {
+            var listRequest = Spire_Api_Server_Entry_V1_ListEntriesRequest()
+            listRequest.filter.bySpiffeID = try Self.spiffeIDPayload(spiffeID)
+            listRequest.pageToken = pageToken
 
-        let listResponse: Spire_Api_Server_Entry_V1_ListEntriesResponse = try await unary(
-            listRequest, descriptor: Self.listEntriesDescriptor)
+            let listResponse: Spire_Api_Server_Entry_V1_ListEntriesResponse = try await unary(
+                listRequest, descriptor: Self.listEntriesDescriptor)
 
-        let entryIDs = listResponse.entries.map(\.id)
+            entryIDs.append(contentsOf: listResponse.entries.map(\.id))
+            pageToken = listResponse.nextPageToken
+        } while !pageToken.isEmpty
+
         guard !entryIDs.isEmpty else { return 0 }
 
         var deleteRequest = Spire_Api_Server_Entry_V1_BatchDeleteEntryRequest()

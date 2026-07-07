@@ -79,6 +79,14 @@ SPIRE_SERVER_HOST="${SPIRE_SERVER_ADDRESS%:*}"
 SPIRE_SERVER_PORT="${SPIRE_SERVER_ADDRESS##*:}"
 [ "$SPIRE_SERVER_HOST" != "$SPIRE_SERVER_PORT" ] || die "--spire-server-address must be host:port"
 
+# The agent config requires a top-level control_plane_url; derive it from the
+# registration URL by stripping the token/name query.
+CONTROL_PLANE_URL="${REGISTRATION_URL%%\?*}"
+case "$CONTROL_PLANE_URL" in
+  ws://*|wss://*) ;;
+  *) die "--registration-url must start with ws:// or wss://" ;;
+esac
+
 if command -v systemctl >/dev/null 2>&1 && [ "$USE_SYSTEMD" -eq 1 ]; then
   HAVE_SYSTEMD=1
 else
@@ -167,6 +175,8 @@ done
 if [ ! -f "$STRATO_CONF_DIR/config.toml" ]; then
   log "Writing $STRATO_CONF_DIR/config.toml"
   cat > "$STRATO_CONF_DIR/config.toml" << EOF
+control_plane_url = "$CONTROL_PLANE_URL"
+
 [spiffe]
 enabled = true
 trust_domain = "$TRUST_DOMAIN"
@@ -174,7 +184,7 @@ workload_api_socket_path = "$SPIRE_SOCKET"
 source_type = "workload_api"
 EOF
 else
-  log "$STRATO_CONF_DIR/config.toml already exists; leaving it in place (ensure [spiffe] is enabled)"
+  log "$STRATO_CONF_DIR/config.toml already exists; leaving it in place (ensure control_plane_url and [spiffe] are set)"
 fi
 
 if [ "$HAVE_SYSTEMD" -eq 1 ]; then

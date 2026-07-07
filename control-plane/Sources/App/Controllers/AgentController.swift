@@ -182,13 +182,27 @@ struct AgentController: RouteCollection {
             throw Abort(.notFound, reason: "Registration token not found")
         }
 
-        // Revoking an *unused* token withdraws the whole provisioning grant,
-        // including the SPIRE entry created alongside it — otherwise the node
-        // could still attest with its join token and obtain agent SVIDs. Fail
-        // closed: if SPIRE is unreachable the token stays revocable later. A
-        // *used* token belongs to a registered agent whose entry must survive;
-        // that entry is removed by deregistering the agent instead.
-        if !token.isUsed, let spire = req.application.spireRegistrationService {
+        // Revoking a token withdraws the whole provisioning grant — including
+        // the SPIRE entries created alongside it — but only when this token
+        // still *owns* that grant:
+        //
+        // - A *used* token belongs to an agent that registered via token auth;
+        //   its entries are removed by deregistering the agent instead.
+        // - An existing Agent row with this name means the node registered over
+        //   mTLS, which never redeems the WebSocket token: the token looks
+        //   unused, but the SPIRE entries now belong to a live agent.
+        // - An *expired* token's join token is equally expired (they share a
+        //   lifetime), so its grant is inert — and because expired tokens can
+        //   be superseded by a replacement for the same name, the entries that
+        //   exist now may belong to the successor.
+        //
+        // Fail closed: if SPIRE is unreachable the token stays revocable later.
+        let agentIsRegistered =
+            try await Agent.query(on: req.db)
+            .filter(\.$name == token.agentName)
+            .first() != nil
+
+        if token.isValid, !agentIsRegistered, let spire = req.application.spireRegistrationService {
             do {
                 try await spire.deprovisionAgent(named: token.agentName)
             } catch {
