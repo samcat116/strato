@@ -179,6 +179,11 @@ public enum HypervisorServiceError: Error, LocalizedError, Sendable {
     /// Operation not supported by this hypervisor
     case notSupported(String)
 
+    /// An orphaned VM's hypervisor process no longer exists, so there is
+    /// nothing to re-adopt. The VM's on-host state (disks) may still exist;
+    /// re-creating it is the way to recover.
+    case adoptionTargetGone(String)
+
     public var errorDescription: String? {
         switch self {
         case .vmNotFound(let vmId):
@@ -202,6 +207,8 @@ public enum HypervisorServiceError: Error, LocalizedError, Sendable {
             return "Timeout during: \(operation)"
         case .notSupported(let operation):
             return "Operation not supported: \(operation)"
+        case .adoptionTargetGone(let message):
+            return "Orphaned VM's process is gone: \(message)"
         }
     }
 }

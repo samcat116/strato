@@ -29,6 +29,11 @@ actor QEMUService: HypervisorService {
     // socket after an agent restart (see AdoptedQEMUVM.swift).
     private var activeVMs: [String: any QEMUVMHandle] = [:]
     private var vmSpecs: [String: VMSpec] = [:]
+    // The exact configuration each VM's process was spawned from, kept so a
+    // VM whose guest powered off (QEMU exits with it) can be respawned by
+    // bootVM. Absent for re-adopted VMs, which were spawned by a previous
+    // agent incarnation.
+    private var vmConfigs: [String: QEMUConfiguration] = [:]
     private var vmConsoleSocketPaths: [String: String] = [:]
     private var vmSerialSocketPaths: [String: String] = [:]
     private var pendingVMs: Set<String> = []  // Track VMs being created (to handle concurrent boot requests)
@@ -224,6 +229,7 @@ actor QEMUService: HypervisorService {
 
         activeVMs[vmId] = qemuManager
         vmSpecs[vmId] = spec
+        vmConfigs[vmId] = qemuConfig
 
         logger.info("QEMU VM created successfully", metadata: ["vmId": .string(vmId)])
     }
@@ -262,7 +268,27 @@ actor QEMUService: HypervisorService {
         logger.info("Booting QEMU VM", metadata: ["vmId": .string(vmId)])
 
         // Start VM execution
-        try await vm.start()
+        do {
+            try await vm.start()
+        } catch {
+            // A guest that powered off took its QEMU process with it, so the
+            // control channel is dead and `cont` cannot revive it. Respawn the
+            // process from the configuration the VM was created with (its disks
+            // persist on this host) and resume that. Without a stored config
+            // (re-adopted VM from a previous agent incarnation) the original
+            // error stands. A false positive is safe: QEMU's image locking
+            // refuses a second process on the same disk.
+            guard let config = vmConfigs[vmId] else { throw error }
+            logger.info(
+                "VM control channel is dead; respawning QEMU process",
+                metadata: ["vmId": .string(vmId), "startError": .string(error.localizedDescription)])
+            try? await vm.destroy()
+            let manager = QEMUManager(qemuPath: qemuBinaryPath, logger: logger)
+            try await manager.createVM(
+                config: config, timeout: TimeInterval(StageBudget.hypervisorSpawnSeconds))
+            activeVMs[vmId] = manager
+            try await manager.start()
+        }
 
         logger.info("QEMU VM booted successfully", metadata: ["vmId": .string(vmId)])
     }
@@ -333,6 +359,7 @@ actor QEMUService: HypervisorService {
         // Clean up VM resources
         activeVMs.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
+        vmConfigs.removeValue(forKey: vmId)
 
         // Clean up console socket
         if let socketPath = vmConsoleSocketPaths.removeValue(forKey: vmId) {
@@ -504,7 +531,7 @@ actor QEMUService: HypervisorService {
 
         let socketPath = Self.adoptionSocketPath(vmStoragePath: vmStoragePath, vmId: vmId)
         guard FileManager.default.fileExists(atPath: socketPath) else {
-            throw HypervisorServiceError.notSupported(
+            throw HypervisorServiceError.adoptionTargetGone(
                 "VM \(vmId) has no re-adoption QMP socket at \(socketPath) (created before deterministic sockets, or its process is gone)"
             )
         }
@@ -517,7 +544,16 @@ actor QEMUService: HypervisorService {
             ])
 
         let adopted = AdoptedQEMUVM(socketPath: socketPath, logger: logger)
-        let qemuStatus = try await adopted.connect()
+        let qemuStatus: QEMUVMStatus
+        do {
+            qemuStatus = try await adopted.connect()
+        } catch {
+            // A live QEMU always accepts connections on its QMP server socket,
+            // so a refused/failed connect means the process is gone and the
+            // socket file merely outlived it.
+            throw HypervisorServiceError.adoptionTargetGone(
+                "VM \(vmId) QMP socket at \(socketPath) is dead: \(error.localizedDescription)")
+        }
 
         activeVMs[vmId] = adopted
         vmSpecs[vmId] = spec
@@ -846,8 +882,12 @@ actor QEMUService: HypervisorService {
         #endif
 
         qemuConfig.noGraphic = true
-        // Start VM immediately to avoid QMP resume dependency during boot
-        qemuConfig.startPaused = false
+        // Honor the create contract (`ReconcileStep.create`: ends "exists, not
+        // running"): spawn with CPUs frozen (-S) and let bootVM issue the QMP
+        // `cont`. Spawning live booted every fresh VM once, and the next
+        // periodic sync shut it down again — the desired state for a new VM is
+        // `shutdown` until it is explicitly started (issue #260).
+        qemuConfig.startPaused = true
 
         // Configure virtio-console for VM console streaming
         // Use the VM's storage directory for the socket (user-writable)
