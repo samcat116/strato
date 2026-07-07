@@ -27,6 +27,8 @@ let package = Package(
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.9.0"),
         // 🔐 Swift Crypto for cryptographic operations
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
+        // X.509 parsing and chain verification (SPIFFE SVID validation)
+        .package(url: "https://github.com/apple/swift-certificates.git", from: "1.5.0"),
         // OpenAPI generator and Vapor bindings (spec-first)
         .package(url: "https://github.com/apple/swift-openapi-generator.git", from: "1.2.0"),
         .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.0.0"),
@@ -55,6 +57,7 @@ let package = Package(
                 .product(name: "JWT", package: "jwt"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "X509", package: "swift-certificates"),
                 .product(name: "OpenAPIVapor", package: "swift-openapi-vapor"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
                 .product(name: "OTel", package: "swift-otel"),
@@ -71,7 +74,8 @@ let package = Package(
             dependencies: [
                 .target(name: "App"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentSQLiteDriver", package: "fluent-sqlite-driver")
+                .product(name: "FluentSQLiteDriver", package: "fluent-sqlite-driver"),
+                .product(name: "X509", package: "swift-certificates")
             ],
             swiftSettings: testSwiftSettings
         )

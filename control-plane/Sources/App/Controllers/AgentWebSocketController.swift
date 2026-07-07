@@ -54,8 +54,8 @@ struct AgentWebSocketController: RouteCollection {
                 return
             }
 
-            guard let spiffeID = extractSPIFFEIDFromXFCC(req: req) else {
-                req.logger.error("XFCC header present but contained no valid SPIFFE URI")
+            guard let spiffeID = await extractVerifiedSPIFFEID(req: req, spireService: spireService) else {
+                // extractVerifiedSPIFFEID already logged the specific failure
                 sendErrorResponse(
                     ws: ws, requestId: "", error: "Invalid client certificate identity", logger: req.logger)
                 Task { try? await ws.close(code: .unacceptableData) }
@@ -112,31 +112,60 @@ struct AgentWebSocketController: RouteCollection {
 
     // MARK: - XFCC Header Parsing
 
-    /// Extract SPIFFE ID from X-Forwarded-Client-Cert header set by Envoy
-    /// XFCC format: By=spiffe://...;Hash=...;URI=spiffe://strato.local/agent/xxx;Subject="..."
-    private func extractSPIFFEIDFromXFCC(req: Request) -> SPIFFEIdentity? {
+    /// Extract the client's SPIFFE ID from the X-Forwarded-Client-Cert header and,
+    /// when Envoy also forwarded the certificate itself (`Cert=`/`Chain=`),
+    /// independently re-verify that certificate against the SPIRE trust bundle and
+    /// require its SAN URI to match the `URI=` field. This means a compromised or
+    /// misconfigured proxy cannot assert an identity it does not hold a
+    /// SPIRE-issued certificate for. Returns nil (after logging why) on any failure.
+    private func extractVerifiedSPIFFEID(req: Request, spireService: SPIREService) async -> SPIFFEIdentity? {
         guard let xfcc = req.headers.first(name: "X-Forwarded-Client-Cert") else {
             return nil
         }
 
-        req.logger.debug("Parsing XFCC header", metadata: ["xfcc": .string(xfcc)])
+        guard let element = XFCCElement.parseNearestHop(header: xfcc) else {
+            req.logger.warning("XFCC header present but unparseable", metadata: ["xfcc": .string(xfcc)])
+            return nil
+        }
 
-        // Parse URI field from XFCC
-        // The header can contain multiple certificates separated by commas
-        // Each certificate's fields are separated by semicolons
-        for component in xfcc.split(separator: ";") {
-            let trimmed = component.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("URI=") {
-                let uri = String(trimmed.dropFirst("URI=".count))
-                if let spiffeID = SPIFFEIdentity(uri: uri) {
-                    req.logger.debug("Extracted SPIFFE ID from XFCC", metadata: ["spiffeID": .string(spiffeID.uri)])
-                    return spiffeID
+        guard let uriString = element.uri, let claimedID = SPIFFEIdentity(uri: uriString) else {
+            req.logger.warning("XFCC header present but no valid SPIFFE URI found", metadata: ["xfcc": .string(xfcc)])
+            return nil
+        }
+
+        // Chain= includes the leaf (leaf first); Cert= is the leaf alone.
+        if let certificatePEM = element.chainPEM ?? element.certPEM {
+            guard await spireService.hasTrustBundle else {
+                // No bundle to verify against: accept Envoy's verification alone,
+                // as before cert forwarding was enabled. Deployments that configure
+                // a trust bundle get the stronger check automatically.
+                req.logger.warning(
+                    "XFCC forwarded a client certificate but no SPIRE trust bundle is configured; relying on Envoy's verification only"
+                )
+                return claimedID
+            }
+
+            do {
+                let verifiedID = try await spireService.validateCertificate(certificatePEM)
+                guard verifiedID == claimedID else {
+                    req.logger.error(
+                        "XFCC URI does not match the SAN URI of the forwarded client certificate",
+                        metadata: [
+                            "claimed": .string(claimedID.uri),
+                            "verified": .string(verifiedID.uri),
+                        ])
+                    return nil
                 }
+            } catch {
+                req.logger.error(
+                    "Forwarded client certificate failed verification against the SPIRE trust bundle: \(error)",
+                    metadata: ["claimed": .string(claimedID.uri)])
+                return nil
             }
         }
 
-        req.logger.warning("XFCC header present but no valid SPIFFE URI found", metadata: ["xfcc": .string(xfcc)])
-        return nil
+        req.logger.debug("Extracted SPIFFE ID from XFCC", metadata: ["spiffeID": .string(claimedID.uri)])
+        return claimedID
     }
 
     // MARK: - Token Authentication (Legacy)

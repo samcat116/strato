@@ -1,6 +1,7 @@
 import Foundation
 import Vapor
 import Crypto
+import X509
 
 // MARK: - SPIFFE Identity
 
@@ -248,20 +249,59 @@ public actor SPIREService {
         return bundle
     }
 
-    /// Validate a client certificate and extract the SPIFFE ID
-    /// - Parameter certificatePEM: The client certificate in PEM format
+    /// Whether a trust bundle has been loaded and chain verification is possible.
+    public var hasTrustBundle: Bool {
+        trustBundle != nil
+    }
+
+    /// Validate a client certificate (chain) and extract the SPIFFE ID.
+    ///
+    /// The PEM may contain the leaf alone or the leaf followed by intermediates
+    /// (leaf first, as Envoy forwards them in the XFCC `Chain=` field). The leaf
+    /// is chain-verified against the current SPIRE trust bundle, then its SPIFFE
+    /// ID is read from the SAN URI extension and checked against the configured
+    /// trust domain.
+    /// - Parameter certificatePEM: The client certificate (chain) in PEM format
     /// - Returns: The validated SPIFFE identity
     public func validateCertificate(_ certificatePEM: String) async throws -> SPIFFEIdentity {
         guard config.enabled else {
             throw SPIREServiceError.notConfigured
         }
 
-        guard trustBundle != nil else {
+        guard let bundle = trustBundle else {
             throw SPIREServiceError.trustBundleUnavailable
         }
 
-        // Extract SPIFFE ID from certificate's SAN URI
-        let spiffeID = try extractSPIFFEID(from: certificatePEM)
+        let pemBlocks = parsePEMCertificates(certificatePEM)
+        guard let leafPEM = pemBlocks.first else {
+            throw SPIREServiceError.invalidCertificate("No certificate found in PEM input")
+        }
+
+        let leaf: Certificate
+        let intermediates: [Certificate]
+        let roots: [Certificate]
+        do {
+            leaf = try Certificate(pemEncoded: leafPEM)
+            intermediates = try pemBlocks.dropFirst().map { try Certificate(pemEncoded: $0) }
+            roots = try bundle.x509Authorities.map { try Certificate(pemEncoded: $0) }
+        } catch {
+            throw SPIREServiceError.invalidCertificate("Failed to parse certificate: \(error)")
+        }
+
+        var verifier = Verifier(rootCertificates: CertificateStore(roots)) {
+            RFC5280Policy(validationTime: Date())
+        }
+        let result = await verifier.validate(
+            leafCertificate: leaf, intermediates: CertificateStore(intermediates))
+
+        guard case .validCertificate = result else {
+            throw SPIREServiceError.certificateValidationFailed(
+                "Certificate does not chain to the SPIRE trust bundle: \(result)"
+            )
+        }
+
+        // Extract SPIFFE ID from the verified leaf's SAN URI
+        let spiffeID = try extractSPIFFEID(from: leaf)
 
         // Verify the trust domain matches
         guard spiffeID.trustDomain == config.trustDomain else {
@@ -427,26 +467,25 @@ public actor SPIREService {
         }
     }
 
-    private func extractSPIFFEID(from certificatePEM: String) throws -> SPIFFEIdentity {
-        // This is a simplified extraction that looks for the SPIFFE ID in the certificate
-        // In production, use a proper X.509 parser to extract from SAN URI extension
+    private func extractSPIFFEID(from certificate: Certificate) throws -> SPIFFEIdentity {
+        let san: SubjectAlternativeNames?
+        do {
+            san = try certificate.extensions.subjectAlternativeNames
+        } catch {
+            throw SPIREServiceError.spiffeIDExtractionFailed(
+                "Failed to parse Subject Alternative Name extension: \(error)")
+        }
 
-        // For now, attempt to parse from a comment or known location
-        // The SPIFFE ID should be in the Subject Alternative Name (SAN) URI extension
-
-        // Simplified: Look for spiffe:// URI pattern in the certificate
-        // A proper implementation would use Security.framework (macOS) or OpenSSL
-
-        // This is a placeholder - in production, integrate with swift-certificates or similar
-        if let range = certificatePEM.range(of: "spiffe://[^\"\\s]+", options: .regularExpression) {
-            let uriString = String(certificatePEM[range])
-            if let spiffeID = SPIFFEIdentity(uri: uriString) {
+        for name in san ?? SubjectAlternativeNames() {
+            if case .uniformResourceIdentifier(let uri) = name,
+                let spiffeID = SPIFFEIdentity(uri: uri)
+            {
                 return spiffeID
             }
         }
 
         throw SPIREServiceError.spiffeIDExtractionFailed(
-            "Could not find SPIFFE ID in certificate. Ensure the certificate contains a SAN URI extension with the SPIFFE ID."
+            "Certificate has no SAN URI entry with a SPIFFE ID"
         )
     }
 
