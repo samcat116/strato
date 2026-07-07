@@ -289,6 +289,79 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
         }
     }
 
+    // MARK: - SPIRE enabled without the registration API (misconfiguration)
+
+    /// SPIRE mTLS auth on, but no SPIRE_SERVER_API_ADDRESS: the control plane
+    /// cannot deprovision, so revocation paths must fail closed instead of
+    /// deleting our records while the node keeps renewing SVIDs.
+    private func installSPIREAuthWithoutRegistrationAPI(on app: Application) {
+        app.spireService = SPIREService(
+            config: SPIREServiceConfig(enabled: true),
+            logger: app.logger,
+            httpClient: NoopClient()
+        )
+    }
+
+    @Test("Deregistration fails closed when SPIRE is enabled without the registration API")
+    func deregisterFailsClosedWithoutRegistrationAPI() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            installSPIREAuthWithoutRegistrationAPI(on: app)
+
+            let agent = makeAgent(named: "node-a")
+            try await agent.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .serviceUnavailable)
+            }
+
+            let remaining = try await Agent.query(on: app.db).count()
+            #expect(remaining == 1)
+
+            // Explicit operator override for out-of-band-managed entries
+            try await app.test(.DELETE, "/api/agents/\(agent.id!)?skipSpireDeprovision=true") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            let afterOverride = try await Agent.query(on: app.db).count()
+            #expect(afterOverride == 0)
+        }
+    }
+
+    @Test("Revoking a live grant fails closed when SPIRE is enabled without the registration API")
+    func revokeFailsClosedWithoutRegistrationAPI() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            installSPIREAuthWithoutRegistrationAPI(on: app)
+
+            let token = AgentRegistrationToken(agentName: "node-a")
+            try await token.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .serviceUnavailable)
+            }
+
+            let remaining = try await AgentRegistrationToken.query(on: app.db).count()
+            #expect(remaining == 1)
+
+            // A token whose grant is inert (expired) is not blocked
+            token.expiresAt = Date().addingTimeInterval(-3600)
+            try await token.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+        }
+    }
+
     // MARK: - Agent deregistration
 
     @Test("Deregistering an agent deletes its SPIRE entry")

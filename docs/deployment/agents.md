@@ -120,9 +120,12 @@ which writes the spire-agent config, waits for the Workload API socket,
 and joins the control plane — one command per new hypervisor node. Both
 secrets are shown exactly once, at creation time.
 
-Revoking an unused registration token also removes the SPIRE entry, as
+Revoking an unused registration token also removes the SPIRE entries, as
 does deregistering an agent; both operations fail closed when the SPIRE
-server is unreachable so a removed node can never keep renewing SVIDs.
+server is unreachable — or when SPIRE authentication is enabled without
+`SPIRE_SERVER_API_ADDRESS` configured — so a removed node can never keep
+renewing SVIDs. Deployments that manage SPIRE entries out of band can
+acknowledge with `?skipSpireDeprovision=true`.
 
 Control-plane environment reference:
 

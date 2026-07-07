@@ -34,6 +34,33 @@ struct AgentController: RouteCollection {
         }
     }
 
+    /// Whether SPIRE mTLS authentication is enabled but the registration API
+    /// is not configured — the state in which agents may hold SPIRE-issued
+    /// identities that this control plane cannot revoke. Revocation paths must
+    /// fail closed here rather than delete our records and silently leave the
+    /// node able to renew SVIDs. Deployments that manage SPIRE entries out of
+    /// band can acknowledge with `?skipSpireDeprovision=true`.
+    private func spireDeprovisioningUnavailable(_ req: Request) async -> Bool {
+        guard req.application.spireRegistrationService == nil,
+            let spireService = req.application.spireService
+        else { return false }
+        return await spireService.isEnabled
+    }
+
+    private func requireSPIREDeprovisioningOrOverride(_ req: Request, action: String) async throws {
+        guard await spireDeprovisioningUnavailable(req) else { return }
+        guard req.query[Bool.self, at: "skipSpireDeprovision"] == true else {
+            throw Abort(
+                .serviceUnavailable,
+                reason:
+                    "SPIRE authentication is enabled but SPIRE_SERVER_API_ADDRESS is not configured, so the SPIRE entries for this \(action) cannot be revoked and the node could keep renewing SVIDs. Configure the SPIRE server API, or remove the entries out of band and retry with ?skipSpireDeprovision=true."
+            )
+        }
+        req.logger.warning(
+            "Skipping SPIRE deprovisioning on operator override; ensure the entries are removed out of band",
+            metadata: ["action": .string(action)])
+    }
+
     // MARK: - Registration Token Management
 
     /// Base WebSocket URL agents should dial, embedded in registration URLs.
@@ -202,6 +229,10 @@ struct AgentController: RouteCollection {
             .filter(\.$name == token.agentName)
             .first() != nil
 
+        if token.isValid, !agentIsRegistered {
+            try await requireSPIREDeprovisioningOrOverride(req, action: "registration token")
+        }
+
         if token.isValid, !agentIsRegistered, let spire = req.application.spireRegistrationService {
             do {
                 try await spire.deprovisionAgent(named: token.agentName)
@@ -283,6 +314,10 @@ struct AgentController: RouteCollection {
         // closed if that doesn't succeed: deregistering is the operator's
         // revocation lever, and deleting the row while the node can still
         // renew its SVID would leave a live credential with no visible owner.
+        // That includes the misconfigured case where SPIRE auth is enabled but
+        // the registration API is not set up at all.
+        try await requireSPIREDeprovisioningOrOverride(req, action: "agent")
+
         if let spire = req.application.spireRegistrationService {
             do {
                 try await spire.deprovisionAgent(named: agent.name)
