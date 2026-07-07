@@ -72,9 +72,10 @@ Requirements for the scale set:
 - Optional but recommended: a persistent volume backing `RUNNER_TOOL_CACHE`
   (the runner mounts it into job containers). Swift build state lives in
   `$RUNNER_TOOL_CACHE/strato-swift-build` (via `swift build --scratch-path`);
-  without the volume every job builds cold. The PR workflow wipes the
-  scratch dir automatically past ~25GB; it is always safe to delete
-  manually — the next run just rebuilds cold. An image registry mirror or
+  without the volume every job builds cold. Each PR job wipes its own
+  scratch subdirectory automatically past ~10GB (never the shared root —
+  concurrent sibling jobs may be building in it); it is always safe to
+  delete manually — the next run just rebuilds cold. An image registry mirror or
   dind image cache also helps, since each job pulls `swift` and `postgres`
   images fresh otherwise.
 

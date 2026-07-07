@@ -161,16 +161,22 @@ jobs:
       # the path is warm across runs if the ARC scale set backs it with a
       # persistent volume; on a plain ephemeral pod these steps are harmless
       # and the build runs cold.
-      - name: Prune build scratch dir if oversized
+      #
+      # Each job prunes only the scratch dirs it owns — the Swift test jobs
+      # run concurrently, possibly against a shared tool-cache volume, so
+      # wiping the strato-swift-build root could delete a sibling job's
+      # in-flight build tree.
+      - name: Prune build scratch dirs if oversized
         run: |
-          scratch="$RUNNER_TOOL_CACHE/strato-swift-build"
-          if [ -d "$scratch" ]; then
-            size_kb=$(du -sk "$scratch" | cut -f1)
-            if [ "$size_kb" -gt $((25 * 1024 * 1024)) ]; then
-              echo "Scratch dir is $((size_kb / 1024 / 1024))GB (>25GB); wiping for a cold rebuild"
-              rm -rf "$scratch"
+          for scratch in "$RUNNER_TOOL_CACHE/strato-swift-build/shared" "$RUNNER_TOOL_CACHE/strato-swift-build/agent"; do
+            if [ -d "$scratch" ]; then
+              size_kb=$(du -sk "$scratch" | cut -f1)
+              if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
+                echo "$scratch is $((size_kb / 1024 / 1024))GB (>10GB); wiping for a cold rebuild"
+                rm -rf "$scratch"
+              fi
             fi
-          fi
+          done
 
       - name: Build Shared Package
         working-directory: shared
@@ -210,13 +216,15 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # Prune only this job's scratch dir — concurrent sibling jobs may share
+      # the tool-cache volume (see the comment on the shared+agent job).
       - name: Prune build scratch dir if oversized
         run: |
-          scratch="$RUNNER_TOOL_CACHE/strato-swift-build"
+          scratch="$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
           if [ -d "$scratch" ]; then
             size_kb=$(du -sk "$scratch" | cut -f1)
-            if [ "$size_kb" -gt $((25 * 1024 * 1024)) ]; then
-              echo "Scratch dir is $((size_kb / 1024 / 1024))GB (>25GB); wiping for a cold rebuild"
+            if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
+              echo "$scratch is $((size_kb / 1024 / 1024))GB (>10GB); wiping for a cold rebuild"
               rm -rf "$scratch"
             fi
           fi
@@ -254,13 +262,15 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # Prune only this job's scratch dir — concurrent sibling jobs may share
+      # the tool-cache volume (see the comment on the shared+agent job).
       - name: Prune build scratch dir if oversized
         run: |
-          scratch="$RUNNER_TOOL_CACHE/strato-swift-build"
+          scratch="$RUNNER_TOOL_CACHE/strato-swift-build/control-plane-postgres"
           if [ -d "$scratch" ]; then
             size_kb=$(du -sk "$scratch" | cut -f1)
-            if [ "$size_kb" -gt $((25 * 1024 * 1024)) ]; then
-              echo "Scratch dir is $((size_kb / 1024 / 1024))GB (>25GB); wiping for a cold rebuild"
+            if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
+              echo "$scratch is $((size_kb / 1024 / 1024))GB (>10GB); wiping for a cold rebuild"
               rm -rf "$scratch"
             fi
           fi
