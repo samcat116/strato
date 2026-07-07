@@ -312,6 +312,23 @@ externalDatabase:
   database: vapor_database
   username: vapor_username
   password: ""  # Set this when using external database
+
+  # Source external-database credentials from a pre-existing Secret instead of
+  # the plaintext `password` above — e.g. one provisioned by Terraform alongside
+  # a managed database, so no credential is committed to git. When set, `password`
+  # is ignored and the chart renders no credential Secret of its own.
+  #
+  # The referenced Secret must contain:
+  #   - existingSecretPasswordKey: the raw DB password (control plane reads it as
+  #     DATABASE_PASSWORD and builds its own verified TLS connection).
+  #   - existingSecretDatastoreUriKey (only when spicedb.enabled): a complete
+  #     SpiceDB/pgx datastore connection string, password included, e.g.
+  #       host=db port=5432 user=u password='...' dbname=d sslmode=verify-full sslrootcert=/etc/spicedb/db-tls/ca.crt
+  #     (Server-cert verification still uses strato.database.tlsCACert / the CA
+  #     mounted at /etc/spicedb/db-tls/ca.crt — the CA is public, not a secret.)
+  existingSecret: ""
+  existingSecretPasswordKey: "password"
+  existingSecretDatastoreUriKey: "datastore-conn-uri"
   
 # Migration job configuration
 migration:

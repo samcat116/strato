@@ -131,6 +131,8 @@ auth.existingSecret so there is a single source of truth.
 {{- define "strato-control-plane.databaseSecretName" -}}
 {{- if .Values.postgresql.enabled }}
 {{- printf "%s-strato-credentials" .Release.Name }}
+{{- else if .Values.externalDatabase.existingSecret }}
+{{- .Values.externalDatabase.existingSecret }}
 {{- else }}
 {{- printf "%s-external-db" (include "strato-control-plane.fullname" .) }}
 {{- end }}
@@ -140,7 +142,34 @@ auth.existingSecret so there is a single source of truth.
 Get the database password secret key
 */}}
 {{- define "strato-control-plane.databaseSecretKey" -}}
-db-password
+{{- if and (not .Values.postgresql.enabled) .Values.externalDatabase.existingSecret }}
+{{- .Values.externalDatabase.existingSecretPasswordKey | default "password" }}
+{{- else }}
+{{- "db-password" }}
+{{- end }}
+{{- end }}
+
+{{/*
+The Secret name + key holding SpiceDB's datastore connection URI. With the
+bundled Postgres (or an inline external password) the chart builds this into its
+own <spicedb>-config Secret; with externalDatabase.existingSecret it comes from
+the pre-provisioned Secret instead, so no password is templated into git-tracked
+state.
+*/}}
+{{- define "strato-control-plane.spicedbDatastoreSecretName" -}}
+{{- if and (not .Values.postgresql.enabled) .Values.externalDatabase.existingSecret }}
+{{- .Values.externalDatabase.existingSecret }}
+{{- else }}
+{{- printf "%s-config" (include "strato-control-plane.spicedb.fullname" .) }}
+{{- end }}
+{{- end }}
+
+{{- define "strato-control-plane.spicedbDatastoreSecretKey" -}}
+{{- if and (not .Values.postgresql.enabled) .Values.externalDatabase.existingSecret }}
+{{- .Values.externalDatabase.existingSecretDatastoreUriKey | default "datastore-conn-uri" }}
+{{- else }}
+{{- "datastore-conn-uri" }}
+{{- end }}
 {{- end }}
 
 {{/*
