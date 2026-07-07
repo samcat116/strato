@@ -11,6 +11,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     private let logger: Logger
     private let ovnSocketPath: String
     private let ovsSocketPath: String
+    private let chassisConfig: OVNChassisConfig
 
     #if os(Linux)
     private var ovnManager: OVNManager?
@@ -25,10 +26,12 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     init(
         ovnSocketPath: String = "/var/run/ovn/ovnnb_db.sock",
         ovsSocketPath: String = "/var/run/openvswitch/db.sock",
+        chassisConfig: OVNChassisConfig = OVNChassisConfig(),
         logger: Logger
     ) {
         self.ovnSocketPath = ovnSocketPath
         self.ovsSocketPath = ovsSocketPath
+        self.chassisConfig = chassisConfig
         self.logger = logger
 
         #if os(Linux)
@@ -70,6 +73,14 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
         // Ensure integration bridge exists
         try await ensureIntegrationBridge()
+
+        // Ensure the chassis is registered with OVN (ovn-remote/encap
+        // external_ids), then prove ovn-controller actually connected — a
+        // chassis that never registers means ports get created but no flows
+        // are ever programmed, which must gate the capability, not pass
+        // silently (issue #328).
+        try ensureChassisConfiguration()
+        try await verifyOVNControllerConnected()
 
         isConnected = true
         logger.info("Network service connected successfully")
@@ -423,6 +434,125 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 "Integration bridge already exists or creation failed",
                 metadata: ["error": .string(error.localizedDescription)])
         }
+    }
+
+    /// Ensures the local OVS carries the chassis `external_ids` that
+    /// `ovn-controller` needs (`ovn-remote`, `ovn-encap-type`, `ovn-encap-ip`,
+    /// and a `system-id`). Idempotent: explicit agent config is reapplied on
+    /// every connect, values an operator already set are left alone, and
+    /// missing values get defaults (encap IP auto-detected from the default
+    /// route). Without these a fresh host looks fully wired but programs no
+    /// flows, ever.
+    private func ensureChassisConfiguration() throws {
+        guard chassisConfig.bootstrapEnabled else {
+            logger.info("OVN chassis bootstrap disabled by configuration; assuming operator-managed external_ids")
+            return
+        }
+
+        let current = try runProcess(
+            "ovs-vsctl",
+            ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
+        guard current.status == 0 else {
+            throw NetworkError.ovsError(
+                "cannot read chassis external_ids (exit \(current.status)): "
+                    + current.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        let existing = OVNChassisBootstrap.parseExternalIDs(current.output)
+
+        var detectedEncapIP: String?
+        if chassisConfig.encapIP == nil, existing["ovn-encap-ip"] == nil {
+            detectedEncapIP = detectEncapIP()
+        }
+
+        let plan = OVNChassisBootstrap.plan(
+            config: chassisConfig,
+            existing: existing,
+            detectedEncapIP: detectedEncapIP,
+            generatedSystemID: UUID().uuidString.lowercased())
+
+        if plan.encapIPUnresolved {
+            throw NetworkError.invalidConfiguration(
+                "cannot determine this host's tunnel endpoint IP: the chassis has no ovn-encap-ip, none is "
+                    + "configured, and auto-detection from the default route failed. Set ovn_encap_ip in the "
+                    + "agent configuration.")
+        }
+
+        guard !plan.settings.isEmpty else {
+            logger.debug("OVN chassis external_ids already configured")
+            return
+        }
+
+        let arguments =
+            ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "set", "open_vswitch", "."]
+            + plan.settings.map(\.vsctlArgument)
+        let result = try runProcess("ovs-vsctl", arguments)
+        guard result.status == 0 else {
+            throw NetworkError.ovsError(
+                "failed to set chassis external_ids (exit \(result.status)): "
+                    + result.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        logger.info(
+            "Bootstrapped OVN chassis configuration",
+            metadata: [
+                "applied": .string(plan.settings.map { "\($0.key)=\($0.value)" }.joined(separator: " "))
+            ])
+    }
+
+    /// The IP the kernel would use as the source for off-host traffic — the
+    /// sensible default tunnel endpoint on single-NIC hosts. Multi-homed
+    /// hosts must set `ovn_encap_ip` explicitly.
+    private func detectEncapIP() -> String? {
+        guard let result = try? runProcess("ip", ["-j", "route", "get", "1.1.1.1"]), result.status == 0 else {
+            return nil
+        }
+        return OVNChassisBootstrap.parseRouteSourceIP(result.output)
+    }
+
+    /// Confirms `ovn-controller` has an active southbound connection, polling
+    /// briefly to ride out a controller that is still dialing after the
+    /// chassis was (re)configured. Throwing here keeps `connect()` failed, so
+    /// the agent does not advertise `ovn_networking` for a host whose ports
+    /// would never get flows; the background retry loop picks it up when the
+    /// controller comes up. A missing `ovn-appctl` only logs — we don't gate
+    /// the capability on a diagnostic tool (preflight reports it separately).
+    private func verifyOVNControllerConnected() async throws {
+        let attempts = 5
+        var lastDetail = "unknown"
+
+        for attempt in 1...attempts {
+            let result: CommandResult
+            do {
+                result = try runProcess("ovn-appctl", ["-t", "ovn-controller", "connection-status"])
+            } catch {
+                logger.warning(
+                    "Cannot verify ovn-controller connection status: \(error.localizedDescription)")
+                return
+            }
+            if result.status == 127 {
+                logger.warning(
+                    "ovn-appctl not found; skipping ovn-controller connection verification "
+                        + "(install ovn-host to enable it)")
+                return
+            }
+
+            let output = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if result.status == 0, output == "connected" {
+                logger.info("ovn-controller is connected to the southbound database")
+                return
+            }
+
+            lastDetail = output.isEmpty ? "exit \(result.status)" : output
+            if attempt < attempts {
+                try? await Task.sleep(for: .milliseconds(1500))
+            }
+        }
+
+        throw NetworkError.ovnError(
+            "ovn-controller is not connected to the southbound database (last status: \(lastDetail)) — "
+                + "check that ovn-controller is running and that external_ids:ovn-remote on the local OVS "
+                + "points at the right southbound database. VM ports would come up with no dataplane, so "
+                + "OVN networking is not being advertised.")
     }
 
     private func findOrCreateLogicalSwitch(name: String, subnet: String) async throws -> UUID {

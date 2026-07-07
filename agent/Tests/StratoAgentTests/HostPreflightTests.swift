@@ -142,6 +142,36 @@ struct HostPreflightTests {
         #expect(withOVN.storageReady)
     }
 
+    @Test("Missing ovn-appctl is advisory: verification is skipped, capability is not gated")
+    func missingOVNAppctlIsAdvisory() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let binDir = "\(root)/bin"
+        try FileManager.default.createDirectory(atPath: binDir, withIntermediateDirectories: true)
+        for tool in ["ip", "ovs-vsctl"] {
+            FileManager.default.createFile(
+                atPath: "\(binDir)/\(tool)", contents: Data(),
+                attributes: [.posixPermissions: 0o755])
+        }
+
+        var inputs = passingInputs(root: root)
+        inputs.ovnMode = true
+        inputs.searchPath = binDir
+        for socket in ["ovn.sock", "ovs.sock"] {
+            FileManager.default.createFile(atPath: "\(root)/\(socket)", contents: Data())
+        }
+        inputs.ovnSocketPath = "\(root)/ovn.sock"
+        inputs.ovsSocketPath = "\(root)/ovs.sock"
+
+        let report = HostPreflight.run(inputs)
+        let check = try #require(report.check(.ovnAppctlTool))
+        #expect(!check.passed)
+        #expect(check.severity == .advisory)
+        #expect(check.detail?.contains("ovn-host") == true)
+        // The diagnostic tool being absent must not demote OVN readiness.
+        #expect(report.ovnReady)
+    }
+
     // MARK: - Advisory checks
 
     @Test("Missing firmware is advisory: logged, not gating")
