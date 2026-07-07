@@ -32,15 +32,32 @@ final class BackgroundTaskRegistry: Sendable {
 
     /// Wait for tracked tasks to finish, giving up after `timeout` (a task
     /// stuck on a multi-minute agent-response budget must not stall
-    /// shutdown). Polls rather than awaiting task handles so a hung task
-    /// cannot pin the drain past its deadline.
-    func drain(timeout: Duration = .seconds(2)) async {
+    /// shutdown). Tasks that outlive the timeout are cancelled and given
+    /// `cancellationGrace` to unwind, so a long agent-response wait gets cut
+    /// short instead of touching the database after Fluent tears down.
+    /// (Cancellation is cooperative — a task that ignores it can still
+    /// outlive the drain, but every await in the operation paths propagates
+    /// it.) Polls rather than awaiting task handles so a hung task cannot
+    /// pin the drain past its deadline.
+    func drain(
+        timeout: Duration = .seconds(2),
+        cancellationGrace: Duration = .seconds(1)
+    ) async {
+        if await pollUntilEmpty(for: timeout) { return }
+        for task in tasks.withLockedValue({ Array($0.values) }) {
+            task.cancel()
+        }
+        _ = await pollUntilEmpty(for: cancellationGrace)
+    }
+
+    private func pollUntilEmpty(for timeout: Duration) async -> Bool {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
         while clock.now < deadline {
-            if tasks.withLockedValue({ $0.isEmpty }) { return }
+            if tasks.withLockedValue({ $0.isEmpty }) { return true }
             try? await Task.sleep(for: .milliseconds(5))
         }
+        return tasks.withLockedValue { $0.isEmpty }
     }
 }
 
