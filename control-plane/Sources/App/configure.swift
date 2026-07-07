@@ -263,6 +263,9 @@ public func configure(_ app: Application) async throws {
     // Project-scoped networks exposed via the API
     app.migrations.add(AddProjectToLogicalNetwork())
 
+    // OVN DHCP/DNS configuration on logical networks
+    app.migrations.add(AddDHCPConfigToLogicalNetwork())
+
     // Project-level roles: user and group grants on individual projects.
     app.migrations.add(CreateProjectMember())
     app.migrations.add(CreateProjectGroupGrant())

@@ -16,6 +16,12 @@ import { Label } from "@/components/ui/label";
 import { networksApi } from "@/lib/api/networks";
 import { useProjectContext } from "@/providers";
 import { toast } from "sonner";
+import {
+  DHCPFields,
+  emptyDhcpForm,
+  parseDhcpForm,
+  type DhcpFormState,
+} from "./dhcp-fields";
 
 interface CreateNetworkDialogProps {
   open: boolean;
@@ -37,6 +43,7 @@ export function CreateNetworkDialog({
     subnet: "",
     gateway: "",
   });
+  const [dhcp, setDhcp] = useState<DhcpFormState>(emptyDhcpForm);
 
   // The network is created in the project selected in the header switcher.
   const { currentProject } = useProjectContext();
@@ -44,6 +51,7 @@ export function CreateNetworkDialog({
 
   const resetForm = () => {
     setFormData({ name: "", subnet: "", gateway: "" });
+    setDhcp(emptyDhcpForm);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -68,6 +76,7 @@ export function CreateNetworkDialog({
         subnet,
         gateway: formData.gateway.trim() || undefined,
         projectId,
+        ...parseDhcpForm(dhcp),
       });
       toast.success(`Network "${name}" created`);
       onOpenChange(false);
@@ -148,6 +157,7 @@ export function CreateNetworkDialog({
                 later only affects VMs created afterward.
               </p>
             </div>
+            <DHCPFields value={dhcp} onChange={setDhcp} disabled={isLoading} />
           </div>
           <DialogFooter>
             <Button

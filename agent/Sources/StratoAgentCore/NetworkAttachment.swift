@@ -16,6 +16,13 @@ public enum NetworkAttachment: Codable, Sendable, Equatable {
     /// Hypervisor-internal user-mode (SLIRP) networking; nothing exists on the
     /// host for this attachment.
     case userMode
+
+    /// True for a host TAP device — the only attachment OVN's DHCP responder can
+    /// serve (user-mode NICs are addressed by the hypervisor's own SLIRP DHCP).
+    public var isTap: Bool {
+        if case .tap = self { return true }
+        return false
+    }
 }
 
 /// One NIC of a VM after the network service has realized it on this host:
@@ -34,6 +41,13 @@ public struct ResolvedNetworkAttachment: Sendable {
     public let netmask: String?
     public let gateway: String?
     public let mtu: Int?
+    /// When true, this NIC's L3 config is delivered by the network's DHCP
+    /// responder (OVN), so guest provisioning omits static addressing and lets
+    /// the guest DHCP instead.
+    public let dhcpEnabled: Bool
+    /// DNS resolvers for this NIC. Delivered over DHCP when `dhcpEnabled`;
+    /// otherwise written into the static guest config as `nameservers`.
+    public let dnsServers: [String]
 
     public init(
         network: String,
@@ -42,7 +56,9 @@ public struct ResolvedNetworkAttachment: Sendable {
         ipAddress: String? = nil,
         netmask: String? = nil,
         gateway: String? = nil,
-        mtu: Int? = nil
+        mtu: Int? = nil,
+        dhcpEnabled: Bool = false,
+        dnsServers: [String] = []
     ) {
         self.network = network
         self.attachment = attachment
@@ -51,6 +67,8 @@ public struct ResolvedNetworkAttachment: Sendable {
         self.netmask = netmask
         self.gateway = gateway
         self.mtu = mtu
+        self.dhcpEnabled = dhcpEnabled
+        self.dnsServers = dnsServers
     }
 }
 

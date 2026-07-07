@@ -159,33 +159,51 @@ public struct CloudInitProvisioner {
         }
     }
 
-    /// Renders a NoCloud `network-config` (version 2) that statically configures
-    /// every NIC carrying a control-plane IP allocation, matched by MAC address.
+    /// Renders a NoCloud `network-config` (version 2), matched by MAC address:
+    /// DHCP-managed NICs are set to `dhcp4: true` (OVN's responder delivers
+    /// IP/gateway/DNS), and NICs with a control-plane static allocation get an
+    /// explicit address/gateway/nameservers block.
     ///
-    /// Returns nil when no NIC has a static allocation — in that case no
-    /// `network-config` is written and the guest keeps its default behavior
-    /// (DHCP), which is also what user-mode (SLIRP) NICs need.
+    /// Returns nil when no NIC needs configuring — no `network-config` is written
+    /// and the guest keeps its default behavior (DHCP), which is also what
+    /// user-mode (SLIRP) NICs need.
     public static func networkConfigYAML(for attachments: [ResolvedNetworkAttachment]) -> String? {
         var sections: [String] = []
 
         for (index, nic) in attachments.enumerated() {
             // User-mode NICs are addressed by SLIRP's built-in DHCP.
             guard case .tap = nic.attachment else { continue }
-            guard let macAddress = nic.macAddress,
-                let ipAddress = nic.ipAddress,
-                let prefix = nic.netmask.flatMap({ IPv4Address($0)?.prefixLength })
-            else { continue }
+            guard let macAddress = nic.macAddress else { continue }
 
+            // Common header: match the NIC by MAC and give it a stable name.
             var section = """
                   nic\(index):
                     match:
                       macaddress: "\(macAddress)"
                     set-name: nic\(index)
-                    addresses:
-                      - \(ipAddress)/\(prefix)
                 """
+
+            if nic.dhcpEnabled {
+                // OVN's DHCP responder delivers IP, gateway, and DNS; just bring
+                // the NIC up on DHCP so it sends a request.
+                section += "\n    dhcp4: true"
+                sections.append(section)
+                continue
+            }
+
+            // Static path: needs a control-plane IP + netmask. Skip NICs without
+            // one (the guest keeps its default DHCP behavior).
+            guard let ipAddress = nic.ipAddress,
+                let prefix = nic.netmask.flatMap({ IPv4Address($0)?.prefixLength })
+            else { continue }
+
+            section += "\n    addresses:\n      - \(ipAddress)/\(prefix)"
             if let gateway = nic.gateway {
                 section += "\n    gateway4: \(gateway)"
+            }
+            let dns = nic.dnsServers.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            if !dns.isEmpty {
+                section += "\n    nameservers:\n      addresses: [\(dns.joined(separator: ", "))]"
             }
             if let mtu = nic.mtu {
                 section += "\n    mtu: \(mtu)"
