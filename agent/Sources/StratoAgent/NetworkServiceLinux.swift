@@ -543,8 +543,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             }
             if result.status == 127 {
                 logger.warning(
-                    "ovn-appctl not found; skipping ovn-controller connection verification "
-                        + "(install ovn-host to enable it)")
+                    "ovn-appctl not found; skipping ovn-controller connection verification (install ovn-host to enable it)"
+                )
                 return
             }
 
