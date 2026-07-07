@@ -214,8 +214,19 @@ public actor SPIREService {
                 "trustBundlePath": .string(config.trustBundlePath ?? "none"),
             ])
 
-        // Load initial trust bundle
-        try await refreshTrustBundle()
+        // Load the initial trust bundle. A missing bundle at startup is
+        // tolerated rather than fatal: in Kubernetes the bundle ConfigMap is
+        // published by SPIRE's k8sbundle notifier only after the SPIRE server
+        // is up, which may be after this pod starts. Until a refresh succeeds,
+        // certificate re-verification stays off and the XFCC path relies on
+        // Envoy's own mTLS verification alone.
+        do {
+            try await refreshTrustBundle()
+        } catch {
+            logger.warning(
+                "SPIRE trust bundle not yet available; certificate re-verification is disabled until a periodic refresh succeeds: \(error)"
+            )
+        }
 
         // Start periodic refresh
         startPeriodicRefresh()

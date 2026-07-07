@@ -186,6 +186,14 @@ spec:
               value: "{{ .Values.spire.controlPlane.requireClientCert }}"
             - name: SPIRE_BUNDLE_REFRESH_INTERVAL
               value: "{{ .Values.spire.controlPlane.bundleRefreshInterval }}"
+            {{- if .Values.spire.notifier.k8sbundle.enabled }}
+            # Trust bundle published to a ConfigMap by SPIRE's k8sbundle
+            # notifier and mounted below. With it the control plane re-verifies
+            # the client certificate Envoy forwards in XFCC instead of trusting
+            # the URI assertion alone.
+            - name: SPIRE_TRUST_BUNDLE_PATH
+              value: /run/spire/bundle/bundle.crt
+            {{- end }}
             {{- end }}
             {{- if .Values.opentelemetry.enabled }}
             - name: OTEL_SERVICE_NAME
@@ -252,15 +260,23 @@ spec:
             successThreshold: {{ .Values.readinessProbe.successThreshold | default 1 }}
             failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
           {{- end }}
-          {{- if .Values.strato.database.tlsCACert }}
+          {{- $spireBundle := and .Values.spire.enabled .Values.spire.controlPlane.enableMTLS .Values.spire.notifier.k8sbundle.enabled }}
+          {{- if or .Values.strato.database.tlsCACert $spireBundle }}
           volumeMounts:
+            {{- if .Values.strato.database.tlsCACert }}
             - name: db-tls-ca
               mountPath: /etc/strato/db-tls
               readOnly: true
+            {{- end }}
+            {{- if $spireBundle }}
+            - name: spire-bundle
+              mountPath: /run/spire/bundle
+              readOnly: true
+            {{- end }}
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      {{- if or (and .Values.spire.enabled .Values.spire.envoy.enabled) .Values.strato.database.tlsCACert }}
+      {{- if or (and .Values.spire.enabled .Values.spire.envoy.enabled) .Values.strato.database.tlsCACert $spireBundle }}
       volumes:
         {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
         - name: envoy-config
@@ -270,6 +286,16 @@ spec:
           hostPath:
             path: {{ .Values.spire.envoy.spireAgentSocketDir }}
             type: DirectoryOrCreate
+        {{- end }}
+        {{- if $spireBundle }}
+        # Written by SPIRE server's k8sbundle notifier (see spire-server
+        # ConfigMap). Optional so the control plane can start before the SPIRE
+        # server publishes it; the kubelet populates the mount once it exists
+        # and the control plane's periodic refresh picks it up.
+        - name: spire-bundle
+          configMap:
+            name: {{ include "strato-control-plane.fullname" . }}-spire-bundle
+            optional: true
         {{- end }}
         {{- if .Values.strato.database.tlsCACert }}
         - name: db-tls-ca
