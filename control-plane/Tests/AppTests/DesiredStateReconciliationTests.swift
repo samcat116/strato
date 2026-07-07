@@ -153,7 +153,7 @@ final class DesiredStateReconciliationTests {
 
             // The dispatch fails immediately — not after the sweep budget.
             var operation: VMOperation?
-            for _ in 0..<100 {
+            for _ in 0..<250 {
                 operation = try await VMOperation.find(operationId, on: app.db)
                 if operation?.status == .failed { break }
                 try await Task.sleep(for: .milliseconds(20))

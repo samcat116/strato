@@ -330,8 +330,9 @@ struct TestPKI {
 }
 
 /// Minimal `Client` stand-in: the SPIRE identity-validation paths under test never
-/// perform outbound requests, so this never needs to succeed.
-private struct NoopClient: Client {
+/// perform outbound requests, so this never needs to succeed. Shared with the
+/// registration-flow tests, which construct a SPIREService the same way.
+struct NoopClient: Client {
     var eventLoop: any EventLoop { EmbeddedEventLoop() }
 
     func delegating(to eventLoop: any EventLoop) -> any Client { self }

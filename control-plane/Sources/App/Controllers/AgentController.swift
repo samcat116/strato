@@ -34,6 +34,44 @@ struct AgentController: RouteCollection {
         }
     }
 
+    /// Whether SPIRE mTLS authentication is enabled but the registration API
+    /// is not configured — the state in which agents may hold SPIRE-issued
+    /// identities that this control plane cannot revoke. Revocation paths must
+    /// fail closed here rather than delete our records and silently leave the
+    /// node able to renew SVIDs. Deployments that manage SPIRE entries out of
+    /// band can acknowledge with `?skipSpireDeprovision=true`.
+    private func spireDeprovisioningUnavailable(_ req: Request) async -> Bool {
+        guard req.application.spireRegistrationService == nil,
+            let spireService = req.application.spireService
+        else { return false }
+        return await spireService.isEnabled
+    }
+
+    /// Pass `grantKnown: true` when a persisted record proves a SPIRE grant
+    /// exists (a `spireProvisioned` token): the guard then applies whenever
+    /// the registration API is missing, regardless of how SPIRE auth happens
+    /// to be configured right now. Without it, the guard falls back to
+    /// inferring from SPIRE auth being enabled.
+    private func requireSPIREDeprovisioningOrOverride(
+        _ req: Request, action: String, grantKnown: Bool = false
+    ) async throws {
+        if grantKnown {
+            guard req.application.spireRegistrationService == nil else { return }
+        } else {
+            guard await spireDeprovisioningUnavailable(req) else { return }
+        }
+        guard req.query[Bool.self, at: "skipSpireDeprovision"] == true else {
+            throw Abort(
+                .serviceUnavailable,
+                reason:
+                    "SPIRE authentication is enabled but SPIRE_SERVER_API_ADDRESS is not configured, so the SPIRE entries for this \(action) cannot be revoked and the node could keep renewing SVIDs. Configure the SPIRE server API, or remove the entries out of band and retry with ?skipSpireDeprovision=true."
+            )
+        }
+        req.logger.warning(
+            "Skipping SPIRE deprovisioning on operator override; ensure the entries are removed out of band",
+            metadata: ["action": .string(action)])
+    }
+
     // MARK: - Registration Token Management
 
     /// Base WebSocket URL agents should dial, embedded in registration URLs.
@@ -98,13 +136,55 @@ struct AgentController: RouteCollection {
                 .conflict, reason: "A valid registration token already exists for agent '\(createRequest.agentName)'")
         }
 
-        // Create new registration token
+        let expirationHours = createRequest.expirationHours ?? 1
+
+        // Provision the node in SPIRE first (join token + workload entry).
+        // SPIRE is not transactional with our database, so order matters: if
+        // provisioning fails nothing was persisted here, and if the save below
+        // fails the provisioning is rolled back best-effort (a leftover entry
+        // is reused on retry; the unredeemed join token just expires). The
+        // join token shares the WS token's lifetime — one provisioning window.
+        var spireProvisioning: SPIREAgentProvisioning?
+        if let spire = req.application.spireRegistrationService {
+            do {
+                spireProvisioning = try await spire.provisionAgent(
+                    named: createRequest.agentName,
+                    joinTokenTTLSeconds: Int32(expirationHours * 3600)
+                )
+            } catch let error as SPIRERegistrationError {
+                throw Abort(.badRequest, reason: error.localizedDescription)
+            } catch {
+                req.logger.error(
+                    "SPIRE provisioning failed while creating registration token",
+                    metadata: [
+                        "agentName": .string(createRequest.agentName),
+                        "error": .string("\(error)"),
+                    ])
+                throw Abort(
+                    .badGateway,
+                    reason:
+                        "SPIRE provisioning failed; no registration token was created. \(error.localizedDescription)"
+                )
+            }
+        }
+
+        // Create new registration token, recording whether it carries a SPIRE
+        // grant — revocation decides ownership from this fact, not from
+        // whatever the process configuration happens to be at revoke time.
         let token = AgentRegistrationToken(
             agentName: createRequest.agentName,
-            expirationHours: createRequest.expirationHours ?? 1
+            expirationHours: expirationHours,
+            spireProvisioned: spireProvisioning != nil
         )
 
-        try await token.save(on: req.db)
+        do {
+            try await token.save(on: req.db)
+        } catch {
+            if let spire = req.application.spireRegistrationService, spireProvisioning != nil {
+                await spire.rollbackProvisioning(agentName: createRequest.agentName)
+            }
+            throw error
+        }
 
         let baseURL = webSocketBaseURL(req: req)
 
@@ -114,9 +194,10 @@ struct AgentController: RouteCollection {
                 "agentName": .string(createRequest.agentName),
                 "tokenId": .string(token.id?.uuidString ?? "unknown"),
                 "expiresAt": .string(token.expiresAt?.description ?? "no expiration"),
+                "spireProvisioned": .string(spireProvisioning == nil ? "no" : "yes"),
             ])
 
-        return try AgentRegistrationTokenResponse(from: token, baseURL: baseURL)
+        return try AgentRegistrationTokenResponse(from: token, baseURL: baseURL, spire: spireProvisioning)
     }
 
     func listRegistrationTokens(req: Request) async throws -> [AgentRegistrationTokenListItem] {
@@ -140,6 +221,67 @@ struct AgentController: RouteCollection {
 
         guard let token = try await AgentRegistrationToken.find(tokenId, on: req.db) else {
             throw Abort(.notFound, reason: "Registration token not found")
+        }
+
+        // Revoking a token withdraws the whole provisioning grant — including
+        // the SPIRE entries created alongside it — but only when this token
+        // still *owns* that grant:
+        //
+        // - A *used* token belongs to an agent that registered via token auth;
+        //   its entries are removed by deregistering the agent instead.
+        // - An existing Agent row with this name means the node registered over
+        //   mTLS, which never redeems the WebSocket token: the token looks
+        //   unused, but the SPIRE entries now belong to a live agent.
+        // - A *valid unused SPIRE-provisioned successor* token for the same
+        //   name means the grant was reissued; the entries (and the stable
+        //   node identity a current bootstrap may already have attested with)
+        //   belong to the successor, so touching SPIRE here would sabotage it.
+        //   A successor minted while the registration API was unconfigured
+        //   carries no grant and does not take ownership.
+        //
+        // Expiry alone does NOT make a grant inert: the join token may have
+        // been redeemed before it expired (spire-agent attests first; the
+        // Agent row only appears once strato-agent registers), leaving entries
+        // and an attested node that can still mint SVIDs. An expired token
+        // with no successor therefore still owns — and must revoke — its grant.
+        //
+        // Fail closed: if SPIRE is unreachable the token stays revocable later.
+        let agentIsRegistered =
+            try await Agent.query(on: req.db)
+            .filter(\.$name == token.agentName)
+            .first() != nil
+
+        let provisionedSuccessorExists = try await AgentRegistrationToken.query(on: req.db)
+            .filter(\.$agentName == token.agentName)
+            .filter(\.$isUsed == false)
+            .filter(\.$spireProvisioned == true)
+            .filter(\.$id != token.requireID())
+            .all()
+            .contains { $0.isValid }
+
+        let tokenOwnsGrant =
+            token.spireProvisioned && !token.isUsed && !agentIsRegistered && !provisionedSuccessorExists
+
+        if tokenOwnsGrant {
+            try await requireSPIREDeprovisioningOrOverride(req, action: "registration token", grantKnown: true)
+        }
+
+        if tokenOwnsGrant, let spire = req.application.spireRegistrationService {
+            do {
+                try await spire.deprovisionAgent(named: token.agentName)
+            } catch {
+                req.logger.error(
+                    "SPIRE deprovisioning failed while revoking registration token",
+                    metadata: [
+                        "agentName": .string(token.agentName),
+                        "error": .string("\(error)"),
+                    ])
+                throw Abort(
+                    .badGateway,
+                    reason:
+                        "SPIRE deprovisioning failed; the registration token was not revoked. Retry when the SPIRE server is reachable."
+                )
+            }
         }
 
         try await token.delete(on: req.db)
@@ -199,6 +341,32 @@ struct AgentController: RouteCollection {
 
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
+        }
+
+        // Remove the SPIRE workload entry before anything else, and fail
+        // closed if that doesn't succeed: deregistering is the operator's
+        // revocation lever, and deleting the row while the node can still
+        // renew its SVID would leave a live credential with no visible owner.
+        // That includes the misconfigured case where SPIRE auth is enabled but
+        // the registration API is not set up at all.
+        try await requireSPIREDeprovisioningOrOverride(req, action: "agent")
+
+        if let spire = req.application.spireRegistrationService {
+            do {
+                try await spire.deprovisionAgent(named: agent.name)
+            } catch {
+                req.logger.error(
+                    "SPIRE deprovisioning failed while deregistering agent",
+                    metadata: [
+                        "agentName": .string(agent.name),
+                        "error": .string("\(error)"),
+                    ])
+                throw Abort(
+                    .badGateway,
+                    reason:
+                        "SPIRE deprovisioning failed; the agent was not deregistered. Retry when the SPIRE server is reachable."
+                )
+            }
         }
 
         // Remove from in-memory registry if present
