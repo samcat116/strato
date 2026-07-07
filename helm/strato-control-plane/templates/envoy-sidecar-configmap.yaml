@@ -57,12 +57,15 @@ data:
                     codec_type: AUTO
                     upgrade_configs:
                       - upgrade_type: websocket
-                    # Forward client certificate details to upstream
+                    # Forward client certificate details to upstream. The chain
+                    # (leaf included) lets the control plane independently
+                    # re-verify the certificate against the SPIRE trust bundle
+                    # instead of trusting the URI assertion alone.
                     forward_client_cert_details: SANITIZE_SET
                     set_current_client_cert_details:
                       uri: true
-                      cert: false
-                      chain: false
+                      cert: true
+                      chain: true
                       dns: false
                       subject: true
                     route_config:

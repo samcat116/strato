@@ -560,12 +560,9 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 return
             }
             if result.status == 127 {
-                // Bind the message as a String first: `Logger.Message` is not
-                // `+`-composable, so concatenated literals must be interpolated in.
-                let detail =
-                    "ovn-appctl not found; skipping ovn-controller connection verification "
-                    + "(install ovn-host to enable it)"
-                logger.warning("\(detail)")
+                logger.warning(
+                    "ovn-appctl not found; skipping ovn-controller connection verification (install ovn-host to enable it)"
+                )
                 return
             }
 

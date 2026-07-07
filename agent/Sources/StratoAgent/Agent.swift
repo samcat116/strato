@@ -5,6 +5,7 @@ import NIOPosix
 import NIOSSL
 import StratoShared
 import StratoAgentCore
+import StratoAgentSPIFFE
 
 enum AgentError: Error, LocalizedError {
     case registrationTimeout
@@ -326,7 +327,7 @@ actor Agent {
                 "Initializing SPIFFE authentication",
                 metadata: [
                     "trustDomain": .string(spiffe.trustDomain ?? SPIFFEConfig.defaultTrustDomain),
-                    "sourceType": .string(spiffe.sourceType ?? "files"),
+                    "sourceType": .string(spiffe.sourceType ?? "workload_api"),
                 ])
 
             do {

@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import X509
 
 // MARK: - SPIFFE Client Protocol
 
@@ -77,9 +78,14 @@ public actor FileSPIFFEClient: SPIFFEClientProtocol {
         let bundlePEM = try readFile(trustBundlePath)
         let trustCerts = parsePEMCertificates(bundlePEM)
 
-        // Parse expiration from certificate (simplified - assume 1 hour from now)
-        // In production, parse the actual certificate expiration
-        let expiresAt = Date().addingTimeInterval(3600)
+        // Rotation timing keys off the leaf certificate's real expiry
+        let expiresAt: Date
+        do {
+            let leaf = try Certificate(pemEncoded: certificates[0])
+            expiresAt = leaf.notValidAfter
+        } catch {
+            throw SPIFFEError.parseError("Failed to parse certificate in \(certificatePath): \(error)")
+        }
 
         let svid = X509SVID(
             spiffeID: spiffeID,
@@ -228,73 +234,6 @@ public actor FileSPIFFEClient: SPIFFEClientProtocol {
         }
 
         return certificates
-    }
-}
-
-// MARK: - Workload API SPIFFE Client
-
-/// SPIFFE client that connects to SPIRE Workload API
-/// Uses gRPC over Unix domain socket
-public actor WorkloadAPISPIFFEClient: SPIFFEClientProtocol {
-    private let socketPath: String
-    private let logger: Logger
-
-    private var watchTask: Task<Void, Never>?
-    private var continuations: [UUID: AsyncStream<X509SVID>.Continuation] = [:]
-
-    /// Default Workload API socket path
-    public static let defaultSocketPath = "/var/run/spire/sockets/workload.sock"
-
-    /// Initialize with socket path
-    /// - Parameters:
-    ///   - socketPath: Path to SPIRE Workload API Unix socket
-    ///   - logger: Logger instance
-    public init(
-        socketPath: String = defaultSocketPath,
-        logger: Logger
-    ) {
-        self.socketPath = socketPath
-        self.logger = logger
-    }
-
-    public func fetchX509SVID() async throws -> X509SVID {
-        logger.debug(
-            "Fetching X.509 SVID from Workload API",
-            metadata: [
-                "socketPath": .string(socketPath)
-            ])
-
-        // Check if socket exists
-        guard FileManager.default.fileExists(atPath: socketPath) else {
-            throw SPIFFEError.workloadAPIUnavailable("Socket not found: \(socketPath)")
-        }
-
-        // TODO: Implement actual gRPC call to Workload API
-        // For now, this is a placeholder that throws an error
-        // In production, use swift-grpc with the SPIFFE proto definitions:
-        // https://github.com/spiffe/spiffe/blob/main/proto/spiffe/workload/workload.proto
-
-        throw SPIFFEError.workloadAPIUnavailable(
-            "gRPC Workload API not yet implemented. Use FileSPIFFEClient with spiffe-helper instead."
-        )
-    }
-
-    public func fetchTrustBundles() async throws -> [String: SPIFFETrustBundle] {
-        throw SPIFFEError.workloadAPIUnavailable(
-            "gRPC Workload API not yet implemented. Use FileSPIFFEClient with spiffe-helper instead."
-        )
-    }
-
-    nonisolated public func watchX509SVID() -> AsyncStream<X509SVID> {
-        AsyncStream { continuation in
-            continuation.finish()
-        }
-    }
-
-    public func close() async {
-        watchTask?.cancel()
-        watchTask = nil
-        logger.info("Workload API SPIFFE client closed")
     }
 }
 
