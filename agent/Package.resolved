@@ -182,6 +182,15 @@
       }
     },
     {
+      "identity" : "swift-ovn",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/samcat116/swift-ovn.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "1da6f5451f746db518241e88ccab1fae992706dd"
+      }
+    },
+    {
       "identity" : "swift-protobuf",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-protobuf.git",
