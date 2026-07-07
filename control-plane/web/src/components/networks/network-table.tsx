@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Trash2 } from "lucide-react";
+import { Loader2, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -21,12 +21,14 @@ interface NetworkTableProps {
   networks: Network[];
   isLoading?: boolean;
   onRefresh?: () => void;
+  onEdit?: (network: Network) => void;
 }
 
 export function NetworkTable({
   networks,
   isLoading,
   onRefresh,
+  onEdit,
 }: NetworkTableProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -74,6 +76,7 @@ export function NetworkTable({
           <TableHead className="text-gray-400 font-medium">Name</TableHead>
           <TableHead className="text-gray-400 font-medium">Subnet</TableHead>
           <TableHead className="text-gray-400 font-medium">Gateway</TableHead>
+          <TableHead className="text-gray-400 font-medium">DHCP / DNS</TableHead>
           <TableHead className="text-gray-400 font-medium">Scope</TableHead>
           <TableHead className="text-gray-400 font-medium">Interfaces</TableHead>
           <TableHead className="text-gray-400 font-medium text-right">
@@ -114,6 +117,27 @@ export function NetworkTable({
               <TableCell className="text-gray-300 font-mono text-sm">
                 {network.gateway ?? "—"}
               </TableCell>
+              <TableCell className="text-gray-300 text-sm">
+                {network.dhcpEnabled ? (
+                  <div className="space-y-0.5">
+                    <Badge className="bg-blue-600/20 text-blue-300 border-blue-700">
+                      DHCP
+                    </Badge>
+                    <div className="text-xs text-gray-400 font-mono">
+                      {network.dnsServers.length > 0
+                        ? network.dnsServers.join(", ")
+                        : "no DNS"}
+                    </div>
+                  </div>
+                ) : (
+                  <Badge
+                    variant="outline"
+                    className="border-gray-600 text-gray-400"
+                  >
+                    Static
+                  </Badge>
+                )}
+              </TableCell>
               <TableCell className="text-gray-300">
                 {network.projectId ? "Project" : "Global"}
               </TableCell>
@@ -121,6 +145,16 @@ export function NetworkTable({
                 {network.attachedInterfaceCount}
               </TableCell>
               <TableCell className="text-right">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-gray-300 hover:text-gray-100 hover:bg-gray-700"
+                  onClick={() => onEdit?.(network)}
+                  disabled={busyId === network.id}
+                  title="Edit gateway and DHCP settings"
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
                 <Button
                   size="sm"
                   variant="ghost"

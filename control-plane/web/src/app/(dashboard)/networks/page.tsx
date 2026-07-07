@@ -4,12 +4,18 @@ import { useState } from "react";
 import { Network as NetworkIcon, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { NetworkTable, CreateNetworkDialog } from "@/components/networks";
+import {
+  NetworkTable,
+  CreateNetworkDialog,
+  EditNetworkDialog,
+} from "@/components/networks";
 import { useNetworks, useInvalidateNetworks } from "@/lib/hooks";
 import { useProjectContext } from "@/providers";
+import type { Network } from "@/types/api";
 
 export default function NetworksPage() {
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<Network | null>(null);
   const { currentProject } = useProjectContext();
   const { data: networks = [], isLoading } = useNetworks(currentProject?.id);
   const invalidateNetworks = useInvalidateNetworks();
@@ -49,6 +55,7 @@ export default function NetworksPage() {
             networks={networks}
             isLoading={isLoading}
             onRefresh={invalidateNetworks}
+            onEdit={setEditing}
           />
         </CardContent>
       </Card>
@@ -57,6 +64,15 @@ export default function NetworksPage() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={invalidateNetworks}
+      />
+
+      <EditNetworkDialog
+        network={editing}
+        open={editing !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null);
+        }}
+        onUpdated={invalidateNetworks}
       />
     </div>
   );

@@ -55,17 +55,29 @@ struct VMSpecBuilder {
 
     /// Builds network specs from the VM's interfaces, ordered by order index
     /// (then device name, for stability when orders collide).
-    static func networkSpecs(from interfaces: [VMNetworkInterface]) -> [NetworkSpec] {
+    ///
+    /// `networks` maps logical-network name → its model, supplying the DHCP/DNS
+    /// configuration agents program into OVN. It defaults empty (DHCP disabled)
+    /// so callers that don't care about DHCP — and tests — need not fetch it.
+    static func networkSpecs(
+        from interfaces: [VMNetworkInterface],
+        networks: [String: LogicalNetwork] = [:]
+    ) -> [NetworkSpec] {
         interfaces
             .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
             .map { interface in
-                NetworkSpec(
+                let network = networks[interface.network]
+                return NetworkSpec(
                     network: interface.network,
                     macAddress: interface.macAddress,
                     ipAddress: interface.ipAddress,
                     netmask: interface.netmask,
                     gateway: interface.gateway,
-                    mtu: interface.mtu
+                    mtu: interface.mtu,
+                    dhcpEnabled: network?.dhcpEnabled ?? false,
+                    dnsServers: network?.dnsServers ?? [],
+                    domainName: network?.domainName,
+                    leaseTime: network?.leaseTime
                 )
             }
     }
@@ -108,7 +120,10 @@ struct VMSpecBuilder {
     /// Builds a VM spec from VM and Image. The boot volume is materialized by the
     /// agent from the cached image (see `buildImageInfo`), so no volume entry is
     /// sent unless the VM carries a legacy disk path.
-    static func buildVMSpec(from vm: VM, image: Image, networkInterfaces: [VMNetworkInterface]) -> VMSpec {
+    static func buildVMSpec(
+        from vm: VM, image: Image, networkInterfaces: [VMNetworkInterface],
+        networks: [String: LogicalNetwork] = [:]
+    ) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
 
@@ -125,7 +140,7 @@ struct VMSpecBuilder {
                 firmware: vm.firmwarePath
             ),
             volumes: legacyVolumeSpecs(from: vm),
-            networks: networkSpecs(from: networkInterfaces),
+            networks: networkSpecs(from: networkInterfaces, networks: networks),
             console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),
             sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? []
         )
@@ -138,7 +153,8 @@ struct VMSpecBuilder {
     ///   - volumes: Attached volumes (sorted by boot order, then device name)
     ///   - networkInterfaces: The VM's network interfaces
     static func buildVMSpecWithVolumes(
-        from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface]
+        from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface],
+        networks: [String: LogicalNetwork] = [:]
     ) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
@@ -161,7 +177,7 @@ struct VMSpecBuilder {
                 firmware: vm.firmwarePath
             ),
             volumes: volumes,
-            networks: networkSpecs(from: networkInterfaces),
+            networks: networkSpecs(from: networkInterfaces, networks: networks),
             console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),
             sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? []
         )
