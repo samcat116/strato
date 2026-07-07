@@ -137,16 +137,12 @@ final class ReplicaRoutingAgentServiceTests {
 
             try await test(app, coordination, store)
 
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             throw error
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     private func registerAgent(

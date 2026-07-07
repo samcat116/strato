@@ -19,16 +19,12 @@ final class OrganizationAccessServiceTests {
             try await configure(app)
             try await app.autoMigrate()
             try await test(app, TestDataBuilder(db: app.db))
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             throw error
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     /// Builds an authenticated `Request` so the static service methods can resolve the

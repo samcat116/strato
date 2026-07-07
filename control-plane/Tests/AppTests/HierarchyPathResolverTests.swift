@@ -13,15 +13,11 @@ final class HierarchyPathResolverTests {
             try await configure(app)
             try await app.autoMigrate()
             try await test(app, TestDataBuilder(db: app.db))
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             throw error
         }
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     @Test("path for a project under a nested OU walks org -> OU chain -> project")

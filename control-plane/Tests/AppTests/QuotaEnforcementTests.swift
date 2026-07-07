@@ -48,17 +48,11 @@ final class QuotaEnforcementTests {
             let token = try await user.generateAPIKey(on: app.db)
 
             try await test(app, user, org, project, image, token)
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            await app.dropTestSchemaIfNeeded()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             throw error
         }
-        await app.dropTestSchemaIfNeeded()
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     // MARK: - Service-level scope resolution

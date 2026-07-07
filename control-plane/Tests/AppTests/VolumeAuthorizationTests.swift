@@ -51,16 +51,12 @@ final class VolumeAuthorizationTests {
 
             try await test(app, project, image, token)
 
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             throw error
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     private func createVolumeBody(project: Project, image: Image) -> CreateVolumeRequest {

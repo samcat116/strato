@@ -118,7 +118,7 @@ struct VMController: RouteCollection {
         let vmID = operation.vmID
 
         guard let agentId = vm.hypervisorId else {
-            Task {
+            app.backgroundTasks.spawn {
                 await completeOperation(
                     operationId, vmID: vmID, as: .failed,
                     error: AgentServiceError.vmNotMapped(vmID.uuidString).localizedDescription,
@@ -126,7 +126,7 @@ struct VMController: RouteCollection {
             }
             return
         }
-        Task {
+        app.backgroundTasks.spawn {
             guard let agent = await app.agentService.getAgentInfo(agentId), agent.status == .online else {
                 await completeOperation(
                     operationId, vmID: vmID, as: .failed,
@@ -220,7 +220,7 @@ struct VMController: RouteCollection {
         let vmID = operation.vmID
         let budget = operation.kind.completionBudget
 
-        Task {
+        app.backgroundTasks.spawn {
             do {
                 let response = try await app.agentService.performVMOperationAwaitingResponse(
                     messageType, vmId: vmID.uuidString, timeout: budget)
@@ -712,7 +712,7 @@ struct VMController: RouteCollection {
         guard let operationId = operation.id else { return }
         let vmID = operation.vmID
 
-        Task {
+        app.backgroundTasks.spawn {
             do {
                 // The image constrains placement (architecture match); the
                 // sync itself re-reads everything it needs from the database.
@@ -781,7 +781,7 @@ struct VMController: RouteCollection {
         guard let operationId = operation.id else { return }
         let vmID = operation.vmID
 
-        Task {
+        app.backgroundTasks.spawn {
             if vm.hypervisorId != nil {
                 app.logger.warning(
                     "Deleting VM record without agent teardown; agent is offline",

@@ -46,16 +46,12 @@ final class VMOperationTests {
 
             try await test(app, user, vm, token)
 
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             throw error
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     /// Waits for the background dispatch task to resolve the VM to `expected`.
@@ -71,6 +67,25 @@ final class VMOperationTests {
             try await Task.sleep(for: .milliseconds(50))
         }
         Issue.record("VM \(vmID) never reached status \(expected.rawValue)")
+    }
+
+    /// Waits for the background dispatch task to complete the operation. The
+    /// operation row and the VM row are written separately, so tests must poll
+    /// the row they assert on — a VM-status poll does not order the operation
+    /// write.
+    private func pollOperationCompleted(
+        _ operationId: UUID, on db: any Database
+    ) async throws -> VMOperation? {
+        for _ in 0..<100 {
+            if let operation = try await VMOperation.find(operationId, on: db),
+                operation.status != .pending
+            {
+                return operation
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        Issue.record("Operation \(operationId) never completed")
+        return nil
     }
 
     // MARK: - 202 + async failure recording
@@ -94,21 +109,12 @@ final class VMOperationTests {
             // No agent is mapped to the VM, so the background dispatch fails
             // immediately: the operation must record it and the VM must be
             // restored to its pre-operation status (not left `.starting`).
-            // Poll the operation itself — the VM both starts and ends this
-            // test as `.created`, so polling the VM status can return before
-            // the background dispatch has even run.
-            var operation: VMOperation?
-            for _ in 0..<250 {
-                operation = try await VMOperation.find(operationId, on: app.db)
-                if operation?.status == .failed { break }
-                try await Task.sleep(for: .milliseconds(20))
-            }
+            let operation = try await pollOperationCompleted(operationId!, on: app.db)
             #expect(operation?.status == .failed)
             #expect(operation?.error?.isEmpty == false)
             #expect(operation?.completedAt != nil)
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
-            #expect(refreshed?.status == .created)
+            try await pollVMStatus(vm.id!, until: .created, on: app.db)
         }
     }
 

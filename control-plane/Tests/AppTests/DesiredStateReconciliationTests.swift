@@ -47,16 +47,12 @@ final class DesiredStateReconciliationTests {
 
             try await test(app, user, vm, token)
 
-            try await app.autoRevert()
         } catch {
-            try? await app.autoRevert()
-            try await app.asyncShutdown()
-            app.cleanupTestDatabase()
+            try await app.shutdownForTesting()
             throw error
         }
 
-        try await app.asyncShutdown()
-        app.cleanupTestDatabase()
+        try await app.shutdownForTesting()
     }
 
     /// Registers an in-memory agent with the given protocol version and maps
@@ -167,10 +163,9 @@ final class DesiredStateReconciliationTests {
 
             // The unachieved intent was realigned: desired reverts to the
             // observed resting state instead of firing when the agent returns.
-            // The revert is a separate write that lands just after the
-            // operation flips to failed, so poll for it rather than racing it.
+            // The VM row is written after the operation row, so poll it too.
             var refreshed: VM?
-            for _ in 0..<250 {
+            for _ in 0..<100 {
                 refreshed = try await VM.find(vm.id, on: app.db)
                 if refreshed?.desiredStatus == .shutdown { break }
                 try await Task.sleep(for: .milliseconds(20))

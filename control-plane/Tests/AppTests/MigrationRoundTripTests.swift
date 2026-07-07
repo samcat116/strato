@@ -17,18 +17,20 @@ struct MigrationRoundTripTests {
     @Test("All migrations apply, revert, and re-apply cleanly")
     func migrationsRoundTrip() async throws {
         try await withTestApp { app in
-            // `configure(app)` has already registered every migration and applied
-            // them once (its trailing `autoMigrate()`). Now drive a full
-            // down → up cycle so a broken `revert` or a non-idempotent `prepare`
-            // surfaces here rather than in production.
+            // The app's database is a clone of the template every migration was
+            // applied to. Drive a full down → up cycle so a broken `revert` or a
+            // non-idempotent `prepare` surfaces here rather than in production.
             try await app.autoRevert()
             try await app.autoMigrate()
 
             // Sanity check: after re-applying, a core table is queryable.
             let userCount = try await User.query(on: app.db).count()
             #expect(userCount == 0)
+
+            // Second cycle: teardown no longer reverts (per-test databases are
+            // simply dropped), so confirm revert is repeatable here.
+            try await app.autoRevert()
+            try await app.autoMigrate()
         }
-        // withTestApp's teardown runs one more autoRevert, completing the second
-        // down cycle and confirming revert is repeatable.
     }
 }
