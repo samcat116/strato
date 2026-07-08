@@ -1,0 +1,19 @@
+docs/architecture/networking.md
+  s_68b7842843836c::t_13f74051abb4b0 1-308
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "74ae93007be07ece6bfae3d904f606910d33916e",
+  "prompts": {},
+  "sessions": {
+    "s_68b7842843836c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0756d484-e927-454b-aa22-8033f03a894a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
