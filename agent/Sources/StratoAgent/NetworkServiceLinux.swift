@@ -445,8 +445,16 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             throw NetworkError.notConnected("OVS manager not connected")
         }
 
-        // Check if br-int exists, create if not
         let bridgeName = "br-int"
+
+        // Idempotent: br-int persists in OVSDB across agent restarts, so on
+        // every reconnect it already exists. Bridge names are uniquely indexed,
+        // so blindly inserting it aborts the whole transaction with a
+        // constraint violation — check for it first. A fresh host has none.
+        if try await ovsManager.getBridge(named: bridgeName) != nil {
+            logger.debug("Integration bridge already present", metadata: ["bridge": .string(bridgeName)])
+            return
+        }
 
         let integrationBridge = OVSBridge(
             name: bridgeName,
@@ -459,10 +467,13 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             let _ = try await ovsManager.createBridge(integrationBridge)
             logger.info("Created integration bridge", metadata: ["bridge": .string(bridgeName)])
         } catch {
-            // Bridge might already exist, which is fine
-            logger.debug(
-                "Integration bridge already exists or creation failed",
-                metadata: ["error": .string(error.localizedDescription)])
+            // A concurrent creator may have won the race between the check
+            // above and this insert; tolerate that, but surface anything else.
+            if try await ovsManager.getBridge(named: bridgeName) != nil {
+                logger.debug("Integration bridge created concurrently", metadata: ["bridge": .string(bridgeName)])
+            } else {
+                throw error
+            }
         }
     }
 
