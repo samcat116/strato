@@ -268,6 +268,47 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("POST /api/networks rejects a name colliding with a reserved OVN prefix (400)")
+    func createRejectsReservedName() async throws {
+        try await withNetworkTestApp { app, _, _, token in
+            app.spicedbMockAllows = true
+            // A tenant switch is named after its network and shares OVN's
+            // Logical_Switch namespace with derived provider switches (ls-ext-*),
+            // so this name must be rejected.
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(name: "ls-ext-project-abc", subnet: "10.70.0.0/24"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("PUT /api/networks rejects a gateway change while the network is in use (409)")
+    func updateRejectsGatewayChangeWhileInUse() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            app.spicedbMockAllows = true
+
+            let network = LogicalNetwork(
+                name: "gw-net", subnet: "10.71.0.0/24", gateway: "10.71.0.1",
+                projectID: project.id!, createdByID: user.id!)
+            try await network.save(on: app.db)
+
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "gw-vm", project: project)
+            let nic = VMNetworkInterface(
+                vmID: vm.id!, network: "gw-net", macAddress: VMNetworkInterface.generateMACAddress())
+            try await nic.save(on: app.db)
+
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(gateway: "10.71.0.254"))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
     @Test("PUT /api/networks rejects a name change while the network is in use (409)")
     func updateRejectsRenameWhileInUse() async throws {
         try await withNetworkTestApp { app, user, project, token in

@@ -103,6 +103,7 @@ struct NetworkController: RouteCollection {
         guard !name.isEmpty else {
             throw Abort(.badRequest, reason: "Network name must not be empty")
         }
+        try Self.validateNetworkName(name)
 
         let (subnet, gateway) = try Self.validateAddressing(subnet: request.subnet, gateway: request.gateway)
         let dnsServers = try Self.validatedDNS(request.dnsServers ?? [])
@@ -197,6 +198,7 @@ struct NetworkController: RouteCollection {
             guard !trimmed.isEmpty else {
                 throw Abort(.badRequest, reason: "Network name must not be empty")
             }
+            try Self.validateNetworkName(trimmed)
             network.name = trimmed
         }
 
@@ -217,7 +219,19 @@ struct NetworkController: RouteCollection {
             network.subnet = newSubnet
         }
 
-        if let newGateway = request.gateway {
+        if let newGateway = request.gateway, newGateway != network.gateway {
+            // The gateway is the L3 router-port address AND the denormalized
+            // gateway existing NICs already carry into their guests. Changing it
+            // while VMs are attached re-addresses the OVN router port but leaves
+            // those guests pointing at the old gateway, breaking their L3 — so
+            // reject it in use, like a subnet change (issue #342).
+            guard interfaceCount == 0 else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Network is in use by \(interfaceCount) interface(s); changing the gateway would break their L3 configuration"
+                )
+            }
             network.gateway = newGateway
         }
 
@@ -334,6 +348,28 @@ struct NetworkController: RouteCollection {
     }
 
     // MARK: - Helper Methods
+
+    /// OVN object-name prefixes the agent derives for Strato-managed L3 objects
+    /// (logical routers, router ports, router-typed switch ports, external
+    /// switches, localnet ports — see `OVNNaming` in StratoAgentCore). A tenant
+    /// logical switch is named after its network, sharing OVN's `Logical_Switch`
+    /// namespace, so a user network named e.g. `ls-ext-project-<uuid>` would
+    /// collide with a provider switch. Reserving the prefixes keeps the two
+    /// namespaces disjoint (issue #342).
+    static let reservedNamePrefixes = ["lr-", "lrp-", "lsp-", "ls-ext-", "ln-ext-"]
+
+    /// Rejects a network name that would collide with the agent's derived OVN
+    /// object names. Returns the (already-trimmed) name unchanged when valid.
+    static func validateNetworkName(_ name: String) throws {
+        let lowercased = name.lowercased()
+        if let reserved = reservedNamePrefixes.first(where: { lowercased.hasPrefix($0) }) {
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Network name must not start with '\(reserved)' — that prefix is reserved for Strato-managed network objects"
+            )
+        }
+    }
 
     /// Validates a subnet/gateway pair, defaulting a missing gateway to the
     /// subnet's first host address. Mirrors the seeding validation in the
