@@ -268,23 +268,6 @@ final class NetworkControllerTests {
         }
     }
 
-    @Test("POST /api/networks rejects a name colliding with a reserved OVN prefix (400)")
-    func createRejectsReservedName() async throws {
-        try await withNetworkTestApp { app, _, _, token in
-            app.spicedbMockAllows = true
-            // A tenant switch is named after its network and shares OVN's
-            // Logical_Switch namespace with derived provider switches (ls-ext-*),
-            // so this name must be rejected.
-            try await app.test(.POST, "/api/networks") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(
-                    CreateNetworkRequest(name: "ls-ext-project-abc", subnet: "10.70.0.0/24"))
-            } afterResponse: { res in
-                #expect(res.status == .badRequest)
-            }
-        }
-    }
-
     @Test("PUT /api/networks rejects a gateway change while the network is in use (409)")
     func updateRejectsGatewayChangeWhileInUse() async throws {
         try await withNetworkTestApp { app, user, project, token in

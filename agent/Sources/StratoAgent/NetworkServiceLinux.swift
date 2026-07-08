@@ -145,8 +145,14 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // MAC only. The old fake allocation (random 192.168.1.x) is gone.
         var ipAddress = config.ipAddress
 
+        // The OVN switch is named after the network's id (matching the network
+        // reconciler), never its user-chosen name, so user names can't collide
+        // with Strato-managed switches. Falls back to the name for specs from a
+        // control plane that predates `networkId` (issue #342).
+        let switchName = config.networkId.map { OVNNaming.switchName(networkId: $0) } ?? config.networkName
+
         // Find or create the logical switch
-        _ = try await findOrCreateLogicalSwitch(name: config.networkName, subnet: config.subnet ?? "10.0.0.0/24")
+        _ = try await findOrCreateLogicalSwitch(name: switchName, subnet: config.subnet ?? "10.0.0.0/24")
 
         // Program OVN's native DHCP responder for this network when enabled, so
         // the guest learns the control-plane-pinned IP, gateway, and DNS over
@@ -170,7 +176,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             if !existingMAC.isEmpty { macAddress = existingMAC }
             if !existingIP.isEmpty { ipAddress = existingIP }
 
-            let logicalSwitch = try await ovnManager?.getLogicalSwitch(named: config.networkName)
+            let logicalSwitch = try await ovnManager?.getLogicalSwitch(named: switchName)
             let attachedPorts = logicalSwitch?.ports ?? []
             if let existingUUID = existingPort.uuid, attachedPorts.contains(existingUUID) {
                 portUUID = existingPort.uuid
@@ -198,12 +204,12 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                     ])
                 try await ovnManager?.deleteLogicalSwitchPort(named: portName)
                 portUUID = try await createAttachedLogicalSwitchPort(
-                    portName: portName, vmId: vmId, networkName: config.networkName,
+                    portName: portName, vmId: vmId, switchName: switchName, networkName: config.networkName,
                     macAddress: macAddress, ipAddress: ipAddress, dhcpOptionsUUID: dhcpOptionsUUID)
             }
         } else {
             portUUID = try await createAttachedLogicalSwitchPort(
-                portName: portName, vmId: vmId, networkName: config.networkName,
+                portName: portName, vmId: vmId, switchName: switchName, networkName: config.networkName,
                 macAddress: macAddress, ipAddress: ipAddress, dhcpOptionsUUID: dhcpOptionsUUID)
         }
 
@@ -616,8 +622,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// OVSDB transaction (`ovn-nbctl lsp-add` semantics) — the two steps must
     /// never diverge or the port is an orphan ovn-northd ignores.
     private func createAttachedLogicalSwitchPort(
-        portName: String, vmId: String, networkName: String, macAddress: String, ipAddress: String?,
-        dhcpOptionsUUID: String? = nil
+        portName: String, vmId: String, switchName: String, networkName: String, macAddress: String,
+        ipAddress: String?, dhcpOptionsUUID: String? = nil
     ) async throws -> String? {
         let portAddress = ipAddress.map { "\(macAddress) \($0)" } ?? macAddress
         let logicalPort = OVNLogicalSwitchPort(
@@ -631,7 +637,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 "description": "VM network interface",
             ]
         )
-        return try await ovnManager?.createLogicalSwitchPort(logicalPort, onSwitch: networkName)
+        return try await ovnManager?.createLogicalSwitchPort(logicalPort, onSwitch: switchName)
     }
 
     private func findOrCreateLogicalSwitch(name: String, subnet: String) async throws -> UUID {

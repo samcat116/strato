@@ -48,6 +48,10 @@ extension NetworkServiceProtocol {
 
 struct VMNetworkConfig: Sendable {
     let networkName: String
+    /// The network's id; when present the agent names the OVN logical switch
+    /// after it (not `networkName`), matching the network reconciler and keeping
+    /// user-chosen names out of the OVN namespace (issue #342).
+    let networkId: UUID?
     let macAddress: String?
     let ipAddress: String?
     let subnet: String?
@@ -63,11 +67,12 @@ struct VMNetworkConfig: Sendable {
     let leaseTime: Int?
 
     init(
-        networkName: String, macAddress: String? = nil, ipAddress: String? = nil, subnet: String? = nil,
-        gateway: String? = nil, dhcpEnabled: Bool = false, dnsServers: [String] = [],
+        networkName: String, networkId: UUID? = nil, macAddress: String? = nil, ipAddress: String? = nil,
+        subnet: String? = nil, gateway: String? = nil, dhcpEnabled: Bool = false, dnsServers: [String] = [],
         domainName: String? = nil, leaseTime: Int? = nil
     ) {
         self.networkName = networkName
+        self.networkId = networkId
         self.macAddress = macAddress
         self.ipAddress = ipAddress
         self.subnet = subnet

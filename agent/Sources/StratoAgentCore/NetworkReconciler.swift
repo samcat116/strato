@@ -23,12 +23,23 @@ import StratoShared
 /// replayed sync always targets the same rows (idempotency) and teardown can
 /// find them again without persisted state.
 public enum OVNNaming {
+    /// The tenant logical switch name for a network. Derived from the network's
+    /// UUID, never its user-chosen name, so a user cannot pick a name that
+    /// collides with a Strato-managed switch (e.g. a provider `ls-ext-*` switch)
+    /// in OVN's shared `Logical_Switch` namespace (issue #342).
+    public static func switchName(networkId: UUID) -> String {
+        "net-\(networkId.uuidString.lowercased())"
+    }
     public static func routerName(routerKey: String) -> String { "lr-\(routerKey)" }
-    /// A network attaches to exactly one router, so the switch name uniquely
-    /// names its router port.
-    public static func routerPortName(network: String) -> String { "lrp-\(network)" }
+    /// A network attaches to exactly one router, so its id uniquely names the
+    /// router port.
+    public static func routerPortName(networkId: UUID) -> String {
+        "lrp-\(networkId.uuidString.lowercased())"
+    }
     /// The `type=router` switch port peering the tenant switch to its router port.
-    public static func switchRouterPortName(network: String) -> String { "lsp-\(network)-router" }
+    public static func switchRouterPortName(networkId: UUID) -> String {
+        "lsp-\(networkId.uuidString.lowercased())-router"
+    }
     public static func externalSwitchName(routerKey: String) -> String { "ls-ext-\(routerKey)" }
     public static func externalRouterPortName(routerKey: String) -> String { "lrp-ext-\(routerKey)" }
     /// The `type=router` switch port peering the external switch to the router's
@@ -258,7 +269,9 @@ public enum NetworkReconciler {
     public static func plan(networks: [DesiredNetworkState]) -> NetworkTopologyPlan {
         let sorted = networks.sorted { $0.name < $1.name }
 
-        let switches = sorted.map { DesiredSwitch(name: $0.name, subnet: $0.subnet) }
+        let switches = sorted.map {
+            DesiredSwitch(name: OVNNaming.switchName(networkId: $0.networkId), subnet: $0.subnet)
+        }
 
         // Group by router key, preserving deterministic order.
         var groups: [String: [DesiredNetworkState]] = [:]
@@ -280,9 +293,9 @@ public enum NetworkReconciler {
 
                 ports.append(
                     DesiredRouterPort(
-                        name: OVNNaming.routerPortName(network: network.name),
-                        switchName: network.name,
-                        switchPortName: OVNNaming.switchRouterPortName(network: network.name),
+                        name: OVNNaming.routerPortName(networkId: network.networkId),
+                        switchName: OVNNaming.switchName(networkId: network.networkId),
+                        switchPortName: OVNNaming.switchRouterPortName(networkId: network.networkId),
                         mac: mac,
                         cidr: "\(gateway)/\(prefix)"))
 
@@ -315,8 +328,9 @@ public enum NetworkReconciler {
         var protected = ProtectedTopology()
         for network in stale {
             let routerName = OVNNaming.routerName(routerKey: network.routerKey)
-            protected.routerPortNames.insert(OVNNaming.routerPortName(network: network.name))
-            protected.switchRouterPortNames.insert(OVNNaming.switchRouterPortName(network: network.name))
+            protected.routerPortNames.insert(OVNNaming.routerPortName(networkId: network.networkId))
+            protected.switchRouterPortNames.insert(
+                OVNNaming.switchRouterPortName(networkId: network.networkId))
             protected.routerNames.insert(routerName)
             protected.externalSwitchNames.insert(OVNNaming.externalSwitchName(routerKey: network.routerKey))
             protected.routerPortNames.insert(OVNNaming.externalRouterPortName(routerKey: network.routerKey))

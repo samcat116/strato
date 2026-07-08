@@ -249,6 +249,12 @@ single network within a site** (Phase 2).
 - The agent reconciles level-triggered and idempotent via the pure
   `NetworkReconciler` in `StratoAgentCore` (plan + teardown diff), with the live
   OVSDB side effects in `NetworkServiceLinux` behind a `NetworkActuator`.
+- All Strato-managed OVN object names are derived from **UUIDs**, never
+  user-chosen network names (`OVNNaming`): tenant switches are `net-<networkId>`,
+  routers `lr-<routerKey>`, etc. This keeps user names out of OVN's shared
+  namespaces, so a network name can't collide with a provider/router object. The
+  `NetworkSpec` a VM carries includes `networkId` so its port lands on the same
+  UUID-named switch the reconciler creates.
 - SNAT egress uses an external logical switch with a `localnet` port on physnet
   `physnet-strato`, mapped to a provider bridge `br-ex` (both bootstrapped by the
   agent like `br-int`), with the SNAT external IP **auto-detected** from the

@@ -126,8 +126,16 @@ public struct VolumeSpec: Codable, Sendable {
 /// A NIC attached to a logical network, referenced by name. The agent realizes
 /// the attachment (tap interface, user-mode SLIRP, ...) according to its platform.
 public struct NetworkSpec: Codable, Sendable {
-    /// Logical network reference. Agents use this to find or create the network.
+    /// Logical network name — a human reference used for the OVN `network-name`
+    /// external-id, DHCP labeling, and logging. NOT the OVN switch name: agents
+    /// derive that from `networkId` so user-chosen names never enter the OVN
+    /// namespace (issue #342).
     public let network: String
+    /// The network's stable id. Agents derive the OVN logical switch name from it
+    /// (`OVNNaming.switchName`), matching the switch the network reconciler
+    /// creates. Optional so specs from a control plane that predates it still
+    /// decode; the agent then falls back to naming the switch after `network`.
+    public let networkId: UUID?
     public let macAddress: String?
     /// Static IP assignment, when the control plane has allocated one.
     public let ipAddress: String?
@@ -151,6 +159,7 @@ public struct NetworkSpec: Codable, Sendable {
 
     public init(
         network: String,
+        networkId: UUID? = nil,
         macAddress: String? = nil,
         ipAddress: String? = nil,
         netmask: String? = nil,
@@ -162,6 +171,7 @@ public struct NetworkSpec: Codable, Sendable {
         leaseTime: Int? = nil
     ) {
         self.network = network
+        self.networkId = networkId
         self.macAddress = macAddress
         self.ipAddress = ipAddress
         self.netmask = netmask
@@ -174,7 +184,7 @@ public struct NetworkSpec: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case network, macAddress, ipAddress, netmask, gateway, mtu
+        case network, networkId, macAddress, ipAddress, netmask, gateway, mtu
         case dhcpEnabled, dnsServers, domainName, leaseTime
     }
 
@@ -184,6 +194,7 @@ public struct NetworkSpec: Codable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.network = try container.decode(String.self, forKey: .network)
+        self.networkId = try container.decodeIfPresent(UUID.self, forKey: .networkId)
         self.macAddress = try container.decodeIfPresent(String.self, forKey: .macAddress)
         self.ipAddress = try container.decodeIfPresent(String.self, forKey: .ipAddress)
         self.netmask = try container.decodeIfPresent(String.self, forKey: .netmask)

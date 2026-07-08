@@ -14,10 +14,11 @@ struct NetworkReconcilerTests {
         gateway: String?,
         routerKey: String,
         externalAccess: Bool = true,
-        generation: Int64 = 1
+        generation: Int64 = 1,
+        id: UUID = UUID()
     ) -> DesiredNetworkState {
         DesiredNetworkState(
-            networkId: UUID(),
+            networkId: id,
             name: name,
             subnet: subnet,
             gateway: gateway,
@@ -31,10 +32,9 @@ struct NetworkReconcilerTests {
     @Test("Networks sharing a project share one router with a port each")
     func perProjectRouterGrouping() {
         let project = "project-A"
-        let plan = NetworkReconciler.plan(networks: [
-            network(name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: project),
-            network(name: "db", subnet: "10.0.5.0/24", gateway: "10.0.5.1", routerKey: project),
-        ])
+        let web = network(name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: project)
+        let db = network(name: "db", subnet: "10.0.5.0/24", gateway: "10.0.5.1", routerKey: project)
+        let plan = NetworkReconciler.plan(networks: [web, db])
 
         #expect(plan.switches.count == 2)
         #expect(plan.routers.count == 1)
@@ -42,8 +42,13 @@ struct NetworkReconcilerTests {
         let router = plan.routers[0]
         #expect(router.name == "lr-project-A")
         #expect(router.ports.count == 2)
-        // Cross-switch east-west: both switches peer to the same router.
-        #expect(Set(router.ports.map(\.switchName)) == ["web", "db"])
+        // Cross-switch east-west: both switches peer to the same router. Switch
+        // names are derived from network ids, not the user-chosen names.
+        #expect(
+            Set(router.ports.map(\.switchName)) == [
+                OVNNaming.switchName(networkId: web.networkId),
+                OVNNaming.switchName(networkId: db.networkId),
+            ])
         // Both networks want external access → both subnets get SNAT.
         #expect(Set(router.snatSubnets) == ["192.168.1.0/24", "10.0.5.0/24"])
         #expect(router.needsUplink)
@@ -111,12 +116,13 @@ struct NetworkReconcilerTests {
         let desired = NetworkReconciler.plan(networks: [web])
         let actions = NetworkReconciler.teardownActions(desired: desired, observed: observed)
 
-        #expect(actions.contains(.routerPort(name: "lrp-db")))
-        #expect(actions.contains(.switchRouterPort(name: "lsp-db-router")))
+        #expect(actions.contains(.routerPort(name: OVNNaming.routerPortName(networkId: db.networkId))))
+        #expect(
+            actions.contains(.switchRouterPort(name: OVNNaming.switchRouterPortName(networkId: db.networkId))))
         #expect(actions.contains(.snat(router: "lr-p", logicalIP: "10.0.5.0/24")))
         // The shared router and web's objects survive.
         #expect(!actions.contains(.router(name: "lr-p")))
-        #expect(!actions.contains(.routerPort(name: "lrp-web")))
+        #expect(!actions.contains(.routerPort(name: OVNNaming.routerPortName(networkId: web.networkId))))
     }
 
     @Test("A stale-skipped network is protected from teardown")
@@ -135,18 +141,19 @@ struct NetworkReconcilerTests {
         // With no stale protection (db truly absent from the sync), db is torn down.
         let unprotected = NetworkReconciler.teardownActions(
             desired: NetworkReconciler.plan(networks: [web]), observed: observed)
-        #expect(unprotected.contains(.routerPort(name: "lrp-db")))
+        #expect(unprotected.contains(.routerPort(name: OVNNaming.routerPortName(networkId: db.networkId))))
         #expect(unprotected.contains(.snat(router: "lr-p", logicalIP: "10.0.5.0/24")))
     }
 
     @Test("Turning off externalAccess on a current network tears down its SNAT")
     func currentNetworkLosesSNATWhenExternalAccessOff() {
+        let webId = UUID()
         let on = network(
             name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
-            externalAccess: true)
+            externalAccess: true, id: webId)
         let off = network(
             name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
-            externalAccess: false)
+            externalAccess: false, id: webId)
         let observed = NetworkReconciler.plan(networks: [on]).expectedTopology
 
         // `web` is current (not stale), so protection is empty and its now-unwanted
@@ -160,14 +167,15 @@ struct NetworkReconcilerTests {
 
     @Test("A stale network protects only its own SNAT on a shared router")
     func staleSNATProtectionIsPerSubnet() {
+        let webId = UUID()
         let webOff = network(
             name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
-            externalAccess: false)
+            externalAccess: false, id: webId)
         let db = network(name: "db", subnet: "10.0.5.0/24", gateway: "10.0.5.1", routerKey: "p")
         // Both networks previously had SNAT on the shared router lr-p.
-        let observed = NetworkReconciler.plan(networks: [
-            network(name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p"), db,
-        ]).expectedTopology
+        let webOn = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p", id: webId)
+        let observed = NetworkReconciler.plan(networks: [webOn, db]).expectedTopology
 
         // web is current with externalAccess off; db is stale (protected).
         let actions = NetworkReconciler.teardownActions(
@@ -183,9 +191,10 @@ struct NetworkReconcilerTests {
         let net = network(name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p")
         let protected = NetworkReconciler.protectedTopology(forStale: [net])
         #expect(protected.routerNames.contains("lr-p"))
-        #expect(protected.routerPortNames.contains("lrp-web"))
+        #expect(protected.routerPortNames.contains(OVNNaming.routerPortName(networkId: net.networkId)))
         #expect(protected.routerPortNames.contains("lrp-ext-p"))
-        #expect(protected.switchRouterPortNames.contains("lsp-web-router"))
+        #expect(
+            protected.switchRouterPortNames.contains(OVNNaming.switchRouterPortName(networkId: net.networkId)))
         #expect(protected.externalSwitchNames.contains("ls-ext-p"))
         #expect(protected.snatRules.contains(SNATRuleKey(router: "lr-p", logicalIP: "192.168.1.0/24")))
     }
@@ -240,12 +249,12 @@ struct NetworkReconcilerTests {
             networks: [web], actuator: actuator, logger: Logger(label: "test"))
 
         let calls = await actuator.calls
-        #expect(calls.contains("ensureSwitch(web)"))
+        #expect(calls.contains("ensureSwitch(\(OVNNaming.switchName(networkId: web.networkId)))"))
         #expect(calls.contains("ensureRouter(lr-p)"))
-        #expect(calls.contains("ensureRouterPort(lrp-web@lr-p)"))
+        #expect(calls.contains("ensureRouterPort(\(OVNNaming.routerPortName(networkId: web.networkId))@lr-p)"))
         #expect(calls.contains("ensureSNAT(lr-p,192.168.1.0/24)"))
         // db's objects are torn down.
-        #expect(calls.contains("removeRouterPort(lrp-db)"))
+        #expect(calls.contains("removeRouterPort(\(OVNNaming.routerPortName(networkId: db.networkId)))"))
         #expect(calls.contains("removeSNAT(lr-p,10.0.5.0/24)"))
     }
 
@@ -258,7 +267,7 @@ struct NetworkReconcilerTests {
             networks: [web], actuator: actuator, logger: Logger(label: "test"))
 
         let calls = await actuator.calls
-        #expect(calls.contains("ensureRouterPort(lrp-web@lr-p)"))
+        #expect(calls.contains("ensureRouterPort(\(OVNNaming.routerPortName(networkId: web.networkId))@lr-p)"))
         #expect(!calls.contains(where: { $0.hasPrefix("ensureSNAT") }))
     }
 }
