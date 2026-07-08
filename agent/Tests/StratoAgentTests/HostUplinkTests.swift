@@ -5,7 +5,7 @@ import Testing
 @Suite("Host Uplink Detection")
 struct HostUplinkTests {
 
-    @Test("parseRoute extracts source IP and egress device")
+    @Test("parseRoute extracts source IP, egress device, and next-hop gateway")
     func parseRoute() {
         let json = """
             [{"dst":"1.1.1.1","gateway":"192.168.1.1","dev":"eth0","prefsrc":"192.168.1.10","flags":[]}]
@@ -13,6 +13,17 @@ struct HostUplinkTests {
         let result = HostUplinkDetection.parseRoute(json)
         #expect(result?.ip == "192.168.1.10")
         #expect(result?.device == "eth0")
+        #expect(result?.gateway == "192.168.1.1")
+    }
+
+    @Test("parseRoute yields a nil gateway for a directly-connected uplink")
+    func parseRouteNoGateway() {
+        let json = """
+            [{"dst":"1.1.1.1","dev":"eth0","prefsrc":"10.0.0.5","flags":[]}]
+            """
+        let result = HostUplinkDetection.parseRoute(json)
+        #expect(result?.ip == "10.0.0.5")
+        #expect(result?.gateway == nil)
     }
 
     @Test("parseRoute returns nil without a source or device")

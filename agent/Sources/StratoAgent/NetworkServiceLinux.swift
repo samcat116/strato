@@ -979,6 +979,17 @@ extension NetworkServiceLinux: NetworkActuator {
             switchName: router.externalSwitchName, switchPortName: router.externalSwitchRouterPortName,
             router: router.name)
 
+        // Default route out the uplink, so SNAT'd traffic to off-subnet
+        // destinations actually has a route (the NAT rule alone is not enough).
+        if let nextHop = uplink.gateway {
+            try ensureDefaultRoute(router: router.name, nextHop: nextHop)
+        } else {
+            logger.warning(
+                "Uplink has no next-hop gateway; skipping the router default route "
+                    + "(SNAT egress limited to the uplink subnet)",
+                metadata: ["router": .string(router.name)])
+        }
+
         uplinkExternalIP = uplink.ipAddress
         return true
         #else
@@ -1061,11 +1072,21 @@ extension NetworkServiceLinux {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
-        if try await ovnManager.getLogicalRouterPort(named: name) == nil {
-            let routerPort = OVNLogicalRouterPort(
-                name: name, mac: mac, networks: [cidr],
-                external_ids: ["strato-managed": "true"])
-            _ = try await ovnManager.createLogicalRouterPort(routerPort, onRouter: router)
+        let desiredPort = OVNLogicalRouterPort(
+            name: name, mac: mac, networks: [cidr],
+            external_ids: ["strato-managed": "true"])
+        if let existing = try await ovnManager.getLogicalRouterPort(named: name) {
+            // Re-address in place when the network's gateway/subnet changed: the
+            // port name is stable (derived from the network), so without this a
+            // subnet/gateway edit would leave a stale CIDR/MAC and break L3.
+            if existing.networks != [cidr] || existing.mac != mac, let uuid = existing.uuid {
+                try await ovnManager.updateLogicalRouterPort(uuid: uuid, desiredPort)
+                logger.info(
+                    "Updated logical router port addressing",
+                    metadata: ["port": .string(name), "cidr": .string(cidr)])
+            }
+        } else {
+            _ = try await ovnManager.createLogicalRouterPort(desiredPort, onRouter: router)
         }
         if try await ovnManager.getLogicalSwitchPort(named: switchPortName) == nil {
             let switchPort = OVNLogicalSwitchPort(
@@ -1134,7 +1155,7 @@ extension NetworkServiceLinux {
     /// device, and that address's prefix) for SNAT and the external router port.
     fileprivate func detectHostUplink() -> HostUplink? {
         guard let route = try? runProcess("ip", ["-j", "route", "get", "1.1.1.1"]), route.status == 0,
-            let (ip, device) = HostUplinkDetection.parseRoute(route.output)
+            let (ip, device, gateway) = HostUplinkDetection.parseRoute(route.output)
         else {
             logger.warning("Could not detect host uplink route; skipping SNAT")
             return nil
@@ -1147,7 +1168,32 @@ extension NetworkServiceLinux {
                 metadata: ["device": .string(device), "ip": .string(ip)])
             return nil
         }
-        return HostUplink(ipAddress: ip, interface: device, prefixLength: prefix)
+        return HostUplink(ipAddress: ip, interface: device, prefixLength: prefix, gateway: gateway)
+    }
+
+    /// Install (or update) the logical router's default route to the uplink next
+    /// hop, so SNAT'd traffic to addresses outside the provider subnet has a
+    /// route out. SwiftOVN has no `Logical_Router_Static_Route` model yet, so
+    /// this shells `ovn-nbctl` (present on OVN hosts); `--may-exist` makes it
+    /// idempotent and updates the next hop if it drifts.
+    fileprivate func ensureDefaultRoute(router: String, nextHop: String) throws {
+        let result = try runProcess(
+            "ovn-nbctl",
+            ["--db=unix:\(ovnSocketPath)", "--may-exist", "lr-route-add", router, "0.0.0.0/0", nextHop])
+        if result.status == 127 {
+            logger.warning(
+                "ovn-nbctl not found; cannot install the default route for SNAT egress "
+                    + "(install ovn-common). East-west and the uplink subnet still work.")
+            return
+        }
+        guard result.status == 0 else {
+            throw NetworkError.ovnError(
+                "failed to add default route on \(router) via \(nextHop) (exit \(result.status)): "
+                    + result.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        logger.info(
+            "Installed default route on logical router",
+            metadata: ["router": .string(router), "nextHop": .string(nextHop)])
     }
 }
 #endif

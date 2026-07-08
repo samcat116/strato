@@ -12,11 +12,16 @@ public struct HostUplink: Equatable, Sendable {
     /// The prefix length of the uplink subnet, for the external router port's
     /// `networks` CIDR.
     public let prefixLength: Int
+    /// The default-route next hop (uplink gateway), or nil when the uplink is on
+    /// a directly-connected subnet with no gateway. The logical router's default
+    /// static route points here so off-subnet traffic can egress under SNAT.
+    public let gateway: String?
 
-    public init(ipAddress: String, interface: String, prefixLength: Int) {
+    public init(ipAddress: String, interface: String, prefixLength: Int, gateway: String? = nil) {
         self.ipAddress = ipAddress
         self.interface = interface
         self.prefixLength = prefixLength
+        self.gateway = gateway
     }
 
     /// The external router port address, `ip/prefix`.
@@ -28,10 +33,11 @@ public struct HostUplink: Equatable, Sendable {
 /// any platform, mirroring `OVNChassisBootstrap`.
 public enum HostUplinkDetection {
 
-    /// Extracts the preferred source IP and egress device from
+    /// Extracts the preferred source IP, egress device, and next-hop gateway from
     /// `ip -j route get <probe>` output, e.g.
-    /// `[{"dst":"1.1.1.1","dev":"eth0","prefsrc":"192.168.1.10",...}]`.
-    public static func parseRoute(_ json: String) -> (ip: String, device: String)? {
+    /// `[{"dst":"1.1.1.1","gateway":"192.168.1.1","dev":"eth0","prefsrc":"192.168.1.10",...}]`.
+    /// `gateway` is nil for a directly-connected uplink (no next hop).
+    public static func parseRoute(_ json: String) -> (ip: String, device: String, gateway: String?)? {
         guard let data = json.data(using: .utf8),
             let routes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
             let route = routes.first,
@@ -40,7 +46,8 @@ public enum HostUplinkDetection {
         else {
             return nil
         }
-        return (source, device)
+        let gateway = (route["gateway"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return (source, device, gateway)
     }
 
     /// Finds the prefix length assigned to `ip` in `ip -j addr show dev <dev>`
