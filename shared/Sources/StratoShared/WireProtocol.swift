@@ -51,7 +51,15 @@ public enum WireProtocol {
     /// control plane keys dual-mode dispatch on this: agents registering with
     /// an older version keep receiving imperative messages. The date encoder is
     /// unchanged (still the legacy numeric form).
-    public static let currentVersion = 2
+    ///
+    /// Version 3: first-class network reconciliation. `DesiredStateMessage`
+    /// carries a `networks: [DesiredNetworkState]` list so agents realize
+    /// logical switches, per-project routers, and SNAT uplinks as level-triggered
+    /// desired state. The change is additive and backward-tolerant: the field
+    /// defaults to `[]` when absent, an older (v2) agent simply ignores it (and
+    /// keeps realizing switches implicitly from `vms`), so state sync still works
+    /// across the skew — hence `stateSyncMinimumVersion` stays at 2.
+    public static let currentVersion = 3
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).

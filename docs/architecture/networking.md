@@ -224,7 +224,7 @@ options) + shipping FRR on egress hosts, not a custom agent.
 Ordered by dependency. Priorities noted; the top product ask is **multi-node
 single network within a site** (Phase 2).
 
-### Phase 1 — Foundations + single-node L3 _(no new infra)_
+### Phase 1 — Foundations + single-node L3 _(no new infra)_ — **implemented**
 
 - Make network (and router) realization **first-class in reconciliation**,
   rather than implicit via `VMSpec.networks`.
@@ -235,6 +235,28 @@ single network within a site** (Phase 2).
   attached-creation overloads).
 - **Result:** VMs get outbound internet + cross-switch east-west _within a
   node_. Works on the current per-agent-local-NB model.
+
+**As built:**
+
+- Networks ride the periodic `DesiredStateMessage` as a first-class
+  `networks: [DesiredNetworkState]` list (wire protocol v3, additive/tolerant).
+  The control plane emits the networks an agent's VMs reference, each tagged with
+  a **`routerKey`** and an `externalAccess` flag; `LogicalNetwork` gains
+  `external_access` + a `generation` counter.
+- Router scope is **per-project**: networks sharing a project share one logical
+  router (cross-switch east-west); a project-less (global) network keys its
+  router on its own id. `routerKey` is derived, not a separate table.
+- The agent reconciles level-triggered and idempotent via the pure
+  `NetworkReconciler` in `StratoAgentCore` (plan + teardown diff), with the live
+  OVSDB side effects in `NetworkServiceLinux` behind a `NetworkActuator`.
+- SNAT egress uses an external logical switch with a `localnet` port on physnet
+  `physnet-strato`, mapped to a provider bridge `br-ex` (both bootstrapped by the
+  agent like `br-int`), with the SNAT external IP **auto-detected** from the
+  host's default route. The model leaves room for explicit uplink config later.
+- **Operator caveat:** the agent does not move the host's primary NIC onto
+  `br-ex` (that risks stranding the host), so on a fresh single node an operator
+  must connect `br-ex` to the external network for SNAT traffic to egress;
+  east-west and the L3 gateway work with no extra setup.
 
 ### Phase 2 — Multi-node single network within a site _(top priority; has prerequisites)_
 

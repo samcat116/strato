@@ -58,6 +58,20 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     @OptionalField(key: "lease_time")
     var leaseTime: Int?
 
+    /// When true, agents attach the network to its project's logical router and
+    /// program outbound SNAT to the host uplink (issue #342), giving VMs internet
+    /// access. False keeps the network internal (L3 gateway only, no egress).
+    /// The uplink IP is auto-detected on the agent — no operator config yet.
+    @Field(key: "external_access")
+    var externalAccess: Bool
+
+    /// Monotonic counter bumped whenever a change alters how agents realize the
+    /// network's L3 (subnet, gateway, or external access). Sent to agents as the
+    /// `DesiredNetworkState.generation` so replayed/reordered syncs can't roll
+    /// the network's realization backward.
+    @Field(key: "generation")
+    var generation: Int
+
     /// Project this network belongs to; nil means global (visible to everyone,
     /// managed by system admins only).
     @OptionalParent(key: "project_id")
@@ -85,7 +99,9 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         dhcpEnabled: Bool = true,
         dnsServers: [String] = [],
         domainName: String? = nil,
-        leaseTime: Int? = nil
+        leaseTime: Int? = nil,
+        externalAccess: Bool = true,
+        generation: Int = 1
     ) {
         self.id = id
         self.name = name
@@ -97,6 +113,19 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         self.dnsServersRaw = LogicalNetwork.joinDNS(dnsServers)
         self.domainName = domainName
         self.leaseTime = leaseTime
+        self.externalAccess = externalAccess
+        self.generation = generation
+    }
+
+    /// The identity of the logical router this network attaches to on agents.
+    /// Per-project so a project's networks share one router (cross-switch
+    /// east-west); a project-less (global) network keys on its own id and gets a
+    /// dedicated router. Opaque to agents — see `DesiredNetworkState.routerKey`.
+    var routerKey: String {
+        if let projectID = $project.id {
+            return "project-\(projectID.uuidString)"
+        }
+        return "network-\(id?.uuidString ?? name)"
     }
 
     /// Parsed DNS resolver list, backed by the comma-separated `dns_servers` column.
@@ -141,13 +170,15 @@ struct CreateNetworkRequest: Content {
     let domainName: String?
     /// DHCP lease time in seconds.
     let leaseTime: Int?
+    /// Whether the network gets outbound SNAT to the host uplink. Defaults true.
+    let externalAccess: Bool?
 
     // Explicit init so the DHCP fields default when omitted (e.g. in tests) while
     // JSON decoding still populates them via the synthesized Codable conformance.
     init(
         name: String, subnet: String, gateway: String? = nil, projectId: UUID? = nil,
         dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
-        leaseTime: Int? = nil
+        leaseTime: Int? = nil, externalAccess: Bool? = nil
     ) {
         self.name = name
         self.subnet = subnet
@@ -157,6 +188,7 @@ struct CreateNetworkRequest: Content {
         self.dnsServers = dnsServers
         self.domainName = domainName
         self.leaseTime = leaseTime
+        self.externalAccess = externalAccess
     }
 }
 
@@ -172,11 +204,13 @@ struct UpdateNetworkRequest: Content {
     let dnsServers: [String]?
     let domainName: String?
     let leaseTime: Int?
+    /// Toggle outbound SNAT. Re-synced to agents, which add/remove the SNAT rule.
+    let externalAccess: Bool?
 
     init(
         name: String? = nil, subnet: String? = nil, gateway: String? = nil,
         dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
-        leaseTime: Int? = nil
+        leaseTime: Int? = nil, externalAccess: Bool? = nil
     ) {
         self.name = name
         self.subnet = subnet
@@ -185,6 +219,7 @@ struct UpdateNetworkRequest: Content {
         self.dnsServers = dnsServers
         self.domainName = domainName
         self.leaseTime = leaseTime
+        self.externalAccess = externalAccess
     }
 }
 
@@ -200,6 +235,7 @@ struct NetworkResponse: Content {
     let dnsServers: [String]
     let domainName: String?
     let leaseTime: Int?
+    let externalAccess: Bool
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -215,6 +251,7 @@ struct NetworkResponse: Content {
         self.dnsServers = network.dnsServers
         self.domainName = network.domainName
         self.leaseTime = network.leaseTime
+        self.externalAccess = network.externalAccess
         self.createdAt = network.createdAt
         self.updatedAt = network.updatedAt
     }

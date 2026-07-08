@@ -233,6 +233,41 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("PUT /api/networks toggling external access bumps the realization generation")
+    func updateExternalAccessBumpsGeneration() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            app.spicedbMockAllows = true
+
+            let network = LogicalNetwork(
+                name: "l3-net", subnet: "10.61.0.0/24", gateway: "10.61.0.1",
+                projectID: project.id!, createdByID: user.id!)
+            try await network.save(on: app.db)
+            let startGeneration = network.generation
+
+            // Toggling external access is L3-affecting → generation bumps.
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(externalAccess: false))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let updated = try res.content.decode(NetworkResponse.self)
+                #expect(updated.externalAccess == false)
+            }
+            let afterToggle = try await LogicalNetwork.find(network.id, on: app.db)
+            #expect(afterToggle?.generation == startGeneration + 1)
+
+            // A DHCP-only edit does not bump the generation (no L3 change).
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(dhcpEnabled: false))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            let afterDHCP = try await LogicalNetwork.find(network.id, on: app.db)
+            #expect(afterDHCP?.generation == startGeneration + 1)
+        }
+    }
+
     @Test("PUT /api/networks rejects a name change while the network is in use (409)")
     func updateRejectsRenameWhileInUse() async throws {
         try await withNetworkTestApp { app, user, project, token in

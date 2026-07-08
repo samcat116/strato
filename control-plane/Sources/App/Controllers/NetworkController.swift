@@ -117,7 +117,8 @@ struct NetworkController: RouteCollection {
             dhcpEnabled: request.dhcpEnabled ?? true,
             dnsServers: dnsServers,
             domainName: request.domainName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
-            leaseTime: request.leaseTime
+            leaseTime: request.leaseTime,
+            externalAccess: request.externalAccess ?? true
         )
 
         do {
@@ -199,6 +200,12 @@ struct NetworkController: RouteCollection {
             network.name = trimmed
         }
 
+        // Track changes that alter how agents realize the network's L3, so the
+        // generation is bumped (and agents accept the new desired network state).
+        let originalSubnet = network.subnet
+        let originalGateway = network.gateway
+        let originalExternalAccess = network.externalAccess
+
         if let newSubnet = request.subnet, newSubnet != network.subnet {
             guard interfaceCount == 0 else {
                 throw Abort(
@@ -218,6 +225,20 @@ struct NetworkController: RouteCollection {
         let (subnet, gateway) = try Self.validateAddressing(subnet: network.subnet, gateway: network.gateway)
         network.subnet = subnet
         network.gateway = gateway
+
+        if let externalAccess = request.externalAccess {
+            network.externalAccess = externalAccess
+        }
+
+        // Bump the realization generation only when an L3-affecting field
+        // actually changed, so agents treat this as a newer network desired
+        // state; DHCP/DNS-only edits leave it untouched.
+        if network.subnet != originalSubnet
+            || network.gateway != originalGateway
+            || network.externalAccess != originalExternalAccess
+        {
+            network.generation += 1
+        }
 
         // DHCP/DNS settings — validated then applied.
         if let dhcpEnabled = request.dhcpEnabled {

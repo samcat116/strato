@@ -25,6 +25,13 @@ protocol NetworkServiceProtocol: Sendable {
     func createLogicalNetwork(name: String, subnet: String, gateway: String?) async throws -> UUID
     func deleteLogicalNetwork(name: String) async throws
     func listLogicalNetworks() async throws -> [NetworkInfo]
+
+    /// Converge this host's L3 network topology (logical routers, router ports,
+    /// SNAT uplinks) toward the control plane's authoritative desired network
+    /// set (issue #342). Level-triggered and idempotent, like VM reconciliation:
+    /// a network omitted from `networks` has its owned L3 objects torn down.
+    /// Default no-op so platforms without a real SDN (macOS user-mode) ignore it.
+    func reconcileNetworks(_ networks: [DesiredNetworkState]) async
 }
 
 extension NetworkServiceProtocol {
@@ -32,6 +39,9 @@ extension NetworkServiceProtocol {
     func detachVMFromNetwork(vmId: String) async throws {
         try await detachVMFromNetwork(vmId: vmId, nicIndex: 0)
     }
+
+    /// No-op by default: only SDN-backed services (OVN on Linux) realize L3.
+    func reconcileNetworks(_ networks: [DesiredNetworkState]) async {}
 }
 
 // MARK: - Network Configuration Models

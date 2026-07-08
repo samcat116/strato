@@ -44,6 +44,63 @@ struct ReconciliationProtocolTests {
         #expect(decoded.vms[0].imageInfo?.filename == "debian.qcow2")
     }
 
+    @Test("DesiredStateMessage carries networks through the envelope")
+    func desiredStateNetworksRoundTrip() throws {
+        let networkId = UUID()
+        let projectKey = "project-\(UUID().uuidString)"
+        let message = DesiredStateMessage(
+            syncId: "sync-net",
+            vms: [],
+            networks: [
+                DesiredNetworkState(
+                    networkId: networkId,
+                    name: "default",
+                    subnet: "192.168.1.0/24",
+                    gateway: "192.168.1.1",
+                    routerKey: projectKey,
+                    externalAccess: true,
+                    generation: 4
+                ),
+                DesiredNetworkState(
+                    networkId: UUID(),
+                    name: "isolated",
+                    subnet: "10.0.5.0/24",
+                    gateway: nil,
+                    routerKey: projectKey,
+                    externalAccess: false,
+                    generation: 1
+                ),
+            ]
+        )
+        let envelope = try MessageEnvelope(message: message)
+        let decoded = try envelope.decode(as: DesiredStateMessage.self)
+
+        #expect(decoded.networks.count == 2)
+        #expect(decoded.networks[0].networkId == networkId)
+        #expect(decoded.networks[0].subnet == "192.168.1.0/24")
+        #expect(decoded.networks[0].gateway == "192.168.1.1")
+        #expect(decoded.networks[0].routerKey == projectKey)
+        #expect(decoded.networks[0].externalAccess)
+        #expect(decoded.networks[0].generation == 4)
+        // Same router key: both networks share one per-project logical router.
+        #expect(decoded.networks[1].routerKey == projectKey)
+        #expect(decoded.networks[1].gateway == nil)
+        #expect(!decoded.networks[1].externalAccess)
+    }
+
+    @Test("DesiredStateMessage from an older control plane decodes networks to []")
+    func desiredStateNetworksBackwardCompatible() throws {
+        // A pre-v3 control plane emits no `networks` key at all; the agent must
+        // tolerate its absence rather than fail the whole sync.
+        let legacy = """
+            {"requestId":"r","timestamp":0,"syncId":"s","vms":[]}
+            """
+        let decoded = try WireProtocol.makeDecoder().decode(
+            DesiredStateMessage.self, from: Data(legacy.utf8))
+        #expect(decoded.networks.isEmpty)
+        #expect(decoded.syncId == "s")
+    }
+
     @Test("ObservedStateReport round-trips through the envelope")
     func observedStateRoundTrip() throws {
         let message = ObservedStateReport(

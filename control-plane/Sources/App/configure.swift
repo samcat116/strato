@@ -272,6 +272,9 @@ public func configure(_ app: Application) async throws {
     // OVN DHCP/DNS configuration on logical networks
     app.migrations.add(AddDHCPConfigToLogicalNetwork())
 
+    // L3: per-project router + SNAT uplink desired-state on logical networks (issue #342)
+    app.migrations.add(AddExternalAccessToLogicalNetwork())
+
     // Project-level roles: user and group grants on individual projects.
     app.migrations.add(CreateProjectMember())
     app.migrations.add(CreateProjectGroupGrant())

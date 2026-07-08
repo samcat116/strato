@@ -17,6 +17,9 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     private var ovnManager: OVNManager?
     private var ovsManager: OVSManager?
     private var isConnected = false
+    /// The host uplink IP resolved during the last `ensureUplink` pass, used as
+    /// the SNAT external IP by `ensureSNAT` in the same reconcile (issue #342).
+    private var uplinkExternalIP: String?
     #else
     // Development mode on macOS - mock network storage
     private var mockNetworks: [String: MockNetwork] = [:]
@@ -43,6 +46,12 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
     /// Bridge that OVN's `ovn-controller` binds VM ports onto.
     static let ovnIntegrationBridge = "br-int"
+
+    /// Provider (external) bridge and OVN physnet the L3 uplink uses. The agent
+    /// bootstraps these like it does `br-int`, so a single node needs no operator
+    /// network config for the OVN side of outbound SNAT (issue #342).
+    static let providerBridge = "br-ex"
+    static let providerPhysnet = "physnet-strato"
 
     /// OVN logical switch port name for one NIC of a VM. NIC 0 keeps the
     /// historical `vm-<vmId>` name so ports created by older agents are still
@@ -833,6 +842,315 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     }
     #endif
 }
+
+// MARK: - L3 Network Reconciliation (issue #342)
+
+extension NetworkServiceLinux {
+    /// Converge this host's OVN L3 topology (per-project routers, router ports,
+    /// SNAT uplinks) toward the control plane's desired network set. Delegates
+    /// the diff to the pure `NetworkReconciler`, driving the OVSDB side effects
+    /// through `self` as the actuator. No-op until the service is connected.
+    func reconcileNetworks(_ networks: [DesiredNetworkState]) async {
+        #if os(Linux)
+        guard isConnected else {
+            logger.debug("Network service not connected; skipping network reconciliation")
+            return
+        }
+        #endif
+        do {
+            try await NetworkReconciler.reconcile(networks: networks, actuator: self, logger: logger)
+        } catch {
+            // observeTopology failed (can't compute teardown safely); the
+            // periodic level-triggered sync retries. Ensures already applied.
+            logger.error(
+                "Network reconciliation could not complete",
+                metadata: ["error": .string(error.localizedDescription)])
+        }
+    }
+}
+
+extension NetworkServiceLinux: NetworkActuator {
+    func observeTopology() async throws -> ObservedNetworkTopology {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        let routers = try await ovnManager.getLogicalRouters()
+        let routerPorts = try await ovnManager.getLogicalRouterPorts()
+        let switchPorts = try await ovnManager.getLogicalSwitchPorts()
+        let switches = try await ovnManager.getLogicalSwitches()
+        let nats = try await ovnManager.getNATRules()
+
+        // Only consider objects this reconciler owns, identified by the naming
+        // scheme, so teardown can never delete something another feature made.
+        let natByUUID = Dictionary(uniqueKeysWithValues: nats.compactMap { nat in nat.uuid.map { ($0, nat) } })
+        var snatRules = Set<SNATRuleKey>()
+        for router in routers where router.name.hasPrefix("lr-") {
+            for uuid in router.nat ?? [] {
+                if let nat = natByUUID[uuid], nat.natType == "snat" {
+                    snatRules.insert(SNATRuleKey(router: router.name, logicalIP: nat.logical_ip))
+                }
+            }
+        }
+
+        return ObservedNetworkTopology(
+            routerNames: Set(routers.map(\.name).filter { $0.hasPrefix("lr-") }),
+            routerPortNames: Set(routerPorts.map(\.name).filter { $0.hasPrefix("lrp-") }),
+            switchRouterPortNames: Set(
+                switchPorts.filter { $0.portType == "router" && $0.name.hasPrefix("lsp-") }.map(\.name)),
+            externalSwitchNames: Set(switches.map(\.name).filter { $0.hasPrefix("ls-ext-") }),
+            snatRules: snatRules)
+        #else
+        return ObservedNetworkTopology()
+        #endif
+    }
+
+    func ensureSwitch(_ desired: DesiredSwitch) async throws {
+        #if os(Linux)
+        _ = try await findOrCreateLogicalSwitch(name: desired.name, subnet: desired.subnet)
+        #endif
+    }
+
+    func ensureRouter(_ router: DesiredRouter) async throws {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        if try await ovnManager.getLogicalRouter(named: router.name) != nil { return }
+        let logicalRouter = OVNLogicalRouter(
+            name: router.name,
+            external_ids: ["strato-managed": "true", "router-key": router.routerKey])
+        do {
+            _ = try await ovnManager.createLogicalRouter(logicalRouter)
+        } catch {
+            // Tolerate a concurrent creator that won the check→insert race.
+            if try await ovnManager.getLogicalRouter(named: router.name) == nil { throw error }
+        }
+        #endif
+    }
+
+    func ensureRouterPort(_ port: DesiredRouterPort, onRouter routerName: String) async throws {
+        #if os(Linux)
+        try await ensureRouterPort(
+            name: port.name, mac: port.mac, cidr: port.cidr,
+            switchName: port.switchName, switchPortName: port.switchPortName, router: routerName)
+        #endif
+    }
+
+    func ensureUplink(for router: DesiredRouter) async throws -> Bool {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        guard let uplink = detectHostUplink() else {
+            uplinkExternalIP = nil
+            return false
+        }
+        guard let uplinkMAC = OVNNaming.routerPortMAC(gateway: uplink.ipAddress) else {
+            uplinkExternalIP = nil
+            return false
+        }
+
+        // Provider bridge + physnet mapping, bootstrapped like br-int so the
+        // OVN side needs no operator config. NOTE: this wires the OVN topology
+        // and bridge mapping; it does not move the host's uplink NIC onto the
+        // provider bridge (that is destructive and can strand the host), so on a
+        // fresh host an operator still connects br-ex to the external network
+        // for SNAT traffic to actually egress. Auto-detected addressing means
+        // no other config is required. See issue #342 / epic #341.
+        try await ensureProviderBridge()
+        try ensureBridgeMapping()
+
+        // External logical switch + localnet port (the provider attachment).
+        _ = try await findOrCreateLogicalSwitch(name: router.externalSwitchName, subnet: "")
+        if try await ovnManager.getLogicalSwitchPort(named: router.localnetPortName) == nil {
+            let localnet = OVNLogicalSwitchPort(
+                name: router.localnetPortName,
+                portType: "localnet",
+                options: ["network_name": Self.providerPhysnet],
+                addresses: ["unknown"],
+                external_ids: ["strato-managed": "true"])
+            _ = try await ovnManager.createLogicalSwitchPort(localnet, onSwitch: router.externalSwitchName)
+        }
+
+        // Gateway router port on the external switch, addressed with the uplink.
+        try await ensureRouterPort(
+            name: router.externalRouterPortName, mac: uplinkMAC, cidr: uplink.cidr,
+            switchName: router.externalSwitchName, switchPortName: router.externalSwitchRouterPortName,
+            router: router.name)
+
+        uplinkExternalIP = uplink.ipAddress
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    func ensureSNAT(router routerName: String, logicalIP: String) async throws {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        guard let externalIP = uplinkExternalIP else {
+            throw NetworkError.invalidConfiguration(
+                "SNAT for \(logicalIP) requested before the host uplink was resolved")
+        }
+        // Idempotent: reuse a matching rule; re-point one whose external IP drifted.
+        for rule in try await snatRules(onRouter: routerName)
+        where rule.natType == "snat" && rule.logical_ip == logicalIP {
+            if rule.external_ip == externalIP { return }
+            if let uuid = rule.uuid { try await ovnManager.deleteNATRule(uuid: uuid) }
+        }
+        let nat = OVNNAT(
+            natType: "snat", external_ip: externalIP, logical_ip: logicalIP,
+            external_ids: ["strato-managed": "true"])
+        _ = try await ovnManager.createNATRule(nat, onRouter: routerName)
+        #endif
+    }
+
+    func removeSNAT(router routerName: String, logicalIP: String) async throws {
+        #if os(Linux)
+        guard let ovnManager else { return }
+        for rule in try await snatRules(onRouter: routerName)
+        where rule.natType == "snat" && rule.logical_ip == logicalIP {
+            if let uuid = rule.uuid { try await ovnManager.deleteNATRule(uuid: uuid) }
+        }
+        #endif
+    }
+
+    func removeSwitchRouterPort(name: String) async throws {
+        #if os(Linux)
+        try? await ovnManager?.deleteLogicalSwitchPort(named: name)
+        #endif
+    }
+
+    func removeRouterPort(name: String) async throws {
+        #if os(Linux)
+        try? await ovnManager?.deleteLogicalRouterPort(named: name)
+        #endif
+    }
+
+    func removeExternalSwitch(name: String) async throws {
+        #if os(Linux)
+        guard let ovnManager else { return }
+        // Delete the switch's localnet port first (deleting the switch alone can
+        // orphan it); its name is derived from the switch's router key.
+        if name.hasPrefix("ls-ext-") {
+            let key = String(name.dropFirst("ls-ext-".count))
+            try? await ovnManager.deleteLogicalSwitchPort(named: OVNNaming.localnetPortName(routerKey: key))
+        }
+        try? await ovnManager.deleteLogicalSwitch(named: name)
+        #endif
+    }
+
+    func removeRouter(name: String) async throws {
+        #if os(Linux)
+        try? await ovnManager?.deleteLogicalRouter(named: name)
+        #endif
+    }
+}
+
+#if os(Linux)
+extension NetworkServiceLinux {
+    /// Create a router port and its peering `type=router` switch port in an
+    /// idempotent pair (both, or neither, so the switch never has a dangling
+    /// router peer). Shared by tenant ports and the external gateway port.
+    fileprivate func ensureRouterPort(
+        name: String, mac: String, cidr: String, switchName: String, switchPortName: String, router: String
+    ) async throws {
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        if try await ovnManager.getLogicalRouterPort(named: name) == nil {
+            let routerPort = OVNLogicalRouterPort(
+                name: name, mac: mac, networks: [cidr],
+                external_ids: ["strato-managed": "true"])
+            _ = try await ovnManager.createLogicalRouterPort(routerPort, onRouter: router)
+        }
+        if try await ovnManager.getLogicalSwitchPort(named: switchPortName) == nil {
+            let switchPort = OVNLogicalSwitchPort(
+                name: switchPortName,
+                portType: "router",
+                options: ["router-port": name],
+                addresses: ["router"],
+                external_ids: ["strato-managed": "true"])
+            _ = try await ovnManager.createLogicalSwitchPort(switchPort, onSwitch: switchName)
+        }
+    }
+
+    /// The SNAT/DNAT rules attached to a router, resolved from its `nat` refs.
+    fileprivate func snatRules(onRouter routerName: String) async throws -> [OVNNAT] {
+        guard let ovnManager,
+            let router = try await ovnManager.getLogicalRouter(named: routerName),
+            let natUUIDs = router.nat
+        else { return [] }
+        let byUUID = Dictionary(
+            uniqueKeysWithValues: try await ovnManager.getNATRules().compactMap { nat in
+                nat.uuid.map { ($0, nat) }
+            })
+        return natUUIDs.compactMap { byUUID[$0] }
+    }
+
+    /// Ensure the external provider bridge exists, mirroring `ensureIntegrationBridge`.
+    fileprivate func ensureProviderBridge() async throws {
+        guard let ovsManager else {
+            throw NetworkError.notConnected("OVS manager not connected")
+        }
+        if try await ovsManager.getBridge(named: Self.providerBridge) != nil { return }
+        let bridge = OVSBridge(
+            name: Self.providerBridge,
+            external_ids: ["description": "Strato OVN external/provider bridge"])
+        do {
+            _ = try await ovsManager.createBridge(bridge)
+            logger.info("Created provider bridge", metadata: ["bridge": .string(Self.providerBridge)])
+        } catch {
+            if try await ovsManager.getBridge(named: Self.providerBridge) == nil { throw error }
+        }
+    }
+
+    /// Ensure the local OVS carries `ovn-bridge-mappings=<physnet>:<bridge>` for
+    /// the provider network, merged with any mappings already present.
+    fileprivate func ensureBridgeMapping() throws {
+        let current = try runProcess(
+            "ovs-vsctl",
+            ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
+        let existing = OVNChassisBootstrap.parseExternalIDs(current.output)["ovn-bridge-mappings"]
+        guard
+            let merged = OVNBridgeMappings.merged(
+                existing: existing, physnet: Self.providerPhysnet, bridge: Self.providerBridge)
+        else {
+            return  // already mapped
+        }
+        try run(
+            "ovs-vsctl",
+            [
+                "--timeout=\(Self.ovsCommandTimeoutSeconds)", "set", "open_vswitch", ".",
+                "external_ids:ovn-bridge-mappings=\(merged)",
+            ])
+        logger.info("Set OVN bridge mapping", metadata: ["mapping": .string(merged)])
+    }
+
+    /// Auto-detect the host's outbound uplink (default-route source IP, egress
+    /// device, and that address's prefix) for SNAT and the external router port.
+    fileprivate func detectHostUplink() -> HostUplink? {
+        guard let route = try? runProcess("ip", ["-j", "route", "get", "1.1.1.1"]), route.status == 0,
+            let (ip, device) = HostUplinkDetection.parseRoute(route.output)
+        else {
+            logger.warning("Could not detect host uplink route; skipping SNAT")
+            return nil
+        }
+        guard let addr = try? runProcess("ip", ["-j", "addr", "show", "dev", device]), addr.status == 0,
+            let prefix = HostUplinkDetection.parsePrefixLength(addr.output, forIP: ip)
+        else {
+            logger.warning(
+                "Could not detect uplink prefix length; skipping SNAT",
+                metadata: ["device": .string(device), "ip": .string(ip)])
+            return nil
+        }
+        return HostUplink(ipAddress: ip, interface: device, prefixLength: prefix)
+    }
+}
+#endif
 
 // MARK: - Network Error Types
 

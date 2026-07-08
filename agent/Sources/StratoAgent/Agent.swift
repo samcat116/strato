@@ -1219,6 +1219,11 @@ extension Agent {
                 await handleVMDelete(message)
             case .desiredState:
                 let message = try envelope.decode(as: DesiredStateMessage.self)
+                // Realize logical networks (per-project routers, SNAT uplinks)
+                // before converging VMs, so a VM's switch and L3 gateway exist
+                // before its NIC attaches (issue #342). Level-triggered and
+                // idempotent, like the VM reconcile that follows.
+                await networkService?.reconcileNetworks(message.networks)
                 await reconciler?.apply(message)
             case .vmInfo:
                 let message = try envelope.decode(as: VMInfoRequestMessage.self)
