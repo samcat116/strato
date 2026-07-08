@@ -173,4 +173,13 @@ struct ReconciliationProtocolTests {
         #expect(WireProtocol.supportsStateSync(3))
         #expect(WireProtocol.supportsStateSync(WireProtocol.currentVersion))
     }
+
+    @Test("Network-sync support is keyed on protocol version 3")
+    func networkSyncVersionGate() {
+        // A v2 control plane omits `networks`; the agent must not treat the
+        // decoded-empty list as an authoritative teardown of all L3.
+        #expect(!WireProtocol.supportsNetworkSync(2))
+        #expect(WireProtocol.supportsNetworkSync(3))
+        #expect(WireProtocol.supportsNetworkSync(WireProtocol.currentVersion))
+    }
 }

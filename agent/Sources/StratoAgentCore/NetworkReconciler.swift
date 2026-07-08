@@ -206,31 +206,37 @@ public enum NetworkTeardownAction: Equatable, Sendable {
 }
 
 /// OVN object identities that teardown must never touch, regardless of the plan.
-/// Built from every network still present in a sync (current *and* stale) so a
-/// present-but-stale network — one skipped by the generation guard, and thus
-/// absent from the applied plan — does not have its live objects torn down.
-/// Only networks entirely absent from the sync are eligible for teardown.
+/// Built only from the networks a sync *skipped as stale* (present in the sync
+/// but at a generation older than one already applied), so those networks —
+/// absent from the applied plan yet still live — are left exactly as-is. It is
+/// deliberately NOT built from current networks: a current network's dropped
+/// objects (e.g. SNAT after `externalAccess` is turned off) must still be torn
+/// down. SNAT is protected precisely by (router, subnet), not by router, so a
+/// stale network can't shield a current sibling's SNAT on a shared router.
 public struct ProtectedTopology: Equatable, Sendable {
     public var routerNames: Set<String>
     public var routerPortNames: Set<String>
     public var switchRouterPortNames: Set<String>
     public var externalSwitchNames: Set<String>
+    public var snatRules: Set<SNATRuleKey>
 
     public init(
         routerNames: Set<String> = [],
         routerPortNames: Set<String> = [],
         switchRouterPortNames: Set<String> = [],
-        externalSwitchNames: Set<String> = []
+        externalSwitchNames: Set<String> = [],
+        snatRules: Set<SNATRuleKey> = []
     ) {
         self.routerNames = routerNames
         self.routerPortNames = routerPortNames
         self.switchRouterPortNames = switchRouterPortNames
         self.externalSwitchNames = externalSwitchNames
+        self.snatRules = snatRules
     }
 
     public var isEmpty: Bool {
         routerNames.isEmpty && routerPortNames.isEmpty && switchRouterPortNames.isEmpty
-            && externalSwitchNames.isEmpty
+            && externalSwitchNames.isEmpty && snatRules.isEmpty
     }
 }
 
@@ -299,20 +305,24 @@ public enum NetworkReconciler {
         return NetworkTopologyPlan(switches: switches, routers: routers)
     }
 
-    /// The OVN objects protected from teardown for a set of networks — every
-    /// object each network (and its shared router) could own. Passed the *full*
-    /// sync list so present-but-stale networks (skipped by the generation guard)
-    /// keep their live objects.
-    public static func protectedTopology(for networks: [DesiredNetworkState]) -> ProtectedTopology {
+    /// The OVN objects protected from teardown for the networks a sync skipped
+    /// as stale — every object each (and its shared router/uplink) could own, so
+    /// a stale network keeps its live objects. Pass ONLY the stale-skipped
+    /// networks: current networks are governed by the plan so their dropped
+    /// objects are still torn down. SNAT is protected precisely by (router,
+    /// subnet) so a stale network shields only its own SNAT on a shared router.
+    public static func protectedTopology(forStale stale: [DesiredNetworkState]) -> ProtectedTopology {
         var protected = ProtectedTopology()
-        for network in networks {
+        for network in stale {
+            let routerName = OVNNaming.routerName(routerKey: network.routerKey)
             protected.routerPortNames.insert(OVNNaming.routerPortName(network: network.name))
             protected.switchRouterPortNames.insert(OVNNaming.switchRouterPortName(network: network.name))
-            protected.routerNames.insert(OVNNaming.routerName(routerKey: network.routerKey))
+            protected.routerNames.insert(routerName)
             protected.externalSwitchNames.insert(OVNNaming.externalSwitchName(routerKey: network.routerKey))
             protected.routerPortNames.insert(OVNNaming.externalRouterPortName(routerKey: network.routerKey))
             protected.switchRouterPortNames.insert(
                 OVNNaming.externalSwitchRouterPortName(routerKey: network.routerKey))
+            protected.snatRules.insert(SNATRuleKey(router: routerName, logicalIP: network.subnet))
         }
         return protected
     }
@@ -331,7 +341,7 @@ public enum NetworkReconciler {
         var actions: [NetworkTeardownAction] = []
 
         for rule in observed.snatRules.subtracting(want.snatRules).sorted(by: snatOrder)
-        where !protected.routerNames.contains(rule.router) {
+        where !protected.snatRules.contains(rule) {
             actions.append(.snat(router: rule.router, logicalIP: rule.logicalIP))
         }
         for name in observed.switchRouterPortNames.subtracting(want.switchRouterPortNames).sorted()

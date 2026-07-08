@@ -71,6 +71,18 @@ public enum WireProtocol {
         version >= stateSyncMinimumVersion
     }
 
+    /// The lowest protocol version whose `DesiredStateMessage` carries an
+    /// authoritative `networks` list (see `currentVersion` version 3 notes).
+    public static let networkSyncMinimumVersion = 3
+
+    /// Whether a control plane at `version` sends a first-class network desired
+    /// state. When false the `networks` field is merely absent (decoded to []),
+    /// which must NOT be treated as "tear down all L3" — the agent skips network
+    /// reconciliation and falls back to VM-only convergence.
+    public static func supportsNetworkSync(_ version: Int) -> Bool {
+        version >= networkSyncMinimumVersion
+    }
+
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and
     /// from this single definition — to Foundation's `deferredToDate` numeric
     /// form, which is byte compatible with what pre-existing peers already

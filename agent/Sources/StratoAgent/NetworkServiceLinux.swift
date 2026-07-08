@@ -867,10 +867,13 @@ extension NetworkServiceLinux {
 
         // Generation guard: apply only entries at least as new as what we last
         // applied for each network, so a reordered stale sync can't re-address
-        // ports or re-add/remove SNAT with an outdated spec. Every network still
-        // present in the sync (current *or* stale) protects its live objects
-        // from teardown; only networks absent from the sync are torn down.
+        // ports or re-add/remove SNAT with an outdated spec. A network skipped as
+        // stale is still present, so its live objects are protected from teardown
+        // (left exactly as-is); current networks are governed by the plan, so
+        // their dropped objects — e.g. SNAT after externalAccess is turned off —
+        // are still torn down. Only networks absent from the sync are torn down.
         var current: [DesiredNetworkState] = []
+        var stale: [DesiredNetworkState] = []
         for network in networks {
             if let applied = networkGenerations[network.networkId], network.generation < applied {
                 logger.debug(
@@ -880,12 +883,13 @@ extension NetworkServiceLinux {
                         "generation": .stringConvertible(network.generation),
                         "applied": .stringConvertible(applied),
                     ])
+                stale.append(network)
                 continue
             }
             networkGenerations[network.networkId] = network.generation
             current.append(network)
         }
-        let protected = NetworkReconciler.protectedTopology(for: networks)
+        let protected = NetworkReconciler.protectedTopology(forStale: stale)
 
         do {
             try await NetworkReconciler.reconcile(

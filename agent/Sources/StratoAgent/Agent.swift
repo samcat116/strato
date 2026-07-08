@@ -1223,7 +1223,14 @@ extension Agent {
                 // before converging VMs, so a VM's switch and L3 gateway exist
                 // before its NIC attaches (issue #342). Level-triggered and
                 // idempotent, like the VM reconcile that follows.
-                await networkService?.reconcileNetworks(message.networks)
+                //
+                // Only a control plane that speaks network sync (v3+) sends an
+                // authoritative `networks` list. An older control plane omits it
+                // (decoded as []); that absence must NOT be read as "tear down
+                // all L3" — skip network reconciliation and fall back to VM-only.
+                if WireProtocol.supportsNetworkSync(envelope.senderVersion) {
+                    await networkService?.reconcileNetworks(message.networks)
+                }
                 await reconciler?.apply(message)
             case .vmInfo:
                 let message = try envelope.decode(as: VMInfoRequestMessage.self)

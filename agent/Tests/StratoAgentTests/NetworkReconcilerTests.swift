@@ -119,34 +119,75 @@ struct NetworkReconcilerTests {
         #expect(!actions.contains(.routerPort(name: "lrp-web")))
     }
 
-    @Test("A present-but-stale network (protected) is not torn down")
-    func protectedNetworkSurvivesTeardown() {
+    @Test("A stale-skipped network is protected from teardown")
+    func staleNetworkSurvivesTeardown() {
         let web = network(name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p")
         let db = network(name: "db", subnet: "10.0.5.0/24", gateway: "10.0.5.1", routerKey: "p")
         let observed = NetworkReconciler.plan(networks: [web, db]).expectedTopology
 
-        // `db` is stale, so the applied plan is [web] — but `db` is still in the
-        // sync, so it protects its objects. Nothing should be torn down.
-        let protected = NetworkReconciler.protectedTopology(for: [web, db])
+        // `db` was skipped as stale, so the applied plan is [web] — but db is
+        // still present, so its objects are protected. Nothing is torn down.
+        let protected = NetworkReconciler.protectedTopology(forStale: [db])
         let actions = NetworkReconciler.teardownActions(
             desired: NetworkReconciler.plan(networks: [web]), observed: observed, protected: protected)
         #expect(actions.isEmpty)
 
-        // Without protection (db truly absent from the sync), db is torn down.
+        // With no stale protection (db truly absent from the sync), db is torn down.
         let unprotected = NetworkReconciler.teardownActions(
             desired: NetworkReconciler.plan(networks: [web]), observed: observed)
         #expect(unprotected.contains(.routerPort(name: "lrp-db")))
+        #expect(unprotected.contains(.snat(router: "lr-p", logicalIP: "10.0.5.0/24")))
     }
 
-    @Test("protectedTopology covers a network's tenant and external objects")
+    @Test("Turning off externalAccess on a current network tears down its SNAT")
+    func currentNetworkLosesSNATWhenExternalAccessOff() {
+        let on = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            externalAccess: true)
+        let off = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            externalAccess: false)
+        let observed = NetworkReconciler.plan(networks: [on]).expectedTopology
+
+        // `web` is current (not stale), so protection is empty and its now-unwanted
+        // SNAT + uplink must be removed rather than leaked.
+        let actions = NetworkReconciler.teardownActions(
+            desired: NetworkReconciler.plan(networks: [off]), observed: observed,
+            protected: NetworkReconciler.protectedTopology(forStale: []))
+        #expect(actions.contains(.snat(router: "lr-p", logicalIP: "192.168.1.0/24")))
+        #expect(actions.contains(.externalSwitch(name: "ls-ext-p")))
+    }
+
+    @Test("A stale network protects only its own SNAT on a shared router")
+    func staleSNATProtectionIsPerSubnet() {
+        let webOff = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            externalAccess: false)
+        let db = network(name: "db", subnet: "10.0.5.0/24", gateway: "10.0.5.1", routerKey: "p")
+        // Both networks previously had SNAT on the shared router lr-p.
+        let observed = NetworkReconciler.plan(networks: [
+            network(name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p"), db,
+        ]).expectedTopology
+
+        // web is current with externalAccess off; db is stale (protected).
+        let actions = NetworkReconciler.teardownActions(
+            desired: NetworkReconciler.plan(networks: [webOff]), observed: observed,
+            protected: NetworkReconciler.protectedTopology(forStale: [db]))
+        // web's SNAT is removed; db's SNAT on the same router is protected.
+        #expect(actions.contains(.snat(router: "lr-p", logicalIP: "192.168.1.0/24")))
+        #expect(!actions.contains(.snat(router: "lr-p", logicalIP: "10.0.5.0/24")))
+    }
+
+    @Test("protectedTopology covers a stale network's tenant, external, and SNAT objects")
     func protectedTopologyCoverage() {
         let net = network(name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p")
-        let protected = NetworkReconciler.protectedTopology(for: [net])
+        let protected = NetworkReconciler.protectedTopology(forStale: [net])
         #expect(protected.routerNames.contains("lr-p"))
         #expect(protected.routerPortNames.contains("lrp-web"))
         #expect(protected.routerPortNames.contains("lrp-ext-p"))
         #expect(protected.switchRouterPortNames.contains("lsp-web-router"))
         #expect(protected.externalSwitchNames.contains("ls-ext-p"))
+        #expect(protected.snatRules.contains(SNATRuleKey(router: "lr-p", logicalIP: "192.168.1.0/24")))
     }
 
     @Test("Removing the last network in a project tears the router and uplink down")
