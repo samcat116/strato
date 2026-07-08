@@ -13,6 +13,13 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     private let ovsSocketPath: String
     private let chassisConfig: OVNChassisConfig
 
+    /// Highest network `generation` this agent has applied, per network id. A
+    /// full-list sync whose entry for a network is older than what's recorded is
+    /// stale (actor-reentrancy reordering of an update push vs. a periodic sync)
+    /// and is skipped, so it can't roll the network's L3 realization backward —
+    /// the same guard the VM reconciler applies per VM.
+    private var networkGenerations: [UUID: Int64] = [:]
+
     #if os(Linux)
     private var ovnManager: OVNManager?
     private var ovsManager: OVSManager?
@@ -857,8 +864,32 @@ extension NetworkServiceLinux {
             return
         }
         #endif
+
+        // Generation guard: apply only entries at least as new as what we last
+        // applied for each network, so a reordered stale sync can't re-address
+        // ports or re-add/remove SNAT with an outdated spec. Every network still
+        // present in the sync (current *or* stale) protects its live objects
+        // from teardown; only networks absent from the sync are torn down.
+        var current: [DesiredNetworkState] = []
+        for network in networks {
+            if let applied = networkGenerations[network.networkId], network.generation < applied {
+                logger.debug(
+                    "Skipping stale network desired state",
+                    metadata: [
+                        "network": .string(network.name),
+                        "generation": .stringConvertible(network.generation),
+                        "applied": .stringConvertible(applied),
+                    ])
+                continue
+            }
+            networkGenerations[network.networkId] = network.generation
+            current.append(network)
+        }
+        let protected = NetworkReconciler.protectedTopology(for: networks)
+
         do {
-            try await NetworkReconciler.reconcile(networks: networks, actuator: self, logger: logger)
+            try await NetworkReconciler.reconcile(
+                networks: current, actuator: self, logger: logger, protected: protected)
         } catch {
             // observeTopology failed (can't compute teardown safely); the
             // periodic level-triggered sync retries. Ensures already applied.

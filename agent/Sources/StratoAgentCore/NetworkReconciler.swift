@@ -205,6 +205,35 @@ public enum NetworkTeardownAction: Equatable, Sendable {
     case router(name: String)
 }
 
+/// OVN object identities that teardown must never touch, regardless of the plan.
+/// Built from every network still present in a sync (current *and* stale) so a
+/// present-but-stale network — one skipped by the generation guard, and thus
+/// absent from the applied plan — does not have its live objects torn down.
+/// Only networks entirely absent from the sync are eligible for teardown.
+public struct ProtectedTopology: Equatable, Sendable {
+    public var routerNames: Set<String>
+    public var routerPortNames: Set<String>
+    public var switchRouterPortNames: Set<String>
+    public var externalSwitchNames: Set<String>
+
+    public init(
+        routerNames: Set<String> = [],
+        routerPortNames: Set<String> = [],
+        switchRouterPortNames: Set<String> = [],
+        externalSwitchNames: Set<String> = []
+    ) {
+        self.routerNames = routerNames
+        self.routerPortNames = routerPortNames
+        self.switchRouterPortNames = switchRouterPortNames
+        self.externalSwitchNames = externalSwitchNames
+    }
+
+    public var isEmpty: Bool {
+        routerNames.isEmpty && routerPortNames.isEmpty && switchRouterPortNames.isEmpty
+            && externalSwitchNames.isEmpty
+    }
+}
+
 // MARK: - Reconciler
 
 /// Pure planning for L3 network reconciliation. No side effects, fully testable.
@@ -270,28 +299,55 @@ public enum NetworkReconciler {
         return NetworkTopologyPlan(switches: switches, routers: routers)
     }
 
+    /// The OVN objects protected from teardown for a set of networks — every
+    /// object each network (and its shared router) could own. Passed the *full*
+    /// sync list so present-but-stale networks (skipped by the generation guard)
+    /// keep their live objects.
+    public static func protectedTopology(for networks: [DesiredNetworkState]) -> ProtectedTopology {
+        var protected = ProtectedTopology()
+        for network in networks {
+            protected.routerPortNames.insert(OVNNaming.routerPortName(network: network.name))
+            protected.switchRouterPortNames.insert(OVNNaming.switchRouterPortName(network: network.name))
+            protected.routerNames.insert(OVNNaming.routerName(routerKey: network.routerKey))
+            protected.externalSwitchNames.insert(OVNNaming.externalSwitchName(routerKey: network.routerKey))
+            protected.routerPortNames.insert(OVNNaming.externalRouterPortName(routerKey: network.routerKey))
+            protected.switchRouterPortNames.insert(
+                OVNNaming.externalSwitchRouterPortName(routerKey: network.routerKey))
+        }
+        return protected
+    }
+
     /// Owned OVN objects present on the host that the plan no longer wants,
     /// ordered so dependents are removed before the objects they reference
-    /// (SNAT rules and peered ports before their routers/switches).
+    /// (SNAT rules and peered ports before their routers/switches). Objects in
+    /// `protected` are never torn down — they belong to a network still present
+    /// in the sync whose (stale) generation kept it out of the applied plan.
     public static func teardownActions(
-        desired: NetworkTopologyPlan, observed: ObservedNetworkTopology
+        desired: NetworkTopologyPlan,
+        observed: ObservedNetworkTopology,
+        protected: ProtectedTopology = ProtectedTopology()
     ) -> [NetworkTeardownAction] {
         let want = desired.expectedTopology
         var actions: [NetworkTeardownAction] = []
 
-        for rule in observed.snatRules.subtracting(want.snatRules).sorted(by: snatOrder) {
+        for rule in observed.snatRules.subtracting(want.snatRules).sorted(by: snatOrder)
+        where !protected.routerNames.contains(rule.router) {
             actions.append(.snat(router: rule.router, logicalIP: rule.logicalIP))
         }
-        for name in observed.switchRouterPortNames.subtracting(want.switchRouterPortNames).sorted() {
+        for name in observed.switchRouterPortNames.subtracting(want.switchRouterPortNames).sorted()
+        where !protected.switchRouterPortNames.contains(name) {
             actions.append(.switchRouterPort(name: name))
         }
-        for name in observed.routerPortNames.subtracting(want.routerPortNames).sorted() {
+        for name in observed.routerPortNames.subtracting(want.routerPortNames).sorted()
+        where !protected.routerPortNames.contains(name) {
             actions.append(.routerPort(name: name))
         }
-        for name in observed.externalSwitchNames.subtracting(want.externalSwitchNames).sorted() {
+        for name in observed.externalSwitchNames.subtracting(want.externalSwitchNames).sorted()
+        where !protected.externalSwitchNames.contains(name) {
             actions.append(.externalSwitch(name: name))
         }
-        for name in observed.routerNames.subtracting(want.routerNames).sorted() {
+        for name in observed.routerNames.subtracting(want.routerNames).sorted()
+        where !protected.routerNames.contains(name) {
             actions.append(.router(name: name))
         }
         return actions
@@ -345,7 +401,10 @@ extension NetworkReconciler {
     /// level-triggered sync retries it. Throws only when the topology snapshot
     /// itself can't be read (teardown can't be computed safely without it).
     public static func reconcile(
-        networks: [DesiredNetworkState], actuator: any NetworkActuator, logger: Logger
+        networks: [DesiredNetworkState],
+        actuator: any NetworkActuator,
+        logger: Logger,
+        protected: ProtectedTopology = ProtectedTopology()
     ) async throws {
         let topology = plan(networks: networks)
 
@@ -386,7 +445,7 @@ extension NetworkReconciler {
         }
 
         let observed = try await actuator.observeTopology()
-        for action in teardownActions(desired: topology, observed: observed) {
+        for action in teardownActions(desired: topology, observed: observed, protected: protected) {
             await attempt(logger, "teardown \(action)") {
                 switch action {
                 case .snat(let router, let logicalIP):

@@ -119,6 +119,36 @@ struct NetworkReconcilerTests {
         #expect(!actions.contains(.routerPort(name: "lrp-web")))
     }
 
+    @Test("A present-but-stale network (protected) is not torn down")
+    func protectedNetworkSurvivesTeardown() {
+        let web = network(name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p")
+        let db = network(name: "db", subnet: "10.0.5.0/24", gateway: "10.0.5.1", routerKey: "p")
+        let observed = NetworkReconciler.plan(networks: [web, db]).expectedTopology
+
+        // `db` is stale, so the applied plan is [web] — but `db` is still in the
+        // sync, so it protects its objects. Nothing should be torn down.
+        let protected = NetworkReconciler.protectedTopology(for: [web, db])
+        let actions = NetworkReconciler.teardownActions(
+            desired: NetworkReconciler.plan(networks: [web]), observed: observed, protected: protected)
+        #expect(actions.isEmpty)
+
+        // Without protection (db truly absent from the sync), db is torn down.
+        let unprotected = NetworkReconciler.teardownActions(
+            desired: NetworkReconciler.plan(networks: [web]), observed: observed)
+        #expect(unprotected.contains(.routerPort(name: "lrp-db")))
+    }
+
+    @Test("protectedTopology covers a network's tenant and external objects")
+    func protectedTopologyCoverage() {
+        let net = network(name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p")
+        let protected = NetworkReconciler.protectedTopology(for: [net])
+        #expect(protected.routerNames.contains("lr-p"))
+        #expect(protected.routerPortNames.contains("lrp-web"))
+        #expect(protected.routerPortNames.contains("lrp-ext-p"))
+        #expect(protected.switchRouterPortNames.contains("lsp-web-router"))
+        #expect(protected.externalSwitchNames.contains("ls-ext-p"))
+    }
+
     @Test("Removing the last network in a project tears the router and uplink down")
     func teardownEmptyRouter() {
         let web = network(name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p")
