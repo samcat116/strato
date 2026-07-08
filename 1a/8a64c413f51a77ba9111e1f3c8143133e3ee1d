@@ -1,0 +1,54 @@
+docs/architecture/networking.md
+  s_3d8fde8278f186::t_8b1ee18f9c8297 227,239-259
+  s_3d8fde8278f186::t_c766a6e9bc0c2b 260
+agent/Tests/StratoAgentTests/HostUplinkTests.swift
+  s_3d8fde8278f186::t_bf702000f1aa9e 1-76
+agent/Sources/StratoAgent/Agent.swift
+  s_3d8fde8278f186::t_13b27cc8f1f219 1222-1226
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_3d8fde8278f186::t_607e77f12f8947 20-22,50-55,846-1154
+agent/Sources/StratoAgent/NetworkServiceProtocol.swift
+  s_3d8fde8278f186::t_1e19ba7961fbc4 28-34,42-44
+agent/Sources/StratoAgentCore/HostUplink.swift
+  s_3d8fde8278f186::t_7068f074144648 1-97
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_3d8fde8278f186::t_112eb3ff22c748 1-423
+agent/Tests/StratoAgentTests/NetworkReconcilerTests.swift
+  s_3d8fde8278f186::t_f71f96c3b64728 1-227
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_3d8fde8278f186::t_883e9578f4c7cc 120-121,203-208,229-242
+control-plane/Sources/App/Migrations/AddExternalAccessToLogicalNetwork.swift
+  s_3d8fde8278f186::t_2369777826a775 1-28
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_3d8fde8278f186::t_f122ff25ecca19 61-74,102-104,116-128,173-174,181,191,207-208,213,222,238,254
+control-plane/Sources/App/Services/AgentService.swift
+  s_3d8fde8278f186::t_dfd7f12f91d241 954-976
+control-plane/Sources/App/configure.swift
+  s_3d8fde8278f186::t_c6dda98d056c1a 275-277
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_3d8fde8278f186::t_7549bf5b4479bb 256-289
+control-plane/Tests/AppTests/NetworkControllerTests.swift
+  s_3d8fde8278f186::t_b36791bbc06aa2 236-270
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_3d8fde8278f186::t_2f71b884ca60e5 91-96,102-103,109-177
+shared/Sources/StratoShared/WireProtocol.swift
+  s_3d8fde8278f186::t_1b205dad8b5790 54-62
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_3d8fde8278f186::t_18d2aefc627a2e 47-103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1a8a64c413f51a77ba9111e1f3c8143133e3ee1d",
+  "prompts": {},
+  "sessions": {
+    "s_3d8fde8278f186": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9d30d495-5bbb-422b-acbe-a23c52d97028",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
