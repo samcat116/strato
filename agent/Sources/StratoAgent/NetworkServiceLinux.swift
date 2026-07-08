@@ -984,10 +984,10 @@ extension NetworkServiceLinux: NetworkActuator {
         if let nextHop = uplink.gateway {
             try ensureDefaultRoute(router: router.name, nextHop: nextHop)
         } else {
-            logger.warning(
+            let message =
                 "Uplink has no next-hop gateway; skipping the router default route "
-                    + "(SNAT egress limited to the uplink subnet)",
-                metadata: ["router": .string(router.name)])
+                + "(SNAT egress limited to the uplink subnet)"
+            logger.warning("\(message)", metadata: ["router": .string(router.name)])
         }
 
         uplinkExternalIP = uplink.ipAddress
@@ -1181,9 +1181,10 @@ extension NetworkServiceLinux {
             "ovn-nbctl",
             ["--db=unix:\(ovnSocketPath)", "--may-exist", "lr-route-add", router, "0.0.0.0/0", nextHop])
         if result.status == 127 {
-            logger.warning(
+            let message =
                 "ovn-nbctl not found; cannot install the default route for SNAT egress "
-                    + "(install ovn-common). East-west and the uplink subnet still work.")
+                + "(install ovn-common). East-west and the uplink subnet still work."
+            logger.warning("\(message)")
             return
         }
         guard result.status == 0 else {
