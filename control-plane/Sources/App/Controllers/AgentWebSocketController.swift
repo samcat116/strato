@@ -602,7 +602,11 @@ struct AgentWebSocketController: RouteCollection {
                 req.consoleSessionManager.removeSession(sessionId: message.sessionId)
 
             case .vmLog:
-                // Handle VM log messages from agent - push to Loki
+                // Handle VM log messages from agent - push to Loki.
+                // Skip entirely when Loki isn't deployed rather than dropping the message downstream.
+                guard req.application.lokiEnabled else {
+                    break
+                }
                 let message = try envelope.decode(as: VMLogMessage.self)
                 Task {
                     do {
