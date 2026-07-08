@@ -5,6 +5,13 @@ import NIOCore
 import StratoShared
 
 struct ImageController: RouteCollection {
+    /// Upper bound on a single multipart upload. Both upload handlers buffer
+    /// the whole body in memory (`FormDataDecoder` needs it contiguous), so
+    /// this caps peak memory per request and returns 413 rather than letting a
+    /// huge image OOM the control plane. Keep it in sync with the compose
+    /// proxy's `client_max_body_size`. (A future streaming path could lift it.)
+    static let maxUploadBytes = 4 * 1024 * 1024 * 1024  // 4 GiB
+
     func boot(routes: any RoutesBuilder) throws {
         // Project-scoped image routes
         let projectImages = routes.grouped("api", "projects", ":projectID", "images")
@@ -332,7 +339,7 @@ struct ImageController: RouteCollection {
         var fileData: ByteBuffer?
 
         // Parse multipart form data
-        let sequence = req.body.collect(max: nil)
+        let sequence = req.body.collect(max: Self.maxUploadBytes)
 
         // For streaming, we need to handle the multipart form differently
         // Collect the body first
@@ -496,7 +503,7 @@ struct ImageController: RouteCollection {
         }
 
         // Collect and parse the multipart body (mirrors the create-upload path).
-        guard let body = try await req.body.collect(max: nil).get() else {
+        guard let body = try await req.body.collect(max: Self.maxUploadBytes).get() else {
             throw Abort(.badRequest, reason: "Empty request body")
         }
         guard req.headers.contentType?.parameters["boundary"] != nil else {
