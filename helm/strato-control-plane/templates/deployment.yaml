@@ -35,7 +35,7 @@ spec:
             - sh
             - -c
             - |
-              until nc -w 1 -z {{ include "strato-control-plane.databaseHost" . }}.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done
+              until nc -w 1 -z {{ include "strato-control-plane.databaseWaitHost" . }} {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done
         {{- end }}
         {{- if and .Values.spicedb.enabled .Values.initContainers.waitForSpiceDB.enabled }}
         - name: wait-for-spicedb

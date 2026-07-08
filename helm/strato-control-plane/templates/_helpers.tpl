@@ -71,6 +71,20 @@ Get the database host
 {{- end }}
 
 {{/*
+Resolvable host for the database readiness wait (nc). The bundled Postgres is an
+in-cluster Service, so qualify it with the cluster domain; an external database
+host is already a routable FQDN and must be used verbatim (qualifying it yields a
+bogus name like `db.example.com.<ns>.svc.cluster.local`).
+*/}}
+{{- define "strato-control-plane.databaseWaitHost" -}}
+{{- if .Values.postgresql.enabled }}
+{{- printf "%s.%s.svc.cluster.local" (include "strato-control-plane.databaseHost" .) .Release.Namespace }}
+{{- else }}
+{{- .Values.externalDatabase.host }}
+{{- end }}
+{{- end }}
+
+{{/*
 Effective PostgreSQL TLS mode (disable|prefer|require) for both the control
 plane (DATABASE_TLS) and SpiceDB (sslmode), so a single knob governs both.
 An explicit strato.database.tls wins. Otherwise it defaults by topology: the
