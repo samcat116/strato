@@ -69,6 +69,53 @@ public struct SPIFFEConfig: Codable, Sendable {
     public static let defaultTrustDomain = "strato.local"
 }
 
+/// TLS settings for an `ssl:` `ovn_northbound` endpoint (the
+/// `[ovn_northbound_tls]` config section). OVN deployments run a private PKI
+/// (`ovn-pki`), so the CA must be supplied explicitly and the server usually
+/// requires a client certificate signed by the same CA — these are the agent
+/// counterparts of ovn-nbctl's `-C`/`-c`/`-p` flags. All paths are PEM files.
+public struct OVNNorthboundTLSConfig: Codable, Sendable, Equatable {
+    /// CA certificate(s) used to verify the server. Nil = system trust roots.
+    public let caCertPath: String?
+    /// Client certificate chain presented to the server.
+    public let clientCertPath: String?
+    /// Private key for the client certificate.
+    public let clientKeyPath: String?
+    /// Whether the server certificate is verified at all. Default true;
+    /// disable only for lab setups with unverifiable certificates.
+    public let verifyServerCertificate: Bool
+    /// Hostname for SNI/certificate verification, when connecting by IP
+    /// address to a certificate issued for a DNS name.
+    public let serverHostname: String?
+
+    enum CodingKeys: String, CodingKey {
+        case caCertPath = "ca_cert"
+        case clientCertPath = "client_cert"
+        case clientKeyPath = "client_key"
+        case verifyServerCertificate = "verify_server_certificate"
+        case serverHostname = "server_hostname"
+    }
+
+    public init(
+        caCertPath: String? = nil,
+        clientCertPath: String? = nil,
+        clientKeyPath: String? = nil,
+        verifyServerCertificate: Bool = true,
+        serverHostname: String? = nil
+    ) {
+        self.caCertPath = caCertPath
+        self.clientCertPath = clientCertPath
+        self.clientKeyPath = clientKeyPath
+        self.verifyServerCertificate = verifyServerCertificate
+        self.serverHostname = serverHostname
+    }
+
+    /// Every configured PEM path, for existence checks in the host preflight.
+    public var configuredFilePaths: [String] {
+        [caCertPath, clientCertPath, clientKeyPath].compactMap { $0 }
+    }
+}
+
 public struct AgentConfig: Codable {
     public let controlPlaneURL: String
     public let qemuSocketDir: String?
@@ -85,6 +132,10 @@ public struct AgentConfig: Codable {
     /// networks (issue #343); `ovn_remote` is the southbound counterpart
     /// consumed by ovn-controller.
     public let ovnNorthbound: String?
+    /// TLS material for an `ssl:` `ovn_northbound` endpoint. Requires
+    /// `ovn_northbound` to actually be `ssl:` — rejected at load time
+    /// otherwise, so TLS settings can never be silently ignored.
+    public let ovnNorthboundTLS: OVNNorthboundTLSConfig?
     public let enableHVF: Bool?
     public let enableKVM: Bool?
     public let vmStoragePath: String?
@@ -110,6 +161,7 @@ public struct AgentConfig: Codable {
         case ovnRemote = "ovn_remote"
         case ovnBootstrapChassis = "ovn_bootstrap_chassis"
         case ovnNorthbound = "ovn_northbound"
+        case ovnNorthboundTLS = "ovn_northbound_tls"
         case enableHVF = "enable_hvf"
         case enableKVM = "enable_kvm"
         case vmStoragePath = "vm_storage_dir"
@@ -134,6 +186,7 @@ public struct AgentConfig: Codable {
         ovnRemote: String? = nil,
         ovnBootstrapChassis: Bool? = nil,
         ovnNorthbound: String? = nil,
+        ovnNorthboundTLS: OVNNorthboundTLSConfig? = nil,
         enableHVF: Bool? = nil,
         enableKVM: Bool? = nil,
         vmStoragePath: String? = nil,
@@ -156,6 +209,7 @@ public struct AgentConfig: Codable {
         self.ovnRemote = ovnRemote
         self.ovnBootstrapChassis = ovnBootstrapChassis
         self.ovnNorthbound = ovnNorthbound
+        self.ovnNorthboundTLS = ovnNorthboundTLS
         self.enableHVF = enableHVF
         self.enableKVM = enableKVM
         self.vmStoragePath = vmStoragePath
@@ -210,6 +264,36 @@ public struct AgentConfig: Codable {
                     "ovn_northbound must be an OVN connection string (unix:<path>, tcp:<host>:<port>, or ssl:<host>:<port>), got '\(ovnNorthbound)'"
                 )
             }
+        }
+        // Parse NB TLS material from the [ovn_northbound_tls] section. It only
+        // makes sense with an ssl: endpoint, so any other pairing is rejected —
+        // an operator who wrote cert paths must not silently get cleartext.
+        // (`table(_:)` returns an empty scoped view even for an absent section,
+        // so presence must be tested with `hasTable`.)
+        let ovnNorthboundTLS: OVNNorthboundTLSConfig?
+        if tomlData.hasTable("ovn_northbound_tls"), let tlsTable = tomlData.table("ovn_northbound_tls") {
+            guard let ovnNorthbound, ovnNorthbound.hasPrefix("ssl:") else {
+                throw AgentConfigError.invalidConfiguration(
+                    "[ovn_northbound_tls] requires ovn_northbound to be an ssl:<host>:<port> endpoint, "
+                        + "got '\(ovnNorthbound ?? "(unset)")'"
+                )
+            }
+            let clientCert = tlsTable.string("client_cert")
+            let clientKey = tlsTable.string("client_key")
+            guard (clientCert == nil) == (clientKey == nil) else {
+                throw AgentConfigError.invalidConfiguration(
+                    "[ovn_northbound_tls] client_cert and client_key must be set together"
+                )
+            }
+            ovnNorthboundTLS = OVNNorthboundTLSConfig(
+                caCertPath: tlsTable.string("ca_cert"),
+                clientCertPath: clientCert,
+                clientKeyPath: clientKey,
+                verifyServerCertificate: tlsTable.bool("verify_server_certificate") ?? true,
+                serverHostname: tlsTable.string("server_hostname")
+            )
+        } else {
+            ovnNorthboundTLS = nil
         }
         let enableHVF = tomlData.bool("enable_hvf")
         let enableKVM = tomlData.bool("enable_kvm")
@@ -315,6 +399,7 @@ public struct AgentConfig: Codable {
             ovnRemote: ovnRemote,
             ovnBootstrapChassis: ovnBootstrapChassis,
             ovnNorthbound: ovnNorthbound,
+            ovnNorthboundTLS: ovnNorthboundTLS,
             enableHVF: enableHVF,
             enableKVM: enableKVM,
             vmStoragePath: vmStoragePath,

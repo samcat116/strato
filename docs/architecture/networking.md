@@ -311,18 +311,21 @@ The per-agent-local-NB (Unix socket) model cannot express this.
 - **Agent config:** `ovn_northbound` (OVN connection string; default
   `unix:/var/run/ovn/ovnnb_db.sock`) is the NB counterpart of the existing
   `ovn_remote` SB setting. Both point at the site central
-  (`tcp:<central-host>:6641/6642`) in a multi-node site.
+  (`tcp:<central-host>:6641/6642`) in a multi-node site. For `ssl:` endpoints
+  the `[ovn_northbound_tls]` section carries the PKI material (CA, client
+  cert/key, verification toggle, SNI hostname — the agent counterparts of
+  ovn-nbctl's `-C`/`-c`/`-p`); it is rejected at load time unless the endpoint
+  is actually `ssl:`, and the host preflight verifies the PEM files exist.
 - **Per-site ovn-central deployment:** `deploy/ovn-central/` (compose +
   image: NB/SB/northd with plain-TCP listeners; TLS via `ovn-pki` is the
   operator upgrade path). Hypervisors run `ovn-controller` + OVS only.
 - Underlay (Layer 0): LAN / customer-provided routability assumed, per plan.
 - **Result:** one logical network spans a site's nodes over geneve.
 
-Remaining in this phase: strip `ovn-central` from the agent image /
-bootstrap script defaults, `ssl:` endpoint TLS configuration surface in the
-agent config (SwiftOVN already supports it), and controller-failover UX
-(re-designation is a manual `PUT /api/sites/:id` today; syncs handle the
-handover level-triggered).
+Remaining in this phase: controller-failover UX (re-designation is a manual
+`PUT /api/sites/:id` today; syncs handle the handover level-triggered) and
+geneve verification on real multi-node hardware (recipe in
+`deploy/ovn-central/README.md`).
 
 ### Phase 3 — Floating IPs + north-south advertisement
 
@@ -355,8 +358,8 @@ handover level-triggered).
   router/router-port fields. Additions needed for gateway HA, static routes,
   security groups, and native dynamic routing. (TCP/SSL transport landed —
   Phase 2 consumed it.)
-- **Agent image** still ships `ovn-central` packages (harmless unless started);
-  stripping them to `ovn-host`-only is Phase 2 cleanup.
+- **Agent image** ships the chassis side only (`ovn-host` + OVS); the
+  NB/SB/northd central is the separate per-site `deploy/ovn-central/` unit.
 - **OVN version floor** for dynamic routing (≥ 25.03, experimental).
 - **IPv4-only IPAM** today; IPv6 is out of scope for this roadmap.
 
