@@ -32,6 +32,7 @@ Event types:
 | `AUDIT_INCLUDE_READS` | `false` | Also audit `GET`/`HEAD`/`OPTIONS` API requests. Admin-bypassed reads are always audited. |
 | `AUDIT_WEBHOOK_URL` | — | Destination for the `webhook` backend (required when enabled). |
 | `LOKI_ENDPOINT` | — | Shared with VM console logs; required for the `loki` backend. |
+| `AUDIT_RETENTION_DAYS` | — | Delete `audit_events` rows older than this many days. Unset (or non-positive) keeps events forever. |
 
 ### Backends
 
@@ -77,6 +78,14 @@ The response is `{ events, total, limit, offset }`.
 
 ## Retention
 
-The `database` backend grows unbounded; there is no built-in retention sweep
-yet. Prune with a scheduled `DELETE FROM audit_events WHERE created_at < ...`
-until one exists, or ship to Loki/webhook and rely on that system's retention.
+Set `AUDIT_RETENTION_DAYS` to bound the `database` backend: an hourly sweep
+deletes `audit_events` rows older than the cutoff (the first pass runs at
+boot). With multiple control-plane replicas, a Valkey lock makes the sweep a
+cluster singleton, so only one replica prunes per interval.
+
+Retention is off by default — with `AUDIT_RETENTION_DAYS` unset, the table
+grows unbounded and events are kept forever. The sweep only prunes the
+database; events shipped to `log`, `loki`, or `webhook` are subject to that
+system's own retention. For compliance regimes that require long-lived audit
+trails, ship events externally and set a retention window that satisfies your
+local query needs.
