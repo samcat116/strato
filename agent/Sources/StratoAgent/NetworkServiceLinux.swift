@@ -1300,7 +1300,16 @@ extension NetworkServiceLinux {
         let route = OVNLogicalRouterStaticRoute(
             ip_prefix: "0.0.0.0/0", nexthop: nextHop,
             external_ids: [Self.managedKey: Self.managedValue])
-        let defaults = try await staticRoutes(onRouter: routerName).filter { $0.ip_prefix == "0.0.0.0/0" }
+        // Only the main-table dst-ip default is the one the agent owns and that the
+        // old `ovn-nbctl lr-route-add` (no --policy/--route-table) reconciled. Leave
+        // src-ip or named-route-table 0.0.0.0/0 routes (operator policy routing)
+        // untouched. OVN defaults an unset policy to dst-ip and an unset route_table
+        // to the main table, matching the route we create below.
+        let defaults = try await staticRoutes(onRouter: routerName).filter {
+            $0.ip_prefix == "0.0.0.0/0"
+                && ($0.policy ?? "dst-ip") == "dst-ip"
+                && ($0.route_table ?? "").isEmpty
+        }
         // Keep at most one route that already matches the desired tagged route;
         // every other default is stale, drifted, legacy-untagged, or a duplicate
         // from an earlier/concurrent reconcile. Delete them all so exactly one
