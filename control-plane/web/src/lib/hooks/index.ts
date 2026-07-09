@@ -6,7 +6,7 @@ export {
   useSnapshotsForVolumes,
   useInvalidateVolumes,
 } from "./use-volumes";
-export { useAgents, useAgent, useAgentTokens, useInvalidateAgents } from "./use-agents";
+export { useAgents, useAgent, useAgentTokens, useInvalidateAgents, isAgentsForbidden } from "./use-agents";
 export {
   useImages,
   useImage,

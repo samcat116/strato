@@ -5,11 +5,16 @@ import { formatAge, vmStatusBadges, vmStatusDots } from "./constants";
 interface RecentInstancesProps {
   vms: VM[];
   agents: Agent[];
+  /** Hide the agent column for users who cannot list agents. */
+  showAgent?: boolean;
 }
 
-const GRID = "grid grid-cols-[12px_1.6fr_1fr_1fr_1fr_0.6fr_0.8fr] items-center gap-3.5";
-
-export function RecentInstances({ vms, agents }: RecentInstancesProps) {
+export function RecentInstances({ vms, agents, showAgent = true }: RecentInstancesProps) {
+  const grid = `grid items-center gap-3.5 ${
+    showAgent
+      ? "grid-cols-[12px_1.6fr_1fr_1fr_1fr_0.6fr_0.8fr]"
+      : "grid-cols-[12px_1.6fr_1.2fr_1fr_0.6fr_0.8fr]"
+  }`;
   // Case-insensitive: hypervisorId is stored as text and may not match the
   // agent UUID's casing.
   const agentNames = new Map(agents.map((a) => [a.id.toLowerCase(), a.name]));
@@ -39,11 +44,11 @@ export function RecentInstances({ vms, agents }: RecentInstancesProps) {
       ) : (
         <>
           <div
-            className={`${GRID} border-b border-muted px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.4px] text-muted-foreground`}
+            className={`${grid} border-b border-muted px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.4px] text-muted-foreground`}
           >
             <span />
             <span>Name</span>
-            <span>Agent</span>
+            {showAgent && <span>Agent</span>}
             <span>Image</span>
             <span>Specs</span>
             <span>Age</span>
@@ -58,7 +63,7 @@ export function RecentInstances({ vms, agents }: RecentInstancesProps) {
               <Link
                 key={vm.id}
                 href={`/vms/detail?id=${vm.id}`}
-                className={`${GRID} border-b border-muted px-4 py-2.5 transition-colors last:border-b-0 hover:bg-background/60`}
+                className={`${grid} border-b border-muted px-4 py-2.5 transition-colors last:border-b-0 hover:bg-background/60`}
               >
                 <span
                   className="h-2 w-2 rounded-full"
@@ -67,9 +72,11 @@ export function RecentInstances({ vms, agents }: RecentInstancesProps) {
                 <span className="truncate font-mono text-[13px] font-semibold">
                   {vm.name}
                 </span>
-                <span className="truncate font-mono text-[12.5px] text-muted-foreground">
-                  {agentName}
-                </span>
+                {showAgent && (
+                  <span className="truncate font-mono text-[12.5px] text-muted-foreground">
+                    {agentName}
+                  </span>
+                )}
                 <span className="truncate font-mono text-[12.5px] text-muted-foreground">
                   {vm.image || "—"}
                 </span>

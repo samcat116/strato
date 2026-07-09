@@ -1,11 +1,22 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentsApi } from "@/lib/api/agents";
+import { ApiError } from "@/lib/api/client";
+
+/** Listing agents is system-admin-only; regular users get a 403. */
+export function isAgentsForbidden(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403;
+}
 
 export function useAgents() {
   return useQuery({
     queryKey: ["agents"],
     queryFn: agentsApi.list,
-    refetchInterval: 10000, // Poll every 10 seconds
+    // Poll every 10 seconds — but a 403 is permanent for this session, so
+    // don't keep hitting a forbidden endpoint.
+    refetchInterval: (query) =>
+      isAgentsForbidden(query.state.error) ? false : 10000,
+    retry: (failureCount, error) =>
+      !isAgentsForbidden(error) && failureCount < 1,
   });
 }
 

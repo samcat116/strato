@@ -18,8 +18,8 @@ import {
   formatBytes,
   reservedPercent,
 } from "@/components/overview";
-import { useAgents, useInvalidateVMs, useVMs } from "@/lib/hooks";
-import { useOrganization } from "@/providers";
+import { isAgentsForbidden, useAgents, useInvalidateVMs, useVMs } from "@/lib/hooks";
+import { useOrganization, useProjectContext } from "@/providers";
 import type { AgentStatus } from "@/types/api";
 
 const AGENT_STATUS_ROWS: { status: AgentStatus; label: string }[] = [
@@ -32,9 +32,19 @@ const AGENT_STATUS_ROWS: { status: AgentStatus; label: string }[] = [
 export default function OverviewPage() {
   const [createVMOpen, setCreateVMOpen] = useState(false);
   const { data: vms = [], isLoading: vmsLoading } = useVMs();
-  const { data: agents = [], isLoading: agentsLoading } = useAgents();
+  const {
+    data: agents = [],
+    isLoading: agentsLoading,
+    error: agentsError,
+  } = useAgents();
   const { currentOrg } = useOrganization();
+  const { projects } = useProjectContext();
   const invalidateVMs = useInvalidateVMs();
+
+  // Listing agents is system-admin-only. For everyone else the fleet-capacity
+  // panels have no backing data, so show VM-allocation stats instead of
+  // rendering a forbidden fleet as empty.
+  const agentsForbidden = isAgentsForbidden(agentsError);
 
   const stats = useMemo(() => {
     const running = vms.filter((vm) => vm.status === "Running").length;
@@ -71,7 +81,15 @@ export default function OverviewPage() {
     );
     const offlineAgents = agents.filter((a) => !a.isOnline);
 
+    // Per-VM allocation totals: the non-admin fallback for fleet capacity.
+    const allocVcpu = vms.reduce((sum, vm) => sum + vm.cpu, 0);
+    const allocMemory = vms.reduce((sum, vm) => sum + vm.memory, 0);
+    const allocDisk = vms.reduce((sum, vm) => sum + vm.disk, 0);
+
     return {
+      allocVcpu,
+      allocMemory,
+      allocDisk,
       running,
       errored,
       stopped,
@@ -112,9 +130,10 @@ export default function OverviewPage() {
         <div>
           <h1 className="text-[22px] font-bold tracking-tight">Overview</h1>
           <div className="mt-0.5 font-mono text-[12.5px] text-muted-foreground">
-            {currentOrg?.name ?? "—"} · {agents.length}{" "}
-            {agents.length === 1 ? "agent" : "agents"} · {vms.length}{" "}
-            {vms.length === 1 ? "instance" : "instances"}
+            {currentOrg?.name ?? "—"}
+            {!agentsForbidden &&
+              ` · ${agents.length} ${agents.length === 1 ? "agent" : "agents"}`}
+            {` · ${vms.length} ${vms.length === 1 ? "instance" : "instances"}`}
           </div>
         </div>
         <div className="flex-1" />
@@ -142,35 +161,64 @@ export default function OverviewPage() {
             sub={runningSub.text}
             tone={runningSub.tone}
           />
-          <KpiCard
-            label="vCPU reserved"
-            value={String(stats.cpuPct)}
-            unit="%"
-            sub={`${Math.max(0, stats.capacity.totalCPU - stats.capacity.availableCPU)} of ${stats.capacity.totalCPU} vCPU`}
-          />
-          <KpiCard
-            label="Memory reserved"
-            value={String(stats.memPct)}
-            unit="%"
-            sub={`${formatBytes(Math.max(0, stats.capacity.totalMemory - stats.capacity.availableMemory))} of ${formatBytes(stats.capacity.totalMemory)}`}
-          />
-          <KpiCard
-            label="Agents"
-            value={String(stats.online.length)}
-            unit={`/${agents.length}`}
-            sub={agentsSub.text}
-            tone={agentsSub.tone}
-          />
-          <KpiCard
-            label="Storage reserved"
-            value={String(stats.diskPct)}
-            unit="%"
-            sub={`${formatBytes(Math.max(0, stats.capacity.totalDisk - stats.capacity.availableDisk))} of ${formatBytes(stats.capacity.totalDisk)}`}
-          />
+          {agentsForbidden ? (
+            <>
+              <KpiCard
+                label="vCPU allocated"
+                value={String(stats.allocVcpu)}
+                unit="vCPU"
+                sub={`across ${vms.length} ${vms.length === 1 ? "instance" : "instances"}`}
+              />
+              <KpiCard
+                label="Memory allocated"
+                value={formatBytes(stats.allocMemory)}
+                sub="provisioned to instances"
+              />
+              <KpiCard
+                label="Storage allocated"
+                value={formatBytes(stats.allocDisk)}
+                sub="provisioned to instances"
+              />
+              <KpiCard
+                label="Projects"
+                value={String(projects.length)}
+                sub={currentOrg?.name ?? "—"}
+              />
+            </>
+          ) : (
+            <>
+              <KpiCard
+                label="vCPU reserved"
+                value={String(stats.cpuPct)}
+                unit="%"
+                sub={`${Math.max(0, stats.capacity.totalCPU - stats.capacity.availableCPU)} of ${stats.capacity.totalCPU} vCPU`}
+              />
+              <KpiCard
+                label="Memory reserved"
+                value={String(stats.memPct)}
+                unit="%"
+                sub={`${formatBytes(Math.max(0, stats.capacity.totalMemory - stats.capacity.availableMemory))} of ${formatBytes(stats.capacity.totalMemory)}`}
+              />
+              <KpiCard
+                label="Agents"
+                value={String(stats.online.length)}
+                unit={`/${agents.length}`}
+                sub={agentsSub.text}
+                tone={agentsSub.tone}
+              />
+              <KpiCard
+                label="Storage reserved"
+                value={String(stats.diskPct)}
+                unit="%"
+                sub={`${formatBytes(Math.max(0, stats.capacity.totalDisk - stats.capacity.availableDisk))} of ${formatBytes(stats.capacity.totalDisk)}`}
+              />
+            </>
+          )}
         </div>
       )}
 
-      {/* Charts row */}
+      {/* Charts row (agent capacity — hidden when the user cannot list agents) */}
+      {!agentsForbidden && (
       <div className="grid gap-3.5 xl:grid-cols-[1fr_340px]">
         <div className="rounded-[11px] border border-border bg-card px-[18px] py-4">
           <div className="mb-3.5 flex items-center">
@@ -227,9 +275,10 @@ export default function OverviewPage() {
           </div>
         </div>
       </div>
+      )}
 
       {/* Recent instances */}
-      <RecentInstances vms={vms} agents={agents} />
+      <RecentInstances vms={vms} agents={agents} showAgent={!agentsForbidden} />
 
       <CreateVMDialog
         open={createVMOpen}
