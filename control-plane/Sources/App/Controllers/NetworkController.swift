@@ -105,6 +105,8 @@ struct NetworkController: RouteCollection {
         }
 
         let (subnet, gateway) = try Self.validateAddressing(subnet: request.subnet, gateway: request.gateway)
+        try await Self.assertNoSubnetOverlap(
+            subnet: subnet, projectId: projectId, excluding: nil, on: req.db)
         let dnsServers = try Self.validatedDNS(request.dnsServers ?? [])
         try Self.validateLeaseTime(request.leaseTime)
 
@@ -238,6 +240,11 @@ struct NetworkController: RouteCollection {
         network.subnet = subnet
         network.gateway = gateway
 
+        if network.subnet != originalSubnet {
+            try await Self.assertNoSubnetOverlap(
+                subnet: network.subnet, projectId: network.$project.id, excluding: network.id, on: req.db)
+        }
+
         if let externalAccess = request.externalAccess {
             network.externalAccess = externalAccess
         }
@@ -346,6 +353,41 @@ struct NetworkController: RouteCollection {
     }
 
     // MARK: - Helper Methods
+
+    /// Whether two CIDRs overlap. For CIDRs, ranges are either disjoint or one
+    /// contains the other, so masking both to the shorter prefix and comparing
+    /// the network addresses detects any overlap. Unparsable inputs don't overlap.
+    static func subnetsOverlap(_ a: String, _ b: String) -> Bool {
+        guard let (baseA, prefixA) = IPAMService.parseCIDR(a),
+            let (baseB, prefixB) = IPAMService.parseCIDR(b)
+        else { return false }
+        let minPrefix = min(prefixA, prefixB)
+        let mask: UInt32 = minPrefix == 0 ? 0 : ~UInt32(0) << (32 - minPrefix)
+        return (baseA & mask) == (baseB & mask)
+    }
+
+    /// Rejects a subnet that overlaps another network in the same project.
+    /// Project networks share one per-project logical router, so overlapping
+    /// router-port `networks` would give OVN ambiguous connected routes (and
+    /// exact duplicates collide on the SNAT `logical_ip`) — issue #342. Global
+    /// (project-less) networks each get their own router, so they're exempt.
+    static func assertNoSubnetOverlap(
+        subnet: String, projectId: UUID?, excluding networkId: UUID?, on db: any Database
+    ) async throws {
+        guard let projectId else { return }
+        var query = LogicalNetwork.query(on: db).filter(\.$project.$id == projectId)
+        if let networkId {
+            query = query.filter(\.$id != networkId)
+        }
+        let siblings = try await query.all()
+        if let clash = siblings.first(where: { subnetsOverlap($0.subnet, subnet) }) {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Subnet \(subnet) overlaps network '\(clash.name)' (\(clash.subnet)) in the same project; networks sharing a project share one router and must use disjoint subnets"
+            )
+        }
+    }
 
     /// Validates a subnet/gateway pair, defaulting a missing gateway to the
     /// subnet's first host address. Mirrors the seeding validation in the

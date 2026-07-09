@@ -60,6 +60,22 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     static let providerBridge = "br-ex"
     static let providerPhysnet = "physnet-strato"
 
+    /// External-id ownership marker stamped on every OVN object the reconciler
+    /// creates, so teardown can identify its own objects without relying on name
+    /// prefixes (which an operator or another feature might also use).
+    static let managedKey = "strato-managed"
+    static let managedValue = "true"
+    /// Distinguishes the external/provider logical switch from tenant switches
+    /// (both are `Logical_Switch`es), so only external switches are teardown
+    /// candidates.
+    static let externalRoleKey = "strato-role"
+    static let externalRoleValue = "external"
+
+    /// Whether an OVN object's external-ids mark it as created by this reconciler.
+    static func isManaged(_ externalIDs: [String: String]?) -> Bool {
+        externalIDs?[managedKey] == managedValue
+    }
+
     /// OVN logical switch port name for one NIC of a VM. NIC 0 keeps the
     /// historical `vm-<vmId>` name so ports created by older agents are still
     /// found and torn down; additional NICs are suffixed with their index.
@@ -922,24 +938,29 @@ extension NetworkServiceLinux: NetworkActuator {
         let switches = try await ovnManager.getLogicalSwitches()
         let nats = try await ovnManager.getNATRules()
 
-        // Only consider objects this reconciler owns, identified by the naming
-        // scheme, so teardown can never delete something another feature made.
+        // Only consider objects this reconciler owns, keyed off the
+        // `strato-managed` external-id it stamps on everything it creates — never
+        // a name prefix, so an operator's or another feature's `lr-*`/`ls-ext-*`
+        // objects are never mistaken for Strato's and torn down.
+        let managedRouters = routers.filter { Self.isManaged($0.external_ids) }
         let natByUUID = Dictionary(uniqueKeysWithValues: nats.compactMap { nat in nat.uuid.map { ($0, nat) } })
         var snatRules = Set<SNATRuleKey>()
-        for router in routers where router.name.hasPrefix("lr-") {
+        for router in managedRouters {
             for uuid in router.nat ?? [] {
-                if let nat = natByUUID[uuid], nat.natType == "snat" {
+                if let nat = natByUUID[uuid], nat.natType == "snat", Self.isManaged(nat.external_ids) {
                     snatRules.insert(SNATRuleKey(router: router.name, logicalIP: nat.logical_ip))
                 }
             }
         }
 
         return ObservedNetworkTopology(
-            routerNames: Set(routers.map(\.name).filter { $0.hasPrefix("lr-") }),
-            routerPortNames: Set(routerPorts.map(\.name).filter { $0.hasPrefix("lrp-") }),
+            routerNames: Set(managedRouters.map(\.name)),
+            routerPortNames: Set(routerPorts.filter { Self.isManaged($0.external_ids) }.map(\.name)),
             switchRouterPortNames: Set(
-                switchPorts.filter { $0.portType == "router" && $0.name.hasPrefix("lsp-") }.map(\.name)),
-            externalSwitchNames: Set(switches.map(\.name).filter { $0.hasPrefix("ls-ext-") }),
+                switchPorts.filter { $0.portType == "router" && Self.isManaged($0.external_ids) }.map(\.name)),
+            externalSwitchNames: Set(
+                switches.filter { $0.external_ids?[Self.externalRoleKey] == Self.externalRoleValue }.map(
+                    \.name)),
             snatRules: snatRules)
         #else
         return ObservedNetworkTopology()
@@ -1003,7 +1024,22 @@ extension NetworkServiceLinux: NetworkActuator {
         try ensureBridgeMapping()
 
         // External logical switch + localnet port (the provider attachment).
-        _ = try await findOrCreateLogicalSwitch(name: router.externalSwitchName, subnet: "")
+        // Created with the external role marker so observeTopology can tell it
+        // apart from tenant switches and no operator switch is a candidate.
+        if try await ovnManager.getLogicalSwitch(named: router.externalSwitchName) == nil {
+            let externalSwitch = OVNLogicalSwitch(
+                name: router.externalSwitchName,
+                external_ids: [
+                    Self.managedKey: Self.managedValue,
+                    Self.externalRoleKey: Self.externalRoleValue,
+                    "description": "Strato external/provider switch",
+                ])
+            do {
+                _ = try await ovnManager.createLogicalSwitch(externalSwitch)
+            } catch {
+                if try await ovnManager.getLogicalSwitch(named: router.externalSwitchName) == nil { throw error }
+            }
+        }
         if try await ovnManager.getLogicalSwitchPort(named: router.localnetPortName) == nil {
             let localnet = OVNLogicalSwitchPort(
                 name: router.localnetPortName,

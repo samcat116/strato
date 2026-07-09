@@ -268,6 +268,34 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("subnetsOverlap detects containment, equality, and disjoint ranges")
+    func subnetOverlapLogic() {
+        #expect(NetworkController.subnetsOverlap("10.0.0.0/16", "10.0.1.0/24"))
+        #expect(NetworkController.subnetsOverlap("10.0.1.0/24", "10.0.0.0/16"))
+        #expect(NetworkController.subnetsOverlap("10.0.0.0/24", "10.0.0.0/24"))
+        #expect(!NetworkController.subnetsOverlap("10.0.0.0/24", "10.0.1.0/24"))
+        #expect(!NetworkController.subnetsOverlap("192.168.1.0/24", "10.0.0.0/8"))
+    }
+
+    @Test("POST /api/networks rejects a subnet overlapping a sibling in the same project (409)")
+    func createRejectsOverlappingSubnet() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            app.spicedbMockAllows = true
+            let existing = LogicalNetwork(
+                name: "net-a", subnet: "10.50.0.0/16", gateway: "10.50.0.1",
+                projectID: project.id!, createdByID: user.id!)
+            try await existing.save(on: app.db)
+
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(name: "net-b", subnet: "10.50.1.0/24", projectId: project.id))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
     @Test("PUT /api/networks rejects a gateway change while the network is in use (409)")
     func updateRejectsGatewayChangeWhileInUse() async throws {
         try await withNetworkTestApp { app, user, project, token in
