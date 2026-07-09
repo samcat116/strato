@@ -59,7 +59,17 @@ public enum WireProtocol {
     /// defaults to `[]` when absent, an older (v2) agent simply ignores it (and
     /// keeps realizing switches implicitly from `vms`), so state sync still works
     /// across the skew — hence `stateSyncMinimumVersion` stays at 2.
-    public static let currentVersion = 3
+    ///
+    /// Version 4: site topology authority (issue #343). `DesiredStateMessage`
+    /// carries `networksAuthoritative`; a `false` value with an empty `networks`
+    /// list means "another agent authors your site's shared NB — leave topology
+    /// alone". A v3 agent doesn't know the field and would read that same sync
+    /// as an authoritative teardown of all its L3, so the control plane must
+    /// never send the non-authoritative shape to agents that registered with an
+    /// older version: sync assembly keys on the registered version and keeps
+    /// pre-v4 agents on the legacy per-node scoping (own networks,
+    /// authoritative) even when they are assigned to a site.
+    public static let currentVersion = 4
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -81,6 +91,19 @@ public enum WireProtocol {
     /// reconciliation and falls back to VM-only convergence.
     public static func supportsNetworkSync(_ version: Int) -> Bool {
         version >= networkSyncMinimumVersion
+    }
+
+    /// The lowest protocol version that understands `networksAuthoritative`
+    /// (see `currentVersion` version 4 notes).
+    public static let siteAuthorityMinimumVersion = 4
+
+    /// Whether an agent registered with `version` can be sent a
+    /// non-authoritative sync (`networks: []` + `networksAuthoritative: false`).
+    /// An older agent ignores the flag and would misread that sync as an
+    /// authoritative teardown of its whole L3 topology, so pre-v4 agents must
+    /// stay on the legacy per-node scoping even when assigned to a site.
+    public static func supportsSiteAuthority(_ version: Int) -> Bool {
+        version >= siteAuthorityMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

@@ -213,8 +213,32 @@ actor AgentService {
             agent.status = .online
         }
 
+        // Persisted so sync assembly (which may run on any replica, from
+        // Postgres alone) can key version-dependent shapes on what this agent
+        // actually speaks — see `networkAssemblyScope`.
+        agent.wireProtocolVersion = protocolVersion
+
         if let siteID {
-            agent.$site.id = siteID
+            // Never move a site's designated network controller by token
+            // redemption: the old site would be left pointing at a non-member
+            // and its networks would silently stop being reconciled. The move
+            // must go through the sites API, which re-designates first. (A
+            // brand-new agent row has no id yet and can't hold a designation.)
+            var orphansControllership = false
+            if let agentID = agent.id {
+                orphansControllership =
+                    try await Site.query(on: db)
+                    .filter(\.$networkControllerAgent.$id == agentID)
+                    .filter(\.$id != siteID)
+                    .count() > 0
+            }
+            if orphansControllership {
+                app.logger.error(
+                    "Ignoring registration-token site assignment: agent is another site's network controller",
+                    metadata: ["agentName": .string(agentName), "requestedSite": .string(siteID.uuidString)])
+            } else {
+                agent.$site.id = siteID
+            }
         }
 
         try await agent.save(on: db)
@@ -1038,6 +1062,22 @@ actor AgentService {
             let siteID = agent.$site.id,
             let site = try await Site.find(siteID, on: db)
         else {
+            return (ownReferences, true)
+        }
+
+        // A pre-v4 agent doesn't know `networksAuthoritative` and would read
+        // the non-authoritative shape (networks: [] + false) as an
+        // authoritative teardown of its whole L3 topology. Keep it on the
+        // legacy per-node scoping — its binary predates `ovn_northbound`, so
+        // it is writing its own local NB anyway, not the site's shared one.
+        guard WireProtocol.supportsSiteAuthority(agent.wireProtocolVersion ?? 0) else {
+            app.logger.warning(
+                "Sited agent registered with a pre-site-authority protocol; syncing legacy per-node networks",
+                metadata: [
+                    "agentName": .string(agent.name),
+                    "site": .string(site.name),
+                    "protocolVersion": .stringConvertible(agent.wireProtocolVersion ?? 0),
+                ])
             return (ownReferences, true)
         }
 

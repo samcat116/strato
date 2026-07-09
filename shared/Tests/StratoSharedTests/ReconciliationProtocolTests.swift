@@ -197,4 +197,14 @@ struct ReconciliationProtocolTests {
         #expect(WireProtocol.supportsNetworkSync(3))
         #expect(WireProtocol.supportsNetworkSync(WireProtocol.currentVersion))
     }
+
+    @Test("Site-authority support is keyed on protocol version 4")
+    func siteAuthorityVersionGate() {
+        // A v3 agent ignores `networksAuthoritative`, so a non-authoritative
+        // empty sync would read as an authoritative teardown of all its L3 —
+        // the control plane must never send that shape to pre-v4 agents.
+        #expect(!WireProtocol.supportsSiteAuthority(3))
+        #expect(WireProtocol.supportsSiteAuthority(4))
+        #expect(WireProtocol.supportsSiteAuthority(WireProtocol.currentVersion))
+    }
 }

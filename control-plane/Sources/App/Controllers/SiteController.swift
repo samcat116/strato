@@ -132,8 +132,25 @@ struct SiteController: RouteCollection {
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
+        let targetSiteId = try site.requireID()
 
-        agent.$site.id = try site.requireID()
+        // A move is a removal from the old site too, so it must honor the same
+        // invariant as removeAgent: never orphan a site's topology authority.
+        // Overwriting site_id while another site still designates this agent as
+        // its network controller would leave that site pointing at a
+        // non-member, silently stopping reconciliation of all its networks.
+        let orphanedControllerships = try await Site.query(on: req.db)
+            .filter(\.$networkControllerAgent.$id == agentId)
+            .filter(\.$id != targetSiteId)
+            .count()
+        guard orphanedControllerships == 0 else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent is another site's network controller; designate a replacement controller there first")
+        }
+
+        agent.$site.id = targetSiteId
         try await agent.save(on: req.db)
         await req.application.agentService.syncDesiredStateToAllAgents()
         return try AgentResponse(from: agent)

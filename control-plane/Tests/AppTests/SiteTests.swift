@@ -55,7 +55,8 @@ final class SiteTests {
     /// Registers an in-memory agent, optionally into a site (as its
     /// registration token would). Returns the agent's UUID string.
     private func registerAgent(
-        app: Application, named name: String, siteID: UUID? = nil
+        app: Application, named name: String, siteID: UUID? = nil,
+        protocolVersion: Int = WireProtocol.currentVersion
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: name,
@@ -67,7 +68,7 @@ final class SiteTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
-            protocolVersion: WireProtocol.currentVersion
+            protocolVersion: protocolVersion
         )
         let uuid = try await app.agentService.registerAgent(message, agentName: name, siteID: siteID)
         return uuid.uuidString
@@ -177,6 +178,36 @@ final class SiteTests {
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
+        }
+    }
+
+    @Test("Assigning an agent that controls another site is refused")
+    func controllerMoveGuard() async throws {
+        try await withSiteTestApp { app, _, _, token in
+            let oldSite = Site(name: "dc-old")
+            try await oldSite.save(on: app.db)
+            let newSite = Site(name: "dc-new")
+            try await newSite.save(on: app.db)
+
+            let controllerId = try await self.registerAgent(app: app, named: "moving-ctl", siteID: oldSite.id)
+            oldSite.$networkControllerAgent.id = UUID(uuidString: controllerId)
+            try await oldSite.save(on: app.db)
+
+            // Moving the old site's controller would leave that site pointing
+            // at a non-member and stop its network reconciliation.
+            try await app.test(.POST, "/api/sites/\(newSite.id!.uuidString)/agents/\(controllerId)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+            let agent = try #require(try await Agent.find(UUID(uuidString: controllerId), on: app.db))
+            #expect(agent.$site.id == oldSite.id)
+
+            // A registration token targeting the new site must not move it
+            // either — the assignment is ignored, not applied.
+            _ = try await self.registerAgent(app: app, named: "moving-ctl", siteID: newSite.id)
+            let after = try #require(try await Agent.find(UUID(uuidString: controllerId), on: app.db))
+            #expect(after.$site.id == oldSite.id)
         }
     }
 
@@ -331,6 +362,28 @@ final class SiteTests {
             #expect(sync.networks.isEmpty)
             // The VM still syncs — only topology is withheld.
             #expect(sync.vms.count == 1)
+        }
+    }
+
+    @Test("A sited agent on a pre-v4 protocol keeps legacy scoping (rolling-upgrade safety)")
+    func preSiteAuthorityAgentAssembly() async throws {
+        try await withSiteTestApp { app, _, project, _ in
+            let site = Site(name: "dc-skew")
+            try await site.save(on: app.db)
+
+            // A v3 binary predates `networksAuthoritative`: it would read the
+            // non-authoritative shape (networks: [] + false) as an
+            // authoritative teardown of all its L3. It must keep receiving its
+            // own networks, authoritative, even though it's in a site.
+            let oldAgentId = try await self.registerAgent(
+                app: app, named: "old-binary", siteID: site.id, protocolVersion: 3)
+            try await self.placeVM(
+                app: app, project: project, named: "old-vm", onAgent: oldAgentId,
+                network: LogicalNetwork.defaultNetworkName)
+
+            let sync = try await app.agentService.assembleDesiredState(agentId: oldAgentId)
+            #expect(sync.networksAuthoritative)
+            #expect(sync.networks.contains { $0.name == LogicalNetwork.defaultNetworkName })
         }
     }
 

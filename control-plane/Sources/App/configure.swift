@@ -282,6 +282,7 @@ public func configure(_ app: Application) async throws {
     // Sites (availability zones): group agents sharing one OVN deployment so a
     // logical network can span nodes (issue #343).
     app.migrations.add(CreateSite())
+    app.migrations.add(AddWireProtocolVersionToAgent())
 
     try await app.autoMigrate()
 
