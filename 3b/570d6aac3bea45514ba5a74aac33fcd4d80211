@@ -1,0 +1,35 @@
+docs/deployment/agents.md
+  s_8d4e3245fcb8ee::t_f52a4088e95dd9 99-100
+  s_8d4e3245fcb8ee::t_c94ce98f9f03ab 7-33,36-37
+  s_8d4e3245fcb8ee::t_f801ce85dc755a 38
+deploy/agent/install.sh
+  s_8d4e3245fcb8ee::t_a520a2fc7aa7c2 211-227,230,232,234-235,238-240,242
+  s_8d4e3245fcb8ee::t_16a290c37440e5 308
+  s_8d4e3245fcb8ee::t_84aea8c99a7970 1-210,228-229,231,233,236-237,241,243-307,309-338
+.github/workflows/release.yaml
+  s_8d4e3245fcb8ee::t_db69cf6efa927f 214-220,223,228,237-242
+  s_8d4e3245fcb8ee::t_1c6b06a23dfa5c 254-263
+  s_8d4e3245fcb8ee::t_c73a453188a074 564-573
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_8d4e3245fcb8ee::t_878e7da857fd13 162,167,173,175,183-184,189-209
+  s_8d4e3245fcb8ee::t_455c104afe66ea 64-66
+  s_8d4e3245fcb8ee::t_c5c2397d0fc506 36
+  s_8d4e3245fcb8ee::t_b44f21982a2cc0 75-77,79-85,90-96
+  s_8d4e3245fcb8ee::t_b0d886f5bdb9a5 210-211
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3b570d6aac3bea45514ba5a74aac33fcd4d80211",
+  "prompts": {},
+  "sessions": {
+    "s_8d4e3245fcb8ee": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da4c92ee-5eeb-4b89-a597-b7ccb20ba078",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
