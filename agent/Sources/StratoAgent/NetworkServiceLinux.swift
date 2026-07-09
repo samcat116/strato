@@ -1296,19 +1296,29 @@ extension NetworkServiceLinux {
         }
         // Idempotent: reuse a matching default route; re-point one whose next hop
         // drifted. Mirrors ensureSNAT's reconcile-in-place approach.
+        let route = OVNLogicalRouterStaticRoute(
+            ip_prefix: "0.0.0.0/0", nexthop: nextHop,
+            external_ids: [Self.managedKey: Self.managedValue])
         let defaults = try await staticRoutes(onRouter: routerName).filter { $0.ip_prefix == "0.0.0.0/0" }
-        // Already have the route we want — adopt it, including a legacy untagged
-        // one left by the old `ovn-nbctl lr-route-add` path, so we don't add a
-        // duplicate 0.0.0.0/0 on upgrade.
-        if defaults.contains(where: { $0.nexthop == nextHop }) { return }
+        // Already have the route we want. Adopt it — including a legacy untagged
+        // one left by the old `ovn-nbctl lr-route-add` path — so we don't add a
+        // duplicate 0.0.0.0/0 on upgrade. Stamp the managed external ID onto an
+        // untagged match so a later next-hop drift can reconcile it away rather
+        // than orphaning it beside a fresh managed route.
+        if let existing = defaults.first(where: { $0.nexthop == nextHop }) {
+            if !Self.isManaged(existing.external_ids), let uuid = existing.uuid {
+                try await ovnManager.updateStaticRoute(uuid: uuid, route)
+                logger.info(
+                    "Adopted legacy default route",
+                    metadata: ["router": .string(routerName), "nextHop": .string(nextHop)])
+            }
+            return
+        }
         // Drop any managed default route whose next hop drifted, then re-add. Leave
         // unmanaged operator routes alone.
         for route in defaults where Self.isManaged(route.external_ids) {
             if let uuid = route.uuid { try await ovnManager.deleteStaticRoute(uuid: uuid) }
         }
-        let route = OVNLogicalRouterStaticRoute(
-            ip_prefix: "0.0.0.0/0", nexthop: nextHop,
-            external_ids: [Self.managedKey: Self.managedValue])
         _ = try await ovnManager.createStaticRoute(route, onRouter: routerName)
         logger.info(
             "Installed default route on logical router",
