@@ -18,6 +18,7 @@ import {
   formatBytes,
   reservedPercent,
 } from "@/components/overview";
+import { friendlyErrorMessage } from "@/lib/errors";
 import { isAgentsForbidden, useAgents, useInvalidateVMs, useVMs } from "@/lib/hooks";
 import { useOrganization, useProjectContext } from "@/providers";
 import type { AgentStatus } from "@/types/api";
@@ -33,18 +34,27 @@ export default function OverviewPage() {
   const [createVMOpen, setCreateVMOpen] = useState(false);
   const { data: vms = [], isLoading: vmsLoading } = useVMs();
   const {
-    data: agents = [],
+    data: agentsData,
     isLoading: agentsLoading,
     error: agentsError,
+    refetch: refetchAgents,
   } = useAgents();
   const { currentOrg } = useOrganization();
   const { projects } = useProjectContext();
   const invalidateVMs = useInvalidateVMs();
 
+  const agents = useMemo(() => agentsData ?? [], [agentsData]);
+
   // Listing agents is system-admin-only. For everyone else the fleet-capacity
   // panels have no backing data, so show VM-allocation stats instead of
   // rendering a forbidden fleet as empty.
   const agentsForbidden = isAgentsForbidden(agentsError);
+  // A non-403 failure with no cached data (e.g. a 500 on first load) means
+  // fleet health is unknown, not zero. Background refetch failures keep the
+  // last good data, so agentsData stays defined in that case.
+  const agentsUnavailable =
+    !!agentsError && !agentsForbidden && agentsData === undefined;
+  const agentsUsable = !agentsForbidden && !agentsUnavailable;
 
   const stats = useMemo(() => {
     const running = vms.filter((vm) => vm.status === "Running").length;
@@ -131,7 +141,7 @@ export default function OverviewPage() {
           <h1 className="text-[22px] font-bold tracking-tight">Overview</h1>
           <div className="mt-0.5 font-mono text-[12.5px] text-muted-foreground">
             {currentOrg?.name ?? "—"}
-            {!agentsForbidden &&
+            {agentsUsable &&
               ` · ${agents.length} ${agents.length === 1 ? "agent" : "agents"}`}
             {` · ${vms.length} ${vms.length === 1 ? "instance" : "instances"}`}
           </div>
@@ -161,7 +171,7 @@ export default function OverviewPage() {
             sub={runningSub.text}
             tone={runningSub.tone}
           />
-          {agentsForbidden ? (
+          {!agentsUsable ? (
             <>
               <KpiCard
                 label="vCPU allocated"
@@ -217,8 +227,30 @@ export default function OverviewPage() {
         </div>
       )}
 
+      {/* Agent-list failure (other than 403): fleet health is unknown, not zero */}
+      {agentsUnavailable && (
+        <div className="flex items-center gap-4 rounded-[11px] border border-border bg-card px-[18px] py-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13.5px] font-semibold">
+              Fleet health unavailable
+            </div>
+            <div className="mt-0.5 truncate text-[12.5px] text-muted-foreground">
+              {friendlyErrorMessage(agentsError, "Couldn't load agents.")}
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-[12.5px]"
+            onClick={() => refetchAgents()}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+
       {/* Charts row (agent capacity — hidden when the user cannot list agents) */}
-      {!agentsForbidden && (
+      {agentsUsable && (
       <div className="grid gap-3.5 xl:grid-cols-[1fr_340px]">
         <div className="rounded-[11px] border border-border bg-card px-[18px] py-4">
           <div className="mb-3.5 flex items-center">
@@ -278,7 +310,7 @@ export default function OverviewPage() {
       )}
 
       {/* Recent instances */}
-      <RecentInstances vms={vms} agents={agents} showAgent={!agentsForbidden} />
+      <RecentInstances vms={vms} agents={agents} showAgent={agentsUsable} />
 
       <CreateVMDialog
         open={createVMOpen}
