@@ -55,7 +55,7 @@ export function NetworkTable({
     return (
       <div className="space-y-2">
         {[...Array(3)].map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full bg-gray-700" />
+          <Skeleton key={i} className="h-12 w-full bg-muted" />
         ))}
       </div>
     );
@@ -63,7 +63,7 @@ export function NetworkTable({
 
   if (networks.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-400">
+      <div className="text-center py-8 text-muted-foreground">
         No networks found. Create one to get started.
       </div>
     );
@@ -71,20 +71,20 @@ export function NetworkTable({
 
   return (
     <Table>
-      <TableHeader className="bg-gray-900">
-        <TableRow className="border-gray-700 hover:bg-gray-900">
-          <TableHead className="text-gray-400 font-medium">Name</TableHead>
-          <TableHead className="text-gray-400 font-medium">Subnet</TableHead>
-          <TableHead className="text-gray-400 font-medium">Gateway</TableHead>
-          <TableHead className="text-gray-400 font-medium">DHCP / DNS</TableHead>
-          <TableHead className="text-gray-400 font-medium">Scope</TableHead>
-          <TableHead className="text-gray-400 font-medium">Interfaces</TableHead>
-          <TableHead className="text-gray-400 font-medium text-right">
+      <TableHeader className="bg-background">
+        <TableRow className="border-border hover:bg-transparent">
+          <TableHead className="text-muted-foreground font-medium">Name</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Subnet</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Gateway</TableHead>
+          <TableHead className="text-muted-foreground font-medium">DHCP / DNS</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Scope</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Interfaces</TableHead>
+          <TableHead className="text-muted-foreground font-medium text-right">
             Actions
           </TableHead>
         </TableRow>
       </TableHeader>
-      <TableBody className="divide-y divide-gray-700">
+      <TableBody className="divide-y divide-border">
         {networks.map((network) => {
           const inUse = network.attachedInterfaceCount > 0;
           const deletable = !network.isDefault && !inUse;
@@ -96,34 +96,34 @@ export function NetworkTable({
           return (
             <TableRow
               key={network.id}
-              className="border-gray-700 hover:bg-gray-800/50"
+              className="border-border hover:bg-accent/60"
             >
               <TableCell>
-                <span className="font-medium text-gray-100">
+                <span className="font-medium text-foreground">
                   {network.name}
                 </span>
                 {network.isDefault && (
                   <Badge
                     variant="outline"
-                    className="ml-2 border-gray-600 text-gray-400"
+                    className="ml-2 border-input text-muted-foreground"
                   >
                     default
                   </Badge>
                 )}
               </TableCell>
-              <TableCell className="text-gray-300 font-mono text-sm">
+              <TableCell className="text-foreground/80 font-mono text-sm">
                 {network.subnet}
               </TableCell>
-              <TableCell className="text-gray-300 font-mono text-sm">
+              <TableCell className="text-foreground/80 font-mono text-sm">
                 {network.gateway ?? "—"}
               </TableCell>
-              <TableCell className="text-gray-300 text-sm">
+              <TableCell className="text-foreground/80 text-sm">
                 {network.dhcpEnabled ? (
                   <div className="space-y-0.5">
-                    <Badge className="bg-blue-600/20 text-blue-300 border-blue-700">
+                    <Badge className="bg-blue-500/15 text-blue-700 border-blue-300">
                       DHCP
                     </Badge>
-                    <div className="text-xs text-gray-400 font-mono">
+                    <div className="text-xs text-muted-foreground font-mono">
                       {network.dnsServers.length > 0
                         ? network.dnsServers.join(", ")
                         : "no DNS"}
@@ -132,23 +132,23 @@ export function NetworkTable({
                 ) : (
                   <Badge
                     variant="outline"
-                    className="border-gray-600 text-gray-400"
+                    className="border-input text-muted-foreground"
                   >
                     Static
                   </Badge>
                 )}
               </TableCell>
-              <TableCell className="text-gray-300">
+              <TableCell className="text-foreground/80">
                 {network.projectId ? "Project" : "Global"}
               </TableCell>
-              <TableCell className="text-gray-300">
+              <TableCell className="text-foreground/80">
                 {network.attachedInterfaceCount}
               </TableCell>
               <TableCell className="text-right">
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="text-gray-300 hover:text-gray-100 hover:bg-gray-700"
+                  className="text-foreground/80 hover:text-foreground hover:bg-accent"
                   onClick={() => onEdit?.(network)}
                   disabled={busyId === network.id}
                   title="Edit gateway and DHCP settings"
@@ -158,7 +158,7 @@ export function NetworkTable({
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                  className="text-red-600 hover:text-red-700 hover:bg-red-500/10"
                   onClick={() => handleDelete(network)}
                   disabled={!deletable || busyId === network.id}
                   title={disabledReason}

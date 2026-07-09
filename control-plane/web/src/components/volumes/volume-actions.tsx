@@ -102,7 +102,7 @@ export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) 
           <Button
             size="sm"
             variant="ghost"
-            className="text-gray-400 hover:text-gray-200"
+            className="text-muted-foreground hover:text-foreground"
             disabled={isLoading}
           >
             {isLoading ? (
@@ -112,51 +112,51 @@ export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) 
             )}
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent className="bg-gray-800 border-gray-700">
+        <DropdownMenuContent className="bg-card border-border">
           <DropdownMenuItem
             onClick={() => setOpenDialog("attach")}
-            className="text-gray-200 hover:bg-gray-700 cursor-pointer"
+            className="text-foreground hover:bg-accent cursor-pointer"
             disabled={!canAttach}
           >
-            <Link2 className="h-4 w-4 mr-2 text-blue-400" />
+            <Link2 className="h-4 w-4 mr-2 text-blue-600" />
             Attach to VM
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={handleDetach}
-            className="text-gray-200 hover:bg-gray-700 cursor-pointer"
+            className="text-foreground hover:bg-accent cursor-pointer"
             disabled={!canDetach}
           >
-            <Unlink className="h-4 w-4 mr-2 text-yellow-400" />
+            <Unlink className="h-4 w-4 mr-2 text-yellow-700" />
             Detach
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => setOpenDialog("resize")}
-            className="text-gray-200 hover:bg-gray-700 cursor-pointer"
+            className="text-foreground hover:bg-accent cursor-pointer"
             disabled={!canResize}
           >
-            <Expand className="h-4 w-4 mr-2 text-blue-400" />
+            <Expand className="h-4 w-4 mr-2 text-blue-600" />
             Resize
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => setOpenDialog("snapshot")}
-            className="text-gray-200 hover:bg-gray-700 cursor-pointer"
+            className="text-foreground hover:bg-accent cursor-pointer"
             disabled={!canSnapshot}
           >
-            <Camera className="h-4 w-4 mr-2 text-purple-400" />
+            <Camera className="h-4 w-4 mr-2 text-purple-600" />
             Snapshot
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => setOpenDialog("clone")}
-            className="text-gray-200 hover:bg-gray-700 cursor-pointer"
+            className="text-foreground hover:bg-accent cursor-pointer"
             disabled={!canClone}
           >
-            <Copy className="h-4 w-4 mr-2 text-purple-400" />
+            <Copy className="h-4 w-4 mr-2 text-purple-600" />
             Clone
           </DropdownMenuItem>
-          <DropdownMenuSeparator className="bg-gray-700" />
+          <DropdownMenuSeparator className="bg-muted" />
           <DropdownMenuItem
             onClick={() => setOpenDialog("delete")}
-            className="text-red-400 hover:bg-red-500/10 cursor-pointer"
+            className="text-red-600 hover:bg-red-500/10 cursor-pointer"
             disabled={!canDelete}
           >
             <Trash2 className="h-4 w-4 mr-2" />
@@ -196,10 +196,10 @@ export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) 
         open={openDialog === "delete"}
         onOpenChange={(open) => !open && closeDialog()}
       >
-        <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+        <DialogContent className="bg-card border-border text-foreground">
           <DialogHeader>
             <DialogTitle>Delete {volume.name}?</DialogTitle>
-            <DialogDescription className="text-gray-400">
+            <DialogDescription className="text-muted-foreground">
               This will permanently delete the volume and all of its
               snapshots. This action cannot be undone.
             </DialogDescription>
@@ -208,7 +208,7 @@ export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) 
             <Button
               variant="outline"
               onClick={closeDialog}
-              className="border-gray-600 text-gray-300 hover:bg-gray-700"
+              className="border-input text-foreground/80 hover:bg-accent"
               disabled={isLoading}
             >
               Cancel

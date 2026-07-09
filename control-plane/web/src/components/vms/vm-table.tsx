@@ -25,7 +25,7 @@ export function VMTable({ vms, isLoading, onRefresh }: VMTableProps) {
     return (
       <div className="space-y-2">
         {[...Array(3)].map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full bg-gray-700" />
+          <Skeleton key={i} className="h-12 w-full bg-muted" />
         ))}
       </div>
     );
@@ -33,7 +33,7 @@ export function VMTable({ vms, isLoading, onRefresh }: VMTableProps) {
 
   if (vms.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-400">
+      <div className="text-center py-8 text-muted-foreground">
         No virtual machines found. Create one to get started.
       </div>
     );
@@ -41,33 +41,33 @@ export function VMTable({ vms, isLoading, onRefresh }: VMTableProps) {
 
   return (
     <Table>
-      <TableHeader className="bg-gray-900">
-        <TableRow className="border-gray-700 hover:bg-gray-900">
-          <TableHead className="text-gray-400 font-medium">Name</TableHead>
-          <TableHead className="text-gray-400 font-medium">Status</TableHead>
-          <TableHead className="text-gray-400 font-medium">CPU</TableHead>
-          <TableHead className="text-gray-400 font-medium">Memory</TableHead>
-          <TableHead className="text-gray-400 font-medium">Disk</TableHead>
-          <TableHead className="text-gray-400 font-medium text-right">
+      <TableHeader className="bg-background">
+        <TableRow className="border-border hover:bg-transparent">
+          <TableHead className="text-muted-foreground font-medium">Name</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Status</TableHead>
+          <TableHead className="text-muted-foreground font-medium">CPU</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Memory</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Disk</TableHead>
+          <TableHead className="text-muted-foreground font-medium text-right">
             Actions
           </TableHead>
         </TableRow>
       </TableHeader>
-      <TableBody className="divide-y divide-gray-700">
+      <TableBody className="divide-y divide-border">
         {vms.map((vm) => (
           <TableRow
             key={vm.id}
-            className="border-gray-700 hover:bg-gray-800/50 cursor-pointer"
+            className="border-border hover:bg-accent/60 cursor-pointer"
           >
             <TableCell>
               <Link
                 href={`/vms/detail?id=${vm.id}`}
-                className="font-medium text-gray-100 hover:text-blue-400"
+                className="font-medium text-foreground hover:text-blue-700"
               >
                 {vm.name}
               </Link>
               {vm.description && (
-                <p className="text-sm text-gray-500 truncate max-w-xs">
+                <p className="text-sm text-muted-foreground truncate max-w-xs">
                   {vm.description}
                 </p>
               )}
@@ -75,11 +75,11 @@ export function VMTable({ vms, isLoading, onRefresh }: VMTableProps) {
             <TableCell>
               <VMStatusBadge status={vm.status} vmId={vm.id} />
             </TableCell>
-            <TableCell className="text-gray-300">
+            <TableCell className="text-foreground/80">
               {vm.cpu} / {vm.maxCpu} cores
             </TableCell>
-            <TableCell className="text-gray-300">{vm.memoryFormatted}</TableCell>
-            <TableCell className="text-gray-300">{vm.diskFormatted}</TableCell>
+            <TableCell className="text-foreground/80">{vm.memoryFormatted}</TableCell>
+            <TableCell className="text-foreground/80">{vm.diskFormatted}</TableCell>
             <TableCell className="text-right">
               <VMActions vm={vm} onActionComplete={onRefresh} />
             </TableCell>

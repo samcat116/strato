@@ -26,9 +26,9 @@ export default function AgentDetailPage() {
     return (
       <div className="max-w-4xl mx-auto">
         <div className="text-center py-12">
-          <p className="text-gray-400 mb-4">No Agent ID provided</p>
+          <p className="text-muted-foreground mb-4">No Agent ID provided</p>
           <Link href="/agents">
-            <Button variant="outline" className="border-gray-600">
+            <Button variant="outline" className="border-input">
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back to Agents
             </Button>
@@ -41,8 +41,8 @@ export default function AgentDetailPage() {
   if (isLoading) {
     return (
       <div className="max-w-4xl mx-auto space-y-6">
-        <Skeleton className="h-8 w-48 bg-gray-700" />
-        <Skeleton className="h-64 w-full bg-gray-700" />
+        <Skeleton className="h-8 w-48 bg-muted" />
+        <Skeleton className="h-64 w-full bg-muted" />
       </div>
     );
   }
@@ -51,9 +51,9 @@ export default function AgentDetailPage() {
     return (
       <div className="max-w-4xl mx-auto">
         <div className="text-center py-12">
-          <p className="text-gray-400 mb-4">Agent not found or failed to load</p>
+          <p className="text-muted-foreground mb-4">Agent not found or failed to load</p>
           <Link href="/agents">
-            <Button variant="outline" className="border-gray-600">
+            <Button variant="outline" className="border-input">
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back to Agents
             </Button>
@@ -89,86 +89,86 @@ export default function AgentDetailPage() {
         <div>
           <Link
             href="/agents"
-            className="text-sm text-gray-400 hover:text-gray-200 flex items-center mb-2"
+            className="text-sm text-muted-foreground hover:text-foreground flex items-center mb-2"
           >
             <ArrowLeft className="h-4 w-4 mr-1" />
             Back to Agents
           </Link>
           <div className="flex items-center gap-3">
-            <h2 className="text-2xl font-semibold text-gray-100">{agent.name}</h2>
+            <h2 className="text-2xl font-semibold text-foreground">{agent.name}</h2>
             <Badge
               variant={agent.isOnline ? "default" : "secondary"}
-              className={agent.isOnline ? "bg-green-600" : "bg-gray-600"}
+              className={agent.isOnline ? "bg-green-600" : "bg-muted"}
             >
               {agent.isOnline ? "Online" : "Offline"}
             </Badge>
           </div>
-          <p className="text-gray-400 mt-1">{agent.hostname}</p>
+          <p className="text-muted-foreground mt-1">{agent.hostname}</p>
         </div>
       </div>
 
       {/* Resources */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="bg-gray-800 border-gray-700">
+        <Card className="bg-card border-border">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
               <Cpu className="h-4 w-4" />
               CPU
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-xl font-bold text-gray-100">
+            <div className="text-xl font-bold text-foreground">
               {agent.resources.availableCPU} / {agent.resources.totalCPU}
             </div>
-            <p className="text-sm text-gray-500">cores available</p>
+            <p className="text-sm text-muted-foreground">cores available</p>
           </CardContent>
         </Card>
-        <Card className="bg-gray-800 border-gray-700">
+        <Card className="bg-card border-border">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
               <MemoryStick className="h-4 w-4" />
               Memory
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-xl font-bold text-gray-100">
+            <div className="text-xl font-bold text-foreground">
               {formatMemory(agent.resources.availableMemory)}
             </div>
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-muted-foreground">
               of {formatMemory(agent.resources.totalMemory)} available
             </p>
           </CardContent>
         </Card>
-        <Card className="bg-gray-800 border-gray-700">
+        <Card className="bg-card border-border">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
               <HardDrive className="h-4 w-4" />
               Disk
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-xl font-bold text-gray-100">
+            <div className="text-xl font-bold text-foreground">
               {formatDisk(agent.resources.availableDisk)}
             </div>
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-muted-foreground">
               of {formatDisk(agent.resources.totalDisk)} available
             </p>
           </CardContent>
         </Card>
-        <Card className="bg-gray-800 border-gray-700">
+        <Card className="bg-card border-border">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
               <Clock className="h-4 w-4" />
               Last Heartbeat
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-sm font-medium text-gray-100">
+            <div className="text-sm font-medium text-foreground">
               {agent.lastHeartbeat
                 ? new Date(agent.lastHeartbeat).toLocaleDateString()
                 : "Never"}
             </div>
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-muted-foreground">
               {agent.lastHeartbeat
                 ? new Date(agent.lastHeartbeat).toLocaleTimeString()
                 : "-"}
@@ -178,29 +178,29 @@ export default function AgentDetailPage() {
       </div>
 
       {/* Details */}
-      <Card className="bg-gray-800 border-gray-700">
+      <Card className="bg-card border-border">
         <CardHeader>
-          <CardTitle className="text-lg font-semibold text-gray-100">
+          <CardTitle className="text-lg font-semibold text-foreground">
             Details
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
-              <p className="text-gray-400">ID</p>
-              <p className="text-gray-100 font-mono">{agent.id}</p>
+              <p className="text-muted-foreground">ID</p>
+              <p className="text-foreground font-mono">{agent.id}</p>
             </div>
             <div>
-              <p className="text-gray-400">Version</p>
-              <p className="text-gray-100">{agent.version}</p>
+              <p className="text-muted-foreground">Version</p>
+              <p className="text-foreground">{agent.version}</p>
             </div>
             <div>
-              <p className="text-gray-400">Hostname</p>
-              <p className="text-gray-100">{agent.hostname}</p>
+              <p className="text-muted-foreground">Hostname</p>
+              <p className="text-foreground">{agent.hostname}</p>
             </div>
             <div>
-              <p className="text-gray-400">Registered</p>
-              <p className="text-gray-100">
+              <p className="text-muted-foreground">Registered</p>
+              <p className="text-foreground">
                 {new Date(agent.createdAt).toLocaleString()}
               </p>
             </div>
@@ -210,9 +210,9 @@ export default function AgentDetailPage() {
 
       {/* Capabilities */}
       {agent.capabilities && agent.capabilities.length > 0 && (
-        <Card className="bg-gray-800 border-gray-700">
+        <Card className="bg-card border-border">
           <CardHeader>
-            <CardTitle className="text-lg font-semibold text-gray-100 flex items-center gap-2">
+            <CardTitle className="text-lg font-semibold text-foreground flex items-center gap-2">
               <Activity className="h-5 w-5" />
               Capabilities
             </CardTitle>
@@ -223,7 +223,7 @@ export default function AgentDetailPage() {
                 <Badge
                   key={capability}
                   variant="outline"
-                  className="border-gray-600 text-gray-300"
+                  className="border-input text-foreground/80"
                 >
                   {capability}
                 </Badge>

@@ -47,7 +47,7 @@ export function ManageGroupMembersDialog({
 }: ManageGroupMembersDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         {/* Keyed so per-group state (e.g. the pending member selection) resets
             whenever a different group is opened, rather than leaking across
             groups while this component stays mounted. */}
@@ -126,7 +126,7 @@ function MembersManager({
     <>
       <DialogHeader>
         <DialogTitle>Manage Members — {group.name}</DialogTitle>
-        <DialogDescription className="text-gray-400">
+        <DialogDescription className="text-muted-foreground">
           Add or remove organization members from this group.
         </DialogDescription>
       </DialogHeader>
@@ -134,7 +134,7 @@ function MembersManager({
       <div className="space-y-4 py-2">
         {canManage && (
           <div className="space-y-2">
-            <Label className="text-gray-200">Add member</Label>
+            <Label className="text-foreground">Add member</Label>
             <div className="flex gap-2">
               <Select
                 value={selectedUserId}
@@ -145,7 +145,7 @@ function MembersManager({
                   candidates.length === 0
                 }
               >
-                <SelectTrigger className="flex-1 bg-gray-900 border-gray-700 text-gray-100">
+                <SelectTrigger className="flex-1 bg-background border-border text-foreground">
                   <SelectValue
                     placeholder={
                       isOrgMembersLoading
@@ -156,12 +156,12 @@ function MembersManager({
                     }
                   />
                 </SelectTrigger>
-                <SelectContent className="bg-gray-800 border-gray-700">
+                <SelectContent className="bg-card border-border">
                   {candidates.map((c) => (
                     <SelectItem
                       key={c.id}
                       value={c.id}
-                      className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                      className="text-foreground focus:bg-accent focus:text-accent-foreground"
                     >
                       {c.displayName || c.username} ({c.email})
                     </SelectItem>
@@ -170,7 +170,7 @@ function MembersManager({
               </Select>
               <Button
                 type="button"
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-primary hover:bg-primary/90"
                 onClick={handleAdd}
                 disabled={!selectedUserId || addMembers.isPending}
               >
@@ -185,21 +185,21 @@ function MembersManager({
         )}
 
         <div className="space-y-2">
-          <Label className="text-gray-200">
+          <Label className="text-foreground">
             Members{members.length > 0 ? ` (${members.length})` : ""}
           </Label>
           {isMembersLoading ? (
             <div className="space-y-2">
               {[...Array(2)].map((_, i) => (
-                <Skeleton key={i} className="h-11 w-full bg-gray-700" />
+                <Skeleton key={i} className="h-11 w-full bg-muted" />
               ))}
             </div>
           ) : members.length === 0 ? (
-            <p className="text-sm text-gray-400 py-4 text-center">
+            <p className="text-sm text-muted-foreground py-4 text-center">
               This group has no members yet.
             </p>
           ) : (
-            <ul className="divide-y divide-gray-700 rounded-md border border-gray-700 max-h-64 overflow-y-auto">
+            <ul className="divide-y divide-border rounded-md border border-border max-h-64 overflow-y-auto">
               {members.map((member) => {
                 const label = member.displayName || member.username;
                 const isPending = pendingId === member.id;
@@ -209,10 +209,10 @@ function MembersManager({
                     className="flex items-center justify-between px-3 py-2"
                   >
                     <div className="flex flex-col">
-                      <span className="text-sm font-medium text-gray-100">
+                      <span className="text-sm font-medium text-foreground">
                         {label}
                       </span>
-                      <span className="text-xs text-gray-400">
+                      <span className="text-xs text-muted-foreground">
                         {member.email}
                       </span>
                     </div>
@@ -220,7 +220,7 @@ function MembersManager({
                       <Button
                         size="icon-sm"
                         variant="ghost"
-                        className="text-gray-400 hover:text-red-400 hover:bg-red-950/30"
+                        className="text-muted-foreground hover:text-red-600 hover:bg-red-500/10"
                         onClick={() => handleRemove(member.id, label)}
                         disabled={isPending}
                         aria-label={`Remove ${label}`}

@@ -21,32 +21,32 @@ export default function ProjectDetailPage() {
     <div className="max-w-5xl mx-auto space-y-6">
       <Link
         href="/projects"
-        className="inline-flex items-center gap-2 text-sm text-gray-400 hover:text-gray-200"
+        className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="h-4 w-4" />
         Back to projects
       </Link>
 
       <div className="flex items-center gap-3">
-        <FolderKanban className="h-8 w-8 text-blue-400" />
+        <FolderKanban className="h-8 w-8 text-blue-600" />
         <div>
           {isLoading ? (
-            <Skeleton className="h-8 w-48 bg-gray-700" />
+            <Skeleton className="h-8 w-48 bg-muted" />
           ) : (
-            <h1 className="text-2xl font-semibold text-gray-100">
+            <h1 className="text-2xl font-semibold text-foreground">
               {project?.name ?? "Project"}
             </h1>
           )}
           {project?.description && (
-            <p className="text-sm text-gray-400">{project.description}</p>
+            <p className="text-sm text-muted-foreground">{project.description}</p>
           )}
         </div>
       </div>
 
       {isLoading ? (
-        <Card className="bg-gray-800 border-gray-700">
+        <Card className="bg-card border-border">
           <CardContent className="py-8">
-            <Skeleton className="h-24 w-full bg-gray-700" />
+            <Skeleton className="h-24 w-full bg-muted" />
           </CardContent>
         </Card>
       ) : (

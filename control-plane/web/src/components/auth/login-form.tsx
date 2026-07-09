@@ -63,18 +63,18 @@ export function LoginForm() {
   };
 
   return (
-    <Card className="w-full max-w-md bg-gray-800 border-gray-700">
+    <Card className="w-full max-w-md bg-card border-border">
       <CardHeader className="space-y-1">
-        <CardTitle className="text-2xl font-bold text-gray-100">
+        <CardTitle className="text-2xl font-bold text-foreground">
           Sign in to Strato
         </CardTitle>
-        <CardDescription className="text-gray-400">
+        <CardDescription className="text-muted-foreground">
           Use your passkey to sign in
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {!isWebAuthnSupported && (
-          <div className="p-3 bg-red-900/50 border border-red-700 rounded-md text-sm text-red-200">
+          <div className="p-3 bg-red-500/10 border border-red-300 rounded-md text-sm text-red-800">
             WebAuthn is not supported in this browser. Please use a modern
             browser with passkey support.
           </div>
@@ -83,7 +83,7 @@ export function LoginForm() {
         {/* Quick passkey login */}
         <Button
           type="button"
-          className="w-full bg-blue-600 hover:bg-blue-700"
+          className="w-full bg-primary hover:bg-primary/90"
           onClick={handlePasskeyLogin}
           disabled={isLoading || !isWebAuthnSupported}
         >
@@ -97,10 +97,10 @@ export function LoginForm() {
 
         <div className="relative">
           <div className="absolute inset-0 flex items-center">
-            <span className="w-full border-t border-gray-700" />
+            <span className="w-full border-t border-border" />
           </div>
           <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-gray-800 px-2 text-gray-500">
+            <span className="bg-card px-2 text-muted-foreground">
               Or specify username
             </span>
           </div>
@@ -109,7 +109,7 @@ export function LoginForm() {
         {/* Username-based login */}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="username" className="text-gray-200">
+            <Label htmlFor="username" className="text-foreground">
               Username
             </Label>
             <Input
@@ -118,14 +118,14 @@ export function LoginForm() {
               placeholder="Enter your username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="bg-gray-900 border-gray-700 text-gray-100 placeholder:text-gray-500"
+              className="bg-background border-border text-foreground placeholder:text-muted-foreground"
               disabled={isLoading}
             />
           </div>
           <Button
             type="submit"
             variant="outline"
-            className="w-full border-gray-600 text-gray-200 hover:bg-gray-700"
+            className="w-full border-input text-foreground hover:bg-accent"
             disabled={isLoading || !isWebAuthnSupported}
           >
             {isLoading ? (
@@ -136,9 +136,9 @@ export function LoginForm() {
         </form>
       </CardContent>
       <CardFooter className="flex justify-center">
-        <p className="text-sm text-gray-400">
+        <p className="text-sm text-muted-foreground">
           Don&apos;t have an account?{" "}
-          <Link href="/register" className="text-blue-400 hover:text-blue-300">
+          <Link href="/register" className="text-blue-600 hover:text-blue-700">
             Create one
           </Link>
         </p>

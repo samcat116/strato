@@ -30,7 +30,7 @@ import { toast } from "sonner";
 import type { VM } from "@/types/api";
 
 const selectClassName =
-  "w-full h-9 px-3 py-2 bg-gray-900 border border-gray-700 text-gray-100 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed";
+  "w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed";
 
 export function VMVolumesCard({ vm }: { vm: VM }) {
   const { data: volumes = [], isLoading } = useVolumes(vm.projectId);
@@ -88,15 +88,15 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
   };
 
   return (
-    <Card className="bg-gray-800 border-gray-700">
+    <Card className="bg-card border-border">
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <CardTitle className="text-lg font-semibold text-gray-100">
+        <CardTitle className="text-lg font-semibold text-foreground">
           Attached Volumes
         </CardTitle>
         <Button
           size="sm"
           variant="outline"
-          className="border-gray-600 text-gray-300 hover:bg-gray-700"
+          className="border-input text-foreground/80 hover:bg-accent"
           onClick={() => setAttachOpen(true)}
         >
           <Plus className="h-4 w-4 mr-2" />
@@ -107,52 +107,52 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
         {isLoading ? (
           <div className="space-y-2">
             {[...Array(2)].map((_, i) => (
-              <Skeleton key={i} className="h-10 w-full bg-gray-700" />
+              <Skeleton key={i} className="h-10 w-full bg-muted" />
             ))}
           </div>
         ) : attachedVolumes.length === 0 ? (
-          <div className="text-center py-6 text-gray-400">
+          <div className="text-center py-6 text-muted-foreground">
             No volumes attached to this VM.
           </div>
         ) : (
           <Table>
-            <TableHeader className="bg-gray-900">
-              <TableRow className="border-gray-700 hover:bg-gray-900">
-                <TableHead className="text-gray-400 font-medium">
+            <TableHeader className="bg-background">
+              <TableRow className="border-border hover:bg-transparent">
+                <TableHead className="text-muted-foreground font-medium">
                   Device
                 </TableHead>
-                <TableHead className="text-gray-400 font-medium">
+                <TableHead className="text-muted-foreground font-medium">
                   Name
                 </TableHead>
-                <TableHead className="text-gray-400 font-medium">
+                <TableHead className="text-muted-foreground font-medium">
                   Size
                 </TableHead>
-                <TableHead className="text-gray-400 font-medium">
+                <TableHead className="text-muted-foreground font-medium">
                   Status
                 </TableHead>
-                <TableHead className="text-gray-400 font-medium text-right">
+                <TableHead className="text-muted-foreground font-medium text-right">
                   Actions
                 </TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody className="divide-y divide-gray-700">
+            <TableBody className="divide-y divide-border">
               {attachedVolumes.map((volume) => (
                 <TableRow
                   key={volume.id}
-                  className="border-gray-700 hover:bg-gray-800/50"
+                  className="border-border hover:bg-accent/60"
                 >
-                  <TableCell className="text-gray-300 font-mono text-sm">
+                  <TableCell className="text-foreground/80 font-mono text-sm">
                     {volume.deviceName ?? "—"}
                   </TableCell>
                   <TableCell>
                     <Link
                       href="/storage/volumes"
-                      className="font-medium text-gray-100 hover:text-blue-400"
+                      className="font-medium text-foreground hover:text-blue-700"
                     >
                       {volume.name}
                     </Link>
                   </TableCell>
-                  <TableCell className="text-gray-300">
+                  <TableCell className="text-foreground/80">
                     {volume.sizeFormatted}
                   </TableCell>
                   <TableCell>
@@ -162,7 +162,7 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="text-yellow-400 hover:text-yellow-300 hover:bg-yellow-500/10"
+                      className="text-yellow-700 hover:text-yellow-700 hover:bg-yellow-500/10"
                       onClick={() => handleDetach(volume.id!, volume.name)}
                       disabled={
                         volume.status !== "attached" ||
@@ -185,25 +185,25 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
 
       {/* Attach dialog */}
       <Dialog open={attachOpen} onOpenChange={setAttachOpen}>
-        <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+        <DialogContent className="bg-card border-border text-foreground">
           <DialogHeader>
             <DialogTitle>Attach Volume to {vm.name}</DialogTitle>
-            <DialogDescription className="text-gray-400">
+            <DialogDescription className="text-muted-foreground">
               Select an available volume from this VM&apos;s project.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleAttach}>
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label htmlFor="vmAttachVolume" className="text-gray-200">
+                <Label htmlFor="vmAttachVolume" className="text-foreground">
                   Volume
                 </Label>
                 {availableVolumes.length === 0 ? (
-                  <div className="text-sm text-gray-400 py-2">
+                  <div className="text-sm text-muted-foreground py-2">
                     No available volumes.{" "}
                     <Link
                       href="/storage/volumes"
-                      className="text-blue-400 hover:underline"
+                      className="text-blue-600 hover:underline"
                     >
                       Create a volume
                     </Link>{" "}
@@ -234,14 +234,14 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
                 type="button"
                 variant="outline"
                 onClick={() => setAttachOpen(false)}
-                className="border-gray-600 text-gray-300 hover:bg-gray-700"
+                className="border-input text-foreground/80 hover:bg-accent"
                 disabled={isAttaching}
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-primary hover:bg-primary/90"
                 disabled={isAttaching || availableVolumes.length === 0}
               >
                 {isAttaching ? (

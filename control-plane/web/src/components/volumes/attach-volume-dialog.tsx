@@ -26,7 +26,7 @@ interface AttachVolumeDialogProps {
 }
 
 const selectClassName =
-  "w-full h-9 px-3 py-2 bg-gray-900 border border-gray-700 text-gray-100 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed";
+  "w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed";
 
 export function AttachVolumeDialog({
   volume,
@@ -78,26 +78,26 @@ export function AttachVolumeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         <DialogHeader>
           <DialogTitle>Attach {volume.name}</DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             Attach this volume to a virtual machine as an additional disk.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="attachVm" className="text-gray-200">
+              <Label htmlFor="attachVm" className="text-foreground">
                 Virtual Machine
               </Label>
               {vmsLoading ? (
-                <div className="flex items-center gap-2 text-gray-400 text-sm">
+                <div className="flex items-center gap-2 text-muted-foreground text-sm">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Loading VMs...
                 </div>
               ) : candidateVMs.length === 0 ? (
-                <div className="text-sm text-gray-400 py-2">
+                <div className="text-sm text-muted-foreground py-2">
                   No VMs available in this volume&apos;s project.
                 </div>
               ) : (
@@ -120,7 +120,7 @@ export function AttachVolumeDialog({
               )}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="attachDeviceName" className="text-gray-200">
+              <Label htmlFor="attachDeviceName" className="text-foreground">
                 Device Name (optional)
               </Label>
               <Input
@@ -128,7 +128,7 @@ export function AttachVolumeDialog({
                 placeholder="Auto-assigned (disk0, disk1, ...)"
                 value={deviceName}
                 onChange={(e) => setDeviceName(e.target.value)}
-                className="bg-gray-900 border-gray-700 text-gray-100"
+                className="bg-background border-border text-foreground"
                 disabled={isLoading}
               />
             </div>
@@ -138,14 +138,14 @@ export function AttachVolumeDialog({
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
-              className="border-gray-600 text-gray-300 hover:bg-gray-700"
+              className="border-input text-foreground/80 hover:bg-accent"
               disabled={isLoading}
             >
               Cancel
             </Button>
             <Button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               disabled={isLoading || candidateVMs.length === 0}
             >
               {isLoading ? (

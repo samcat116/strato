@@ -157,7 +157,7 @@ export function QuotaDialog({
     step?: string
   ) => (
     <div className="space-y-2">
-      <Label htmlFor={key} className="text-gray-200">
+      <Label htmlFor={key} className="text-foreground">
         {label}
       </Label>
       <Input
@@ -167,7 +167,7 @@ export function QuotaDialog({
         step={step}
         value={form[key] as string}
         onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-        className="bg-gray-900 border-gray-700 text-gray-100"
+        className="bg-background border-border text-foreground"
         disabled={isLoading}
       />
     </div>
@@ -175,20 +175,20 @@ export function QuotaDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         <DialogHeader>
           <DialogTitle>
             {isEdit ? "Edit Resource Quota" : "Create Resource Quota"}
           </DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             {isEdit ? "Update limits for" : "Set resource limits for"}{" "}
-            <span className="text-gray-200">{scopeLabel}</span>
+            <span className="text-foreground">{scopeLabel}</span>
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="name" className="text-gray-200">
+              <Label htmlFor="name" className="text-foreground">
                 Quota Name
               </Label>
               <Input
@@ -196,14 +196,14 @@ export function QuotaDialog({
                 placeholder="default"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="bg-gray-900 border-gray-700 text-gray-100"
+                className="bg-background border-border text-foreground"
                 disabled={isLoading}
               />
             </div>
 
             {showEnvironment && (
               <div className="space-y-2">
-                <Label htmlFor="environment" className="text-gray-200">
+                <Label htmlFor="environment" className="text-foreground">
                   Environment (optional)
                 </Label>
                 <select
@@ -213,7 +213,7 @@ export function QuotaDialog({
                     setForm({ ...form, environment: e.target.value })
                   }
                   disabled={isLoading}
-                  className="w-full h-9 px-3 py-2 bg-gray-900 border border-gray-700 text-gray-100 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
+                  className="w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
                 >
                   <option value="">All environments</option>
                   {environments?.map((env) => (
@@ -233,7 +233,7 @@ export function QuotaDialog({
               {numberField("maxNetworks", "Max Networks")}
             </div>
 
-            <label className="flex items-center gap-2 text-sm text-gray-200">
+            <label className="flex items-center gap-2 text-sm text-foreground">
               <input
                 type="checkbox"
                 checked={form.isEnabled}
@@ -241,7 +241,7 @@ export function QuotaDialog({
                   setForm({ ...form, isEnabled: e.target.checked })
                 }
                 disabled={isLoading}
-                className="h-4 w-4 rounded border-gray-600 bg-gray-900 accent-blue-600"
+                className="h-4 w-4 rounded border-input bg-background accent-blue-600"
               />
               Enforce this quota
             </label>
@@ -251,14 +251,14 @@ export function QuotaDialog({
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
-              className="border-gray-600 text-gray-300 hover:bg-gray-700"
+              className="border-input text-foreground/80 hover:bg-accent"
               disabled={isLoading}
             >
               Cancel
             </Button>
             <Button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               disabled={isLoading}
             >
               {isLoading ? (

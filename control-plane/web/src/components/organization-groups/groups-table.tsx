@@ -60,7 +60,7 @@ export function GroupsTable({
     return (
       <div className="space-y-2">
         {[...Array(3)].map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full bg-gray-700" />
+          <Skeleton key={i} className="h-12 w-full bg-muted" />
         ))}
       </div>
     );
@@ -68,39 +68,39 @@ export function GroupsTable({
 
   if (groups.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-400">No groups yet.</div>
+      <div className="text-center py-8 text-muted-foreground">No groups yet.</div>
     );
   }
 
   return (
     <Table>
-      <TableHeader className="bg-gray-900">
-        <TableRow className="border-gray-700 hover:bg-gray-900">
-          <TableHead className="text-gray-400 font-medium">Name</TableHead>
-          <TableHead className="text-gray-400 font-medium">
+      <TableHeader className="bg-background">
+        <TableRow className="border-border hover:bg-transparent">
+          <TableHead className="text-muted-foreground font-medium">Name</TableHead>
+          <TableHead className="text-muted-foreground font-medium">
             Description
           </TableHead>
-          <TableHead className="text-gray-400 font-medium">Members</TableHead>
-          <TableHead className="text-gray-400 font-medium text-right">
+          <TableHead className="text-muted-foreground font-medium">Members</TableHead>
+          <TableHead className="text-muted-foreground font-medium text-right">
             Actions
           </TableHead>
         </TableRow>
       </TableHeader>
-      <TableBody className="divide-y divide-gray-700">
+      <TableBody className="divide-y divide-border">
         {groups.map((group) => {
           const isPending = pendingId === group.id;
           return (
             <TableRow
               key={group.id}
-              className="border-gray-700 hover:bg-gray-800/50"
+              className="border-border hover:bg-accent/60"
             >
-              <TableCell className="font-medium text-gray-100">
+              <TableCell className="font-medium text-foreground">
                 {group.name}
               </TableCell>
-              <TableCell className="text-gray-400 text-sm">
+              <TableCell className="text-muted-foreground text-sm">
                 {group.description || "—"}
               </TableCell>
-              <TableCell className="text-gray-300 text-sm">
+              <TableCell className="text-foreground/80 text-sm">
                 {group.memberCount ?? 0}
               </TableCell>
               <TableCell className="text-right">
@@ -108,7 +108,7 @@ export function GroupsTable({
                   <Button
                     size="icon-sm"
                     variant="ghost"
-                    className="text-gray-400 hover:text-gray-100 hover:bg-gray-700"
+                    className="text-muted-foreground hover:text-foreground hover:bg-accent"
                     onClick={() => onManageMembers(group)}
                     aria-label={`Manage members of ${group.name}`}
                   >
@@ -119,7 +119,7 @@ export function GroupsTable({
                       <Button
                         size="icon-sm"
                         variant="ghost"
-                        className="text-gray-400 hover:text-gray-100 hover:bg-gray-700"
+                        className="text-muted-foreground hover:text-foreground hover:bg-accent"
                         onClick={() => onEdit(group)}
                         aria-label={`Edit ${group.name}`}
                       >
@@ -128,7 +128,7 @@ export function GroupsTable({
                       <Button
                         size="icon-sm"
                         variant="ghost"
-                        className="text-gray-400 hover:text-red-400 hover:bg-red-950/30"
+                        className="text-muted-foreground hover:text-red-600 hover:bg-red-500/10"
                         onClick={() => handleDelete(group)}
                         disabled={isPending}
                         aria-label={`Delete ${group.name}`}

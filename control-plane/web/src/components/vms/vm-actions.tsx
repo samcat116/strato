@@ -125,7 +125,7 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
         <Button
           size="sm"
           variant="ghost"
-          className="text-green-400 hover:text-green-300 hover:bg-green-500/10"
+          className="text-green-600 hover:text-green-700 hover:bg-green-500/10"
           onClick={() => handleAction("start")}
           disabled={isLoading}
         >
@@ -140,7 +140,7 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
         <Button
           size="sm"
           variant="ghost"
-          className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+          className="text-red-600 hover:text-red-700 hover:bg-red-500/10"
           onClick={() => handleAction("stop")}
           disabled={isLoading}
         >
@@ -158,61 +158,61 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
           <Button
             size="sm"
             variant="ghost"
-            className="text-gray-400 hover:text-gray-200"
+            className="text-muted-foreground hover:text-foreground"
             disabled={isLoading}
           >
             <MoreHorizontal className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent className="bg-gray-800 border-gray-700">
+        <DropdownMenuContent className="bg-card border-border">
           {canStart && (
             <DropdownMenuItem
               onClick={() => handleAction("start")}
-              className="text-gray-200 hover:bg-gray-700 cursor-pointer"
+              className="text-foreground hover:bg-accent cursor-pointer"
             >
-              <Play className="h-4 w-4 mr-2 text-green-400" />
+              <Play className="h-4 w-4 mr-2 text-green-600" />
               Start
             </DropdownMenuItem>
           )}
           {canStop && (
             <DropdownMenuItem
               onClick={() => handleAction("stop")}
-              className="text-gray-200 hover:bg-gray-700 cursor-pointer"
+              className="text-foreground hover:bg-accent cursor-pointer"
             >
-              <Square className="h-4 w-4 mr-2 text-red-400" />
+              <Square className="h-4 w-4 mr-2 text-red-600" />
               Stop
             </DropdownMenuItem>
           )}
           <DropdownMenuItem
             onClick={() => handleAction("restart")}
-            className="text-gray-200 hover:bg-gray-700 cursor-pointer"
+            className="text-foreground hover:bg-accent cursor-pointer"
             disabled={vm.status !== "Running"}
           >
-            <RotateCcw className="h-4 w-4 mr-2 text-blue-400" />
+            <RotateCcw className="h-4 w-4 mr-2 text-blue-600" />
             Restart
           </DropdownMenuItem>
           {canPause && (
             <DropdownMenuItem
               onClick={() => handleAction("pause")}
-              className="text-gray-200 hover:bg-gray-700 cursor-pointer"
+              className="text-foreground hover:bg-accent cursor-pointer"
             >
-              <Pause className="h-4 w-4 mr-2 text-yellow-400" />
+              <Pause className="h-4 w-4 mr-2 text-yellow-700" />
               Pause
             </DropdownMenuItem>
           )}
           {canResume && (
             <DropdownMenuItem
               onClick={() => handleAction("resume")}
-              className="text-gray-200 hover:bg-gray-700 cursor-pointer"
+              className="text-foreground hover:bg-accent cursor-pointer"
             >
-              <Play className="h-4 w-4 mr-2 text-green-400" />
+              <Play className="h-4 w-4 mr-2 text-green-600" />
               Resume
             </DropdownMenuItem>
           )}
-          <DropdownMenuSeparator className="bg-gray-700" />
+          <DropdownMenuSeparator className="bg-muted" />
           <DropdownMenuItem
             onClick={() => setShowDeleteConfirm(true)}
-            className="text-red-400 hover:bg-red-500/10 cursor-pointer"
+            className="text-red-600 hover:bg-red-500/10 cursor-pointer"
           >
             <Trash2 className="h-4 w-4 mr-2" />
             Delete
@@ -222,10 +222,10 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
 
       {/* Delete confirmation dialog */}
       <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
-        <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+        <DialogContent className="bg-card border-border text-foreground">
           <DialogHeader>
             <DialogTitle>Delete {vm.name}?</DialogTitle>
-            <DialogDescription className="text-gray-400">
+            <DialogDescription className="text-muted-foreground">
               This will permanently delete the virtual machine and its disk.
               This action cannot be undone.
             </DialogDescription>

@@ -42,7 +42,7 @@ function TreeRow({
 }: RowProps) {
   const content = (
     <div
-      className="flex items-center gap-2 py-1.5 pr-2 rounded-md hover:bg-gray-700/50 transition-colors"
+      className="flex items-center gap-2 py-1.5 pr-2 rounded-md hover:bg-accent/60 transition-colors"
       style={{ paddingLeft: depth * 20 + 4 }}
     >
       {expandable ? (
@@ -51,7 +51,7 @@ function TreeRow({
             e.preventDefault();
             onToggle?.();
           }}
-          className="p-0.5 text-gray-400 hover:text-gray-100"
+          className="p-0.5 text-muted-foreground hover:text-foreground"
           aria-label={expanded ? "Collapse" : "Expand"}
         >
           <ChevronRight
@@ -65,7 +65,7 @@ function TreeRow({
         <span className="w-5" />
       )}
       {icon}
-      <span className="text-sm text-gray-200 truncate">{label}</span>
+      <span className="text-sm text-foreground truncate">{label}</span>
       {meta}
     </div>
   );
@@ -84,7 +84,7 @@ function quotaBadge(count: number) {
   return (
     <Badge
       variant="outline"
-      className="border-gray-600 text-gray-400 gap-1 ml-1"
+      className="border-input text-muted-foreground gap-1 ml-1"
     >
       <ShieldCheck className="h-3 w-3" />
       {count}
@@ -97,14 +97,14 @@ function VMRow({ vm, depth }: { vm: VMSummaryNode; depth: number }) {
     <TreeRow
       depth={depth}
       href={`/vms/detail?id=${vm.id}`}
-      icon={<Monitor className="h-4 w-4 text-gray-400" />}
+      icon={<Monitor className="h-4 w-4 text-muted-foreground" />}
       label={vm.name}
       meta={
-        <span className="ml-2 flex items-center gap-2 text-xs text-gray-500">
+        <span className="ml-2 flex items-center gap-2 text-xs text-muted-foreground">
           <span>{vm.environment}</span>
-          <span className="text-gray-600">·</span>
+          <span className="text-muted-foreground">·</span>
           <span>{vm.status}</span>
-          <span className="text-gray-600">·</span>
+          <span className="text-muted-foreground">·</span>
           <span>
             {vm.cpu} vCPU / {vm.memoryGB}GB
           </span>
@@ -127,13 +127,13 @@ function ProjectRow({
     <div>
       <TreeRow
         depth={depth}
-        icon={<Boxes className="h-4 w-4 text-emerald-400" />}
+        icon={<Boxes className="h-4 w-4 text-emerald-600" />}
         label={project.name}
         expandable={hasChildren}
         expanded={expanded}
         onToggle={() => setExpanded((v) => !v)}
         meta={
-          <span className="ml-2 flex items-center text-xs text-gray-500">
+          <span className="ml-2 flex items-center text-xs text-muted-foreground">
             {project.vms.length} VM{project.vms.length === 1 ? "" : "s"}
             {quotaBadge(project.quotas.length)}
           </span>
@@ -154,7 +154,7 @@ function OURow({ ou, depth }: { ou: OrganizationalUnitNode; depth: number }) {
     <div>
       <TreeRow
         depth={depth}
-        icon={<FolderTree className="h-4 w-4 text-purple-400" />}
+        icon={<FolderTree className="h-4 w-4 text-purple-600" />}
         label={ou.name}
         expandable={hasChildren}
         expanded={expanded}
@@ -180,7 +180,7 @@ export function HierarchyTree({ org }: { org: OrganizationNode }) {
     <div className="space-y-0.5">
       <TreeRow
         depth={0}
-        icon={<Building2 className="h-4 w-4 text-blue-400" />}
+        icon={<Building2 className="h-4 w-4 text-blue-600" />}
         label={<span className="font-medium">{org.name}</span>}
         meta={quotaBadge(org.quotas.length)}
       />
@@ -192,7 +192,7 @@ export function HierarchyTree({ org }: { org: OrganizationNode }) {
       ))}
       {org.organizationalUnits.length === 0 &&
         org.projects.length === 0 && (
-          <p className="pl-6 py-2 text-sm text-gray-500">
+          <p className="pl-6 py-2 text-sm text-muted-foreground">
             This organization has no units or projects yet.
           </p>
         )}

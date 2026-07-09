@@ -150,12 +150,12 @@ export function ProjectFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         <DialogHeader>
           <DialogTitle>
             {isEdit ? "Edit Project" : "Create Project"}
           </DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             {isEdit
               ? "Update this project's details and environments."
               : "Projects organize VMs and images within an organization."}
@@ -165,7 +165,7 @@ export function ProjectFormDialog({
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="projectName" className="text-gray-200">
+              <Label htmlFor="projectName" className="text-foreground">
                 Name
               </Label>
               <Input
@@ -173,14 +173,14 @@ export function ProjectFormDialog({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="my-project"
-                className="bg-gray-900 border-gray-700 text-gray-100"
+                className="bg-background border-border text-foreground"
                 disabled={isPending}
                 autoFocus
               />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="projectDescription" className="text-gray-200">
+              <Label htmlFor="projectDescription" className="text-foreground">
                 Description
               </Label>
               <Input
@@ -188,25 +188,25 @@ export function ProjectFormDialog({
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="A brief description of the project"
-                className="bg-gray-900 border-gray-700 text-gray-100"
+                className="bg-background border-border text-foreground"
                 disabled={isPending}
               />
             </div>
 
             <div className="space-y-2">
-              <Label className="text-gray-200">Environments</Label>
+              <Label className="text-foreground">Environments</Label>
               <div className="flex flex-wrap gap-2">
                 {environments.map((env) => (
                   <span
                     key={env}
-                    className="inline-flex items-center gap-1 rounded-md bg-gray-700 px-2 py-1 text-sm text-gray-100"
+                    className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-sm text-foreground"
                   >
                     {env}
                     <button
                       type="button"
                       onClick={() => removeEnvironment(env)}
                       disabled={isPending || environments.length <= 1}
-                      className="text-gray-400 hover:text-red-400 disabled:opacity-40 disabled:hover:text-gray-400"
+                      className="text-muted-foreground hover:text-red-600 disabled:opacity-40 disabled:hover:text-muted-foreground"
                       aria-label={`Remove ${env}`}
                     >
                       <X className="h-3 w-3" />
@@ -225,28 +225,28 @@ export function ProjectFormDialog({
                     }
                   }}
                   placeholder="Add environment"
-                  className="bg-gray-900 border-gray-700 text-gray-100"
+                  className="bg-background border-border text-foreground"
                   disabled={isPending}
                 />
                 <Button
                   type="button"
                   variant="outline"
                   onClick={addEnvironment}
-                  className="border-gray-600 text-gray-300 hover:bg-gray-700"
+                  className="border-input text-foreground/80 hover:bg-accent"
                   disabled={isPending || !newEnvironment.trim()}
                 >
                   <Plus className="h-4 w-4" />
                 </Button>
               </div>
               {isEdit && (
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-muted-foreground">
                   Environments in use by existing VMs cannot be removed.
                 </p>
               )}
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="defaultEnvironment" className="text-gray-200">
+              <Label htmlFor="defaultEnvironment" className="text-foreground">
                 Default Environment
               </Label>
               <Select
@@ -256,16 +256,16 @@ export function ProjectFormDialog({
               >
                 <SelectTrigger
                   id="defaultEnvironment"
-                  className="bg-gray-900 border-gray-700 text-gray-100"
+                  className="bg-background border-border text-foreground"
                 >
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent className="bg-gray-800 border-gray-700">
+                <SelectContent className="bg-card border-border">
                   {environments.map((env) => (
                     <SelectItem
                       key={env}
                       value={env}
-                      className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                      className="text-foreground focus:bg-accent focus:text-accent-foreground"
                     >
                       {env}
                     </SelectItem>
@@ -279,7 +279,7 @@ export function ProjectFormDialog({
             <Button
               type="button"
               variant="outline"
-              className="border-gray-600 text-gray-300 hover:bg-gray-700"
+              className="border-input text-foreground/80 hover:bg-accent"
               onClick={() => onOpenChange(false)}
               disabled={isPending}
             >
@@ -287,7 +287,7 @@ export function ProjectFormDialog({
             </Button>
             <Button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               disabled={isPending}
             >
               {isPending ? (

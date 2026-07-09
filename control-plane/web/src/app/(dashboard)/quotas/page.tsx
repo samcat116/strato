@@ -52,7 +52,7 @@ function collectScopes(
 
   scopes.push({
     key: `org-${org.id}`,
-    icon: <Building2 className="h-4 w-4 text-blue-400" />,
+    icon: <Building2 className="h-4 w-4 text-blue-600" />,
     label: org.name,
     sublabel: "Organization",
     depth: 0,
@@ -66,7 +66,7 @@ function collectScopes(
   ) => {
     scopes.push({
       key: `project-${project.id}`,
-      icon: <Boxes className="h-4 w-4 text-emerald-400" />,
+      icon: <Boxes className="h-4 w-4 text-emerald-600" />,
       label: project.name,
       sublabel: "Project",
       depth,
@@ -79,7 +79,7 @@ function collectScopes(
   const walkOU = (ou: OrganizationalUnitNode, depth: number) => {
     scopes.push({
       key: `ou-${ou.id}`,
-      icon: <FolderTree className="h-4 w-4 text-purple-400" />,
+      icon: <FolderTree className="h-4 w-4 text-purple-600" />,
       label: ou.name,
       sublabel: "Organizational Unit",
       depth,
@@ -156,7 +156,7 @@ export default function QuotasPage() {
   if (!orgId) {
     return (
       <div className="max-w-5xl mx-auto text-center py-12">
-        <p className="text-gray-400">No organization selected</p>
+        <p className="text-muted-foreground">No organization selected</p>
       </div>
     );
   }
@@ -164,10 +164,10 @@ export default function QuotasPage() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div>
-        <h2 className="text-2xl font-semibold text-gray-100">
+        <h2 className="text-2xl font-semibold text-foreground">
           Resource Quotas
         </h2>
-        <p className="text-gray-400">
+        <p className="text-muted-foreground">
           Set and monitor resource limits across your organization, units, and
           projects
         </p>
@@ -175,12 +175,12 @@ export default function QuotasPage() {
 
       {isLoading ? (
         <div className="space-y-4">
-          <Skeleton className="h-40 w-full bg-gray-700" />
-          <Skeleton className="h-40 w-full bg-gray-700" />
+          <Skeleton className="h-40 w-full bg-muted" />
+          <Skeleton className="h-40 w-full bg-muted" />
         </div>
       ) : error ? (
-        <Card className="bg-gray-800 border-gray-700">
-          <CardContent className="py-12 text-center text-gray-400">
+        <Card className="bg-card border-border">
+          <CardContent className="py-12 text-center text-muted-foreground">
             Failed to load quotas. You may not have access to this
             organization&apos;s hierarchy.
           </CardContent>
@@ -190,18 +190,18 @@ export default function QuotasPage() {
           {scopes.map((scope) => (
             <Card
               key={scope.key}
-              className="bg-gray-800 border-gray-700"
+              className="bg-card border-border"
               style={{ marginLeft: scope.depth * 16 }}
             >
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
                 <div className="flex items-center gap-2 min-w-0">
                   {scope.icon}
                   <div className="min-w-0">
-                    <CardTitle className="text-base font-semibold text-gray-100 truncate">
+                    <CardTitle className="text-base font-semibold text-foreground truncate">
                       {scope.label}
                     </CardTitle>
                     {scope.sublabel && (
-                      <p className="text-xs text-gray-500">{scope.sublabel}</p>
+                      <p className="text-xs text-muted-foreground">{scope.sublabel}</p>
                     )}
                   </div>
                 </div>
@@ -209,7 +209,7 @@ export default function QuotasPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="border-gray-600 text-gray-300 hover:bg-gray-700 shrink-0"
+                    className="border-input text-foreground/80 hover:bg-accent shrink-0"
                     onClick={() => openCreate(scope)}
                   >
                     <Plus className="h-4 w-4 mr-1" />
@@ -219,7 +219,7 @@ export default function QuotasPage() {
               </CardHeader>
               <CardContent>
                 {scope.quotas.length === 0 ? (
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm text-muted-foreground">
                     No quotas defined at this level.
                   </p>
                 ) : (
@@ -255,12 +255,12 @@ export default function QuotasPage() {
         open={!!pendingDelete}
         onOpenChange={(open) => !open && setPendingDelete(undefined)}
       >
-        <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+        <DialogContent className="bg-card border-border text-foreground">
           <DialogHeader>
             <DialogTitle>Delete Quota</DialogTitle>
-            <DialogDescription className="text-gray-400">
+            <DialogDescription className="text-muted-foreground">
               Delete quota{" "}
-              <span className="text-gray-200">
+              <span className="text-foreground">
                 &quot;{pendingDelete?.name}&quot;
               </span>
               ? This cannot be undone. Quotas with active reservations cannot be
@@ -271,7 +271,7 @@ export default function QuotasPage() {
             <Button
               variant="outline"
               onClick={() => setPendingDelete(undefined)}
-              className="border-gray-600 text-gray-300 hover:bg-gray-700"
+              className="border-input text-foreground/80 hover:bg-accent"
               disabled={deleteQuota.isPending}
             >
               Cancel

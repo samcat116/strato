@@ -46,7 +46,7 @@ export function OuFormDialog({
 }: OuFormDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         {/* Keyed so the form's initial state resets whenever the target OU
             or parent (create vs. edit vs. add-sub) changes. */}
         <OuForm
@@ -127,7 +127,7 @@ function OuForm({
     <>
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
-        <DialogDescription className="text-gray-400">
+        <DialogDescription className="text-muted-foreground">
           {isEdit
             ? "Update this unit's name and description."
             : "Organizational units group projects into a hierarchy within your organization."}
@@ -137,7 +137,7 @@ function OuForm({
       <form onSubmit={handleSubmit}>
         <div className="space-y-4 py-4">
           <div className="space-y-2">
-            <Label htmlFor="ouName" className="text-gray-200">
+            <Label htmlFor="ouName" className="text-foreground">
               Name
             </Label>
             <Input
@@ -145,14 +145,14 @@ function OuForm({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Platform"
-              className="bg-gray-900 border-gray-700 text-gray-100"
+              className="bg-background border-border text-foreground"
               disabled={isPending}
               autoFocus
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="ouDescription" className="text-gray-200">
+            <Label htmlFor="ouDescription" className="text-foreground">
               Description
             </Label>
             <Input
@@ -160,7 +160,7 @@ function OuForm({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="A short description of the unit"
-              className="bg-gray-900 border-gray-700 text-gray-100"
+              className="bg-background border-border text-foreground"
               disabled={isPending}
             />
           </div>
@@ -170,7 +170,7 @@ function OuForm({
           <Button
             type="button"
             variant="outline"
-            className="border-gray-600"
+            className="border-input"
             onClick={onClose}
             disabled={isPending}
           >
@@ -178,7 +178,7 @@ function OuForm({
           </Button>
           <Button
             type="submit"
-            className="bg-blue-600 hover:bg-blue-700"
+            className="bg-primary hover:bg-primary/90"
             disabled={isPending}
           >
             {isPending ? (

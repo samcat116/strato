@@ -41,14 +41,14 @@ export function UsageBar({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-xs">
-        <span className="text-gray-300">{label}</span>
-        <span className="text-gray-400 tabular-nums">
+        <span className="text-foreground/80">{label}</span>
+        <span className="text-muted-foreground tabular-nums">
           {format(used, decimals)} / {format(limit, decimals)}
           {unit ? ` ${unit}` : ""}
-          <span className="ml-1 text-gray-500">({Math.round(pct)}%)</span>
+          <span className="ml-1 text-muted-foreground">({Math.round(pct)}%)</span>
         </span>
       </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-gray-700">
+      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
         <div
           className={cn("h-full rounded-full transition-all", barColor(pct))}
           style={{ width: `${clamped}%` }}

@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, FolderKanban, Settings } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,29 +25,26 @@ export function ProjectSwitcher() {
   };
 
   const label = isLoading
-    ? "Loading..."
+    ? "Loading…"
     : currentProject?.name || "No project";
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          className="bg-gray-800 hover:bg-gray-700 text-gray-200 border-gray-600"
-        >
-          <FolderKanban className="mr-2 h-4 w-4 text-gray-400" />
-          {label}
-          <ChevronDown className="ml-2 h-4 w-4 text-gray-500" />
-        </Button>
+        <button className="flex h-8 items-center gap-1.5 rounded-[7px] border border-border bg-background px-2.5 text-[12.5px] font-medium transition-colors hover:bg-accent">
+          <FolderKanban className="h-3.5 w-3.5 text-muted-foreground" strokeWidth={1.6} />
+          <span className="max-w-40 truncate">{label}</span>
+          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+        </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent className="w-64 bg-gray-800 border-gray-600">
-        <DropdownMenuLabel className="text-xs font-medium text-gray-400 uppercase">
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuLabel className="text-xs font-medium uppercase text-muted-foreground">
           Switch Project
         </DropdownMenuLabel>
-        <DropdownMenuSeparator className="bg-gray-700" />
+        <DropdownMenuSeparator />
         <div className="max-h-48 overflow-y-auto">
           {projects.length === 0 ? (
-            <div className="px-2 py-2 text-sm text-gray-400">
+            <div className="px-2 py-2 text-sm text-muted-foreground">
               No projects in this organization.
             </div>
           ) : (
@@ -56,25 +52,23 @@ export function ProjectSwitcher() {
               <DropdownMenuItem
                 key={project.id}
                 onClick={() => handleSwitch(project.id)}
-                className="text-gray-200 hover:bg-gray-700 focus:bg-gray-700 cursor-pointer"
+                className="cursor-pointer"
               >
                 <span className="flex-1 truncate">{project.name}</span>
-                {currentProject?.id === project.id && (
-                  <Check className="h-4 w-4 text-blue-400" />
-                )}
+                {currentProject?.id === project.id && <Check className="h-4 w-4" />}
               </DropdownMenuItem>
             ))
           )}
         </div>
-        <DropdownMenuSeparator className="bg-gray-700" />
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           onClick={() => {
             setOpen(false);
             router.push("/projects");
           }}
-          className="text-blue-400 hover:bg-gray-700 focus:bg-gray-700 cursor-pointer"
+          className="cursor-pointer"
         >
-          <Settings className="h-4 w-4 mr-2" />
+          <Settings className="mr-2 h-4 w-4" />
           Manage Projects
         </DropdownMenuItem>
       </DropdownMenuContent>

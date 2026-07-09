@@ -16,13 +16,13 @@ export default function APIKeysPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-gray-100">API Keys</h2>
-          <p className="text-gray-400">
+          <h2 className="text-2xl font-semibold text-foreground">API Keys</h2>
+          <p className="text-muted-foreground">
             Manage API keys for programmatic access to the Strato API
           </p>
         </div>
         <Button
-          className="bg-blue-600 hover:bg-blue-700"
+          className="bg-primary hover:bg-primary/90"
           onClick={() => setCreateOpen(true)}
         >
           <Plus className="h-4 w-4 mr-2" />
@@ -31,9 +31,9 @@ export default function APIKeysPage() {
       </div>
 
       {/* Key List */}
-      <Card className="bg-gray-800 border-gray-700">
+      <Card className="bg-card border-border">
         <CardHeader>
-          <CardTitle className="text-lg font-semibold text-gray-100">
+          <CardTitle className="text-lg font-semibold text-foreground">
             Your API Keys
           </CardTitle>
         </CardHeader>

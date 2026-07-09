@@ -68,7 +68,7 @@ export function ProjectsTable({
     return (
       <div className="space-y-3">
         {[...Array(3)].map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full bg-gray-700" />
+          <Skeleton key={i} className="h-12 w-full bg-muted" />
         ))}
       </div>
     );
@@ -76,7 +76,7 @@ export function ProjectsTable({
 
   if (projects.length === 0) {
     return (
-      <div className="py-12 text-center text-gray-400">
+      <div className="py-12 text-center text-muted-foreground">
         No projects yet. Create one to organize your VMs and images.
       </div>
     );
@@ -85,12 +85,12 @@ export function ProjectsTable({
   return (
     <Table>
       <TableHeader>
-        <TableRow className="border-gray-700 hover:bg-transparent">
-          <TableHead className="text-gray-400">Name</TableHead>
-          <TableHead className="text-gray-400">Environments</TableHead>
-          <TableHead className="text-gray-400 text-right">VMs</TableHead>
+        <TableRow className="border-border hover:bg-transparent">
+          <TableHead className="text-muted-foreground">Name</TableHead>
+          <TableHead className="text-muted-foreground">Environments</TableHead>
+          <TableHead className="text-muted-foreground text-right">VMs</TableHead>
           {canManage && (
-            <TableHead className="text-gray-400 w-12 text-right">
+            <TableHead className="text-muted-foreground w-12 text-right">
               Actions
             </TableHead>
           )}
@@ -98,16 +98,16 @@ export function ProjectsTable({
       </TableHeader>
       <TableBody>
         {projects.map((project) => (
-          <TableRow key={project.id} className="border-gray-700">
+          <TableRow key={project.id} className="border-border">
             <TableCell>
               <Link
                 href={`/projects/${project.id}`}
-                className="font-medium text-gray-100 hover:text-blue-400 hover:underline"
+                className="font-medium text-foreground hover:text-blue-700 hover:underline"
               >
                 {project.name}
               </Link>
               {project.description && (
-                <div className="text-sm text-gray-400">
+                <div className="text-sm text-muted-foreground">
                   {project.description}
                 </div>
               )}
@@ -120,8 +120,8 @@ export function ProjectsTable({
                     variant="outline"
                     className={
                       env === project.defaultEnvironment
-                        ? "border-blue-500 text-blue-300"
-                        : "border-gray-600 text-gray-300"
+                        ? "border-blue-500 text-blue-700"
+                        : "border-input text-foreground/80"
                     }
                   >
                     {env}
@@ -130,7 +130,7 @@ export function ProjectsTable({
                 ))}
               </div>
             </TableCell>
-            <TableCell className="text-right text-gray-200">
+            <TableCell className="text-right text-foreground">
               {project.vmCount ?? 0}
             </TableCell>
             {canManage && (
@@ -140,30 +140,30 @@ export function ProjectsTable({
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="text-gray-400 hover:text-gray-200"
+                      className="text-muted-foreground hover:text-foreground"
                       disabled={pendingId === project.id}
                     >
                       <MoreHorizontal className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent className="bg-gray-800 border-gray-700">
+                  <DropdownMenuContent className="bg-card border-border">
                     <DropdownMenuItem
                       onClick={() => onEdit(project)}
-                      className="text-gray-200 focus:bg-gray-700 focus:text-gray-100 cursor-pointer"
+                      className="text-foreground focus:bg-accent focus:text-accent-foreground cursor-pointer"
                     >
                       <Pencil className="h-4 w-4 mr-2" />
                       Edit
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => onTransfer(project)}
-                      className="text-gray-200 focus:bg-gray-700 focus:text-gray-100 cursor-pointer"
+                      className="text-foreground focus:bg-accent focus:text-accent-foreground cursor-pointer"
                     >
                       <ArrowRightLeft className="h-4 w-4 mr-2" />
                       Transfer
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => handleDelete(project)}
-                      className="text-red-400 focus:bg-gray-700 focus:text-red-300 cursor-pointer"
+                      className="text-red-600 focus:bg-accent focus:text-red-700 cursor-pointer"
                     >
                       <Trash2 className="h-4 w-4 mr-2" />
                       Delete

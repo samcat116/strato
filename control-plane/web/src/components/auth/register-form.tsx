@@ -75,12 +75,12 @@ export function RegisterForm() {
   };
 
   return (
-    <Card className="w-full max-w-md bg-gray-800 border-gray-700">
+    <Card className="w-full max-w-md bg-card border-border">
       <CardHeader className="space-y-1">
-        <CardTitle className="text-2xl font-bold text-gray-100">
+        <CardTitle className="text-2xl font-bold text-foreground">
           Create an account
         </CardTitle>
-        <CardDescription className="text-gray-400">
+        <CardDescription className="text-muted-foreground">
           {step === "username" && "Tell us a bit about yourself to get started"}
           {step === "passkey" && "Create a passkey for secure authentication"}
           {step === "complete" && "Your account has been created"}
@@ -88,7 +88,7 @@ export function RegisterForm() {
       </CardHeader>
       <CardContent className="space-y-4">
         {!isWebAuthnSupported && (
-          <div className="p-3 bg-red-900/50 border border-red-700 rounded-md text-sm text-red-200">
+          <div className="p-3 bg-red-500/10 border border-red-300 rounded-md text-sm text-red-800">
             WebAuthn is not supported in this browser. Please use a modern
             browser with passkey support.
           </div>
@@ -97,7 +97,7 @@ export function RegisterForm() {
         {/* Step indicators */}
         <div className="flex items-center justify-center space-x-4 mb-6">
           <div
-            className={`flex items-center ${step === "username" ? "text-blue-400" : "text-gray-500"}`}
+            className={`flex items-center ${step === "username" ? "text-blue-600" : "text-muted-foreground"}`}
           >
             <div
               className={`w-8 h-8 rounded-full flex items-center justify-center border-2 ${
@@ -107,16 +107,16 @@ export function RegisterForm() {
               }`}
             >
               {step !== "username" ? (
-                <CheckCircle2 className="h-5 w-5 text-green-500" />
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
               ) : (
                 "1"
               )}
             </div>
             <span className="ml-2 text-sm">Username</span>
           </div>
-          <div className="w-8 h-px bg-gray-700" />
+          <div className="w-8 h-px bg-muted" />
           <div
-            className={`flex items-center ${step === "passkey" ? "text-blue-400" : step === "complete" ? "text-green-500" : "text-gray-500"}`}
+            className={`flex items-center ${step === "passkey" ? "text-blue-600" : step === "complete" ? "text-green-600" : "text-muted-foreground"}`}
           >
             <div
               className={`w-8 h-8 rounded-full flex items-center justify-center border-2 ${
@@ -124,11 +124,11 @@ export function RegisterForm() {
                   ? "border-blue-400 bg-blue-400/10"
                   : step === "complete"
                     ? "border-green-500 bg-green-500/10"
-                    : "border-gray-600"
+                    : "border-input"
               }`}
             >
               {step === "complete" ? (
-                <CheckCircle2 className="h-5 w-5 text-green-500" />
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
               ) : (
                 "2"
               )}
@@ -141,7 +141,7 @@ export function RegisterForm() {
         {step === "username" && (
           <form onSubmit={handleUsernameSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="username" className="text-gray-200">
+              <Label htmlFor="username" className="text-foreground">
                 Username
               </Label>
               <Input
@@ -150,12 +150,12 @@ export function RegisterForm() {
                 placeholder="Choose a username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="bg-gray-900 border-gray-700 text-gray-100 placeholder:text-gray-500"
+                className="bg-background border-border text-foreground placeholder:text-muted-foreground"
                 autoFocus
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="email" className="text-gray-200">
+              <Label htmlFor="email" className="text-foreground">
                 Email
               </Label>
               <Input
@@ -164,11 +164,11 @@ export function RegisterForm() {
                 placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="bg-gray-900 border-gray-700 text-gray-100 placeholder:text-gray-500"
+                className="bg-background border-border text-foreground placeholder:text-muted-foreground"
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="displayName" className="text-gray-200">
+              <Label htmlFor="displayName" className="text-foreground">
                 Display name
               </Label>
               <Input
@@ -177,12 +177,12 @@ export function RegisterForm() {
                 placeholder="How should we address you?"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                className="bg-gray-900 border-gray-700 text-gray-100 placeholder:text-gray-500"
+                className="bg-background border-border text-foreground placeholder:text-muted-foreground"
               />
             </div>
             <Button
               type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-700"
+              className="w-full bg-primary hover:bg-primary/90"
               disabled={!username.trim() || !email.trim() || !displayName.trim()}
             >
               Continue
@@ -193,20 +193,20 @@ export function RegisterForm() {
         {/* Step 2: Create Passkey */}
         {step === "passkey" && (
           <div className="space-y-4">
-            <div className="p-4 bg-gray-900 rounded-lg border border-gray-700">
-              <p className="text-sm text-gray-300 mb-2">
+            <div className="p-4 bg-background rounded-lg border border-border">
+              <p className="text-sm text-foreground/80 mb-2">
                 You&apos;re registering as:
               </p>
-              <p className="text-lg font-semibold text-gray-100">{username}</p>
+              <p className="text-lg font-semibold text-foreground">{username}</p>
             </div>
-            <p className="text-sm text-gray-400">
+            <p className="text-sm text-muted-foreground">
               Click the button below to create a passkey. You&apos;ll be prompted to
               use your device&apos;s biometric authentication (Face ID, Touch ID,
               Windows Hello) or a security key.
             </p>
             <Button
               type="button"
-              className="w-full bg-blue-600 hover:bg-blue-700"
+              className="w-full bg-primary hover:bg-primary/90"
               onClick={handleCreatePasskey}
               disabled={isLoading || !isWebAuthnSupported}
             >
@@ -220,7 +220,7 @@ export function RegisterForm() {
             <Button
               type="button"
               variant="ghost"
-              className="w-full text-gray-400 hover:text-gray-200"
+              className="w-full text-muted-foreground hover:text-foreground"
               onClick={() => setStep("username")}
               disabled={isLoading}
             >
@@ -233,20 +233,20 @@ export function RegisterForm() {
         {step === "complete" && (
           <div className="text-center space-y-4">
             <div className="flex justify-center">
-              <CheckCircle2 className="h-16 w-16 text-green-500" />
+              <CheckCircle2 className="h-16 w-16 text-green-600" />
             </div>
-            <p className="text-gray-300">
+            <p className="text-foreground/80">
               Welcome to Strato, <strong>{username}</strong>!
             </p>
-            <p className="text-sm text-gray-400">Redirecting to dashboard...</p>
+            <p className="text-sm text-muted-foreground">Redirecting to dashboard...</p>
           </div>
         )}
       </CardContent>
       {step === "username" && (
         <CardFooter className="flex justify-center">
-          <p className="text-sm text-gray-400">
+          <p className="text-sm text-muted-foreground">
             Already have an account?{" "}
-            <Link href="/login" className="text-blue-400 hover:text-blue-300">
+            <Link href="/login" className="text-blue-600 hover:text-blue-700">
               Sign in
             </Link>
           </p>

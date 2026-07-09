@@ -37,7 +37,7 @@ export function VolumeTable({
     return (
       <div className="space-y-2">
         {[...Array(3)].map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full bg-gray-700" />
+          <Skeleton key={i} className="h-12 w-full bg-muted" />
         ))}
       </div>
     );
@@ -45,7 +45,7 @@ export function VolumeTable({
 
   if (volumes.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-400">
+      <div className="text-center py-8 text-muted-foreground">
         No volumes found. Create one to get started.
       </div>
     );
@@ -53,37 +53,37 @@ export function VolumeTable({
 
   return (
     <Table>
-      <TableHeader className="bg-gray-900">
-        <TableRow className="border-gray-700 hover:bg-gray-900">
-          <TableHead className="text-gray-400 font-medium">Name</TableHead>
-          <TableHead className="text-gray-400 font-medium">Status</TableHead>
-          <TableHead className="text-gray-400 font-medium">Type</TableHead>
-          <TableHead className="text-gray-400 font-medium">Size</TableHead>
-          <TableHead className="text-gray-400 font-medium">
+      <TableHeader className="bg-background">
+        <TableRow className="border-border hover:bg-transparent">
+          <TableHead className="text-muted-foreground font-medium">Name</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Status</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Type</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Size</TableHead>
+          <TableHead className="text-muted-foreground font-medium">
             Attached To
           </TableHead>
-          <TableHead className="text-gray-400 font-medium text-right">
+          <TableHead className="text-muted-foreground font-medium text-right">
             Actions
           </TableHead>
         </TableRow>
       </TableHeader>
-      <TableBody className="divide-y divide-gray-700">
+      <TableBody className="divide-y divide-border">
         {volumes.map((volume) => {
           const attachedVM = volume.vmId ? vmsById.get(volume.vmId) : undefined;
           return (
             <TableRow
               key={volume.id}
-              className="border-gray-700 hover:bg-gray-800/50"
+              className="border-border hover:bg-accent/60"
             >
               <TableCell>
-                <span className="font-medium text-gray-100">{volume.name}</span>
+                <span className="font-medium text-foreground">{volume.name}</span>
                 {volume.description && (
-                  <p className="text-sm text-gray-500 truncate max-w-xs">
+                  <p className="text-sm text-muted-foreground truncate max-w-xs">
                     {volume.description}
                   </p>
                 )}
                 {volume.status === "error" && volume.errorMessage && (
-                  <p className="text-sm text-red-400 truncate max-w-xs">
+                  <p className="text-sm text-red-600 truncate max-w-xs">
                     {volume.errorMessage}
                   </p>
                 )}
@@ -91,33 +91,33 @@ export function VolumeTable({
               <TableCell>
                 <VolumeStatusBadge status={volume.status} />
               </TableCell>
-              <TableCell className="text-gray-300">
+              <TableCell className="text-foreground/80">
                 {volume.volumeType}
-                <span className="text-gray-500"> · {volume.format}</span>
+                <span className="text-muted-foreground"> · {volume.format}</span>
               </TableCell>
-              <TableCell className="text-gray-300">
+              <TableCell className="text-foreground/80">
                 {volume.sizeFormatted}
               </TableCell>
               <TableCell>
                 {attachedVM ? (
                   <Link
                     href={`/vms/detail?id=${attachedVM.id}`}
-                    className="text-blue-400 hover:text-blue-300 hover:underline"
+                    className="text-blue-600 hover:text-blue-700 hover:underline"
                   >
                     {attachedVM.name}
                     {volume.deviceName && (
-                      <span className="text-gray-500">
+                      <span className="text-muted-foreground">
                         {" "}
                         ({volume.deviceName})
                       </span>
                     )}
                   </Link>
                 ) : volume.vmId ? (
-                  <span className="text-gray-300 font-mono text-sm">
+                  <span className="text-foreground/80 font-mono text-sm">
                     {volume.vmId}
                   </span>
                 ) : (
-                  <span className="text-gray-500">—</span>
+                  <span className="text-muted-foreground">—</span>
                 )}
               </TableCell>
               <TableCell className="text-right">

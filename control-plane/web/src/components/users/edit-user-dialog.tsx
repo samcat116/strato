@@ -61,39 +61,39 @@ export function EditUserDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         <DialogHeader>
           <DialogTitle>Edit {user.username}</DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             Update the user&apos;s display name and email address.
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label className="text-gray-200">Username</Label>
+            <Label className="text-foreground">Username</Label>
             <Input
               value={user.username}
-              className="bg-gray-950 border-gray-700 text-gray-400"
+              className="bg-muted/50 text-muted-foreground"
               disabled
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="edit-user-display-name" className="text-gray-200">
+            <Label htmlFor="edit-user-display-name" className="text-foreground">
               Display Name
             </Label>
             <Input
               id="edit-user-display-name"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              className="bg-gray-900 border-gray-700 text-gray-100"
+              className="bg-background border-border text-foreground"
               disabled={updateUser.isPending}
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="edit-user-email" className="text-gray-200">
+            <Label htmlFor="edit-user-email" className="text-foreground">
               Email
             </Label>
             <Input
@@ -101,7 +101,7 @@ export function EditUserDialog({
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="bg-gray-900 border-gray-700 text-gray-100"
+              className="bg-background border-border text-foreground"
               disabled={updateUser.isPending}
             />
           </div>
@@ -110,7 +110,7 @@ export function EditUserDialog({
             <Button
               type="button"
               variant="outline"
-              className="border-gray-600"
+              className="border-input"
               onClick={() => onOpenChange(false)}
               disabled={updateUser.isPending}
             >
@@ -118,7 +118,7 @@ export function EditUserDialog({
             </Button>
             <Button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               disabled={updateUser.isPending}
             >
               {updateUser.isPending ? (

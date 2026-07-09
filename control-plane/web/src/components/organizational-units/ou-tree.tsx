@@ -38,7 +38,7 @@ export function OuTree({ units, isLoading, ...handlers }: OuTreeProps) {
     return (
       <div className="space-y-2">
         {[...Array(3)].map((_, i) => (
-          <Skeleton key={i} className="h-10 w-full bg-gray-700" />
+          <Skeleton key={i} className="h-10 w-full bg-muted" />
         ))}
       </div>
     );
@@ -46,7 +46,7 @@ export function OuTree({ units, isLoading, ...handlers }: OuTreeProps) {
 
   if (units.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-400">
+      <div className="text-center py-8 text-muted-foreground">
         No organizational units yet.
       </div>
     );
@@ -90,7 +90,7 @@ function OuTopNode({
         <ul className="space-y-1 mt-1">
           {isLoading && (
             <li style={{ paddingLeft: 28 }}>
-              <Skeleton className="h-9 w-full bg-gray-700" />
+              <Skeleton className="h-9 w-full bg-muted" />
             </li>
           )}
           {tree?.children.map((child) => (
@@ -192,14 +192,14 @@ function OuRow({
 
   return (
     <div
-      className="group flex items-center gap-2 rounded-md border border-gray-700 bg-gray-900/40 px-2 py-2 hover:bg-gray-800/60"
+      className="group flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-2 hover:bg-accent/60"
       style={{ marginLeft: depth > 0 ? 20 : 0 }}
     >
       {onToggle ? (
         <button
           type="button"
           onClick={onToggle}
-          className="text-gray-400 hover:text-gray-100"
+          className="text-muted-foreground hover:text-foreground"
           aria-label={expanded ? `Collapse ${name}` : `Expand ${name}`}
         >
           {expanded ? (
@@ -212,18 +212,18 @@ function OuRow({
         <span className="w-4" />
       )}
 
-      <FolderTree className="h-4 w-4 text-gray-500 shrink-0" />
+      <FolderTree className="h-4 w-4 text-muted-foreground shrink-0" />
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-gray-100 truncate">{name}</span>
-          <span className="text-xs text-gray-500 shrink-0">
+          <span className="font-medium text-foreground truncate">{name}</span>
+          <span className="text-xs text-muted-foreground shrink-0">
             {childCount} {childCount === 1 ? "unit" : "units"} · {projectCount}{" "}
             {projectCount === 1 ? "project" : "projects"}
           </span>
         </div>
         {description && (
-          <p className="text-xs text-gray-400 truncate">{description}</p>
+          <p className="text-xs text-muted-foreground truncate">{description}</p>
         )}
       </div>
 
@@ -232,7 +232,7 @@ function OuRow({
           <Button
             size="icon-sm"
             variant="ghost"
-            className="text-gray-400 hover:text-gray-100 hover:bg-gray-700"
+            className="text-muted-foreground hover:text-foreground hover:bg-accent"
             onClick={() => onAddSub({ id, name })}
             aria-label={`Add sub-unit to ${name}`}
           >
@@ -241,7 +241,7 @@ function OuRow({
           <Button
             size="icon-sm"
             variant="ghost"
-            className="text-gray-400 hover:text-gray-100 hover:bg-gray-700"
+            className="text-muted-foreground hover:text-foreground hover:bg-accent"
             onClick={() => onEdit({ id, name, description })}
             aria-label={`Edit ${name}`}
           >
@@ -250,7 +250,7 @@ function OuRow({
           <Button
             size="icon-sm"
             variant="ghost"
-            className="text-gray-400 hover:text-red-400 hover:bg-red-950/30"
+            className="text-muted-foreground hover:text-red-600 hover:bg-red-500/10"
             onClick={handleDelete}
             disabled={isDeleting}
             aria-label={`Delete ${name}`}

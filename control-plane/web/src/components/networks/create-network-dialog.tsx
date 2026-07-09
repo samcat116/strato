@@ -93,10 +93,10 @@ export function CreateNetworkDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         <DialogHeader>
           <DialogTitle>Create Network</DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             {currentProject
               ? `Create a new network in ${currentProject.name}`
               : "Create a new network"}
@@ -105,7 +105,7 @@ export function CreateNetworkDialog({
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="networkName" className="text-gray-200">
+              <Label htmlFor="networkName" className="text-foreground">
                 Name
               </Label>
               <Input
@@ -115,13 +115,13 @@ export function CreateNetworkDialog({
                 onChange={(e) =>
                   setFormData({ ...formData, name: e.target.value })
                 }
-                className="bg-gray-900 border-gray-700 text-gray-100"
+                className="bg-background border-border text-foreground"
                 disabled={isLoading}
                 autoFocus
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="networkSubnet" className="text-gray-200">
+              <Label htmlFor="networkSubnet" className="text-foreground">
                 Subnet (CIDR)
               </Label>
               <Input
@@ -131,15 +131,15 @@ export function CreateNetworkDialog({
                 onChange={(e) =>
                   setFormData({ ...formData, subnet: e.target.value })
                 }
-                className="bg-gray-900 border-gray-700 text-gray-100 font-mono"
+                className="bg-background border-border text-foreground font-mono"
                 disabled={isLoading}
               />
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-muted-foreground">
                 Prefix must be between /8 and /30.
               </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="networkGateway" className="text-gray-200">
+              <Label htmlFor="networkGateway" className="text-foreground">
                 Gateway (optional)
               </Label>
               <Input
@@ -149,10 +149,10 @@ export function CreateNetworkDialog({
                 onChange={(e) =>
                   setFormData({ ...formData, gateway: e.target.value })
                 }
-                className="bg-gray-900 border-gray-700 text-gray-100 font-mono"
+                className="bg-background border-border text-foreground font-mono"
                 disabled={isLoading}
               />
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-muted-foreground">
                 Defaults to the subnet&apos;s first host address. Changing it
                 later only affects VMs created afterward.
               </p>
@@ -164,14 +164,14 @@ export function CreateNetworkDialog({
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
-              className="border-gray-600 text-gray-300 hover:bg-gray-700"
+              className="border-input text-foreground/80 hover:bg-accent"
               disabled={isLoading}
             >
               Cancel
             </Button>
             <Button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               disabled={isLoading}
             >
               {isLoading ? (

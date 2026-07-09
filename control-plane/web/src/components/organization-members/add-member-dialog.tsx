@@ -67,10 +67,10 @@ export function AddMemberDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         <DialogHeader>
           <DialogTitle>Add Member</DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             Add an existing user to this organization by their email address.
           </DialogDescription>
         </DialogHeader>
@@ -78,7 +78,7 @@ export function AddMemberDialog({
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="memberEmail" className="text-gray-200">
+              <Label htmlFor="memberEmail" className="text-foreground">
                 Email
               </Label>
               <Input
@@ -87,17 +87,17 @@ export function AddMemberDialog({
                 placeholder="user@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="bg-gray-900 border-gray-700 text-gray-100"
+                className="bg-background border-border text-foreground"
                 disabled={addMember.isPending}
                 autoFocus
               />
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-muted-foreground">
                 The user must already have a Strato account.
               </p>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="memberRole" className="text-gray-200">
+              <Label htmlFor="memberRole" className="text-foreground">
                 Role
               </Label>
               <Select
@@ -107,20 +107,20 @@ export function AddMemberDialog({
               >
                 <SelectTrigger
                   id="memberRole"
-                  className="bg-gray-900 border-gray-700 text-gray-100"
+                  className="bg-background border-border text-foreground"
                 >
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent className="bg-gray-800 border-gray-700">
+                <SelectContent className="bg-card border-border">
                   <SelectItem
                     value="member"
-                    className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                    className="text-foreground focus:bg-accent focus:text-accent-foreground"
                   >
                     Member
                   </SelectItem>
                   <SelectItem
                     value="admin"
-                    className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                    className="text-foreground focus:bg-accent focus:text-accent-foreground"
                   >
                     Admin
                   </SelectItem>
@@ -133,7 +133,7 @@ export function AddMemberDialog({
             <Button
               type="button"
               variant="outline"
-              className="border-gray-600"
+              className="border-input"
               onClick={handleClose}
               disabled={addMember.isPending}
             >
@@ -141,7 +141,7 @@ export function AddMemberDialog({
             </Button>
             <Button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               disabled={addMember.isPending}
             >
               {addMember.isPending ? (

@@ -35,28 +35,28 @@ const LOG_LEVEL_CONFIG: Record<
 > = {
   debug: {
     icon: <Info className="h-4 w-4" />,
-    className: "text-gray-400",
+    className: "text-muted-foreground",
   },
   info: {
     icon: <CheckCircle className="h-4 w-4" />,
-    className: "text-blue-400",
+    className: "text-blue-600",
   },
   warning: {
     icon: <AlertTriangle className="h-4 w-4" />,
-    className: "text-yellow-400",
+    className: "text-yellow-700",
   },
   error: {
     icon: <AlertCircle className="h-4 w-4" />,
-    className: "text-red-400",
+    className: "text-red-600",
   },
 };
 
 const EVENT_TYPE_CONFIG: Record<VMEventType, string> = {
-  status_change: "bg-purple-500/20 text-purple-300 border-purple-500/30",
-  operation: "bg-blue-500/20 text-blue-300 border-blue-500/30",
-  qemu_output: "bg-gray-500/20 text-gray-300 border-gray-500/30",
-  error: "bg-red-500/20 text-red-300 border-red-500/30",
-  info: "bg-green-500/20 text-green-300 border-green-500/30",
+  status_change: "bg-purple-500/20 text-purple-700 border-purple-500/30",
+  operation: "bg-blue-500/20 text-blue-700 border-blue-500/30",
+  qemu_output: "bg-gray-500/20 text-foreground/80 border-gray-500/30",
+  error: "bg-red-500/20 text-red-700 border-red-500/30",
+  info: "bg-green-500/20 text-green-700 border-green-500/30",
 };
 
 export function LogViewer({ vmId, className }: LogViewerProps) {
@@ -114,9 +114,9 @@ export function LogViewer({ vmId, className }: LogViewerProps) {
   };
 
   return (
-    <Card className={`bg-gray-800 border-gray-700 ${className || ""}`}>
+    <Card className={`bg-card border-border ${className || ""}`}>
       <CardHeader className="flex flex-row items-center justify-between py-4">
-        <CardTitle className="text-lg font-semibold text-gray-100">
+        <CardTitle className="text-lg font-semibold text-foreground">
           VM Logs
         </CardTitle>
         <div className="flex items-center gap-2">
@@ -125,7 +125,7 @@ export function LogViewer({ vmId, className }: LogViewerProps) {
             value={String(limit)}
             onValueChange={(v) => setLimit(Number(v))}
           >
-            <SelectTrigger className="w-[100px] bg-gray-700 border-gray-600">
+            <SelectTrigger className="w-[100px] bg-muted border-input">
               <SelectValue placeholder="Limit" />
             </SelectTrigger>
             <SelectContent>
@@ -141,7 +141,7 @@ export function LogViewer({ vmId, className }: LogViewerProps) {
             variant="outline"
             size="sm"
             onClick={() => setAutoRefresh(!autoRefresh)}
-            className={`border-gray-600 ${
+            className={`border-input ${
               autoRefresh ? "bg-green-900/20 border-green-700" : ""
             }`}
           >
@@ -164,7 +164,7 @@ export function LogViewer({ vmId, className }: LogViewerProps) {
             size="sm"
             onClick={() => refetch()}
             disabled={isFetching}
-            className="border-gray-600"
+            className="border-input"
           >
             <RefreshCw
               className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`}
@@ -177,7 +177,7 @@ export function LogViewer({ vmId, className }: LogViewerProps) {
             size="sm"
             onClick={downloadLogs}
             disabled={!logs || logs.length === 0}
-            className="border-gray-600"
+            className="border-input"
           >
             <Download className="h-4 w-4" />
           </Button>
@@ -186,9 +186,9 @@ export function LogViewer({ vmId, className }: LogViewerProps) {
       <CardContent className="p-0">
         {/* Polling indicator */}
         {autoRefresh && (
-          <div className="flex items-center gap-2 px-4 py-2 bg-green-900/10 border-b border-gray-700">
+          <div className="flex items-center gap-2 px-4 py-2 bg-green-900/10 border-b border-border">
             <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-xs text-green-400">
+            <span className="text-xs text-green-600">
               Auto-refreshing every 5 seconds
             </span>
           </div>
@@ -200,14 +200,14 @@ export function LogViewer({ vmId, className }: LogViewerProps) {
           className="h-[400px] overflow-auto font-mono text-xs"
         >
           {isLoading ? (
-            <div className="flex items-center justify-center h-full text-gray-400">
+            <div className="flex items-center justify-center h-full text-muted-foreground">
               Loading logs...
             </div>
           ) : !logs || logs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-2">
+            <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
               <Info className="h-8 w-8" />
               <span>No logs available</span>
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-muted-foreground">
                 Logs will appear here when VM operations are performed
               </span>
             </div>
@@ -223,9 +223,9 @@ export function LogViewer({ vmId, className }: LogViewerProps) {
                   return (
                     <tr
                       key={`${log.timestamp}-${idx}`}
-                      className="hover:bg-gray-700/50 border-b border-gray-800"
+                      className="hover:bg-accent/60 border-b border-border"
                     >
-                      <td className="px-3 py-2 text-gray-500 whitespace-nowrap align-top">
+                      <td className="px-3 py-2 text-muted-foreground whitespace-nowrap align-top">
                         {formatTimestamp(log.timestamp)}
                       </td>
                       <td className="px-2 py-2 align-top">
@@ -243,7 +243,7 @@ export function LogViewer({ vmId, className }: LogViewerProps) {
                       </td>
                       <td className="px-2 py-2 align-top">
                         {log.labels.source && (
-                          <span className="text-xs text-gray-500">
+                          <span className="text-xs text-muted-foreground">
                             [{log.labels.source}]
                           </span>
                         )}
