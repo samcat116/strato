@@ -72,6 +72,11 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(spire.trustDomain == "strato.local")
                 #expect(spire.serverAddress == "spire.example.com:8085")
 
+                // With SPIRE provisioning active, agents dial the Envoy mTLS
+                // listener, which is always TLS — the URL must be wss:// even
+                // though this test request arrived over plain HTTP.
+                #expect(response.registrationURL.hasPrefix("wss://"))
+
                 let command = try #require(response.bootstrapCommand)
                 #expect(command.contains(response.registrationURL))
                 #expect(command.contains("fake-join-token"))

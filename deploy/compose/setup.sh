@@ -15,6 +15,10 @@ cd "$(dirname "$0")"
 
 HOSTNAME_ARG="localhost"
 PORT_ARG="80"
+# Envoy mTLS listener + SPIRE node API ports agents connect to. Kept fixed to
+# match the published ports and the control plane's :8085 derivation; override
+# in .env only if you also change docker-compose.yml.
+AGENT_MTLS_PORT="8443"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,11 +63,15 @@ fi
 
 if [[ ( "$SCHEME" == "http" && "$PORT_ARG" != "80" ) || ( "$SCHEME" == "https" && "$PORT_ARG" != "443" ) ]]; then
   ORIGIN="${SCHEME}://${HOSTNAME_ARG}:${PORT_ARG}"
-  EXTERNAL_HOSTNAME="${HOSTNAME_ARG}:${PORT_ARG}"
 else
   ORIGIN="${SCHEME}://${HOSTNAME_ARG}"
-  EXTERNAL_HOSTNAME="${HOSTNAME_ARG}"
 fi
+
+# Agents authenticate over mTLS to the Envoy listener, a TLS port separate from
+# the browser proxy, so EXTERNAL_HOSTNAME points at <hostname>:<mTLS port>
+# regardless of the HTTP port. The control plane always emits wss:// agent URLs
+# when SPIRE is enabled, so this works for http:// (localhost) origins too.
+EXTERNAL_HOSTNAME="${HOSTNAME_ARG}:${AGENT_MTLS_PORT}"
 
 umask 077
 cat > .env <<EOF
@@ -81,8 +89,9 @@ VALKEY_PASSWORD=$(openssl rand -hex 32)
 # this does not match, so change it (and re-register users) when the
 # hostname changes. Non-localhost hostnames require HTTPS.
 STRATO_HOSTNAME=${HOSTNAME_ARG}
-# Host (and port, when non-standard) agents use to reach the control plane;
-# embedded in the join commands the UI generates.
+# Host:port agents use to reach the control plane over mTLS (the Envoy
+# listener); embedded in the bootstrap commands the UI generates. This is the
+# agent-facing endpoint, not the browser proxy.
 EXTERNAL_HOSTNAME=${EXTERNAL_HOSTNAME}
 # Full origin agents fetch signed image-download URLs from. Routes to the
 # control plane through the published proxy, so it must be the browser origin
@@ -111,5 +120,10 @@ if [[ "$SCHEME" == "https" ]]; then
   echo "Terminate TLS for ${ORIGIN} in front of the proxy service before"
   echo "registering users."
 fi
+echo
+echo "Agents authenticate over mTLS: make sure ${HOSTNAME_ARG}:${AGENT_MTLS_PORT}"
+echo "(Envoy) and ${HOSTNAME_ARG}:8085 (SPIRE) are reachable from your"
+echo "hypervisor nodes. mTLS is end-to-end, so do NOT terminate TLS in front"
+echo "of :${AGENT_MTLS_PORT}."
 echo
 echo "Next: docker compose up -d"
