@@ -124,6 +124,8 @@ actor Agent {
     private let ovnChassisConfig: OVNChassisConfig
     private let ovnUplink: OVNUplinkConfig?
     private let ovnNorthbound: String?
+    // TLS material for an ssl: ovn_northbound endpoint (nil = tcp/unix).
+    private let ovnNorthboundTLS: OVNNorthboundTLSConfig?
     // The networking backend actually selected at startup (config value plus
     // platform fallbacks). Drives the networking capability advertised at
     // registration: a Linux agent configured for user-mode networking must not
@@ -167,6 +169,7 @@ actor Agent {
         ovnChassisConfig: OVNChassisConfig = OVNChassisConfig(),
         ovnUplink: OVNUplinkConfig? = nil,
         ovnNorthbound: String? = nil,
+        ovnNorthboundTLS: OVNNorthboundTLSConfig? = nil,
         isRegistrationMode: Bool,
         logger: Logger,
         imageCachePath: String? = nil,
@@ -189,6 +192,7 @@ actor Agent {
         self.ovnChassisConfig = ovnChassisConfig
         self.ovnUplink = ovnUplink
         self.ovnNorthbound = ovnNorthbound
+        self.ovnNorthboundTLS = ovnNorthboundTLS
         self.isRegistrationMode = isRegistrationMode
         self.logger = logger
         self.imageCachePath = imageCachePath
@@ -255,7 +259,8 @@ actor Agent {
             #if os(Linux)
             logger.info("Network service initialized with SwiftOVN support")
             networkService = NetworkServiceLinux(
-                nbConnection: ovnNorthbound, chassisConfig: ovnChassisConfig, uplink: ovnUplink, logger: logger)
+                nbConnection: ovnNorthbound, nbTLS: ovnNorthboundTLS, chassisConfig: ovnChassisConfig,
+                uplink: ovnUplink, logger: logger)
             effectiveNetworkMode = .ovn
             #else
             logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
@@ -885,7 +890,8 @@ actor Agent {
                 firecrackerSocketDirectory: firecrackerSocketDirectory,
                 firmwarePath: resolvedFirmwarePath,
                 ovnMode: effectiveNetworkMode == .ovn,
-                ovnNBConnection: ovnNorthbound ?? "unix:/var/run/ovn/ovnnb_db.sock"
+                ovnNBConnection: ovnNorthbound ?? "unix:/var/run/ovn/ovnnb_db.sock",
+                ovnNBTLSFilePaths: ovnNorthboundTLS?.configuredFilePaths ?? []
             ))
     }
 

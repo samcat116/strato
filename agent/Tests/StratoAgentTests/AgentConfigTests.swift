@@ -127,6 +127,98 @@ struct AgentConfigTests {
         }
     }
 
+    @Test("Load [ovn_northbound_tls] with an ssl: endpoint")
+    func loadOVNNorthboundTLS() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                network_mode = "ovn"
+                ovn_northbound = "ssl:central:6641"
+
+                [ovn_northbound_tls]
+                ca_cert = "/etc/strato/pki/cacert.pem"
+                client_cert = "/etc/strato/pki/agent-cert.pem"
+                client_key = "/etc/strato/pki/agent-privkey.pem"
+                server_hostname = "central.site.example"
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+            let tls = try #require(config.ovnNorthboundTLS)
+            #expect(tls.caCertPath == "/etc/strato/pki/cacert.pem")
+            #expect(tls.clientCertPath == "/etc/strato/pki/agent-cert.pem")
+            #expect(tls.clientKeyPath == "/etc/strato/pki/agent-privkey.pem")
+            #expect(tls.serverHostname == "central.site.example")
+            // Verification is on unless explicitly disabled.
+            #expect(tls.verifyServerCertificate)
+            #expect(
+                tls.configuredFilePaths == [
+                    "/etc/strato/pki/cacert.pem",
+                    "/etc/strato/pki/agent-cert.pem",
+                    "/etc/strato/pki/agent-privkey.pem",
+                ])
+        }
+    }
+
+    @Test("[ovn_northbound_tls] without an ssl: endpoint is rejected — TLS settings must never be silently ignored")
+    func ovnNorthboundTLSRequiresSSLEndpoint() throws {
+        try withTempDirectory { tempDirectory in
+            for endpointLine in ["ovn_northbound = \"tcp:central:6641\"", ""] {
+                let tomlContent = """
+                    control_plane_url = "ws://localhost:8080/agent/ws"
+                    \(endpointLine)
+
+                    [ovn_northbound_tls]
+                    ca_cert = "/etc/strato/pki/cacert.pem"
+                    """
+                let configPath = tempDirectory.appendingPathComponent("config.toml").path
+                try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+                #expect(throws: AgentConfigError.self) {
+                    _ = try AgentConfig.load(from: configPath)
+                }
+            }
+        }
+    }
+
+    @Test("A client certificate without its key (or vice versa) is rejected")
+    func ovnNorthboundTLSClientPairValidated() throws {
+        try withTempDirectory { tempDirectory in
+            for lonelyKey in ["client_cert", "client_key"] {
+                let tomlContent = """
+                    control_plane_url = "ws://localhost:8080/agent/ws"
+                    ovn_northbound = "ssl:central:6641"
+
+                    [ovn_northbound_tls]
+                    \(lonelyKey) = "/etc/strato/pki/half-a-pair.pem"
+                    """
+                let configPath = tempDirectory.appendingPathComponent("config.toml").path
+                try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+                #expect(throws: AgentConfigError.self) {
+                    _ = try AgentConfig.load(from: configPath)
+                }
+            }
+        }
+    }
+
+    @Test("ovn_northbound_tls defaults to nil, and an ssl: endpoint works without it (system trust roots)")
+    func ovnNorthboundTLSDefaultsNil() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://minimal:8080/ws"
+                ovn_northbound = "ssl:central:6641"
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+            #expect(config.ovnNorthbound == "ssl:central:6641")
+            #expect(config.ovnNorthboundTLS == nil)
+        }
+    }
+
     @Test("ovn_northbound defaults to nil (legacy local socket)")
     func ovnNorthboundDefaultsNil() throws {
         try withTempDirectory { tempDirectory in

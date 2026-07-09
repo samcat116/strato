@@ -13,6 +13,9 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// `ssl:<host>:<port>`). Defaults to the legacy per-node local socket; a
     /// site's agents all point it at the site's shared ovn-central (issue #343).
     private let ovnNBConnection: String
+    /// TLS material for an `ssl:` NB endpoint (CA, client cert/key). Nil for
+    /// `unix:`/`tcp:` connections, or for `ssl:` with system trust roots.
+    private let ovnNBTLS: OVNNorthboundTLSConfig?
     private let ovsSocketPath: String
     private let chassisConfig: OVNChassisConfig
     /// Site uplink for SNAT egress; nil disables SNAT (issue #342). SNAT needs a
@@ -45,12 +48,14 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
     init(
         nbConnection: String? = nil,
+        nbTLS: OVNNorthboundTLSConfig? = nil,
         ovsSocketPath: String = "/var/run/openvswitch/db.sock",
         chassisConfig: OVNChassisConfig = OVNChassisConfig(),
         uplink: OVNUplinkConfig? = nil,
         logger: Logger
     ) {
         self.ovnNBConnection = nbConnection ?? "unix:/var/run/ovn/ovnnb_db.sock"
+        self.ovnNBTLS = nbTLS
         self.ovsSocketPath = ovsSocketPath
         self.chassisConfig = chassisConfig
         self.uplinkConfig = uplink
@@ -99,8 +104,22 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         #if os(Linux)
         logger.info("Connecting to OVN/OVS services")
 
-        // Initialize OVN manager
-        ovnManager = OVNManager(endpoint: try OVSDBEndpoint(parsing: ovnNBConnection), logger: logger)
+        // Initialize OVN manager. The string form can't express TLS options
+        // (CA, client cert), so an ssl: endpoint is re-created with the
+        // configured material when the operator supplied any.
+        var nbEndpoint = try OVSDBEndpoint(parsing: ovnNBConnection)
+        if case .ssl(let host, let port, _) = nbEndpoint, let tls = ovnNBTLS {
+            nbEndpoint = .ssl(
+                host: host, port: port,
+                tls: OVSDBTLSConfiguration(
+                    caCertificatePath: tls.caCertPath,
+                    clientCertificatePath: tls.clientCertPath,
+                    clientPrivateKeyPath: tls.clientKeyPath,
+                    verifiesServerCertificate: tls.verifyServerCertificate,
+                    serverHostname: tls.serverHostname
+                ))
+        }
+        ovnManager = OVNManager(endpoint: nbEndpoint, logger: logger)
         try await ovnManager?.connect()
         logger.info("Connected to OVN database", metadata: ["endpoint": .string(ovnNBConnection)])
 

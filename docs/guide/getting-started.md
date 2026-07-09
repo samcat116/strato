@@ -17,7 +17,9 @@ This guide will help you set up Strato for development or production use.
 
 - KVM kernel module (`/dev/kvm` access)
 - QEMU packages: `qemu-system-x86_64`, `qemu-utils`
-- OVN/OVS packages: `ovn-central`, `ovn-host`, `openvswitch-switch`
+- OVN/OVS packages: `ovn-host`, `openvswitch-switch` (hypervisors run only the
+  chassis side; the per-site NB/SB/northd central runs separately — see
+  `deploy/ovn-central/`)
 - Network capabilities: `NET_ADMIN`, `SYS_ADMIN`
 
 #### macOS (Development)

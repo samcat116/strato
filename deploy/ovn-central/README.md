@@ -16,8 +16,18 @@ docker compose up -d --build
 
 It listens on plain TCP: `6641` (northbound) and `6642` (southbound). Plain
 TCP assumes the site network is trusted; for anything less, issue certs with
-`ovn-pki` and switch the remotes to `ssl:` (the agent's `ovn_northbound`
-accepts `ssl:host:port` too).
+`ovn-pki` and switch the remotes to `ssl:`. On the agent side, point
+`ovn_northbound` at `ssl:<central-host>:6641` and put the PKI material in
+`[ovn_northbound_tls]` (the counterparts of ovn-nbctl's `-C`/`-c`/`-p`):
+
+```toml
+ovn_northbound = "ssl:<central-host>:6641"
+
+[ovn_northbound_tls]
+ca_cert = "/etc/strato/pki/cacert.pem"
+client_cert = "/etc/strato/pki/agent-cert.pem"
+client_key = "/etc/strato/pki/agent-privkey.pem"
+```
 
 ## Pointing the site's hypervisors at it
 

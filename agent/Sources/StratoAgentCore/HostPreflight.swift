@@ -31,6 +31,7 @@ public enum HostPreflight {
         case qemuImgBinary = "qemu-img"
         case uefiFirmware = "uefi_firmware"
         case ovnDatabaseSocket = "ovn_nb_socket"
+        case ovnDatabaseTLSFiles = "ovn_nb_tls_files"
         case ovsDatabaseSocket = "ovsdb_socket"
         case ipTool = "ip"
         case ovsVsctlTool = "ovs-vsctl"
@@ -85,6 +86,10 @@ public enum HostPreflight {
         /// to unix connections — a remote site central can't be probed as a
         /// file, and its reachability surfaces at connect time instead.
         public var ovnNBConnection: String
+        /// PEM files configured for an `ssl:` NB endpoint (CA, client
+        /// cert/key). Each must exist — a typoed cert path should surface
+        /// here with its config key, not as an opaque TLS handshake failure.
+        public var ovnNBTLSFilePaths: [String]
         public var ovsSocketPath: String
         /// `PATH` used to locate CLI tools (`ip`, `ovs-vsctl`).
         public var searchPath: String
@@ -100,6 +105,7 @@ public enum HostPreflight {
             firmwarePath: String? = nil,
             ovnMode: Bool = false,
             ovnNBConnection: String = "unix:/var/run/ovn/ovnnb_db.sock",
+            ovnNBTLSFilePaths: [String] = [],
             ovsSocketPath: String = "/var/run/openvswitch/db.sock",
             searchPath: String = ProcessInfo.processInfo.environment["PATH"]
                 ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -113,6 +119,7 @@ public enum HostPreflight {
             self.firmwarePath = firmwarePath
             self.ovnMode = ovnMode
             self.ovnNBConnection = ovnNBConnection
+            self.ovnNBTLSFilePaths = ovnNBTLSFilePaths
             self.ovsSocketPath = ovsSocketPath
             self.searchPath = searchPath
             self.minimumFreeDiskBytes = minimumFreeDiskBytes
@@ -161,8 +168,8 @@ public enum HostPreflight {
         /// CLI tools) all passed. Only meaningful when the preflight ran in
         /// OVN mode.
         public var ovnReady: Bool {
-            !failed(.ovnDatabaseSocket) && !failed(.ovsDatabaseSocket) && !failed(.ipTool)
-                && !failed(.ovsVsctlTool)
+            !failed(.ovnDatabaseSocket) && !failed(.ovnDatabaseTLSFiles) && !failed(.ovsDatabaseSocket)
+                && !failed(.ipTool) && !failed(.ovsVsctlTool)
         }
 
         /// Applies host-level gates on top of the per-hypervisor probes: a
@@ -229,6 +236,9 @@ public enum HostPreflight {
                 // Remote NB (shared site central): nothing local to probe;
                 // reachability surfaces when the network service connects.
                 checks.append(.pass(.ovnDatabaseSocket))
+            }
+            if !inputs.ovnNBTLSFilePaths.isEmpty {
+                checks.append(checkTLSFiles(inputs.ovnNBTLSFilePaths))
             }
             checks.append(
                 checkSocket(
@@ -312,6 +322,19 @@ public enum HostPreflight {
                     + "or set firmware_path_arm64/firmware_path_x86_64 in the agent configuration.")
         }
         return .pass(.uefiFirmware, severity: .advisory)
+    }
+
+    /// All PEM files configured for the ssl: NB endpoint must exist.
+    static func checkTLSFiles(_ paths: [String]) -> Check {
+        let missing = paths.filter { !FileManager.default.fileExists(atPath: $0) }
+        guard missing.isEmpty else {
+            return .fail(
+                .ovnDatabaseTLSFiles,
+                "ovn_northbound_tls file(s) not found: \(missing.joined(separator: ", ")) — "
+                    + "fix the [ovn_northbound_tls] paths in the agent configuration, or issue the "
+                    + "certificates (e.g. with ovn-pki) and place them there.")
+        }
+        return .pass(.ovnDatabaseTLSFiles)
     }
 
     static func checkSocket(_ path: String, kind: CheckKind, hint: String) -> Check {

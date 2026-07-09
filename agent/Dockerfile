@@ -74,8 +74,9 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     # glib-2.0 development files for QEMUKit
     libglib2.0-0 \
     libglib2.0-dev \
-    # OVN/OVS for software-defined networking
-    ovn-central \
+    # OVN/OVS for software-defined networking. Hypervisors run only the
+    # chassis side (ovn-controller + OVS); the NB/SB/northd central is a
+    # separate per-site deployment (deploy/ovn-central/), never this image.
     ovn-host \
     ovn-common \
     openvswitch-switch \

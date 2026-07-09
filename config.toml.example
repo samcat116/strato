@@ -124,6 +124,21 @@ log_level = "info"
 # external_ids and the agent must never touch them.
 # ovn_bootstrap_chassis = true
 
+# TLS for an ssl: ovn_northbound endpoint. OVN deployments run a private PKI
+# (ovn-pki), so the CA must be given explicitly and ovsdb-server usually
+# requires a client certificate signed by the same CA — these mirror
+# ovn-nbctl's -C/-c/-p flags. All paths are PEM files. This section is only
+# valid when ovn_northbound is ssl:<host>:<port>.
+#
+# [ovn_northbound_tls]
+# ca_cert = "/etc/strato/pki/cacert.pem"       # verifies the server (default: system roots)
+# client_cert = "/etc/strato/pki/agent-cert.pem"
+# client_key = "/etc/strato/pki/agent-privkey.pem"
+# # Verify the server certificate at all (default true; lab setups only)
+# verify_server_certificate = true
+# # SNI/verification hostname when connecting by IP to a cert issued for a name
+# server_hostname = "ovn-central.site.example"
+
 # OVN SNAT uplink (Linux, network_mode = "ovn"). Enables outbound internet for
 # networks with external access. SNAT needs a DEDICATED external IP on the
 # provider network that the host does NOT own (the OVN router claims it), so it

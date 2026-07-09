@@ -159,6 +159,46 @@ struct HostPreflightTests {
         #expect(report.check(.ovsDatabaseSocket)?.passed == false)
     }
 
+    @Test("Configured NB TLS files must exist; missing ones gate OVN readiness")
+    func nbTLSFilesChecked() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.ovnMode = true
+        inputs.ovnNBConnection = "ssl:central.example:6641"
+        let caPath = "\(root)/cacert.pem"
+        FileManager.default.createFile(atPath: caPath, contents: Data())
+        inputs.ovnNBTLSFilePaths = [caPath, "\(root)/missing-cert.pem"]
+
+        let report = HostPreflight.run(inputs)
+        let check = try #require(report.check(.ovnDatabaseTLSFiles))
+        #expect(!check.passed)
+        #expect(check.detail?.contains("missing-cert.pem") == true)
+        // The file that exists is not reported as missing.
+        #expect(check.detail?.contains("cacert.pem") == false)
+        #expect(!report.ovnReady)
+    }
+
+    @Test("NB TLS file check passes when every configured file exists, and is skipped when none are configured")
+    func nbTLSFilesPassOrSkip() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.ovnMode = true
+        inputs.ovnNBConnection = "ssl:central.example:6641"
+
+        let noFiles = HostPreflight.run(inputs)
+        #expect(noFiles.check(.ovnDatabaseTLSFiles) == nil)
+
+        let caPath = "\(root)/cacert.pem"
+        FileManager.default.createFile(atPath: caPath, contents: Data())
+        inputs.ovnNBTLSFilePaths = [caPath]
+        let withFiles = HostPreflight.run(inputs)
+        #expect(withFiles.check(.ovnDatabaseTLSFiles)?.passed == true)
+    }
+
     @Test("Missing ovn-appctl is advisory: verification is skipped, capability is not gated")
     func missingOVNAppctlIsAdvisory() throws {
         let root = try makeTempDir()
