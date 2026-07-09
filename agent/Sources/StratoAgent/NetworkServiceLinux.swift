@@ -965,6 +965,29 @@ extension NetworkServiceLinux: NetworkActuator {
 
     func ensureSwitch(_ desired: DesiredSwitch) async throws {
         #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        // Already on the UUID scheme.
+        if try await ovnManager.getLogicalSwitch(named: desired.name) != nil { return }
+
+        // Upgrade migration: an older agent named this switch after the network's
+        // user-facing name. Rename it in place to the UUID name — a rename keeps
+        // the same OVSDB row (and UUID), so existing VM ports and their dataplane
+        // bindings move to the new scheme without re-creation, and new VMs + the
+        // router port land on the same switch. issue #342.
+        if !desired.legacyName.isEmpty, desired.legacyName != desired.name,
+            let legacy = try await ovnManager.getLogicalSwitch(named: desired.legacyName),
+            let legacyUUID = legacy.uuid
+        {
+            // Only `name` is set, so the row encoder leaves ports/external_ids intact.
+            try await ovnManager.updateLogicalSwitch(uuid: legacyUUID, OVNLogicalSwitch(name: desired.name))
+            logger.info(
+                "Migrated legacy network switch to UUID name",
+                metadata: ["from": .string(desired.legacyName), "to": .string(desired.name)])
+            return
+        }
+
         _ = try await findOrCreateLogicalSwitch(name: desired.name, subnet: desired.subnet)
         #endif
     }

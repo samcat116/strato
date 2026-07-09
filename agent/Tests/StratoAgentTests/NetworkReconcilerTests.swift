@@ -86,11 +86,14 @@ struct NetworkReconcilerTests {
 
     @Test("A network with no gateway is switch-only (no router port, no router)")
     func switchOnlyNetwork() {
-        let plan = NetworkReconciler.plan(networks: [
-            network(name: "isolated", subnet: "10.9.0.0/24", gateway: nil, routerKey: "project-Z")
-        ])
+        let net = network(name: "isolated", subnet: "10.9.0.0/24", gateway: nil, routerKey: "project-Z")
+        let plan = NetworkReconciler.plan(networks: [net])
         #expect(plan.switches.count == 1)
         #expect(plan.routers.isEmpty)
+        // The switch is named by UUID; the user name is carried as the legacy
+        // name so the agent can migrate an old name-based switch in place.
+        #expect(plan.switches[0].name == OVNNaming.switchName(networkId: net.networkId))
+        #expect(plan.switches[0].legacyName == "isolated")
     }
 
     @Test("externalAccess=false gets an L3 gateway but no SNAT")

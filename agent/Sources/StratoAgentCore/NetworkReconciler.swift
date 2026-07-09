@@ -66,11 +66,18 @@ public enum OVNNaming {
 
 /// A tenant logical switch the plan wants to exist.
 public struct DesiredSwitch: Equatable, Sendable {
+    /// The UUID-derived OVN switch name (`OVNNaming.switchName`).
     public let name: String
     public let subnet: String
-    public init(name: String, subnet: String) {
+    /// The network's user-facing name, i.e. the switch name older agents used
+    /// before UUID naming. The actuator renames such a legacy switch in place to
+    /// `name` on upgrade, so existing VM ports migrate without re-creation.
+    public let legacyName: String
+
+    public init(name: String, subnet: String, legacyName: String) {
         self.name = name
         self.subnet = subnet
+        self.legacyName = legacyName
     }
 }
 
@@ -270,7 +277,8 @@ public enum NetworkReconciler {
         let sorted = networks.sorted { $0.name < $1.name }
 
         let switches = sorted.map {
-            DesiredSwitch(name: OVNNaming.switchName(networkId: $0.networkId), subnet: $0.subnet)
+            DesiredSwitch(
+                name: OVNNaming.switchName(networkId: $0.networkId), subnet: $0.subnet, legacyName: $0.name)
         }
 
         // Group by router key, preserving deterministic order.
