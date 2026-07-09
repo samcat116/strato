@@ -195,6 +195,7 @@ struct UserController: RouteCollection {
 
         // Create session - log the user in automatically
         req.auth.login(user)
+        await req.recordAuthEvent(.register, user: user)
 
         // If this is a system admin (first user), skip default organization setup
         // They'll create their organization through the onboarding flow
@@ -238,14 +239,21 @@ struct UserController: RouteCollection {
     func finishAuthentication(req: Request) async throws -> AuthenticationFinishResponse {
         let finishRequest = try req.content.decode(AuthenticationFinishRequest.self)
 
-        let user = try await req.webAuthn.finishAuthentication(
-            challenge: finishRequest.challenge,
-            authenticationCredential: finishRequest.response,
-            on: req.db
-        )
+        let user: User
+        do {
+            user = try await req.webAuthn.finishAuthentication(
+                challenge: finishRequest.challenge,
+                authenticationCredential: finishRequest.response,
+                on: req.db
+            )
+        } catch {
+            await req.recordAuthEvent(.loginFailed, metadata: ["error": "\(error)"])
+            throw error
+        }
 
         // Create session
         req.auth.login(user)
+        await req.recordAuthEvent(.login, user: user)
 
         // Store in SpiceDB relationships if needed
         // Ensure user belongs to default organization (skip for system admins)
@@ -267,7 +275,11 @@ struct UserController: RouteCollection {
     // MARK: - Session Management
 
     func logout(req: Request) async throws -> HTTPStatus {
+        let user = req.auth.get(User.self)
         req.auth.logout(User.self)
+        if let user {
+            await req.recordAuthEvent(.logout, user: user)
+        }
         return .noContent
     }
 

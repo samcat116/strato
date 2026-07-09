@@ -48,9 +48,12 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
             throw Abort(.unauthorized, reason: "User not authenticated")
         }
 
-        // System admins bypass all permission checks
+        // System admins bypass all permission checks. Flag the request so
+        // AuditMiddleware records the bypassed action as an admin audit event
+        // (issue #39) — this bypass is otherwise invisible to authorization.
         if user.isSystemAdmin {
             request.logger.info("System admin access - bypassing permission checks")
+            request.adminBypassUsed = true
             return try await next.respond(to: request)
         }
 
