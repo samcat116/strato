@@ -281,7 +281,29 @@ EOF
 
 install_unit
 
-# --- join (only with a registration URL) -------------------------------------
+# --- config + join (only with a registration URL) ----------------------------
+
+# Write the agent config before joining. `strato-agent join --config-file`
+# treats an explicit path as authoritative and fails if the file is missing (it
+# only auto-writes when using the default config path), so on a fresh host the
+# file must exist first. This is also the only place the selected network mode
+# is persisted — without it a Linux agent defaults to OVN even when installed
+# with --network-mode user. Linux only; macOS uses the agent's own default
+# config path (and always user-mode SLIRP), so join auto-writes it there.
+write_config() {
+  local url="$1"
+  install -d "$STRATO_CONF_DIR"
+  if [ -f "$CONFIG_FILE" ]; then
+    log "$CONFIG_FILE already exists; leaving it in place (ensure control_plane_url and network_mode are set)"
+    return 0
+  fi
+  local cp_url="${url%%\?*}"
+  log "Writing $CONFIG_FILE (network_mode = ${NETWORK_MODE})"
+  cat > "$CONFIG_FILE" << EOF
+control_plane_url = "$cp_url"
+network_mode = "$NETWORK_MODE"
+EOF
+}
 
 join_control_plane() {
   local url="$1"
@@ -289,6 +311,8 @@ join_control_plane() {
     ws://*|wss://*) ;;
     *) die "--registration-url must start with ws:// or wss:// (got '$url')" ;;
   esac
+
+  if [ "$OS" = "linux" ]; then write_config "$url"; fi
 
   if [ "$USE_SYSTEMD" -eq 1 ]; then
     if [ -f "$STATE_FILE" ]; then
@@ -322,7 +346,13 @@ join_control_plane() {
     log "Done. Follow along with: journalctl -fu strato-agent"
   else
     log "Joining the control plane (foreground; Ctrl-C stops the agent)"
-    exec "$STRATO_AGENT_BIN" join --config-file "$CONFIG_FILE" "$url"
+    if [ "$OS" = "linux" ]; then
+      exec "$STRATO_AGENT_BIN" join --config-file "$CONFIG_FILE" "$url"
+    else
+      # macOS: no config was written above; let join use its platform default
+      # config path and auto-write the minimal config there.
+      exec "$STRATO_AGENT_BIN" join "$url"
+    fi
   fi
 }
 
@@ -333,6 +363,12 @@ else
   log "(Agents -> Create Registration Token) and run:"
   log "  ${STRATO_AGENT_BIN} join '<registration-url>'"
   if [ "$USE_SYSTEMD" -eq 1 ]; then
-    log "The strato-agent.service unit is installed and will start it on boot after the first join."
+    log "Then start it on boot:  sudo systemctl enable --now strato-agent"
+    log "(or just re-run this installer with --registration-url to do both)."
+  fi
+  if [ "$OS" = "linux" ] && [ "$NETWORK_MODE" = "user" ]; then
+    log "Note: network_mode is only persisted during join. Re-run with"
+    log "--registration-url, or add 'network_mode = \"user\"' to $CONFIG_FILE yourself,"
+    log "otherwise the agent will default to OVN networking."
   fi
 fi
