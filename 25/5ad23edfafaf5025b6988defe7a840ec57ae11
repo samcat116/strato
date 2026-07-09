@@ -1,0 +1,26 @@
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_3d8fde8278f186::t_7762ca36ab0881 968-990
+agent/Tests/StratoAgentTests/NetworkReconcilerTests.swift
+  s_3d8fde8278f186::t_207897e88d1bfd 89-90,93-96
+docs/architecture/networking.md
+  s_3d8fde8278f186::t_37c4f0ff16182d 257-263
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_3d8fde8278f186::t_eab11e6aa2931b 280-281
+  s_3d8fde8278f186::t_a3f37392fe2868 69,72-77,80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "255ad23edfafaf5025b6988defe7a840ec57ae11",
+  "prompts": {},
+  "sessions": {
+    "s_3d8fde8278f186": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9d30d495-5bbb-422b-acbe-a23c52d97028",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
