@@ -12,6 +12,9 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     private let ovnSocketPath: String
     private let ovsSocketPath: String
     private let chassisConfig: OVNChassisConfig
+    /// Site uplink for SNAT egress; nil disables SNAT (issue #342). SNAT needs a
+    /// dedicated external IP the host doesn't own, so it is explicit config.
+    private let uplinkConfig: OVNUplinkConfig?
 
     /// Highest network `generation` this agent has applied, per network id. A
     /// full-list sync whose entry for a network is older than what's recorded is
@@ -24,9 +27,6 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     private var ovnManager: OVNManager?
     private var ovsManager: OVSManager?
     private var isConnected = false
-    /// The host uplink IP resolved during the last `ensureUplink` pass, used as
-    /// the SNAT external IP by `ensureSNAT` in the same reconcile (issue #342).
-    private var uplinkExternalIP: String?
     #else
     // Development mode on macOS - mock network storage
     private var mockNetworks: [String: MockNetwork] = [:]
@@ -37,11 +37,13 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         ovnSocketPath: String = "/var/run/ovn/ovnnb_db.sock",
         ovsSocketPath: String = "/var/run/openvswitch/db.sock",
         chassisConfig: OVNChassisConfig = OVNChassisConfig(),
+        uplink: OVNUplinkConfig? = nil,
         logger: Logger
     ) {
         self.ovnSocketPath = ovnSocketPath
         self.ovsSocketPath = ovsSocketPath
         self.chassisConfig = chassisConfig
+        self.uplinkConfig = uplink
         self.logger = logger
 
         #if os(Linux)
@@ -53,12 +55,6 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
     /// Bridge that OVN's `ovn-controller` binds VM ports onto.
     static let ovnIntegrationBridge = "br-int"
-
-    /// Provider (external) bridge and OVN physnet the L3 uplink uses. The agent
-    /// bootstraps these like it does `br-int`, so a single node needs no operator
-    /// network config for the OVN side of outbound SNAT (issue #342).
-    static let providerBridge = "br-ex"
-    static let providerPhysnet = "physnet-strato"
 
     /// External-id ownership marker stamped on every OVN object the reconciler
     /// creates, so teardown can identify its own objects without relying on name
@@ -1004,24 +1000,29 @@ extension NetworkServiceLinux: NetworkActuator {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
-        guard let uplink = detectHostUplink() else {
-            uplinkExternalIP = nil
+        // SNAT requires an operator-configured dedicated external IP: the OVN
+        // router port claims this address on the provider network, so it must be
+        // one the host itself does not own (otherwise host and router conflict).
+        // Without it we realize the router + east-west but no uplink/SNAT.
+        guard let uplink = uplinkConfig else {
+            logger.info(
+                "No OVN uplink configured; realizing router without SNAT egress",
+                metadata: ["router": .string(router.name)])
             return false
         }
-        guard let uplinkMAC = OVNNaming.routerPortMAC(gateway: uplink.ipAddress) else {
-            uplinkExternalIP = nil
+        guard let externalIP = uplink.externalIP,
+            let uplinkMAC = OVNNaming.routerPortMAC(gateway: externalIP)
+        else {
+            logger.error(
+                "OVN uplink external_cidr is not a valid ip/prefix; skipping SNAT",
+                metadata: ["externalCIDR": .string(uplink.externalCIDR)])
             return false
         }
 
-        // Provider bridge + physnet mapping, bootstrapped like br-int so the
-        // OVN side needs no operator config. NOTE: this wires the OVN topology
-        // and bridge mapping; it does not move the host's uplink NIC onto the
-        // provider bridge (that is destructive and can strand the host), so on a
-        // fresh host an operator still connects br-ex to the external network
-        // for SNAT traffic to actually egress. Auto-detected addressing means
-        // no other config is required. See issue #342 / epic #341.
-        try await ensureProviderBridge()
-        try ensureBridgeMapping()
+        // Provider bridge + physnet mapping. The operator connects the bridge to
+        // the external network out of band; the agent only wires the OVN side.
+        try await ensureProviderBridge(uplink.bridge)
+        try ensureBridgeMapping(physnet: uplink.physnet, bridge: uplink.bridge)
 
         // External logical switch + localnet port (the provider attachment).
         // Created with the external role marker so observeTopology can tell it
@@ -1044,15 +1045,16 @@ extension NetworkServiceLinux: NetworkActuator {
             let localnet = OVNLogicalSwitchPort(
                 name: router.localnetPortName,
                 portType: "localnet",
-                options: ["network_name": Self.providerPhysnet],
+                options: ["network_name": uplink.physnet],
                 addresses: ["unknown"],
-                external_ids: ["strato-managed": "true"])
+                external_ids: [Self.managedKey: Self.managedValue])
             _ = try await ovnManager.createLogicalSwitchPort(localnet, onSwitch: router.externalSwitchName)
         }
 
-        // Gateway router port on the external switch, addressed with the uplink.
+        // Gateway router port on the external switch, at the configured
+        // dedicated external address.
         try await ensureRouterPort(
-            name: router.externalRouterPortName, mac: uplinkMAC, cidr: uplink.cidr,
+            name: router.externalRouterPortName, mac: uplinkMAC, cidr: uplink.externalCIDR,
             switchName: router.externalSwitchName, switchPortName: router.externalSwitchRouterPortName,
             router: router.name)
 
@@ -1062,12 +1064,11 @@ extension NetworkServiceLinux: NetworkActuator {
             try ensureDefaultRoute(router: router.name, nextHop: nextHop)
         } else {
             let message =
-                "Uplink has no next-hop gateway; skipping the router default route "
-                + "(SNAT egress limited to the uplink subnet)"
+                "OVN uplink has no gateway; skipping the router default route "
+                + "(SNAT egress limited to the external subnet)"
             logger.warning("\(message)", metadata: ["router": .string(router.name)])
         }
 
-        uplinkExternalIP = uplink.ipAddress
         return true
         #else
         return false
@@ -1079,9 +1080,11 @@ extension NetworkServiceLinux: NetworkActuator {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
-        guard let externalIP = uplinkExternalIP else {
+        // SNAT to the configured dedicated external IP (reconcile only calls this
+        // after ensureUplink returned true, so the uplink config is present/valid).
+        guard let externalIP = uplinkConfig?.externalIP else {
             throw NetworkError.invalidConfiguration(
-                "SNAT for \(logicalIP) requested before the host uplink was resolved")
+                "SNAT for \(logicalIP) requested without a configured uplink external IP")
         }
         // Idempotent: reuse a matching rule; re-point one whose external IP drifted.
         for rule in try await snatRules(onRouter: routerName)
@@ -1091,7 +1094,7 @@ extension NetworkServiceLinux: NetworkActuator {
         }
         let nat = OVNNAT(
             natType: "snat", external_ip: externalIP, logical_ip: logicalIP,
-            external_ids: ["strato-managed": "true"])
+            external_ids: [Self.managedKey: Self.managedValue])
         _ = try await ovnManager.createNATRule(nat, onRouter: routerName)
         #endif
     }
@@ -1190,33 +1193,30 @@ extension NetworkServiceLinux {
     }
 
     /// Ensure the external provider bridge exists, mirroring `ensureIntegrationBridge`.
-    fileprivate func ensureProviderBridge() async throws {
+    fileprivate func ensureProviderBridge(_ bridgeName: String) async throws {
         guard let ovsManager else {
             throw NetworkError.notConnected("OVS manager not connected")
         }
-        if try await ovsManager.getBridge(named: Self.providerBridge) != nil { return }
+        if try await ovsManager.getBridge(named: bridgeName) != nil { return }
         let bridge = OVSBridge(
-            name: Self.providerBridge,
+            name: bridgeName,
             external_ids: ["description": "Strato OVN external/provider bridge"])
         do {
             _ = try await ovsManager.createBridge(bridge)
-            logger.info("Created provider bridge", metadata: ["bridge": .string(Self.providerBridge)])
+            logger.info("Created provider bridge", metadata: ["bridge": .string(bridgeName)])
         } catch {
-            if try await ovsManager.getBridge(named: Self.providerBridge) == nil { throw error }
+            if try await ovsManager.getBridge(named: bridgeName) == nil { throw error }
         }
     }
 
     /// Ensure the local OVS carries `ovn-bridge-mappings=<physnet>:<bridge>` for
     /// the provider network, merged with any mappings already present.
-    fileprivate func ensureBridgeMapping() throws {
+    fileprivate func ensureBridgeMapping(physnet: String, bridge: String) throws {
         let current = try runProcess(
             "ovs-vsctl",
             ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
         let existing = OVNChassisBootstrap.parseExternalIDs(current.output)["ovn-bridge-mappings"]
-        guard
-            let merged = OVNBridgeMappings.merged(
-                existing: existing, physnet: Self.providerPhysnet, bridge: Self.providerBridge)
-        else {
+        guard let merged = OVNBridgeMappings.merged(existing: existing, physnet: physnet, bridge: bridge) else {
             return  // already mapped
         }
         try run(
@@ -1226,26 +1226,6 @@ extension NetworkServiceLinux {
                 "external_ids:ovn-bridge-mappings=\(merged)",
             ])
         logger.info("Set OVN bridge mapping", metadata: ["mapping": .string(merged)])
-    }
-
-    /// Auto-detect the host's outbound uplink (default-route source IP, egress
-    /// device, and that address's prefix) for SNAT and the external router port.
-    fileprivate func detectHostUplink() -> HostUplink? {
-        guard let route = try? runProcess("ip", ["-j", "route", "get", "1.1.1.1"]), route.status == 0,
-            let (ip, device, gateway) = HostUplinkDetection.parseRoute(route.output)
-        else {
-            logger.warning("Could not detect host uplink route; skipping SNAT")
-            return nil
-        }
-        guard let addr = try? runProcess("ip", ["-j", "addr", "show", "dev", device]), addr.status == 0,
-            let prefix = HostUplinkDetection.parsePrefixLength(addr.output, forIP: ip)
-        else {
-            logger.warning(
-                "Could not detect uplink prefix length; skipping SNAT",
-                metadata: ["device": .string(device), "ip": .string(ip)])
-            return nil
-        }
-        return HostUplink(ipAddress: ip, interface: device, prefixLength: prefix, gateway: gateway)
     }
 
     /// Install (or update) the logical router's default route to the uplink next

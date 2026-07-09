@@ -121,9 +121,18 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     /// Per-project so a project's networks share one router (cross-switch
     /// east-west); a project-less (global) network keys on its own id and gets a
     /// dedicated router. Opaque to agents — see `DesiredNetworkState.routerKey`.
+    ///
+    /// Split by `externalAccess`: a project's egress networks share one router
+    /// (with the uplink), and its no-egress networks share a separate `-internal`
+    /// router with no uplink — so `externalAccess=false` guests provably have no
+    /// route to the internet, honoring the contract (issue #342). The tradeoff:
+    /// an egress and a no-egress network in the same project are on different
+    /// routers, so they don't route to each other (per-network egress policy that
+    /// preserves that east-west is a follow-up).
     var routerKey: String {
         if let projectID = $project.id {
-            return "project-\(projectID.uuidString)"
+            let scope = externalAccess ? "" : "-internal"
+            return "project-\(projectID.uuidString)\(scope)"
         }
         return "network-\(id?.uuidString ?? name)"
     }

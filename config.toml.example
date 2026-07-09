@@ -116,6 +116,19 @@ log_level = "info"
 # external_ids and the agent must never touch them.
 # ovn_bootstrap_chassis = true
 
+# OVN SNAT uplink (Linux, network_mode = "ovn"). Enables outbound internet for
+# networks with external access. SNAT needs a DEDICATED external IP on the
+# provider network that the host does NOT own (the OVN router claims it), so it
+# is explicit config, not auto-detected. Without this section, routers and
+# east-west are realized but no SNAT. The operator connects `bridge` to the
+# external network out of band; the agent only wires the OVN side.
+#
+# [ovn_uplink]
+# external_cidr = "203.0.113.2/24"   # dedicated router IP on the provider net
+# gateway = "203.0.113.1"            # next hop for the router's default route
+# bridge = "br-ex"                   # OVS provider bridge (default br-ex)
+# physnet = "physnet-strato"         # OVN physnet mapped to the bridge
+
 # Additional configuration options can be added here as needed
 # Examples:
 # heartbeat_interval = 30

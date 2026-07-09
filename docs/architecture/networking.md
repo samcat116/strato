@@ -255,14 +255,19 @@ single network within a site** (Phase 2).
   namespaces, so a network name can't collide with a provider/router object. The
   `NetworkSpec` a VM carries includes `networkId` so its port lands on the same
   UUID-named switch the reconciler creates.
-- SNAT egress uses an external logical switch with a `localnet` port on physnet
-  `physnet-strato`, mapped to a provider bridge `br-ex` (both bootstrapped by the
-  agent like `br-int`), with the SNAT external IP **auto-detected** from the
-  host's default route. The model leaves room for explicit uplink config later.
-- **Operator caveat:** the agent does not move the host's primary NIC onto
-  `br-ex` (that risks stranding the host), so on a fresh single node an operator
-  must connect `br-ex` to the external network for SNAT traffic to egress;
-  east-west and the L3 gateway work with no extra setup.
+- SNAT egress uses an external logical switch with a `localnet` port on a
+  configured physnet, mapped to a provider bridge, plus a gateway router port and
+  a default route. It requires an **operator-configured, dedicated external IP**
+  (`[ovn_uplink] external_cidr` in the agent config) that the host does not own —
+  the OVN router port claims that address, so auto-detecting and reusing the
+  host's own IP would cause an ARP/address conflict. Without the uplink config,
+  routers and east-west are realized but no SNAT (`externalAccess` has no effect).
+  The operator connects the provider bridge to the external network out of band.
+- **No-egress isolation:** a project's `externalAccess=false` networks are keyed
+  onto a separate `-internal` logical router with no uplink, so their guests
+  provably have no route to the internet. Tradeoff: an egress and a no-egress
+  network in the same project are on different routers and don't route to each
+  other; per-network egress policy that preserves that east-west is a follow-up.
 
 ### Phase 2 — Multi-node single network within a site _(top priority; has prerequisites)_
 

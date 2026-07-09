@@ -54,6 +54,26 @@ struct NetworkReconcilerTests {
         #expect(router.needsUplink)
     }
 
+    @Test("Egress and no-egress networks split onto separate routers")
+    func egressSplitRouters() {
+        // The control plane keys no-egress networks on a separate `-internal`
+        // routerKey; the planner then groups them onto a router with no uplink,
+        // so they provably can't egress.
+        let web = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "project-P",
+            externalAccess: true)
+        let db = network(
+            name: "db", subnet: "10.0.5.0/24", gateway: "10.0.5.1", routerKey: "project-P-internal",
+            externalAccess: false)
+        let plan = NetworkReconciler.plan(networks: [web, db])
+
+        #expect(plan.routers.count == 2)
+        let egress = plan.routers.first { $0.name == "lr-project-P" }
+        let internalRouter = plan.routers.first { $0.name == "lr-project-P-internal" }
+        #expect(egress?.needsUplink == true)
+        #expect(internalRouter?.needsUplink == false)
+    }
+
     @Test("A global (project-less) network keys its router on its own id")
     func globalNetworkFallback() {
         let plan = NetworkReconciler.plan(networks: [

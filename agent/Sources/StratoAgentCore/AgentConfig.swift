@@ -89,6 +89,9 @@ public struct AgentConfig: Codable {
     public let firecrackerSocketDir: String?
     public let hypervisorType: HypervisorType?
     public let stateFilePath: String?
+    /// Site uplink for OVN SNAT egress (issue #342). When nil, routers +
+    /// east-west are realized but no SNAT/uplink.
+    public let ovnUplink: OVNUplinkConfig?
 
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
@@ -110,6 +113,7 @@ public struct AgentConfig: Codable {
         case firecrackerSocketDir = "firecracker_socket_dir"
         case hypervisorType = "hypervisor_type"
         case stateFilePath = "state_file"
+        case ovnUplink = "ovn_uplink"
     }
 
     public init(
@@ -131,7 +135,8 @@ public struct AgentConfig: Codable {
         firecrackerBinaryPath: String? = nil,
         firecrackerSocketDir: String? = nil,
         hypervisorType: HypervisorType? = nil,
-        stateFilePath: String? = nil
+        stateFilePath: String? = nil,
+        ovnUplink: OVNUplinkConfig? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
         self.qemuSocketDir = qemuSocketDir
@@ -152,6 +157,7 @@ public struct AgentConfig: Codable {
         self.firecrackerSocketDir = firecrackerSocketDir
         self.hypervisorType = hypervisorType
         self.stateFilePath = stateFilePath
+        self.ovnUplink = ovnUplink
     }
 
     /// The OVN chassis bootstrap settings derived from this configuration.
@@ -254,6 +260,21 @@ public struct AgentConfig: Codable {
             spiffeConfig = nil
         }
 
+        // Parse the OVN uplink from the [ovn_uplink] section (issue #342). SNAT
+        // egress is off unless a dedicated external CIDR is configured.
+        let ovnUplink: OVNUplinkConfig?
+        if let uplinkTable = tomlData.table("ovn_uplink"), let externalCIDR = uplinkTable.string("external_cidr") {
+            ovnUplink = OVNUplinkConfig(
+                externalCIDR: externalCIDR,
+                gateway: uplinkTable.string("gateway"),
+                bridge: uplinkTable.string("bridge") ?? OVNUplinkConfig.defaultBridge,
+                physnet: uplinkTable.string("physnet") ?? OVNUplinkConfig.defaultPhysnet
+            )
+            logger?.info("OVN SNAT uplink configured", metadata: ["externalCIDR": .string(externalCIDR)])
+        } else {
+            ovnUplink = nil
+        }
+
         // Validate platform-specific settings
         #if os(macOS)
         if enableKVM == true {
@@ -284,7 +305,8 @@ public struct AgentConfig: Codable {
             firecrackerBinaryPath: firecrackerBinaryPath,
             firecrackerSocketDir: firecrackerSocketDir,
             hypervisorType: hypervisorType,
-            stateFilePath: stateFilePath
+            stateFilePath: stateFilePath,
+            ovnUplink: ovnUplink
         )
     }
 
