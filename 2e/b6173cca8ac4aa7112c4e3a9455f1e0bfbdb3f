@@ -1,0 +1,22 @@
+control-plane/Tests/AppTests/AuditLoggingTests.swift
+  s_5293f3e5aa34d6::t_2dc7b37ff7c6e9 132-158
+control-plane/Sources/App/configure.swift
+  s_5293f3e5aa34d6::t_d724672ab27455 124-128,131-134
+  s_5293f3e5aa34d6::t_b3a1402d5f0b50 135
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2eb6173cca8ac4aa7112c4e3a9455f1e0bfbdb3f",
+  "prompts": {},
+  "sessions": {
+    "s_5293f3e5aa34d6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7388a3fe-8a29-450d-9368-936e457603a6",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
