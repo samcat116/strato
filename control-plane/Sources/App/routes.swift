@@ -53,6 +53,9 @@ func routes(_ app: Application) throws {
     // VM Logs controller for querying logs from Loki
     try app.register(collection: LogsController())
 
+    // Audit trail query API (issue #39)
+    try app.register(collection: AuditEventController())
+
     // OpenAPI Vapor transport (spec-first). Once the generator produces APIProtocol
     // from Sources/App/openapi.yaml, register handlers here.
     // let transport = VaporTransport(routesBuilder: app)

@@ -355,12 +355,15 @@ struct OIDCController: RouteCollection {
 
             // Authenticate user
             req.auth.login(user)
+            await req.recordAuthEvent(.oidcLogin, user: user, organizationID: organizationID)
 
             // Redirect to dashboard
             return Response(status: .seeOther, headers: HTTPHeaders([("Location", "/")]))
 
         } catch {
             req.logger.error("OIDC callback error: \(error)")
+            await req.recordAuthEvent(
+                .oidcLoginFailed, organizationID: organizationID, metadata: ["error": "\(error)"])
 
             // Clean up session data on error
             req.session.data["oidc_state"] = nil

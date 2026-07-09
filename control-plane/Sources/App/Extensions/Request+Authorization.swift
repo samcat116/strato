@@ -15,7 +15,9 @@ extension Request {
         }
 
         // System admins bypass all permission checks (matches SpiceDBAuthMiddleware).
+        // Flagged so AuditMiddleware records the action as an admin audit event.
         if user.isSystemAdmin {
+            adminBypassUsed = true
             return true
         }
 

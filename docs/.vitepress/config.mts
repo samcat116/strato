@@ -51,6 +51,7 @@ export default defineConfig({
           { text: 'IAM & Permissions', link: '/deployment/iam' },
           { text: 'Rate Limiting', link: '/deployment/rate-limiting' },
           { text: 'Logging', link: '/deployment/logging' },
+          { text: 'Audit Logging', link: '/deployment/audit-logging' },
           { text: 'Observability', link: '/deployment/observability' }
         ]
       },

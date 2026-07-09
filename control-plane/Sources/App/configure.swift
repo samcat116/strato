@@ -123,6 +123,14 @@ public func configure(_ app: Application) async throws {
     // key; a no-op for session-authenticated requests (issue #173).
     app.middleware.use(APIKeyScopeMiddleware())
 
+    // Audit logging (issue #39): durable audit events for API mutations, auth
+    // flows, and system-admin activity, fanned out to configurable backends
+    // (AUDIT_BACKENDS; database by default). Registered after the
+    // authenticators so events carry the resolved actor, and before
+    // SpiceDBAuthMiddleware so denied requests are audited with their real
+    // status. The middleware no-ops when AUDIT_ENABLED=false.
+    app.middleware.use(AuditMiddleware())
+
     // Configure WebAuthn
     let relyingPartyID = Environment.get("WEBAUTHN_RELYING_PARTY_ID") ?? "localhost"
     let relyingPartyName = Environment.get("WEBAUTHN_RELYING_PARTY_NAME") ?? "Strato"
@@ -283,6 +291,9 @@ public func configure(_ app: Application) async throws {
     // logical network can span nodes (issue #343).
     app.migrations.add(CreateSite())
     app.migrations.add(AddWireProtocolVersionToAgent())
+
+    // Centralized audit logging (issue #39)
+    app.migrations.add(CreateAuditEvent())
 
     try await app.autoMigrate()
 
