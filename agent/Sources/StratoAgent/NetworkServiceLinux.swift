@@ -1119,7 +1119,7 @@ extension NetworkServiceLinux: NetworkActuator {
         // Default route out the uplink, so SNAT'd traffic to off-subnet
         // destinations actually has a route (the NAT rule alone is not enough).
         if let nextHop = uplink.gateway {
-            try ensureDefaultRoute(router: router.name, nextHop: nextHop)
+            try await ensureDefaultRoute(router: router.name, nextHop: nextHop)
         } else {
             let message =
                 "OVN uplink has no gateway; skipping the router default route "
@@ -1288,28 +1288,67 @@ extension NetworkServiceLinux {
 
     /// Install (or update) the logical router's default route to the uplink next
     /// hop, so SNAT'd traffic to addresses outside the provider subnet has a
-    /// route out. SwiftOVN has no `Logical_Router_Static_Route` model yet, so
-    /// this shells `ovn-nbctl` (present on OVN hosts); `--may-exist` makes it
-    /// idempotent and updates the next hop if it drifts.
-    fileprivate func ensureDefaultRoute(router: String, nextHop: String) throws {
-        let result = try runProcess(
-            "ovn-nbctl",
-            ["--db=\(ovnNBConnection)", "--may-exist", "lr-route-add", router, "0.0.0.0/0", nextHop])
-        if result.status == 127 {
-            let message =
-                "ovn-nbctl not found; cannot install the default route for SNAT egress "
-                + "(install ovn-common). East-west and the uplink subnet still work."
-            logger.warning("\(message)")
-            return
+    /// route out. Uses SwiftOVN's `Logical_Router_Static_Route` API directly
+    /// against the NB DB — no `ovn-nbctl` dependency on the host.
+    fileprivate func ensureDefaultRoute(router routerName: String, nextHop: String) async throws {
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
         }
-        guard result.status == 0 else {
-            throw NetworkError.ovnError(
-                "failed to add default route on \(router) via \(nextHop) (exit \(result.status)): "
-                    + result.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        // The native OVSDB path writes nexthop verbatim, so validate the gateway
+        // ourselves — the old `ovn-nbctl lr-route-add` rejected a malformed one.
+        // Throwing keeps this a failed uplink instead of committing a broken route
+        // and then proceeding to install SNAT over silently dead egress.
+        guard IPv4Address(nextHop) != nil else {
+            throw NetworkError.invalidConfiguration(
+                "OVN uplink gateway '\(nextHop)' is not a valid IPv4 address; cannot install default route")
+        }
+        // The agent owns L3 on this router (deterministically named, created with
+        // the managed external ID), so it owns the router's default route too.
+        // Mirrors ensureSNAT's reconcile-in-place stance.
+        let route = OVNLogicalRouterStaticRoute(
+            ip_prefix: "0.0.0.0/0", nexthop: nextHop,
+            external_ids: [Self.managedKey: Self.managedValue])
+        // Only the main-table dst-ip default is the one the agent owns and that the
+        // old `ovn-nbctl lr-route-add` (no --policy/--route-table) reconciled. Leave
+        // src-ip or named-route-table 0.0.0.0/0 routes (operator policy routing)
+        // untouched. OVN defaults an unset policy to dst-ip and an unset route_table
+        // to the main table, matching the route we create below.
+        let defaults = try await staticRoutes(onRouter: routerName).filter {
+            $0.ip_prefix == "0.0.0.0/0"
+                && ($0.policy ?? "dst-ip") == "dst-ip"
+                && ($0.route_table ?? "").isEmpty
+        }
+        // Keep at most one route that already matches the desired tagged route;
+        // every other default is stale, drifted, legacy-untagged, or a duplicate
+        // from an earlier/concurrent reconcile. Delete them all so exactly one
+        // 0.0.0.0/0 remains and OVN can't fall back to a stale next hop.
+        let keep = defaults.first(where: { $0.nexthop == nextHop && Self.isManaged($0.external_ids) })
+        for existing in defaults where existing.uuid != keep?.uuid {
+            if let uuid = existing.uuid { try await ovnManager.deleteStaticRoute(uuid: uuid) }
+        }
+        // Install the desired route only when nothing already matched.
+        if keep == nil {
+            _ = try await ovnManager.createStaticRoute(route, onRouter: routerName)
         }
         logger.info(
             "Installed default route on logical router",
-            metadata: ["router": .string(router), "nextHop": .string(nextHop)])
+            metadata: ["router": .string(routerName), "nextHop": .string(nextHop)])
+    }
+
+    /// The static routes attached to a router, resolved from its
+    /// `static_routes` refs. Mirrors `snatRules(onRouter:)`.
+    fileprivate func staticRoutes(onRouter routerName: String) async throws -> [OVNLogicalRouterStaticRoute] {
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        guard let routeUUIDs = try await ovnManager.getLogicalRouter(named: routerName)?.static_routes,
+            !routeUUIDs.isEmpty
+        else { return [] }
+        let byUUID = Dictionary(
+            uniqueKeysWithValues: try await ovnManager.getStaticRoutes().compactMap { route in
+                route.uuid.map { ($0, route) }
+            })
+        return routeUUIDs.compactMap { byUUID[$0] }
     }
 }
 #endif
