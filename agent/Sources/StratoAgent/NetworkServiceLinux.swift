@@ -1294,6 +1294,14 @@ extension NetworkServiceLinux {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
+        // The native OVSDB path writes nexthop verbatim, so validate the gateway
+        // ourselves — the old `ovn-nbctl lr-route-add` rejected a malformed one.
+        // Throwing keeps this a failed uplink instead of committing a broken route
+        // and then proceeding to install SNAT over silently dead egress.
+        guard IPv4Address(nextHop) != nil else {
+            throw NetworkError.invalidConfiguration(
+                "OVN uplink gateway '\(nextHop)' is not a valid IPv4 address; cannot install default route")
+        }
         // The agent owns L3 on this router (deterministically named, created with
         // the managed external ID), so it owns the router's default route too.
         // Mirrors ensureSNAT's reconcile-in-place stance.
