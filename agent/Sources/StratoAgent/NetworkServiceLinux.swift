@@ -1301,16 +1301,18 @@ extension NetworkServiceLinux {
             ip_prefix: "0.0.0.0/0", nexthop: nextHop,
             external_ids: [Self.managedKey: Self.managedValue])
         let defaults = try await staticRoutes(onRouter: routerName).filter { $0.ip_prefix == "0.0.0.0/0" }
-        // Nothing to do when the single route we want already exists and is tagged.
-        if defaults.contains(where: { $0.nexthop == nextHop && Self.isManaged($0.external_ids) }) { return }
-        // Otherwise the default route is missing, its next hop drifted, or it's a
-        // legacy untagged one from the old `ovn-nbctl lr-route-add` path. Remove
-        // every existing default route and install exactly the desired one, so an
-        // upgrade or a gateway change can't leave a stale 0.0.0.0/0 behind.
-        for existing in defaults {
+        // Keep at most one route that already matches the desired tagged route;
+        // every other default is stale, drifted, legacy-untagged, or a duplicate
+        // from an earlier/concurrent reconcile. Delete them all so exactly one
+        // 0.0.0.0/0 remains and OVN can't fall back to a stale next hop.
+        let keep = defaults.first(where: { $0.nexthop == nextHop && Self.isManaged($0.external_ids) })
+        for existing in defaults where existing.uuid != keep?.uuid {
             if let uuid = existing.uuid { try await ovnManager.deleteStaticRoute(uuid: uuid) }
         }
-        _ = try await ovnManager.createStaticRoute(route, onRouter: routerName)
+        // Install the desired route only when nothing already matched.
+        if keep == nil {
+            _ = try await ovnManager.createStaticRoute(route, onRouter: routerName)
+        }
         logger.info(
             "Installed default route on logical router",
             metadata: ["router": .string(routerName), "nextHop": .string(nextHop)])
