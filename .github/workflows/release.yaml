@@ -337,10 +337,13 @@ jobs:
             # `strato-agent join` (or deploy/agent/install.sh). See
             # docs/deployment/agents.md for the Docker/systemd invocation:
             #   docker run -d --name strato-agent --restart unless-stopped \
-            #     --device /dev/kvm \
+            #     --user root --device /dev/kvm \
             #     -v /var/lib/strato:/var/lib/strato -v /etc/strato:/etc/strato \
             #     ghcr.io/${{ github.repository }}-agent:${{ github.ref_name }} \
             #     join 'ws://strato.example.com/agent/ws?token=...&name=hv-01'
+            # `--user root` is required: the root-owned /var/lib/strato and
+            # /etc/strato paths (and the join state-file write check) need root,
+            # matching the "run join as root on Linux" guidance in the docs.
 
             migrate:
               image: ghcr.io/${{ github.repository }}-control-plane:${{ github.ref_name }}
