@@ -1,0 +1,32 @@
+control-plane/Sources/App/Services/AgentService.swift
+  s_c9833d46e3d894::t_60d923108476f1 221-231,233,237-247,249,251
+  s_c9833d46e3d894::t_f7e3e324124715 1578-1579
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_c9833d46e3d894::t_6397941e22e2c8 153-169
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_c9833d46e3d894::t_b354fd2318eb24 63-64
+  s_c9833d46e3d894::t_b419dd48795fa5 132-133
+  s_c9833d46e3d894::t_c0737ea28f6be4 42-47
+  s_c9833d46e3d894::t_c9f3728f0595be 405-409,412-414
+  s_c9833d46e3d894::t_594596209609b6 80
+control-plane/Tests/AppTests/SiteTests.swift
+  s_c9833d46e3d894::t_d9611d0ea577e8 287-288,297-298
+  s_c9833d46e3d894::t_75c6127b99b177 333-353
+  s_c9833d46e3d894::t_26531a7954d5a8 214-246
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "42e3270f2cf4fc9d0fe266fe53485ed3ce595a43",
+  "prompts": {},
+  "sessions": {
+    "s_c9833d46e3d894": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "faf56adc-acd3-4b91-bf82-59493e689cbb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
