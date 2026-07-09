@@ -402,15 +402,18 @@ final class SchedulerService: @unchecked Sendable {
 
         // Site pinning is categorical — a network pinned to a site exists only
         // in that site's OVN deployment, so agents elsewhere (or site-less)
-        // can never satisfy it, regardless of capacity. Members that last
-        // registered below the site-authority protocol are excluded too: sync
-        // assembly keeps them on legacy per-node scoping, so a pinned-network
-        // VM placed there would land in the agent's private local NB instead
-        // of the site's shared one.
+        // can never satisfy it, regardless of capacity. Two further member
+        // exclusions: agents that last registered below the site-authority
+        // protocol (sync assembly keeps them on legacy per-node scoping, so
+        // the VM's switch would land in a private local NB), and agents
+        // without overlay networking (user-mode/SLIRP hosts never attach to
+        // the site's OVN fabric at all).
         let siteMatched: [SchedulableAgent]
         if let requiredSiteID = requirements.siteID {
             siteMatched = online.filter {
-                $0.siteID == requiredSiteID && WireProtocol.supportsSiteAuthority($0.wireProtocolVersion ?? 0)
+                $0.siteID == requiredSiteID
+                    && WireProtocol.supportsSiteAuthority($0.wireProtocolVersion ?? 0)
+                    && $0.supportsInterVMNetworking
             }
             guard !siteMatched.isEmpty else {
                 throw SchedulerError.siteUnsatisfied(requiredSiteID: requiredSiteID)

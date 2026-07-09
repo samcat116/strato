@@ -56,7 +56,8 @@ final class SiteTests {
     /// registration token would). Returns the agent's UUID string.
     private func registerAgent(
         app: Application, named name: String, siteID: UUID? = nil,
-        protocolVersion: Int = WireProtocol.currentVersion
+        protocolVersion: Int = WireProtocol.currentVersion,
+        networkCapability: NetworkCapability = .overlay
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: name,
@@ -68,6 +69,7 @@ final class SiteTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
+            networkCapability: networkCapability,
             protocolVersion: protocolVersion
         )
         let uuid = try await app.agentService.registerAgent(message, agentName: name, siteID: siteID)
@@ -146,6 +148,58 @@ final class SiteTests {
                 let updated = try res.content.decode(SiteResponse.self)
                 #expect(updated.networkControllerAgentId?.uuidString == memberId)
             }
+        }
+    }
+
+    @Test("A controller the sync path won't honor cannot be designated")
+    func controllerCapabilityValidation() async throws {
+        try await withSiteTestApp { app, _, _, token in
+            let site = Site(name: "dc-caps")
+            try await site.save(on: app.db)
+
+            // Pre-v4 member: assembly keeps it on legacy per-node scoping, so
+            // designating it would leave the site's topology authored nowhere.
+            let oldId = try await self.registerAgent(
+                app: app, named: "old-proto", siteID: site.id, protocolVersion: 3)
+            try await app.test(.PUT, "/api/sites/\(site.id!.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    UpdateSiteRequest(description: nil, networkControllerAgentId: UUID(uuidString: oldId)))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // Non-overlay (user-mode/SLIRP) member: no OVN network service to
+            // reconcile topology with.
+            let slirpId = try await self.registerAgent(
+                app: app, named: "slirp-node", siteID: site.id, networkCapability: .userMode)
+            try await app.test(.PUT, "/api/sites/\(site.id!.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    UpdateSiteRequest(description: nil, networkControllerAgentId: UUID(uuidString: slirpId)))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("A site's network controller cannot be deregistered")
+    func controllerDeregistrationGuard() async throws {
+        try await withSiteTestApp { app, _, _, token in
+            let site = Site(name: "dc-dereg")
+            try await site.save(on: app.db)
+            let controllerId = try await self.registerAgent(app: app, named: "dereg-ctl", siteID: site.id)
+            site.$networkControllerAgent.id = UUID(uuidString: controllerId)
+            try await site.save(on: app.db)
+
+            // The controller reference has no FK, so deletion would leave the
+            // site pointing at a vanished agent and reconciliation would stop.
+            try await app.test(.DELETE, "/api/agents/\(controllerId)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+            #expect(try await Agent.find(UUID(uuidString: controllerId), on: app.db) != nil)
         }
     }
 
@@ -285,7 +339,8 @@ final class SiteTests {
 
     private func makeSchedulable(
         id: String = UUID().uuidString, name: String, siteID: UUID? = nil,
-        wireProtocolVersion: Int = WireProtocol.currentVersion
+        wireProtocolVersion: Int = WireProtocol.currentVersion,
+        supportsInterVMNetworking: Bool = true
     ) -> SchedulableAgent {
         SchedulableAgent(
             id: id, name: name,
@@ -294,6 +349,7 @@ final class SiteTests {
             totalDisk: 1 << 40, availableDisk: 1 << 40,
             status: .online, runningVMCount: 0,
             supportedHypervisors: [.qemu],
+            supportsInterVMNetworking: supportsInterVMNetworking,
             siteID: siteID,
             wireProtocolVersion: wireProtocolVersion
         )
@@ -348,6 +404,28 @@ final class SiteTests {
 
         #expect(throws: SchedulerError.self) {
             try scheduler.selectAgent(requirements: requirements, from: [oldMember])
+        }
+    }
+
+    @Test("Site requirement excludes members without overlay networking")
+    func schedulerSiteFilterExcludesNonOverlay() throws {
+        let siteA = UUID()
+        // A user-mode (SLIRP) member never attaches to the site's OVN fabric,
+        // so a pinned-network VM placed there would have no site overlay.
+        let slirpMember = makeSchedulable(
+            name: "slirp-member", siteID: siteA, supportsInterVMNetworking: false)
+        let overlayMember = makeSchedulable(name: "overlay-member", siteID: siteA)
+
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+        let requirements = VMPlacementRequirements(
+            cpu: 1, memory: 1 << 30, disk: 1 << 30, siteID: siteA)
+
+        let selected = try scheduler.selectAgent(
+            requirements: requirements, from: [slirpMember, overlayMember])
+        #expect(selected == overlayMember.id)
+
+        #expect(throws: SchedulerError.self) {
+            try scheduler.selectAgent(requirements: requirements, from: [slirpMember])
         }
     }
 

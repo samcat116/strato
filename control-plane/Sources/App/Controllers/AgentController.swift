@@ -352,6 +352,23 @@ struct AgentController: RouteCollection {
             throw Abort(.notFound, reason: "Agent not found")
         }
 
+        // Never delete a site's designated network controller: the controller
+        // reference deliberately has no FK (see CreateSite), so the site would
+        // keep pointing at a vanished agent, no member could ever match it,
+        // and reconciliation of the site's networks would silently stop.
+        // Checked before SPIRE deprovisioning so the refusal has no side
+        // effects.
+        let controlledSites = try await Site.query(on: req.db)
+            .filter(\.$networkControllerAgent.$id == agentId)
+            .count()
+        guard controlledSites == 0 else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent is a site's network controller; designate a replacement controller before deregistering it"
+            )
+        }
+
         // Remove the SPIRE workload entry before anything else, and fail
         // closed if that doesn't succeed: deregistering is the operator's
         // revocation lever, and deleting the row while the node can still

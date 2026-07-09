@@ -1,4 +1,5 @@
 import Fluent
+import StratoShared
 import Vapor
 
 /// Sites (availability zones) group agents that share one OVN deployment, so
@@ -86,6 +87,25 @@ struct SiteController: RouteCollection {
                 throw Abort(
                     .badRequest,
                     reason: "Agent '\(agent.name)' is not a member of this site; assign it to the site first")
+            }
+            // A designation the sync path won't honor is a silent outage:
+            // a pre-v4 agent is kept on legacy per-node scoping by assembly,
+            // and a non-overlay (user-mode/SLIRP) agent has no OVN network
+            // service to reconcile with — either way peers stay
+            // non-authoritative and the site's networks are realized nowhere.
+            guard WireProtocol.supportsSiteAuthority(agent.wireProtocolVersion ?? 0) else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "Agent '\(agent.name)' registered with a protocol too old for site topology authority; upgrade it first"
+                )
+            }
+            guard agent.supportsInterVMNetworking else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "Agent '\(agent.name)' has no overlay (OVN) networking capability and cannot author site topology"
+                )
             }
         }
 
