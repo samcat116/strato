@@ -749,12 +749,16 @@ actor AgentService {
     ///
     /// A mutation on one agent can change what its site's network controller
     /// must realize (a VM landing on any site node may reference a network
-    /// the shared NB doesn't have yet), so the controller is synced alongside.
+    /// the shared NB doesn't have yet), so the controller is synced alongside
+    /// — and *first*: a non-authoritative peer cannot create a missing switch
+    /// itself, so giving the controller's topology sync a head start lets the
+    /// common case (first VM on a fresh network) converge on the peer's first
+    /// attempt instead of waiting out a dependency-pending retry.
     func syncDesiredState(agentId: String) async {
-        await routeDesiredStateSync(agentId: agentId)
         if let controllerId = await siteNetworkControllerID(forAgentId: agentId), controllerId != agentId {
             await routeDesiredStateSync(agentId: controllerId)
         }
+        await routeDesiredStateSync(agentId: agentId)
     }
 
     /// The agent id of the site network controller responsible for the given

@@ -181,7 +181,11 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         if topologyAuthority {
             _ = try await findOrCreateLogicalSwitch(name: switchName, subnet: config.subnet ?? "10.0.0.0/24")
         } else if try await ovnManager?.getLogicalSwitch(named: switchName) == nil {
-            throw NetworkError.networkNotFound(
+            // Waiting, not failing: the reconciler must not report this as an
+            // error (that would fail the pending create operation before the
+            // controller's own sync — which the control plane sends alongside
+            // this VM's — has realized the switch). See issue #343.
+            throw DependencyPendingError(
                 "logical switch \(switchName) does not exist yet; waiting for the site's network controller to realize it"
             )
         }

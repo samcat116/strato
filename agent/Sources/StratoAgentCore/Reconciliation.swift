@@ -257,6 +257,32 @@ public actor Reconciler {
                     "generation": .stringConvertible(item.generation),
                 ])
         } catch {
+            let classification = (error as? ClassifiableError)?.failureClassification ?? .transient
+
+            // Waiting on another component (e.g. the site network controller
+            // hasn't realized this VM's switch in the shared NB yet) is not a
+            // failure: recording it would report `lastError` and fail the
+            // pending operation on the control plane before the dependency has
+            // a chance to land. Record nothing and burn no attempts — the
+            // periodic level-triggered sync re-drives the item, and the
+            // operation's completion budget backstops a dependency that never
+            // arrives.
+            if classification == .waitingOnDependency {
+                logger.info(
+                    "VM convergence waiting on a dependency; will retry on the next sync",
+                    metadata: [
+                        "vmId": .string(item.vmId),
+                        "generation": .stringConvertible(item.generation),
+                        "waitingOn": .string(error.localizedDescription),
+                    ])
+                if inFlight[item.vmId] == item.generation {
+                    inFlight.removeValue(forKey: item.vmId)
+                    currentPhase.removeValue(forKey: item.vmId)
+                }
+                await actuator.convergenceDidChange()
+                return
+            }
+
             var failure =
                 failures[item.vmId]
                 ?? ConvergenceFailure(generation: item.generation, attempts: 0, lastError: "")
@@ -269,7 +295,6 @@ public actor Reconciler {
             // budget now so the remaining attempts aren't burned re-running a
             // doomed convergence. A new generation (operator retry after
             // fixing the host) still re-arms the loop as usual.
-            let classification = (error as? ClassifiableError)?.failureClassification ?? .transient
             if classification == .permanent {
                 failure.attempts = max(failure.attempts, Self.maxAttemptsPerGeneration)
             }

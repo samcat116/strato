@@ -331,6 +331,40 @@ struct ReconciliationTests {
         #expect(clearedError == nil)
     }
 
+    @Test("Waiting on a dependency reports no error and retries past the attempt cap")
+    func dependencyPendingWaitsWithoutFailing() async {
+        let vmId = UUID()
+        let actuator = MockActuator()
+        // e.g. a VM port on a shared site NB whose switch the site's network
+        // controller hasn't realized yet (issue #343).
+        await actuator.setFailure(DependencyPendingError("switch not realized yet"))
+        let reconciler = makeReconciler(actuator)
+        let message = Self.sync([Self.desired(vmId, status: .running, generation: 1)])
+
+        // Every sync keeps re-driving the item, well past the attempt cap...
+        let rounds = Reconciler.maxAttemptsPerGeneration + 2
+        for attempt in 1...rounds {
+            await reconciler.apply(message)
+            _ = await actuator.waitForReports(attempt)
+        }
+        let reports = await actuator.reportCount
+        #expect(reports == rounds)
+        // ...and none of it is reported as an error — a `lastError` here would
+        // fail the pending create operation on the control plane before the
+        // controller's topology sync had a chance to land.
+        let lastError = await reconciler.lastError(for: vmId.uuidString)
+        #expect(lastError == nil)
+
+        // The dependency lands (controller realized the switch): converges.
+        await actuator.setFailure(nil)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(rounds + 1)
+        let performed = await actuator.performed
+        #expect(performed.map(\.step) == [.create, .boot])
+        let generation = await reconciler.observedGeneration(for: vmId.uuidString)
+        #expect(generation == 1)
+    }
+
     @Test("Undesired-VM deletes are exempt from the attempt cap")
     func undesiredDeleteRetriesPastCap() async {
         struct Boom: Error {}
