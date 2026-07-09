@@ -129,6 +129,33 @@ final class AuditLoggingTests {
         }
     }
 
+    @Test("Mutations denied for missing API-key scope are audited")
+    func scopeDeniedMutationIsAudited() async throws {
+        try await withApp { app, user, _, _ in
+            let readOnlyKey = APIKey.generateAPIKey()
+            try await APIKey(
+                userID: user.id!,
+                name: "read-only",
+                keyHash: APIKey.hashAPIKey(readOnlyKey),
+                keyPrefix: String(readOnlyKey.prefix(16)),
+                scopes: ["read"]
+            ).save(on: app.db)
+
+            try await app.test(.POST, "/api/api-keys") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: readOnlyKey)
+                try req.content.encode(["name": "should-not-exist"])
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+
+            let recorded = try await self.events(ofType: "api.request", on: app.db)
+            #expect(recorded.count == 1)
+            let event = try #require(recorded.first)
+            #expect(event.status == 403)
+            #expect(event.userID == user.id)
+        }
+    }
+
     // MARK: - Auth events
 
     @Test("Logout records an auth.logout event")

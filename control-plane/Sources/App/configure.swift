@@ -118,18 +118,20 @@ public func configure(_ app: Application) async throws {
             ])
     }
 
+    // Audit logging (issue #39): durable audit events for API mutations, auth
+    // flows, and system-admin activity, fanned out to configurable backends
+    // (AUDIT_BACKENDS; database by default). Registered after the
+    // authenticators (so events carry the resolved actor) and rate limiter
+    // (so throttled spam is not audited), and before the scope and
+    // authorization middleware so denied requests — API-key scope 403s
+    // included — are audited with their real status. No-ops when
+    // AUDIT_ENABLED=false.
+    app.middleware.use(AuditMiddleware())
+
     // Enforce the scopes attached to an API key. Must run after the bearer
     // authenticator above (which populates request.apiKey) so it can see the
     // key; a no-op for session-authenticated requests (issue #173).
     app.middleware.use(APIKeyScopeMiddleware())
-
-    // Audit logging (issue #39): durable audit events for API mutations, auth
-    // flows, and system-admin activity, fanned out to configurable backends
-    // (AUDIT_BACKENDS; database by default). Registered after the
-    // authenticators so events carry the resolved actor, and before
-    // SpiceDBAuthMiddleware so denied requests are audited with their real
-    // status. The middleware no-ops when AUDIT_ENABLED=false.
-    app.middleware.use(AuditMiddleware())
 
     // Configure WebAuthn
     let relyingPartyID = Environment.get("WEBAUTHN_RELYING_PARTY_ID") ?? "localhost"
