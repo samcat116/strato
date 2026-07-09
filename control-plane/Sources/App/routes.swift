@@ -31,6 +31,8 @@ func routes(_ app: Application) throws {
     try app.register(collection: OIDCController())
     // Agent management controller
     try app.register(collection: AgentController())
+    // Sites (availability zones) grouping agents into shared OVN deployments
+    try app.register(collection: SiteController())
 
     // SCIM controllers
     try app.register(collection: SCIMController())

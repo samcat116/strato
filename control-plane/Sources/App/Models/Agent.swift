@@ -62,6 +62,20 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "network_capability")
     var networkCapability: String?
 
+    /// The site (availability zone) this agent belongs to. Nil means the
+    /// legacy single-node model: the agent owns a private local OVN NB and is
+    /// always its topology authority. Assigned via the registration token.
+    @OptionalParent(key: "site_id")
+    var site: Site?
+
+    /// Wire protocol version the agent last registered with; nil for rows that
+    /// predate this column. Sync assembly keys site topology authority on it:
+    /// a pre-v4 agent ignores `networksAuthoritative` and would misread a
+    /// non-authoritative empty sync as a full L3 teardown, so it must stay on
+    /// legacy per-node scoping even when assigned to a site.
+    @OptionalField(key: "wire_protocol_version")
+    var wireProtocolVersion: Int?
+
     init() {}
 
     init(
@@ -194,6 +208,7 @@ struct AgentResponse: Content {
     let architecture: CPUArchitecture?
     let hypervisors: [HypervisorSupport]
     let networkCapability: NetworkCapability?
+    let siteId: UUID?
     let lastHeartbeat: Date?
     let createdAt: Date?
     let isOnline: Bool
@@ -213,6 +228,7 @@ struct AgentResponse: Content {
         self.architecture = agent.architecture.flatMap(CPUArchitecture.init(rawValue:))
         self.hypervisors = agent.hypervisors
         self.networkCapability = agent.networkCapability.flatMap(NetworkCapability.init(rawValue:))
+        self.siteId = agent.$site.id
         self.lastHeartbeat = agent.lastHeartbeat
         self.createdAt = agent.createdAt
         self.isOnline = agent.isOnline

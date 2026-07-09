@@ -104,6 +104,14 @@ log_level = "info"
 # runs on this host; point it at tcp:<central-host>:6642 otherwise.
 # ovn_remote = "unix:/var/run/ovn/ovnsb_db.sock"
 #
+# Where the OVN northbound database lives — the DB the agent writes switches,
+# routers, and VM ports into. The default assumes ovn-central runs on this
+# host. In a multi-node site (issue #343) every agent points this at the
+# site's shared ovn-central (tcp:<central-host>:6641, or ssl:...) together
+# with ovn_remote above; only the agent designated as the site's network
+# controller in the control plane authors topology there.
+# ovn_northbound = "unix:/var/run/ovn/ovnnb_db.sock"
+#
 # Tunnel encapsulation between hypervisor hosts (default: geneve)
 # ovn_encap_type = "geneve"
 #

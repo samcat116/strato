@@ -78,6 +78,13 @@ public struct AgentConfig: Codable {
     public let ovnEncapType: String?
     public let ovnRemote: String?
     public let ovnBootstrapChassis: Bool?
+    /// OVN northbound DB connection string in OVN syntax: `unix:<path>`,
+    /// `tcp:<host>:<port>`, or `ssl:<host>:<port>`. Nil means the legacy
+    /// per-node local socket. Point every agent in a site at the site's
+    /// shared ovn-central (`tcp:<central-host>:6641`) for multi-node
+    /// networks (issue #343); `ovn_remote` is the southbound counterpart
+    /// consumed by ovn-controller.
+    public let ovnNorthbound: String?
     public let enableHVF: Bool?
     public let enableKVM: Bool?
     public let vmStoragePath: String?
@@ -102,6 +109,7 @@ public struct AgentConfig: Codable {
         case ovnEncapType = "ovn_encap_type"
         case ovnRemote = "ovn_remote"
         case ovnBootstrapChassis = "ovn_bootstrap_chassis"
+        case ovnNorthbound = "ovn_northbound"
         case enableHVF = "enable_hvf"
         case enableKVM = "enable_kvm"
         case vmStoragePath = "vm_storage_dir"
@@ -125,6 +133,7 @@ public struct AgentConfig: Codable {
         ovnEncapType: String? = nil,
         ovnRemote: String? = nil,
         ovnBootstrapChassis: Bool? = nil,
+        ovnNorthbound: String? = nil,
         enableHVF: Bool? = nil,
         enableKVM: Bool? = nil,
         vmStoragePath: String? = nil,
@@ -146,6 +155,7 @@ public struct AgentConfig: Codable {
         self.ovnEncapType = ovnEncapType
         self.ovnRemote = ovnRemote
         self.ovnBootstrapChassis = ovnBootstrapChassis
+        self.ovnNorthbound = ovnNorthbound
         self.enableHVF = enableHVF
         self.enableKVM = enableKVM
         self.vmStoragePath = vmStoragePath
@@ -192,6 +202,15 @@ public struct AgentConfig: Codable {
         let ovnEncapType = tomlData.string("ovn_encap_type")
         let ovnRemote = tomlData.string("ovn_remote")
         let ovnBootstrapChassis = tomlData.bool("ovn_bootstrap_chassis")
+        let ovnNorthbound = tomlData.string("ovn_northbound")
+        if let ovnNorthbound {
+            let validSchemes = ["unix:", "tcp:", "ssl:"]
+            guard validSchemes.contains(where: ovnNorthbound.hasPrefix) else {
+                throw AgentConfigError.invalidConfiguration(
+                    "ovn_northbound must be an OVN connection string (unix:<path>, tcp:<host>:<port>, or ssl:<host>:<port>), got '\(ovnNorthbound)'"
+                )
+            }
+        }
         let enableHVF = tomlData.bool("enable_hvf")
         let enableKVM = tomlData.bool("enable_kvm")
         let vmStoragePath = tomlData.string("vm_storage_dir")
@@ -295,6 +314,7 @@ public struct AgentConfig: Codable {
             ovnEncapType: ovnEncapType,
             ovnRemote: ovnRemote,
             ovnBootstrapChassis: ovnBootstrapChassis,
+            ovnNorthbound: ovnNorthbound,
             enableHVF: enableHVF,
             enableKVM: enableKVM,
             vmStoragePath: vmStoragePath,

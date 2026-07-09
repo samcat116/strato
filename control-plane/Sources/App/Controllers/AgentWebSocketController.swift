@@ -28,6 +28,10 @@ struct AgentWebSocketController: RouteCollection {
         /// too, but presenting a header is not the same as being validated by
         /// it: an mTLS-only node must never accrete token-auth credentials.
         var tokenAuthenticated = false
+        /// Site carried by the redeemed registration token, applied to the
+        /// agent row when the register message arrives. Nil (no token site, or
+        /// mTLS auth) never clears an existing assignment.
+        var pendingSiteID: UUID?
     }
 
     // Non-async handler - runs on WebSocket's event loop
@@ -281,7 +285,7 @@ struct AgentWebSocketController: RouteCollection {
         }
 
         // Validate registration token using EventLoopFuture
-        validateRegistrationToken(req: req, ws: ws, token: token, agentName: agentName)
+        validateRegistrationToken(req: req, ws: ws, token: token, agentName: agentName, state: state)
             .flatMap { isValid -> EventLoopFuture<Void> in
                 guard isValid else {
                     return ws.eventLoop.makeSucceededFuture(())
@@ -322,7 +326,8 @@ struct AgentWebSocketController: RouteCollection {
         req: Request,
         ws: WebSocket,
         token: String,
-        agentName: String
+        agentName: String,
+        state: MessageState
     ) -> EventLoopFuture<Bool> {
         // Query database for token
         let query = AgentRegistrationToken.query(on: req.db)
@@ -358,7 +363,11 @@ struct AgentWebSocketController: RouteCollection {
             // stay unused in the store and remain replayable. On save failure we
             // reject instead — the token is untouched and the agent can retry.
             registrationToken.markAsUsed()
+            let tokenSiteID = registrationToken.siteID
             return registrationToken.save(on: req.db).map { _ -> Bool in
+                // Stash the token's site for the register message that follows;
+                // all `state` access happens on the WebSocket's event loop.
+                ws.eventLoop.execute { state.pendingSiteID = tokenSiteID }
                 // Never log the raw token value — logs are lower-trust than the token
                 // store and may be shipped off-host. The agent name is sufficient.
                 req.logger.info(
@@ -430,9 +439,11 @@ struct AgentWebSocketController: RouteCollection {
                 // header, and rotating for it would mint a long-lived bearer
                 // credential for a node meant to authenticate by SVID only.
                 let isTokenAuthenticated = state.tokenAuthenticated
+                let pendingSiteID = state.pendingSiteID
                 Task {
                     do {
-                        let agentUUID = try await req.agentService.registerAgent(message, agentName: agentName)
+                        let agentUUID = try await req.agentService.registerAgent(
+                            message, agentName: agentName, siteID: pendingSiteID)
 
                         // Rotate the single-use registration token: the one this
                         // connection presented was consumed at validation, so without a

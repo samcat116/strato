@@ -30,8 +30,10 @@ protocol NetworkServiceProtocol: Sendable {
     /// SNAT uplinks) toward the control plane's authoritative desired network
     /// set (issue #342). Level-triggered and idempotent, like VM reconciliation:
     /// a network omitted from `networks` has its owned L3 objects torn down.
+    /// `authoritative: false` (issue #343) means another agent authors the
+    /// shared site NB — topology must be left entirely alone, teardown included.
     /// Default no-op so platforms without a real SDN (macOS user-mode) ignore it.
-    func reconcileNetworks(_ networks: [DesiredNetworkState]) async
+    func reconcileNetworks(_ networks: [DesiredNetworkState], authoritative: Bool) async
 }
 
 extension NetworkServiceProtocol {
@@ -41,7 +43,7 @@ extension NetworkServiceProtocol {
     }
 
     /// No-op by default: only SDN-backed services (OVN on Linux) realize L3.
-    func reconcileNetworks(_ networks: [DesiredNetworkState]) async {}
+    func reconcileNetworks(_ networks: [DesiredNetworkState], authoritative: Bool) async {}
 }
 
 // MARK: - Network Configuration Models

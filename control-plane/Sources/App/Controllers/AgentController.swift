@@ -138,6 +138,14 @@ struct AgentController: RouteCollection {
 
         let expirationHours = createRequest.expirationHours ?? 1
 
+        // Resolve the target site up front so a typo'd id fails the request
+        // instead of silently minting a site-less token.
+        if let siteId = createRequest.siteId {
+            guard try await Site.find(siteId, on: req.db) != nil else {
+                throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
+            }
+        }
+
         // Provision the node in SPIRE first (join token + workload entry).
         // SPIRE is not transactional with our database, so order matters: if
         // provisioning fails nothing was persisted here, and if the save below
@@ -174,7 +182,8 @@ struct AgentController: RouteCollection {
         let token = AgentRegistrationToken(
             agentName: createRequest.agentName,
             expirationHours: expirationHours,
-            spireProvisioned: spireProvisioning != nil
+            spireProvisioned: spireProvisioning != nil,
+            siteID: createRequest.siteId
         )
 
         do {
@@ -341,6 +350,23 @@ struct AgentController: RouteCollection {
 
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
+        }
+
+        // Never delete a site's designated network controller: the controller
+        // reference deliberately has no FK (see CreateSite), so the site would
+        // keep pointing at a vanished agent, no member could ever match it,
+        // and reconciliation of the site's networks would silently stop.
+        // Checked before SPIRE deprovisioning so the refusal has no side
+        // effects.
+        let controlledSites = try await Site.query(on: req.db)
+            .filter(\.$networkControllerAgent.$id == agentId)
+            .count()
+        guard controlledSites == 0 else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent is a site's network controller; designate a replacement controller before deregistering it"
+            )
         }
 
         // Remove the SPIRE workload entry before anything else, and fail

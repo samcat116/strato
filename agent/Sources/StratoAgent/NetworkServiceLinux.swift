@@ -9,12 +9,22 @@ import SwiftOVN
 
 actor NetworkServiceLinux: NetworkServiceProtocol {
     private let logger: Logger
-    private let ovnSocketPath: String
+    /// OVN NB connection string in OVN syntax (`unix:<path>`, `tcp:<host>:<port>`,
+    /// `ssl:<host>:<port>`). Defaults to the legacy per-node local socket; a
+    /// site's agents all point it at the site's shared ovn-central (issue #343).
+    private let ovnNBConnection: String
     private let ovsSocketPath: String
     private let chassisConfig: OVNChassisConfig
     /// Site uplink for SNAT egress; nil disables SNAT (issue #342). SNAT needs a
     /// dedicated external IP the host doesn't own, so it is explicit config.
     private let uplinkConfig: OVNUplinkConfig?
+
+    /// Whether this agent may author NB topology (switches, routers, NAT,
+    /// teardown), per the control plane's last sync. False on agents sharing a
+    /// site NB that another agent (the site's network controller) writes; such
+    /// agents only bind their own VMs' ports. Defaults true: an agent that has
+    /// never received a sync owns its local NB (the legacy model).
+    private var topologyAuthority = true
 
     /// Highest network `generation` this agent has applied, per network id. A
     /// full-list sync whose entry for a network is older than what's recorded is
@@ -34,13 +44,13 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     #endif
 
     init(
-        ovnSocketPath: String = "/var/run/ovn/ovnnb_db.sock",
+        nbConnection: String? = nil,
         ovsSocketPath: String = "/var/run/openvswitch/db.sock",
         chassisConfig: OVNChassisConfig = OVNChassisConfig(),
         uplink: OVNUplinkConfig? = nil,
         logger: Logger
     ) {
-        self.ovnSocketPath = ovnSocketPath
+        self.ovnNBConnection = nbConnection ?? "unix:/var/run/ovn/ovnnb_db.sock"
         self.ovsSocketPath = ovsSocketPath
         self.chassisConfig = chassisConfig
         self.uplinkConfig = uplink
@@ -90,9 +100,9 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         logger.info("Connecting to OVN/OVS services")
 
         // Initialize OVN manager
-        ovnManager = OVNManager(socketPath: ovnSocketPath, logger: logger)
+        ovnManager = OVNManager(endpoint: try OVSDBEndpoint(parsing: ovnNBConnection), logger: logger)
         try await ovnManager?.connect()
-        logger.info("Connected to OVN database", metadata: ["socket": .string(ovnSocketPath)])
+        logger.info("Connected to OVN database", metadata: ["endpoint": .string(ovnNBConnection)])
 
         // Initialize OVS manager
         ovsManager = OVSManager(socketPath: ovsSocketPath, logger: logger)
@@ -163,8 +173,22 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // control plane that predates `networkId` (issue #342).
         let switchName = config.networkId.map { OVNNaming.switchName(networkId: $0) } ?? config.networkName
 
-        // Find or create the logical switch
-        _ = try await findOrCreateLogicalSwitch(name: switchName, subnet: config.subnet ?? "10.0.0.0/24")
+        // Find or create the logical switch. A non-authoritative agent must
+        // not create it — on a shared site NB the switch belongs to the
+        // network controller, and creating a second same-named switch here
+        // would split the network. Failing is safe: the VM's reconcile lane
+        // retries after the controller's level-triggered sync realizes it.
+        if topologyAuthority {
+            _ = try await findOrCreateLogicalSwitch(name: switchName, subnet: config.subnet ?? "10.0.0.0/24")
+        } else if try await ovnManager?.getLogicalSwitch(named: switchName) == nil {
+            // Waiting, not failing: the reconciler must not report this as an
+            // error (that would fail the pending create operation before the
+            // controller's own sync — which the control plane sends alongside
+            // this VM's — has realized the switch). See issue #343.
+            throw DependencyPendingError(
+                "logical switch \(switchName) does not exist yet; waiting for the site's network controller to realize it"
+            )
+        }
 
         // Program OVN's native DHCP responder for this network when enabled, so
         // the guest learns the control-plane-pinned IP, gateway, and DNS over
@@ -875,7 +899,18 @@ extension NetworkServiceLinux {
     /// SNAT uplinks) toward the control plane's desired network set. Delegates
     /// the diff to the pure `NetworkReconciler`, driving the OVSDB side effects
     /// through `self` as the actuator. No-op until the service is connected.
-    func reconcileNetworks(_ networks: [DesiredNetworkState]) async {
+    ///
+    /// `authoritative: false` means another agent (the site's network
+    /// controller) authors the shared NB this agent writes its ports to
+    /// (issue #343): topology is left entirely alone — reconciling here, even
+    /// with an empty list, would tear down the controller's objects.
+    func reconcileNetworks(_ networks: [DesiredNetworkState], authoritative: Bool) async {
+        topologyAuthority = authoritative
+        guard authoritative else {
+            logger.debug("Not the site's network topology authority; skipping network reconciliation")
+            return
+        }
+
         #if os(Linux)
         guard isConnected else {
             logger.debug("Network service not connected; skipping network reconciliation")
@@ -1259,7 +1294,7 @@ extension NetworkServiceLinux {
     fileprivate func ensureDefaultRoute(router: String, nextHop: String) throws {
         let result = try runProcess(
             "ovn-nbctl",
-            ["--db=unix:\(ovnSocketPath)", "--may-exist", "lr-route-add", router, "0.0.0.0/0", nextHop])
+            ["--db=\(ovnNBConnection)", "--may-exist", "lr-route-add", router, "0.0.0.0/0", nextHop])
         if result.status == 127 {
             let message =
                 "ovn-nbctl not found; cannot install the default route for SNAT egress "

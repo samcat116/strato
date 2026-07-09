@@ -275,24 +275,54 @@ single network within a site** (Phase 2).
   network in the same project are on different routers and don't route to each
   other; per-network egress policy that preserves that east-west is a follow-up.
 
-### Phase 2 — Multi-node single network within a site _(top priority; has prerequisites)_
+### Phase 2 — Multi-node single network within a site _(top priority)_ — **implemented (first cut)**
 
 A single logical switch spanning hypervisors requires a **shared per-site NB**.
-The current per-agent-local-NB (Unix socket) model cannot express this.
+The per-agent-local-NB (Unix socket) model cannot express this.
 
-- **SwiftOVN TCP transport** (upstream) — the client is Unix-socket-only today;
-  a shared NB must be reachable over the network. **Hard prerequisite.**
-- **Per-site OVN central** — one `ovn-central` (NB/SB/northd) per site instead
-  of one per agent. Site agents run `ovn-controller` only, SB over the site
-  network.
-- **Site / availability-zone model** in the control plane (group agents into a
-  site; scope the OVN deployment + underlay to it).
-- **NB authorship decision (open):** who writes the shared site NB — the
-  control plane over TCP/TLS, or a designated per-site "network-controller"
-  agent over its local socket. Port binding (`iface-id`) stays per-chassis
-  regardless.
-- Underlay (Layer 0): assume LAN / customer-provided routability first.
+**As built (issue #343):**
+
+- **SwiftOVN TCP/SSL transport** landed upstream (`OVSDBEndpoint`:
+  `unix:`/`tcp:`/`ssl:` connection strings); the agent pin was bumped past it.
+- **NB authorship decision → agents, not the control plane.** The CP is a SaaS
+  the agents dial out to through NAT — it cannot reach a customer site's NB
+  over TCP, and the division of responsibility above says it is "an
+  orchestrator, not an OVN participant". Refined split: **every** agent in a
+  site connects to the shared NB (each binds its own VMs' logical switch
+  ports), but **topology authority** — switch/router/SNAT reconciliation and
+  teardown — runs only on one CP-designated **network controller** agent per
+  site, so the shared, level-triggered-reconciled NB has a single topology
+  writer. The CP tells each agent which role it has via
+  `DesiredStateMessage.networksAuthoritative` (absent = true, matching older
+  CPs where every agent owned its private NB). A non-authoritative agent never
+  creates switches: a VM port whose switch doesn't exist yet fails and retries
+  after the controller's next sync realizes it.
+- **Site model:** `Site` rows group agents (`agents.site_id`, assigned via the
+  registration token's `siteId` or the sites API) and carry the
+  `network_controller_agent_id` designation. `logical_networks.site_id` pins a
+  network to a site; the scheduler filters placement to that site's agents
+  (`VMPlacementRequirements.siteID`, derived from the VM's NICs' networks —
+  networks pinned to different sites on one VM are rejected). Site-less agents
+  and unpinned networks keep the legacy single-node behavior exactly.
+- **Sync assembly:** the controller agent's sync carries every network
+  referenced by any VM in the site plus all site-pinned networks
+  (`networksAuthoritative=true`); other sited agents get an empty list and
+  `false`. Mutation syncs for any site member also nudge the controller.
+- **Agent config:** `ovn_northbound` (OVN connection string; default
+  `unix:/var/run/ovn/ovnnb_db.sock`) is the NB counterpart of the existing
+  `ovn_remote` SB setting. Both point at the site central
+  (`tcp:<central-host>:6641/6642`) in a multi-node site.
+- **Per-site ovn-central deployment:** `deploy/ovn-central/` (compose +
+  image: NB/SB/northd with plain-TCP listeners; TLS via `ovn-pki` is the
+  operator upgrade path). Hypervisors run `ovn-controller` + OVS only.
+- Underlay (Layer 0): LAN / customer-provided routability assumed, per plan.
 - **Result:** one logical network spans a site's nodes over geneve.
+
+Remaining in this phase: strip `ovn-central` from the agent image /
+bootstrap script defaults, `ssl:` endpoint TLS configuration surface in the
+agent config (SwiftOVN already supports it), and controller-failover UX
+(re-designation is a manual `PUT /api/sites/:id` today; syncs handle the
+handover level-triggered).
 
 ### Phase 3 — Floating IPs + north-south advertisement
 
@@ -320,14 +350,13 @@ The current per-agent-local-NB (Unix socket) model cannot express this.
 
 ## Known gaps / dependencies
 
-- **SwiftOVN is Unix-socket-only** — no `tcp:host:6642` path. Blocks any shared
-  NB (Phase 2). Upstream work.
 - **SwiftOVN lacks models** for `Gateway_Chassis`, `HA_Chassis_Group`,
   `Logical_Router_Static_Route`, `Port_Group`, and the `dynamic-routing*`
   router/router-port fields. Additions needed for gateway HA, static routes,
-  security groups, and native dynamic routing.
-- **Agent image** ships per-agent `ovn-central`; Phase 2 restructures this to
-  per-site.
+  security groups, and native dynamic routing. (TCP/SSL transport landed —
+  Phase 2 consumed it.)
+- **Agent image** still ships `ovn-central` packages (harmless unless started);
+  stripping them to `ovn-host`-only is Phase 2 cleanup.
 - **OVN version floor** for dynamic routing (≥ 25.03, experimental).
 - **IPv4-only IPAM** today; IPv6 is out of scope for this roadmap.
 

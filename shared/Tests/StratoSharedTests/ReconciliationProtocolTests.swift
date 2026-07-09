@@ -88,6 +88,18 @@ struct ReconciliationProtocolTests {
         #expect(!decoded.networks[1].externalAccess)
     }
 
+    @Test("DesiredStateMessage carries topology authority through the envelope")
+    func desiredStateAuthorityRoundTrip() throws {
+        let peer = DesiredStateMessage(syncId: "sync-peer", vms: [], networksAuthoritative: false)
+        let decodedPeer = try MessageEnvelope(message: peer).decode(as: DesiredStateMessage.self)
+        #expect(!decodedPeer.networksAuthoritative)
+
+        // Default: an agent that owns its NB (site-less) is authoritative.
+        let solo = DesiredStateMessage(syncId: "sync-solo", vms: [])
+        let decodedSolo = try MessageEnvelope(message: solo).decode(as: DesiredStateMessage.self)
+        #expect(decodedSolo.networksAuthoritative)
+    }
+
     @Test("DesiredStateMessage from an older control plane decodes networks to []")
     func desiredStateNetworksBackwardCompatible() throws {
         // A pre-v3 control plane emits no `networks` key at all; the agent must
@@ -99,6 +111,9 @@ struct ReconciliationProtocolTests {
             DesiredStateMessage.self, from: Data(legacy.utf8))
         #expect(decoded.networks.isEmpty)
         #expect(decoded.syncId == "s")
+        // Every control plane predating the site/shared-NB protocol implies the
+        // agent owns its local NB, so absence must decode to authoritative.
+        #expect(decoded.networksAuthoritative)
     }
 
     @Test("ObservedStateReport round-trips through the envelope")
@@ -181,5 +196,15 @@ struct ReconciliationProtocolTests {
         #expect(!WireProtocol.supportsNetworkSync(2))
         #expect(WireProtocol.supportsNetworkSync(3))
         #expect(WireProtocol.supportsNetworkSync(WireProtocol.currentVersion))
+    }
+
+    @Test("Site-authority support is keyed on protocol version 4")
+    func siteAuthorityVersionGate() {
+        // A v3 agent ignores `networksAuthoritative`, so a non-authoritative
+        // empty sync would read as an authoritative teardown of all its L3 —
+        // the control plane must never send that shape to pre-v4 agents.
+        #expect(!WireProtocol.supportsSiteAuthority(3))
+        #expect(WireProtocol.supportsSiteAuthority(4))
+        #expect(WireProtocol.supportsSiteAuthority(WireProtocol.currentVersion))
     }
 }

@@ -129,7 +129,7 @@ struct HostPreflightTests {
         #expect(withoutOVN.check(.ipTool) == nil)
 
         inputs.ovnMode = true
-        inputs.ovnSocketPath = "\(root)/missing-ovn.sock"
+        inputs.ovnNBConnection = "unix:\(root)/missing-ovn.sock"
         inputs.ovsSocketPath = "\(root)/missing-ovs.sock"
         inputs.searchPath = "/nonexistent"
         let withOVN = HostPreflight.run(inputs)
@@ -140,6 +140,23 @@ struct HostPreflightTests {
         #expect(!withOVN.ovnReady)
         // OVN problems never gate storage readiness.
         #expect(withOVN.storageReady)
+    }
+
+    @Test("A remote NB connection skips the local socket check")
+    func remoteNBSkipsSocketCheck() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.ovnMode = true
+        // A shared site central (issue #343) has no local NB socket to probe;
+        // reachability surfaces at connect time instead of failing preflight.
+        inputs.ovnNBConnection = "tcp:central.example:6641"
+        inputs.ovsSocketPath = "\(root)/missing-ovs.sock"
+        let report = HostPreflight.run(inputs)
+        #expect(report.check(.ovnDatabaseSocket)?.passed == true)
+        // The OVS database is still host-local and still checked.
+        #expect(report.check(.ovsDatabaseSocket)?.passed == false)
     }
 
     @Test("Missing ovn-appctl is advisory: verification is skipped, capability is not gated")
@@ -160,7 +177,7 @@ struct HostPreflightTests {
         for socket in ["ovn.sock", "ovs.sock"] {
             FileManager.default.createFile(atPath: "\(root)/\(socket)", contents: Data())
         }
-        inputs.ovnSocketPath = "\(root)/ovn.sock"
+        inputs.ovnNBConnection = "unix:\(root)/ovn.sock"
         inputs.ovsSocketPath = "\(root)/ovs.sock"
 
         let report = HostPreflight.run(inputs)

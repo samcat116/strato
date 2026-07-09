@@ -37,6 +37,14 @@ struct SchedulableAgent: Sendable {
     /// Whether the agent's networking backend supports VM-to-VM traffic
     /// (OVN/OVS). User-mode (SLIRP) agents cannot satisfy inter-VM networking.
     let supportsInterVMNetworking: Bool
+    /// Site (availability zone) the agent belongs to; nil for site-less agents.
+    let siteID: UUID?
+    /// Wire protocol version the agent last registered with; nil for unknown
+    /// (rows predating the column). Site-pinned placement requires
+    /// site-authority support: a pre-v4 agent is kept on legacy per-node
+    /// network scoping, so a pinned-network VM placed there would get its
+    /// switch in the agent's local NB instead of the site's shared one.
+    let wireProtocolVersion: Int?
 
     init(
         id: String,
@@ -51,7 +59,9 @@ struct SchedulableAgent: Sendable {
         runningVMCount: Int,
         supportedHypervisors: [HypervisorType] = [.qemu],
         architecture: CPUArchitecture? = nil,
-        supportsInterVMNetworking: Bool = false
+        supportsInterVMNetworking: Bool = false,
+        siteID: UUID? = nil,
+        wireProtocolVersion: Int? = nil
     ) {
         self.id = id
         self.name = name
@@ -66,6 +76,8 @@ struct SchedulableAgent: Sendable {
         self.supportedHypervisors = supportedHypervisors
         self.architecture = architecture
         self.supportsInterVMNetworking = supportsInterVMNetworking
+        self.siteID = siteID
+        self.wireProtocolVersion = wireProtocolVersion
     }
 
     /// Calculate resource utilization percentage (0.0 to 1.0)
@@ -116,7 +128,9 @@ struct SchedulableAgent: Sendable {
             runningVMCount: runningVMCount,
             supportedHypervisors: supportedHypervisors,
             architecture: architecture,
-            supportsInterVMNetworking: supportsInterVMNetworking
+            supportsInterVMNetworking: supportsInterVMNetworking,
+            siteID: siteID,
+            wireProtocolVersion: wireProtocolVersion
         )
     }
 }
@@ -138,6 +152,10 @@ struct VMPlacementRequirements: Sendable {
     /// Whether the VM needs VM-to-VM networking, which user-mode (SLIRP)
     /// agents cannot provide.
     let requiresInterVMNetworking: Bool
+    /// Site the VM must place into, when one of its networks is pinned to a
+    /// site (a pinned network only exists in that site's OVN deployment).
+    /// Hard constraint; nil means unconstrained.
+    let siteID: UUID?
 
     init(
         cpu: Int,
@@ -145,7 +163,8 @@ struct VMPlacementRequirements: Sendable {
         disk: Int64,
         hypervisorType: HypervisorType = .qemu,
         architecture: CPUArchitecture? = nil,
-        requiresInterVMNetworking: Bool = false
+        requiresInterVMNetworking: Bool = false,
+        siteID: UUID? = nil
     ) {
         self.cpu = cpu
         self.memory = memory
@@ -153,6 +172,7 @@ struct VMPlacementRequirements: Sendable {
         self.hypervisorType = hypervisorType
         self.architecture = architecture
         self.requiresInterVMNetworking = requiresInterVMNetworking
+        self.siteID = siteID
     }
 }
 
@@ -163,6 +183,7 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case noUsableHypervisors(onlineAgents: Int)
     case architectureMismatch(required: CPUArchitecture)
     case networkCapabilityUnsatisfied
+    case siteUnsatisfied(requiredSiteID: UUID)
     case insufficientResources(required: VMPlacementRequirements, available: [SchedulableAgent])
     case invalidStrategy(String)
     case agentServiceUnavailable
@@ -187,6 +208,9 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
                 "No eligible agent has a \(required.displayName) host architecture (required for hardware-accelerated guests)"
         case .networkCapabilityUnsatisfied:
             return "No eligible agent supports VM-to-VM networking required by this VM"
+        case .siteUnsatisfied(let requiredSiteID):
+            return
+                "No online agent belongs to site \(requiredSiteID) required by the VM's network pinning"
         case .insufficientResources(let required, let available):
             return
                 "No agent has sufficient resources. Required: CPU=\(required.cpu), Memory=\(required.memory), Disk=\(required.disk). Available agents: \(available.count)"
@@ -242,14 +266,15 @@ final class SchedulerService: @unchecked Sendable {
     /// agents. It becomes derivable once VMs can express attachment to a
     /// shared/tenant network at creation time.
     static func placementRequirements(
-        for vm: VM, architecture: CPUArchitecture? = nil
+        for vm: VM, architecture: CPUArchitecture? = nil, siteID: UUID? = nil
     ) -> VMPlacementRequirements {
         VMPlacementRequirements(
             cpu: vm.cpu,
             memory: vm.memory,
             disk: vm.disk,
             hypervisorType: vm.hypervisorType,
-            architecture: architecture
+            architecture: architecture,
+            siteID: siteID
         )
     }
 
@@ -375,19 +400,41 @@ final class SchedulerService: @unchecked Sendable {
             throw SchedulerError.noAvailableAgents
         }
 
-        let hypervisorCapable = online.filter { $0.supportedHypervisors.contains(requirements.hypervisorType) }
+        // Site pinning is categorical — a network pinned to a site exists only
+        // in that site's OVN deployment, so agents elsewhere (or site-less)
+        // can never satisfy it, regardless of capacity. Two further member
+        // exclusions: agents that last registered below the site-authority
+        // protocol (sync assembly keeps them on legacy per-node scoping, so
+        // the VM's switch would land in a private local NB), and agents
+        // without overlay networking (user-mode/SLIRP hosts never attach to
+        // the site's OVN fabric at all).
+        let siteMatched: [SchedulableAgent]
+        if let requiredSiteID = requirements.siteID {
+            siteMatched = online.filter {
+                $0.siteID == requiredSiteID
+                    && WireProtocol.supportsSiteAuthority($0.wireProtocolVersion ?? 0)
+                    && $0.supportsInterVMNetworking
+            }
+            guard !siteMatched.isEmpty else {
+                throw SchedulerError.siteUnsatisfied(requiredSiteID: requiredSiteID)
+            }
+        } else {
+            siteMatched = online
+        }
+
+        let hypervisorCapable = siteMatched.filter { $0.supportedHypervisors.contains(requirements.hypervisorType) }
         guard !hypervisorCapable.isEmpty else {
             // Distinguish a genuine backend mismatch from agents that
             // advertise no hypervisor at all (failed binary probes at
             // registration) so the operator is pointed at the agent's
             // configuration rather than the VM's hypervisor type.
-            let agentsWithoutHypervisors = online.count(where: { $0.supportedHypervisors.isEmpty })
-            if agentsWithoutHypervisors == online.count {
-                throw SchedulerError.noUsableHypervisors(onlineAgents: online.count)
+            let agentsWithoutHypervisors = siteMatched.count(where: { $0.supportedHypervisors.isEmpty })
+            if agentsWithoutHypervisors == siteMatched.count {
+                throw SchedulerError.noUsableHypervisors(onlineAgents: siteMatched.count)
             }
             throw SchedulerError.unsupportedHypervisor(
                 required: requirements.hypervisorType,
-                onlineAgents: online.count,
+                onlineAgents: siteMatched.count,
                 agentsWithoutHypervisors: agentsWithoutHypervisors
             )
         }

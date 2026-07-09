@@ -279,6 +279,11 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateProjectMember())
     app.migrations.add(CreateProjectGroupGrant())
 
+    // Sites (availability zones): group agents sharing one OVN deployment so a
+    // logical network can span nodes (issue #343).
+    app.migrations.add(CreateSite())
+    app.migrations.add(AddWireProtocolVersionToAgent())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen
