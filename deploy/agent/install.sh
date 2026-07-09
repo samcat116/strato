@@ -315,11 +315,12 @@ join_control_plane() {
   if [ "$OS" = "linux" ]; then write_config "$url"; fi
 
   if [ "$USE_SYSTEMD" -eq 1 ]; then
+    # A registration URL was supplied, so always register with it — that is the
+    # documented recovery path when the stored state is stale, revoked, or
+    # corrupt, and `join` overwrites the old state on success. Skipping join
+    # here would start the service on the dead state and it would just fail.
     if [ -f "$STATE_FILE" ]; then
-      log "Join state already present at $STATE_FILE; starting the service without re-registering"
-      systemctl enable --now strato-agent.service
-      log "Done. Follow along with: journalctl -fu strato-agent"
-      return 0
+      log "Existing join state at $STATE_FILE will be replaced by this registration"
     fi
     # `join` registers and then keeps running as the agent. Run it just long
     # enough to confirm registration (the "Registration complete" log line),
