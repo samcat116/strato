@@ -33,7 +33,7 @@ export function CreateTokenDialog({
   const [expirationHours, setExpirationHours] = useState("24");
   const [createdToken, setCreatedToken] = useState<AgentRegistrationToken | null>(null);
   const [copiedCommand, setCopiedCommand] = useState<
-    "join" | "docker" | "bootstrap" | null
+    "curl" | "join" | "docker" | "bootstrap" | null
   >(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -61,6 +61,9 @@ export function CreateTokenDialog({
     }
   };
 
+  const curlInstallCommand = createdToken
+    ? `curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh | sudo bash -s -- --registration-url '${createdToken.registrationURL}'`
+    : "";
   const joinCommand = createdToken
     ? `strato-agent join '${createdToken.registrationURL}'`
     : "";
@@ -69,22 +72,28 @@ export function CreateTokenDialog({
     : "";
   const bootstrapCommand = createdToken?.bootstrapCommand ?? "";
 
-  const handleCopy = async (command: "join" | "docker" | "bootstrap") => {
+  const handleCopy = async (
+    command: "curl" | "join" | "docker" | "bootstrap"
+  ) => {
     const text =
-      command === "join"
-        ? joinCommand
-        : command === "docker"
-          ? dockerJoinCommand
-          : bootstrapCommand;
+      command === "curl"
+        ? curlInstallCommand
+        : command === "join"
+          ? joinCommand
+          : command === "docker"
+            ? dockerJoinCommand
+            : bootstrapCommand;
     if (!text) return;
     await navigator.clipboard.writeText(text);
     setCopiedCommand(command);
     toast.success(
-      command === "join"
-        ? "Join command copied to clipboard"
-        : command === "docker"
-          ? "Docker command copied to clipboard"
-          : "Bootstrap command copied to clipboard"
+      command === "curl"
+        ? "Install command copied to clipboard"
+        : command === "join"
+          ? "Join command copied to clipboard"
+          : command === "docker"
+            ? "Docker command copied to clipboard"
+            : "Bootstrap command copied to clipboard"
     );
     setTimeout(() => setCopiedCommand(null), 2000);
   };
@@ -150,11 +159,39 @@ export function CreateTokenDialog({
             <div className="p-4 bg-background rounded-lg border border-border">
               <Label className="text-muted-foreground text-sm">
                 {bootstrapCommand
-                  ? "Or join without SPIRE (token auth only):"
+                  ? "Or install + join without SPIRE (token auth only):"
                   : "Run this command on your hypervisor host:"}
               </Label>
               <div className="flex items-start gap-2 mt-2">
                 <code className="flex-1 min-w-0 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono whitespace-pre-wrap break-all">
+                  {curlInstallCommand}
+                </code>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-input shrink-0"
+                  onClick={() => handleCopy("curl")}
+                >
+                  {copiedCommand === "curl" ? (
+                    <Check className="h-4 w-4 text-green-600" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+              <p className="text-sm text-muted-foreground mt-2">
+                Downloads the agent, installs QEMU/OVN dependencies and a
+                systemd service, then joins — and reconnects automatically
+                after restarts.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-muted-foreground text-sm">
+                Or, if strato-agent is already installed, just join:
+              </Label>
+              <div className="flex items-start gap-2">
+                <code className="flex-1 min-w-0 p-3 bg-gray-950 rounded text-sm text-gray-200 font-mono whitespace-pre-wrap break-all">
                   {joinCommand}
                 </code>
                 <Button
@@ -170,10 +207,6 @@ export function CreateTokenDialog({
                   )}
                 </Button>
               </div>
-              <p className="text-sm text-muted-foreground mt-2">
-                The agent joins, stays running, and reconnects automatically
-                after restarts.
-              </p>
             </div>
 
             <div className="p-4 bg-blue-500/10 rounded-lg border border-blue-500/30">

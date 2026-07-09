@@ -211,14 +211,21 @@ jobs:
 
       - name: Build Swift binaries
         run: |
+          # On Linux, statically link the Swift stdlib so the release binaries
+          # run on hosts without a Swift toolchain (the install.sh flow drops
+          # them onto bare hypervisors). macOS links the OS-provided runtime,
+          # where the flag does not apply.
+          STATIC=""
+          if [ "${{ matrix.os }}" = "self-hosted" ]; then STATIC="--static-swift-stdlib"; fi
+
           # Build control plane
           cd control-plane
-          swift build -c release
+          swift build -c release $STATIC
           cd ..
 
           # Build agent
           cd agent
-          swift build -c release
+          swift build -c release $STATIC
           cd ..
 
       - name: Package binaries
@@ -227,6 +234,12 @@ jobs:
           cp control-plane/.build/release/App release/strato-control-plane
           cp agent/.build/release/StratoAgent release/strato-agent
           tar czf ${{ matrix.asset_name }}.tar.gz -C release strato-control-plane strato-agent
+          # Checksum for install.sh to verify the download.
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum ${{ matrix.asset_name }}.tar.gz > ${{ matrix.asset_name }}.tar.gz.sha256
+          else
+            shasum -a 256 ${{ matrix.asset_name }}.tar.gz > ${{ matrix.asset_name }}.tar.gz.sha256
+          fi
 
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
@@ -237,6 +250,16 @@ jobs:
           asset_path: ./${{ matrix.asset_name }}.tar.gz
           asset_name: ${{ matrix.asset_name }}.tar.gz
           asset_content_type: application/gzip
+
+      - name: Upload Release Asset checksum
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./${{ matrix.asset_name }}.tar.gz.sha256
+          asset_name: ${{ matrix.asset_name }}.tar.gz.sha256
+          asset_content_type: text/plain
 
   upload-source-assets:
     runs-on: self-hosted
@@ -538,3 +561,13 @@ jobs:
           asset_path: ./schema.zed
           asset_name: schema.zed
           asset_content_type: text/plain
+
+      - name: Upload agent install script
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./deploy/agent/install.sh
+          asset_name: install.sh
+          asset_content_type: text/x-shellscript
