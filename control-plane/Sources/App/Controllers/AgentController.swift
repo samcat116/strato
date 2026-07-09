@@ -138,6 +138,14 @@ struct AgentController: RouteCollection {
 
         let expirationHours = createRequest.expirationHours ?? 1
 
+        // Resolve the target site up front so a typo'd id fails the request
+        // instead of silently minting a site-less token.
+        if let siteId = createRequest.siteId {
+            guard try await Site.find(siteId, on: req.db) != nil else {
+                throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
+            }
+        }
+
         // Provision the node in SPIRE first (join token + workload entry).
         // SPIRE is not transactional with our database, so order matters: if
         // provisioning fails nothing was persisted here, and if the save below
@@ -174,7 +182,8 @@ struct AgentController: RouteCollection {
         let token = AgentRegistrationToken(
             agentName: createRequest.agentName,
             expirationHours: expirationHours,
-            spireProvisioned: spireProvisioning != nil
+            spireProvisioned: spireProvisioning != nil,
+            siteID: createRequest.siteId
         )
 
         do {

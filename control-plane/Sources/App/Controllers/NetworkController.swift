@@ -110,6 +110,16 @@ struct NetworkController: RouteCollection {
         let dnsServers = try Self.validatedDNS(request.dnsServers ?? [])
         try Self.validateLeaseTime(request.leaseTime)
 
+        // Pinning to a site constrains all the network's VMs to that site's
+        // agents, where the shared OVN deployment spans the switch across
+        // nodes. Validated here so a typo'd id fails the create, not the
+        // first VM placement.
+        if let siteId = request.siteId {
+            guard try await Site.find(siteId, on: req.db) != nil else {
+                throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
+            }
+        }
+
         let network = LogicalNetwork(
             name: name,
             subnet: subnet,
@@ -120,7 +130,8 @@ struct NetworkController: RouteCollection {
             dnsServers: dnsServers,
             domainName: request.domainName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             leaseTime: request.leaseTime,
-            externalAccess: request.externalAccess ?? true
+            externalAccess: request.externalAccess ?? true,
+            siteID: request.siteId
         )
 
         do {

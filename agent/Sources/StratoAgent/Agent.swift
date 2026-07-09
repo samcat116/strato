@@ -123,6 +123,7 @@ actor Agent {
     // service bootstraps onto the local OVS at connect time.
     private let ovnChassisConfig: OVNChassisConfig
     private let ovnUplink: OVNUplinkConfig?
+    private let ovnNorthbound: String?
     // The networking backend actually selected at startup (config value plus
     // platform fallbacks). Drives the networking capability advertised at
     // registration: a Linux agent configured for user-mode networking must not
@@ -165,6 +166,7 @@ actor Agent {
         networkMode: NetworkMode?,
         ovnChassisConfig: OVNChassisConfig = OVNChassisConfig(),
         ovnUplink: OVNUplinkConfig? = nil,
+        ovnNorthbound: String? = nil,
         isRegistrationMode: Bool,
         logger: Logger,
         imageCachePath: String? = nil,
@@ -186,6 +188,7 @@ actor Agent {
         self.networkMode = networkMode
         self.ovnChassisConfig = ovnChassisConfig
         self.ovnUplink = ovnUplink
+        self.ovnNorthbound = ovnNorthbound
         self.isRegistrationMode = isRegistrationMode
         self.logger = logger
         self.imageCachePath = imageCachePath
@@ -252,7 +255,7 @@ actor Agent {
             #if os(Linux)
             logger.info("Network service initialized with SwiftOVN support")
             networkService = NetworkServiceLinux(
-                chassisConfig: ovnChassisConfig, uplink: ovnUplink, logger: logger)
+                nbConnection: ovnNorthbound, chassisConfig: ovnChassisConfig, uplink: ovnUplink, logger: logger)
             effectiveNetworkMode = .ovn
             #else
             logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
@@ -881,7 +884,8 @@ actor Agent {
                 qemuImgPath: FileSystemStorageBackend.defaultQemuImgPath,
                 firecrackerSocketDirectory: firecrackerSocketDirectory,
                 firmwarePath: resolvedFirmwarePath,
-                ovnMode: effectiveNetworkMode == .ovn
+                ovnMode: effectiveNetworkMode == .ovn,
+                ovnNBConnection: ovnNorthbound ?? "unix:/var/run/ovn/ovnnb_db.sock"
             ))
     }
 
@@ -1233,7 +1237,8 @@ extension Agent {
                 // (decoded as []); that absence must NOT be read as "tear down
                 // all L3" — skip network reconciliation and fall back to VM-only.
                 if WireProtocol.supportsNetworkSync(envelope.senderVersion) {
-                    await networkService?.reconcileNetworks(message.networks)
+                    await networkService?.reconcileNetworks(
+                        message.networks, authoritative: message.networksAuthoritative)
                 }
                 await reconciler?.apply(message)
             case .vmInfo:

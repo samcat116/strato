@@ -299,6 +299,7 @@ private func launchAgent(
         networkMode: config.networkMode,
         ovnChassisConfig: config.ovnChassisConfig,
         ovnUplink: config.ovnUplink,
+        ovnNorthbound: config.ovnNorthbound,
         isRegistrationMode: isRegistrationMode,
         logger: logger,
         vmStoragePath: finalVMStoragePath,

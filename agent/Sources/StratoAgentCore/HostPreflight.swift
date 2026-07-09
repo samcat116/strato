@@ -80,7 +80,11 @@ public enum HostPreflight {
         /// Whether the agent runs with OVN networking (enables the OVN/OVS
         /// socket and tool checks).
         public var ovnMode: Bool
-        public var ovnSocketPath: String
+        /// OVN NB connection string (`unix:<path>`, `tcp:<host>:<port>`,
+        /// `ssl:<host>:<port>`). The local-socket existence check only applies
+        /// to unix connections — a remote site central can't be probed as a
+        /// file, and its reachability surfaces at connect time instead.
+        public var ovnNBConnection: String
         public var ovsSocketPath: String
         /// `PATH` used to locate CLI tools (`ip`, `ovs-vsctl`).
         public var searchPath: String
@@ -95,7 +99,7 @@ public enum HostPreflight {
             firecrackerSocketDirectory: String? = nil,
             firmwarePath: String? = nil,
             ovnMode: Bool = false,
-            ovnSocketPath: String = "/var/run/ovn/ovnnb_db.sock",
+            ovnNBConnection: String = "unix:/var/run/ovn/ovnnb_db.sock",
             ovsSocketPath: String = "/var/run/openvswitch/db.sock",
             searchPath: String = ProcessInfo.processInfo.environment["PATH"]
                 ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -108,7 +112,7 @@ public enum HostPreflight {
             self.firecrackerSocketDirectory = firecrackerSocketDirectory
             self.firmwarePath = firmwarePath
             self.ovnMode = ovnMode
-            self.ovnSocketPath = ovnSocketPath
+            self.ovnNBConnection = ovnNBConnection
             self.ovsSocketPath = ovsSocketPath
             self.searchPath = searchPath
             self.minimumFreeDiskBytes = minimumFreeDiskBytes
@@ -216,10 +220,16 @@ public enum HostPreflight {
         checks.append(checkFirmware(inputs.firmwarePath))
 
         if inputs.ovnMode {
-            checks.append(
-                checkSocket(
-                    inputs.ovnSocketPath, kind: .ovnDatabaseSocket,
-                    hint: "is OVN (ovn-central / ovn-controller) installed and running on this host?"))
+            if inputs.ovnNBConnection.hasPrefix("unix:") {
+                checks.append(
+                    checkSocket(
+                        String(inputs.ovnNBConnection.dropFirst("unix:".count)), kind: .ovnDatabaseSocket,
+                        hint: "is OVN (ovn-central / ovn-controller) installed and running on this host?"))
+            } else {
+                // Remote NB (shared site central): nothing local to probe;
+                // reachability surfaces when the network service connects.
+                checks.append(.pass(.ovnDatabaseSocket))
+            }
             checks.append(
                 checkSocket(
                     inputs.ovsSocketPath, kind: .ovsDatabaseSocket,

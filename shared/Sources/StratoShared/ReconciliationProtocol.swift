@@ -94,24 +94,36 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// network-reconciliation protocol, in which case the agent falls back to
     /// realizing switches implicitly from `vms`.
     public let networks: [DesiredNetworkState]
+    /// Whether the receiving agent is the topology authority for its OVN
+    /// northbound database. The authority reconciles `networks` — creating and
+    /// tearing down switches, routers, and NAT. A non-authoritative agent shares
+    /// its site's NB with peers and must leave topology alone (it still binds
+    /// its own VMs' ports); exactly one agent per site is authoritative, so the
+    /// shared NB has a single topology writer. Site-less agents own their local
+    /// NB outright and are always authoritative.
+    public let networksAuthoritative: Bool
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         syncId: String = UUID().uuidString,
         vms: [DesiredVMState],
-        networks: [DesiredNetworkState] = []
+        networks: [DesiredNetworkState] = [],
+        networksAuthoritative: Bool = true
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.syncId = syncId
         self.vms = vms
         self.networks = networks
+        self.networksAuthoritative = networksAuthoritative
     }
 
     // Custom decode so `networks` tolerates absence: a sync produced by an older
     // control plane (before networks were first-class) decodes to [] rather than
     // throwing, keeping agent↔control-plane compatible across version skew.
+    // `networksAuthoritative` likewise defaults to true, matching every control
+    // plane older than the site/shared-NB protocol (agents owned their local NB).
     // `encode(to:)` stays synthesized; all other keys remain required.
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -120,6 +132,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         syncId = try c.decode(String.self, forKey: .syncId)
         vms = try c.decode([DesiredVMState].self, forKey: .vms)
         networks = try c.decodeIfPresent([DesiredNetworkState].self, forKey: .networks) ?? []
+        networksAuthoritative = try c.decodeIfPresent(Bool.self, forKey: .networksAuthoritative) ?? true
     }
 }
 

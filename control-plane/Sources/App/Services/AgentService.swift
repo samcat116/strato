@@ -173,8 +173,12 @@ actor AgentService {
 
     // MARK: - Agent Registration
 
-    /// Registers an agent and returns its database UUID
-    func registerAgent(_ message: AgentRegisterMessage, agentName: String) async throws -> UUID {
+    /// Registers an agent and returns its database UUID.
+    ///
+    /// `siteID` is the site carried by the redeemed registration token, if any.
+    /// Non-nil assigns (or moves) the agent; nil never clears — the assignment
+    /// is durable on the agent row, and rotated reconnect tokens don't carry it.
+    func registerAgent(_ message: AgentRegisterMessage, agentName: String, siteID: UUID? = nil) async throws -> UUID {
         // The imperative message path is gone (issue #261): an agent that
         // cannot be driven by desired-state syncs would register successfully
         // and then never converge anything — every operation would time out
@@ -207,6 +211,10 @@ actor AgentService {
             // Create new agent
             agent = Agent.from(registration: message, name: agentName)
             agent.status = .online
+        }
+
+        if let siteID {
+            agent.$site.id = siteID
         }
 
         try await agent.save(on: db)
@@ -700,7 +708,36 @@ actor AgentService {
     /// routing key is nudged over pub/sub and assembles it from Postgres
     /// there. Both halves are latency optimizations — a lost nudge is
     /// repaired by the holder's periodic sync timer.
+    ///
+    /// A mutation on one agent can change what its site's network controller
+    /// must realize (a VM landing on any site node may reference a network
+    /// the shared NB doesn't have yet), so the controller is synced alongside.
     func syncDesiredState(agentId: String) async {
+        await routeDesiredStateSync(agentId: agentId)
+        if let controllerId = await siteNetworkControllerID(forAgentId: agentId), controllerId != agentId {
+            await routeDesiredStateSync(agentId: controllerId)
+        }
+    }
+
+    /// The agent id of the site network controller responsible for the given
+    /// agent's networks, or nil for site-less agents / unconfigured sites.
+    /// Best-effort: on lookup failure the periodic sync timer still converges
+    /// the controller.
+    private func siteNetworkControllerID(forAgentId agentId: String) async -> String? {
+        guard let agentUUID = UUID(uuidString: agentId) else { return nil }
+        do {
+            guard let agent = try await Agent.find(agentUUID, on: app.db),
+                let siteID = agent.$site.id,
+                let site = try await Site.find(siteID, on: app.db)
+            else { return nil }
+            return site.$networkControllerAgent.id?.uuidString
+        } catch {
+            app.logger.debug("Site controller lookup failed: \(error)")
+            return nil
+        }
+    }
+
+    private func routeDesiredStateSync(agentId: String) async {
         if let localName = app.websocketManager.agentName(agentId: agentId) {
             await syncDesiredStateLocally(agentId: agentId, agentName: localName)
             return
@@ -952,13 +989,13 @@ actor AgentService {
         }
 
         // First-class network desired state (issue #342): the logical networks
-        // this agent's VMs reference, so the agent realizes their switches,
-        // per-project routers, and SNAT uplinks as level-triggered desired
-        // state. Scoped to referenced networks — an agent needn't realize a
-        // network with no VM of its own on this host.
-        let referencedNames = Set(vms.flatMap { $0.networkInterfaces.map(\.network) })
+        // the agent should realize as level-triggered desired state (switches,
+        // per-project routers, SNAT uplinks). Which networks — and whether this
+        // agent may write topology at all — depends on its site membership
+        // (issue #343); see `networkAssemblyScope`.
+        let scope = try await networkAssemblyScope(agentId: agentId, ownVMs: vms, on: db)
         let networkStates =
-            referencedNames
+            scope.networkNames
             .sorted()
             .compactMap { name -> DesiredNetworkState? in
                 guard let network = networksByName[name], let networkId = network.id else { return nil }
@@ -973,7 +1010,64 @@ actor AgentService {
                 )
             }
 
-        return DesiredStateMessage(vms: entries, networks: networkStates)
+        return DesiredStateMessage(
+            vms: entries, networks: networkStates, networksAuthoritative: scope.authoritative)
+    }
+
+    /// Which networks an agent's sync should carry, and whether the agent is
+    /// the topology authority for the NB it writes to (issue #343).
+    ///
+    /// - Site-less agent (legacy single-node model): it owns a private local
+    ///   NB, so it is always authoritative, scoped to the networks its own
+    ///   VMs reference — a network with no VM on the host needn't exist there.
+    /// - Sited agent designated as the site's network controller: the whole
+    ///   site shares one NB and this agent is its single topology writer, so
+    ///   it gets every network referenced by any VM in the site plus every
+    ///   network pinned to the site (pinned-but-unused networks are realized
+    ///   ahead of their first VM).
+    /// - Any other sited agent: non-authoritative and empty. It still binds
+    ///   its own VMs' ports to the shared NB, but topology belongs to the
+    ///   controller — two level-triggered writers would fight over teardown.
+    private func networkAssemblyScope(
+        agentId: String, ownVMs: [VM], on db: any Database
+    ) async throws -> (networkNames: Set<String>, authoritative: Bool) {
+        let ownReferences = Set(ownVMs.flatMap { $0.networkInterfaces.map(\.network) })
+
+        guard let agentUUID = UUID(uuidString: agentId),
+            let agent = try await Agent.find(agentUUID, on: db),
+            let siteID = agent.$site.id,
+            let site = try await Site.find(siteID, on: db)
+        else {
+            return (ownReferences, true)
+        }
+
+        guard let controllerID = site.$networkControllerAgent.id else {
+            // No designated controller: nobody may author topology, so the
+            // site's networks are realized nowhere until one is set. Loud —
+            // this is a misconfiguration, not a transient.
+            app.logger.warning(
+                "Site has no network controller; its networks will not be reconciled",
+                metadata: ["site": .string(site.name), "agentName": .string(agent.name)])
+            return ([], false)
+        }
+        guard controllerID == agentUUID else {
+            return ([], false)
+        }
+
+        let siteAgentIDs = try await Agent.query(on: db)
+            .filter(\.$site.$id == siteID)
+            .all()
+            .compactMap { $0.id?.uuidString }
+        let siteVMs = try await VM.query(on: db)
+            .filter(\.$hypervisorId ~~ siteAgentIDs)
+            .with(\.$networkInterfaces)
+            .all()
+        var names = Set(siteVMs.flatMap { $0.networkInterfaces.map(\.network) })
+        let pinned = try await LogicalNetwork.query(on: db)
+            .filter(\.$site.$id == siteID)
+            .all()
+        names.formUnion(pinned.map(\.name))
+        return (names, true)
     }
 
     // MARK: - Observed-state reports (issue #260)
@@ -1261,13 +1355,18 @@ actor AgentService {
         let schedulableAgents = await schedulableAgentsFromDatabase()
         let vmId = vm.id?.uuidString ?? ""
 
+        // A network pinned to a site exists only in that site's OVN
+        // deployment, so it pins the VM's placement (issue #343).
+        let requiredSiteID = try await pinnedSiteID(for: vm, on: db)
+
         // Use scheduler to select the best agent and atomically reserve the
         // VM's resources on it, so a concurrent create can't place against
         // the same capacity (issue #258).
         let agentId: String
         do {
             agentId = try await app.scheduler.selectAndReserveAgent(
-                requirements: SchedulerService.placementRequirements(for: vm, architecture: image?.architecture),
+                requirements: SchedulerService.placementRequirements(
+                    for: vm, architecture: image?.architecture, siteID: requiredSiteID),
                 vmId: vmId,
                 from: schedulableAgents,
                 coordination: app.coordination,
@@ -1304,6 +1403,30 @@ actor AgentService {
             await app.coordination.releaseReservation(agentId: agentId, vmId: vmId)
             throw error
         }
+    }
+
+    /// The site a VM's placement is pinned to, derived from its NICs'
+    /// networks: attaching a site-pinned network confines the VM to that
+    /// site's agents. NICs are persisted before placement runs, so the rows
+    /// are authoritative here. Networks pinned to different sites cannot
+    /// coexist on one VM — no host is in both sites.
+    private func pinnedSiteID(for vm: VM, on db: Database) async throws -> UUID? {
+        guard let vmID = vm.id else { return nil }
+        let nics = try await VMNetworkInterface.query(on: db)
+            .filter(\.$vm.$id == vmID)
+            .all()
+        let names = Set(nics.map(\.network))
+        guard !names.isEmpty else { return nil }
+
+        let networks = try await LogicalNetwork.query(on: db)
+            .filter(\.$name ~~ names)
+            .all()
+        let siteIDs = Set(networks.compactMap { $0.$site.id })
+        guard siteIDs.count <= 1 else {
+            throw AgentServiceError.schedulingFailed(
+                "VM attaches networks pinned to different sites; no host can satisfy both")
+        }
+        return siteIDs.first
     }
 
     /// Dispatch a correlated VM command (reboot — an action, not a state, so
@@ -1397,7 +1520,8 @@ actor AgentService {
                 runningVMCount: runningVMCounts[agentId] ?? 0,
                 supportedHypervisors: agent.supportedHypervisors,
                 architecture: agent.cpuArchitecture,
-                supportsInterVMNetworking: agent.supportsInterVMNetworking
+                supportsInterVMNetworking: agent.supportsInterVMNetworking,
+                siteID: agent.$site.id
             )
         }
     }

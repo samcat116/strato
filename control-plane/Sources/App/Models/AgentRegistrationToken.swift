@@ -22,6 +22,12 @@ final class AgentRegistrationToken: Model, Content, @unchecked Sendable {
     @Field(key: "spire_provisioned")
     var spireProvisioned: Bool
 
+    /// Site the agent joins when it redeems this token. Applied to the agent
+    /// row at registration and durable there afterwards, so rotated reconnect
+    /// tokens deliberately don't carry it (nil never clears an assignment).
+    @OptionalField(key: "site_id")
+    var siteID: UUID?
+
     @Timestamp(key: "expires_at", on: .none)
     var expiresAt: Date?
 
@@ -38,13 +44,15 @@ final class AgentRegistrationToken: Model, Content, @unchecked Sendable {
         token: String = UUID().uuidString,
         agentName: String,
         expirationHours: Int = 1,
-        spireProvisioned: Bool = false
+        spireProvisioned: Bool = false,
+        siteID: UUID? = nil
     ) {
         self.id = id
         self.token = token
         self.agentName = agentName
         self.isUsed = false
         self.spireProvisioned = spireProvisioned
+        self.siteID = siteID
         self.expiresAt = Date().addingTimeInterval(TimeInterval(expirationHours * 3600))
     }
 
@@ -159,6 +167,9 @@ struct AgentRegistrationTokenListItem: Content {
 struct CreateAgentRegistrationTokenRequest: Content {
     let agentName: String
     let expirationHours: Int?
+    /// Site the agent joins on registration; omitted keeps the agent site-less
+    /// (legacy single-node OVN model).
+    let siteId: UUID?
 
     func validate() throws {
         guard !agentName.isEmpty else {

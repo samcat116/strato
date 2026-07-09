@@ -1,0 +1,19 @@
+# Per-site OVN central (issue #343): one of these per Strato site, on a host
+# every hypervisor in the site can reach. Host networking so geneve-relevant
+# addressing and the 6641/6642 listeners are the host's own.
+services:
+  ovn-central:
+    build: .
+    container_name: strato-ovn-central
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      # NB/SB database files survive container replacement.
+      - ovn-db:/var/lib/ovn
+      - ovn-log:/var/log/ovn
+      - ovn-run:/var/run/ovn
+
+volumes:
+  ovn-db:
+  ovn-log:
+  ovn-run:

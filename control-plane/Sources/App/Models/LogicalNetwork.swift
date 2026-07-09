@@ -77,6 +77,14 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     @OptionalParent(key: "project_id")
     var project: Project?
 
+    /// Site (availability zone) this network is pinned to. A pinned network's
+    /// VMs may only place on that site's agents, where the shared OVN
+    /// deployment lets one logical switch span nodes over geneve. Nil means
+    /// unpinned: the legacy model, where the same name on different agents is
+    /// disconnected segments sharing an IP pool — only safe single-node.
+    @OptionalParent(key: "site_id")
+    var site: Site?
+
     /// User who created the network; nil for seeded networks.
     @OptionalParent(key: "created_by_id")
     var createdBy: User?
@@ -101,13 +109,15 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         domainName: String? = nil,
         leaseTime: Int? = nil,
         externalAccess: Bool = true,
-        generation: Int = 1
+        generation: Int = 1,
+        siteID: UUID? = nil
     ) {
         self.id = id
         self.name = name
         self.subnet = subnet
         self.gateway = gateway
         self.$project.id = projectID
+        self.$site.id = siteID
         self.$createdBy.id = createdByID
         self.dhcpEnabled = dhcpEnabled
         self.dnsServersRaw = LogicalNetwork.joinDNS(dnsServers)
@@ -181,13 +191,16 @@ struct CreateNetworkRequest: Content {
     let leaseTime: Int?
     /// Whether the network gets outbound SNAT to the host uplink. Defaults true.
     let externalAccess: Bool?
+    /// Site to pin the network to; its VMs then only place on that site's
+    /// agents, where the shared OVN deployment spans it across nodes.
+    let siteId: UUID?
 
     // Explicit init so the DHCP fields default when omitted (e.g. in tests) while
     // JSON decoding still populates them via the synthesized Codable conformance.
     init(
         name: String, subnet: String, gateway: String? = nil, projectId: UUID? = nil,
         dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
-        leaseTime: Int? = nil, externalAccess: Bool? = nil
+        leaseTime: Int? = nil, externalAccess: Bool? = nil, siteId: UUID? = nil
     ) {
         self.name = name
         self.subnet = subnet
@@ -198,6 +211,7 @@ struct CreateNetworkRequest: Content {
         self.domainName = domainName
         self.leaseTime = leaseTime
         self.externalAccess = externalAccess
+        self.siteId = siteId
     }
 }
 
@@ -245,6 +259,7 @@ struct NetworkResponse: Content {
     let domainName: String?
     let leaseTime: Int?
     let externalAccess: Bool
+    let siteId: UUID?
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -261,6 +276,7 @@ struct NetworkResponse: Content {
         self.domainName = network.domainName
         self.leaseTime = network.leaseTime
         self.externalAccess = network.externalAccess
+        self.siteId = network.$site.id
         self.createdAt = network.createdAt
         self.updatedAt = network.updatedAt
     }

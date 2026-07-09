@@ -111,6 +111,52 @@ struct AgentConfigTests {
         }
     }
 
+    @Test("Load OVN northbound connection string")
+    func loadOVNNorthbound() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                network_mode = "ovn"
+                ovn_northbound = "tcp:central:6641"
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+            #expect(config.ovnNorthbound == "tcp:central:6641")
+        }
+    }
+
+    @Test("ovn_northbound defaults to nil (legacy local socket)")
+    func ovnNorthboundDefaultsNil() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://minimal:8080/ws"
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+            #expect(config.ovnNorthbound == nil)
+        }
+    }
+
+    @Test("A malformed ovn_northbound is rejected at load time")
+    func ovnNorthboundValidated() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://minimal:8080/ws"
+                ovn_northbound = "central:6641"
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            #expect(throws: AgentConfigError.self) {
+                _ = try AgentConfig.load(from: configPath)
+            }
+        }
+    }
+
     @Test("Chassis bootstrap defaults to enabled when keys are absent")
     func ovnChassisSettingsDefault() throws {
         try withTempDirectory { tempDirectory in
