@@ -89,3 +89,4 @@ export {
   projectMemberErrorMessage,
 } from "./use-project-members";
 export { useNetworks, useNetwork, useInvalidateNetworks } from "./use-networks";
+export { useAuditEvents, auditErrorMessage } from "./use-audit-events";

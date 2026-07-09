@@ -12,6 +12,7 @@ import {
   Layers,
   LayoutGrid,
   Rows3,
+  ScrollText,
   Users,
 } from "lucide-react";
 
@@ -52,7 +53,10 @@ export const navSections: NavSection[] = [
   {
     label: "Administration",
     adminOnly: true,
-    items: [{ label: "Users", href: "/admin/users", icon: Users }],
+    items: [
+      { label: "Users", href: "/admin/users", icon: Users },
+      { label: "Audit Log", href: "/admin/audit", icon: ScrollText },
+    ],
   },
 ];
 

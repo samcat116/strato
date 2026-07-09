@@ -18,3 +18,5 @@ export { organizationalUnitsApi } from "./organizational-units";
 export { quotasApi } from "./quotas";
 export { hierarchyApi } from "./hierarchy";
 export { networksApi } from "./networks";
+export { auditEventsApi } from "./audit-events";
+export type { AuditEventFilters } from "./audit-events";
