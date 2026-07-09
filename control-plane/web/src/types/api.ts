@@ -794,3 +794,33 @@ export interface UpdateNetworkRequest {
   domainName?: string;
   leaseTime?: number;
 }
+
+// Audit events (system-admin / org-admin trail)
+
+export interface AuditEvent {
+  id: string;
+  eventType: string;
+  userID?: string;
+  /** Username snapshot at event time; survives user deletion/rename. */
+  username?: string;
+  apiKeyID?: string;
+  organizationID?: string;
+  method?: string;
+  path?: string;
+  status?: number;
+  resourceType?: string;
+  resourceID?: string;
+  action?: string;
+  sourceIP?: string;
+  /** True when the request was served via the system-admin permission bypass. */
+  adminBypass: boolean;
+  metadata?: Record<string, string>;
+  createdAt?: string;
+}
+
+export interface AuditEventListResponse {
+  events: AuditEvent[];
+  total: number;
+  limit: number;
+  offset: number;
+}
