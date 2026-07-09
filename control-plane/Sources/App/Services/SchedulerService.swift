@@ -39,6 +39,12 @@ struct SchedulableAgent: Sendable {
     let supportsInterVMNetworking: Bool
     /// Site (availability zone) the agent belongs to; nil for site-less agents.
     let siteID: UUID?
+    /// Wire protocol version the agent last registered with; nil for unknown
+    /// (rows predating the column). Site-pinned placement requires
+    /// site-authority support: a pre-v4 agent is kept on legacy per-node
+    /// network scoping, so a pinned-network VM placed there would get its
+    /// switch in the agent's local NB instead of the site's shared one.
+    let wireProtocolVersion: Int?
 
     init(
         id: String,
@@ -54,7 +60,8 @@ struct SchedulableAgent: Sendable {
         supportedHypervisors: [HypervisorType] = [.qemu],
         architecture: CPUArchitecture? = nil,
         supportsInterVMNetworking: Bool = false,
-        siteID: UUID? = nil
+        siteID: UUID? = nil,
+        wireProtocolVersion: Int? = nil
     ) {
         self.id = id
         self.name = name
@@ -70,6 +77,7 @@ struct SchedulableAgent: Sendable {
         self.architecture = architecture
         self.supportsInterVMNetworking = supportsInterVMNetworking
         self.siteID = siteID
+        self.wireProtocolVersion = wireProtocolVersion
     }
 
     /// Calculate resource utilization percentage (0.0 to 1.0)
@@ -121,7 +129,8 @@ struct SchedulableAgent: Sendable {
             supportedHypervisors: supportedHypervisors,
             architecture: architecture,
             supportsInterVMNetworking: supportsInterVMNetworking,
-            siteID: siteID
+            siteID: siteID,
+            wireProtocolVersion: wireProtocolVersion
         )
     }
 }
@@ -393,10 +402,16 @@ final class SchedulerService: @unchecked Sendable {
 
         // Site pinning is categorical — a network pinned to a site exists only
         // in that site's OVN deployment, so agents elsewhere (or site-less)
-        // can never satisfy it, regardless of capacity.
+        // can never satisfy it, regardless of capacity. Members that last
+        // registered below the site-authority protocol are excluded too: sync
+        // assembly keeps them on legacy per-node scoping, so a pinned-network
+        // VM placed there would land in the agent's private local NB instead
+        // of the site's shared one.
         let siteMatched: [SchedulableAgent]
         if let requiredSiteID = requirements.siteID {
-            siteMatched = online.filter { $0.siteID == requiredSiteID }
+            siteMatched = online.filter {
+                $0.siteID == requiredSiteID && WireProtocol.supportsSiteAuthority($0.wireProtocolVersion ?? 0)
+            }
             guard !siteMatched.isEmpty else {
                 throw SchedulerError.siteUnsatisfied(requiredSiteID: requiredSiteID)
             }

@@ -218,23 +218,37 @@ actor AgentService {
         // actually speaks — see `networkAssemblyScope`.
         agent.wireProtocolVersion = protocolVersion
 
-        if let siteID {
-            // Never move a site's designated network controller by token
-            // redemption: the old site would be left pointing at a non-member
-            // and its networks would silently stop being reconciled. The move
-            // must go through the sites API, which re-designates first. (A
-            // brand-new agent row has no id yet and can't hold a designation.)
-            var orphansControllership = false
+        if let siteID, agent.$site.id != siteID {
+            // A token-driven site change must honor the same invariants as the
+            // sites API's assign/remove endpoints, or the token becomes a
+            // bypass. Never move a site's designated network controller (the
+            // old site would point at a non-member and its networks would
+            // silently stop being reconciled), and never move an agent that
+            // still hosts VMs (their networks would drop out of the NB that
+            // has been realizing them). Refusals are logged, not fatal — the
+            // agent still registers with its previous site intact. (A
+            // brand-new agent row has no id yet and trips neither guard.)
+            var refusalReason: String?
             if let agentID = agent.id {
-                orphansControllership =
+                let controllerships =
                     try await Site.query(on: db)
                     .filter(\.$networkControllerAgent.$id == agentID)
                     .filter(\.$id != siteID)
-                    .count() > 0
+                    .count()
+                if controllerships > 0 {
+                    refusalReason = "agent is another site's network controller"
+                } else {
+                    let hostedVMs = try await VM.query(on: db)
+                        .filter(\.$hypervisorId == agentID.uuidString)
+                        .count()
+                    if hostedVMs > 0 {
+                        refusalReason = "agent hosts \(hostedVMs) VM(s); drain it first"
+                    }
+                }
             }
-            if orphansControllership {
+            if let refusalReason {
                 app.logger.error(
-                    "Ignoring registration-token site assignment: agent is another site's network controller",
+                    "Ignoring registration-token site assignment: \(refusalReason)",
                     metadata: ["agentName": .string(agentName), "requestedSite": .string(siteID.uuidString)])
             } else {
                 agent.$site.id = siteID
@@ -1561,7 +1575,8 @@ actor AgentService {
                 supportedHypervisors: agent.supportedHypervisors,
                 architecture: agent.cpuArchitecture,
                 supportsInterVMNetworking: agent.supportsInterVMNetworking,
-                siteID: agent.$site.id
+                siteID: agent.$site.id,
+                wireProtocolVersion: agent.wireProtocolVersion
             )
         }
     }

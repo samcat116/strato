@@ -211,6 +211,39 @@ final class SiteTests {
         }
     }
 
+    @Test("An agent hosting VMs cannot change site (API and token paths)")
+    func hostedVMMoveGuard() async throws {
+        try await withSiteTestApp { app, _, project, token in
+            let oldSite = Site(name: "dc-vm-old")
+            try await oldSite.save(on: app.db)
+            let newSite = Site(name: "dc-vm-new")
+            try await newSite.save(on: app.db)
+
+            let agentId = try await self.registerAgent(app: app, named: "loaded", siteID: oldSite.id)
+            try await self.placeVM(
+                app: app, project: project, named: "resident-vm", onAgent: agentId,
+                network: LogicalNetwork.defaultNetworkName)
+
+            // Moving it would drop its VMs' networks out of the old site's
+            // shared NB while the VMs keep running.
+            try await app.test(.POST, "/api/sites/\(newSite.id!.uuidString)/agents/\(agentId)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            // The token path refuses the same move (logged, not fatal).
+            _ = try await self.registerAgent(app: app, named: "loaded", siteID: newSite.id)
+            let agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.db))
+            #expect(agent.$site.id == oldSite.id)
+
+            // Re-registering into the SAME site is a no-op, not a refusal.
+            _ = try await self.registerAgent(app: app, named: "loaded", siteID: oldSite.id)
+            let unchanged = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.db))
+            #expect(unchanged.$site.id == oldSite.id)
+        }
+    }
+
     @Test("Sites API requires a system admin")
     func sitesRequireAdmin() async throws {
         try await withSiteTestApp { app, _, _, _ in
@@ -251,7 +284,8 @@ final class SiteTests {
     // MARK: - Scheduler site constraint
 
     private func makeSchedulable(
-        id: String = UUID().uuidString, name: String, siteID: UUID? = nil
+        id: String = UUID().uuidString, name: String, siteID: UUID? = nil,
+        wireProtocolVersion: Int = WireProtocol.currentVersion
     ) -> SchedulableAgent {
         SchedulableAgent(
             id: id, name: name,
@@ -260,7 +294,8 @@ final class SiteTests {
             totalDisk: 1 << 40, availableDisk: 1 << 40,
             status: .online, runningVMCount: 0,
             supportedHypervisors: [.qemu],
-            siteID: siteID
+            siteID: siteID,
+            wireProtocolVersion: wireProtocolVersion
         )
     }
 
@@ -292,6 +327,27 @@ final class SiteTests {
                 requirements: requirements,
                 from: [self.makeSchedulable(name: "siteless"), self.makeSchedulable(name: "other", siteID: UUID())]
             )
+        }
+    }
+
+    @Test("Site requirement excludes members on a pre-site-authority protocol")
+    func schedulerSiteFilterExcludesOldProtocol() throws {
+        let siteA = UUID()
+        // A pre-v4 member is kept on legacy per-node network scoping, so a
+        // pinned-network VM placed there would land in its private local NB.
+        let oldMember = makeSchedulable(name: "old-member", siteID: siteA, wireProtocolVersion: 3)
+        let newMember = makeSchedulable(name: "new-member", siteID: siteA)
+
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+        let requirements = VMPlacementRequirements(
+            cpu: 1, memory: 1 << 30, disk: 1 << 30, siteID: siteA)
+
+        let selected = try scheduler.selectAgent(
+            requirements: requirements, from: [oldMember, newMember])
+        #expect(selected == newMember.id)
+
+        #expect(throws: SchedulerError.self) {
+            try scheduler.selectAgent(requirements: requirements, from: [oldMember])
         }
     }
 
