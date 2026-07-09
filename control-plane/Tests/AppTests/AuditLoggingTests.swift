@@ -263,6 +263,75 @@ final class AuditLoggingTests {
         }
     }
 
+    // MARK: - Retention
+
+    /// Build an audit service with an explicit retention window, bypassing
+    /// the environment the rest of the config came from.
+    private func auditService(on app: Application, retentionDays: Int?) -> AuditService {
+        var config = AuditConfig.fromEnvironment()
+        config.retentionDays = retentionDays
+        return AuditService(app: app, config: config)
+    }
+
+    /// Persist an event and backdate its creation timestamp (Fluent stamps
+    /// `created_at` on insert, so the backdate needs a second save).
+    private func saveEvent(type: String, ageDays: Double, on db: any Database) async throws {
+        let event = AuditEvent(from: AuditRecord(eventType: type))
+        try await event.save(on: db)
+        event.createdAt = Date().addingTimeInterval(-ageDays * 86_400)
+        try await event.save(on: db)
+    }
+
+    @Test("Retention sweep deletes events past the window and keeps newer ones")
+    func retentionSweepDeletesExpiredEvents() async throws {
+        try await withApp { app, _, _, _ in
+            app.audit = self.auditService(on: app, retentionDays: 30)
+
+            try await self.saveEvent(type: "test.expired", ageDays: 40, on: app.db)
+            try await self.saveEvent(type: "test.recent", ageDays: 1, on: app.db)
+
+            await app.audit.sweepExpiredEvents()
+
+            let remaining = try await AuditEvent.query(on: app.db).all()
+            let types = remaining.map(\.eventType)
+            #expect(types == ["test.recent"])
+        }
+    }
+
+    @Test("Retention sweep is a no-op when AUDIT_RETENTION_DAYS is unset or non-positive")
+    func retentionSweepDisabled() async throws {
+        try await withApp { app, _, _, _ in
+            try await self.saveEvent(type: "test.ancient", ageDays: 365, on: app.db)
+
+            for retentionDays in [nil, 0, -7] {
+                app.audit = self.auditService(on: app, retentionDays: retentionDays)
+                #expect(app.audit.retentionDays == nil)
+                await app.audit.sweepExpiredEvents()
+
+                let count = try await AuditEvent.query(on: app.db).count()
+                #expect(count == 1)
+            }
+        }
+    }
+
+    @Test("Retention sweep skips the pass when another replica holds the sweep lock")
+    func retentionSweepRespectsSingletonLock() async throws {
+        try await withApp { app, _, _, _ in
+            app.audit = self.auditService(on: app, retentionDays: 30)
+            try await self.saveEvent(type: "test.expired", ageDays: 40, on: app.db)
+
+            // Simulate another replica's in-flight pass.
+            let acquired = await app.coordination.acquireSweepLock(
+                "audit_retention", ttlSeconds: AuditService.retentionSweepLockTTLSeconds)
+            #expect(acquired)
+
+            await app.audit.sweepExpiredEvents()
+
+            let count = try await AuditEvent.query(on: app.db).count()
+            #expect(count == 1)
+        }
+    }
+
     // MARK: - Resource parsing
 
     @Test("Resource references are parsed from API paths")

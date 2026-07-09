@@ -503,6 +503,11 @@ public func configure(_ app: Application) async throws {
     // the handler cancels it at shutdown (if the service was ever created).
     app.lifecycle.use(AgentServiceLifecycleHandler())
 
+    // Audit retention (issue #39): when AUDIT_RETENTION_DAYS is set, an
+    // hourly cluster-singleton sweep prunes audit_events rows older than the
+    // cutoff. The handler arms the sweep at boot and cancels it at shutdown.
+    app.lifecycle.use(AuditRetentionLifecycleHandler())
+
     try routes(app)
 
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))

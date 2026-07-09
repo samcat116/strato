@@ -1,6 +1,7 @@
 import AsyncHTTPClient
 import Fluent
 import Foundation
+import NIOConcurrencyHelpers
 import NIOCore
 import Vapor
 
@@ -52,12 +53,15 @@ struct AuditRecord: Content, Sendable {
 ///   default false (admin-bypassed reads are always audited).
 /// - `AUDIT_WEBHOOK_URL` — destination for the `webhook` backend.
 /// - `LOKI_ENDPOINT` — shared with VM logs; used by the `loki` backend.
+/// - `AUDIT_RETENTION_DAYS` — delete `audit_events` rows older than this many
+///   days; unset (or non-positive) keeps events forever.
 struct AuditConfig: Sendable {
     var enabled: Bool
     var backendNames: [String]
     var includeReads: Bool
     var webhookURL: String?
     var lokiEndpoint: String?
+    var retentionDays: Int?
 
     static func fromEnvironment() -> AuditConfig {
         let backends =
@@ -70,7 +74,8 @@ struct AuditConfig: Sendable {
             backendNames: backends,
             includeReads: Environment.get("AUDIT_INCLUDE_READS").flatMap(Bool.init) ?? false,
             webhookURL: Environment.get("AUDIT_WEBHOOK_URL"),
-            lokiEndpoint: Environment.get("LOKI_ENDPOINT")
+            lokiEndpoint: Environment.get("LOKI_ENDPOINT"),
+            retentionDays: Environment.get("AUDIT_RETENTION_DAYS").flatMap(Int.init)
         )
     }
 }
@@ -243,6 +248,11 @@ final class AuditService: @unchecked Sendable {
     let config: AuditConfig
     private let backends: [any AuditBackend]
     private let logger: Logger
+    private let app: Application
+
+    /// The periodic retention-sweep loop, when armed. Locked because the class
+    /// is shared across request handlers while boot/shutdown mutate it.
+    private let retentionTask = NIOLockedValueBox<Task<Void, Never>?>(nil)
 
     var isEnabled: Bool {
         config.enabled && !backends.isEmpty
@@ -251,6 +261,7 @@ final class AuditService: @unchecked Sendable {
     init(app: Application, config: AuditConfig = .fromEnvironment()) {
         self.config = config
         self.logger = app.logger
+        self.app = app
 
         var backends: [any AuditBackend] = []
         if config.enabled {
@@ -293,6 +304,103 @@ final class AuditService: @unchecked Sendable {
             await backend.write(record)
         }
     }
+
+    // MARK: Retention sweep
+
+    /// How often the retention sweep runs. Retention granularity is whole
+    /// days, so hourly passes are plenty.
+    static let retentionSweepIntervalSeconds = 3600
+
+    /// Sweep-lock TTL: slightly under the interval so the current holder's
+    /// next tick can reacquire, while any other replica's tick inside the
+    /// same window is excluded.
+    static let retentionSweepLockTTLSeconds = 3300
+
+    /// The effective retention window, or nil when retention is off. Only a
+    /// positive `AUDIT_RETENTION_DAYS` enables pruning.
+    var retentionDays: Int? {
+        guard let days = config.retentionDays, days > 0 else { return nil }
+        return days
+    }
+
+    /// Arm the periodic retention sweep. Called once from the boot lifecycle;
+    /// a no-op when retention is off. The first pass runs immediately so
+    /// short-lived and freshly restarted processes still prune.
+    func startRetentionSweep() {
+        guard let days = retentionDays else {
+            if let raw = config.retentionDays, raw <= 0 {
+                logger.warning(
+                    "Ignoring non-positive AUDIT_RETENTION_DAYS; audit events are kept forever",
+                    metadata: ["value": .stringConvertible(raw)])
+            }
+            return
+        }
+        retentionTask.withLockedValue { task in
+            guard task == nil else { return }
+            logger.info(
+                "Audit retention enabled; events older than \(days) day(s) will be pruned")
+            task = Task { [weak self] in
+                while !Task.isCancelled {
+                    await self?.sweepExpiredEvents()
+                    do {
+                        try await Task.sleep(for: .seconds(Self.retentionSweepIntervalSeconds))
+                    } catch {
+                        break  // cancelled
+                    }
+                }
+            }
+        }
+    }
+
+    /// Cancel the retention sweep. Called from the application's shutdown
+    /// lifecycle so the periodic database delete never outlives the
+    /// application (the same hazard as the AgentService heartbeat loop).
+    func shutdown() {
+        retentionTask.withLockedValue { task in
+            task?.cancel()
+            task = nil
+        }
+    }
+
+    /// One pass of the retention sweep: delete `audit_events` rows older than
+    /// the configured window. Internal rather than private so tests can drive
+    /// a pass directly.
+    func sweepExpiredEvents() async {
+        guard let days = retentionDays else { return }
+
+        // Cluster-singleton: with multiple replicas, only one may prune per interval.
+        guard
+            await app.coordination.acquireSweepLock(
+                "audit_retention", ttlSeconds: Self.retentionSweepLockTTLSeconds)
+        else {
+            logger.debug("Skipping audit retention sweep; lock held by another control-plane instance")
+            return
+        }
+
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        do {
+            // Count first so the deletion is observable; the extra query is
+            // cheap against the created_at index and a row slipping between
+            // the two only misstates the log line, not the data.
+            let expired = try await AuditEvent.query(on: app.db)
+                .filter(\.$createdAt < cutoff)
+                .count()
+            guard expired > 0 else { return }
+
+            try await AuditEvent.query(on: app.db)
+                .filter(\.$createdAt < cutoff)
+                .delete()
+
+            logger.info(
+                "Audit retention sweep pruned expired events",
+                metadata: [
+                    "deleted": .stringConvertible(expired),
+                    "retentionDays": .stringConvertible(days),
+                ])
+        } catch {
+            logger.error("Audit retention sweep failed: \(error)")
+        }
+    }
 }
 
 // MARK: - Application / Request accessors
@@ -309,6 +417,25 @@ extension Application {
         set {
             storage[AuditServiceKey.self] = newValue
         }
+    }
+
+    /// The audit service if something already created it. Shutdown must not
+    /// instantiate the service just to shut it down.
+    var auditServiceIfCreated: AuditService? {
+        storage[AuditServiceKey.self]
+    }
+}
+
+/// Arms the audit retention sweep at boot (a no-op unless
+/// `AUDIT_RETENTION_DAYS` is set) and cancels it at shutdown so the periodic
+/// database delete never outlives the application.
+struct AuditRetentionLifecycleHandler: LifecycleHandler {
+    func didBootAsync(_ application: Application) async throws {
+        application.audit.startRetentionSweep()
+    }
+
+    func shutdownAsync(_ application: Application) async {
+        application.auditServiceIfCreated?.shutdown()
     }
 }
 
