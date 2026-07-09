@@ -951,7 +951,29 @@ actor AgentService {
                 ))
         }
 
-        return DesiredStateMessage(vms: entries)
+        // First-class network desired state (issue #342): the logical networks
+        // this agent's VMs reference, so the agent realizes their switches,
+        // per-project routers, and SNAT uplinks as level-triggered desired
+        // state. Scoped to referenced networks — an agent needn't realize a
+        // network with no VM of its own on this host.
+        let referencedNames = Set(vms.flatMap { $0.networkInterfaces.map(\.network) })
+        let networkStates =
+            referencedNames
+            .sorted()
+            .compactMap { name -> DesiredNetworkState? in
+                guard let network = networksByName[name], let networkId = network.id else { return nil }
+                return DesiredNetworkState(
+                    networkId: networkId,
+                    name: network.name,
+                    subnet: network.subnet,
+                    gateway: network.gateway,
+                    routerKey: network.routerKey,
+                    externalAccess: network.externalAccess,
+                    generation: Int64(network.generation)
+                )
+            }
+
+        return DesiredStateMessage(vms: entries, networks: networkStates)
     }
 
     // MARK: - Observed-state reports (issue #260)

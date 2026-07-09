@@ -253,6 +253,40 @@ final class DesiredStateReconciliationTests {
         }
     }
 
+    @Test("Sync assembly emits first-class network desired state for referenced networks")
+    func syncAssemblyIncludesNetworks() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+
+            // A project-scoped network the VM references via a NIC.
+            let network = LogicalNetwork(
+                name: "app-net",
+                subnet: "10.20.0.0/24",
+                gateway: "10.20.0.1",
+                projectID: vm.$project.id,
+                externalAccess: true,
+                generation: 3
+            )
+            try await network.save(on: app.db)
+            let nic = VMNetworkInterface(
+                vmID: vm.id!, network: "app-net", macAddress: VMNetworkInterface.generateMACAddress())
+            try await nic.save(on: app.db)
+
+            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let net = try #require(message.networks.first { $0.name == "app-net" })
+            #expect(net.networkId == network.id)
+            #expect(net.subnet == "10.20.0.0/24")
+            #expect(net.gateway == "10.20.0.1")
+            #expect(net.externalAccess)
+            #expect(net.generation == 3)
+            // Per-project router: the key is derived from the owning project.
+            #expect(net.routerKey == "project-\(vm.$project.id.uuidString)")
+
+            // A network no VM on this agent references is not synced to it.
+            #expect(!message.networks.contains { $0.name == "unreferenced" })
+        }
+    }
+
     // MARK: - Observed-state report application
 
     @Test("A converged report updates status, generation, and completes the operation")

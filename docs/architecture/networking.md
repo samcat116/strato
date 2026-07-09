@@ -224,7 +224,7 @@ options) + shipping FRR on egress hosts, not a custom agent.
 Ordered by dependency. Priorities noted; the top product ask is **multi-node
 single network within a site** (Phase 2).
 
-### Phase 1 — Foundations + single-node L3 _(no new infra)_
+### Phase 1 — Foundations + single-node L3 _(no new infra)_ — **implemented**
 
 - Make network (and router) realization **first-class in reconciliation**,
   rather than implicit via `VMSpec.networks`.
@@ -235,6 +235,45 @@ single network within a site** (Phase 2).
   attached-creation overloads).
 - **Result:** VMs get outbound internet + cross-switch east-west _within a
   node_. Works on the current per-agent-local-NB model.
+
+**As built:**
+
+- Networks ride the periodic `DesiredStateMessage` as a first-class
+  `networks: [DesiredNetworkState]` list (wire protocol v3, additive/tolerant).
+  The control plane emits the networks an agent's VMs reference, each tagged with
+  a **`routerKey`** and an `externalAccess` flag; `LogicalNetwork` gains
+  `external_access` + a `generation` counter.
+- Router scope is **per-project**: networks sharing a project share one logical
+  router (cross-switch east-west); a project-less (global) network keys its
+  router on its own id. `routerKey` is derived, not a separate table.
+- The agent reconciles level-triggered and idempotent via the pure
+  `NetworkReconciler` in `StratoAgentCore` (plan + teardown diff), with the live
+  OVSDB side effects in `NetworkServiceLinux` behind a `NetworkActuator`.
+- All Strato-managed OVN object names are derived from **UUIDs**, never
+  user-chosen network names (`OVNNaming`): tenant switches are `net-<networkId>`,
+  routers `lr-<routerKey>`, etc. This keeps user names out of OVN's shared
+  namespaces, so a network name can't collide with a provider/router object. The
+  `NetworkSpec` a VM carries includes `networkId` so its port lands on the same
+  UUID-named switch the reconciler creates. On upgrade from an older agent that
+  named switches after the network, the reconciler **renames the switch in
+  place** to the UUID name — a rename keeps the same OVSDB row, so existing VM
+  ports and their dataplane bindings migrate without re-creation.
+- Teardown identifies Strato-owned objects by a `strato-managed` external-id
+  (external switches also carry `strato-role=external`), never by name prefix, so
+  operator or other-feature objects are never candidates.
+- SNAT egress uses an external logical switch with a `localnet` port on a
+  configured physnet, mapped to a provider bridge, plus a gateway router port and
+  a default route. It requires an **operator-configured, dedicated external IP**
+  (`[ovn_uplink] external_cidr` in the agent config) that the host does not own —
+  the OVN router port claims that address, so auto-detecting and reusing the
+  host's own IP would cause an ARP/address conflict. Without the uplink config,
+  routers and east-west are realized but no SNAT (`externalAccess` has no effect).
+  The operator connects the provider bridge to the external network out of band.
+- **No-egress isolation:** a project's `externalAccess=false` networks are keyed
+  onto a separate `-internal` logical router with no uplink, so their guests
+  provably have no route to the internet. Tradeoff: an egress and a no-egress
+  network in the same project are on different routers and don't route to each
+  other; per-network egress policy that preserves that east-west is a follow-up.
 
 ### Phase 2 — Multi-node single network within a site _(top priority; has prerequisites)_
 

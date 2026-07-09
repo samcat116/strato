@@ -105,6 +105,8 @@ struct NetworkController: RouteCollection {
         }
 
         let (subnet, gateway) = try Self.validateAddressing(subnet: request.subnet, gateway: request.gateway)
+        try await Self.assertNoSubnetOverlap(
+            subnet: subnet, projectId: projectId, excluding: nil, on: req.db)
         let dnsServers = try Self.validatedDNS(request.dnsServers ?? [])
         try Self.validateLeaseTime(request.leaseTime)
 
@@ -117,7 +119,8 @@ struct NetworkController: RouteCollection {
             dhcpEnabled: request.dhcpEnabled ?? true,
             dnsServers: dnsServers,
             domainName: request.domainName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
-            leaseTime: request.leaseTime
+            leaseTime: request.leaseTime,
+            externalAccess: request.externalAccess ?? true
         )
 
         do {
@@ -199,6 +202,12 @@ struct NetworkController: RouteCollection {
             network.name = trimmed
         }
 
+        // Track changes that alter how agents realize the network's L3, so the
+        // generation is bumped (and agents accept the new desired network state).
+        let originalSubnet = network.subnet
+        let originalGateway = network.gateway
+        let originalExternalAccess = network.externalAccess
+
         if let newSubnet = request.subnet, newSubnet != network.subnet {
             guard interfaceCount == 0 else {
                 throw Abort(
@@ -210,7 +219,19 @@ struct NetworkController: RouteCollection {
             network.subnet = newSubnet
         }
 
-        if let newGateway = request.gateway {
+        if let newGateway = request.gateway, newGateway != network.gateway {
+            // The gateway is the L3 router-port address AND the denormalized
+            // gateway existing NICs already carry into their guests. Changing it
+            // while VMs are attached re-addresses the OVN router port but leaves
+            // those guests pointing at the old gateway, breaking their L3 — so
+            // reject it in use, like a subnet change (issue #342).
+            guard interfaceCount == 0 else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Network is in use by \(interfaceCount) interface(s); changing the gateway would break their L3 configuration"
+                )
+            }
             network.gateway = newGateway
         }
 
@@ -218,6 +239,25 @@ struct NetworkController: RouteCollection {
         let (subnet, gateway) = try Self.validateAddressing(subnet: network.subnet, gateway: network.gateway)
         network.subnet = subnet
         network.gateway = gateway
+
+        if network.subnet != originalSubnet {
+            try await Self.assertNoSubnetOverlap(
+                subnet: network.subnet, projectId: network.$project.id, excluding: network.id, on: req.db)
+        }
+
+        if let externalAccess = request.externalAccess {
+            network.externalAccess = externalAccess
+        }
+
+        // Bump the realization generation only when an L3-affecting field
+        // actually changed, so agents treat this as a newer network desired
+        // state; DHCP/DNS-only edits leave it untouched.
+        if network.subnet != originalSubnet
+            || network.gateway != originalGateway
+            || network.externalAccess != originalExternalAccess
+        {
+            network.generation += 1
+        }
 
         // DHCP/DNS settings — validated then applied.
         if let dhcpEnabled = request.dhcpEnabled {
@@ -313,6 +353,41 @@ struct NetworkController: RouteCollection {
     }
 
     // MARK: - Helper Methods
+
+    /// Whether two CIDRs overlap. For CIDRs, ranges are either disjoint or one
+    /// contains the other, so masking both to the shorter prefix and comparing
+    /// the network addresses detects any overlap. Unparsable inputs don't overlap.
+    static func subnetsOverlap(_ a: String, _ b: String) -> Bool {
+        guard let (baseA, prefixA) = IPAMService.parseCIDR(a),
+            let (baseB, prefixB) = IPAMService.parseCIDR(b)
+        else { return false }
+        let minPrefix = min(prefixA, prefixB)
+        let mask: UInt32 = minPrefix == 0 ? 0 : ~UInt32(0) << (32 - minPrefix)
+        return (baseA & mask) == (baseB & mask)
+    }
+
+    /// Rejects a subnet that overlaps another network in the same project.
+    /// Project networks share one per-project logical router, so overlapping
+    /// router-port `networks` would give OVN ambiguous connected routes (and
+    /// exact duplicates collide on the SNAT `logical_ip`) — issue #342. Global
+    /// (project-less) networks each get their own router, so they're exempt.
+    static func assertNoSubnetOverlap(
+        subnet: String, projectId: UUID?, excluding networkId: UUID?, on db: any Database
+    ) async throws {
+        guard let projectId else { return }
+        var query = LogicalNetwork.query(on: db).filter(\.$project.$id == projectId)
+        if let networkId {
+            query = query.filter(\.$id != networkId)
+        }
+        let siblings = try await query.all()
+        if let clash = siblings.first(where: { subnetsOverlap($0.subnet, subnet) }) {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Subnet \(subnet) overlaps network '\(clash.name)' (\(clash.subnet)) in the same project; networks sharing a project share one router and must use disjoint subnets"
+            )
+        }
+    }
 
     /// Validates a subnet/gateway pair, defaulting a missing gateway to the
     /// subnet's first host address. Mirrors the seeding validation in the

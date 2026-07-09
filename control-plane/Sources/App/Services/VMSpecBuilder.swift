@@ -69,6 +69,10 @@ struct VMSpecBuilder {
                 let network = networks[interface.network]
                 return NetworkSpec(
                     network: interface.network,
+                    // The network's id, so the agent names its OVN switch after
+                    // the id (not the user-chosen name) and lands the VM on the
+                    // same switch the network reconciler creates (issue #342).
+                    networkId: network?.id,
                     macAddress: interface.macAddress,
                     ipAddress: interface.ipAddress,
                     netmask: interface.netmask,

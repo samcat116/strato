@@ -233,6 +233,93 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("PUT /api/networks toggling external access bumps the realization generation")
+    func updateExternalAccessBumpsGeneration() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            app.spicedbMockAllows = true
+
+            let network = LogicalNetwork(
+                name: "l3-net", subnet: "10.61.0.0/24", gateway: "10.61.0.1",
+                projectID: project.id!, createdByID: user.id!)
+            try await network.save(on: app.db)
+            let startGeneration = network.generation
+
+            // Toggling external access is L3-affecting → generation bumps.
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(externalAccess: false))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let updated = try res.content.decode(NetworkResponse.self)
+                #expect(updated.externalAccess == false)
+            }
+            let afterToggle = try await LogicalNetwork.find(network.id, on: app.db)
+            #expect(afterToggle?.generation == startGeneration + 1)
+
+            // A DHCP-only edit does not bump the generation (no L3 change).
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(dhcpEnabled: false))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            let afterDHCP = try await LogicalNetwork.find(network.id, on: app.db)
+            #expect(afterDHCP?.generation == startGeneration + 1)
+        }
+    }
+
+    @Test("subnetsOverlap detects containment, equality, and disjoint ranges")
+    func subnetOverlapLogic() {
+        #expect(NetworkController.subnetsOverlap("10.0.0.0/16", "10.0.1.0/24"))
+        #expect(NetworkController.subnetsOverlap("10.0.1.0/24", "10.0.0.0/16"))
+        #expect(NetworkController.subnetsOverlap("10.0.0.0/24", "10.0.0.0/24"))
+        #expect(!NetworkController.subnetsOverlap("10.0.0.0/24", "10.0.1.0/24"))
+        #expect(!NetworkController.subnetsOverlap("192.168.1.0/24", "10.0.0.0/8"))
+    }
+
+    @Test("POST /api/networks rejects a subnet overlapping a sibling in the same project (409)")
+    func createRejectsOverlappingSubnet() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            app.spicedbMockAllows = true
+            let existing = LogicalNetwork(
+                name: "net-a", subnet: "10.50.0.0/16", gateway: "10.50.0.1",
+                projectID: project.id!, createdByID: user.id!)
+            try await existing.save(on: app.db)
+
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(name: "net-b", subnet: "10.50.1.0/24", projectId: project.id))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
+    @Test("PUT /api/networks rejects a gateway change while the network is in use (409)")
+    func updateRejectsGatewayChangeWhileInUse() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            app.spicedbMockAllows = true
+
+            let network = LogicalNetwork(
+                name: "gw-net", subnet: "10.71.0.0/24", gateway: "10.71.0.1",
+                projectID: project.id!, createdByID: user.id!)
+            try await network.save(on: app.db)
+
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "gw-vm", project: project)
+            let nic = VMNetworkInterface(
+                vmID: vm.id!, network: "gw-net", macAddress: VMNetworkInterface.generateMACAddress())
+            try await nic.save(on: app.db)
+
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(gateway: "10.71.0.254"))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
     @Test("PUT /api/networks rejects a name change while the network is in use (409)")
     func updateRejectsRenameWhileInUse() async throws {
         try await withNetworkTestApp { app, user, project, token in

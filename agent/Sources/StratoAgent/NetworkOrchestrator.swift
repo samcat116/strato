@@ -49,6 +49,7 @@ struct NetworkOrchestrator: Sendable {
         for (index, spec) in networks.enumerated() {
             let config = VMNetworkConfig(
                 networkName: spec.network,
+                networkId: spec.networkId,
                 macAddress: spec.macAddress,
                 ipAddress: spec.ipAddress,
                 subnet: subnetCIDR(ipAddress: spec.ipAddress, netmask: spec.netmask),

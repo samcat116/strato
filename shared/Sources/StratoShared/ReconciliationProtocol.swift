@@ -88,17 +88,93 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// Correlation id for logging/tracing a sync end to end. No semantics.
     public let syncId: String
     public let vms: [DesiredVMState]
+    /// The full authoritative set of logical networks that should exist on the
+    /// receiving agent (full-list, same semantics as `vms`: a network omitted
+    /// here should be torn down). Empty when the control plane is older than the
+    /// network-reconciliation protocol, in which case the agent falls back to
+    /// realizing switches implicitly from `vms`.
+    public let networks: [DesiredNetworkState]
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         syncId: String = UUID().uuidString,
-        vms: [DesiredVMState]
+        vms: [DesiredVMState],
+        networks: [DesiredNetworkState] = []
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.syncId = syncId
         self.vms = vms
+        self.networks = networks
+    }
+
+    // Custom decode so `networks` tolerates absence: a sync produced by an older
+    // control plane (before networks were first-class) decodes to [] rather than
+    // throwing, keeping agent↔control-plane compatible across version skew.
+    // `encode(to:)` stays synthesized; all other keys remain required.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        requestId = try c.decode(String.self, forKey: .requestId)
+        timestamp = try c.decode(Date.self, forKey: .timestamp)
+        syncId = try c.decode(String.self, forKey: .syncId)
+        vms = try c.decode([DesiredVMState].self, forKey: .vms)
+        networks = try c.decodeIfPresent([DesiredNetworkState].self, forKey: .networks) ?? []
+    }
+}
+
+// MARK: - Desired Network State
+
+/// The state the control plane wants a logical network to be in on an agent.
+///
+/// Networking used to reach the agent only as a side effect of `VMSpec.networks`
+/// during VM create, so routers/NAT had nowhere to live. This makes the network
+/// (and its L3 router + uplink) a first-class entry in the desired-state sync,
+/// reconciled level-triggered just like VMs: a network omitted from the list
+/// should not exist on the agent.
+///
+/// Router scope is per-project: every network in the same project shares one
+/// logical router (giving cross-switch east-west), keyed by `routerKey`. A
+/// project-less (global) network keys its router on its own id, so it still gets
+/// outbound SNAT without joining a shared router.
+public struct DesiredNetworkState: Codable, Sendable {
+    public let networkId: UUID
+    /// OVN logical switch name (matches `NetworkSpec.network` on VM NICs).
+    public let name: String
+    /// The network's subnet in CIDR form, e.g. `192.168.1.0/24`. Used as the
+    /// SNAT `logical_ip` and to size the router port's address.
+    public let subnet: String
+    /// The L3 gateway address the router presents on this network (the router
+    /// port's IP). Already reserved by control-plane IPAM as a non-allocatable
+    /// host address. Nil disables L3 for the network (switch only).
+    public let gateway: String?
+    /// Identity of the logical router this network attaches to. Networks sharing
+    /// a `routerKey` share one router. Opaque to the agent — do not parse it.
+    public let routerKey: String
+    /// Whether the agent should program outbound SNAT to the site uplink for
+    /// this network. The uplink IP is auto-detected on the agent.
+    public let externalAccess: Bool
+    /// Monotonic per-network counter, bumped by the control plane on any change
+    /// that alters realization (subnet, gateway, router membership, external
+    /// access). Lets the agent reject replayed or reordered syncs.
+    public let generation: Int64
+
+    public init(
+        networkId: UUID,
+        name: String,
+        subnet: String,
+        gateway: String?,
+        routerKey: String,
+        externalAccess: Bool,
+        generation: Int64
+    ) {
+        self.networkId = networkId
+        self.name = name
+        self.subnet = subnet
+        self.gateway = gateway
+        self.routerKey = routerKey
+        self.externalAccess = externalAccess
+        self.generation = generation
     }
 }
 

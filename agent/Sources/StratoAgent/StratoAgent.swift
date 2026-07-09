@@ -298,6 +298,7 @@ private func launchAgent(
         qemuSocketDir: finalQemuSocketDir,
         networkMode: config.networkMode,
         ovnChassisConfig: config.ovnChassisConfig,
+        ovnUplink: config.ovnUplink,
         isRegistrationMode: isRegistrationMode,
         logger: logger,
         vmStoragePath: finalVMStoragePath,
