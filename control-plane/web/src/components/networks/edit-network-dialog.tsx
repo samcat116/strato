@@ -51,7 +51,7 @@ export function EditNetworkDialog({
 }: EditNetworkDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         {network && (
           // Keyed on the network id so switching targets remounts the form with
           // fresh initial state — no effect needed to re-seed.
@@ -106,7 +106,7 @@ function EditNetworkForm({
     <>
       <DialogHeader>
         <DialogTitle>Edit {network.name}</DialogTitle>
-        <DialogDescription className="text-gray-400">
+        <DialogDescription className="text-muted-foreground">
           Update the gateway and DHCP configuration. Subnet {network.subnet} is
           fixed here.
         </DialogDescription>
@@ -114,7 +114,7 @@ function EditNetworkForm({
       <form onSubmit={handleSubmit}>
         <div className="space-y-4 py-4">
           <div className="space-y-2">
-            <Label htmlFor="editGateway" className="text-gray-200">
+            <Label htmlFor="editGateway" className="text-foreground">
               Gateway
             </Label>
             <Input
@@ -122,10 +122,10 @@ function EditNetworkForm({
               placeholder="10.0.0.1"
               value={gateway}
               onChange={(e) => setGateway(e.target.value)}
-              className="bg-gray-900 border-gray-700 text-gray-100 font-mono"
+              className="bg-background border-border text-foreground font-mono"
               disabled={isLoading}
             />
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-muted-foreground">
               Changing the gateway only affects VMs created afterward.
             </p>
           </div>
@@ -136,14 +136,14 @@ function EditNetworkForm({
             type="button"
             variant="outline"
             onClick={() => onOpenChange(false)}
-            className="border-gray-600 text-gray-300 hover:bg-gray-700"
+            className="border-input text-foreground/80 hover:bg-accent"
             disabled={isLoading}
           >
             Cancel
           </Button>
           <Button
             type="submit"
-            className="bg-blue-600 hover:bg-blue-700"
+            className="bg-primary hover:bg-primary/90"
             disabled={isLoading}
           >
             {isLoading ? (

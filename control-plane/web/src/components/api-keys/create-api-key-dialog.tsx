@@ -105,12 +105,12 @@ export function CreateAPIKeyDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100 sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="bg-card border-border text-foreground sm:max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {createdKey ? "API Key Created" : "Create API Key"}
           </DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             {createdKey
               ? "Copy your API key now — it won't be shown again"
               : "Create a new API key to access the Strato API"}
@@ -119,8 +119,8 @@ export function CreateAPIKeyDialog({
 
         {createdKey ? (
           <div className="space-y-4 py-4 min-w-0">
-            <div className="p-4 bg-gray-900 rounded-lg border border-gray-700">
-              <Label className="text-gray-400 text-sm">Your new API key</Label>
+            <div className="p-4 bg-background rounded-lg border border-border">
+              <Label className="text-muted-foreground text-sm">Your new API key</Label>
               <div className="flex items-start gap-2 mt-2">
                 <code className="flex-1 min-w-0 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono whitespace-pre-wrap break-all">
                   {createdKey.key}
@@ -128,11 +128,11 @@ export function CreateAPIKeyDialog({
                 <Button
                   size="sm"
                   variant="outline"
-                  className="border-gray-600 shrink-0"
+                  className="border-input shrink-0"
                   onClick={handleCopy}
                 >
                   {copied ? (
-                    <Check className="h-4 w-4 text-green-400" />
+                    <Check className="h-4 w-4 text-green-600" />
                   ) : (
                     <Copy className="h-4 w-4" />
                   )}
@@ -140,14 +140,14 @@ export function CreateAPIKeyDialog({
               </div>
             </div>
 
-            <div className="p-4 bg-blue-900/20 rounded-lg border border-blue-700/30">
-              <p className="text-sm text-blue-200">
+            <div className="p-4 bg-blue-500/10 rounded-lg border border-blue-500/30">
+              <p className="text-sm text-blue-800">
                 <strong>Important:</strong> Store this key somewhere safe. For
                 security reasons, it cannot be retrieved again after you close
                 this dialog.
               </p>
               {createdKey.expiresAt && (
-                <p className="text-sm text-gray-400 mt-2">
+                <p className="text-sm text-muted-foreground mt-2">
                   Expires: {new Date(createdKey.expiresAt).toLocaleString()}
                 </p>
               )}
@@ -155,7 +155,7 @@ export function CreateAPIKeyDialog({
 
             <DialogFooter>
               <Button
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-primary hover:bg-primary/90"
                 onClick={handleClose}
               >
                 Done
@@ -166,7 +166,7 @@ export function CreateAPIKeyDialog({
           <form onSubmit={handleSubmit}>
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label htmlFor="keyName" className="text-gray-200">
+                <Label htmlFor="keyName" className="text-foreground">
                   Name
                 </Label>
                 <Input
@@ -174,31 +174,31 @@ export function CreateAPIKeyDialog({
                   placeholder="e.g. CI pipeline"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="bg-gray-900 border-gray-700 text-gray-100"
+                  className="bg-background border-border text-foreground"
                   disabled={createKey.isPending}
                 />
               </div>
 
               <div className="space-y-2">
-                <Label className="text-gray-200">Scopes</Label>
+                <Label className="text-foreground">Scopes</Label>
                 <div className="space-y-2">
                   {AVAILABLE_SCOPES.map((scope) => (
                     <label
                       key={scope.value}
-                      className="flex items-start gap-3 p-2 rounded-md hover:bg-gray-700/50 cursor-pointer"
+                      className="flex items-start gap-3 p-2 rounded-md hover:bg-accent/60 cursor-pointer"
                     >
                       <input
                         type="checkbox"
                         checked={scopes.includes(scope.value)}
                         onChange={() => toggleScope(scope.value)}
                         disabled={createKey.isPending}
-                        className="mt-0.5 h-4 w-4 rounded border-gray-600 bg-gray-900 accent-blue-600"
+                        className="mt-0.5 h-4 w-4 rounded border-input bg-background accent-blue-600"
                       />
                       <span>
-                        <span className="block text-sm text-gray-100">
+                        <span className="block text-sm text-foreground">
                           {scope.label}
                         </span>
-                        <span className="block text-xs text-gray-400">
+                        <span className="block text-xs text-muted-foreground">
                           {scope.description}
                         </span>
                       </span>
@@ -208,7 +208,7 @@ export function CreateAPIKeyDialog({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="expiresInDays" className="text-gray-200">
+                <Label htmlFor="expiresInDays" className="text-foreground">
                   Expiration (days)
                 </Label>
                 <Input
@@ -219,10 +219,10 @@ export function CreateAPIKeyDialog({
                   placeholder="Never expires"
                   value={expiresInDays}
                   onChange={(e) => setExpiresInDays(e.target.value)}
-                  className="bg-gray-900 border-gray-700 text-gray-100"
+                  className="bg-background border-border text-foreground"
                   disabled={createKey.isPending}
                 />
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-muted-foreground">
                   Leave blank for a key that never expires (max 365 days).
                 </p>
               </div>
@@ -232,7 +232,7 @@ export function CreateAPIKeyDialog({
               <Button
                 type="button"
                 variant="outline"
-                className="border-gray-600"
+                className="border-input"
                 onClick={handleClose}
                 disabled={createKey.isPending}
               >
@@ -240,7 +240,7 @@ export function CreateAPIKeyDialog({
               </Button>
               <Button
                 type="submit"
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-primary hover:bg-primary/90"
                 disabled={createKey.isPending}
               >
                 {createKey.isPending ? (

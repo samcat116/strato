@@ -26,7 +26,7 @@ export default function ProjectsPage() {
 
   if (!currentOrg) {
     return (
-      <div className="max-w-5xl mx-auto py-12 text-center text-gray-400">
+      <div className="max-w-5xl mx-auto py-12 text-center text-muted-foreground">
         Select an organization to manage its projects.
       </div>
     );
@@ -36,16 +36,16 @@ export default function ProjectsPage() {
     <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <FolderKanban className="h-8 w-8 text-blue-400" />
+          <FolderKanban className="h-8 w-8 text-blue-600" />
           <div>
-            <h1 className="text-2xl font-semibold text-gray-100">Projects</h1>
-            <p className="text-sm text-gray-400">
+            <h1 className="text-2xl font-semibold text-foreground">Projects</h1>
+            <p className="text-sm text-muted-foreground">
               Organize VMs and images within {currentOrg.name}
             </p>
           </div>
         </div>
         <Button
-          className="bg-blue-600 hover:bg-blue-700"
+          className="bg-primary hover:bg-primary/90"
           onClick={() => setCreateOpen(true)}
         >
           <Plus className="h-4 w-4 mr-2" />
@@ -53,15 +53,15 @@ export default function ProjectsPage() {
         </Button>
       </div>
 
-      <Card className="bg-gray-800 border-gray-700">
+      <Card className="bg-card border-border">
         <CardHeader>
-          <CardTitle className="text-lg font-semibold text-gray-100">
+          <CardTitle className="text-lg font-semibold text-foreground">
             All Projects ({projects.length})
           </CardTitle>
         </CardHeader>
         <CardContent>
           {!canManage && (
-            <p className="text-sm text-gray-400 mb-4">
+            <p className="text-sm text-muted-foreground mb-4">
               You need admin rights to edit, transfer, or delete projects.
             </p>
           )}

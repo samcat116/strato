@@ -92,7 +92,7 @@ export function MembersTable({
     return (
       <div className="space-y-2">
         {[...Array(3)].map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full bg-gray-700" />
+          <Skeleton key={i} className="h-12 w-full bg-muted" />
         ))}
       </div>
     );
@@ -100,7 +100,7 @@ export function MembersTable({
 
   if (members.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-400">
+      <div className="text-center py-8 text-muted-foreground">
         No members yet.
       </div>
     );
@@ -108,36 +108,36 @@ export function MembersTable({
 
   return (
     <Table>
-      <TableHeader className="bg-gray-900">
-        <TableRow className="border-gray-700 hover:bg-gray-900">
-          <TableHead className="text-gray-400 font-medium">User</TableHead>
-          <TableHead className="text-gray-400 font-medium">Role</TableHead>
-          <TableHead className="text-gray-400 font-medium">Joined</TableHead>
+      <TableHeader className="bg-background">
+        <TableRow className="border-border hover:bg-transparent">
+          <TableHead className="text-muted-foreground font-medium">User</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Role</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Joined</TableHead>
           {canManage && (
-            <TableHead className="text-gray-400 font-medium text-right">
+            <TableHead className="text-muted-foreground font-medium text-right">
               Actions
             </TableHead>
           )}
         </TableRow>
       </TableHeader>
-      <TableBody className="divide-y divide-gray-700">
+      <TableBody className="divide-y divide-border">
         {members.map((member) => {
           const isSelf = member.id === currentUserId;
           const isPending = pendingId === member.id;
           return (
             <TableRow
               key={member.id}
-              className="border-gray-700 hover:bg-gray-800/50"
+              className="border-border hover:bg-accent/60"
             >
               <TableCell>
                 <div className="flex flex-col">
-                  <span className="font-medium text-gray-100">
+                  <span className="font-medium text-foreground">
                     {member.displayName || member.username}
                     {isSelf && (
-                      <span className="ml-2 text-xs text-gray-500">(you)</span>
+                      <span className="ml-2 text-xs text-muted-foreground">(you)</span>
                     )}
                   </span>
-                  <span className="text-sm text-gray-400">{member.email}</span>
+                  <span className="text-sm text-muted-foreground">{member.email}</span>
                 </div>
               </TableCell>
               <TableCell>
@@ -147,19 +147,19 @@ export function MembersTable({
                     onValueChange={(role) => handleRoleChange(member, role)}
                     disabled={isPending}
                   >
-                    <SelectTrigger className="w-32 bg-gray-900 border-gray-700 text-gray-100">
+                    <SelectTrigger className="w-32 bg-background border-border text-foreground">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent className="bg-gray-800 border-gray-700">
+                    <SelectContent className="bg-card border-border">
                       <SelectItem
                         value="member"
-                        className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                        className="text-foreground focus:bg-accent focus:text-accent-foreground"
                       >
                         Member
                       </SelectItem>
                       <SelectItem
                         value="admin"
-                        className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                        className="text-foreground focus:bg-accent focus:text-accent-foreground"
                       >
                         Admin
                       </SelectItem>
@@ -168,13 +168,13 @@ export function MembersTable({
                 ) : (
                   <Badge
                     variant="secondary"
-                    className="bg-gray-700 text-gray-200 capitalize"
+                    className="bg-muted text-foreground capitalize"
                   >
                     {member.role}
                   </Badge>
                 )}
               </TableCell>
-              <TableCell className="text-gray-400 text-sm">
+              <TableCell className="text-muted-foreground text-sm">
                 {member.joinedAt
                   ? new Date(member.joinedAt).toLocaleDateString()
                   : "—"}
@@ -184,7 +184,7 @@ export function MembersTable({
                   <Button
                     size="icon-sm"
                     variant="ghost"
-                    className="text-gray-400 hover:text-red-400 hover:bg-red-950/30"
+                    className="text-muted-foreground hover:text-red-600 hover:bg-red-500/10"
                     onClick={() => handleRemove(member)}
                     disabled={isPending}
                     aria-label={`Remove ${member.displayName || member.username}`}

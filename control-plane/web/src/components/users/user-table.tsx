@@ -53,7 +53,7 @@ export function UserTable({ users, isLoading, currentUserId }: UserTableProps) {
     return (
       <div className="space-y-2">
         {[...Array(3)].map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full bg-gray-700" />
+          <Skeleton key={i} className="h-12 w-full bg-muted" />
         ))}
       </div>
     );
@@ -61,64 +61,64 @@ export function UserTable({ users, isLoading, currentUserId }: UserTableProps) {
 
   if (users.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-400">No users found.</div>
+      <div className="text-center py-8 text-muted-foreground">No users found.</div>
     );
   }
 
   return (
     <>
       <Table>
-        <TableHeader className="bg-gray-900">
-          <TableRow className="border-gray-700 hover:bg-gray-900">
-            <TableHead className="text-gray-400 font-medium">
+        <TableHeader className="bg-background">
+          <TableRow className="border-border hover:bg-transparent">
+            <TableHead className="text-muted-foreground font-medium">
               Username
             </TableHead>
-            <TableHead className="text-gray-400 font-medium">
+            <TableHead className="text-muted-foreground font-medium">
               Display Name
             </TableHead>
-            <TableHead className="text-gray-400 font-medium">Email</TableHead>
-            <TableHead className="text-gray-400 font-medium">Role</TableHead>
-            <TableHead className="text-gray-400 font-medium">Created</TableHead>
-            <TableHead className="text-gray-400 font-medium text-right">
+            <TableHead className="text-muted-foreground font-medium">Email</TableHead>
+            <TableHead className="text-muted-foreground font-medium">Role</TableHead>
+            <TableHead className="text-muted-foreground font-medium">Created</TableHead>
+            <TableHead className="text-muted-foreground font-medium text-right">
               Actions
             </TableHead>
           </TableRow>
         </TableHeader>
-        <TableBody className="divide-y divide-gray-700">
+        <TableBody className="divide-y divide-border">
           {users.map((user) => (
             <TableRow
               key={user.id}
-              className="border-gray-700 hover:bg-gray-800/50"
+              className="border-border hover:bg-accent/60"
             >
               <TableCell>
-                <span className="font-medium text-gray-100">
+                <span className="font-medium text-foreground">
                   {user.username}
                 </span>
                 {user.id === currentUserId && (
                   <Badge
                     variant="secondary"
-                    className="ml-2 bg-gray-700 text-gray-300"
+                    className="ml-2 bg-muted text-foreground/80"
                   >
                     You
                   </Badge>
                 )}
               </TableCell>
-              <TableCell className="text-gray-300">
+              <TableCell className="text-foreground/80">
                 {user.displayName}
               </TableCell>
-              <TableCell className="text-gray-300">{user.email}</TableCell>
+              <TableCell className="text-foreground/80">{user.email}</TableCell>
               <TableCell>
                 {user.isSystemAdmin ? (
-                  <Badge className="bg-purple-900/40 text-purple-300 border-transparent">
+                  <Badge className="bg-purple-900/40 text-purple-700 border-transparent">
                     System Admin
                   </Badge>
                 ) : (
-                  <Badge className="bg-gray-700 text-gray-300 border-transparent">
+                  <Badge className="bg-muted text-foreground/80 border-transparent">
                     User
                   </Badge>
                 )}
               </TableCell>
-              <TableCell className="text-gray-400 text-sm">
+              <TableCell className="text-muted-foreground text-sm">
                 {user.createdAt
                   ? new Date(user.createdAt).toLocaleDateString()
                   : "—"}
@@ -128,7 +128,7 @@ export function UserTable({ users, isLoading, currentUserId }: UserTableProps) {
                   <Button
                     size="icon-sm"
                     variant="ghost"
-                    className="text-gray-400 hover:text-gray-100"
+                    className="text-muted-foreground hover:text-foreground"
                     onClick={() => setEditTarget(user)}
                     aria-label={`Edit ${user.username}`}
                   >
@@ -137,7 +137,7 @@ export function UserTable({ users, isLoading, currentUserId }: UserTableProps) {
                   <Button
                     size="icon-sm"
                     variant="ghost"
-                    className="text-gray-400 hover:text-red-400 hover:bg-red-950/30"
+                    className="text-muted-foreground hover:text-red-600 hover:bg-red-500/10"
                     onClick={() => setDeleteTarget(user)}
                     aria-label={`Delete ${user.username}`}
                   >
@@ -167,14 +167,14 @@ export function UserTable({ users, isLoading, currentUserId }: UserTableProps) {
           if (!open) setDeleteTarget(null);
         }}
       >
-        <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+        <DialogContent className="bg-card border-border text-foreground">
           <DialogHeader>
             <DialogTitle>Delete {deleteTarget?.username}?</DialogTitle>
-            <DialogDescription className="text-gray-400">
+            <DialogDescription className="text-muted-foreground">
               This will permanently delete the user account and its passkeys.
               This action cannot be undone.
               {deleteTarget?.id === currentUserId && (
-                <span className="block mt-2 text-yellow-400">
+                <span className="block mt-2 text-yellow-700">
                   Warning: this is your own account. You will be signed out.
                 </span>
               )}
@@ -183,7 +183,7 @@ export function UserTable({ users, isLoading, currentUserId }: UserTableProps) {
           <DialogFooter>
             <Button
               variant="outline"
-              className="border-gray-600"
+              className="border-input"
               onClick={() => setDeleteTarget(null)}
               disabled={deleteUser.isPending}
             >

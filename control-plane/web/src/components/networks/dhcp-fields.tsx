@@ -58,25 +58,25 @@ interface DHCPFieldsProps {
  */
 export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
   return (
-    <div className="space-y-4 rounded-md border border-gray-700 p-3">
-      <label className="flex items-center gap-2 text-sm text-gray-200">
+    <div className="space-y-4 rounded-md border border-border p-3">
+      <label className="flex items-center gap-2 text-sm text-foreground">
         <input
           type="checkbox"
           checked={value.dhcpEnabled}
           onChange={(e) => onChange({ ...value, dhcpEnabled: e.target.checked })}
           disabled={disabled}
-          className="h-4 w-4 rounded border-gray-600 bg-gray-900 accent-blue-600"
+          className="h-4 w-4 rounded border-input bg-background accent-blue-600"
         />
         Manage guest addressing with OVN DHCP
       </label>
-      <p className="text-xs text-gray-500">
+      <p className="text-xs text-muted-foreground">
         When on, agents answer guest DHCP requests with the allocated IP,
         gateway, and the DNS below. When off, VMs are configured statically via
         cloud-init.
       </p>
 
       <div className="space-y-2">
-        <Label htmlFor="dnsServers" className="text-gray-200">
+        <Label htmlFor="dnsServers" className="text-foreground">
           DNS servers
         </Label>
         <Input
@@ -84,16 +84,16 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
           placeholder="1.1.1.1, 8.8.8.8"
           value={value.dnsServers}
           onChange={(e) => onChange({ ...value, dnsServers: e.target.value })}
-          className="bg-gray-900 border-gray-700 text-gray-100 font-mono"
+          className="bg-background border-border text-foreground font-mono"
           disabled={disabled || !value.dhcpEnabled}
         />
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-muted-foreground">
           Comma- or space-separated IPv4 addresses advertised over DHCP.
         </p>
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="domainName" className="text-gray-200">
+        <Label htmlFor="domainName" className="text-foreground">
           Search domain (optional)
         </Label>
         <Input
@@ -101,13 +101,13 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
           placeholder="internal.example.com"
           value={value.domainName}
           onChange={(e) => onChange({ ...value, domainName: e.target.value })}
-          className="bg-gray-900 border-gray-700 text-gray-100"
+          className="bg-background border-border text-foreground"
           disabled={disabled || !value.dhcpEnabled}
         />
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="leaseTime" className="text-gray-200">
+        <Label htmlFor="leaseTime" className="text-foreground">
           Lease time (seconds, optional)
         </Label>
         <Input
@@ -117,7 +117,7 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
           placeholder="3600"
           value={value.leaseTime}
           onChange={(e) => onChange({ ...value, leaseTime: e.target.value })}
-          className="bg-gray-900 border-gray-700 text-gray-100 font-mono"
+          className="bg-background border-border text-foreground font-mono"
           disabled={disabled || !value.dhcpEnabled}
         />
       </div>

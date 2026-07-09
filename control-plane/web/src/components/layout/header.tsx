@@ -1,34 +1,19 @@
 "use client";
 
-import { LogOut } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { useAuth } from "@/providers";
-import { OrganizationSwitcher } from "./organization-switcher";
+import { usePathname } from "next/navigation";
+import { CommandPalette } from "./command-palette";
 import { ProjectSwitcher } from "./project-switcher";
+import { pageTitle } from "./nav";
 
 export function Header() {
-  const { logout } = useAuth();
+  const pathname = usePathname();
 
   return (
-    <header className="bg-gray-900 shadow-sm border-b border-gray-700">
-      <div className="flex items-center justify-between h-16 px-6">
-        <div className="flex items-center">
-          <h1 className="text-2xl font-bold text-blue-400">Strato</h1>
-        </div>
-        <div className="flex items-center space-x-4">
-          <OrganizationSwitcher />
-          <ProjectSwitcher />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={logout}
-            className="text-gray-400 hover:text-gray-200"
-          >
-            <LogOut className="h-4 w-4 mr-2" />
-            Logout
-          </Button>
-        </div>
-      </div>
+    <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-border bg-card px-5">
+      <span className="text-[13px] font-semibold">{pageTitle(pathname)}</span>
+      <div className="flex-1" />
+      <ProjectSwitcher />
+      <CommandPalette />
     </header>
   );
 }

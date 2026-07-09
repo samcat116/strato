@@ -108,7 +108,7 @@ export function ConsoleTerminal({
                 : "bg-red-500"
           }`}
         />
-        <span className="text-xs text-gray-400">
+        <span className="text-xs text-muted-foreground">
           {isConnected
             ? "Connected"
             : isConnecting

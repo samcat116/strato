@@ -1,233 +1,115 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  ChevronRight,
-  LayoutDashboard,
-  Monitor,
-  HardDrive,
-  Network,
-  Server,
-  Settings,
-  Plus,
-  Key,
-  FolderKanban,
-  Building2,
-  FolderTree,
-  Gauge,
-  ShieldCheck,
-  Users,
-} from "lucide-react";
+import { LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useAuth } from "@/providers";
+import { useAuth, useOrganization } from "@/providers";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { OrganizationSwitcher } from "./organization-switcher";
+import { footerNavItems, isNavActive, navSections, type NavItem } from "./nav";
 
-interface SidebarSectionProps {
-  id: string;
-  title: string;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
-}
-
-function SidebarSection({
-  id,
-  title,
-  icon,
-  children,
-  defaultOpen = false,
-}: SidebarSectionProps) {
-  // Initialize state from localStorage (lazy initializer avoids effect)
-  const [isOpen, setIsOpen] = useState(() => {
-    if (typeof window === "undefined") return defaultOpen;
-    const stored = localStorage.getItem(`sidebar-${id}`);
-    return stored === "expanded" ? true : stored === "collapsed" ? false : defaultOpen;
-  });
-
-  const toggle = () => {
-    const newState = !isOpen;
-    setIsOpen(newState);
-    localStorage.setItem(`sidebar-${id}`, newState ? "expanded" : "collapsed");
-  };
-
-  return (
-    <div className="space-y-1">
-      <button
-        onClick={toggle}
-        className="flex items-center w-full px-3 py-2 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-700 transition-colors"
-      >
-        <ChevronRight
-          className={cn(
-            "h-4 w-4 mr-2 transition-transform",
-            isOpen && "rotate-90"
-          )}
-        />
-        {icon}
-        <span className="ml-2">{title}</span>
-      </button>
-      {isOpen && <div className="ml-6 space-y-1">{children}</div>}
-    </div>
-  );
-}
-
-interface SidebarLinkProps {
-  href: string;
-  children: React.ReactNode;
-  onClick?: () => void;
-}
-
-function SidebarLink({ href, children, onClick }: SidebarLinkProps) {
+function SidebarLink({ item }: { item: NavItem }) {
   const pathname = usePathname();
-  const isActive = pathname === href;
+  const active = isNavActive(pathname, item.href);
+  const Icon = item.icon;
 
   return (
     <Link
-      href={href}
-      onClick={onClick}
+      href={item.href}
       className={cn(
-        "block px-3 py-2 text-sm rounded-md transition-colors",
-        isActive
-          ? "bg-gray-700 text-gray-100"
-          : "text-gray-400 hover:bg-gray-700 hover:text-gray-200"
+        "flex items-center gap-2.5 rounded-[7px] px-[9px] py-[7px] text-[13px] transition-colors",
+        active
+          ? "bg-accent font-semibold text-foreground"
+          : "font-medium text-foreground/70 hover:bg-muted hover:text-foreground"
       )}
     >
-      {children}
+      <Icon className="h-4 w-4 shrink-0" strokeWidth={1.6} />
+      {item.label}
     </Link>
   );
 }
 
-interface SidebarProps {
-  onCreateVM?: () => void;
-  onAddAgent?: () => void;
+function UserCard() {
+  const { user, logout } = useAuth();
+  const { currentOrg } = useOrganization();
+
+  const role = user?.isSystemAdmin ? "Admin" : (currentOrg?.userRole ?? "Member");
+
+  return (
+    <div className="mt-1.5 border-t border-border/60 pt-1.5">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button className="flex w-full items-center gap-2.5 rounded-[7px] px-2 py-2 text-left transition-colors hover:bg-muted">
+            <div className="h-7 w-7 shrink-0 rounded-full bg-gradient-to-br from-muted to-border" />
+            <div className="min-w-0 leading-snug">
+              <div className="truncate text-xs font-semibold">
+                {user?.displayName || user?.username || "—"}
+              </div>
+              <div className="truncate text-[10.5px] capitalize text-muted-foreground">
+                {role}
+              </div>
+            </div>
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-56">
+          <DropdownMenuLabel className="truncate text-xs font-normal text-muted-foreground">
+            {user?.email}
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={logout} className="cursor-pointer">
+            <LogOut className="mr-2 h-4 w-4" />
+            Log out
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
 }
 
-export function Sidebar({ onCreateVM, onAddAgent }: SidebarProps) {
+export function Sidebar() {
   const { user } = useAuth();
 
   return (
-    <aside className="w-64 bg-gray-800 border-r border-gray-700 overflow-y-auto">
-      <nav className="px-3 py-4 space-y-1">
-        {/* Dashboard Link */}
-        <SidebarLink href="/dashboard">
-          <span className="flex items-center">
-            <LayoutDashboard className="h-4 w-4 mr-2" />
-            Dashboard
-          </span>
-        </SidebarLink>
+    <aside className="flex w-[236px] shrink-0 flex-col overflow-y-auto border-r border-border bg-card px-3 py-3.5">
+      <div className="flex items-center gap-2 px-2 pb-3.5 pt-1">
+        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-foreground font-mono text-[13px] font-bold text-background">
+          S
+        </div>
+        <span className="font-mono text-[15px] font-bold tracking-tight">Strato</span>
+      </div>
 
-        {/* Projects Link */}
-        <SidebarLink href="/projects">
-          <span className="flex items-center">
-            <FolderKanban className="h-4 w-4 mr-2" />
-            Projects
-          </span>
-        </SidebarLink>
+      <OrganizationSwitcher />
 
-        {/* VMs Section */}
-        <SidebarSection
-          id="vms-section"
-          title="Virtual Machines"
-          icon={<Monitor className="h-4 w-4" />}
-          defaultOpen
-        >
-          <SidebarLink href="/vms">All VMs</SidebarLink>
-          <button
-            onClick={onCreateVM}
-            className="flex items-center w-full px-3 py-2 text-sm text-blue-400 hover:bg-gray-700 rounded-md transition-colors"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            New VM
-          </button>
-        </SidebarSection>
+      <nav className="flex flex-1 flex-col">
+        {navSections
+          .filter((section) => !section.adminOnly || user?.isSystemAdmin)
+          .map((section, i) => (
+            <div key={section.label} className={cn("space-y-0.5", i > 0 && "mt-4")}>
+              <div className="px-[9px] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.6px] text-muted-foreground">
+                {section.label}
+              </div>
+              {section.items.map((item) => (
+                <SidebarLink key={item.href} item={item} />
+              ))}
+            </div>
+          ))}
 
-        {/* Storage Section */}
-        <SidebarSection
-          id="storage-section"
-          title="Storage"
-          icon={<HardDrive className="h-4 w-4" />}
-          defaultOpen
-        >
-          <SidebarLink href="/images">Images</SidebarLink>
-          <SidebarLink href="/storage/volumes">Volumes</SidebarLink>
-          <SidebarLink href="/storage/snapshots">Snapshots</SidebarLink>
-        </SidebarSection>
+        <div className="flex-1" />
 
-        {/* Networking Section */}
-        <SidebarSection
-          id="networking-section"
-          title="Networking"
-          icon={<Network className="h-4 w-4" />}
-        >
-          <SidebarLink href="/networks">Networks</SidebarLink>
-        </SidebarSection>
-
-        {/* Nodes Section */}
-        <SidebarSection
-          id="nodes-section"
-          title="Compute Nodes"
-          icon={<Server className="h-4 w-4" />}
-        >
-          <SidebarLink href="/agents">Agents</SidebarLink>
-          <button
-            onClick={onAddAgent}
-            className="flex items-center w-full px-3 py-2 text-sm text-blue-400 hover:bg-gray-700 rounded-md transition-colors"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Add Agent
-          </button>
-        </SidebarSection>
-
-        {/* Organization Section */}
-        <SidebarSection
-          id="organization-section"
-          title="Organization"
-          icon={<Building2 className="h-4 w-4" />}
-        >
-          <SidebarLink href="/hierarchy">
-            <span className="flex items-center">
-              <FolderTree className="h-4 w-4 mr-2" />
-              Hierarchy
-            </span>
-          </SidebarLink>
-          <SidebarLink href="/quotas">
-            <span className="flex items-center">
-              <Gauge className="h-4 w-4 mr-2" />
-              Resource Quotas
-            </span>
-          </SidebarLink>
-          <SidebarLink href="/organizations/settings">Settings</SidebarLink>
-        </SidebarSection>
-
-        {/* Settings Section */}
-        <SidebarSection
-          id="settings-section"
-          title="Settings"
-          icon={<Settings className="h-4 w-4" />}
-        >
-          <SidebarLink href="/settings/api-keys">
-            <span className="flex items-center">
-              <Key className="h-4 w-4 mr-2" />
-              API Keys
-            </span>
-          </SidebarLink>
-        </SidebarSection>
-
-        {/* Administration Section (system admins only) */}
-        {user?.isSystemAdmin && (
-          <SidebarSection
-            id="admin-section"
-            title="Administration"
-            icon={<ShieldCheck className="h-4 w-4" />}
-          >
-            <SidebarLink href="/admin/users">
-              <span className="flex items-center">
-                <Users className="h-4 w-4 mr-2" />
-                Users
-              </span>
-            </SidebarLink>
-          </SidebarSection>
-        )}
+        <div className="space-y-0.5">
+          {footerNavItems.map((item) => (
+            <SidebarLink key={item.href} item={item} />
+          ))}
+        </div>
+        <UserCard />
       </nav>
     </aside>
   );

@@ -15,18 +15,18 @@ export function ImageStatusBadge({
   const getStatusColor = () => {
     switch (status) {
       case "ready":
-        return "bg-green-500/20 text-green-400 border-green-500/30";
+        return "bg-green-500/20 text-green-600 border-green-500/30";
       case "uploading":
       case "downloading":
-        return "bg-blue-500/20 text-blue-400 border-blue-500/30";
+        return "bg-blue-500/20 text-blue-600 border-blue-500/30";
       case "validating":
-        return "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
+        return "bg-yellow-500/20 text-yellow-700 border-yellow-500/30";
       case "pending":
-        return "bg-gray-500/20 text-gray-400 border-gray-500/30";
+        return "bg-gray-500/20 text-muted-foreground border-gray-500/30";
       case "error":
-        return "bg-red-500/20 text-red-400 border-red-500/30";
+        return "bg-red-500/20 text-red-600 border-red-500/30";
       default:
-        return "bg-gray-500/20 text-gray-400 border-gray-500/30";
+        return "bg-gray-500/20 text-muted-foreground border-gray-500/30";
     }
   };
 

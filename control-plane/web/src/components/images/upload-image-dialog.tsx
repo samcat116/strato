@@ -248,39 +248,39 @@ export function UploadImageDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button className="bg-blue-600 hover:bg-blue-700">
+        <Button className="bg-primary hover:bg-primary/90">
           <Upload className="mr-2 h-4 w-4" />
           Add Image
         </Button>
       </DialogTrigger>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100 sm:max-w-lg">
+      <DialogContent className="bg-card border-border text-foreground sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Add Image</DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             Upload a disk image, register Firecracker kernel + rootfs, or fetch
             from a URL.
           </DialogDescription>
         </DialogHeader>
 
         <Tabs defaultValue="upload" className="w-full">
-          <TabsList className="grid w-full grid-cols-3 bg-gray-900">
+          <TabsList className="grid w-full grid-cols-3 bg-background">
             <TabsTrigger
               value="upload"
-              className="data-[state=active]:bg-gray-700"
+              className="data-[state=active]:bg-muted"
             >
               <Upload className="mr-2 h-4 w-4" />
               Disk
             </TabsTrigger>
             <TabsTrigger
               value="firecracker"
-              className="data-[state=active]:bg-gray-700"
+              className="data-[state=active]:bg-muted"
             >
               <Cpu className="mr-2 h-4 w-4" />
               Firecracker
             </TabsTrigger>
             <TabsTrigger
               value="url"
-              className="data-[state=active]:bg-gray-700"
+              className="data-[state=active]:bg-muted"
             >
               <LinkIcon className="mr-2 h-4 w-4" />
               From URL
@@ -295,7 +295,7 @@ export function UploadImageDialog({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Ubuntu 22.04 Server"
-                className="bg-gray-700 border-gray-600"
+                className="bg-muted border-input"
               />
             </div>
 
@@ -306,7 +306,7 @@ export function UploadImageDialog({
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Ubuntu 22.04 LTS server image"
-                className="bg-gray-700 border-gray-600"
+                className="bg-muted border-input"
               />
             </div>
 
@@ -318,7 +318,7 @@ export function UploadImageDialog({
                 onChange={(e) =>
                   setArchitecture(e.target.value as CPUArchitecture)
                 }
-                className="w-full rounded-md bg-gray-700 border border-gray-600 px-3 py-2 text-sm text-gray-100"
+                className="w-full rounded-md bg-muted border border-input px-3 py-2 text-sm text-foreground"
               >
                 {ARCHITECTURES.map((arch) => (
                   <option key={arch} value={arch}>
@@ -331,14 +331,14 @@ export function UploadImageDialog({
             <div className="space-y-2">
               <Label>Image File</Label>
               <div
-                className="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center cursor-pointer hover:border-gray-500 transition-colors"
+                className="border-2 border-dashed border-input rounded-lg p-6 text-center cursor-pointer hover:border-ring transition-colors"
                 onClick={() => fileInputRef.current?.click()}
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}
               >
                 {selectedFile ? (
                   <div className="flex items-center justify-center gap-2">
-                    <span className="text-gray-300">{selectedFile.name}</span>
+                    <span className="text-foreground/80">{selectedFile.name}</span>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -352,10 +352,10 @@ export function UploadImageDialog({
                     </Button>
                   </div>
                 ) : (
-                  <div className="text-gray-400">
+                  <div className="text-muted-foreground">
                     <Upload className="h-8 w-8 mx-auto mb-2" />
                     <p>Click to select or drag and drop</p>
-                    <p className="text-sm text-gray-500">
+                    <p className="text-sm text-muted-foreground">
                       QCOW2, RAW, IMG, or ISO files
                     </p>
                   </div>
@@ -372,11 +372,11 @@ export function UploadImageDialog({
 
             {uploadProgress > 0 && uploadProgress < 100 && (
               <div className="space-y-1">
-                <div className="flex justify-between text-sm text-gray-400">
+                <div className="flex justify-between text-sm text-muted-foreground">
                   <span>Uploading...</span>
                   <span>{uploadProgress}%</span>
                 </div>
-                <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                <div className="h-2 bg-muted rounded-full overflow-hidden">
                   <div
                     className="h-full bg-blue-500 transition-all duration-300"
                     style={{ width: `${uploadProgress}%` }}
@@ -386,7 +386,7 @@ export function UploadImageDialog({
             )}
 
             {error && (
-              <p className="text-sm text-red-400">{error}</p>
+              <p className="text-sm text-red-600">{error}</p>
             )}
 
             <DialogFooter>
@@ -394,14 +394,14 @@ export function UploadImageDialog({
                 variant="outline"
                 onClick={handleClose}
                 disabled={isSubmitting}
-                className="border-gray-600"
+                className="border-input"
               >
                 Cancel
               </Button>
               <Button
                 onClick={handleSubmitUpload}
                 disabled={!name || !selectedFile || isSubmitting}
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-primary hover:bg-primary/90"
               >
                 {isSubmitting ? "Uploading..." : "Upload"}
               </Button>
@@ -409,7 +409,7 @@ export function UploadImageDialog({
           </TabsContent>
 
           <TabsContent value="firecracker" className="space-y-4 mt-4">
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-muted-foreground">
               Register a kernel + root filesystem (and optional initramfs) so the
               image can boot on Firecracker hypervisors.
             </p>
@@ -421,7 +421,7 @@ export function UploadImageDialog({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Alpine 3.20 (microVM)"
-                className="bg-gray-700 border-gray-600"
+                className="bg-muted border-input"
               />
             </div>
 
@@ -432,7 +432,7 @@ export function UploadImageDialog({
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Minimal microVM image"
-                className="bg-gray-700 border-gray-600"
+                className="bg-muted border-input"
               />
             </div>
 
@@ -444,7 +444,7 @@ export function UploadImageDialog({
                 onChange={(e) =>
                   setArchitecture(e.target.value as CPUArchitecture)
                 }
-                className="w-full rounded-md bg-gray-700 border border-gray-600 px-3 py-2 text-sm text-gray-100"
+                className="w-full rounded-md bg-muted border border-input px-3 py-2 text-sm text-foreground"
               >
                 {ARCHITECTURES.map((arch) => (
                   <option key={arch} value={arch}>
@@ -454,14 +454,14 @@ export function UploadImageDialog({
               </select>
             </div>
 
-            <div className="flex rounded-md bg-gray-900 p-1 text-sm">
+            <div className="flex rounded-md bg-background p-1 text-sm">
               <button
                 type="button"
                 onClick={() => setFcMode("upload")}
                 className={`flex-1 rounded px-3 py-1.5 ${
                   fcMode === "upload"
-                    ? "bg-gray-700 text-gray-100"
-                    : "text-gray-400 hover:text-gray-200"
+                    ? "bg-muted text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
                 }`}
               >
                 Upload files
@@ -471,8 +471,8 @@ export function UploadImageDialog({
                 onClick={() => setFcMode("url")}
                 className={`flex-1 rounded px-3 py-1.5 ${
                   fcMode === "url"
-                    ? "bg-gray-700 text-gray-100"
-                    : "text-gray-400 hover:text-gray-200"
+                    ? "bg-muted text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
                 }`}
               >
                 From URLs
@@ -487,9 +487,9 @@ export function UploadImageDialog({
                     id="fc-kernel"
                     type="file"
                     onChange={(e) => setKernelFile(e.target.files?.[0] ?? null)}
-                    className="block w-full text-sm text-gray-300 file:mr-3 file:rounded-md file:border-0 file:bg-gray-700 file:px-3 file:py-1.5 file:text-gray-100 hover:file:bg-gray-600"
+                    className="block w-full text-sm text-foreground/80 file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-foreground hover:file:bg-muted"
                   />
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-muted-foreground">
                     Uncompressed kernel image (e.g. vmlinux).
                   </p>
                 </div>
@@ -500,9 +500,9 @@ export function UploadImageDialog({
                     id="fc-rootfs"
                     type="file"
                     onChange={(e) => setRootfsFile(e.target.files?.[0] ?? null)}
-                    className="block w-full text-sm text-gray-300 file:mr-3 file:rounded-md file:border-0 file:bg-gray-700 file:px-3 file:py-1.5 file:text-gray-100 hover:file:bg-gray-600"
+                    className="block w-full text-sm text-foreground/80 file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-foreground hover:file:bg-muted"
                   />
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-muted-foreground">
                     Root filesystem image (raw/ext4/squashfs or qcow2).
                   </p>
                 </div>
@@ -515,7 +515,7 @@ export function UploadImageDialog({
                     onChange={(e) =>
                       setInitramfsFile(e.target.files?.[0] ?? null)
                     }
-                    className="block w-full text-sm text-gray-300 file:mr-3 file:rounded-md file:border-0 file:bg-gray-700 file:px-3 file:py-1.5 file:text-gray-100 hover:file:bg-gray-600"
+                    className="block w-full text-sm text-foreground/80 file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-foreground hover:file:bg-muted"
                   />
                 </div>
               </>
@@ -529,7 +529,7 @@ export function UploadImageDialog({
                     value={kernelURL}
                     onChange={(e) => setKernelURL(e.target.value)}
                     placeholder="https://.../vmlinux"
-                    className="bg-gray-700 border-gray-600"
+                    className="bg-muted border-input"
                   />
                 </div>
 
@@ -541,7 +541,7 @@ export function UploadImageDialog({
                     value={rootfsURL}
                     onChange={(e) => setRootfsURL(e.target.value)}
                     placeholder="https://.../rootfs.ext4"
-                    className="bg-gray-700 border-gray-600"
+                    className="bg-muted border-input"
                   />
                 </div>
 
@@ -555,11 +555,11 @@ export function UploadImageDialog({
                     value={initramfsURL}
                     onChange={(e) => setInitramfsURL(e.target.value)}
                     placeholder="https://.../initramfs.cpio.gz"
-                    className="bg-gray-700 border-gray-600"
+                    className="bg-muted border-input"
                   />
                 </div>
 
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-muted-foreground">
                   Artifacts download in the background; the image becomes ready
                   once the kernel and rootfs finish.
                 </p>
@@ -568,11 +568,11 @@ export function UploadImageDialog({
 
             {isSubmitting && uploadPhase && (
               <div className="space-y-1">
-                <div className="flex justify-between text-sm text-gray-400">
+                <div className="flex justify-between text-sm text-muted-foreground">
                   <span>{uploadPhase}...</span>
                   {uploadProgress > 0 && <span>{uploadProgress}%</span>}
                 </div>
-                <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                <div className="h-2 bg-muted rounded-full overflow-hidden">
                   <div
                     className="h-full bg-blue-500 transition-all duration-300"
                     style={{ width: `${uploadProgress}%` }}
@@ -581,14 +581,14 @@ export function UploadImageDialog({
               </div>
             )}
 
-            {error && <p className="text-sm text-red-400">{error}</p>}
+            {error && <p className="text-sm text-red-600">{error}</p>}
 
             <DialogFooter>
               <Button
                 variant="outline"
                 onClick={handleClose}
                 disabled={isSubmitting}
-                className="border-gray-600"
+                className="border-input"
               >
                 Cancel
               </Button>
@@ -601,7 +601,7 @@ export function UploadImageDialog({
                     ? !kernelFile || !rootfsFile
                     : !kernelURL || !rootfsURL)
                 }
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-primary hover:bg-primary/90"
               >
                 {isSubmitting ? "Registering..." : "Register Image"}
               </Button>
@@ -616,7 +616,7 @@ export function UploadImageDialog({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Ubuntu 22.04 Server"
-                className="bg-gray-700 border-gray-600"
+                className="bg-muted border-input"
               />
             </div>
 
@@ -627,7 +627,7 @@ export function UploadImageDialog({
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Ubuntu 22.04 LTS server image"
-                className="bg-gray-700 border-gray-600"
+                className="bg-muted border-input"
               />
             </div>
 
@@ -639,7 +639,7 @@ export function UploadImageDialog({
                 onChange={(e) =>
                   setArchitecture(e.target.value as CPUArchitecture)
                 }
-                className="w-full rounded-md bg-gray-700 border border-gray-600 px-3 py-2 text-sm text-gray-100"
+                className="w-full rounded-md bg-muted border border-input px-3 py-2 text-sm text-foreground"
               >
                 {ARCHITECTURES.map((arch) => (
                   <option key={arch} value={arch}>
@@ -657,15 +657,15 @@ export function UploadImageDialog({
                 value={sourceURL}
                 onChange={(e) => setSourceURL(e.target.value)}
                 placeholder="https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
-                className="bg-gray-700 border-gray-600"
+                className="bg-muted border-input"
               />
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-muted-foreground">
                 The image will be downloaded in the background.
               </p>
             </div>
 
             {error && (
-              <p className="text-sm text-red-400">{error}</p>
+              <p className="text-sm text-red-600">{error}</p>
             )}
 
             <DialogFooter>
@@ -673,14 +673,14 @@ export function UploadImageDialog({
                 variant="outline"
                 onClick={handleClose}
                 disabled={isSubmitting}
-                className="border-gray-600"
+                className="border-input"
               >
                 Cancel
               </Button>
               <Button
                 onClick={handleSubmitURL}
                 disabled={!name || !sourceURL || isSubmitting}
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-primary hover:bg-primary/90"
               >
                 {isSubmitting ? "Creating..." : "Fetch Image"}
               </Button>

@@ -15,8 +15,8 @@ export default function AdminUsersPage() {
   if (isAuthLoading) {
     return (
       <div className="max-w-5xl mx-auto space-y-6">
-        <Skeleton className="h-8 w-64 bg-gray-700" />
-        <Skeleton className="h-64 w-full bg-gray-700" />
+        <Skeleton className="h-8 w-64 bg-muted" />
+        <Skeleton className="h-64 w-full bg-muted" />
       </div>
     );
   }
@@ -25,8 +25,8 @@ export default function AdminUsersPage() {
     return (
       <div className="max-w-5xl mx-auto">
         <div className="text-center py-12">
-          <ShieldAlert className="h-10 w-10 mx-auto mb-4 text-gray-500" />
-          <p className="text-gray-400">
+          <ShieldAlert className="h-10 w-10 mx-auto mb-4 text-muted-foreground" />
+          <p className="text-muted-foreground">
             You need system administrator rights to manage users.
           </p>
         </div>
@@ -38,15 +38,15 @@ export default function AdminUsersPage() {
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
       <div>
-        <h2 className="text-2xl font-semibold text-gray-100">Users</h2>
-        <p className="text-gray-400">
+        <h2 className="text-2xl font-semibold text-foreground">Users</h2>
+        <p className="text-muted-foreground">
           Manage all user accounts on this Strato installation
         </p>
       </div>
 
-      <Card className="bg-gray-800 border-gray-700">
+      <Card className="bg-card border-border">
         <CardHeader>
-          <CardTitle className="text-lg font-semibold text-gray-100">
+          <CardTitle className="text-lg font-semibold text-foreground">
             All Users
           </CardTitle>
         </CardHeader>

@@ -28,7 +28,7 @@ interface CreateSnapshotDialogProps {
 }
 
 const selectClassName =
-  "w-full h-9 px-3 py-2 bg-gray-900 border border-gray-700 text-gray-100 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed";
+  "w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed";
 
 export function CreateSnapshotDialog({
   volume,
@@ -85,12 +85,12 @@ export function CreateSnapshotDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         <DialogHeader>
           <DialogTitle>
             {volume ? `Snapshot ${volume.name}` : "Create Snapshot"}
           </DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             Capture a point-in-time copy of the volume.
           </DialogDescription>
         </DialogHeader>
@@ -98,11 +98,11 @@ export function CreateSnapshotDialog({
           <div className="space-y-4 py-4">
             {!volume && (
               <div className="space-y-2">
-                <Label htmlFor="snapshotVolume" className="text-gray-200">
+                <Label htmlFor="snapshotVolume" className="text-foreground">
                   Volume
                 </Label>
                 {candidateVolumes.length === 0 ? (
-                  <div className="text-sm text-gray-400 py-2">
+                  <div className="text-sm text-muted-foreground py-2">
                     No volumes can be snapshotted right now. Volumes must be
                     available or attached.
                   </div>
@@ -127,7 +127,7 @@ export function CreateSnapshotDialog({
               </div>
             )}
             <div className="space-y-2">
-              <Label htmlFor="snapshotName" className="text-gray-200">
+              <Label htmlFor="snapshotName" className="text-foreground">
                 Name
               </Label>
               <Input
@@ -135,13 +135,13 @@ export function CreateSnapshotDialog({
                 placeholder="before-upgrade"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="bg-gray-900 border-gray-700 text-gray-100"
+                className="bg-background border-border text-foreground"
                 disabled={isLoading}
                 autoFocus
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="snapshotDescription" className="text-gray-200">
+              <Label htmlFor="snapshotDescription" className="text-foreground">
                 Description
               </Label>
               <Input
@@ -149,7 +149,7 @@ export function CreateSnapshotDialog({
                 placeholder="Snapshot before OS upgrade"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="bg-gray-900 border-gray-700 text-gray-100"
+                className="bg-background border-border text-foreground"
                 disabled={isLoading}
               />
             </div>
@@ -159,14 +159,14 @@ export function CreateSnapshotDialog({
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
-              className="border-gray-600 text-gray-300 hover:bg-gray-700"
+              className="border-input text-foreground/80 hover:bg-accent"
               disabled={isLoading}
             >
               Cancel
             </Button>
             <Button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               disabled={isLoading || (!volume && candidateVolumes.length === 0)}
             >
               {isLoading ? (

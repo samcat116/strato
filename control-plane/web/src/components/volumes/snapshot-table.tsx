@@ -70,7 +70,7 @@ export function SnapshotTable({
     return (
       <div className="space-y-2">
         {[...Array(3)].map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full bg-gray-700" />
+          <Skeleton key={i} className="h-12 w-full bg-muted" />
         ))}
       </div>
     );
@@ -78,7 +78,7 @@ export function SnapshotTable({
 
   if (snapshots.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-400">
+      <div className="text-center py-8 text-muted-foreground">
         No snapshots found. Snapshot a volume to get started.
       </div>
     );
@@ -92,23 +92,23 @@ export function SnapshotTable({
   return (
     <>
       <Table>
-        <TableHeader className="bg-gray-900">
-          <TableRow className="border-gray-700 hover:bg-gray-900">
-            <TableHead className="text-gray-400 font-medium">Name</TableHead>
+        <TableHeader className="bg-background">
+          <TableRow className="border-border hover:bg-transparent">
+            <TableHead className="text-muted-foreground font-medium">Name</TableHead>
             {showVolumeColumn && (
-              <TableHead className="text-gray-400 font-medium">
+              <TableHead className="text-muted-foreground font-medium">
                 Volume
               </TableHead>
             )}
-            <TableHead className="text-gray-400 font-medium">Status</TableHead>
-            <TableHead className="text-gray-400 font-medium">Size</TableHead>
-            <TableHead className="text-gray-400 font-medium">Created</TableHead>
-            <TableHead className="text-gray-400 font-medium text-right">
+            <TableHead className="text-muted-foreground font-medium">Status</TableHead>
+            <TableHead className="text-muted-foreground font-medium">Size</TableHead>
+            <TableHead className="text-muted-foreground font-medium">Created</TableHead>
+            <TableHead className="text-muted-foreground font-medium text-right">
               Actions
             </TableHead>
           </TableRow>
         </TableHeader>
-        <TableBody className="divide-y divide-gray-700">
+        <TableBody className="divide-y divide-border">
           {snapshots.map((snapshot) => {
             const volume = snapshot.volumeId
               ? volumesById.get(snapshot.volumeId)
@@ -116,27 +116,27 @@ export function SnapshotTable({
             return (
               <TableRow
                 key={snapshot.id}
-                className="border-gray-700 hover:bg-gray-800/50"
+                className="border-border hover:bg-accent/60"
               >
                 <TableCell>
-                  <span className="font-medium text-gray-100">
+                  <span className="font-medium text-foreground">
                     {snapshot.name}
                   </span>
                   {snapshot.description && (
-                    <p className="text-sm text-gray-500 truncate max-w-xs">
+                    <p className="text-sm text-muted-foreground truncate max-w-xs">
                       {snapshot.description}
                     </p>
                   )}
                   {snapshot.status === "error" && snapshot.errorMessage && (
-                    <p className="text-sm text-red-400 truncate max-w-xs">
+                    <p className="text-sm text-red-600 truncate max-w-xs">
                       {snapshot.errorMessage}
                     </p>
                   )}
                 </TableCell>
                 {showVolumeColumn && (
-                  <TableCell className="text-gray-300">
+                  <TableCell className="text-foreground/80">
                     {volume?.name ?? (
-                      <span className="text-gray-500 font-mono text-sm">
+                      <span className="text-muted-foreground font-mono text-sm">
                         {snapshot.volumeId ?? "—"}
                       </span>
                     )}
@@ -145,10 +145,10 @@ export function SnapshotTable({
                 <TableCell>
                   <SnapshotStatusBadge status={snapshot.status} />
                 </TableCell>
-                <TableCell className="text-gray-300">
+                <TableCell className="text-foreground/80">
                   {snapshot.sizeFormatted}
                 </TableCell>
-                <TableCell className="text-gray-300">
+                <TableCell className="text-foreground/80">
                   {snapshot.createdAt
                     ? new Date(snapshot.createdAt).toLocaleString()
                     : "—"}
@@ -157,7 +157,7 @@ export function SnapshotTable({
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                    className="text-red-600 hover:text-red-700 hover:bg-red-500/10"
                     onClick={() => setDeleteTarget(snapshot)}
                     disabled={!canDelete(snapshot)}
                   >
@@ -175,10 +175,10 @@ export function SnapshotTable({
         open={!!deleteTarget}
         onOpenChange={(open) => !open && setDeleteTarget(null)}
       >
-        <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+        <DialogContent className="bg-card border-border text-foreground">
           <DialogHeader>
             <DialogTitle>Delete snapshot {deleteTarget?.name}?</DialogTitle>
-            <DialogDescription className="text-gray-400">
+            <DialogDescription className="text-muted-foreground">
               This will permanently delete the snapshot. This action cannot be
               undone.
             </DialogDescription>
@@ -187,7 +187,7 @@ export function SnapshotTable({
             <Button
               variant="outline"
               onClick={() => setDeleteTarget(null)}
-              className="border-gray-600 text-gray-300 hover:bg-gray-700"
+              className="border-input text-foreground/80 hover:bg-accent"
               disabled={isDeleting}
             >
               Cancel

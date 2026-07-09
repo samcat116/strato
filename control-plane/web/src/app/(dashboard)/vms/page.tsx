@@ -26,17 +26,17 @@ export default function VMsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-gray-100">
+          <h2 className="text-2xl font-semibold text-foreground">
             Virtual Machines
           </h2>
-          <p className="text-gray-400">
+          <p className="text-muted-foreground">
             {currentProject
               ? `VMs in ${currentProject.name}`
               : "Manage and monitor your virtual machines"}
           </p>
         </div>
         <Button
-          className="bg-blue-600 hover:bg-blue-700"
+          className="bg-primary hover:bg-primary/90"
           onClick={() => setCreateVMOpen(true)}
         >
           <Plus className="h-4 w-4 mr-2" />
@@ -45,9 +45,9 @@ export default function VMsPage() {
       </div>
 
       {/* VM List */}
-      <Card className="bg-gray-800 border-gray-700">
+      <Card className="bg-card border-border">
         <CardHeader>
-          <CardTitle className="text-lg font-semibold text-gray-100">
+          <CardTitle className="text-lg font-semibold text-foreground">
             {currentProject ? currentProject.name : "All"} Virtual Machines (
             {scopedVMs.length})
           </CardTitle>

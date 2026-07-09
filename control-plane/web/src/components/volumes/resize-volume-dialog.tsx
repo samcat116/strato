@@ -64,10 +64,10 @@ export function ResizeVolumeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         <DialogHeader>
           <DialogTitle>Resize {volume.name}</DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             Current size: {volume.sizeFormatted}. Volumes can only grow, and
             must be detached to resize.
           </DialogDescription>
@@ -75,7 +75,7 @@ export function ResizeVolumeDialog({
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="resizeSize" className="text-gray-200">
+              <Label htmlFor="resizeSize" className="text-foreground">
                 New Size (GB)
               </Label>
               <Input
@@ -84,7 +84,7 @@ export function ResizeVolumeDialog({
                 min={currentSizeGB + 1}
                 value={sizeGB}
                 onChange={(e) => setSizeGB(e.target.value)}
-                className="bg-gray-900 border-gray-700 text-gray-100"
+                className="bg-background border-border text-foreground"
                 disabled={isLoading}
                 autoFocus
               />
@@ -95,14 +95,14 @@ export function ResizeVolumeDialog({
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
-              className="border-gray-600 text-gray-300 hover:bg-gray-700"
+              className="border-input text-foreground/80 hover:bg-accent"
               disabled={isLoading}
             >
               Cancel
             </Button>
             <Button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               disabled={isLoading}
             >
               {isLoading ? (

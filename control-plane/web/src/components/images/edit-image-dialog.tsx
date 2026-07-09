@@ -117,10 +117,10 @@ export function EditImageDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100 sm:max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogContent className="bg-card border-border text-foreground sm:max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Image</DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             Update the image name, description, and default VM settings.
           </DialogDescription>
         </DialogHeader>
@@ -132,7 +132,7 @@ export function EditImageDialog({
               id="edit-image-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="bg-gray-700 border-gray-600"
+              className="bg-muted border-input"
               disabled={updateImage.isPending}
             />
           </div>
@@ -144,7 +144,7 @@ export function EditImageDialog({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="A brief description of this image"
-              className="bg-gray-700 border-gray-600"
+              className="bg-muted border-input"
               disabled={updateImage.isPending}
             />
           </div>
@@ -157,7 +157,7 @@ export function EditImageDialog({
               onChange={(e) =>
                 setArchitecture(e.target.value as CPUArchitecture)
               }
-              className="w-full rounded-md bg-gray-700 border border-gray-600 px-3 py-2 text-sm text-gray-100"
+              className="w-full rounded-md bg-muted border border-input px-3 py-2 text-sm text-foreground"
               disabled={updateImage.isPending}
             >
               {ARCHITECTURES.map((arch) => (
@@ -169,10 +169,10 @@ export function EditImageDialog({
           </div>
 
           <div>
-            <p className="text-sm font-medium text-gray-200">
+            <p className="text-sm font-medium text-foreground">
               Default VM Settings
             </p>
-            <p className="text-xs text-gray-500 mt-1">
+            <p className="text-xs text-muted-foreground mt-1">
               Pre-filled when creating a VM from this image. Leave a field
               blank to keep its current value.
             </p>
@@ -188,7 +188,7 @@ export function EditImageDialog({
                 value={defaultCpu}
                 onChange={(e) => setDefaultCpu(e.target.value)}
                 placeholder="Not set"
-                className="bg-gray-700 border-gray-600"
+                className="bg-muted border-input"
                 disabled={updateImage.isPending}
               />
             </div>
@@ -202,7 +202,7 @@ export function EditImageDialog({
                 value={defaultMemoryGB}
                 onChange={(e) => setDefaultMemoryGB(e.target.value)}
                 placeholder="Not set"
-                className="bg-gray-700 border-gray-600"
+                className="bg-muted border-input"
                 disabled={updateImage.isPending}
               />
             </div>
@@ -215,7 +215,7 @@ export function EditImageDialog({
                 value={defaultDiskGB}
                 onChange={(e) => setDefaultDiskGB(e.target.value)}
                 placeholder="Not set"
-                className="bg-gray-700 border-gray-600"
+                className="bg-muted border-input"
                 disabled={updateImage.isPending}
               />
             </div>
@@ -228,7 +228,7 @@ export function EditImageDialog({
               value={defaultCmdline}
               onChange={(e) => setDefaultCmdline(e.target.value)}
               placeholder="e.g. console=ttyS0 root=/dev/vda1"
-              className="bg-gray-700 border-gray-600 font-mono"
+              className="bg-muted border-input font-mono"
               disabled={updateImage.isPending}
             />
           </div>
@@ -237,7 +237,7 @@ export function EditImageDialog({
             <Button
               type="button"
               variant="outline"
-              className="border-gray-600"
+              className="border-input"
               onClick={() => onOpenChange(false)}
               disabled={updateImage.isPending}
             >
@@ -245,7 +245,7 @@ export function EditImageDialog({
             </Button>
             <Button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               disabled={updateImage.isPending}
             >
               {updateImage.isPending ? (

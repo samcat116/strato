@@ -157,22 +157,22 @@ export function CreateVMDialog({
     if (sourceType === "image") {
       return (
         <div className="space-y-2">
-          <Label htmlFor="image" className="text-gray-200">
+          <Label htmlFor="image" className="text-foreground">
             Disk Image
           </Label>
           {!projectId ? (
-            <div className="text-sm text-gray-400 py-2">
+            <div className="text-sm text-muted-foreground py-2">
               No project available. Create a project first to upload images.
             </div>
           ) : imagesLoading ? (
-            <div className="flex items-center gap-2 text-gray-400 text-sm">
+            <div className="flex items-center gap-2 text-muted-foreground text-sm">
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading images...
             </div>
           ) : readyImages.length === 0 ? (
-            <div className="text-sm text-gray-400 py-2">
+            <div className="text-sm text-muted-foreground py-2">
               No images available.{" "}
-              <a href="/images" className="text-blue-400 hover:underline">
+              <a href="/images" className="text-blue-600 hover:underline">
                 Upload an image
               </a>{" "}
               first.
@@ -182,7 +182,7 @@ export function CreateVMDialog({
               value={formData.imageId}
               onChange={(e) => handleImageSelect(e.target.value)}
               disabled={isLoading}
-              className="w-full h-9 px-3 py-2 bg-gray-900 border border-gray-700 text-gray-100 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <option value="" disabled>
                 Select an image
@@ -200,7 +200,7 @@ export function CreateVMDialog({
 
     return (
       <div className="space-y-2">
-        <Label htmlFor="template" className="text-gray-200">
+        <Label htmlFor="template" className="text-foreground">
           OS Template (Legacy)
         </Label>
         <Input
@@ -210,10 +210,10 @@ export function CreateVMDialog({
           onChange={(e) =>
             setFormData({ ...formData, templateName: e.target.value })
           }
-          className="bg-gray-900 border-gray-700 text-gray-100"
+          className="bg-background border-border text-foreground"
           disabled={isLoading}
         />
-        <p className="text-xs text-yellow-500">
+        <p className="text-xs text-yellow-700">
           Templates are deprecated. Consider uploading an image instead.
         </p>
       </div>
@@ -222,23 +222,23 @@ export function CreateVMDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         <DialogHeader>
           <DialogTitle>Create Virtual Machine</DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             Configure your new virtual machine
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
             {quotaError && (
-              <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">
+              <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-700">
                 <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
                 <div className="space-y-1">
                   <p>{quotaError}</p>
                   <Link
                     href="/quotas"
-                    className="inline-block font-medium text-red-200 underline hover:text-red-100"
+                    className="inline-block font-medium text-red-800 underline hover:text-red-800"
                   >
                     Review resource quotas
                   </Link>
@@ -246,7 +246,7 @@ export function CreateVMDialog({
               </div>
             )}
             <div className="space-y-2">
-              <Label htmlFor="name" className="text-gray-200">
+              <Label htmlFor="name" className="text-foreground">
                 VM Name
               </Label>
               <Input
@@ -256,12 +256,12 @@ export function CreateVMDialog({
                 onChange={(e) =>
                   setFormData({ ...formData, name: e.target.value })
                 }
-                className="bg-gray-900 border-gray-700 text-gray-100"
+                className="bg-background border-border text-foreground"
                 disabled={isLoading}
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="description" className="text-gray-200">
+              <Label htmlFor="description" className="text-foreground">
                 Description
               </Label>
               <Input
@@ -271,15 +271,15 @@ export function CreateVMDialog({
                 onChange={(e) =>
                   setFormData({ ...formData, description: e.target.value })
                 }
-                className="bg-gray-900 border-gray-700 text-gray-100"
+                className="bg-background border-border text-foreground"
                 disabled={isLoading}
               />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="sshPublicKey" className="text-gray-200">
+              <Label htmlFor="sshPublicKey" className="text-foreground">
                 SSH Public Key{" "}
-                <span className="text-gray-500">(optional)</span>
+                <span className="text-muted-foreground">(optional)</span>
               </Label>
               <Input
                 id="sshPublicKey"
@@ -288,10 +288,10 @@ export function CreateVMDialog({
                 onChange={(e) =>
                   setFormData({ ...formData, sshPublicKey: e.target.value })
                 }
-                className="bg-gray-900 border-gray-700 text-gray-100 font-mono text-xs"
+                className="bg-background border-border text-foreground font-mono text-xs"
                 disabled={isLoading}
               />
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-muted-foreground">
                 Authorized for the guest&apos;s default user via cloud-init.
                 Leave blank for no SSH login.
               </p>
@@ -299,7 +299,7 @@ export function CreateVMDialog({
 
             {/* Source Type Selector */}
             <div className="space-y-2">
-              <Label className="text-gray-200">Disk Source</Label>
+              <Label className="text-foreground">Disk Source</Label>
               <div className="flex gap-2">
                 <Button
                   type="button"
@@ -308,8 +308,8 @@ export function CreateVMDialog({
                   onClick={() => setSourceType("image")}
                   className={
                     sourceType === "image"
-                      ? "bg-blue-600 hover:bg-blue-700"
-                      : "border-gray-600 text-gray-300 hover:bg-gray-700"
+                      ? "bg-primary hover:bg-primary/90"
+                      : "border-input text-foreground/80 hover:bg-accent"
                   }
                   disabled={isLoading}
                 >
@@ -323,8 +323,8 @@ export function CreateVMDialog({
                   onClick={() => setSourceType("template")}
                   className={
                     sourceType === "template"
-                      ? "bg-blue-600 hover:bg-blue-700"
-                      : "border-gray-600 text-gray-300 hover:bg-gray-700"
+                      ? "bg-primary hover:bg-primary/90"
+                      : "border-input text-foreground/80 hover:bg-accent"
                   }
                   disabled={isLoading}
                 >
@@ -338,7 +338,7 @@ export function CreateVMDialog({
 
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="cpu" className="text-gray-200">
+                <Label htmlFor="cpu" className="text-foreground">
                   CPU Cores
                 </Label>
                 <Input
@@ -349,12 +349,12 @@ export function CreateVMDialog({
                   onChange={(e) =>
                     setFormData({ ...formData, cpu: e.target.value })
                   }
-                  className="bg-gray-900 border-gray-700 text-gray-100"
+                  className="bg-background border-border text-foreground"
                   disabled={isLoading}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="memory" className="text-gray-200">
+                <Label htmlFor="memory" className="text-foreground">
                   Memory (GB)
                 </Label>
                 <Input
@@ -365,12 +365,12 @@ export function CreateVMDialog({
                   onChange={(e) =>
                     setFormData({ ...formData, memory: e.target.value })
                   }
-                  className="bg-gray-900 border-gray-700 text-gray-100"
+                  className="bg-background border-border text-foreground"
                   disabled={isLoading}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="disk" className="text-gray-200">
+                <Label htmlFor="disk" className="text-foreground">
                   Disk (GB)
                 </Label>
                 <Input
@@ -381,14 +381,14 @@ export function CreateVMDialog({
                   onChange={(e) =>
                     setFormData({ ...formData, disk: e.target.value })
                   }
-                  className="bg-gray-900 border-gray-700 text-gray-100"
+                  className="bg-background border-border text-foreground"
                   disabled={isLoading}
                 />
               </div>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="network" className="text-gray-200">
+              <Label htmlFor="network" className="text-foreground">
                 Network
               </Label>
               <select
@@ -398,7 +398,7 @@ export function CreateVMDialog({
                   setFormData({ ...formData, networkId: e.target.value })
                 }
                 disabled={isLoading}
-                className="w-full h-9 px-3 py-2 bg-gray-900 border border-gray-700 text-gray-100 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <option value="">default (auto)</option>
                 {networks
@@ -409,7 +409,7 @@ export function CreateVMDialog({
                     </option>
                   ))}
               </select>
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-muted-foreground">
                 The VM&apos;s IP is allocated automatically from the selected
                 network.
               </p>
@@ -423,14 +423,14 @@ export function CreateVMDialog({
                 setQuotaError(null);
                 onOpenChange(false);
               }}
-              className="border-gray-600 text-gray-300 hover:bg-gray-700"
+              className="border-input text-foreground/80 hover:bg-accent"
               disabled={isLoading}
             >
               Cancel
             </Button>
             <Button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               disabled={isLoading}
             >
               {isLoading ? (

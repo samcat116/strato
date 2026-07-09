@@ -25,8 +25,8 @@ export default function ImagesPage() {
     return (
       <div className="container mx-auto py-6">
         <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
-          <span className="ml-2 text-gray-400">Loading projects...</span>
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+          <span className="ml-2 text-muted-foreground">Loading projects...</span>
         </div>
       </div>
     );
@@ -37,23 +37,23 @@ export default function ImagesPage() {
     return (
       <div className="container mx-auto py-6 space-y-6">
         <div className="flex items-center gap-3">
-          <HardDrive className="h-8 w-8 text-blue-400" />
+          <HardDrive className="h-8 w-8 text-blue-600" />
           <div>
-            <h1 className="text-2xl font-bold text-gray-100">Images</h1>
-            <p className="text-sm text-gray-400">
+            <h1 className="text-2xl font-bold text-foreground">Images</h1>
+            <p className="text-sm text-muted-foreground">
               Manage disk images for virtual machines
             </p>
           </div>
         </div>
 
-        <Card className="bg-gray-800 border-gray-700">
+        <Card className="bg-card border-border">
           <CardContent className="py-12">
             <div className="flex flex-col items-center justify-center text-center">
-              <FolderPlus className="h-12 w-12 text-gray-500 mb-4" />
-              <h3 className="text-lg font-medium text-gray-100 mb-2">
+              <FolderPlus className="h-12 w-12 text-muted-foreground mb-4" />
+              <h3 className="text-lg font-medium text-foreground mb-2">
                 No Projects Found
               </h3>
-              <p className="text-sm text-gray-400 max-w-md">
+              <p className="text-sm text-muted-foreground max-w-md">
                 You need to create a project before you can upload images.
                 Projects help organize your resources within an organization.
               </p>
@@ -68,10 +68,10 @@ export default function ImagesPage() {
     <div className="container mx-auto py-6 space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <HardDrive className="h-8 w-8 text-blue-400" />
+          <HardDrive className="h-8 w-8 text-blue-600" />
           <div>
-            <h1 className="text-2xl font-bold text-gray-100">Images</h1>
-            <p className="text-sm text-gray-400">
+            <h1 className="text-2xl font-bold text-foreground">Images</h1>
+            <p className="text-sm text-muted-foreground">
               Manage disk images for virtual machines
             </p>
           </div>
@@ -81,9 +81,9 @@ export default function ImagesPage() {
         )}
       </div>
 
-      <Card className="bg-gray-800 border-gray-700">
+      <Card className="bg-card border-border">
         <CardHeader>
-          <CardTitle className="text-gray-100">
+          <CardTitle className="text-foreground">
             {currentProject
               ? `Images in ${currentProject.name}`
               : "Images"}

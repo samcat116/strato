@@ -84,12 +84,12 @@ export function CreateSCIMTokenDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100 max-h-[85vh] overflow-y-auto">
+      <DialogContent className="bg-card border-border text-foreground max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {createdToken ? "SCIM Token Created" : "Create SCIM Token"}
           </DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             {createdToken
               ? "Copy your token now — it won't be shown again"
               : "Create a bearer token for your identity provider's SCIM provisioning integration"}
@@ -98,8 +98,8 @@ export function CreateSCIMTokenDialog({
 
         {createdToken ? (
           <div className="space-y-4 py-4">
-            <div className="p-4 bg-gray-900 rounded-lg border border-gray-700">
-              <Label className="text-gray-400 text-sm">
+            <div className="p-4 bg-background rounded-lg border border-border">
+              <Label className="text-muted-foreground text-sm">
                 Your new SCIM token
               </Label>
               <div className="flex items-center gap-2 mt-2">
@@ -109,11 +109,11 @@ export function CreateSCIMTokenDialog({
                 <Button
                   size="sm"
                   variant="outline"
-                  className="border-gray-600 shrink-0"
+                  className="border-input shrink-0"
                   onClick={handleCopy}
                 >
                   {copied ? (
-                    <Check className="h-4 w-4 text-green-400" />
+                    <Check className="h-4 w-4 text-green-600" />
                   ) : (
                     <Copy className="h-4 w-4" />
                   )}
@@ -121,14 +121,14 @@ export function CreateSCIMTokenDialog({
               </div>
             </div>
 
-            <div className="p-4 bg-blue-900/20 rounded-lg border border-blue-700/30">
-              <p className="text-sm text-blue-200">
+            <div className="p-4 bg-blue-500/10 rounded-lg border border-blue-500/30">
+              <p className="text-sm text-blue-800">
                 <strong>Important:</strong> Configure this token in your
                 identity provider now. For security reasons, it cannot be
                 retrieved again after you close this dialog.
               </p>
               {createdToken.expiresAt && (
-                <p className="text-sm text-gray-400 mt-2">
+                <p className="text-sm text-muted-foreground mt-2">
                   Expires: {new Date(createdToken.expiresAt).toLocaleString()}
                 </p>
               )}
@@ -136,7 +136,7 @@ export function CreateSCIMTokenDialog({
 
             <DialogFooter>
               <Button
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-primary hover:bg-primary/90"
                 onClick={handleClose}
               >
                 Done
@@ -147,7 +147,7 @@ export function CreateSCIMTokenDialog({
           <form onSubmit={handleSubmit}>
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label htmlFor="scimTokenName" className="text-gray-200">
+                <Label htmlFor="scimTokenName" className="text-foreground">
                   Name
                 </Label>
                 <Input
@@ -155,13 +155,13 @@ export function CreateSCIMTokenDialog({
                   placeholder="e.g. Okta provisioning"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="bg-gray-900 border-gray-700 text-gray-100"
+                  className="bg-background border-border text-foreground"
                   disabled={createToken.isPending}
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="scimTokenExpires" className="text-gray-200">
+                <Label htmlFor="scimTokenExpires" className="text-foreground">
                   Expiration (days)
                 </Label>
                 <Input
@@ -171,10 +171,10 @@ export function CreateSCIMTokenDialog({
                   placeholder="Never expires"
                   value={expiresInDays}
                   onChange={(e) => setExpiresInDays(e.target.value)}
-                  className="bg-gray-900 border-gray-700 text-gray-100"
+                  className="bg-background border-border text-foreground"
                   disabled={createToken.isPending}
                 />
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-muted-foreground">
                   Leave blank for a token that never expires.
                 </p>
               </div>
@@ -184,7 +184,7 @@ export function CreateSCIMTokenDialog({
               <Button
                 type="button"
                 variant="outline"
-                className="border-gray-600"
+                className="border-input"
                 onClick={handleClose}
                 disabled={createToken.isPending}
               >
@@ -192,7 +192,7 @@ export function CreateSCIMTokenDialog({
               </Button>
               <Button
                 type="submit"
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-primary hover:bg-primary/90"
                 disabled={createToken.isPending}
               >
                 {createToken.isPending ? (

@@ -78,15 +78,15 @@ export function SCIMTokensSection({ orgId, canManage }: SCIMTokensSectionProps) 
   };
 
   return (
-    <Card className="bg-gray-800 border-gray-700">
+    <Card className="bg-card border-border">
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <CardTitle className="text-lg font-semibold text-gray-100">
+        <CardTitle className="text-lg font-semibold text-foreground">
           SCIM Provisioning Tokens
         </CardTitle>
         {canManage && (
           <Button
             size="sm"
-            className="bg-blue-600 hover:bg-blue-700"
+            className="bg-primary hover:bg-primary/90"
             onClick={() => setCreateOpen(true)}
           >
             <Plus className="h-4 w-4 mr-2" />
@@ -95,86 +95,86 @@ export function SCIMTokensSection({ orgId, canManage }: SCIMTokensSectionProps) 
         )}
       </CardHeader>
       <CardContent>
-        <p className="text-sm text-gray-400 mb-4">
+        <p className="text-sm text-muted-foreground mb-4">
           Bearer tokens that let your identity provider (Okta, Entra ID, ...)
           provision and deprovision users in this organization via SCIM.
         </p>
 
         {!canManage ? (
-          <p className="text-sm text-gray-400">
+          <p className="text-sm text-muted-foreground">
             You need admin rights to manage SCIM tokens.
           </p>
         ) : isLoading ? (
           <div className="space-y-2">
             {[...Array(2)].map((_, i) => (
-              <Skeleton key={i} className="h-12 w-full bg-gray-700" />
+              <Skeleton key={i} className="h-12 w-full bg-muted" />
             ))}
           </div>
         ) : tokens.length === 0 ? (
-          <div className="text-center py-8 text-gray-400">
+          <div className="text-center py-8 text-muted-foreground">
             No SCIM tokens yet. Create one to connect your identity provider.
           </div>
         ) : (
           <Table>
-            <TableHeader className="bg-gray-900">
-              <TableRow className="border-gray-700 hover:bg-gray-900">
-                <TableHead className="text-gray-400 font-medium">
+            <TableHeader className="bg-background">
+              <TableRow className="border-border hover:bg-transparent">
+                <TableHead className="text-muted-foreground font-medium">
                   Name
                 </TableHead>
-                <TableHead className="text-gray-400 font-medium">
+                <TableHead className="text-muted-foreground font-medium">
                   Token
                 </TableHead>
-                <TableHead className="text-gray-400 font-medium">
+                <TableHead className="text-muted-foreground font-medium">
                   Status
                 </TableHead>
-                <TableHead className="text-gray-400 font-medium">
+                <TableHead className="text-muted-foreground font-medium">
                   Expires
                 </TableHead>
-                <TableHead className="text-gray-400 font-medium">
+                <TableHead className="text-muted-foreground font-medium">
                   Last Used
                 </TableHead>
-                <TableHead className="text-gray-400 font-medium text-right">
+                <TableHead className="text-muted-foreground font-medium text-right">
                   Actions
                 </TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody className="divide-y divide-gray-700">
+            <TableBody className="divide-y divide-border">
               {tokens.map((token) => {
                 const expired = isExpired(token);
                 return (
                   <TableRow
                     key={token.id}
-                    className="border-gray-700 hover:bg-gray-800/50"
+                    className="border-border hover:bg-accent/60"
                   >
                     <TableCell>
-                      <span className="font-medium text-gray-100">
+                      <span className="font-medium text-foreground">
                         {token.name}
                       </span>
                     </TableCell>
-                    <TableCell className="text-gray-300 font-mono text-sm">
+                    <TableCell className="text-foreground/80 font-mono text-sm">
                       {token.tokenPrefix}…
                     </TableCell>
                     <TableCell>
                       {expired ? (
-                        <Badge className="bg-yellow-900/40 text-yellow-300 border-transparent">
+                        <Badge className="bg-yellow-500/10 text-yellow-700 border-transparent">
                           Expired
                         </Badge>
                       ) : token.isActive ? (
-                        <Badge className="bg-green-900/40 text-green-300 border-transparent">
+                        <Badge className="bg-green-500/10 text-green-700 border-transparent">
                           Active
                         </Badge>
                       ) : (
-                        <Badge className="bg-gray-700 text-gray-300 border-transparent">
+                        <Badge className="bg-muted text-foreground/80 border-transparent">
                           Inactive
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-gray-400 text-sm">
+                    <TableCell className="text-muted-foreground text-sm">
                       {token.expiresAt
                         ? new Date(token.expiresAt).toLocaleDateString()
                         : "Never"}
                     </TableCell>
-                    <TableCell className="text-gray-400 text-sm">
+                    <TableCell className="text-muted-foreground text-sm">
                       {token.lastUsedAt
                         ? new Date(token.lastUsedAt).toLocaleString()
                         : "Never"}
@@ -184,7 +184,7 @@ export function SCIMTokensSection({ orgId, canManage }: SCIMTokensSectionProps) 
                         <Button
                           size="icon-sm"
                           variant="ghost"
-                          className="text-gray-400 hover:text-gray-100"
+                          className="text-muted-foreground hover:text-foreground"
                           onClick={() => handleToggleActive(token)}
                           disabled={togglePendingId === token.id}
                           aria-label={
@@ -203,7 +203,7 @@ export function SCIMTokensSection({ orgId, canManage }: SCIMTokensSectionProps) 
                         <Button
                           size="icon-sm"
                           variant="ghost"
-                          className="text-gray-400 hover:text-red-400 hover:bg-red-950/30"
+                          className="text-muted-foreground hover:text-red-600 hover:bg-red-500/10"
                           onClick={() => setDeleteTarget(token)}
                           aria-label={`Delete ${token.name}`}
                         >
@@ -234,10 +234,10 @@ export function SCIMTokensSection({ orgId, canManage }: SCIMTokensSectionProps) 
           if (!open) setDeleteTarget(null);
         }}
       >
-        <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+        <DialogContent className="bg-card border-border text-foreground">
           <DialogHeader>
             <DialogTitle>Delete {deleteTarget?.name}?</DialogTitle>
-            <DialogDescription className="text-gray-400">
+            <DialogDescription className="text-muted-foreground">
               Your identity provider will immediately lose access and SCIM
               provisioning will stop working until you configure a new token.
               This cannot be undone.
@@ -246,7 +246,7 @@ export function SCIMTokensSection({ orgId, canManage }: SCIMTokensSectionProps) 
           <DialogFooter>
             <Button
               variant="outline"
-              className="border-gray-600"
+              className="border-input"
               onClick={() => setDeleteTarget(null)}
               disabled={deleteToken.isPending}
             >

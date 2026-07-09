@@ -76,13 +76,13 @@ export default function OnboardingPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
-      <Card className="w-full max-w-md bg-gray-800 border-gray-700">
+      <Card className="w-full max-w-md bg-card border-border">
         <CardHeader className="space-y-1">
-          <CardTitle className="text-2xl font-bold text-gray-100 flex items-center gap-2">
-            <Building2 className="h-6 w-6 text-blue-400" />
+          <CardTitle className="text-2xl font-bold text-foreground flex items-center gap-2">
+            <Building2 className="h-6 w-6 text-blue-600" />
             Welcome to Strato
           </CardTitle>
-          <CardDescription className="text-gray-400">
+          <CardDescription className="text-muted-foreground">
             {isComplete
               ? "You're all set!"
               : "Let's create your first organization to get started"}
@@ -92,19 +92,19 @@ export default function OnboardingPage() {
           {isComplete ? (
             <div className="text-center space-y-4">
               <div className="flex justify-center">
-                <CheckCircle2 className="h-16 w-16 text-green-500" />
+                <CheckCircle2 className="h-16 w-16 text-green-600" />
               </div>
-              <p className="text-gray-300">
+              <p className="text-foreground/80">
                 Your organization <strong>{orgName}</strong> is ready!
               </p>
-              <p className="text-sm text-gray-400">
+              <p className="text-sm text-muted-foreground">
                 Redirecting to dashboard...
               </p>
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="orgName" className="text-gray-200">
+                <Label htmlFor="orgName" className="text-foreground">
                   Organization Name
                 </Label>
                 <Input
@@ -113,15 +113,15 @@ export default function OnboardingPage() {
                   placeholder="My Company"
                   value={orgName}
                   onChange={(e) => setOrgName(e.target.value)}
-                  className="bg-gray-900 border-gray-700 text-gray-100 placeholder:text-gray-500"
+                  className="bg-background border-border text-foreground placeholder:text-muted-foreground"
                   autoFocus
                   disabled={isLoading}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="orgDescription" className="text-gray-200">
+                <Label htmlFor="orgDescription" className="text-foreground">
                   Description{" "}
-                  <span className="text-gray-500">(optional)</span>
+                  <span className="text-muted-foreground">(optional)</span>
                 </Label>
                 <Input
                   id="orgDescription"
@@ -129,13 +129,13 @@ export default function OnboardingPage() {
                   placeholder="A brief description of your organization"
                   value={orgDescription}
                   onChange={(e) => setOrgDescription(e.target.value)}
-                  className="bg-gray-900 border-gray-700 text-gray-100 placeholder:text-gray-500"
+                  className="bg-background border-border text-foreground placeholder:text-muted-foreground"
                   disabled={isLoading}
                 />
               </div>
               <Button
                 type="submit"
-                className="w-full bg-blue-600 hover:bg-blue-700"
+                className="w-full bg-primary hover:bg-primary/90"
                 disabled={isLoading || !orgName.trim()}
               >
                 {isLoading ? (

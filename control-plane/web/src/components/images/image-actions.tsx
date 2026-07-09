@@ -80,7 +80,7 @@ export function ImageActions({
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
-            className="h-8 w-8 p-0 text-gray-400 hover:text-gray-100"
+            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
           >
             <MoreHorizontal className="h-4 w-4" />
             <span className="sr-only">Open menu</span>
@@ -88,28 +88,28 @@ export function ImageActions({
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="end"
-          className="bg-gray-800 border-gray-700 text-gray-100"
+          className="bg-card border-border text-foreground"
         >
           <DropdownMenuItem
             onClick={handleDownload}
             disabled={!canDownload}
-            className="hover:bg-gray-700 cursor-pointer"
+            className="hover:bg-accent cursor-pointer"
           >
             <Download className="mr-2 h-4 w-4" />
             Download
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => setEditOpen(true)}
-            className="hover:bg-gray-700 cursor-pointer"
+            className="hover:bg-accent cursor-pointer"
           >
             <Pencil className="mr-2 h-4 w-4" />
             Edit
           </DropdownMenuItem>
-          <DropdownMenuSeparator className="bg-gray-700" />
+          <DropdownMenuSeparator className="bg-muted" />
           <DropdownMenuItem
             onClick={() => setShowDeleteConfirm(true)}
             disabled={deleteImage.isPending}
-            className="hover:bg-gray-700 cursor-pointer text-red-400"
+            className="hover:bg-accent cursor-pointer text-red-600"
           >
             <Trash2 className="mr-2 h-4 w-4" />
             Delete
@@ -128,10 +128,10 @@ export function ImageActions({
 
       {/* Delete confirmation dialog */}
       <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
-        <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+        <DialogContent className="bg-card border-border text-foreground">
           <DialogHeader>
             <DialogTitle>Delete {image.name}?</DialogTitle>
-            <DialogDescription className="text-gray-400">
+            <DialogDescription className="text-muted-foreground">
               This will permanently delete the image. VMs already created from
               it are not affected. This action cannot be undone.
             </DialogDescription>
@@ -139,7 +139,7 @@ export function ImageActions({
           <DialogFooter>
             <Button
               variant="outline"
-              className="border-gray-600"
+              className="border-input"
               onClick={() => setShowDeleteConfirm(false)}
               disabled={deleteImage.isPending}
             >

@@ -1,12 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Header, Sidebar } from "@/components/layout";
-import { CreateVMDialog, OperationWatcher } from "@/components/vms";
-import { CreateTokenDialog } from "@/components/agents";
+import { OperationWatcher } from "@/components/vms";
 import { useAuth, useOrganization } from "@/providers";
-import { useInvalidateVMs } from "@/lib/hooks";
 
 export default function DashboardLayout({
   children,
@@ -16,9 +14,6 @@ export default function DashboardLayout({
   const { isAuthenticated, isLoading } = useAuth();
   const { organizations, isLoading: orgsLoading } = useOrganization();
   const router = useRouter();
-  const [createVMOpen, setCreateVMOpen] = useState(false);
-  const [addAgentOpen, setAddAgentOpen] = useState(false);
-  const invalidateVMs = useInvalidateVMs();
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -43,7 +38,7 @@ export default function DashboardLayout({
   if (isLoading || (isAuthenticated && orgsLoading)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-gray-400">Loading...</div>
+        <div className="text-muted-foreground">Loading...</div>
       </div>
     );
   }
@@ -53,28 +48,14 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="flex h-screen overflow-hidden">
       {/* Polls in-flight VM operations to completion across page navigations */}
       <OperationWatcher />
-      <Header />
-      <div className="flex flex-1 h-[calc(100vh-4rem)]">
-        <Sidebar
-          onCreateVM={() => setCreateVMOpen(true)}
-          onAddAgent={() => setAddAgentOpen(true)}
-        />
+      <Sidebar />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Header />
         <main className="flex-1 overflow-y-auto p-6">{children}</main>
       </div>
-
-      {/* Global dialogs accessible from sidebar */}
-      <CreateVMDialog
-        open={createVMOpen}
-        onOpenChange={setCreateVMOpen}
-        onCreated={invalidateVMs}
-      />
-      <CreateTokenDialog
-        open={addAgentOpen}
-        onOpenChange={setAddAgentOpen}
-      />
     </div>
   );
 }

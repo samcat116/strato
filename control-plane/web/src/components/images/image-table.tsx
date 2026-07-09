@@ -30,7 +30,7 @@ export function ImageTable({
     return (
       <div className="space-y-2">
         {[...Array(3)].map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full bg-gray-700" />
+          <Skeleton key={i} className="h-12 w-full bg-muted" />
         ))}
       </div>
     );
@@ -38,7 +38,7 @@ export function ImageTable({
 
   if (images.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-400">
+      <div className="text-center py-8 text-muted-foreground">
         No images found. Upload an image or fetch from URL to get started.
       </div>
     );
@@ -46,38 +46,38 @@ export function ImageTable({
 
   return (
     <Table>
-      <TableHeader className="bg-gray-900">
-        <TableRow className="border-gray-700 hover:bg-gray-900">
-          <TableHead className="text-gray-400 font-medium">Name</TableHead>
-          <TableHead className="text-gray-400 font-medium">Status</TableHead>
-          <TableHead className="text-gray-400 font-medium">Format</TableHead>
-          <TableHead className="text-gray-400 font-medium">Arch</TableHead>
-          <TableHead className="text-gray-400 font-medium">
+      <TableHeader className="bg-background">
+        <TableRow className="border-border hover:bg-transparent">
+          <TableHead className="text-muted-foreground font-medium">Name</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Status</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Format</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Arch</TableHead>
+          <TableHead className="text-muted-foreground font-medium">
             Compatible
           </TableHead>
-          <TableHead className="text-gray-400 font-medium">Size</TableHead>
-          <TableHead className="text-gray-400 font-medium">
+          <TableHead className="text-muted-foreground font-medium">Size</TableHead>
+          <TableHead className="text-muted-foreground font-medium">
             Created
           </TableHead>
-          <TableHead className="text-gray-400 font-medium text-right">
+          <TableHead className="text-muted-foreground font-medium text-right">
             Actions
           </TableHead>
         </TableRow>
       </TableHeader>
-      <TableBody className="divide-y divide-gray-700">
+      <TableBody className="divide-y divide-border">
         {images.map((image) => (
           <TableRow
             key={image.id}
-            className="border-gray-700 hover:bg-gray-800/50"
+            className="border-border hover:bg-accent/60"
           >
             <TableCell>
-              <div className="font-medium text-gray-100">{image.name}</div>
+              <div className="font-medium text-foreground">{image.name}</div>
               {image.description && (
-                <p className="text-sm text-gray-500 truncate max-w-xs">
+                <p className="text-sm text-muted-foreground truncate max-w-xs">
                   {image.description}
                 </p>
               )}
-              <p className="text-xs text-gray-600 truncate max-w-xs">
+              <p className="text-xs text-muted-foreground truncate max-w-xs">
                 {image.filename}
               </p>
             </TableCell>
@@ -87,38 +87,38 @@ export function ImageTable({
                 downloadProgress={image.downloadProgress}
               />
               {image.errorMessage && (
-                <p className="text-xs text-red-400 mt-1 truncate max-w-xs">
+                <p className="text-xs text-red-600 mt-1 truncate max-w-xs">
                   {image.errorMessage}
                 </p>
               )}
             </TableCell>
-            <TableCell className="text-gray-300 uppercase">
+            <TableCell className="text-foreground/80 uppercase">
               {image.format}
             </TableCell>
-            <TableCell className="text-gray-300">
+            <TableCell className="text-foreground/80">
               {image.architecture}
             </TableCell>
-            <TableCell className="text-gray-300">
+            <TableCell className="text-foreground/80">
               {image.compatibleHypervisors &&
               image.compatibleHypervisors.length > 0 ? (
                 <div className="flex flex-wrap gap-1">
                   {image.compatibleHypervisors.map((h) => (
                     <span
                       key={h}
-                      className="rounded bg-gray-700 px-1.5 py-0.5 text-xs text-gray-200"
+                      className="rounded bg-muted px-1.5 py-0.5 text-xs text-foreground"
                     >
                       {h}
                     </span>
                   ))}
                 </div>
               ) : (
-                <span className="text-gray-600">—</span>
+                <span className="text-muted-foreground">—</span>
               )}
             </TableCell>
-            <TableCell className="text-gray-300">
+            <TableCell className="text-foreground/80">
               {image.sizeFormatted || "—"}
             </TableCell>
-            <TableCell className="text-gray-300">
+            <TableCell className="text-foreground/80">
               {image.createdAt
                 ? new Date(image.createdAt).toLocaleDateString()
                 : "—"}

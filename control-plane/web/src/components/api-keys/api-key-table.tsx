@@ -56,7 +56,7 @@ export function APIKeyTable({ apiKeys, isLoading }: APIKeyTableProps) {
     return (
       <div className="space-y-2">
         {[...Array(3)].map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full bg-gray-700" />
+          <Skeleton key={i} className="h-12 w-full bg-muted" />
         ))}
       </div>
     );
@@ -64,7 +64,7 @@ export function APIKeyTable({ apiKeys, isLoading }: APIKeyTableProps) {
 
   if (apiKeys.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-400">
+      <div className="text-center py-8 text-muted-foreground">
         No API keys yet. Create one to access the Strato API programmatically.
       </div>
     );
@@ -72,32 +72,32 @@ export function APIKeyTable({ apiKeys, isLoading }: APIKeyTableProps) {
 
   return (
     <Table>
-      <TableHeader className="bg-gray-900">
-        <TableRow className="border-gray-700 hover:bg-gray-900">
-          <TableHead className="text-gray-400 font-medium">Name</TableHead>
-          <TableHead className="text-gray-400 font-medium">Key</TableHead>
-          <TableHead className="text-gray-400 font-medium">Scopes</TableHead>
-          <TableHead className="text-gray-400 font-medium">Status</TableHead>
-          <TableHead className="text-gray-400 font-medium">Created</TableHead>
-          <TableHead className="text-gray-400 font-medium">Expires</TableHead>
-          <TableHead className="text-gray-400 font-medium">Last Used</TableHead>
-          <TableHead className="text-gray-400 font-medium text-right">
+      <TableHeader className="bg-background">
+        <TableRow className="border-border hover:bg-transparent">
+          <TableHead className="text-muted-foreground font-medium">Name</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Key</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Scopes</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Status</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Created</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Expires</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Last Used</TableHead>
+          <TableHead className="text-muted-foreground font-medium text-right">
             Actions
           </TableHead>
         </TableRow>
       </TableHeader>
-      <TableBody className="divide-y divide-gray-700">
+      <TableBody className="divide-y divide-border">
         {apiKeys.map((key) => {
           const expired = isExpired(key);
           return (
             <TableRow
               key={key.id}
-              className="border-gray-700 hover:bg-gray-800/50"
+              className="border-border hover:bg-accent/60"
             >
               <TableCell>
-                <span className="font-medium text-gray-100">{key.name}</span>
+                <span className="font-medium text-foreground">{key.name}</span>
               </TableCell>
-              <TableCell className="text-gray-300 font-mono text-sm">
+              <TableCell className="text-foreground/80 font-mono text-sm">
                 {key.keyPrefix}
               </TableCell>
               <TableCell>
@@ -106,7 +106,7 @@ export function APIKeyTable({ apiKeys, isLoading }: APIKeyTableProps) {
                     <Badge
                       key={scope}
                       variant="secondary"
-                      className="bg-gray-700 text-gray-200"
+                      className="bg-muted text-foreground"
                     >
                       {scope}
                     </Badge>
@@ -115,30 +115,30 @@ export function APIKeyTable({ apiKeys, isLoading }: APIKeyTableProps) {
               </TableCell>
               <TableCell>
                 {expired ? (
-                  <Badge className="bg-yellow-900/40 text-yellow-300 border-transparent">
+                  <Badge className="bg-yellow-500/10 text-yellow-700 border-transparent">
                     Expired
                   </Badge>
                 ) : key.isActive ? (
-                  <Badge className="bg-green-900/40 text-green-300 border-transparent">
+                  <Badge className="bg-green-500/10 text-green-700 border-transparent">
                     Active
                   </Badge>
                 ) : (
-                  <Badge className="bg-gray-700 text-gray-300 border-transparent">
+                  <Badge className="bg-muted text-foreground/80 border-transparent">
                     Inactive
                   </Badge>
                 )}
               </TableCell>
-              <TableCell className="text-gray-400 text-sm">
+              <TableCell className="text-muted-foreground text-sm">
                 {key.createdAt
                   ? new Date(key.createdAt).toLocaleDateString()
                   : "—"}
               </TableCell>
-              <TableCell className="text-gray-400 text-sm">
+              <TableCell className="text-muted-foreground text-sm">
                 {key.expiresAt
                   ? new Date(key.expiresAt).toLocaleDateString()
                   : "Never"}
               </TableCell>
-              <TableCell className="text-gray-400 text-sm">
+              <TableCell className="text-muted-foreground text-sm">
                 {key.lastUsedAt
                   ? new Date(key.lastUsedAt).toLocaleString()
                   : "Never"}
@@ -147,7 +147,7 @@ export function APIKeyTable({ apiKeys, isLoading }: APIKeyTableProps) {
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  className="text-gray-400 hover:text-red-400 hover:bg-red-950/30"
+                  className="text-muted-foreground hover:text-red-600 hover:bg-red-500/10"
                   onClick={() => handleRevoke(key)}
                   disabled={pendingId === key.id}
                   aria-label={`Revoke ${key.name}`}

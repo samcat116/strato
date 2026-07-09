@@ -102,12 +102,12 @@ export function CreateTokenDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100 sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="bg-card border-border text-foreground sm:max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {createdToken ? "Registration Token Created" : "Add Compute Agent"}
           </DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             {createdToken
               ? "Use this token to register your agent"
               : "Create a registration token for a new compute agent"}
@@ -117,8 +117,8 @@ export function CreateTokenDialog({
         {createdToken ? (
           <div className="space-y-4 py-4 min-w-0">
             {bootstrapCommand && (
-              <div className="p-4 bg-gray-900 rounded-lg border border-gray-700">
-                <Label className="text-gray-400 text-sm">
+              <div className="p-4 bg-background rounded-lg border border-border">
+                <Label className="text-muted-foreground text-sm">
                   Bootstrap the node (SPIRE attestation + agent join) with one
                   command:
                 </Label>
@@ -129,17 +129,17 @@ export function CreateTokenDialog({
                   <Button
                     size="sm"
                     variant="outline"
-                    className="border-gray-600 shrink-0"
+                    className="border-input shrink-0"
                     onClick={() => handleCopy("bootstrap")}
                   >
                     {copiedCommand === "bootstrap" ? (
-                      <Check className="h-4 w-4 text-green-400" />
+                      <Check className="h-4 w-4 text-green-600" />
                     ) : (
                       <Copy className="h-4 w-4" />
                     )}
                   </Button>
                 </div>
-                <p className="text-sm text-gray-400 mt-2">
+                <p className="text-sm text-muted-foreground mt-2">
                   Starts spire-agent with the one-time join token, waits for
                   the node&apos;s SVID, then joins the control plane. Both
                   tokens are single-use and expire together.
@@ -147,8 +147,8 @@ export function CreateTokenDialog({
               </div>
             )}
 
-            <div className="p-4 bg-gray-900 rounded-lg border border-gray-700">
-              <Label className="text-gray-400 text-sm">
+            <div className="p-4 bg-background rounded-lg border border-border">
+              <Label className="text-muted-foreground text-sm">
                 {bootstrapCommand
                   ? "Or join without SPIRE (token auth only):"
                   : "Run this command on your hypervisor host:"}
@@ -160,48 +160,48 @@ export function CreateTokenDialog({
                 <Button
                   size="sm"
                   variant="outline"
-                  className="border-gray-600 shrink-0"
+                  className="border-input shrink-0"
                   onClick={() => handleCopy("join")}
                 >
                   {copiedCommand === "join" ? (
-                    <Check className="h-4 w-4 text-green-400" />
+                    <Check className="h-4 w-4 text-green-600" />
                   ) : (
                     <Copy className="h-4 w-4" />
                   )}
                 </Button>
               </div>
-              <p className="text-sm text-gray-400 mt-2">
+              <p className="text-sm text-muted-foreground mt-2">
                 The agent joins, stays running, and reconnects automatically
                 after restarts.
               </p>
             </div>
 
-            <div className="p-4 bg-blue-900/20 rounded-lg border border-blue-700/30">
-              <p className="text-sm text-blue-200">
+            <div className="p-4 bg-blue-500/10 rounded-lg border border-blue-500/30">
+              <p className="text-sm text-blue-800">
                 <strong>Important:</strong> The token in this command is
                 single-use and will not be shown again.
               </p>
-              <p className="text-sm text-gray-400 mt-2">
+              <p className="text-sm text-muted-foreground mt-2">
                 Expires: {new Date(createdToken.expiresAt).toLocaleString()}
               </p>
             </div>
 
             <div className="space-y-2">
-              <Label className="text-gray-400 text-sm">
+              <Label className="text-muted-foreground text-sm">
                 Or run the agent in Docker (Linux hosts):
               </Label>
               <div className="flex items-start gap-2">
-                <code className="flex-1 min-w-0 p-3 bg-gray-950 rounded text-sm text-gray-300 font-mono whitespace-pre-wrap break-all">
+                <code className="flex-1 min-w-0 p-3 bg-gray-950 rounded text-sm text-gray-200 font-mono whitespace-pre-wrap break-all">
                   {dockerJoinCommand}
                 </code>
                 <Button
                   size="sm"
                   variant="outline"
-                  className="border-gray-600 shrink-0"
+                  className="border-input shrink-0"
                   onClick={() => handleCopy("docker")}
                 >
                   {copiedCommand === "docker" ? (
-                    <Check className="h-4 w-4 text-green-400" />
+                    <Check className="h-4 w-4 text-green-600" />
                   ) : (
                     <Copy className="h-4 w-4" />
                   )}
@@ -213,7 +213,7 @@ export function CreateTokenDialog({
           <form onSubmit={handleSubmit}>
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label htmlFor="agentName" className="text-gray-200">
+                <Label htmlFor="agentName" className="text-foreground">
                   Agent Name
                 </Label>
                 <Input
@@ -221,12 +221,12 @@ export function CreateTokenDialog({
                   placeholder="my-hypervisor-01"
                   value={agentName}
                   onChange={(e) => setAgentName(e.target.value)}
-                  className="bg-gray-900 border-gray-700 text-gray-100"
+                  className="bg-background border-border text-foreground"
                   disabled={isLoading}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="expiration" className="text-gray-200">
+                <Label htmlFor="expiration" className="text-foreground">
                   Token Expiration (hours)
                 </Label>
                 <Input
@@ -236,7 +236,7 @@ export function CreateTokenDialog({
                   max="720"
                   value={expirationHours}
                   onChange={(e) => setExpirationHours(e.target.value)}
-                  className="bg-gray-900 border-gray-700 text-gray-100"
+                  className="bg-background border-border text-foreground"
                   disabled={isLoading}
                 />
               </div>
@@ -246,14 +246,14 @@ export function CreateTokenDialog({
                 type="button"
                 variant="outline"
                 onClick={handleClose}
-                className="border-gray-600 text-gray-300 hover:bg-gray-700"
+                className="border-input text-foreground/80 hover:bg-accent"
                 disabled={isLoading}
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-primary hover:bg-primary/90"
                 disabled={isLoading}
               >
                 {isLoading ? (
@@ -273,7 +273,7 @@ export function CreateTokenDialog({
           <DialogFooter>
             <Button
               onClick={handleClose}
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
             >
               Done
             </Button>

@@ -4,19 +4,19 @@ import type { AgentStatus } from "@/types/api";
 const statusConfig: Record<AgentStatus, { label: string; className: string }> = {
   online: {
     label: "Online",
-    className: "bg-green-500/20 text-green-400 border-green-500/30",
+    className: "bg-green-500/20 text-green-600 border-green-500/30",
   },
   offline: {
     label: "Offline",
-    className: "bg-red-500/20 text-red-400 border-red-500/30",
+    className: "bg-red-500/20 text-red-600 border-red-500/30",
   },
   connecting: {
     label: "Connecting",
-    className: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+    className: "bg-yellow-500/20 text-yellow-700 border-yellow-500/30",
   },
   error: {
     label: "Error",
-    className: "bg-red-500/20 text-red-400 border-red-500/30",
+    className: "bg-red-500/20 text-red-600 border-red-500/30",
   },
 };
 

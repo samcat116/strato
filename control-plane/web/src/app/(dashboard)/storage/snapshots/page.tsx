@@ -26,10 +26,10 @@ export default function SnapshotsPage() {
     <div className="max-w-7xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Camera className="h-8 w-8 text-blue-400" />
+          <Camera className="h-8 w-8 text-blue-600" />
           <div>
-            <h2 className="text-2xl font-semibold text-gray-100">Snapshots</h2>
-            <p className="text-gray-400">
+            <h2 className="text-2xl font-semibold text-foreground">Snapshots</h2>
+            <p className="text-muted-foreground">
               {currentProject
                 ? `Volume snapshots in ${currentProject.name}`
                 : "Point-in-time copies of your volumes"}
@@ -37,7 +37,7 @@ export default function SnapshotsPage() {
           </div>
         </div>
         <Button
-          className="bg-blue-600 hover:bg-blue-700"
+          className="bg-primary hover:bg-primary/90"
           onClick={() => setCreateOpen(true)}
         >
           <Plus className="h-4 w-4 mr-2" />
@@ -45,9 +45,9 @@ export default function SnapshotsPage() {
         </Button>
       </div>
 
-      <Card className="bg-gray-800 border-gray-700">
+      <Card className="bg-card border-border">
         <CardHeader>
-          <CardTitle className="text-lg font-semibold text-gray-100">
+          <CardTitle className="text-lg font-semibold text-foreground">
             {currentProject ? currentProject.name : "All"} Snapshots (
             {snapshots.length})
           </CardTitle>

@@ -77,12 +77,12 @@ export function TransferProjectDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         <DialogHeader>
           <DialogTitle>Transfer Project</DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             Move{" "}
-            <span className="font-medium text-gray-200">{project?.name}</span>{" "}
+            <span className="font-medium text-foreground">{project?.name}</span>{" "}
             to another organization. You must be an admin of both.
           </DialogDescription>
         </DialogHeader>
@@ -90,11 +90,11 @@ export function TransferProjectDialog({
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="destinationOrg" className="text-gray-200">
+              <Label htmlFor="destinationOrg" className="text-foreground">
                 Destination Organization
               </Label>
               {destinations.length === 0 ? (
-                <p className="text-sm text-gray-400">
+                <p className="text-sm text-muted-foreground">
                   No other organizations are available to transfer to.
                 </p>
               ) : (
@@ -105,16 +105,16 @@ export function TransferProjectDialog({
                 >
                   <SelectTrigger
                     id="destinationOrg"
-                    className="bg-gray-900 border-gray-700 text-gray-100"
+                    className="bg-background border-border text-foreground"
                   >
                     <SelectValue placeholder="Select organization" />
                   </SelectTrigger>
-                  <SelectContent className="bg-gray-800 border-gray-700">
+                  <SelectContent className="bg-card border-border">
                     {destinations.map((org) => (
                       <SelectItem
                         key={org.id}
                         value={org.id}
-                        className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                        className="text-foreground focus:bg-accent focus:text-accent-foreground"
                       >
                         {org.name}
                       </SelectItem>
@@ -129,7 +129,7 @@ export function TransferProjectDialog({
             <Button
               type="button"
               variant="outline"
-              className="border-gray-600 text-gray-300 hover:bg-gray-700"
+              className="border-input text-foreground/80 hover:bg-accent"
               onClick={() => onOpenChange(false)}
               disabled={transferProject.isPending}
             >
@@ -137,7 +137,7 @@ export function TransferProjectDialog({
             </Button>
             <Button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               disabled={transferProject.isPending || destinations.length === 0}
             >
               {transferProject.isPending ? (

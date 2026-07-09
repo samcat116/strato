@@ -33,7 +33,7 @@ export function GroupFormDialog({
 }: GroupFormDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         {/* Keyed so the form's initial state resets whenever the target
             group (or create vs. edit mode) changes. */}
         <GroupForm
@@ -102,7 +102,7 @@ function GroupForm({
     <>
       <DialogHeader>
         <DialogTitle>{isEdit ? "Edit Group" : "Create Group"}</DialogTitle>
-        <DialogDescription className="text-gray-400">
+        <DialogDescription className="text-muted-foreground">
           {isEdit
             ? "Update this group's name and description."
             : "Groups let you manage a set of organization members together."}
@@ -112,7 +112,7 @@ function GroupForm({
       <form onSubmit={handleSubmit}>
         <div className="space-y-4 py-4">
           <div className="space-y-2">
-            <Label htmlFor="groupName" className="text-gray-200">
+            <Label htmlFor="groupName" className="text-foreground">
               Name
             </Label>
             <Input
@@ -120,14 +120,14 @@ function GroupForm({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Engineering"
-              className="bg-gray-900 border-gray-700 text-gray-100"
+              className="bg-background border-border text-foreground"
               disabled={isPending}
               autoFocus
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="groupDescription" className="text-gray-200">
+            <Label htmlFor="groupDescription" className="text-foreground">
               Description
             </Label>
             <Input
@@ -135,7 +135,7 @@ function GroupForm({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="A short description of the group"
-              className="bg-gray-900 border-gray-700 text-gray-100"
+              className="bg-background border-border text-foreground"
               disabled={isPending}
             />
           </div>
@@ -145,7 +145,7 @@ function GroupForm({
           <Button
             type="button"
             variant="outline"
-            className="border-gray-600"
+            className="border-input"
             onClick={onClose}
             disabled={isPending}
           >
@@ -153,7 +153,7 @@ function GroupForm({
           </Button>
           <Button
             type="submit"
-            className="bg-blue-600 hover:bg-blue-700"
+            className="bg-primary hover:bg-primary/90"
             disabled={isPending}
           >
             {isPending ? (

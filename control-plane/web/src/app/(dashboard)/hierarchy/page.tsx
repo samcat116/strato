@@ -19,11 +19,11 @@ function resultHref(result: HierarchySearchResult): string | undefined {
 
 function Stat({ label, value }: { label: string; value: number | string }) {
   return (
-    <div className="rounded-lg border border-gray-700 bg-gray-900/50 px-4 py-3">
-      <div className="text-2xl font-semibold text-gray-100 tabular-nums">
+    <div className="rounded-lg border border-border bg-muted/50 px-4 py-3">
+      <div className="text-2xl font-semibold text-foreground tabular-nums">
         {value}
       </div>
-      <div className="text-xs text-gray-400">{label}</div>
+      <div className="text-xs text-muted-foreground">{label}</div>
     </div>
   );
 }
@@ -44,7 +44,7 @@ export default function HierarchyPage() {
   if (!orgId) {
     return (
       <div className="max-w-5xl mx-auto text-center py-12">
-        <p className="text-gray-400">No organization selected</p>
+        <p className="text-muted-foreground">No organization selected</p>
       </div>
     );
   }
@@ -54,27 +54,27 @@ export default function HierarchyPage() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div>
-        <h2 className="text-2xl font-semibold text-gray-100">
+        <h2 className="text-2xl font-semibold text-foreground">
           Organization Hierarchy
         </h2>
-        <p className="text-gray-400">
+        <p className="text-muted-foreground">
           Browse organizational units, projects, and resources
         </p>
       </div>
 
       {/* Search */}
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500" />
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search units, projects, and VMs..."
-          className="bg-gray-900 border-gray-700 text-gray-100 pl-9 pr-9"
+          className="bg-background border-border text-foreground pl-9 pr-9"
         />
         {isSearching && (
           <button
             onClick={() => setQuery("")}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
             aria-label="Clear search"
           >
             <X className="h-4 w-4" />
@@ -83,15 +83,15 @@ export default function HierarchyPage() {
       </div>
 
       {isSearching ? (
-        <Card className="bg-gray-800 border-gray-700">
+        <Card className="bg-card border-border">
           <CardHeader>
-            <CardTitle className="text-base font-semibold text-gray-100 flex items-center gap-2">
+            <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
               Search Results
               {searching && (
-                <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               )}
               {search && (
-                <span className="text-sm font-normal text-gray-400">
+                <span className="text-sm font-normal text-muted-foreground">
                   ({search.totalResults})
                 </span>
               )}
@@ -99,7 +99,7 @@ export default function HierarchyPage() {
           </CardHeader>
           <CardContent>
             {search && search.results.length === 0 && !searching ? (
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-muted-foreground">
                 No results for &quot;{query}&quot;.
               </p>
             ) : (
@@ -107,21 +107,21 @@ export default function HierarchyPage() {
                 {search?.results.map((result) => {
                   const href = resultHref(result);
                   const row = (
-                    <div className="flex items-center justify-between gap-2 rounded-md px-3 py-2 hover:bg-gray-700/50 transition-colors">
+                    <div className="flex items-center justify-between gap-2 rounded-md px-3 py-2 hover:bg-accent/60 transition-colors">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm text-gray-200 truncate">
+                          <span className="text-sm text-foreground truncate">
                             {result.name}
                           </span>
                           <Badge
                             variant="outline"
-                            className="border-gray-600 text-gray-400 uppercase text-[10px]"
+                            className="border-input text-muted-foreground uppercase text-[10px]"
                           >
                             {result.type}
                           </Badge>
                         </div>
                         {result.path && (
-                          <p className="text-xs text-gray-500 truncate">
+                          <p className="text-xs text-muted-foreground truncate">
                             {result.path}
                           </p>
                         )}
@@ -153,16 +153,16 @@ export default function HierarchyPage() {
           )}
 
           {/* Tree */}
-          <Card className="bg-gray-800 border-gray-700">
+          <Card className="bg-card border-border">
             <CardContent className="py-4">
               {isLoading ? (
                 <div className="space-y-2">
-                  <Skeleton className="h-6 w-1/2 bg-gray-700" />
-                  <Skeleton className="h-6 w-2/3 bg-gray-700" />
-                  <Skeleton className="h-6 w-1/3 bg-gray-700" />
+                  <Skeleton className="h-6 w-1/2 bg-muted" />
+                  <Skeleton className="h-6 w-2/3 bg-muted" />
+                  <Skeleton className="h-6 w-1/3 bg-muted" />
                 </div>
               ) : error || !hierarchy ? (
-                <p className="text-sm text-gray-400 py-6 text-center">
+                <p className="text-sm text-muted-foreground py-6 text-center">
                   Failed to load the organization hierarchy.
                 </p>
               ) : (

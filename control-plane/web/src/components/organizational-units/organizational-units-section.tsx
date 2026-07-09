@@ -51,15 +51,15 @@ export function OrganizationalUnitsSection({
 
   return (
     <>
-      <Card className="bg-gray-800 border-gray-700">
+      <Card className="bg-card border-border">
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
-          <CardTitle className="text-lg font-semibold text-gray-100">
+          <CardTitle className="text-lg font-semibold text-foreground">
             Organizational Units
           </CardTitle>
           {canManage && (
             <Button
               size="sm"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               onClick={handleCreateTopLevel}
             >
               <Plus className="h-4 w-4 mr-2" />
@@ -69,7 +69,7 @@ export function OrganizationalUnitsSection({
         </CardHeader>
         <CardContent>
           {!canManage && (
-            <p className="text-sm text-gray-400 mb-4">
+            <p className="text-sm text-muted-foreground mb-4">
               You need admin rights to create, edit, or delete organizational
               units.
             </p>

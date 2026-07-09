@@ -102,7 +102,7 @@ export default function OrganizationSettingsPage() {
     return (
       <div className="max-w-4xl mx-auto">
         <div className="text-center py-12">
-          <p className="text-gray-400">No organization selected</p>
+          <p className="text-muted-foreground">No organization selected</p>
         </div>
       </div>
     );
@@ -111,8 +111,8 @@ export default function OrganizationSettingsPage() {
   if (isOrgLoading) {
     return (
       <div className="max-w-4xl mx-auto space-y-6">
-        <Skeleton className="h-8 w-64 bg-gray-700" />
-        <Skeleton className="h-64 w-full bg-gray-700" />
+        <Skeleton className="h-8 w-64 bg-muted" />
+        <Skeleton className="h-64 w-full bg-muted" />
       </div>
     );
   }
@@ -121,56 +121,56 @@ export default function OrganizationSettingsPage() {
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
       <div>
-        <h2 className="text-2xl font-semibold text-gray-100">
+        <h2 className="text-2xl font-semibold text-foreground">
           Organization Settings
         </h2>
-        <p className="text-gray-400">Manage your organization configuration</p>
+        <p className="text-muted-foreground">Manage your organization configuration</p>
       </div>
 
       {/* Tabs */}
       <Tabs defaultValue="general" className="space-y-6">
-        <TabsList className="bg-gray-800 border-gray-700">
+        <TabsList className="bg-card border-border">
           <TabsTrigger
             value="general"
-            className="data-[state=active]:bg-gray-700"
+            className="data-[state=active]:bg-muted"
           >
             General
           </TabsTrigger>
           <TabsTrigger
             value="members"
-            className="data-[state=active]:bg-gray-700"
+            className="data-[state=active]:bg-muted"
           >
             Members
           </TabsTrigger>
           <TabsTrigger
             value="groups"
-            className="data-[state=active]:bg-gray-700"
+            className="data-[state=active]:bg-muted"
           >
             Groups
           </TabsTrigger>
           <TabsTrigger
             value="organizational-units"
-            className="data-[state=active]:bg-gray-700"
+            className="data-[state=active]:bg-muted"
           >
             Organizational Units
           </TabsTrigger>
-          <TabsTrigger value="auth" className="data-[state=active]:bg-gray-700">
+          <TabsTrigger value="auth" className="data-[state=active]:bg-muted">
             Authentication
           </TabsTrigger>
         </TabsList>
 
         {/* General Tab */}
         <TabsContent value="general">
-          <Card className="bg-gray-800 border-gray-700">
+          <Card className="bg-card border-border">
             <CardHeader>
-              <CardTitle className="text-lg font-semibold text-gray-100">
+              <CardTitle className="text-lg font-semibold text-foreground">
                 Organization Information
               </CardTitle>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="name" className="text-gray-200">
+                  <Label htmlFor="name" className="text-foreground">
                     Organization Name
                   </Label>
                   <Input
@@ -179,12 +179,12 @@ export default function OrganizationSettingsPage() {
                     onChange={(e) =>
                       setFormData({ ...formData, name: e.target.value })
                     }
-                    className="bg-gray-900 border-gray-700 text-gray-100"
+                    className="bg-background border-border text-foreground"
                     disabled={isLoading}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="description" className="text-gray-200">
+                  <Label htmlFor="description" className="text-foreground">
                     Description
                   </Label>
                   <Input
@@ -193,22 +193,22 @@ export default function OrganizationSettingsPage() {
                     onChange={(e) =>
                       setFormData({ ...formData, description: e.target.value })
                     }
-                    className="bg-gray-900 border-gray-700 text-gray-100"
+                    className="bg-background border-border text-foreground"
                     placeholder="A brief description of your organization"
                     disabled={isLoading}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label className="text-gray-200">Organization ID</Label>
+                  <Label className="text-foreground">Organization ID</Label>
                   <Input
                     value={id}
-                    className="bg-gray-950 border-gray-700 text-gray-400 font-mono"
+                    className="bg-muted/50 font-mono text-muted-foreground"
                     disabled
                   />
                 </div>
                 <Button
                   type="submit"
-                  className="bg-blue-600 hover:bg-blue-700"
+                  className="bg-primary hover:bg-primary/90"
                   disabled={isLoading}
                 >
                   {isLoading ? (
@@ -230,15 +230,15 @@ export default function OrganizationSettingsPage() {
 
         {/* Members Tab */}
         <TabsContent value="members">
-          <Card className="bg-gray-800 border-gray-700">
+          <Card className="bg-card border-border">
             <CardHeader className="flex flex-row items-center justify-between space-y-0">
-              <CardTitle className="text-lg font-semibold text-gray-100">
+              <CardTitle className="text-lg font-semibold text-foreground">
                 Organization Members
               </CardTitle>
               {canManageMembers && (
                 <Button
                   size="sm"
-                  className="bg-blue-600 hover:bg-blue-700"
+                  className="bg-primary hover:bg-primary/90"
                   onClick={() => setAddMemberOpen(true)}
                 >
                   <Plus className="h-4 w-4 mr-2" />
@@ -248,7 +248,7 @@ export default function OrganizationSettingsPage() {
             </CardHeader>
             <CardContent>
               {!canManageMembers && (
-                <p className="text-sm text-gray-400 mb-4">
+                <p className="text-sm text-muted-foreground mb-4">
                   You need admin rights to add, remove, or change the roles of
                   members.
                 </p>
@@ -276,14 +276,14 @@ export default function OrganizationSettingsPage() {
 
         {/* Authentication Tab */}
         <TabsContent value="auth" className="space-y-6">
-          <Card className="bg-gray-800 border-gray-700">
+          <Card className="bg-card border-border">
             <CardHeader>
-              <CardTitle className="text-lg font-semibold text-gray-100">
+              <CardTitle className="text-lg font-semibold text-foreground">
                 OIDC Configuration
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-gray-400">
+              <p className="text-muted-foreground">
                 OIDC provider configuration coming soon. Configure SSO providers
                 for your organization.
               </p>

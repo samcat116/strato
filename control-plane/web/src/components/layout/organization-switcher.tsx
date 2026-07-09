@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { Check, ChevronDown, Plus } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,42 +26,40 @@ export function OrganizationSwitcher() {
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          className="bg-gray-800 hover:bg-gray-700 text-gray-200 border-gray-600"
-        >
-          {isLoading ? "Loading..." : currentOrg?.name || "Select Organization"}
-          <ChevronDown className="ml-2 h-4 w-4 text-gray-500" />
-        </Button>
+        <button className="mb-3.5 flex w-full items-center gap-2 rounded-[7px] border border-border bg-background px-[9px] py-[7px] transition-colors hover:bg-accent">
+          <span className="h-4 w-4 shrink-0 rounded bg-gradient-to-br from-[#3c87dd] to-[#7c3aed]" />
+          <span className="min-w-0 flex-1 truncate text-left text-[12.5px] font-semibold">
+            {isLoading ? "Loading…" : currentOrg?.name || "Select organization"}
+          </span>
+          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+        </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent className="w-64 bg-gray-800 border-gray-600">
-        <DropdownMenuLabel className="text-xs font-medium text-gray-400 uppercase">
+      <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuLabel className="text-xs font-medium uppercase text-muted-foreground">
           Switch Organization
         </DropdownMenuLabel>
-        <DropdownMenuSeparator className="bg-gray-700" />
+        <DropdownMenuSeparator />
         <div className="max-h-48 overflow-y-auto">
           {organizations.map((org) => (
             <DropdownMenuItem
               key={org.id}
               onClick={() => handleSwitch(org.id)}
-              className="text-gray-200 hover:bg-gray-700 focus:bg-gray-700 cursor-pointer"
+              className="cursor-pointer"
             >
-              <span className="flex-1">{org.name}</span>
-              {currentOrg?.id === org.id && (
-                <Check className="h-4 w-4 text-blue-400" />
-              )}
+              <span className="flex-1 truncate">{org.name}</span>
+              {currentOrg?.id === org.id && <Check className="h-4 w-4" />}
             </DropdownMenuItem>
           ))}
         </div>
-        <DropdownMenuSeparator className="bg-gray-700" />
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           onClick={() => {
             setOpen(false);
             setCreateDialogOpen(true);
           }}
-          className="text-blue-400 hover:bg-gray-700 focus:bg-gray-700 cursor-pointer"
+          className="cursor-pointer"
         >
-          <Plus className="h-4 w-4 mr-2" />
+          <Plus className="mr-2 h-4 w-4" />
           Create New Organization
         </DropdownMenuItem>
       </DropdownMenuContent>

@@ -78,10 +78,10 @@ export function AddGroupDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         <DialogHeader>
           <DialogTitle>Grant group access</DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             Give a group a role on this project. Every member of the group
             inherits it.
           </DialogDescription>
@@ -90,7 +90,7 @@ export function AddGroupDialog({
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="pgGroup" className="text-gray-200">
+              <Label htmlFor="pgGroup" className="text-foreground">
                 Group
               </Label>
               <Select
@@ -100,7 +100,7 @@ export function AddGroupDialog({
               >
                 <SelectTrigger
                   id="pgGroup"
-                  className="bg-gray-900 border-gray-700 text-gray-100"
+                  className="bg-background border-border text-foreground"
                 >
                   <SelectValue
                     placeholder={
@@ -108,9 +108,9 @@ export function AddGroupDialog({
                     }
                   />
                 </SelectTrigger>
-                <SelectContent className="bg-gray-800 border-gray-700">
+                <SelectContent className="bg-card border-border">
                   {available.length === 0 ? (
-                    <div className="px-2 py-1.5 text-sm text-gray-400">
+                    <div className="px-2 py-1.5 text-sm text-muted-foreground">
                       No groups available
                     </div>
                   ) : (
@@ -118,7 +118,7 @@ export function AddGroupDialog({
                       <SelectItem
                         key={g.id}
                         value={g.id}
-                        className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                        className="text-foreground focus:bg-accent focus:text-accent-foreground"
                       >
                         {g.name}
                       </SelectItem>
@@ -129,7 +129,7 @@ export function AddGroupDialog({
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="pgRole" className="text-gray-200">
+              <Label htmlFor="pgRole" className="text-foreground">
                 Role
               </Label>
               <Select
@@ -139,16 +139,16 @@ export function AddGroupDialog({
               >
                 <SelectTrigger
                   id="pgRole"
-                  className="bg-gray-900 border-gray-700 text-gray-100 capitalize"
+                  className="bg-background border-border text-foreground capitalize"
                 >
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent className="bg-gray-800 border-gray-700">
+                <SelectContent className="bg-card border-border">
                   {ROLES.map((r) => (
                     <SelectItem
                       key={r}
                       value={r}
-                      className="text-gray-100 capitalize focus:bg-gray-700 focus:text-gray-100"
+                      className="text-foreground capitalize focus:bg-accent focus:text-accent-foreground"
                     >
                       {r}
                     </SelectItem>
@@ -162,7 +162,7 @@ export function AddGroupDialog({
             <Button
               type="button"
               variant="outline"
-              className="border-gray-600"
+              className="border-input"
               onClick={handleClose}
               disabled={grant.isPending}
             >
@@ -170,7 +170,7 @@ export function AddGroupDialog({
             </Button>
             <Button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               disabled={grant.isPending}
             >
               {grant.isPending ? (

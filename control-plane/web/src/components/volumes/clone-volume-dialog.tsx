@@ -63,10 +63,10 @@ export function CloneVolumeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-gray-800 border-gray-700 text-gray-100">
+      <DialogContent className="bg-card border-border text-foreground">
         <DialogHeader>
           <DialogTitle>Clone {volume.name}</DialogTitle>
-          <DialogDescription className="text-gray-400">
+          <DialogDescription className="text-muted-foreground">
             Create a full copy of this volume ({volume.sizeFormatted}). Cloning
             large volumes can take several minutes.
           </DialogDescription>
@@ -74,20 +74,20 @@ export function CloneVolumeDialog({
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="cloneName" className="text-gray-200">
+              <Label htmlFor="cloneName" className="text-foreground">
                 Name
               </Label>
               <Input
                 id="cloneName"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="bg-gray-900 border-gray-700 text-gray-100"
+                className="bg-background border-border text-foreground"
                 disabled={isLoading}
                 autoFocus
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="cloneDescription" className="text-gray-200">
+              <Label htmlFor="cloneDescription" className="text-foreground">
                 Description
               </Label>
               <Input
@@ -95,7 +95,7 @@ export function CloneVolumeDialog({
                 placeholder={`Clone of ${volume.name}`}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="bg-gray-900 border-gray-700 text-gray-100"
+                className="bg-background border-border text-foreground"
                 disabled={isLoading}
               />
             </div>
@@ -105,14 +105,14 @@ export function CloneVolumeDialog({
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
-              className="border-gray-600 text-gray-300 hover:bg-gray-700"
+              className="border-input text-foreground/80 hover:bg-accent"
               disabled={isLoading}
             >
               Cancel
             </Button>
             <Button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-primary hover:bg-primary/90"
               disabled={isLoading}
             >
               {isLoading ? (
