@@ -1,0 +1,24 @@
+control-plane/web/src/app/(dashboard)/dashboard/page.tsx
+  s_674b14ea31f8f5::t_c232fd2a620c30 37,40,46-47,52-57
+  s_674b14ea31f8f5::t_7e81394a007e69 144
+  s_674b14ea31f8f5::t_6c03401f5abcf5 313
+  s_674b14ea31f8f5::t_25c764be925bb0 174
+  s_674b14ea31f8f5::t_d1f1049611455d 21
+  s_674b14ea31f8f5::t_7d5c4f1811f2de 230-251,253
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0379c00f3bd9490721daf3a728125c74d06c845d",
+  "prompts": {},
+  "sessions": {
+    "s_674b14ea31f8f5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c0a6edd-662c-4469-90c9-5e6459064819",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
