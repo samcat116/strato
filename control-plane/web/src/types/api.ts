@@ -237,6 +237,9 @@ export interface Agent {
   architecture?: CPUArchitecture;
   hypervisors: HypervisorSupport[];
   networkCapability?: NetworkCapability;
+  siteId?: string;
+  organizationId?: string;
+  organizationalUnitId?: string;
   lastHeartbeat?: string;
   createdAt: string;
   isOnline: boolean;
@@ -273,8 +276,27 @@ export interface AgentRegistrationTokenListItem {
   expiresAt: string;
   isUsed: boolean;
   isValid: boolean;
+  organizationId?: string;
+  organizationalUnitId?: string;
   createdAt?: string;
   usedAt?: string;
+}
+
+export interface Site {
+  id: string;
+  name: string;
+  description?: string;
+  networkControllerAgentId?: string;
+  organizationId?: string;
+  organizationalUnitId?: string;
+  createdAt?: string;
+}
+
+export interface CreateSiteRequest {
+  name: string;
+  description?: string;
+  organizationId?: string;
+  organizationalUnitId?: string;
 }
 
 export interface APIKey {
@@ -405,6 +427,9 @@ export interface CreateAPIKeyRequest {
 export interface CreateAgentRegistrationTokenRequest {
   agentName: string;
   expirationHours?: number;
+  // Owning scope the agent becomes dedicated to; exactly one is required.
+  organizationId?: string;
+  organizationalUnitId?: string;
 }
 
 // Image types

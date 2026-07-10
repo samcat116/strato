@@ -7,23 +7,50 @@ import Vapor
 /// every fresh start of the local dev stack, whose in-memory SpiceDB loses its
 /// schema on each container restart.
 ///
-/// An existing schema is never overwritten, so deployments that manage the
-/// schema externally (the zed one-shot in deploy/compose, the Helm schema job)
-/// are unaffected — as are schema upgrades applied by those tools.
+/// An existing schema is upgraded only when the file introduces object types
+/// the deployed schema lacks — the startup backfills that follow would
+/// otherwise 400 writing tuples for the new types. Anything subtler (changed
+/// permission expressions, new relations on existing types) is deliberately
+/// left to the external schema appliers (the zed one-shot in deploy/compose,
+/// the Helm schema job, `task dev`), which re-apply the full file on every
+/// deploy; overwriting on any text difference here would stomp deployments
+/// that manage the schema out of band.
 func ensureSpiceDBSchema(_ app: Application) async throws {
     guard let schemaPath = spiceDBSchemaPath(app) else {
         app.logger.debug("No SpiceDB schema file found; assuming schema is managed externally")
         return
     }
 
+    let schema = try String(contentsOfFile: schemaPath, encoding: .utf8)
+
     if let existing = try await readSchemaWithRetry(app), !existing.isEmpty {
-        app.logger.debug("SpiceDB already has a schema; not overwriting")
-        return
+        let missing = definitionNames(in: schema).subtracting(definitionNames(in: existing))
+        guard !missing.isEmpty else {
+            app.logger.debug("SpiceDB already has a schema; not overwriting")
+            return
+        }
+        app.logger.notice(
+            "SpiceDB schema is missing object types; applying the bundled schema",
+            metadata: ["missing": .string(missing.sorted().joined(separator: ","))])
     }
 
-    let schema = try String(contentsOfFile: schemaPath, encoding: .utf8)
     try await app.spicedb.writeSchema(schema)
     app.logger.notice("Loaded SpiceDB schema", metadata: ["path": .string(schemaPath)])
+}
+
+/// Object-type names declared in a schema text (`definition <name> {`).
+private func definitionNames(in schema: String) -> Set<String> {
+    var names: Set<String> = []
+    for line in schema.split(separator: "\n") {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("definition ") else { continue }
+        let rest = trimmed.dropFirst("definition ".count)
+        let name = rest.prefix { $0.isLetter || $0.isNumber || $0 == "_" }
+        if !name.isEmpty {
+            names.insert(String(name))
+        }
+    }
+    return names
 }
 
 /// Resolves the schema file: explicit SPICEDB_SCHEMA_PATH, or the repo's

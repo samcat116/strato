@@ -317,6 +317,11 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateVMInterfaceAddresses())
     app.migrations.add(AddIPv6ToLogicalNetwork())
 
+    // Organization-scoped infrastructure: agents/sites/registration tokens
+    // carry a mandatory org-or-OU owner (backfilled to the oldest org).
+    app.migrations.add(AddOrganizationScopeToInfra())
+    app.migrations.add(BackfillInfraOrganizationScope())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen
@@ -335,6 +340,8 @@ public func configure(_ app: Application) async throws {
         try await backfillOrganizationalUnitParentRelationships(app)
         try await backfillProjectOrganizationRelationships(app)
         try await backfillOrganizationMemberRelationships(app)
+        //  - agent#parent / site#parent tuples for org-scoped infrastructure.
+        try await backfillInfraParentRelationships(app)
     }
 
     // Initialize the image download signing key (generates if not exists)
