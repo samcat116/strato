@@ -52,6 +52,7 @@ export default defineConfig({
           { text: 'Rate Limiting', link: '/deployment/rate-limiting' },
           { text: 'Logging', link: '/deployment/logging' },
           { text: 'Audit Logging', link: '/deployment/audit-logging' },
+          { text: 'Shared Signals (SSF)', link: '/deployment/shared-signals' },
           { text: 'Observability', link: '/deployment/observability' }
         ]
       },

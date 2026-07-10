@@ -183,6 +183,18 @@ struct UserController: RouteCollection {
     func finishRegistration(req: Request) async throws -> RegistrationFinishResponse {
         let finishRequest = try req.content.decode(RegistrationFinishRequest.self)
 
+        // Reject disabled accounts before finishRegistration persists the new
+        // credential (and consumes the challenge) — a user disabled by an SSF
+        // signal must not be able to add passkeys.
+        if let challengeRecord = try await AuthenticationChallenge.query(on: req.db)
+            .filter(\.$challenge == finishRequest.challenge)
+            .first(),
+            let challengeUserID = challengeRecord.userID,
+            let challengeUser = try await User.find(challengeUserID, on: req.db)
+        {
+            try rejectDisabledAccount(challengeUser)
+        }
+
         let credential = try await req.webAuthn.finishRegistration(
             challenge: finishRequest.challenge,
             credentialCreationData: finishRequest.response,
@@ -193,8 +205,13 @@ struct UserController: RouteCollection {
         try await credential.$user.load(on: req.db)
         let user = credential.user
 
+        // Accounts disabled by an SSF signal must not get a session; the
+        // middleware only sees authenticated requests, so check here too.
+        try rejectDisabledAccount(user)
+
         // Create session - log the user in automatically
         req.auth.login(user)
+        req.stampSessionEpoch(for: user)
         await req.recordAuthEvent(.register, user: user)
 
         // If this is a system admin (first user), skip default organization setup
@@ -251,8 +268,17 @@ struct UserController: RouteCollection {
             throw error
         }
 
+        // Accounts disabled by an SSF signal must not get a session; the
+        // middleware only sees authenticated requests, so check here too.
+        if user.disabledAt != nil {
+            await req.recordAuthEvent(
+                .loginFailed, metadata: ["error": "account disabled", "username": user.username])
+        }
+        try rejectDisabledAccount(user)
+
         // Create session
         req.auth.login(user)
+        req.stampSessionEpoch(for: user)
         await req.recordAuthEvent(.login, user: user)
 
         // Store in SpiceDB relationships if needed

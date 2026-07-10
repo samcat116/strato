@@ -26,8 +26,10 @@ For a real hostname (WebAuthn then requires HTTPS in front of the proxy):
 - **Valkey** — control-plane coordination (agent presence, singleton sweeps,
   scheduler reservations) and session storage; required, password-protected.
 - **Control plane + frontend** — published images
-  (`ghcr.io/samcat116/strato-*`). Database migrations run automatically at
-  startup. Pin a version with `STRATO_VERSION` in `.env`.
+  (`ghcr.io/samcat116/strato-*`), defaulting to the `main` tag (rebuilt on
+  every main-branch merge). Database migrations run automatically at startup.
+  Pin an immutable build with `STRATO_VERSION` in `.env` (e.g. a `main-<sha>`
+  tag).
 - **SPIRE + Envoy (mTLS agent auth, on by default)** — a SPIRE server issues
   X.509 SVIDs; an Envoy front terminates agent mTLS on `:8443` and forwards the
   verified client identity to the control plane. A one-shot `spire-bootstrap`

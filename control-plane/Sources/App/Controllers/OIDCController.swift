@@ -353,8 +353,14 @@ struct OIDCController: RouteCollection {
             req.session.data["oidc_provider_id"] = nil
             req.session.data["oidc_organization_id"] = nil
 
+            // Accounts disabled by an SSF signal must not get a session; the
+            // middleware only sees authenticated requests, so check here too.
+            // Thrown into the catch below, which records the failed login.
+            try rejectDisabledAccount(user)
+
             // Authenticate user
             req.auth.login(user)
+            req.stampSessionEpoch(for: user)
             await req.recordAuthEvent(.oidcLogin, user: user, organizationID: organizationID)
 
             // Redirect to dashboard
