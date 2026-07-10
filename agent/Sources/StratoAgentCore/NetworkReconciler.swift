@@ -48,6 +48,11 @@ public enum OVNNaming {
         "lsp-ext-\(routerKey)-router"
     }
     public static func localnetPortName(routerKey: String) -> String { "ln-ext-\(routerKey)" }
+    /// The `Gateway_Chassis` row pinning a router's external port to a chassis,
+    /// named `<port>-<chassis>` to match `ovn-nbctl lrp-set-gateway-chassis`.
+    public static func gatewayChassisName(portName: String, chassis: String) -> String {
+        "\(portName)-\(chassis)"
+    }
 
     /// A stable, locally-administered unicast MAC for a router port, derived
     /// from its gateway IP (gateways are unique per network, so the MAC is too).
