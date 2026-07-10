@@ -27,8 +27,8 @@ Three independent Swift packages: `control-plane/`, `agent/`, `shared/` (plus ve
 
 Build & test notes:
 - Swift builds in a fresh worktree start from a cold `.build` and can take 10+ minutes. Run builds/tests with a generous timeout or in the background — never the default 2-minute timeout.
-- Control-plane tests run against in-memory SQLite locally — no Postgres/SpiceDB services needed. CI additionally runs a Postgres job, so migrations must work on BOTH (SQLite `ALTER TABLE` cannot combine multiple actions in one migration step; use separate `.update()` calls).
-- Known CI flake: the "Test Control Plane (Postgres)" job can crash with Vapor's `ServeCommand did not shutdown before deinit` teardown race. If a failure doesn't reproduce locally and matches this signature, rerun with `gh run rerun <run-id> --failed` instead of debugging.
+- Control-plane tests run against in-memory SQLite locally — no Postgres/SpiceDB services needed. CI additionally runs the suite against Postgres, so migrations must work on BOTH (SQLite `ALTER TABLE` cannot combine multiple actions in one migration step; use separate `.update()` calls).
+- Known CI flake: the "Test Control Plane (Postgres)" step of the Test Control Plane job can crash with Vapor's `ServeCommand did not shutdown before deinit` teardown race. If a failure doesn't reproduce locally and matches this signature, rerun with `gh run rerun <run-id> --failed` instead of debugging.
 - Swift CI (PR build/test and main-branch release binaries) runs on the `swift-runners-strato` runner scale set managed by actions-runner-controller; Docker image builds still run on the static self-hosted runner on the strato-dev VM (`/home/sam/actions-runner`). If Swift CI fails with missing-symbol errors your diff can't explain, suspect a stale build cache in the runner's persistent `RUNNER_TOOL_CACHE` volume — reproduce locally before debugging source.
 
 ### Formatting and linting (CI-enforced)
