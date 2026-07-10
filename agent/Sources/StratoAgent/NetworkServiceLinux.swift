@@ -530,28 +530,30 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // constraint violation — check for it first. A fresh host has none.
         if try await ovsManager.getBridge(named: bridgeName) != nil {
             logger.debug("Integration bridge already present", metadata: ["bridge": .string(bridgeName)])
-            return
-        }
+        } else {
+            let integrationBridge = OVSBridge(
+                name: bridgeName,
+                protocols: ["OpenFlow13"],
+                fail_mode: "secure",
+                external_ids: ["description": "OVN integration bridge"]
+            )
 
-        let integrationBridge = OVSBridge(
-            name: bridgeName,
-            protocols: ["OpenFlow13"],
-            fail_mode: "secure",
-            external_ids: ["description": "OVN integration bridge"]
-        )
-
-        do {
-            let _ = try await ovsManager.createBridge(integrationBridge)
-            logger.info("Created integration bridge", metadata: ["bridge": .string(bridgeName)])
-        } catch {
-            // A concurrent creator may have won the race between the check
-            // above and this insert; tolerate that, but surface anything else.
-            if try await ovsManager.getBridge(named: bridgeName) != nil {
-                logger.debug("Integration bridge created concurrently", metadata: ["bridge": .string(bridgeName)])
-            } else {
-                throw error
+            do {
+                let _ = try await ovsManager.createBridge(integrationBridge)
+                logger.info("Created integration bridge", metadata: ["bridge": .string(bridgeName)])
+            } catch {
+                // A concurrent creator may have won the race between the check
+                // above and this insert; tolerate that, but surface anything else.
+                if try await ovsManager.getBridge(named: bridgeName) != nil {
+                    logger.debug(
+                        "Integration bridge created concurrently", metadata: ["bridge": .string(bridgeName)])
+                } else {
+                    throw error
+                }
             }
         }
+
+        try await ensureBridgeLocalPort(bridgeName)
     }
 
     /// Ensures the local OVS carries the chassis `external_ids` that
@@ -1135,6 +1137,12 @@ extension NetworkServiceLinux: NetworkActuator {
             switchName: router.externalSwitchName, switchPortName: router.externalSwitchRouterPortName,
             router: router.name)
 
+        // Pin the gateway port to this chassis. OVN only programs centralized
+        // SNAT on the chassis holding the router's distributed gateway port,
+        // so without a Gateway_Chassis binding the NAT rule sits in the NB
+        // unprogrammed and VM traffic egresses un-NAT'd (issue #372).
+        try await ensureGatewayChassis(onPort: router.externalRouterPortName)
+
         // Default route out the uplink, so SNAT'd traffic to off-subnet
         // destinations actually has a route (the NAT rule alone is not enough).
         if let nextHop = uplink.gateway {
@@ -1274,16 +1282,122 @@ extension NetworkServiceLinux {
         guard let ovsManager else {
             throw NetworkError.notConnected("OVS manager not connected")
         }
-        if try await ovsManager.getBridge(named: bridgeName) != nil { return }
-        let bridge = OVSBridge(
-            name: bridgeName,
-            external_ids: ["description": "Strato OVN external/provider bridge"])
-        do {
-            _ = try await ovsManager.createBridge(bridge)
-            logger.info("Created provider bridge", metadata: ["bridge": .string(bridgeName)])
-        } catch {
-            if try await ovsManager.getBridge(named: bridgeName) == nil { throw error }
+        if try await ovsManager.getBridge(named: bridgeName) == nil {
+            let bridge = OVSBridge(
+                name: bridgeName,
+                external_ids: ["description": "Strato OVN external/provider bridge"])
+            do {
+                _ = try await ovsManager.createBridge(bridge)
+                logger.info("Created provider bridge", metadata: ["bridge": .string(bridgeName)])
+            } catch {
+                if try await ovsManager.getBridge(named: bridgeName) == nil { throw error }
+            }
         }
+        try await ensureBridgeLocalPort(bridgeName)
+        await warnIfBridgeNetdevMissing(bridgeName)
+    }
+
+    /// Ensure the bridge-named internal `Port`/`Interface` pair exists.
+    /// SwiftOVN's `createBridge` inserts only the `Bridge` row; without this
+    /// pair `ovs-vswitchd` never instantiates the bridge's Linux netdev, so
+    /// the bridge has no host presence and no localnet datapath (issue #371).
+    /// `ovs-vsctl add-br` creates all three rows in one transaction — this
+    /// repairs both freshly created bridges and ones from older agents.
+    fileprivate func ensureBridgeLocalPort(_ bridgeName: String) async throws {
+        guard let ovsManager else {
+            throw NetworkError.notConnected("OVS manager not connected")
+        }
+        if try await ovsManager.getPort(named: bridgeName) != nil { return }
+        do {
+            _ = try await ovsManager.createPort(
+                OVSPort(name: bridgeName, interfaces: []),
+                withInterface: OVSInterface(name: bridgeName, interfaceType: "internal"),
+                onBridge: bridgeName)
+            logger.info("Created bridge internal port", metadata: ["bridge": .string(bridgeName)])
+        } catch {
+            // Tolerate a concurrent creator that won the check→insert race.
+            if try await ovsManager.getPort(named: bridgeName) == nil { throw error }
+        }
+    }
+
+    /// Log loudly when the bridge netdev hasn't materialized shortly after its
+    /// OVSDB rows converged — the rows committing does not prove that
+    /// `ovs-vswitchd` realized the datapath (issue #371's silent failure mode,
+    /// where the operator cannot address the bridge or attach the physical
+    /// NIC). Warning-only: OVSDB is the desired state and vswitchd may just be
+    /// catching up; usually the first probe succeeds and this costs one exec.
+    fileprivate func warnIfBridgeNetdevMissing(_ bridgeName: String) async {
+        for _ in 0..<10 {
+            if let probe = try? runProcess("ip", ["link", "show", "dev", bridgeName]), probe.status == 0 {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        let message =
+            "Provider bridge exists in OVSDB but its netdev did not appear; "
+            + "host-side uplink wiring (addressing the bridge, attaching the external NIC) will fail"
+        logger.warning("\(message)", metadata: ["bridge": .string(bridgeName)])
+    }
+
+    /// Bind the router's external gateway port to the local chassis (the OVS
+    /// `system-id` that `ovn-controller` registers southbound). Only the
+    /// uplink-authoring agent — the site's network controller — reaches this,
+    /// so the local chassis is the site's designated SNAT gateway; stale
+    /// Strato-managed bindings to other chassis (host re-provisioned, role
+    /// moved) are removed, operator-authored rows are left alone.
+    fileprivate func ensureGatewayChassis(onPort portName: String) async throws {
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        let chassisName = try localChassisSystemID()
+        guard let port = try await ovnManager.getLogicalRouterPort(named: portName) else {
+            throw NetworkError.ovnError(
+                "external router port \(portName) not found while binding its gateway chassis")
+        }
+        let refs = Set(port.gateway_chassis ?? [])
+        let bindings: [GatewayChassisBinding] = try await ovnManager.getGatewayChassis().compactMap { row in
+            guard let uuid = row.uuid, refs.contains(uuid) else { return nil }
+            return GatewayChassisBinding(
+                uuid: uuid, chassisName: row.chassis_name, managed: Self.isManaged(row.external_ids))
+        }
+        let actions = GatewayChassisPlan.plan(localChassis: chassisName, existing: bindings)
+        for uuid in actions.deleteUUIDs {
+            try await ovnManager.deleteGatewayChassis(uuid: uuid)
+            logger.info("Removed stale gateway chassis binding", metadata: ["port": .string(portName)])
+        }
+        if actions.createForLocalChassis {
+            let binding = OVNGatewayChassis(
+                name: OVNNaming.gatewayChassisName(portName: portName, chassis: chassisName),
+                chassis_name: chassisName, priority: 1,
+                external_ids: [Self.managedKey: Self.managedValue])
+            _ = try await ovnManager.createGatewayChassis(binding, onRouterPort: portName)
+            logger.info(
+                "Bound external router port to gateway chassis",
+                metadata: ["port": .string(portName), "chassis": .string(chassisName)])
+        }
+    }
+
+    /// The chassis `system-id` of the local OVS — the name `ovn-controller`
+    /// registers in the southbound `Chassis` table (set or verified by
+    /// `ensureChassisConfiguration` at connect time).
+    fileprivate func localChassisSystemID() throws -> String {
+        let result = try runProcess(
+            "ovs-vsctl",
+            ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
+        guard result.status == 0 else {
+            throw NetworkError.ovsError(
+                "cannot read chassis external_ids (exit \(result.status)): "
+                    + result.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        guard let systemID = OVNChassisBootstrap.parseExternalIDs(result.output)["system-id"],
+            !systemID.isEmpty
+        else {
+            throw NetworkError.invalidConfiguration(
+                "the local OVS has no external_ids:system-id, so the SNAT gateway cannot be "
+                    + "bound to this chassis. Enable ovn_bootstrap_chassis in the agent "
+                    + "configuration or set external_ids:system-id on the OVS.")
+        }
+        return systemID
     }
 
     /// Ensure the local OVS carries `ovn-bridge-mappings=<physnet>:<bridge>` for
