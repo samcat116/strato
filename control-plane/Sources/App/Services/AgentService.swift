@@ -309,13 +309,20 @@ actor AgentService {
                     }
                 }
             }
-            // A site is one OVN deployment owned by one org; an agent from a
-            // different org joining it would mix tenants on a shared SDN.
+            // A site is one OVN deployment owned by one scope; its members
+            // must live within that scope (sibling-OU agents included — see
+            // the sites API's assignAgent, which this token path must match).
             if refusalReason == nil {
-                let siteOrg = try await Site.find(siteID, on: db)?.rootOrganizationID(on: db)
-                let agentOrg = try await agent.rootOrganizationID(on: db)
-                if siteOrg != agentOrg {
-                    refusalReason = "site belongs to a different organization than the agent"
+                let siteScope = try await Site.find(siteID, on: db)?.organizationScope
+                let agentScope = agent.organizationScope
+                let contained: Bool
+                if let siteScope, let agentScope {
+                    contained = try await siteScope.contains(agentScope, on: db)
+                } else {
+                    contained = false
+                }
+                if !contained {
+                    refusalReason = "site's organization scope does not contain the agent's"
                 }
             }
             if let refusalReason {

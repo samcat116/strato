@@ -68,6 +68,26 @@ enum OrganizationScope: Equatable, Sendable {
         }
     }
 
+    /// Whether this scope contains `other`: an organization contains every
+    /// scope rooted in it; an OU contains itself and its descendant OUs (an
+    /// OU never contains org-level scopes — capacity delegated to an OU must
+    /// not absorb org-wide resources without an explicit rescope).
+    func contains(_ other: OrganizationScope, on db: Database) async throws -> Bool {
+        switch self {
+        case .organization(let orgID):
+            return try await other.rootOrganizationID(on: db) == orgID
+        case .organizationalUnit(let ouID):
+            guard case .organizationalUnit(let otherOUID) = other else { return false }
+            // Walk the other OU's ancestry; bounded by OU nesting depth.
+            var current: UUID? = otherOUID
+            while let currentID = current {
+                if currentID == ouID { return true }
+                current = try await OrganizationalUnit.find(currentID, on: db)?.$parentOU.id
+            }
+            return false
+        }
+    }
+
     /// Resolves and validates the referenced parent, failing the request with
     /// a client error when it doesn't exist (a typo'd id must not silently
     /// mint an unowned resource).

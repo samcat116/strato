@@ -172,6 +172,27 @@ final class AgentOrganizationScopeTests {
             let agent = try #require(try await Agent.find(agentUUID, on: app.db))
             #expect(agent.$site.id == nil)
             #expect(agent.$organization.id == org.id)
+
+            // Sibling-OU delegation within one org is refused the same way:
+            // an OU-B site must not admit an OU-A agent (root org matches).
+            let ouA = OrganizationalUnit(
+                name: "Member OU A", description: "a", organizationID: org.id!,
+                path: "/\(org.id!.uuidString)", depth: 1)
+            try await ouA.save(on: app.db)
+            let ouB = OrganizationalUnit(
+                name: "Member OU B", description: "b", organizationID: org.id!,
+                path: "/\(org.id!.uuidString)", depth: 1)
+            try await ouB.save(on: app.db)
+            let ouBSite = Site(name: "ou-b-dc", organizationScope: .organizationalUnit(ouB.id!))
+            try await ouBSite.save(on: app.db)
+
+            let ouAgentUUID = try await app.agentService.registerAgent(
+                self.makeRegisterMessage(agentName: "ou-a-agent"),
+                agentName: "ou-a-agent",
+                siteID: ouBSite.id,
+                organizationScope: .organizationalUnit(ouA.id!))
+            let ouAgent = try #require(try await Agent.find(ouAgentUUID, on: app.db))
+            #expect(ouAgent.$site.id == nil)
         }
     }
 
@@ -370,6 +391,21 @@ final class AgentOrganizationScopeTests {
             let vm = try await builder.createVM(name: "anchor", project: project)
             vm.hypervisorId = agentUUID.uuidString
             try await vm.save(on: app.db)
+
+            try await app.test(.PATCH, "/api/agents/\(agentUUID.uuidString)/organization") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(Body(organizationId: org.id))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            // A detached volume anchors the agent the same way.
+            try await vm.delete(on: app.db)
+            let volume = Volume(
+                name: "anchor-vol", description: "v", projectID: project.id!,
+                size: 1 << 30, createdByID: admin.id!)
+            volume.hypervisorId = agentUUID.uuidString
+            try await volume.save(on: app.db)
 
             try await app.test(.PATCH, "/api/agents/\(agentUUID.uuidString)/organization") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

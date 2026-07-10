@@ -68,20 +68,16 @@ struct NetworkController: RouteCollection {
     /// only projects under that OU (directly or via a descendant OU). Legacy
     /// unscoped sites serve nothing until an operator assigns them an owner.
     static func siteScopeContains(project: Project, site: Site, on db: Database) async throws -> Bool {
-        switch site.organizationScope {
-        case .organization(let siteOrgID):
-            return try await project.getRootOrganizationId(on: db) == siteOrgID
-        case .organizationalUnit(let siteOUID):
-            // Walk the project's OU ancestry; bounded by OU nesting depth.
-            var current = project.$organizationalUnit.id
-            while let ouID = current {
-                if ouID == siteOUID { return true }
-                current = try await OrganizationalUnit.find(ouID, on: db)?.$parentOU.id
-            }
-            return false
-        case nil:
+        guard let siteScope = site.organizationScope else { return false }
+        let projectScope: OrganizationScope
+        if let orgID = project.$organization.id {
+            projectScope = .organization(orgID)
+        } else if let ouID = project.$organizationalUnit.id {
+            projectScope = .organizationalUnit(ouID)
+        } else {
             return false
         }
+        return try await siteScope.contains(projectScope, on: db)
     }
 
     // MARK: - Create Network

@@ -250,10 +250,12 @@ struct AgentController: RouteCollection {
             guard let site = try await Site.find(siteId, on: req.db) else {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
             }
-            let siteOrg = try await site.rootOrganizationID(on: req.db)
-            let tokenOrg = try await scope.rootOrganizationID(on: req.db)
-            guard siteOrg == tokenOrg else {
-                throw Abort(.badRequest, reason: "Site \(siteId) belongs to a different organization")
+            guard let siteScope = site.organizationScope,
+                try await siteScope.contains(scope, on: req.db)
+            else {
+                throw Abort(
+                    .badRequest,
+                    reason: "Site \(siteId)'s organization scope does not contain the token's")
             }
             let user = try requireUser(req)
             if !user.isSystemAdmin {
@@ -693,6 +695,21 @@ struct AgentController: RouteCollection {
             throw Abort(
                 .conflict,
                 reason: "Agent hosts \(hostedVMs) VM(s); migrate or delete them before changing its organization")
+        }
+        // Detached volumes anchor the old org's data to this hardware the
+        // same way VMs do: moving the agent would strand them on foreign
+        // capacity (their operations still target this agent by
+        // hypervisorId) and block the new org's delegated admins behind the
+        // foreign-workload guard.
+        let storedVolumes = try await Volume.query(on: req.db)
+            .filter(\.$hypervisorId == agentId.uuidString)
+            .count()
+        guard storedVolumes == 0 else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent stores \(storedVolumes) volume(s); migrate or delete them before changing its organization"
+            )
         }
 
         // SpiceDB first, DB last: both tuple operations are idempotent

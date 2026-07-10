@@ -250,14 +250,17 @@ struct SiteController: RouteCollection {
         try await requireAgentManage(req, agent: agent)
         let targetSiteId = try site.requireID()
 
-        // A site is one OVN deployment owned by one org; admitting a foreign
-        // org's agent would mix tenants on a shared SDN.
-        let siteOrg = try await site.rootOrganizationID(on: req.db)
-        let agentOrg = try await agent.rootOrganizationID(on: req.db)
-        guard siteOrg == agentOrg else {
+        // A site is one OVN deployment owned by one scope; its members must
+        // live within that scope. Root-org equality is not enough: an OU-B
+        // site admitting a sibling OU-A agent would run OU-B's site-pinned
+        // VMs on capacity managed through OU-A. Rescope the agent first.
+        guard let siteScope = site.organizationScope,
+            let agentScope = agent.organizationScope,
+            try await siteScope.contains(agentScope, on: req.db)
+        else {
             throw Abort(
                 .conflict,
-                reason: "Agent belongs to a different organization than this site")
+                reason: "Agent is not owned by this site's organization scope; reassign the agent first")
         }
 
         // A move is a removal from the old site too, so it must honor the same
