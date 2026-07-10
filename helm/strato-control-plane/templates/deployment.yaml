@@ -4,11 +4,16 @@ metadata:
   name: {{ include "strato-control-plane.fullname" . }}
   labels:
     {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
+    # matchLabels is immutable on an existing Deployment, so the component label
+    # is deliberately absent here; it lives on the pod template and on the
+    # Service/PDB/NetworkPolicy selectors (all mutable), which is what stops
+    # cross-matching other pods that share the name/instance labels.
     matchLabels:
       {{- include "strato-control-plane.selectorLabels" . | nindent 6 }}
   template:
@@ -19,6 +24,7 @@ spec:
       {{- end }}
       labels:
         {{- include "strato-control-plane.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: control-plane
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

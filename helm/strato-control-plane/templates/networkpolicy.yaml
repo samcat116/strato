@@ -9,6 +9,7 @@ spec:
   podSelector:
     matchLabels:
       {{- include "strato-control-plane.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: control-plane
   policyTypes:
     - Ingress
     - Egress
@@ -93,6 +94,7 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "strato-control-plane.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: control-plane
       ports:
         - protocol: TCP
           port: 50051
