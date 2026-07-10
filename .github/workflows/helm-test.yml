@@ -8,11 +8,15 @@ on:
     branches: [main, develop]
     paths:
       - "helm/**"
+      # The chart embeds a copy of the SpiceDB schema; run on canonical-schema
+      # changes too so the drift check can catch a missed sync.
+      - "spicedb/schema.zed"
       - ".github/workflows/helm-test.yml"
   pull_request:
     branches: [main, develop]
     paths:
       - "helm/**"
+      - "spicedb/schema.zed"
       - ".github/workflows/helm-test.yml"
   workflow_dispatch:
 
@@ -47,6 +51,15 @@ jobs:
       - name: Lint Helm chart
         run: |
           helm lint helm/strato-control-plane/
+
+      - name: Check SpiceDB schema copies are in sync
+        run: |
+          # The chart ships a verbatim copy of the authorization schema because
+          # Helm cannot read files outside the chart root. Fail on any drift so
+          # a schema change can never silently miss Kubernetes installs again.
+          diff -u spicedb/schema.zed helm/strato-control-plane/files/spicedb-schema.zed \
+            || { echo "❌ helm/strato-control-plane/files/spicedb-schema.zed is out of sync with spicedb/schema.zed — copy the canonical file into the chart"; exit 1; }
+          echo "✅ Chart schema matches spicedb/schema.zed"
 
       - name: Validate chart dependencies
         run: |
