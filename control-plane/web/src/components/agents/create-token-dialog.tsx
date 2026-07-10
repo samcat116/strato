@@ -147,8 +147,8 @@ export function CreateTokenDialog({
             {bootstrapCommand && (
               <div className="p-4 bg-background rounded-lg border border-border">
                 <Label className="text-muted-foreground text-sm">
-                  Bootstrap the node (SPIRE attestation + agent join) with one
-                  command:
+                  Bootstrap the node (install, SPIRE attestation, agent join,
+                  host telemetry) with one command:
                 </Label>
                 <div className="flex items-start gap-2 mt-2">
                   <code className="flex-1 min-w-0 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono whitespace-pre-wrap break-all">

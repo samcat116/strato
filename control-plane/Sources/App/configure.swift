@@ -312,6 +312,11 @@ public func configure(_ app: Application) async throws {
     // Shared Signals Framework receiver streams (issue #38)
     app.migrations.add(CreateSSFStream())
 
+    // Dual-stack networking: NIC addresses normalized into their own table,
+    // one row per family (issue: IPv6 support).
+    app.migrations.add(CreateVMInterfaceAddresses())
+    app.migrations.add(AddIPv6ToLogicalNetwork())
+
     // Organization-scoped infrastructure: agents/sites/registration tokens
     // carry a mandatory org-or-OU owner (backfilled to the oldest org).
     app.migrations.add(AddOrganizationScopeToInfra())

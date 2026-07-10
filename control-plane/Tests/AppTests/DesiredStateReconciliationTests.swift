@@ -282,6 +282,10 @@ final class DesiredStateReconciliationTests {
             #expect(net.gateway == "10.20.0.1")
             #expect(net.externalAccess)
             #expect(net.generation == 3)
+            // DHCP config rides the network state so the level-triggered
+            // network reconcile converges DHCP rows on live networks (DHCP
+            // edits bump no generation and converged VMs never re-realize).
+            #expect(net.dhcpEnabled == true)
             // Per-project router: the key is derived from the owning project.
             #expect(net.routerKey == "project-\(vm.$project.id.uuidString)")
 

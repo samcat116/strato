@@ -87,9 +87,16 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(response.registrationURL.hasPrefix("wss://"))
 
                 let command = try #require(response.bootstrapCommand)
+                // The curl-able installer (deploy/agent/install.sh) is the one
+                // node-onboarding entry point; the command must fetch it and
+                // pass through the registration and SPIRE parameters.
+                #expect(command.hasPrefix("curl -fsSL"))
+                #expect(command.contains("deploy/agent/install.sh"))
+                #expect(command.contains("| sudo bash -s --"))
                 #expect(command.contains(response.registrationURL))
                 #expect(command.contains("fake-join-token"))
                 #expect(command.contains("spire.example.com:8085"))
+                #expect(command.contains("--trust-domain 'strato.local'"))
             }
 
             // The join token lifetime matches the WS token's expirationHours

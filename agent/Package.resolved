@@ -186,8 +186,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/samcat116/swift-ovn.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "5410e9ee0033be96af95561de23aa0c571ed7910"
+        "revision" : "d474198c454b87b62d6af68fa15241e8d1ed9bd5"
       }
     },
     {

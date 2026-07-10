@@ -161,15 +161,44 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// port's IP). Already reserved by control-plane IPAM as a non-allocatable
     /// host address. Nil disables L3 for the network (switch only).
     public let gateway: String?
+    /// The network's IPv6 subnet in CIDR form (a /64, e.g.
+    /// `fd12:3456:789a::/64`), when the network is dual-stack. Nil on
+    /// v4-only networks and from control planes that predate IPv6 support —
+    /// optional, so old payloads decode and old agents ignore it.
+    public let subnet6: String?
+    /// The IPv6 gateway (router-port address) inside `subnet6`, when
+    /// dual-stack. The agent adds it to the router port and announces it via
+    /// Router Advertisements (dhcpv6_stateful mode) — DHCPv6 itself cannot
+    /// convey a default route.
+    public let gateway6: String?
     /// Identity of the logical router this network attaches to. Networks sharing
     /// a `routerKey` share one router. Opaque to the agent — do not parse it.
     public let routerKey: String
     /// Whether the agent should program outbound SNAT to the site uplink for
-    /// this network. The uplink IP is auto-detected on the agent.
+    /// this network. The uplink IP is auto-detected on the agent. IPv4-only:
+    /// IPv6 stays internal (no NAT66, no default route) in this phase.
     public let externalAccess: Bool
+    /// Whether the network's guests are addressed by OVN's DHCP responder.
+    /// Carried here — not only on per-NIC specs — because DHCP edits don't
+    /// bump VM generations, so converged VMs never re-realize their NICs; the
+    /// level-triggered network reconcile is what converges the DHCP_Options
+    /// rows (including deleting them when DHCP is turned off). Nil from
+    /// control planes that predate the field: the agent then leaves DHCP rows
+    /// alone, preserving the old NIC-driven behavior.
+    public let dhcpEnabled: Bool?
+    /// DNS resolvers advertised over DHCP; may be mixed-family (the agent
+    /// splits per DHCP family). Nil ≙ pre-field control plane, like
+    /// `dhcpEnabled`.
+    public let dnsServers: [String]?
+    /// DNS search domain advertised over DHCP.
+    public let domainName: String?
+    /// DHCPv4 lease time in seconds; agents default it when nil.
+    public let leaseTime: Int?
     /// Monotonic per-network counter, bumped by the control plane on any change
     /// that alters realization (subnet, gateway, router membership, external
-    /// access). Lets the agent reject replayed or reordered syncs.
+    /// access). Lets the agent reject replayed or reordered syncs. DHCP-only
+    /// edits deliberately don't bump it — the network reconcile is
+    /// level-triggered, so same-generation networks still converge DHCP.
     public let generation: Int64
 
     public init(
@@ -177,16 +206,28 @@ public struct DesiredNetworkState: Codable, Sendable {
         name: String,
         subnet: String,
         gateway: String?,
+        subnet6: String? = nil,
+        gateway6: String? = nil,
         routerKey: String,
         externalAccess: Bool,
+        dhcpEnabled: Bool? = nil,
+        dnsServers: [String]? = nil,
+        domainName: String? = nil,
+        leaseTime: Int? = nil,
         generation: Int64
     ) {
         self.networkId = networkId
         self.name = name
         self.subnet = subnet
         self.gateway = gateway
+        self.subnet6 = subnet6
+        self.gateway6 = gateway6
         self.routerKey = routerKey
         self.externalAccess = externalAccess
+        self.dhcpEnabled = dhcpEnabled
+        self.dnsServers = dnsServers
+        self.domainName = domainName
+        self.leaseTime = leaseTime
         self.generation = generation
     }
 }

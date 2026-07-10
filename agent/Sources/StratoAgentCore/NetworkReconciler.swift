@@ -93,15 +93,27 @@ public struct DesiredRouterPort: Equatable, Sendable {
     public let switchName: String
     public let switchPortName: String
     public let mac: String
-    /// The router port's address, `gateway/prefix` (e.g. `192.168.1.1/24`).
-    public let cidr: String
+    /// The router port's addresses, `gateway/prefix` per family — v4 first
+    /// (e.g. `192.168.1.1/24`), then the v6 gateway (`fd..::1/64`) when the
+    /// network is dual-stack. Both live on one port; OVN's `networks` column
+    /// is a set.
+    public let cidrs: [String]
+    /// OVN `ipv6_ra_configs` for the port when the network is dual-stack —
+    /// Router Advertisements are what hand guests their default route (DHCPv6
+    /// cannot), so `address_mode: dhcpv6_stateful` RAs accompany DHCPv6-
+    /// assigned addresses. Nil on v4-only ports (actuators clear the column).
+    public let ipv6RAConfigs: [String: String]?
 
-    public init(name: String, switchName: String, switchPortName: String, mac: String, cidr: String) {
+    public init(
+        name: String, switchName: String, switchPortName: String, mac: String, cidrs: [String],
+        ipv6RAConfigs: [String: String]? = nil
+    ) {
         self.name = name
         self.switchName = switchName
         self.switchPortName = switchPortName
         self.mac = mac
-        self.cidr = cidr
+        self.cidrs = cidrs
+        self.ipv6RAConfigs = ipv6RAConfigs
     }
 }
 
@@ -298,11 +310,27 @@ public enum NetworkReconciler {
 
             for network in members {
                 // L3 needs a gateway (the router-port IP) and a prefix from the
-                // subnet CIDR; a network missing either is switch-only.
+                // subnet CIDR; a network missing either is switch-only. The MAC
+                // stays derived from the v4 gateway (v4 remains mandatory) —
+                // rederiving it would rewrite every existing port's MAC on
+                // upgrade and invalidate guest neighbor caches.
                 guard let gateway = network.gateway,
                     let prefix = prefixLength(ofCIDR: network.subnet),
                     let mac = OVNNaming.routerPortMAC(gateway: gateway)
                 else { continue }
+
+                // Dual-stack: the same port carries the v6 gateway and sends
+                // RAs. Unparsable v6 config degrades the port to v4-only —
+                // never drops it (v4 service must survive a bad v6 edit).
+                var cidrs = ["\(gateway)/\(prefix)"]
+                var raConfigs: [String: String]?
+                if let subnet6 = network.subnet6, let gateway6 = network.gateway6,
+                    let cidr6 = IPv6CIDR(subnet6), let gw6 = IPv6Address(gateway6),
+                    cidr6.contains(gw6)
+                {
+                    cidrs.append("\(gw6)/\(cidr6.prefix)")
+                    raConfigs = ipv6RAConfigs
+                }
 
                 ports.append(
                     DesiredRouterPort(
@@ -310,7 +338,8 @@ public enum NetworkReconciler {
                         switchName: OVNNaming.switchName(networkId: network.networkId),
                         switchPortName: OVNNaming.switchRouterPortName(networkId: network.networkId),
                         mac: mac,
-                        cidr: "\(gateway)/\(prefix)"))
+                        cidrs: cidrs,
+                        ipv6RAConfigs: raConfigs))
 
                 if network.externalAccess {
                     snatSubnets.append(network.subnet)
@@ -391,6 +420,17 @@ public enum NetworkReconciler {
     }
 
     // MARK: - Helpers
+
+    /// The `ipv6_ra_configs` map for a dual-stack router port. Stateful mode:
+    /// addresses come from DHCPv6 (control-plane IPAM pins them), while the RA
+    /// carries the on-link prefix and default route — the piece DHCPv6 cannot
+    /// deliver. Periodic sends keep guests' routes alive without solicitation.
+    public static let ipv6RAConfigs: [String: String] = [
+        "address_mode": "dhcpv6_stateful",
+        "send_periodic": "true",
+        "max_interval": "900",
+        "min_interval": "300",
+    ]
 
     /// The prefix length of a CIDR string such as `192.168.1.0/24` → 24.
     static func prefixLength(ofCIDR cidr: String) -> Int? {

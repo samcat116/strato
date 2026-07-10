@@ -88,7 +88,8 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
           disabled={disabled || !value.dhcpEnabled}
         />
         <p className="text-xs text-muted-foreground">
-          Comma- or space-separated IPv4 addresses advertised over DHCP.
+          Comma- or space-separated IPv4 or IPv6 addresses advertised over
+          DHCP (each family&apos;s servers go to its own DHCP options).
         </p>
       </div>
 

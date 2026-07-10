@@ -25,6 +25,10 @@ node survives reboots. Useful flags (`--help` lists them all):
 - `--version vX.Y.Z` — pin a release instead of `latest`
 - `--no-systemd` — install the binary + deps but don't manage a service
 - `--no-deps` — you manage host packages yourself
+- `--spire-join-token` / `--spire-server-address` — SPIRE mode: the node
+  attests to SPIRE and authenticates by SVID over mTLS (the UI emits these
+  for you, see [One-command node bootstrap](#one-command-node-bootstrap))
+- `--no-telemetry` — SPIRE mode only: skip the host telemetry stack
 
 Run it **without** `--registration-url` to install the binary, dependencies,
 and service now and register later (or re-run with the URL when you have a
@@ -160,11 +164,34 @@ creating a registration token also provisions the node in SPIRE:
   `SPIRE_AGENT_SELECTORS`, default `unix:uid:0`).
 
 The API response (and the UI dialog) then includes a ready-to-paste
-bootstrap command using
-[`deploy/agent/strato-node-bootstrap.sh`](https://github.com/samcat116/strato/blob/main/deploy/agent/strato-node-bootstrap.sh),
-which writes the spire-agent config, waits for the Workload API socket,
-and joins the control plane — one command per new hypervisor node. Both
-secrets are shown exactly once, at creation time.
+bootstrap command that curls
+[`deploy/agent/install.sh`](https://github.com/samcat116/strato/blob/main/deploy/agent/install.sh)
+with the SPIRE flags: it downloads the `strato-agent` and `spire-agent`
+binaries, writes the spire-agent config, waits for the Workload API
+socket, joins the control plane, and brings up host telemetry — one
+command per new hypervisor node. Both secrets are shown exactly once, at
+creation time.
+
+### Host telemetry (Alloy)
+
+In SPIRE mode the installer also sets up host telemetry (skip with
+`--no-telemetry`):
+
+- **Grafana Alloy** (`alloy.service`) collects node metrics
+  (node_exporter set) and the `strato-agent`/`spire-agent` journals, and
+  pushes them to the control plane's Envoy mTLS listener —
+  `/ingest/metrics` lands in Prometheus, `/ingest/logs` in Loki (see
+  `deploy/compose`).
+- **spiffe-helper** (`spiffe-helper.service`) materializes the node's
+  SVID as PEM files under `/var/lib/alloy/certs/` for Alloy's
+  `tls_config`; Alloy re-reads them on every TLS handshake, so SVID
+  rotation needs no reloads.
+
+The client credential is the node's own SPIFFE identity
+(`spiffe://<trust-domain>/agent/<name>`) — Envoy only accepts telemetry
+writes from `agent/` identities. `/etc/alloy/config.alloy` is written
+once and then left alone on re-runs, so local edits stick. Nodes joined
+with a plain token URL (no SPIRE) get no telemetry stack.
 
 Revoking an unused registration token also removes the SPIRE entries, as
 does deregistering an agent; both operations fail closed when the SPIRE

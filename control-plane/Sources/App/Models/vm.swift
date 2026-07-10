@@ -298,13 +298,30 @@ extension VM {
 
 // MARK: - Response DTO
 
+struct InterfaceAddressResponse: Content {
+    let family: String
+    let address: String
+    let prefixLength: Int
+    let gateway: String?
+
+    init(from address: VMInterfaceAddress) {
+        self.family = address.family
+        self.address = address.address
+        self.prefixLength = address.prefixLength
+        self.gateway = address.gateway
+    }
+}
+
 struct NetworkInterfaceResponse: Content {
     let id: UUID?
     let network: String
     let macAddress: String
+    /// Legacy single-address fields, populated from the IPv4 address row so
+    /// existing API consumers keep working; `addresses` is the full set.
     let ipAddress: String?
     let netmask: String?
     let gateway: String?
+    let addresses: [InterfaceAddressResponse]
     let mtu: Int?
     let deviceName: String
     let orderIndex: Int
@@ -313,9 +330,14 @@ struct NetworkInterfaceResponse: Content {
         self.id = nic.id
         self.network = nic.network
         self.macAddress = nic.macAddress
-        self.ipAddress = nic.ipAddress
-        self.netmask = nic.netmask
-        self.gateway = nic.gateway
+        let ipv4 = nic.ipv4Address
+        self.ipAddress = ipv4?.address
+        self.netmask = nic.ipv4Netmask
+        self.gateway = ipv4?.gateway
+        // ipv4-first for a stable, familiar ordering.
+        self.addresses = (nic.$addresses.value ?? [])
+            .sorted { ($0.family, $0.address) < ($1.family, $1.address) }
+            .map(InterfaceAddressResponse.init)
         self.mtu = nic.mtu
         self.deviceName = nic.deviceName
         self.orderIndex = nic.orderIndex

@@ -1,4 +1,9 @@
 import Foundation
+import StratoShared
+
+/// IP address math lives in StratoShared so the control plane's IPAM and the
+/// agent share one implementation; the alias keeps existing call sites.
+public typealias IPv4Address = StratoShared.IPv4Address
 
 /// How a VM's NIC is realized on this host, as resolved by the platform network
 /// service. Hypervisor drivers translate the descriptor into their native
@@ -40,6 +45,11 @@ public struct ResolvedNetworkAttachment: Sendable {
     public let ipAddress: String?
     public let netmask: String?
     public let gateway: String?
+    /// Static IPv6 address on a dual-stack network, with its prefix length
+    /// (v6 has no dotted-netmask form) and per-family gateway.
+    public let ip6Address: String?
+    public let prefixLength6: Int?
+    public let gateway6: String?
     public let mtu: Int?
     /// When true, this NIC's L3 config is delivered by the network's DHCP
     /// responder (OVN), so guest provisioning omits static addressing and lets
@@ -56,6 +66,9 @@ public struct ResolvedNetworkAttachment: Sendable {
         ipAddress: String? = nil,
         netmask: String? = nil,
         gateway: String? = nil,
+        ip6Address: String? = nil,
+        prefixLength6: Int? = nil,
+        gateway6: String? = nil,
         mtu: Int? = nil,
         dhcpEnabled: Bool = false,
         dnsServers: [String] = []
@@ -66,6 +79,9 @@ public struct ResolvedNetworkAttachment: Sendable {
         self.ipAddress = ipAddress
         self.netmask = netmask
         self.gateway = gateway
+        self.ip6Address = ip6Address
+        self.prefixLength6 = prefixLength6
+        self.gateway6 = gateway6
         self.mtu = mtu
         self.dhcpEnabled = dhcpEnabled
         self.dnsServers = dnsServers
@@ -86,35 +102,14 @@ public func subnetCIDR(ipAddress: String?, netmask: String?) -> String? {
     return "\(network)/\(prefix)"
 }
 
-/// Minimal IPv4 address value for subnet math (Foundation has no portable one).
-public struct IPv4Address: CustomStringConvertible, Equatable, Sendable {
-    public let raw: UInt32
-
-    public init(raw: UInt32) {
-        self.raw = raw
+/// Derives the IPv6 network CIDR (e.g. "fd12:3456:789a::/64") from an
+/// interface's address and prefix length. Nil when either part is missing or
+/// unparsable.
+public func subnet6CIDR(ip6Address: String?, prefixLength: Int?) -> String? {
+    guard let ip6Address, let prefixLength,
+        let address = IPv6Address(ip6Address), (0...128).contains(prefixLength)
+    else {
+        return nil
     }
-
-    public init?(_ string: String) {
-        let parts = string.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 4 else { return nil }
-        var value: UInt32 = 0
-        for part in parts {
-            guard let octet = UInt8(part) else { return nil }
-            value = (value << 8) | UInt32(octet)
-        }
-        self.raw = value
-    }
-
-    /// The prefix length when this address is a contiguous netmask
-    /// (e.g. 255.255.255.0 → 24); nil for non-contiguous masks.
-    public var prefixLength: Int? {
-        let ones = raw.nonzeroBitCount
-        // A valid mask is `ones` set bits followed only by zeros.
-        guard raw == (ones == 0 ? 0 : ~UInt32(0) << (32 - ones)) else { return nil }
-        return ones
-    }
-
-    public var description: String {
-        "\((raw >> 24) & 0xff).\((raw >> 16) & 0xff).\((raw >> 8) & 0xff).\(raw & 0xff)"
-    }
+    return IPv6CIDR(base: address, prefix: prefixLength).description
 }

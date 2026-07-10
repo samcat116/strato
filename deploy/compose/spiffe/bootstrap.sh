@@ -14,8 +14,13 @@ TRUST_DOMAIN=strato.local
 HANDOFF=/handoff
 CP_NODE="spiffe://${TRUST_DOMAIN}/cp-node"
 CP_WORKLOAD="spiffe://${TRUST_DOMAIN}/control-plane"
+# DNS SAN for Envoy's server SVID: the hostname agents dial for mTLS. Go TLS
+# clients (Grafana Alloy pushing telemetry) refuse a URI-SAN-only certificate,
+# so the entry must carry this. Passed in from .env via docker-compose.yml.
+DNS_NAME="${STRATO_HOSTNAME:-localhost}"
 
 log() { echo "==> $*"; }
+die() { echo "error: $*" >&2; exit 1; }
 
 log "Waiting for the SPIRE server admin socket at ${SOCK}"
 for _ in $(seq 1 60); do [ -S "$SOCK" ] && break; sleep 1; done
@@ -31,18 +36,35 @@ mkdir -p "$HANDOFF"
 #    over the Workload API. A duplicate create on re-run is tolerated, but any
 #    OTHER failure is fatal — Envoy's server SVID depends on this entry, so
 #    starting without it would leave agents unable to complete mTLS.
-log "Creating control-plane workload entry (${CP_WORKLOAD}, unix:uid:101)"
+log "Creating control-plane workload entry (${CP_WORKLOAD}, unix:uid:101, dns:${DNS_NAME})"
 if ! entry_out=$(spire-server entry create \
     -socketPath "$SOCK" \
     -parentID "$CP_NODE" \
     -spiffeID "$CP_WORKLOAD" \
     -selector unix:uid:101 \
+    -dns "$DNS_NAME" \
     -x509SVIDTTL 3600 2>&1); then
     printf '%s\n' "$entry_out" | sed 's/^/    /' >&2
     if ! printf '%s' "$entry_out" | grep -qiE "already exists|similar entry"; then
         die "failed to create control-plane workload entry"
     fi
-    log "Entry already exists; continuing"
+    # The entry exists from an earlier `up` — possibly created before DNS SANs
+    # were added, or with a different hostname. The duplicate check above keys
+    # on spiffeID+parentID+selectors only, so update to converge the DNS SAN.
+    entry_id=$(spire-server entry show \
+        -socketPath "$SOCK" \
+        -spiffeID "$CP_WORKLOAD" 2>/dev/null | awk '/Entry ID/{print $NF; exit}')
+    [ -n "$entry_id" ] || die "entry reported as existing but not found for update"
+    log "Entry already exists (${entry_id}); updating to converge DNS SAN"
+    spire-server entry update \
+        -socketPath "$SOCK" \
+        -entryID "$entry_id" \
+        -parentID "$CP_NODE" \
+        -spiffeID "$CP_WORKLOAD" \
+        -selector unix:uid:101 \
+        -dns "$DNS_NAME" \
+        -x509SVIDTTL 3600 | sed 's/^/    /' \
+        || die "failed to update control-plane workload entry"
 else
     printf '%s\n' "$entry_out" | sed 's/^/    /'
 fi

@@ -55,6 +55,16 @@ struct NetworkAttachmentTests {
         #expect(subnetCIDR(ipAddress: "192.168.1.7", netmask: "255.0.255.0") == nil)
     }
 
+    @Test("IPv6 subnet CIDR derived from address and prefix length")
+    func subnet6Derivation() {
+        #expect(
+            subnet6CIDR(ip6Address: "fd12:3456:789a::100", prefixLength: 64) == "fd12:3456:789a::/64")
+        #expect(subnet6CIDR(ip6Address: nil, prefixLength: 64) == nil)
+        #expect(subnet6CIDR(ip6Address: "fd12::1", prefixLength: nil) == nil)
+        #expect(subnet6CIDR(ip6Address: "not-an-ip", prefixLength: 64) == nil)
+        #expect(subnet6CIDR(ip6Address: "fd12::1", prefixLength: 129) == nil)
+    }
+
     // MARK: - NetworkAttachment coding
 
     @Test("attachment descriptor round-trips through Codable")

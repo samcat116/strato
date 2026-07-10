@@ -54,7 +54,9 @@ struct VMSpecBuilder {
     }
 
     /// Builds network specs from the VM's interfaces, ordered by order index
-    /// (then device name, for stability when orders collide).
+    /// (then device name, for stability when orders collide). Interfaces must
+    /// have `addresses` eager-loaded — the per-family address rows are the
+    /// source of NIC addressing (the legacy single-address columns are dead).
     ///
     /// `networks` maps logical-network name → its model, supplying the DHCP/DNS
     /// configuration agents program into OVN. It defaults empty (DHCP disabled)
@@ -67,6 +69,8 @@ struct VMSpecBuilder {
             .sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
             .map { interface in
                 let network = networks[interface.network]
+                let ipv4 = interface.ipv4Address
+                let ipv6 = interface.ipv6Address
                 return NetworkSpec(
                     network: interface.network,
                     // The network's id, so the agent names its OVN switch after
@@ -74,9 +78,13 @@ struct VMSpecBuilder {
                     // same switch the network reconciler creates (issue #342).
                     networkId: network?.id,
                     macAddress: interface.macAddress,
-                    ipAddress: interface.ipAddress,
-                    netmask: interface.netmask,
-                    gateway: interface.gateway,
+                    ipAddress: ipv4?.address,
+                    // Old agents still read a dotted netmask off the wire.
+                    netmask: interface.ipv4Netmask,
+                    gateway: ipv4?.gateway,
+                    ipv6Address: ipv6?.address,
+                    ipv6PrefixLength: ipv6?.prefixLength,
+                    gateway6: ipv6?.gateway,
                     mtu: interface.mtu,
                     dhcpEnabled: network?.dhcpEnabled ?? false,
                     dnsServers: network?.dnsServers ?? [],

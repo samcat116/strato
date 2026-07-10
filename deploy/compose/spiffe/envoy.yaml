@@ -64,6 +64,54 @@ static_resources:
                     - name: control_plane
                       domains: ["*"]
                       routes:
+                        # Telemetry ingest: Alloy on the hypervisor nodes pushes
+                        # node metrics and journal logs here with its SPIFFE
+                        # SVID as the client cert. The per-route RBAC override
+                        # restricts these to agent identities — mTLS alone only
+                        # proves trust-domain membership, and e.g. the
+                        # control-plane identity must not be able to write
+                        # telemetry. Exact-path matches, so they take priority
+                        # over the prefix routes below.
+                        - match:
+                            path: "/ingest/metrics"
+                          route:
+                            cluster: prometheus
+                            prefix_rewrite: "/api/v1/write"
+                            timeout: 30s
+                          typed_per_filter_config:
+                            envoy.filters.http.rbac:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute
+                              rbac:
+                                rules:
+                                  action: ALLOW
+                                  policies:
+                                    agents-only:
+                                      permissions:
+                                        - any: true
+                                      principals:
+                                        - authenticated:
+                                            principal_name:
+                                              prefix: "spiffe://strato.local/agent/"
+                        - match:
+                            path: "/ingest/logs"
+                          route:
+                            cluster: loki
+                            prefix_rewrite: "/loki/api/v1/push"
+                            timeout: 30s
+                          typed_per_filter_config:
+                            envoy.filters.http.rbac:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute
+                              rbac:
+                                rules:
+                                  action: ALLOW
+                                  policies:
+                                    agents-only:
+                                      permissions:
+                                        - any: true
+                                      principals:
+                                        - authenticated:
+                                            principal_name:
+                                              prefix: "spiffe://strato.local/agent/"
                         - match:
                             prefix: "/agent/"
                           route:
@@ -74,6 +122,14 @@ static_resources:
                           route:
                             cluster: control_plane_upstream
                 http_filters:
+                  # No listener-level rules: everything is allowed unless a
+                  # route overrides via typed_per_filter_config (the /ingest/*
+                  # routes above). Control-plane routes keep their existing
+                  # model — the control plane re-verifies the forwarded client
+                  # cert (XFCC) itself.
+                  - name: envoy.filters.http.rbac
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -130,6 +186,37 @@ static_resources:
                     socket_address:
                       address: 127.0.0.1
                       port_value: 8080
+
+    # Telemetry ingest upstreams. Envoy shares the control-plane container's
+    # network namespace, which still resolves compose service names through
+    # Docker's embedded DNS — hence STRICT_DNS rather than STATIC.
+    - name: prometheus
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: prometheus
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: prometheus
+                      port_value: 9090
+
+    - name: loki
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: loki
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: loki
+                      port_value: 3100
 
     - name: spire_agent
       connect_timeout: 5s
