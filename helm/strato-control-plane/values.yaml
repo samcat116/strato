@@ -258,7 +258,25 @@ spicedb:
     pullPolicy: IfNotPresent
   
   replicaCount: 1
-  
+
+  # Postgres connection-pool sizing for the SpiceDB datastore. SpiceDB's
+  # upstream defaults (read 20/20, write 10/10 — min pinned equal to max) hold
+  # 30 connections open even when idle, which exhausts small managed databases
+  # (e.g. DigitalOcean's 1GB tier caps at 25 connections, ~22 usable for
+  # non-superuser roles) and starves the control plane out of booting. These
+  # defaults fit a small shared database while leaving headroom for the
+  # control plane; raise them for high-throughput installs with a dedicated
+  # or larger Postgres. Budgets are per SpiceDB replica — multiply by
+  # spicedb.replicaCount.
+  datastore:
+    connPool:
+      read:
+        maxOpen: 8
+        minOpen: 2
+      write:
+        maxOpen: 2
+        minOpen: 1
+
   service:
     grpcPort: 50051
     httpPort: 8080

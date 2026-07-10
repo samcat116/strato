@@ -128,6 +128,14 @@ externalDatabase:
   password: external-db-password
 ```
 
+SpiceDB's Postgres connection pools default to small, shared-database-friendly
+sizes (read 8 max / 2 min, write 2 max / 1 min per replica) so that a managed
+database with a low connection cap (e.g. DigitalOcean's 1GB tier allows ~22
+non-superuser connections) isn't exhausted before the control plane can
+connect. On a dedicated or larger database, raise
+`spicedb.datastore.connPool.*` toward SpiceDB's upstream defaults (read 20,
+write 10) for more throughput.
+
 #### Disable SpiceDB
 
 If you don't need authorization features:
@@ -160,6 +168,10 @@ spicedb:
 | `spicedb.enabled` | bool | `true` | Enable SpiceDB authorization |
 | `spicedb.operator.enabled` | bool | `true` | Install the SpiceDB Operator dependency |
 | `spicedb.presharedKey` | string | `""` | SpiceDB preshared key (auto-generated when empty) |
+| `spicedb.datastore.connPool.read.maxOpen` | int | `8` | Max open Postgres connections in SpiceDB's read pool |
+| `spicedb.datastore.connPool.read.minOpen` | int | `2` | Min (idle) Postgres connections in SpiceDB's read pool |
+| `spicedb.datastore.connPool.write.maxOpen` | int | `2` | Max open Postgres connections in SpiceDB's write pool |
+| `spicedb.datastore.connPool.write.minOpen` | int | `1` | Min (idle) Postgres connections in SpiceDB's write pool |
 | `spicedb.resources.limits.cpu` | string | `"500m"` | SpiceDB CPU limit |
 | `spicedb.resources.limits.memory` | string | `"512Mi"` | SpiceDB memory limit |
 | `ingress.enabled` | bool | `false` | Enable ingress |

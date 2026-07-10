@@ -40,6 +40,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "strato-control-plane.spicedbDatastoreSecretName" . }}
                   key: {{ include "strato-control-plane.spicedbDatastoreSecretKey" . }}
+            {{- include "strato-control-plane.spicedb.connPoolEnv" . | nindent 12 }}
           {{- if .Values.strato.database.tlsCACert }}
           volumeMounts:
             - name: db-tls-ca
@@ -83,6 +84,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "strato-control-plane.spicedbDatastoreSecretName" . }}
                   key: {{ include "strato-control-plane.spicedbDatastoreSecretKey" . }}
+            {{- include "strato-control-plane.spicedb.connPoolEnv" . | nindent 12 }}
           livenessProbe:
             httpGet:
               path: /healthz

@@ -224,6 +224,26 @@ app.kubernetes.io/component: spicedb
 {{- end }}
 
 {{/*
+SpiceDB datastore connection-pool env vars, shared by the serve container and
+the migrate initContainer. SpiceDB binds every flag to a SPICEDB_-prefixed env
+var (dashes -> underscores), so these map to --datastore-conn-pool-read-max-open
+etc. Values come from spicedb.datastore.connPool; see values.yaml for the
+sizing rationale.
+*/}}
+{{- define "strato-control-plane.spicedb.connPoolEnv" -}}
+{{- with .Values.spicedb.datastore.connPool -}}
+- name: SPICEDB_DATASTORE_CONN_POOL_READ_MAX_OPEN
+  value: {{ .read.maxOpen | quote }}
+- name: SPICEDB_DATASTORE_CONN_POOL_READ_MIN_OPEN
+  value: {{ .read.minOpen | quote }}
+- name: SPICEDB_DATASTORE_CONN_POOL_WRITE_MAX_OPEN
+  value: {{ .write.maxOpen | quote }}
+- name: SPICEDB_DATASTORE_CONN_POOL_WRITE_MIN_OPEN
+  value: {{ .write.minOpen | quote }}
+{{- end }}
+{{- end }}
+
+{{/*
 SpiceDB base labels (without component)
 */}}
 {{- define "strato-control-plane.spicedb.baseLabels" -}}
