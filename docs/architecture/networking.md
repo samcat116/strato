@@ -263,12 +263,19 @@ single network within a site** (Phase 2).
   operator or other-feature objects are never candidates.
 - SNAT egress uses an external logical switch with a `localnet` port on a
   configured physnet, mapped to a provider bridge, plus a gateway router port and
-  a default route. It requires an **operator-configured, dedicated external IP**
-  (`[ovn_uplink] external_cidr` in the agent config) that the host does not own —
-  the OVN router port claims that address, so auto-detecting and reusing the
-  host's own IP would cause an ARP/address conflict. Without the uplink config,
-  routers and east-west are realized but no SNAT (`externalAccess` has no effect).
-  The operator connects the provider bridge to the external network out of band.
+  a default route. The agent binds the gateway router port to its own chassis
+  with a `Gateway_Chassis` row (priority 1) — OVN only programs the centralized
+  SNAT on the chassis holding the gateway port, so without the binding the NAT
+  rule sits unprogrammed and traffic egresses un-NAT'd (issue #372). It also
+  ensures the provider bridge's bridge-named internal port exists so
+  `ovs-vswitchd` materializes the Linux netdev (issue #371), and warns when the
+  netdev still fails to appear. It requires an **operator-configured, dedicated
+  external IP** (`[ovn_uplink] external_cidr` in the agent config) that the host
+  does not own — the OVN router port claims that address, so auto-detecting and
+  reusing the host's own IP would cause an ARP/address conflict. Without the
+  uplink config, routers and east-west are realized but no SNAT
+  (`externalAccess` has no effect). The operator connects the provider bridge to
+  the external network out of band.
 - **No-egress isolation:** a project's `externalAccess=false` networks are keyed
   onto a separate `-internal` logical router with no uplink, so their guests
   provably have no route to the internet. Tradeoff: an egress and a no-egress
@@ -353,11 +360,14 @@ geneve verification on real multi-node hardware (recipe in
 
 ## Known gaps / dependencies
 
-- **SwiftOVN lacks models** for `Gateway_Chassis`, `HA_Chassis_Group`,
-  `Logical_Router_Static_Route`, `Port_Group`, and the `dynamic-routing*`
-  router/router-port fields. Additions needed for gateway HA, static routes,
-  security groups, and native dynamic routing. (TCP/SSL transport landed —
-  Phase 2 consumed it.)
+- **SwiftOVN model coverage is now largely complete** — `Gateway_Chassis`,
+  `HA_Chassis`/`HA_Chassis_Group`, `Logical_Router_Static_Route`, `Port_Group`,
+  the `dynamic-routing*` router/router-port fields, and TCP/SSL transport have
+  all landed and are consumed by the agent. Its `createBridge` gained
+  `ovs-vsctl add-br` semantics (bridge-named internal `Port`/`Interface` pair,
+  so the Linux netdev materializes — issue #371); the agent's
+  `ensureBridgeLocalPort` still runs as a repair path for bridges created by
+  older agents.
 - **Agent image** ships the chassis side only (`ovn-host` + OVS); the
   NB/SB/northd central is the separate per-site `deploy/ovn-central/` unit.
 - **OVN version floor** for dynamic routing (≥ 25.03, experimental).

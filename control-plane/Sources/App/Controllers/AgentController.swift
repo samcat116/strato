@@ -124,8 +124,15 @@ struct AgentController: RouteCollection {
     /// TLS-terminating proxy the local hop is plain HTTP, so trust
     /// X-Forwarded-Proto when present.
     private func webSocketBaseURL(req: Request) -> String {
+        // When SPIRE provisioning is active, agents connect to the Envoy mTLS
+        // listener (EXTERNAL_HOSTNAME), which is always TLS regardless of the
+        // browser-facing scheme — so the agent URL must be wss:// even for an
+        // http:// (localhost) origin. Otherwise trust X-Forwarded-Proto (the
+        // local hop behind a TLS terminator is plain HTTP).
+        let spireProvisioned = req.application.spireRegistrationService != nil
         let forwardedProto = req.headers["x-forwarded-proto"].first?.lowercased()
-        let isHTTPS = forwardedProto == "https" || (forwardedProto == nil && req.url.scheme == "https")
+        let isHTTPS =
+            spireProvisioned || forwardedProto == "https" || (forwardedProto == nil && req.url.scheme == "https")
         let scheme = isHTTPS ? "wss" : "ws"
 
         let host =

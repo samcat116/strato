@@ -15,6 +15,10 @@ cd "$(dirname "$0")"
 
 HOSTNAME_ARG="localhost"
 PORT_ARG="80"
+# Envoy mTLS listener + SPIRE node API ports agents connect to. Kept fixed to
+# match the published ports and the control plane's :8085 derivation; override
+# in .env only if you also change docker-compose.yml.
+AGENT_MTLS_PORT="8443"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,11 +44,37 @@ done
 if [[ -f .env ]]; then
   echo ".env already exists — leaving it untouched."
   echo "To reconfigure non-secret settings, edit .env directly."
+  # Upgrade guard: agents now authenticate over Envoy mTLS on :${AGENT_MTLS_PORT},
+  # so EXTERNAL_HOSTNAME must carry that port. A .env generated before this
+  # (EXTERNAL_HOSTNAME = the browser endpoint) makes the control plane emit
+  # agent bootstrap URLs that dial the wrong port.
+  if grep -q '^EXTERNAL_HOSTNAME=' .env && ! grep -qE "^EXTERNAL_HOSTNAME=.+:${AGENT_MTLS_PORT}\$" .env; then
+    echo
+    echo "WARNING: EXTERNAL_HOSTNAME in .env is not '<hostname>:${AGENT_MTLS_PORT}'."
+    echo "Agents authenticate over Envoy mTLS now — set it to your hostname with"
+    echo ":${AGENT_MTLS_PORT} appended, or agent bootstrap commands will dial the wrong port."
+  fi
+  # An existing .env generated with HTTP_PORT == the mTLS port can't stand up:
+  # nginx and Envoy would both try to publish that host port.
+  if grep -qE "^HTTP_PORT=${AGENT_MTLS_PORT}\$" .env; then
+    echo
+    echo "WARNING: HTTP_PORT in .env is ${AGENT_MTLS_PORT}, which collides with the"
+    echo "agent mTLS port. Change HTTP_PORT — nginx and Envoy cannot share it."
+  fi
   exit 0
 fi
 
 if ! command -v openssl >/dev/null 2>&1; then
   echo "Error: openssl is required to generate secrets." >&2
+  exit 1
+fi
+
+# The Envoy agent-mTLS listener claims ${AGENT_MTLS_PORT}; the browser proxy
+# cannot also bind it. Reject the collision rather than generate an unstartable
+# stack (both services would try to publish the same host port).
+if [[ "$PORT_ARG" == "$AGENT_MTLS_PORT" ]]; then
+  echo "Error: --port $PORT_ARG collides with the agent mTLS port (${AGENT_MTLS_PORT})." >&2
+  echo "Pick a different HTTP port (the mTLS listener needs ${AGENT_MTLS_PORT})." >&2
   exit 1
 fi
 
@@ -59,11 +89,15 @@ fi
 
 if [[ ( "$SCHEME" == "http" && "$PORT_ARG" != "80" ) || ( "$SCHEME" == "https" && "$PORT_ARG" != "443" ) ]]; then
   ORIGIN="${SCHEME}://${HOSTNAME_ARG}:${PORT_ARG}"
-  EXTERNAL_HOSTNAME="${HOSTNAME_ARG}:${PORT_ARG}"
 else
   ORIGIN="${SCHEME}://${HOSTNAME_ARG}"
-  EXTERNAL_HOSTNAME="${HOSTNAME_ARG}"
 fi
+
+# Agents authenticate over mTLS to the Envoy listener, a TLS port separate from
+# the browser proxy, so EXTERNAL_HOSTNAME points at <hostname>:<mTLS port>
+# regardless of the HTTP port. The control plane always emits wss:// agent URLs
+# when SPIRE is enabled, so this works for http:// (localhost) origins too.
+EXTERNAL_HOSTNAME="${HOSTNAME_ARG}:${AGENT_MTLS_PORT}"
 
 umask 077
 cat > .env <<EOF
@@ -81,8 +115,9 @@ VALKEY_PASSWORD=$(openssl rand -hex 32)
 # this does not match, so change it (and re-register users) when the
 # hostname changes. Non-localhost hostnames require HTTPS.
 STRATO_HOSTNAME=${HOSTNAME_ARG}
-# Host (and port, when non-standard) agents use to reach the control plane;
-# embedded in the join commands the UI generates.
+# Host:port agents use to reach the control plane over mTLS (the Envoy
+# listener); embedded in the bootstrap commands the UI generates. This is the
+# agent-facing endpoint, not the browser proxy.
 EXTERNAL_HOSTNAME=${EXTERNAL_HOSTNAME}
 # Full origin agents fetch signed image-download URLs from. Routes to the
 # control plane through the published proxy, so it must be the browser origin
@@ -111,5 +146,10 @@ if [[ "$SCHEME" == "https" ]]; then
   echo "Terminate TLS for ${ORIGIN} in front of the proxy service before"
   echo "registering users."
 fi
+echo
+echo "Agents authenticate over mTLS: make sure ${HOSTNAME_ARG}:${AGENT_MTLS_PORT}"
+echo "(Envoy) and ${HOSTNAME_ARG}:8085 (SPIRE) are reachable from your"
+echo "hypervisor nodes. mTLS is end-to-end, so do NOT terminate TLS in front"
+echo "of :${AGENT_MTLS_PORT}."
 echo
 echo "Next: docker compose up -d"
