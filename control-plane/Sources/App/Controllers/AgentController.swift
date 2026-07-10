@@ -241,7 +241,11 @@ struct AgentController: RouteCollection {
         // instead of silently minting a site-less token — and require it to
         // belong to the token's organization: a site is one OVN deployment
         // owned by one org, so a foreign agent joining it would mix tenants
-        // on a shared SDN.
+        // on a shared SDN. The caller also needs manage on the site itself
+        // (not just manage_agents on the token's scope): with agents and
+        // sites delegated to different OUs of one org, a token-carried site
+        // pin must not admit an agent into a sibling OU's fabric that the
+        // site membership endpoint would refuse.
         if let siteId = createRequest.siteId {
             guard let site = try await Site.find(siteId, on: req.db) else {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
@@ -250,6 +254,18 @@ struct AgentController: RouteCollection {
             let tokenOrg = try await scope.rootOrganizationID(on: req.db)
             guard siteOrg == tokenOrg else {
                 throw Abort(.badRequest, reason: "Site \(siteId) belongs to a different organization")
+            }
+            let user = try requireUser(req)
+            if !user.isSystemAdmin {
+                let allowed = try await req.spicedb.checkPermission(
+                    subject: user.id!.uuidString,
+                    permission: "manage",
+                    resource: "site",
+                    resourceId: siteId.uuidString
+                )
+                guard allowed else {
+                    throw Abort(.forbidden, reason: "You don't have 'manage' permission on site \(siteId)")
+                }
             }
         }
 

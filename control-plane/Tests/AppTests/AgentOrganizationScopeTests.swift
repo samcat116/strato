@@ -560,6 +560,38 @@ final class AgentOrganizationScopeTests {
         }
     }
 
+    @Test("Minting a token with a site pin requires manage on the site")
+    func tokenSitePinRequiresSiteManage() async throws {
+        try await withScopedApp { app, org, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(
+                username: "agents-only-admin", email: "agents-only-admin@example.com",
+                displayName: "Agents Only Admin", isSystemAdmin: false)
+            let token = try await user.generateAPIKey(on: app.db)
+            let site = Site(name: "pin-gated-dc", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
+
+            // The sibling-OU scenario: SpiceDB grants manage_agents on the
+            // token's scope but denies site#manage (same root org, different
+            // delegated subtree).
+            app.spicedbMockDeniedResources = ["site"]
+            defer { app.spicedbMockDeniedResources = [] }
+
+            struct Body: Content {
+                let agentName: String
+                let organizationId: UUID?
+                let siteId: UUID?
+            }
+            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    Body(agentName: "pin-gated-agent", organizationId: org.id, siteId: site.id))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+        }
+    }
+
     @Test("Site membership changes require manage on the agent, not just the site")
     func siteMembershipRequiresAgentManage() async throws {
         try await withScopedApp { app, org, _ in
