@@ -1,0 +1,33 @@
+control-plane/Sources/App/Services/SSFService.swift
+  s_7fd9b55b2a3f1e::t_a6851f13ee5695 144-146,148-150
+  s_7fd9b55b2a3f1e::t_1b993d7e60a4fd 75-77
+  s_7fd9b55b2a3f1e::t_8baa824a4ea434 271-277
+  s_7fd9b55b2a3f1e::t_a87f4aa3721035 22-55
+control-plane/Sources/App/Controllers/SSFStreamController.swift
+  s_7fd9b55b2a3f1e::t_b704fef4a13e35 62
+docs/deployment/shared-signals.md
+  s_7fd9b55b2a3f1e::t_b93568674a8281 52-55
+control-plane/Sources/App/Controllers/UserController.swift
+  s_7fd9b55b2a3f1e::t_2fffcbe56b4052 186-197
+control-plane/Tests/AppTests/SSFTests.swift
+  s_7fd9b55b2a3f1e::t_d2e3927c1027a0 615
+  s_7fd9b55b2a3f1e::t_148f4d0cd03411 95
+  s_7fd9b55b2a3f1e::t_ccc9a92280ebcb 439-458
+  s_7fd9b55b2a3f1e::t_840c0e04a51b49 352-355
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8b58905961bd5e914e0a44171965aaaf744b838d",
+  "prompts": {},
+  "sessions": {
+    "s_7fd9b55b2a3f1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53c35a4a-65e8-4363-8020-6eed993bf100",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
