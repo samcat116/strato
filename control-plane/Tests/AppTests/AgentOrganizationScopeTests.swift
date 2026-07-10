@@ -530,6 +530,38 @@ final class AgentOrganizationScopeTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
+
+            // OU delegation within ONE org: a site scoped to OU-B serves only
+            // OU-B's subtree, not a sibling OU's project (root org matches!).
+            let ouA = OrganizationalUnit(
+                name: "Pin OU A", description: "a", organizationID: org.id!,
+                path: "/\(org.id!.uuidString)", depth: 1)
+            try await ouA.save(on: app.db)
+            let ouB = OrganizationalUnit(
+                name: "Pin OU B", description: "b", organizationID: org.id!,
+                path: "/\(org.id!.uuidString)", depth: 1)
+            try await ouB.save(on: app.db)
+            let projectA = try await builder.createProject(
+                name: "Pin Project A", description: "p", ou: ouA)
+            let projectB = try await builder.createProject(
+                name: "Pin Project B", description: "p", ou: ouB)
+            let siteB = Site(name: "pin-ou-b-dc", organizationScope: .organizationalUnit(ouB.id!))
+            try await siteB.save(on: app.db)
+
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    Body(name: "sibling-ou-net", subnet: "10.52.0.0/24", projectId: projectA.id, siteId: siteB.id))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    Body(name: "own-ou-net", subnet: "10.53.0.0/24", projectId: projectB.id, siteId: siteB.id))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
         }
     }
 

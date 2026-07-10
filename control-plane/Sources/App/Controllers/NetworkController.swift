@@ -63,6 +63,27 @@ struct NetworkController: RouteCollection {
         return responses
     }
 
+    /// Whether a site's owning scope contains a project: an org-scoped site
+    /// serves every project whose root org matches; an OU-scoped site serves
+    /// only projects under that OU (directly or via a descendant OU). Legacy
+    /// unscoped sites serve nothing until an operator assigns them an owner.
+    static func siteScopeContains(project: Project, site: Site, on db: Database) async throws -> Bool {
+        switch site.organizationScope {
+        case .organization(let siteOrgID):
+            return try await project.getRootOrganizationId(on: db) == siteOrgID
+        case .organizationalUnit(let siteOUID):
+            // Walk the project's OU ancestry; bounded by OU nesting depth.
+            var current = project.$organizationalUnit.id
+            while let ouID = current {
+                if ouID == siteOUID { return true }
+                current = try await OrganizationalUnit.find(ouID, on: db)?.$parentOU.id
+            }
+            return false
+        case nil:
+            return false
+        }
+    }
+
     // MARK: - Create Network
 
     /// Create a new project-scoped network
@@ -118,22 +139,22 @@ struct NetworkController: RouteCollection {
         // Pinning to a site constrains all the network's VMs to that site's
         // agents, where the shared OVN deployment spans the switch across
         // nodes. Validated here so a typo'd id fails the create, not the
-        // first VM placement — and the site must belong to the same root
-        // organization as the network's project: sites are dedicated capacity,
-        // and a foreign project pinning a network here would get its VMs
-        // scheduled onto (and its switch realized across) another tenant's
-        // agents.
+        // first VM placement — and the site's owning scope must CONTAIN the
+        // network's project: sites are dedicated capacity, so an org-scoped
+        // site serves its whole org while an OU-scoped site serves only that
+        // OU's subtree. A bare root-org match would let a sibling OU's
+        // project force its VMs onto (and realize its switch across) capacity
+        // delegated to a different OU.
         if let siteId = request.siteId {
             guard let site = try await Site.find(siteId, on: req.db) else {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
             }
-            let projectOrg = try await Project.find(projectId, on: req.db)?
-                .getRootOrganizationId(on: req.db)
-            let siteOrg = try await site.rootOrganizationID(on: req.db)
-            guard projectOrg != nil, projectOrg == siteOrg else {
+            guard let project = try await Project.find(projectId, on: req.db),
+                try await Self.siteScopeContains(project: project, site: site, on: req.db)
+            else {
                 throw Abort(
                     .badRequest,
-                    reason: "Site \(siteId) belongs to a different organization than the network's project")
+                    reason: "Site \(siteId) does not serve the network's project")
             }
         }
 
