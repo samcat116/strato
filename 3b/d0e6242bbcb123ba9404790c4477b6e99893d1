@@ -1,0 +1,95 @@
+control-plane/Sources/App/Services/AgentService.swift
+  s_43b6c50e986845::t_160268a923abf2 183-184,186,188-193
+.github/workflows/README.md
+  s_43b6c50e986845::t_00ba7aa32f09c9 63-91
+.github/workflows/build.yaml
+  s_43b6c50e986845::t_e669040b8e3628 140-146,160-162,201-212,223-228,240-243,246-247,257,259-265,268-270,274-277,288
+.github/workflows/main-build.yaml
+  s_43b6c50e986845::t_2527efe37b408f 26-33,45-48,51-54
+CLAUDE.md
+  s_43b6c50e986845::t_4652ee2570b276 30-31
+Taskfile.yml
+  s_43b6c50e986845::t_8faca631e8f3a3 1007-1009,1011,1018-1019
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_43b6c50e986845::t_7da5a1204cbf7e 19-22,27-32,36-40,46-124,212-217,241-248,250,253-271,311-312,339,345-365,368,380-387,464,470-489,491,495,497,509-510,526-528,578-599,619-621,638-739
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_43b6c50e986845::t_b689838e95b592 35-38,371,373-379,452,456-457,500-512,539-540,542-551
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_43b6c50e986845::t_cd878188546173 66-82,138-143,145,148-154
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_43b6c50e986845::t_ae9d80e20f3e6c 23-25,29-80,95,97-115,119-121,127-135,141,149-156,162,213,229-237,243,250,253-265,307,315
+control-plane/Sources/App/Migrations/AddOrganizationScopeToInfra.swift
+  s_43b6c50e986845::t_76c292a4bcc48b 1-58
+control-plane/Sources/App/Migrations/BackfillInfraOrganizationScope.swift
+  s_43b6c50e986845::t_508666de78df25 1-53
+control-plane/Sources/App/Migrations/DropLegacyVMInterfaceAddressColumns.swift
+  s_43b6c50e986845::t_2c86a7cd95884b 1-52
+control-plane/Sources/App/Models/Agent.swift
+  s_43b6c50e986845::t_5006f0e828a502 79-88,206-225,242-243,264-265
+control-plane/Sources/App/Models/AgentRegistrationToken.swift
+  s_43b6c50e986845::t_9126888978b1db 31-42,60-61,69-70,74-81,177-178,192-193,203-204,206-220,236-237
+control-plane/Sources/App/Models/OrganizationScope.swift
+  s_43b6c50e986845::t_bd7d9524c7a714 1-106
+control-plane/Sources/App/Models/Site.swift
+  s_43b6c50e986845::t_4a72d498f853b7 39-48,57-63,68-87,98-99,107-108,116-118
+control-plane/Sources/App/Models/VMInterfaceAddress.swift
+  s_43b6c50e986845::t_79539f9ada2fa1 40
+control-plane/Sources/App/Services/AgentService+Types.swift
+  s_43b6c50e986845::t_993f1ed17f0a48 25,47-50
+control-plane/Sources/App/Services/SpiceDBInfraReconciliation.swift
+  s_43b6c50e986845::t_eee31202a3ec5a 1-64
+control-plane/Sources/App/Services/SpiceDBSchemaBootstrap.swift
+  s_43b6c50e986845::t_32793de34a713c 10-17,24-25,27-34,41-55
+control-plane/Sources/App/configure.swift
+  s_43b6c50e986845::t_3d5b0b6419b7aa 320-328,347-348
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_43b6c50e986845::t_75e1678c92ba52 1-717
+control-plane/Tests/AppTests/AgentWebSocketIntegrationTests.swift
+  s_43b6c50e986845::t_2bd88b57cbdee9 23-29,36-38,97-104,127-128,130,142-144
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_43b6c50e986845::t_676f89bb5c881d 78-81
+control-plane/Tests/AppTests/MigrationRoundTripTests.swift
+  s_43b6c50e986845::t_cd994a8788b35b 1,37-59
+control-plane/Tests/AppTests/ReplicaRoutingTests.swift
+  s_43b6c50e986845::t_d09ed2dc784e7c 164-175
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_43b6c50e986845::t_f546f6bbe1a63f 51-58,67,72,122,129,142,149,163,168,182,186
+control-plane/Tests/AppTests/SiteTests.swift
+  s_43b6c50e986845::t_2624e9dcdb1383 56-58,77-80,84-92,109-110,114-117,123,127,130-143,161,189,220,239,253,269-270,297-298,325-326,328-329,336-339,343-345,355,477,517,534
+control-plane/Tests/AppTests/VMNetworkSelectionTests.swift
+  s_43b6c50e986845::t_9d7cc3deea9a2d 228-233
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_43b6c50e986845::t_2784140bc6b05d 1-286
+control-plane/web/src/components/agents/agent-table.tsx
+  s_43b6c50e986845::t_612b94a5d99abc 13,22-36,61,85
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_43b6c50e986845::t_82f8a368c47396 16-22,24,39,43-45,59-64,70,289-316
+control-plane/web/src/components/layout/nav.ts
+  s_43b6c50e986845::t_d551a1e18c51e1 14,39
+control-plane/web/src/components/vms/vm-network-card.tsx
+  s_43b6c50e986845::t_c2ebbf5bfb3fd2 14,16,20
+control-plane/web/src/lib/api/sites.ts
+  s_43b6c50e986845::t_e6a11a6957df31 1-30
+control-plane/web/src/types/api.ts
+  s_43b6c50e986845::t_84969c4c2351a1 236-238,275-276,281-297,426-428
+docs/deployment/agents.md
+  s_43b6c50e986845::t_628e25d59c0b49 69-72
+spicedb/schema.zed
+  s_43b6c50e986845::t_329ce89238bc7a 42,67-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "3bd0e6242bbcb123ba9404790c4477b6e99893d1",
+  "prompts": {},
+  "sessions": {
+    "s_43b6c50e986845": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e3d64ddb-5ca6-49de-8f37-b9fe7ced2e88",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
