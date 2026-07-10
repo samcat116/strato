@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 
 /// Builds the OVN `DHCP_Options` `options` map and the DHCP server identity for
 /// a subnet. Pure and platform-independent (no OVN dependency) so it lives in
@@ -7,7 +8,9 @@ public enum OVNDHCPOptionsBuilder {
     /// Builds the OVN DHCPv4 option map. `server_id`/`server_mac` are required for
     /// OVN to answer a DISCOVER; `router`/`dns_server`/`domain_name`/`lease_time`
     /// are the guest-facing config. DNS uses OVN's `{a, b}` set syntax and the
-    /// domain is quoted per OVN's option grammar.
+    /// domain is quoted per OVN's option grammar. The DNS list may be mixed —
+    /// only its IPv4 entries belong in a DHCPv4 option (v6 entries go to
+    /// `v6Options`).
     public static func v4Options(
         gateway: String, dnsServers: [String], domainName: String?, leaseTime: Int?, subnet: String
     ) -> [String: String] {
@@ -17,12 +20,39 @@ public enum OVNDHCPOptionsBuilder {
             "lease_time": String(leaseTime ?? 3600),
             "router": gateway,
         ]
-        let cleanedDNS = dnsServers.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let cleanedDNS = dnsServers
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { IPv4Address($0) != nil }
         if !cleanedDNS.isEmpty {
             options["dns_server"] = "{\(cleanedDNS.joined(separator: ", "))}"
         }
         if let domainName, !domainName.isEmpty {
             options["domain_name"] = "\"\(domainName)\""
+        }
+        return options
+    }
+
+    /// Builds the OVN DHCPv6 option map. OVN keys the family off the
+    /// `DHCP_Options` row's CIDR, and the v6 grammar is smaller: `server_id`
+    /// is a MAC (it seeds the server DUID — never an IP, unlike v4), DNS is
+    /// the option's v6 entries, and the search domain is `domain_search`.
+    /// There is deliberately no router option: guests learn their default
+    /// route from Router Advertisements (`ipv6_ra_configs` on the router
+    /// port), not DHCPv6.
+    public static func v6Options(
+        dnsServers: [String], domainName: String?, subnet6: String
+    ) -> [String: String] {
+        var options: [String: String] = [
+            "server_id": serverMAC(for: subnet6)
+        ]
+        let v6DNS = dnsServers
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { IPv6Address($0) != nil }
+        if !v6DNS.isEmpty {
+            options["dns_server"] = "{\(v6DNS.joined(separator: ", "))}"
+        }
+        if let domainName, !domainName.isEmpty {
+            options["domain_search"] = "\"\(domainName)\""
         }
         return options
     }

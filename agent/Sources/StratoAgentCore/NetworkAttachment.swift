@@ -45,6 +45,11 @@ public struct ResolvedNetworkAttachment: Sendable {
     public let ipAddress: String?
     public let netmask: String?
     public let gateway: String?
+    /// Static IPv6 address on a dual-stack network, with its prefix length
+    /// (v6 has no dotted-netmask form) and per-family gateway.
+    public let ip6Address: String?
+    public let prefixLength6: Int?
+    public let gateway6: String?
     public let mtu: Int?
     /// When true, this NIC's L3 config is delivered by the network's DHCP
     /// responder (OVN), so guest provisioning omits static addressing and lets
@@ -61,6 +66,9 @@ public struct ResolvedNetworkAttachment: Sendable {
         ipAddress: String? = nil,
         netmask: String? = nil,
         gateway: String? = nil,
+        ip6Address: String? = nil,
+        prefixLength6: Int? = nil,
+        gateway6: String? = nil,
         mtu: Int? = nil,
         dhcpEnabled: Bool = false,
         dnsServers: [String] = []
@@ -71,6 +79,9 @@ public struct ResolvedNetworkAttachment: Sendable {
         self.ipAddress = ipAddress
         self.netmask = netmask
         self.gateway = gateway
+        self.ip6Address = ip6Address
+        self.prefixLength6 = prefixLength6
+        self.gateway6 = gateway6
         self.mtu = mtu
         self.dhcpEnabled = dhcpEnabled
         self.dnsServers = dnsServers
@@ -89,4 +100,16 @@ public func subnetCIDR(ipAddress: String?, netmask: String?) -> String? {
     }
     let network = IPv4Address(raw: ip.raw & mask.raw)
     return "\(network)/\(prefix)"
+}
+
+/// Derives the IPv6 network CIDR (e.g. "fd12:3456:789a::/64") from an
+/// interface's address and prefix length. Nil when either part is missing or
+/// unparsable.
+public func subnet6CIDR(ip6Address: String?, prefixLength: Int?) -> String? {
+    guard let ip6Address, let prefixLength,
+        let address = IPv6Address(ip6Address), (0...128).contains(prefixLength)
+    else {
+        return nil
+    }
+    return IPv6CIDR(base: address, prefix: prefixLength).description
 }

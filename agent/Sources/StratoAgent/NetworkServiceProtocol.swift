@@ -58,10 +58,18 @@ struct VMNetworkConfig: Sendable {
     let ipAddress: String?
     let subnet: String?
     let gateway: String?
+    /// IPv6 assignment on a dual-stack network: address, prefix length, the
+    /// per-family gateway, and the network CIDR (keys the DHCPv6 options row).
+    let ip6Address: String?
+    let prefixLength6: Int?
+    let gateway6: String?
+    let subnet6: String?
     /// When true, program OVN's native DHCP responder for this NIC's subnet so
     /// the guest learns its `ipAddress`, `gateway`, and `dnsServers` over DHCP.
+    /// Covers both families: a dual-stack NIC gets DHCPv4 and DHCPv6.
     let dhcpEnabled: Bool
-    /// DNS resolvers to advertise over DHCP (`dns_server` option).
+    /// DNS resolvers to advertise over DHCP (`dns_server` option). May be
+    /// mixed-family; each DHCP family's options take their own entries.
     let dnsServers: [String]
     /// DNS search domain to advertise over DHCP (`domain_name` option).
     let domainName: String?
@@ -70,7 +78,8 @@ struct VMNetworkConfig: Sendable {
 
     init(
         networkName: String, networkId: UUID? = nil, macAddress: String? = nil, ipAddress: String? = nil,
-        subnet: String? = nil, gateway: String? = nil, dhcpEnabled: Bool = false, dnsServers: [String] = [],
+        subnet: String? = nil, gateway: String? = nil, ip6Address: String? = nil, prefixLength6: Int? = nil,
+        gateway6: String? = nil, subnet6: String? = nil, dhcpEnabled: Bool = false, dnsServers: [String] = [],
         domainName: String? = nil, leaseTime: Int? = nil
     ) {
         self.networkName = networkName
@@ -79,6 +88,10 @@ struct VMNetworkConfig: Sendable {
         self.ipAddress = ipAddress
         self.subnet = subnet
         self.gateway = gateway
+        self.ip6Address = ip6Address
+        self.prefixLength6 = prefixLength6
+        self.gateway6 = gateway6
+        self.subnet6 = subnet6
         self.dhcpEnabled = dhcpEnabled
         self.dnsServers = dnsServers
         self.domainName = domainName
@@ -98,6 +111,23 @@ struct VMNetworkInfo: Codable, Sendable {
     /// existing port's addresses). Nil when the network hands out addresses
     /// itself (user-mode SLIRP) or no allocation exists.
     let ipAddress: String?
+    /// The IPv6 address bound to the port on a dual-stack network, same
+    /// provenance as `ipAddress`.
+    let ip6Address: String?
+
+    init(
+        vmId: String, networkName: String, portName: String, portUUID: String?,
+        attachment: NetworkAttachment, macAddress: String, ipAddress: String?, ip6Address: String? = nil
+    ) {
+        self.vmId = vmId
+        self.networkName = networkName
+        self.portName = portName
+        self.portUUID = portUUID
+        self.attachment = attachment
+        self.macAddress = macAddress
+        self.ipAddress = ipAddress
+        self.ip6Address = ip6Address
+    }
 }
 
 struct NetworkInfo: Codable, Sendable {
