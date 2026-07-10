@@ -1,0 +1,14 @@
+# Prometheus for the Strato single-host deployment.
+#
+# Storage for agent host telemetry: hypervisor nodes run Grafana Alloy, which
+# remote-writes node metrics through the Envoy mTLS listener
+# (/ingest/metrics -> /api/v1/write; see spiffe/envoy.yaml). Ingest happens via
+# the remote-write receiver (--web.enable-remote-write-receiver in
+# docker-compose.yml), so the only scrape here is Prometheus itself.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
