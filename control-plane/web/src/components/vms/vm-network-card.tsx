@@ -9,7 +9,23 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { VM } from "@/types/api";
+import type { VM, VMNetworkInterface } from "@/types/api";
+
+/** All addresses of a NIC as `address/prefix`, from the per-family list when
+ * present, falling back to the legacy single-address fields. */
+function nicAddresses(nic: VMNetworkInterface): string[] {
+  if (nic.addresses && nic.addresses.length > 0) {
+    return nic.addresses.map((a) => `${a.address}/${a.prefixLength}`);
+  }
+  return nic.ipAddress ? [nic.ipAddress] : [];
+}
+
+function nicGateways(nic: VMNetworkInterface): string[] {
+  if (nic.addresses && nic.addresses.length > 0) {
+    return nic.addresses.flatMap((a) => (a.gateway ? [a.gateway] : []));
+  }
+  return nic.gateway ? [nic.gateway] : [];
+}
 
 export function VMNetworkCard({ vm }: { vm: VM }) {
   const interfaces = vm.networkInterfaces ?? [];
@@ -40,10 +56,7 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
                   MAC
                 </TableHead>
                 <TableHead className="text-muted-foreground font-medium">
-                  IP Address
-                </TableHead>
-                <TableHead className="text-muted-foreground font-medium">
-                  Netmask
+                  Addresses
                 </TableHead>
                 <TableHead className="text-muted-foreground font-medium">
                   Gateway
@@ -67,13 +80,18 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
                     {nic.macAddress}
                   </TableCell>
                   <TableCell className="text-foreground/80 font-mono text-sm">
-                    {nic.ipAddress ?? "—"}
+                    {nicAddresses(nic).length > 0
+                      ? nicAddresses(nic).map((address) => (
+                          <div key={address}>{address}</div>
+                        ))
+                      : "—"}
                   </TableCell>
                   <TableCell className="text-foreground/80 font-mono text-sm">
-                    {nic.netmask ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-foreground/80 font-mono text-sm">
-                    {nic.gateway ?? "—"}
+                    {nicGateways(nic).length > 0
+                      ? nicGateways(nic).map((gateway) => (
+                          <div key={gateway}>{gateway}</div>
+                        ))
+                      : "—"}
                   </TableCell>
                   <TableCell className="text-foreground/80">
                     {nic.mtu ?? "—"}

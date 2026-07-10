@@ -78,6 +78,7 @@ function EditNetworkForm({
 }) {
   const [isLoading, setIsLoading] = useState(false);
   const [gateway, setGateway] = useState(network.gateway ?? "");
+  const [enableIpv6, setEnableIpv6] = useState(false);
   const [dhcp, setDhcp] = useState<DhcpFormState>(() => dhcpFormFrom(network));
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -88,6 +89,9 @@ function EditNetworkForm({
     try {
       await networksApi.update(network.id, {
         gateway: gateway.trim() || undefined,
+        // Adding IPv6 is always safe (existing NICs stay v4); the server
+        // generates a ULA /64 and re-syncs agents.
+        ipv6Enabled: enableIpv6 ? true : undefined,
         ...parseDhcpForm(dhcp),
       });
       toast.success(`Network "${network.name}" updated`);
@@ -129,6 +133,29 @@ function EditNetworkForm({
               Changing the gateway only affects VMs created afterward.
             </p>
           </div>
+          {network.subnet6 ? (
+            <div className="space-y-2">
+              <Label className="text-foreground">IPv6 subnet</Label>
+              <p className="text-sm font-mono text-muted-foreground">
+                {network.subnet6}
+                {network.gateway6 ? ` (gateway ${network.gateway6})` : ""}
+              </p>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <input
+                id="editEnableIpv6"
+                type="checkbox"
+                checked={enableIpv6}
+                onChange={(e) => setEnableIpv6(e.target.checked)}
+                disabled={isLoading}
+                className="h-4 w-4 accent-primary"
+              />
+              <Label htmlFor="editEnableIpv6" className="text-foreground">
+                Enable IPv6 (generate a unique local /64)
+              </Label>
+            </div>
+          )}
           <DHCPFields value={dhcp} onChange={setDhcp} disabled={isLoading} />
         </div>
         <DialogFooter>

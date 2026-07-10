@@ -31,6 +31,9 @@ interface CreateNetworkDialogProps {
 
 // A loose sanity check; the server is the source of truth for CIDR validity.
 const CIDR_PATTERN = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
+// Loose IPv6 CIDR check requiring /64 (the only tenant prefix length the
+// server accepts); the server fully validates.
+const CIDR6_PATTERN = /^[0-9a-fA-F:]+\/64$/;
 
 export function CreateNetworkDialog({
   open,
@@ -42,7 +45,9 @@ export function CreateNetworkDialog({
     name: "",
     subnet: "",
     gateway: "",
+    subnet6: "",
   });
+  const [ipv6Enabled, setIpv6Enabled] = useState(true);
   const [dhcp, setDhcp] = useState<DhcpFormState>(emptyDhcpForm);
 
   // The network is created in the project selected in the header switcher.
@@ -50,7 +55,8 @@ export function CreateNetworkDialog({
   const projectId = currentProject?.id;
 
   const resetForm = () => {
-    setFormData({ name: "", subnet: "", gateway: "" });
+    setFormData({ name: "", subnet: "", gateway: "", subnet6: "" });
+    setIpv6Enabled(true);
     setDhcp(emptyDhcpForm);
   };
 
@@ -69,12 +75,21 @@ export function CreateNetworkDialog({
       return;
     }
 
+    const subnet6 = formData.subnet6.trim();
+    if (ipv6Enabled && subnet6 && !CIDR6_PATTERN.test(subnet6)) {
+      toast.error("IPv6 subnet must be a /64, e.g. fd12:3456:789a::/64");
+      return;
+    }
+
     setIsLoading(true);
     try {
       await networksApi.create({
         name,
         subnet,
         gateway: formData.gateway.trim() || undefined,
+        // Omitted subnet6 with IPv6 enabled → the server generates a ULA /64.
+        subnet6: ipv6Enabled && subnet6 ? subnet6 : undefined,
+        ipv6Enabled: ipv6Enabled ? undefined : false,
         projectId,
         ...parseDhcpForm(dhcp),
       });
@@ -156,6 +171,40 @@ export function CreateNetworkDialog({
                 Defaults to the subnet&apos;s first host address. Changing it
                 later only affects VMs created afterward.
               </p>
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <input
+                  id="networkIpv6Enabled"
+                  type="checkbox"
+                  checked={ipv6Enabled}
+                  onChange={(e) => setIpv6Enabled(e.target.checked)}
+                  disabled={isLoading}
+                  className="h-4 w-4 accent-primary"
+                />
+                <Label htmlFor="networkIpv6Enabled" className="text-foreground">
+                  IPv6 (dual-stack)
+                </Label>
+              </div>
+              {ipv6Enabled && (
+                <>
+                  <Input
+                    id="networkSubnet6"
+                    placeholder="Auto-generate a unique local (ULA) /64"
+                    value={formData.subnet6}
+                    onChange={(e) =>
+                      setFormData({ ...formData, subnet6: e.target.value })
+                    }
+                    className="bg-background border-border text-foreground font-mono"
+                    disabled={isLoading}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Leave empty to auto-generate a unique local /64, or enter
+                    an explicit /64 prefix. The gateway defaults to ::1 in the
+                    prefix.
+                  </p>
+                </>
+              )}
             </div>
             <DHCPFields value={dhcp} onChange={setDhcp} disabled={isLoading} />
           </div>

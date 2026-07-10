@@ -112,10 +112,20 @@ export function NetworkTable({
                 )}
               </TableCell>
               <TableCell className="text-foreground/80 font-mono text-sm">
-                {network.subnet}
+                <div>{network.subnet}</div>
+                {network.subnet6 && (
+                  <div className="text-xs text-muted-foreground">
+                    {network.subnet6}
+                  </div>
+                )}
               </TableCell>
               <TableCell className="text-foreground/80 font-mono text-sm">
-                {network.gateway ?? "—"}
+                <div>{network.gateway ?? "—"}</div>
+                {network.gateway6 && (
+                  <div className="text-xs text-muted-foreground">
+                    {network.gateway6}
+                  </div>
+                )}
               </TableCell>
               <TableCell className="text-foreground/80 text-sm">
                 {network.dhcpEnabled ? (

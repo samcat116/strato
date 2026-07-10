@@ -31,13 +31,23 @@ export type VMStatus =
   | "Error"
   | "Unknown";
 
+export interface InterfaceAddress {
+  family: "ipv4" | "ipv6";
+  address: string;
+  prefixLength: number;
+  gateway?: string;
+}
+
 export interface VMNetworkInterface {
   id?: string;
   network: string;
   macAddress: string;
+  /** Legacy single-address fields (the IPv4 address); `addresses` is the full set. */
   ipAddress?: string;
   netmask?: string;
   gateway?: string;
+  /** All addresses on the NIC, one per family on a dual-stack network. */
+  addresses?: InterfaceAddress[];
   mtu?: number;
   deviceName: string;
   orderIndex: number;
@@ -755,6 +765,9 @@ export interface Network {
   name: string;
   subnet: string;
   gateway?: string;
+  /** IPv6 subnet (always a /64) when the network is dual-stack. */
+  subnet6?: string;
+  gateway6?: string;
   projectId?: string;
   /** The seeded global "default" network, which cannot be renamed or deleted. */
   isDefault: boolean;
@@ -776,6 +789,11 @@ export interface CreateNetworkRequest {
   name: string;
   subnet: string;
   gateway?: string;
+  /** Explicit IPv6 /64; omitted → the server generates a ULA (dual-stack default). */
+  subnet6?: string;
+  gateway6?: string;
+  /** false → v4-only network. */
+  ipv6Enabled?: boolean;
   projectId?: string;
   dhcpEnabled?: boolean;
   dnsServers?: string[];
@@ -787,6 +805,10 @@ export interface UpdateNetworkRequest {
   name?: string;
   subnet?: string;
   gateway?: string;
+  subnet6?: string;
+  gateway6?: string;
+  /** true with no subnet6 → enable IPv6 with a generated ULA; false → remove IPv6. */
+  ipv6Enabled?: boolean;
   dhcpEnabled?: boolean;
   dnsServers?: string[];
   domainName?: string;
