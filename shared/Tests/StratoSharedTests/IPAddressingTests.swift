@@ -22,7 +22,9 @@ import Testing
         for (input, canonical) in cases {
             let parsed = IPv6Address(input)
             #expect(parsed != nil, "'\(input)' should parse")
-            #expect(parsed?.description == canonical, "'\(input)' → '\(parsed?.description ?? "nil")', wanted '\(canonical)'")
+            #expect(
+                parsed?.description == canonical,
+                "'\(input)' → '\(parsed?.description ?? "nil")', wanted '\(canonical)'")
             // Canonical forms are fixed points.
             let reparsed = parsed.flatMap { IPv6Address($0.description) }
             #expect(reparsed == parsed)

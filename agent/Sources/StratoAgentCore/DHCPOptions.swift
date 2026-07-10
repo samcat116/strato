@@ -20,7 +20,8 @@ public enum OVNDHCPOptionsBuilder {
             "lease_time": String(leaseTime ?? 3600),
             "router": gateway,
         ]
-        let cleanedDNS = dnsServers
+        let cleanedDNS =
+            dnsServers
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { IPv4Address($0) != nil }
         if !cleanedDNS.isEmpty {
@@ -45,7 +46,8 @@ public enum OVNDHCPOptionsBuilder {
         var options: [String: String] = [
             "server_id": serverMAC(for: subnet6)
         ]
-        let v6DNS = dnsServers
+        let v6DNS =
+            dnsServers
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { IPv6Address($0) != nil }
         if !v6DNS.isEmpty {
