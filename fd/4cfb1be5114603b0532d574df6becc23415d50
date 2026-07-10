@@ -1,0 +1,30 @@
+control-plane/Tests/AppTests/AgentServiceLifecycleTests.swift
+  s_43b6c50e986845::t_9960455566ddd0 46-83
+control-plane/Sources/App/Services/AgentService.swift
+  s_43b6c50e986845::t_3930cd9218eff5 593-594
+  s_43b6c50e986845::t_bb5f05e435a334 124-126
+  s_43b6c50e986845::t_2788e701ba4113 127-132
+  s_43b6c50e986845::t_d928127f7c3b56 166-170,173-177
+  s_43b6c50e986845::t_053b746827da16 190
+  s_43b6c50e986845::t_e89dfef8506e81 162,164,178-189,191-194,196,198-206
+  s_43b6c50e986845::t_34e3bd51a6ef22 2192-2195
+  s_43b6c50e986845::t_c9505553c988d8 566,572-576,582
+  s_43b6c50e986845::t_34fa3969f7b451 608-612
+  s_43b6c50e986845::t_0827c55b92ab1b 583
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "fd4cfb1be5114603b0532d574df6becc23415d50",
+  "prompts": {},
+  "sessions": {
+    "s_43b6c50e986845": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e3d64ddb-5ca6-49de-8f37-b9fe7ced2e88",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
