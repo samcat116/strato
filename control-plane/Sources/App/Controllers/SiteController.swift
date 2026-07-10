@@ -20,13 +20,64 @@ struct SiteController: RouteCollection {
 
     /// Site topology is infrastructure, same trust level as agent management:
     /// moving an agent between sites or re-pointing the network controller
-    /// changes which node authors a site's whole SDN. System admins only.
-    private func requireSystemAdmin(_ req: Request) throws {
+    /// changes which node authors a site's whole SDN. Delegated to the owning
+    /// org (manage_agents / site#manage); system admins retain full access.
+    private func requireUser(_ req: Request) throws -> User {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
-        guard user.isSystemAdmin else {
-            throw Abort(.forbidden, reason: "System admin access required")
+        return user
+    }
+
+    /// System admin, or `manage_agents` on the org/OU scope a new site is
+    /// being created under.
+    private func requireManageAgents(_ req: Request, scope: OrganizationScope) async throws {
+        let user = try requireUser(req)
+        if user.isSystemAdmin { return }
+        let ref = scope.spiceDBParentRef
+        let allowed = try await req.spicedb.checkPermission(
+            subject: user.id!.uuidString,
+            permission: "manage_agents",
+            resource: ref.subjectType,
+            resourceId: ref.subjectId.uuidString
+        )
+        guard allowed else {
+            throw Abort(.forbidden, reason: "You don't have permission to manage sites for this organization")
+        }
+    }
+
+    /// System admin, or the given permission on the site itself (resolved
+    /// through `site#parent` in SpiceDB).
+    private func requireSitePermission(_ req: Request, site: Site, permission: String) async throws {
+        let user = try requireUser(req)
+        if user.isSystemAdmin { return }
+        let allowed = try await req.spicedb.checkPermission(
+            subject: user.id!.uuidString,
+            permission: permission,
+            resource: "site",
+            resourceId: try site.requireID().uuidString
+        )
+        guard allowed else {
+            throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this site")
+        }
+    }
+
+    /// System admin, or `manage` on the agent (via `agent#parent`). Site
+    /// membership changes need this ON TOP of site#manage: with agents and
+    /// sites delegated to different OUs of one org, a sibling-OU site admin
+    /// shares the root org but must not move an agent SpiceDB wouldn't let
+    /// them manage.
+    private func requireAgentManage(_ req: Request, agent: Agent) async throws {
+        let user = try requireUser(req)
+        if user.isSystemAdmin { return }
+        let allowed = try await req.spicedb.checkPermission(
+            subject: user.id!.uuidString,
+            permission: "manage",
+            resource: "agent",
+            resourceId: try agent.requireID().uuidString
+        )
+        guard allowed else {
+            throw Abort(.forbidden, reason: "You don't have 'manage' permission on this agent")
         }
     }
 
@@ -41,26 +92,53 @@ struct SiteController: RouteCollection {
     }
 
     func listSites(req: Request) async throws -> [SiteResponse] {
-        try requireSystemAdmin(req)
+        let user = try requireUser(req)
         let sites = try await Site.query(on: req.db).sort(\.$name).all()
-        return try sites.map { try SiteResponse(from: $0) }
+
+        let visible: [Site]
+        if user.isSystemAdmin {
+            visible = sites
+        } else {
+            var allowed: [Site] = []
+            for site in sites {
+                guard let siteId = site.id else { continue }
+                let ok = try await req.spicedb.checkPermission(
+                    subject: user.id!.uuidString,
+                    permission: "view",
+                    resource: "site",
+                    resourceId: siteId.uuidString
+                )
+                if ok { allowed.append(site) }
+            }
+            visible = allowed
+        }
+        return try visible.map { try SiteResponse(from: $0) }
     }
 
     func getSite(req: Request) async throws -> SiteResponse {
-        try requireSystemAdmin(req)
-        return try SiteResponse(from: try await findSite(req))
+        let site = try await findSite(req)
+        try await requireSitePermission(req, site: site, permission: "view")
+        return try SiteResponse(from: site)
     }
 
     func createSite(req: Request) async throws -> SiteResponse {
-        try requireSystemAdmin(req)
         let create = try req.content.decode(CreateSiteRequest.self)
+
+        guard
+            let scope = try OrganizationScope.from(
+                organizationID: create.organizationId, organizationalUnitID: create.organizationalUnitId)
+        else {
+            throw Abort(.badRequest, reason: "Either organizationId or organizationalUnitId is required")
+        }
+        try await scope.validateExists(on: req.db)
+        try await requireManageAgents(req, scope: scope)
 
         let name = create.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name.count <= 100 else {
             throw Abort(.badRequest, reason: "Site name must be 1-100 characters")
         }
 
-        let site = Site(name: name, description: create.description)
+        let site = Site(name: name, description: create.description, organizationScope: scope)
         do {
             try await site.save(on: req.db)
         } catch {
@@ -68,12 +146,20 @@ struct SiteController: RouteCollection {
             // the registration-token conflict behavior.
             throw Abort(.conflict, reason: "A site named '\(name)' already exists")
         }
+
+        // Mirror ownership into SpiceDB so org admins can manage the site.
+        let ref = scope.spiceDBParentRef
+        try await req.spicedb.writeRelationship(
+            entity: "site", entityId: try site.requireID().uuidString,
+            relation: "parent",
+            subject: ref.subjectType, subjectId: ref.subjectId.uuidString)
+
         return try SiteResponse(from: site)
     }
 
     func updateSite(req: Request) async throws -> SiteResponse {
-        try requireSystemAdmin(req)
         let site = try await findSite(req)
+        try await requireSitePermission(req, site: site, permission: "manage")
         let update = try req.content.decode(UpdateSiteRequest.self)
 
         if let controllerId = update.networkControllerAgentId {
@@ -123,8 +209,8 @@ struct SiteController: RouteCollection {
     }
 
     func deleteSite(req: Request) async throws -> HTTPStatus {
-        try requireSystemAdmin(req)
         let site = try await findSite(req)
+        try await requireSitePermission(req, site: site, permission: "manage")
         let siteId = try site.requireID()
 
         // Refuse while anything references the site: a cascade would silently
@@ -140,19 +226,42 @@ struct SiteController: RouteCollection {
         }
 
         try await site.delete(on: req.db)
+
+        // Drop the ownership tuple; best-effort — a leftover grants nothing
+        // once the row is gone.
+        if let ref = site.organizationScope?.spiceDBParentRef {
+            try? await req.spicedb.deleteRelationship(
+                entity: "site", entityId: siteId.uuidString,
+                relation: "parent",
+                subject: ref.subjectType, subjectId: ref.subjectId.uuidString)
+        }
         return .noContent
     }
 
     func assignAgent(req: Request) async throws -> AgentResponse {
-        try requireSystemAdmin(req)
         let site = try await findSite(req)
+        try await requireSitePermission(req, site: site, permission: "manage")
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
+        try await requireAgentManage(req, agent: agent)
         let targetSiteId = try site.requireID()
+
+        // A site is one OVN deployment owned by one scope; its members must
+        // live within that scope. Root-org equality is not enough: an OU-B
+        // site admitting a sibling OU-A agent would run OU-B's site-pinned
+        // VMs on capacity managed through OU-A. Rescope the agent first.
+        guard let siteScope = site.organizationScope,
+            let agentScope = agent.organizationScope,
+            try await siteScope.contains(agentScope, on: req.db)
+        else {
+            throw Abort(
+                .conflict,
+                reason: "Agent is not owned by this site's organization scope; reassign the agent first")
+        }
 
         // A move is a removal from the old site too, so it must honor the same
         // invariant as removeAgent: never orphan a site's topology authority.
@@ -194,8 +303,8 @@ struct SiteController: RouteCollection {
     }
 
     func removeAgent(req: Request) async throws -> AgentResponse {
-        try requireSystemAdmin(req)
         let site = try await findSite(req)
+        try await requireSitePermission(req, site: site, permission: "manage")
         let siteId = try site.requireID()
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
@@ -203,6 +312,7 @@ struct SiteController: RouteCollection {
         guard let agent = try await Agent.find(agentId, on: req.db), agent.$site.id == siteId else {
             throw Abort(.notFound, reason: "Agent not found in this site")
         }
+        try await requireAgentManage(req, agent: agent)
 
         // Never orphan a site's topology authority by pulling its controller:
         // reconciliation would silently stop for every network in the site.

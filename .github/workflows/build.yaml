@@ -137,18 +137,18 @@ jobs:
   # match on exactly one label — the installation name — so do not add
   # `self-hosted` or arch labels here.
   #
-  # Jobs build inside the official Swift image instead of installing a
-  # toolchain on the ephemeral runner each job. vapor/swiftly-action breaks on
-  # the ARC pods ($USER is unset, so it sources /home//.local/.../env.sh), and
-  # this pins the exact toolchain the Dockerfiles build with — agent/Dockerfile
-  # uses this same image. The runner image needs nothing Swift-related.
+  # Jobs run directly on the runner pod: the scale set's runner image bakes in
+  # the Swift 6.3.2 toolchain (and git, which SwiftPM needs). They used to run
+  # in a `container: swift:6.3.2-noble` job container, but that pulled the
+  # multi-GB Swift image through dind on every job. vapor/swiftly-action is
+  # still not an option on ARC pods ($USER is unset, so it sources
+  # /home//.local/.../env.sh) — a toolchain bump means rebuilding the runner
+  # image together with the Dockerfiles.
   test:
     name: Build and Test Swift Packages
     needs: changes
     if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: swift-runners-strato
-    container:
-      image: swift:6.3.2-noble
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -157,10 +157,9 @@ jobs:
       # actions/cache: the GitHub cache never helped here — PR-scoped saves
       # are unreadable by sibling PRs and nothing on main saves the key, so
       # every run paid a ~5 minute 1.4GB upload for a restore that always
-      # missed. The runner mounts its tool cache into the job container, so
-      # the path is warm across runs if the ARC scale set backs it with a
-      # persistent volume; on a plain ephemeral pod these steps are harmless
-      # and the build runs cold.
+      # missed. The path is warm across runs if the ARC scale set backs the
+      # tool cache with a persistent volume; on a plain ephemeral pod these
+      # steps are harmless and the build runs cold.
       #
       # Each job prunes only the scratch dirs it owns — the Swift test jobs
       # run concurrently, possibly against a shared tool-cache volume, so
@@ -199,53 +198,21 @@ jobs:
         working-directory: agent
         run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent"
 
-  # Two control-plane jobs, one suite each: fast engine-independent coverage
-  # on SQLite, and the identical suite against the real engine production
-  # uses, validating migrations and Postgres-specific SQL (issue #195).
-  # Separate jobs (not steps or a matrix on a shared runner) because each ARC
-  # pod is its own container network — the old single-job layout existed only
-  # so two Postgres services wouldn't fight over one shared runner's port.
-  test-control-plane-sqlite:
-    name: Test Control Plane (SQLite)
+  # One control-plane job running the identical suite twice: fast
+  # engine-independent coverage on SQLite, then against the real engine
+  # production uses, validating migrations and Postgres-specific SQL
+  # (issue #195). These used to be two parallel jobs, but the runner pool is
+  # small and queue time — not execution time — dominates PR wall clock:
+  # each job cost a runner slot, a swift-image pull, and its own full
+  # `swift build` of the same package into a separate scratch dir. Running
+  # both suites after a single build trades ~3 minutes of in-job serialism
+  # for a whole runner slot and a duplicate ~5-minute build, which under
+  # contention saved 20-40 minutes of queueing.
+  test-control-plane:
+    name: Test Control Plane
     needs: changes
     if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: swift-runners-strato
-    container:
-      image: swift:6.3.2-noble
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      # Prune only this job's scratch dir — concurrent sibling jobs may share
-      # the tool-cache volume (see the comment on the shared+agent job).
-      - name: Prune build scratch dir if oversized
-        run: |
-          scratch="$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
-          if [ -d "$scratch" ]; then
-            size_kb=$(du -sk "$scratch" | cut -f1)
-            if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
-              echo "$scratch is $((size_kb / 1024 / 1024))GB (>10GB); wiping for a cold rebuild"
-              rm -rf "$scratch"
-            fi
-          fi
-
-      - name: Build Control Plane
-        working-directory: control-plane
-        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
-
-      - name: Test Control Plane (SQLite)
-        working-directory: control-plane
-        env:
-          STRATO_TEST_DATABASE: sqlite
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
-
-  test-control-plane-postgres:
-    name: Test Control Plane (Postgres)
-    needs: changes
-    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
-    runs-on: swift-runners-strato
-    container:
-      image: swift:6.3.2-noble
     services:
       postgres:
         image: postgres:15
@@ -253,6 +220,12 @@ jobs:
           POSTGRES_DB: strato_test
           POSTGRES_USER: strato
           POSTGRES_PASSWORD: strato_password
+        # With no job container the job doesn't share a Docker network with
+        # the service, so the port must be published. The dind daemon shares
+        # the runner pod's network namespace, which puts the published port on
+        # the pod's loopback.
+        ports:
+          - 5432:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -264,9 +237,14 @@ jobs:
 
       # Prune only this job's scratch dir — concurrent sibling jobs may share
       # the tool-cache volume (see the comment on the shared+agent job).
+      # The strato-swift-build/control-plane-postgres dir is orphaned (its job
+      # merged into this one); remove it if a previous workflow left one.
+      # This can race a still-running old-workflow job during the transition —
+      # worst case that job fails its build and needs a rerun.
       - name: Prune build scratch dir if oversized
         run: |
-          scratch="$RUNNER_TOOL_CACHE/strato-swift-build/control-plane-postgres"
+          rm -rf "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane-postgres"
+          scratch="$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
           if [ -d "$scratch" ]; then
             size_kb=$(du -sk "$scratch" | cut -f1)
             if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
@@ -275,21 +253,28 @@ jobs:
             fi
           fi
 
-      # Separate scratch dir from the SQLite job: the two run concurrently,
-      # possibly against the same persistent tool-cache volume, and SwiftPM
-      # build trees don't tolerate concurrent writers.
       - name: Build Control Plane
+        id: build-cp
         working-directory: control-plane
-        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane-postgres"
+        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+
+      - name: Test Control Plane (SQLite)
+        working-directory: control-plane
+        env:
+          STRATO_TEST_DATABASE: sqlite
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
 
       - name: Test Control Plane (Postgres)
+        # Run even if the SQLite leg failed (but not if the build did) —
+        # Postgres-specific breakage should always be visible on the PR.
+        if: ${{ !cancelled() && steps.build-cp.outcome == 'success' }}
         working-directory: control-plane
         env:
           STRATO_TEST_DATABASE: postgres
-          # The job runs in a container on the same Docker network as the
-          # service, so Postgres is reachable by service name on its native
-          # port — no host port mapping involved.
-          DATABASE_HOST: postgres
+          # The service publishes 5432 to the runner pod (see the `ports`
+          # mapping above). 127.0.0.1 rather than localhost: docker publishes
+          # on IPv4, and localhost can resolve to ::1 first.
+          DATABASE_HOST: 127.0.0.1
           DATABASE_PORT: 5432
           DATABASE_NAME: strato_test
           DATABASE_USERNAME: strato
@@ -300,7 +285,7 @@ jobs:
         # control-plane/Tests/AppTests/TestUtilities.swift — so the suite
         # stays far under Postgres's default max_connections=100. This leg
         # used to be forced to --no-parallel and took ~8 minutes.
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane-postgres"
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
 
   test-agent-macos:
     name: Build & Test Agent (macOS)

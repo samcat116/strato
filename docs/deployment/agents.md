@@ -66,7 +66,10 @@ token is single-use and rotates on every successful registration.
 
 - Registration tokens are **single-use** and expire (default 24h from the
   UI). Creating one requires an admin session; the API equivalent is
-  `POST /api/agents/registration-tokens`.
+  `POST /api/agents/registration-tokens`. Every token names the organization
+  (or organizational unit) whose dedicated capacity the agent becomes, via
+  `organizationId`/`organizationalUnitId` — a brand-new agent whose token
+  carries no organization is refused registration.
 - If an agent's stored token is rejected (expired, revoked, or the agent was
   deleted server-side), the agent exits with instructions rather than
   retrying forever. Create a new token and run `strato-agent join` again —

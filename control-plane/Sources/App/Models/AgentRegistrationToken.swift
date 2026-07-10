@@ -28,6 +28,18 @@ final class AgentRegistrationToken: Model, Content, @unchecked Sendable {
     @OptionalField(key: "site_id")
     var siteID: UUID?
 
+    /// Owning organization scope (exactly one of the two on freshly minted
+    /// tokens) the agent inherits when it redeems this token. Like `siteID`,
+    /// the assignment is durable on the agent row, so rotated reconnect tokens
+    /// deliberately don't carry it — but unlike the site, a brand-new agent is
+    /// REFUSED registration when its token has no scope: unowned dedicated
+    /// capacity would be schedulable by no one.
+    @OptionalField(key: "organization_id")
+    var organizationID: UUID?
+
+    @OptionalField(key: "organizational_unit_id")
+    var organizationalUnitID: UUID?
+
     @Timestamp(key: "expires_at", on: .none)
     var expiresAt: Date?
 
@@ -45,7 +57,8 @@ final class AgentRegistrationToken: Model, Content, @unchecked Sendable {
         agentName: String,
         expirationHours: Int = 1,
         spireProvisioned: Bool = false,
-        siteID: UUID? = nil
+        siteID: UUID? = nil,
+        organizationScope: OrganizationScope? = nil
     ) {
         self.id = id
         self.token = token
@@ -53,7 +66,17 @@ final class AgentRegistrationToken: Model, Content, @unchecked Sendable {
         self.isUsed = false
         self.spireProvisioned = spireProvisioned
         self.siteID = siteID
+        self.organizationID = organizationScope?.organizationID
+        self.organizationalUnitID = organizationScope?.organizationalUnitID
         self.expiresAt = Date().addingTimeInterval(TimeInterval(expirationHours * 3600))
+    }
+
+    /// The scope the redeeming agent inherits; nil on rotated reconnect tokens
+    /// and rows predating mandatory scoping.
+    var organizationScope: OrganizationScope? {
+        if let orgID = organizationID { return .organization(orgID) }
+        if let ouID = organizationalUnitID { return .organizationalUnit(ouID) }
+        return nil
     }
 
     /// Check if the token is valid (not used and not expired)
@@ -151,6 +174,8 @@ struct AgentRegistrationTokenListItem: Content {
     let expiresAt: Date
     let isUsed: Bool
     let isValid: Bool
+    let organizationId: UUID?
+    let organizationalUnitId: UUID?
     let createdAt: Date?
     let usedAt: Date?
 
@@ -164,6 +189,8 @@ struct AgentRegistrationTokenListItem: Content {
         self.expiresAt = tokenModel.expiresAt ?? Date()
         self.isUsed = tokenModel.isUsed
         self.isValid = tokenModel.isValid
+        self.organizationId = tokenModel.organizationID
+        self.organizationalUnitId = tokenModel.organizationalUnitID
         self.createdAt = tokenModel.createdAt
         self.usedAt = tokenModel.usedAt
     }
@@ -173,8 +200,24 @@ struct CreateAgentRegistrationTokenRequest: Content {
     let agentName: String
     let expirationHours: Int?
     /// Site the agent joins on registration; omitted keeps the agent site-less
-    /// (legacy single-node OVN model).
+    /// (legacy single-node OVN model). The site must belong to the same
+    /// organization as the token's scope.
     let siteId: UUID?
+    /// Owning scope the agent inherits at registration; exactly one of the two
+    /// is required.
+    let organizationId: UUID?
+    let organizationalUnitId: UUID?
+
+    /// The validated one-of org/OU scope.
+    func organizationScope() throws -> OrganizationScope {
+        guard
+            let scope = try OrganizationScope.from(
+                organizationID: organizationId, organizationalUnitID: organizationalUnitId)
+        else {
+            throw Abort(.badRequest, reason: "Either organizationId or organizationalUnitId is required")
+        }
+        return scope
+    }
 
     func validate() throws {
         guard !agentName.isEmpty else {
@@ -190,5 +233,7 @@ struct CreateAgentRegistrationTokenRequest: Content {
                 throw Abort(.badRequest, reason: "Expiration hours must be between 1 and 168 (1 week)")
             }
         }
+
+        _ = try organizationScope()
     }
 }

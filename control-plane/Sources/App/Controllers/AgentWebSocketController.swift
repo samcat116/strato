@@ -32,6 +32,10 @@ struct AgentWebSocketController: RouteCollection {
         /// agent row when the register message arrives. Nil (no token site, or
         /// mTLS auth) never clears an existing assignment.
         var pendingSiteID: UUID?
+        /// Organization scope carried by the redeemed registration token,
+        /// applied like the site. Nil never clears — but a brand-new agent
+        /// with no pending scope is refused registration.
+        var pendingOrganizationScope: OrganizationScope?
     }
 
     // Non-async handler - runs on WebSocket's event loop
@@ -364,10 +368,15 @@ struct AgentWebSocketController: RouteCollection {
             // reject instead — the token is untouched and the agent can retry.
             registrationToken.markAsUsed()
             let tokenSiteID = registrationToken.siteID
+            let tokenOrganizationScope = registrationToken.organizationScope
             return registrationToken.save(on: req.db).map { _ -> Bool in
-                // Stash the token's site for the register message that follows;
-                // all `state` access happens on the WebSocket's event loop.
-                ws.eventLoop.execute { state.pendingSiteID = tokenSiteID }
+                // Stash the token's site and org scope for the register message
+                // that follows; all `state` access happens on the WebSocket's
+                // event loop.
+                ws.eventLoop.execute {
+                    state.pendingSiteID = tokenSiteID
+                    state.pendingOrganizationScope = tokenOrganizationScope
+                }
                 // Never log the raw token value — logs are lower-trust than the token
                 // store and may be shipped off-host. The agent name is sufficient.
                 req.logger.info(
@@ -440,10 +449,12 @@ struct AgentWebSocketController: RouteCollection {
                 // credential for a node meant to authenticate by SVID only.
                 let isTokenAuthenticated = state.tokenAuthenticated
                 let pendingSiteID = state.pendingSiteID
+                let pendingOrganizationScope = state.pendingOrganizationScope
                 Task {
                     do {
                         let agentUUID = try await req.agentService.registerAgent(
-                            message, agentName: agentName, siteID: pendingSiteID)
+                            message, agentName: agentName, siteID: pendingSiteID,
+                            organizationScope: pendingOrganizationScope)
 
                         // Rotate the single-use registration token: the one this
                         // connection presented was consumed at validation, so without a
@@ -486,8 +497,19 @@ struct AgentWebSocketController: RouteCollection {
                         // replacement was minted. Without this, a transient failure
                         // here (e.g. a DB blip) would permanently consume the agent's
                         // only credential and lock it out until an operator mints a
-                        // new join token.
-                        if isTokenAuthenticated, let bearer = req.headers.bearerAuthorization?.token {
+                        // new join token. NOT restored for a scopeless token: that
+                        // credential can never register this agent, and a restored
+                        // valid-unused token would block minting the scoped
+                        // replacement (the create endpoint's duplicate-token guard).
+                        let tokenIsPermanentlyUnusable: Bool
+                        if case AgentServiceError.missingOrganizationScope = error {
+                            tokenIsPermanentlyUnusable = true
+                        } else {
+                            tokenIsPermanentlyUnusable = false
+                        }
+                        if isTokenAuthenticated, !tokenIsPermanentlyUnusable,
+                            let bearer = req.headers.bearerAuthorization?.token
+                        {
                             do {
                                 if let presented = try await AgentRegistrationToken.query(on: req.db)
                                     .filter(\.$token == bearer)
@@ -514,9 +536,19 @@ struct AgentWebSocketController: RouteCollection {
                         // its reconnect loop. Everything else stays unclassified
                         // (treated as transient; the agent retries with backoff).
                         let errorCode: String?
-                        if case AgentServiceError.unsupportedProtocolVersion = error {
+                        switch error {
+                        case AgentServiceError.unsupportedProtocolVersion:
                             errorCode = ErrorMessage.ErrorCode.unsupportedProtocolVersion
-                        } else {
+                        case AgentServiceError.missingOrganizationScope:
+                            // Permanent for this credential: the presented
+                            // token carries no org and never will. Classified
+                            // as invalid_token — the operator action ("mint a
+                            // new token", which is org-scoped now) matches,
+                            // and agents already deployed exit with
+                            // instructions instead of reconnect-looping on an
+                            // unrecognized code.
+                            errorCode = ErrorMessage.ErrorCode.invalidToken
+                        default:
                             errorCode = nil
                         }
                         self.sendErrorResponse(

@@ -1,3 +1,4 @@
+import SQLKit
 import Testing
 import Vapor
 import Fluent
@@ -31,6 +32,29 @@ struct MigrationRoundTripTests {
             // simply dropped), so confirm revert is repeatable here.
             try await app.autoRevert()
             try await app.autoMigrate()
+        }
+    }
+
+    @Test("Legacy NIC address columns are dropped from the migrated schema")
+    func legacyNICAddressColumnsAreDropped() async throws {
+        try await withTestApp { app in
+            let sql = try #require(app.db as? SQLDatabase)
+
+            // DropLegacyVMInterfaceAddressColumns removed the single-address
+            // columns; selecting them must fail on the fully-migrated schema.
+            await #expect(throws: (any Error).self) {
+                _ = try await sql.raw("SELECT ip_address FROM vm_network_interfaces").all()
+            }
+            await #expect(throws: (any Error).self) {
+                _ = try await sql.raw("SELECT netmask FROM vm_network_interfaces").all()
+            }
+            await #expect(throws: (any Error).self) {
+                _ = try await sql.raw("SELECT gateway FROM vm_network_interfaces").all()
+            }
+
+            // Their replacement is queryable.
+            let addressRows = try await sql.raw("SELECT address FROM vm_interface_addresses").all()
+            #expect(addressRows.isEmpty)
         }
     }
 }

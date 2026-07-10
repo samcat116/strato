@@ -53,7 +53,9 @@ final class SiteTests {
     }
 
     /// Registers an in-memory agent, optionally into a site (as its
-    /// registration token would). Returns the agent's UUID string.
+    /// registration token would). New agents require an org scope; default to
+    /// the harness's organization (the oldest one). Returns the agent's UUID
+    /// string.
     private func registerAgent(
         app: Application, named name: String, siteID: UUID? = nil,
         protocolVersion: Int = WireProtocol.currentVersion,
@@ -72,8 +74,20 @@ final class SiteTests {
             networkCapability: networkCapability,
             protocolVersion: protocolVersion
         )
-        let uuid = try await app.agentService.registerAgent(message, agentName: name, siteID: siteID)
+        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let uuid = try await app.agentService.registerAgent(
+            message, agentName: name, siteID: siteID,
+            organizationScope: orgID.map { .organization($0) })
         return uuid.uuidString
+    }
+
+    /// A site owned by the harness's organization, so the site↔agent same-org
+    /// invariant holds for agents registered via `registerAgent`.
+    private func makeSite(app: Application, name: String) async throws -> Site {
+        let orgID = try #require(try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id)
+        let site = Site(name: name, organizationScope: .organization(orgID))
+        try await site.save(on: app.db)
+        return site
     }
 
     private func placeVM(
@@ -92,22 +106,41 @@ final class SiteTests {
 
     @Test("Site CRUD round-trips and rejects duplicate names")
     func siteCRUD() async throws {
-        try await withSiteTestApp { app, _, _, token in
+        try await withSiteTestApp { app, _, project, token in
+            let orgId = project.$organization.id
             var siteId: UUID?
             try await app.test(.POST, "/api/sites") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(CreateSiteRequest(name: "dc-east", description: "rack 1"))
+                try req.content.encode(
+                    CreateSiteRequest(
+                        name: "dc-east", description: "rack 1",
+                        organizationId: orgId, organizationalUnitId: nil))
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let site = try res.content.decode(SiteResponse.self)
                 #expect(site.name == "dc-east")
                 #expect(site.networkControllerAgentId == nil)
+                #expect(site.organizationId == orgId)
                 siteId = site.id
+            }
+
+            // A site without an owning scope is refused outright.
+            try await app.test(.POST, "/api/sites") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSiteRequest(
+                        name: "dc-unowned", description: nil,
+                        organizationId: nil, organizationalUnitId: nil))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
             }
 
             try await app.test(.POST, "/api/sites") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(CreateSiteRequest(name: "dc-east", description: nil))
+                try req.content.encode(
+                    CreateSiteRequest(
+                        name: "dc-east", description: nil,
+                        organizationId: orgId, organizationalUnitId: nil))
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
@@ -125,8 +158,7 @@ final class SiteTests {
     @Test("Designating a network controller requires site membership")
     func controllerMustBeMember() async throws {
         try await withSiteTestApp { app, _, _, token in
-            let site = Site(name: "dc-a")
-            try await site.save(on: app.db)
+            let site = try await self.makeSite(app: app, name: "dc-a")
             let outsiderId = try await self.registerAgent(app: app, named: "outsider")
 
             try await app.test(.PUT, "/api/sites/\(site.id!.uuidString)") { req in
@@ -154,8 +186,7 @@ final class SiteTests {
     @Test("A controller the sync path won't honor cannot be designated")
     func controllerCapabilityValidation() async throws {
         try await withSiteTestApp { app, _, _, token in
-            let site = Site(name: "dc-caps")
-            try await site.save(on: app.db)
+            let site = try await self.makeSite(app: app, name: "dc-caps")
 
             // Pre-v4 member: assembly keeps it on legacy per-node scoping, so
             // designating it would leave the site's topology authored nowhere.
@@ -186,8 +217,7 @@ final class SiteTests {
     @Test("A site's network controller cannot be deregistered")
     func controllerDeregistrationGuard() async throws {
         try await withSiteTestApp { app, _, _, token in
-            let site = Site(name: "dc-dereg")
-            try await site.save(on: app.db)
+            let site = try await self.makeSite(app: app, name: "dc-dereg")
             let controllerId = try await self.registerAgent(app: app, named: "dereg-ctl", siteID: site.id)
             site.$networkControllerAgent.id = UUID(uuidString: controllerId)
             try await site.save(on: app.db)
@@ -206,8 +236,7 @@ final class SiteTests {
     @Test("A site with members or pinned networks refuses deletion")
     func deleteGuards() async throws {
         try await withSiteTestApp { app, _, _, token in
-            let site = Site(name: "dc-b")
-            try await site.save(on: app.db)
+            let site = try await self.makeSite(app: app, name: "dc-b")
             _ = try await self.registerAgent(app: app, named: "occupant", siteID: site.id)
 
             try await app.test(.DELETE, "/api/sites/\(site.id!.uuidString)") { req in
@@ -221,8 +250,7 @@ final class SiteTests {
     @Test("The designated network controller cannot be removed from its site")
     func controllerRemovalGuard() async throws {
         try await withSiteTestApp { app, _, _, token in
-            let site = Site(name: "dc-c")
-            try await site.save(on: app.db)
+            let site = try await self.makeSite(app: app, name: "dc-c")
             let controllerId = try await self.registerAgent(app: app, named: "ctl", siteID: site.id)
             site.$networkControllerAgent.id = UUID(uuidString: controllerId)
             try await site.save(on: app.db)
@@ -238,10 +266,8 @@ final class SiteTests {
     @Test("Assigning an agent that controls another site is refused")
     func controllerMoveGuard() async throws {
         try await withSiteTestApp { app, _, _, token in
-            let oldSite = Site(name: "dc-old")
-            try await oldSite.save(on: app.db)
-            let newSite = Site(name: "dc-new")
-            try await newSite.save(on: app.db)
+            let oldSite = try await self.makeSite(app: app, name: "dc-old")
+            let newSite = try await self.makeSite(app: app, name: "dc-new")
 
             let controllerId = try await self.registerAgent(app: app, named: "moving-ctl", siteID: oldSite.id)
             oldSite.$networkControllerAgent.id = UUID(uuidString: controllerId)
@@ -268,10 +294,8 @@ final class SiteTests {
     @Test("An agent hosting VMs cannot change site (API and token paths)")
     func hostedVMMoveGuard() async throws {
         try await withSiteTestApp { app, _, project, token in
-            let oldSite = Site(name: "dc-vm-old")
-            try await oldSite.save(on: app.db)
-            let newSite = Site(name: "dc-vm-new")
-            try await newSite.save(on: app.db)
+            let oldSite = try await self.makeSite(app: app, name: "dc-vm-old")
+            let newSite = try await self.makeSite(app: app, name: "dc-vm-new")
 
             let agentId = try await self.registerAgent(app: app, named: "loaded", siteID: oldSite.id)
             try await self.placeVM(
@@ -298,19 +322,27 @@ final class SiteTests {
         }
     }
 
-    @Test("Sites API requires a system admin")
-    func sitesRequireAdmin() async throws {
+    @Test("Site listing is scoped: a user with no site access sees nothing")
+    func sitesListScoped() async throws {
         try await withSiteTestApp { app, _, _, _ in
+            _ = try await self.makeSite(app: app, name: "dc-scoped")
+
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
                 username: "plainuser", email: "plain@example.com",
                 displayName: "Plain", isSystemAdmin: false)
             let token = try await user.generateAPIKey(on: app.db)
 
+            // The mock SpiceDB denies site view for this user, so the list is
+            // empty rather than forbidden — sites are org-delegated now.
+            app.spicedbMockAllows = false
+            defer { app.spicedbMockAllows = true }
             try await app.test(.GET, "/api/sites") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
-                #expect(res.status == .forbidden)
+                #expect(res.status == .ok)
+                let sites = try res.content.decode([SiteResponse].self)
+                #expect(sites.isEmpty)
             }
         }
     }
@@ -320,8 +352,7 @@ final class SiteTests {
     @Test("Registration assigns the token's site; re-registration without one preserves it")
     func registrationSiteAssignment() async throws {
         try await withSiteTestApp { app, _, _, _ in
-            let site = Site(name: "dc-d")
-            try await site.save(on: app.db)
+            let site = try await self.makeSite(app: app, name: "dc-d")
 
             let agentId = try await self.registerAgent(app: app, named: "node-1", siteID: site.id)
             var agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.db))
@@ -443,8 +474,7 @@ final class SiteTests {
     @Test("The site's network controller gets the whole site's networks, authoritative")
     func controllerAssembly() async throws {
         try await withSiteTestApp { app, _, project, _ in
-            let site = Site(name: "dc-e")
-            try await site.save(on: app.db)
+            let site = try await self.makeSite(app: app, name: "dc-e")
 
             let controllerId = try await self.registerAgent(app: app, named: "ctl-agent", siteID: site.id)
             let peerId = try await self.registerAgent(app: app, named: "peer-agent", siteID: site.id)
@@ -484,8 +514,7 @@ final class SiteTests {
     @Test("A site with no designated controller gives no agent authority")
     func noControllerAssembly() async throws {
         try await withSiteTestApp { app, _, project, _ in
-            let site = Site(name: "dc-f")
-            try await site.save(on: app.db)
+            let site = try await self.makeSite(app: app, name: "dc-f")
             let agentId = try await self.registerAgent(app: app, named: "lone-agent", siteID: site.id)
             try await self.placeVM(
                 app: app, project: project, named: "lone-vm", onAgent: agentId,
@@ -502,8 +531,7 @@ final class SiteTests {
     @Test("A sited agent on a pre-v4 protocol keeps legacy scoping (rolling-upgrade safety)")
     func preSiteAuthorityAgentAssembly() async throws {
         try await withSiteTestApp { app, _, project, _ in
-            let site = Site(name: "dc-skew")
-            try await site.save(on: app.db)
+            let site = try await self.makeSite(app: app, name: "dc-skew")
 
             // A v3 binary predates `networksAuthoritative`: it would read the
             // non-authoritative shape (networks: [] + false) as an
