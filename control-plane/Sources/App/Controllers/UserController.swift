@@ -195,6 +195,7 @@ struct UserController: RouteCollection {
 
         // Create session - log the user in automatically
         req.auth.login(user)
+        req.stampSessionEpoch(for: user)
         await req.recordAuthEvent(.register, user: user)
 
         // If this is a system admin (first user), skip default organization setup
@@ -253,6 +254,7 @@ struct UserController: RouteCollection {
 
         // Create session
         req.auth.login(user)
+        req.stampSessionEpoch(for: user)
         await req.recordAuthEvent(.login, user: user)
 
         // Store in SpiceDB relationships if needed

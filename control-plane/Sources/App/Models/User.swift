@@ -37,6 +37,16 @@ final class User: Model, @unchecked Sendable {
     @Field(key: "scim_active")
     var scimActive: Bool
 
+    // Security state driven by SSF signals (issue #38). `sessionEpoch` is
+    // compared against the epoch stamped into each session at login: bumping
+    // it invalidates every existing session. `disabledAt` blocks all
+    // authentication while set. Both are enforced by UserSecurityMiddleware.
+    @Field(key: "session_epoch")
+    var sessionEpoch: Int
+
+    @OptionalField(key: "disabled_at")
+    var disabledAt: Date?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -78,6 +88,8 @@ final class User: Model, @unchecked Sendable {
         self.oidcSubject = oidcSubject
         self.scimProvisioned = scimProvisioned
         self.scimActive = scimActive
+        self.sessionEpoch = 0
+        self.disabledAt = nil
     }
 }
 

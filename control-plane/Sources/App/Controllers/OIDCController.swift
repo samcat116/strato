@@ -355,6 +355,7 @@ struct OIDCController: RouteCollection {
 
             // Authenticate user
             req.auth.login(user)
+            req.stampSessionEpoch(for: user)
             await req.recordAuthEvent(.oidcLogin, user: user, organizationID: organizationID)
 
             // Redirect to dashboard
