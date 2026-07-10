@@ -26,12 +26,16 @@ import Vapor
 /// HTTPS only, host allow-listed. `SSF_TRANSMITTER_ALLOWED_HOSTS` /
 /// `SSF_TRANSMITTER_ALLOWED_SUFFIXES` override the OIDC discovery defaults.
 enum SSFValidation {
-    static func validateTransmitterURL(_ raw: String) throws {
+    /// `label` names the URL in error messages; the same rules cover every
+    /// URL the receiver fetches, including transmitter-returned poll
+    /// endpoints — a compromised transmitter must not be able to point the
+    /// recurring sweep at internal services either.
+    static func validateTransmitterURL(_ raw: String, label: String = "transmitterURL") throws {
         guard let url = URL(string: raw),
             url.scheme?.lowercased() == "https",
             let host = url.host?.lowercased()
         else {
-            throw Abort(.unprocessableEntity, reason: "transmitterURL must be a valid HTTPS URL")
+            throw Abort(.unprocessableEntity, reason: "\(label) must be a valid HTTPS URL")
         }
 
         let allowedHosts =
@@ -46,7 +50,7 @@ enum SSFValidation {
             throw Abort(
                 .unprocessableEntity,
                 reason:
-                    "Transmitter host is not in the allowed list for security reasons. "
+                    "\(label) host is not in the allowed list for security reasons. "
                     + "Set SSF_TRANSMITTER_ALLOWED_HOSTS or SSF_TRANSMITTER_ALLOWED_SUFFIXES "
                     + "to allow this host.")
         }
@@ -143,10 +147,13 @@ actor SSFService {
             try? await receiver.deleteStream(id: existing)
             // Persist the unregistered state before attempting the
             // replacement: if createStream fails below, the row must not
-            // keep claiming a remote stream that was just deleted.
+            // keep claiming a remote stream that was just deleted — and the
+            // old push token must stop authenticating deliveries.
             stream.remoteStreamID = nil
             stream.pollEndpoint = nil
             stream.verifiedAt = nil
+            stream.pushTokenHash = nil
+            stream.pushTokenPrefix = nil
             try await stream.save(on: db)
         }
 
@@ -184,8 +191,21 @@ actor SSFService {
         )
 
         stream.remoteStreamID = configuration.stream_id
-        stream.pollEndpoint =
-            method == .poll ? configuration.delivery?.endpoint_url?.absoluteString : nil
+        stream.pollEndpoint = nil
+        if method == .poll, let endpoint = configuration.delivery?.endpoint_url?.absoluteString {
+            // The poll endpoint is transmitter-controlled; hold it to the
+            // same HTTPS/allow-list rules as the transmitter itself. On
+            // failure, undo the remote registration we just made.
+            do {
+                try SSFValidation.validateTransmitterURL(endpoint, label: "Transmitter poll endpoint")
+            } catch {
+                try? await receiver.deleteStream(id: configuration.stream_id)
+                stream.remoteStreamID = nil
+                try await stream.save(on: db)
+                throw error
+            }
+            stream.pollEndpoint = endpoint
+        }
         stream.verifiedAt = nil
         stream.lastError = nil
         try await stream.save(on: db)
@@ -238,10 +258,15 @@ actor SSFService {
             throw Abort(.unprocessableEntity, reason: "Not a poll-delivery stream")
         }
         guard stream.remoteStreamID != nil,
-            let endpointRaw = stream.pollEndpoint,
-            let endpoint = URL(string: endpointRaw)
+            let endpointRaw = stream.pollEndpoint
         else {
             throw Abort(.conflict, reason: "Stream is not registered with the transmitter")
+        }
+        // Re-validated on every use so stored endpoints predating a
+        // tightened allow-list can't keep being polled.
+        try SSFValidation.validateTransmitterURL(endpointRaw, label: "Transmitter poll endpoint")
+        guard let endpoint = URL(string: endpointRaw) else {
+            throw Abort(.unprocessableEntity, reason: "Invalid poll endpoint URL")
         }
 
         let receiver = try self.receiver(for: stream)

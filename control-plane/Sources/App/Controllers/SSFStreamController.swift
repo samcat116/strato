@@ -174,7 +174,10 @@ struct SSFStreamController: RouteCollection {
             return setErrorResponse(.notFound, err: "invalid_request", description: "Unknown stream")
         }
 
-        guard stream.enabled, stream.deliveryMethodValue == .push else {
+        // Requiring a remote registration also guarantees the push token is
+        // current: unregistering clears both together.
+        guard stream.enabled, stream.deliveryMethodValue == .push, stream.remoteStreamID != nil
+        else {
             return setErrorResponse(
                 .notFound, err: "invalid_request",
                 description: "Stream does not accept push delivery")

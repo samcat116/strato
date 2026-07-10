@@ -326,7 +326,7 @@ final class SSFPushDeliveryTests {
         }
     }
 
-    @Test("Unknown streams and disabled streams reject push delivery")
+    @Test("Unknown, disabled, and unregistered streams reject push delivery")
     func rejectsUnknownAndDisabledStreams() async throws {
         try await withTestApp { app in
             let fixture = try await makePushFixture(app)
@@ -336,11 +336,51 @@ final class SSFPushDeliveryTests {
             try await self.deliver(
                 app, streamID: UUID(), token: fixture.pushToken, body: set, expect: .notFound)
 
+            // Unregistered (e.g. a failed re-register): the old token must
+            // stop working even if it were still stored.
+            fixture.stream.remoteStreamID = nil
+            try await fixture.stream.save(on: app.db)
+            try await self.deliver(
+                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: set,
+                expect: .notFound)
+
+            fixture.stream.remoteStreamID = "remote-stream-1"
             fixture.stream.enabled = false
             try await fixture.stream.save(on: app.db)
             try await self.deliver(
                 app, streamID: fixture.stream.id!, token: fixture.pushToken, body: set,
                 expect: .notFound)
+        }
+    }
+
+    @Test("Poll endpoints outside the allow-list are never polled")
+    func pollEndpointOutsideAllowListRejected() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "polluser", email: "poll@example.com")
+            let org = try await builder.createOrganization(name: "Poll Org")
+            try await builder.addUserToOrganization(user: user, organization: org)
+
+            // A stored endpoint pointing at a metadata service — as a
+            // malicious transmitter could have returned before validation
+            // existed — must be rejected at poll time.
+            let stream = SSFStream(
+                organizationID: org.id!,
+                name: "poll",
+                transmitterURL: "https://idp.example.com",
+                deliveryMethod: .poll,
+                createdByID: user.id!
+            )
+            stream.remoteStreamID = "remote-poll-1"
+            stream.pollEndpoint = "https://169.254.169.254/poll"
+            try await stream.save(on: app.db)
+
+            do {
+                _ = try await app.ssf.pollStream(stream, on: app.db)
+                Issue.record("Expected poll endpoint validation to throw")
+            } catch let abort as Abort {
+                #expect(abort.status == .unprocessableEntity)
+            }
         }
     }
 }
