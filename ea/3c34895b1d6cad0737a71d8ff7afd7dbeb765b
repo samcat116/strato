@@ -1,0 +1,59 @@
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_eb8d88f42f560f::t_901bdacfb4c682 86-91,93-94
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_eb8d88f42f560f::t_901bdacfb4c682 51-55
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_eb8d88f42f560f::t_901bdacfb4c682 159-191,194-214,216-217,229-250,252
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_eb8d88f42f560f::t_901bdacfb4c682 564-570,572-583,586-587,1238-1243,1394-1419,1421-1425,1427-1507,1509
+deploy/compose/.env.example
+  s_eb8d88f42f560f::t_901bdacfb4c682 19-23,37-43
+deploy/compose/spiffe/agent-cp-entrypoint.sh
+  s_eb8d88f42f560f::t_901bdacfb4c682 1-66
+deploy/compose/spiffe/Dockerfile
+  s_eb8d88f42f560f::t_901bdacfb4c682 1-18
+control-plane/Sources/SPIREServerAPI/SPIREServerAPIClient.swift
+  s_eb8d88f42f560f::t_901bdacfb4c682 97,110-111,368-369
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_eb8d88f42f560f::t_901bdacfb4c682 129-134,140-142,155-174
+  s_eb8d88f42f560f::t_6a8d0b413ea70c 175-176
+deploy/compose/setup.sh
+  s_eb8d88f42f560f::t_901bdacfb4c682 18-21,47-63,72-80,96-101,118-120,150-153
+  s_eb8d88f42f560f::t_046577143b0c05 154
+agent/Sources/StratoAgentCore/GatewayChassisPlan.swift
+  s_eb8d88f42f560f::t_901bdacfb4c682 1-56
+deploy/agent/strato-node-bootstrap.sh
+  s_eb8d88f42f560f::t_901bdacfb4c682 96-105,197
+deploy/compose/README.md
+  s_eb8d88f42f560f::t_901bdacfb4c682 31-49,58-63
+deploy/compose/spiffe/envoy.yaml
+  s_eb8d88f42f560f::t_901bdacfb4c682 1-159
+deploy/compose/spiffe/spire-server.conf
+  s_eb8d88f42f560f::t_901bdacfb4c682 1-42
+agent/Tests/StratoAgentTests/GatewayChassisPlanTests.swift
+  s_eb8d88f42f560f::t_901bdacfb4c682 1-65
+deploy/compose/docker-compose.yml
+  s_eb8d88f42f560f::t_901bdacfb4c682 5,8-14,16-18,122-252,278-280,298-313,316,328-329,359-363
+deploy/compose/spiffe/bootstrap.sh
+  s_eb8d88f42f560f::t_901bdacfb4c682 1-67
+docs/architecture/networking.md
+  s_eb8d88f42f560f::t_901bdacfb4c682 266-278,363-370
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_eb8d88f42f560f::t_901bdacfb4c682 75-79,315-368,626-627,633-638,675-677,686-688
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ea3c34895b1d6cad0737a71d8ff7afd7dbeb765b",
+  "prompts": {},
+  "sessions": {
+    "s_eb8d88f42f560f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "100f01e6-cb6f-4ea1-acb7-8737af15ef62",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
