@@ -85,6 +85,13 @@ spec:
         - name: socket
           emptyDir: {}
         {{- end }}
+        {{- if not .Values.spire.persistence.enabled }}
+        # Without persistence the data mount is a plain emptyDir. It must live
+        # in this list — a second `volumes:` key after volumeClaimTemplates
+        # would silently replace this one (duplicate YAML key, last wins).
+        - name: data
+          emptyDir: {}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -110,9 +117,5 @@ spec:
         resources:
           requests:
             storage: {{ .Values.spire.persistence.size }}
-  {{- else }}
-      volumes:
-        - name: data
-          emptyDir: {}
   {{- end }}
 {{- end }}

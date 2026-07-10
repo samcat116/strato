@@ -1,0 +1,87 @@
+{{- /*
+Provision the SPIRE server's datastore in the bundled PostgreSQL. The SPIRE
+server config connects as `user=<spire.database.username> dbname=spire`, but
+the bitnami subchart only creates the application database/role — without this
+job spire.enabled could never start against the bundled Postgres (the compose
+deployment does the equivalent with an initdb script). Idempotent: creates the
+role and database only when missing and re-syncs the role password to the
+<fullname>-spire secret. With an external database (postgresql.enabled=false)
+provisioning is the operator's responsibility, matching the docs.
+*/}}
+{{- if and .Values.spire.enabled .Values.postgresql.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spire-db-init
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-db-init
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    # Before the app migration job (-5) and SpiceDB schema job (-4).
+    "helm.sh/hook-weight": "-6"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "strato-control-plane.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: spire-db-init
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-db
+          image: {{ default "busybox:1.36.1" .Values.initContainers.waitForDB.image | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              until nc -w 1 -z {{ include "strato-control-plane.databaseWaitHost" . }} {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done
+      containers:
+        - name: spire-db-init
+          image: {{ .Values.spire.database.initImage | quote }}
+          env:
+            - name: PGHOST
+              value: "{{ include "strato-control-plane.databaseWaitHost" . }}"
+            - name: PGPORT
+              value: "{{ .Values.strato.database.port }}"
+            - name: PGUSER
+              value: postgres
+            - name: PGDATABASE
+              value: postgres
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ include "strato-control-plane.databaseSecretName" . }}"
+                  key: postgres-admin-password
+            - name: SPIRE_DB_USER
+              value: "{{ .Values.spire.database.username }}"
+            - name: SPIRE_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "strato-control-plane.fullname" . }}-spire
+                  key: database-password
+          command:
+            - sh
+            - -c
+            # psql variables (:'...') keep the credentials out of SQL string
+            # interpolation; format()+\gexec makes each statement conditional.
+            # ALTER ROLE always runs so the role password follows the secret.
+            - |
+              set -eu
+              psql -v ON_ERROR_STOP=1 \
+                --set=spire_user="$SPIRE_DB_USER" \
+                --set=spire_password="$SPIRE_DB_PASSWORD" <<'SQL'
+              SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'spire_user', :'spire_password')
+              WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'spire_user')\gexec
+              SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', :'spire_user', :'spire_password')\gexec
+              SELECT format('CREATE DATABASE spire OWNER %I', :'spire_user')
+              WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'spire')\gexec
+              SQL
+              echo "spire database ready"
+{{- end }}
