@@ -501,6 +501,38 @@ final class AgentOrganizationScopeTests {
         }
     }
 
+    @Test("Site membership changes require manage on the agent, not just the site")
+    func siteMembershipRequiresAgentManage() async throws {
+        try await withScopedApp { app, org, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(
+                username: "site-only-admin", email: "site-only-admin@example.com",
+                displayName: "Site Only Admin", isSystemAdmin: false)
+            let token = try await user.generateAPIKey(on: app.db)
+
+            let site = Site(name: "membership-dc", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
+            let agentUUID = try await app.agentService.registerAgent(
+                self.makeRegisterMessage(agentName: "membership-agent"),
+                agentName: "membership-agent",
+                organizationScope: .organization(org.id!))
+
+            // The sibling-OU scenario: SpiceDB grants site#manage but denies
+            // agent#manage (same root org, different delegated subtree).
+            app.spicedbMockDeniedResources = ["agent"]
+            defer { app.spicedbMockDeniedResources = [] }
+
+            try await app.test(.POST, "/api/sites/\(site.id!.uuidString)/agents/\(agentUUID.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+
+            let agent = try #require(try await Agent.find(agentUUID, on: app.db))
+            #expect(agent.$site.id == nil)
+        }
+    }
+
     // MARK: - OU scope resolution
 
     @Test("An OU-scoped agent resolves its root organization through the OU")

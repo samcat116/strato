@@ -62,6 +62,25 @@ struct SiteController: RouteCollection {
         }
     }
 
+    /// System admin, or `manage` on the agent (via `agent#parent`). Site
+    /// membership changes need this ON TOP of site#manage: with agents and
+    /// sites delegated to different OUs of one org, a sibling-OU site admin
+    /// shares the root org but must not move an agent SpiceDB wouldn't let
+    /// them manage.
+    private func requireAgentManage(_ req: Request, agent: Agent) async throws {
+        let user = try requireUser(req)
+        if user.isSystemAdmin { return }
+        let allowed = try await req.spicedb.checkPermission(
+            subject: user.id!.uuidString,
+            permission: "manage",
+            resource: "agent",
+            resourceId: try agent.requireID().uuidString
+        )
+        guard allowed else {
+            throw Abort(.forbidden, reason: "You don't have 'manage' permission on this agent")
+        }
+    }
+
     private func findSite(_ req: Request) async throws -> Site {
         guard let siteId = req.parameters.get("siteId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid site ID")
@@ -228,6 +247,7 @@ struct SiteController: RouteCollection {
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
+        try await requireAgentManage(req, agent: agent)
         let targetSiteId = try site.requireID()
 
         // A site is one OVN deployment owned by one org; admitting a foreign
@@ -289,6 +309,7 @@ struct SiteController: RouteCollection {
         guard let agent = try await Agent.find(agentId, on: req.db), agent.$site.id == siteId else {
             throw Abort(.notFound, reason: "Agent not found in this site")
         }
+        try await requireAgentManage(req, agent: agent)
 
         // Never orphan a site's topology authority by pulling its controller:
         // reconciliation would silently stop for every network in the site.
