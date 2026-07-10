@@ -251,7 +251,9 @@ services:
     restart: unless-stopped
 
   control-plane:
-    image: ghcr.io/samcat116/strato-control-plane:${STRATO_VERSION:-latest}
+    # `main` is the moving tag CI publishes on every main-branch build; no
+    # `latest` tag exists on GHCR until a versioned release is published.
+    image: ghcr.io/samcat116/strato-control-plane:${STRATO_VERSION:-main}
     # To run from source instead of the published image, comment out `image:`
     # above and uncomment:
     # build:
@@ -330,7 +332,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: ghcr.io/samcat116/strato-frontend:${STRATO_VERSION:-latest}
+    image: ghcr.io/samcat116/strato-frontend:${STRATO_VERSION:-main}
     environment:
       NODE_ENV: production
       PORT: 3000

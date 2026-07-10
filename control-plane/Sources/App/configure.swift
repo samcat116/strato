@@ -133,6 +133,12 @@ public func configure(_ app: Application) async throws {
     // key; a no-op for session-authenticated requests (issue #173).
     app.middleware.use(APIKeyScopeMiddleware())
 
+    // Enforce per-user security state set by SSF signal handlers (issue #38):
+    // disabled accounts and revoked sessions (session-epoch mismatch). After
+    // both authenticators and the audit middleware (so denials are audited),
+    // before authorization.
+    app.middleware.use(UserSecurityMiddleware())
+
     // Configure WebAuthn
     let relyingPartyID = Environment.get("WEBAUTHN_RELYING_PARTY_ID") ?? "localhost"
     let relyingPartyName = Environment.get("WEBAUTHN_RELYING_PARTY_NAME") ?? "Strato"
@@ -192,6 +198,11 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(EnhanceVM())
     app.migrations.add(FixVMColumnNames())
     app.migrations.add(AddSystemAdminToUser())
+
+    // SSF security state on users (issue #38). Registered early — before any
+    // data migration that loads the User model — because the model selects
+    // these columns (same ordering constraint as AddStatusChangedAtToVM).
+    app.migrations.add(AddSecurityStateToUser())
 
     // Hierarchical IAM migrations
     app.migrations.add(CreateOrganizationalUnit())
@@ -297,6 +308,9 @@ public func configure(_ app: Application) async throws {
 
     // Drop the legacy vm_templates table (VM template feature removed).
     app.migrations.add(DropVMTemplate())
+
+    // Shared Signals Framework receiver streams (issue #38)
+    app.migrations.add(CreateSSFStream())
 
     // Organization-scoped infrastructure: agents/sites/registration tokens
     // carry a mandatory org-or-OU owner (backfilled to the oldest org).
@@ -515,6 +529,11 @@ public func configure(_ app: Application) async throws {
     // hourly cluster-singleton sweep prunes audit_events rows older than the
     // cutoff. The handler arms the sweep at boot and cancels it at shutdown.
     app.lifecycle.use(AuditRetentionLifecycleHandler())
+
+    // SSF poll delivery (issue #38): periodically drain poll-delivery streams
+    // from their transmitters. The handler arms the sweep at boot and cancels
+    // it at shutdown.
+    app.lifecycle.use(SSFPollLifecycleHandler())
 
     try routes(app)
 

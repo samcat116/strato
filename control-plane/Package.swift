@@ -26,6 +26,11 @@ let package = Package(
         .package(url: "https://github.com/samcat116/swift-scim.git", branch: "main"),
         // 🔐 JWT token handling and HTTP client functionality
         .package(url: "https://github.com/vapor/jwt.git", from: "4.0.0"),
+        // 📡 Shared Signals Framework receiver (SSF/CAEP/RISC security events,
+        // issue #38). No tagged releases yet, so pin by revision.
+        .package(
+            url: "https://github.com/samcat116/swift-ssf.git",
+            revision: "42159e7aaa133a0c7269ca808687a22d8cbca354"),
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.9.0"),
         // 🔐 Swift Crypto for cryptographic operations
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
@@ -80,6 +85,7 @@ let package = Package(
                 .product(name: "WebAuthn", package: "webauthn-swift"),
                 .product(name: "SwiftSCIM", package: "swift-scim"),
                 .product(name: "JWT", package: "jwt"),
+                .product(name: "SwiftSSF", package: "swift-ssf"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "X509", package: "swift-certificates"),

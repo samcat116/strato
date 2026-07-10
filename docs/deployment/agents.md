@@ -83,12 +83,18 @@ instructions if it isn't; to run unprivileged, pass `--state-file` (and
 
 ## Running in Docker (Linux)
 
+The agent image is published from the `main` branch as
+`ghcr.io/samcat116/strato-agent:main` (moving) and `main-<sha>` (immutable),
+linux/amd64 only — the same convention as the control-plane and frontend
+images used by the compose deployment. On other architectures, build the
+image from source (`docker build -f agent/Dockerfile .` at the repo root).
+
 ```bash
 docker run -d --name strato-agent --restart unless-stopped \
   --user root --device /dev/kvm \
   -v /var/lib/strato:/var/lib/strato \
   -v /etc/strato:/etc/strato \
-  ghcr.io/samcat116/strato-agent:latest \
+  ghcr.io/samcat116/strato-agent:main \
   join 'ws://strato.example.com/agent/ws?token=...&name=hv-01'
 ```
 

@@ -38,6 +38,9 @@ func routes(_ app: Application) throws {
     try app.register(collection: SCIMController())
     try app.register(collection: SCIMTokenController())
 
+    // Shared Signals Framework receiver (issue #38)
+    try app.register(collection: SSFStreamController())
+
     // Image management controller
     try app.register(collection: ImageController())
 

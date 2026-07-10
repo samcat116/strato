@@ -75,6 +75,34 @@ struct AgentController: RouteCollection {
         }
     }
 
+    /// Until the scheduler enforces org-scoped placement (phase 2 of the
+    /// hierarchy overhaul), an agent may host VMs whose projects belong to a
+    /// different organization — cross-org placements from before scoping, or
+    /// new ones the still-unscoped scheduler makes. A delegated org admin must
+    /// not be able to take down another tenant's workloads, so destructive
+    /// agent actions (force-offline, deregister) fall back to system-admin
+    /// only while any foreign-org VM is hosted here.
+    private func requireNoForeignHostedVMs(_ req: Request, agent: Agent) async throws {
+        let user = try requireUser(req)
+        if user.isSystemAdmin { return }
+
+        let agentOrg = try await agent.rootOrganizationID(on: req.db)
+        let hostedVMs = try await VM.query(on: req.db)
+            .filter(\.$hypervisorId == agent.requireID().uuidString)
+            .with(\.$project)
+            .all()
+        for vm in hostedVMs {
+            let vmOrg = try await vm.project.getRootOrganizationId(on: req.db)
+            guard vmOrg == agentOrg else {
+                throw Abort(
+                    .forbidden,
+                    reason:
+                        "Agent hosts VMs belonging to another organization; only a system administrator can perform this action until they are migrated"
+                )
+            }
+        }
+    }
+
     /// Whether SPIRE mTLS authentication is enabled but the registration API
     /// is not configured — the state in which agents may hold SPIRE-issued
     /// identities that this control plane cannot revoke. Revocation paths must
@@ -459,6 +487,7 @@ struct AgentController: RouteCollection {
         }
 
         try await requireAgentPermission(req, agent: agent, permission: "manage")
+        try await requireNoForeignHostedVMs(req, agent: agent)
 
         // Never delete a site's designated network controller: the controller
         // reference deliberately has no FK (see CreateSite), so the site would
@@ -539,6 +568,7 @@ struct AgentController: RouteCollection {
         }
 
         try await requireAgentPermission(req, agent: agent, permission: "manage")
+        try await requireNoForeignHostedVMs(req, agent: agent)
 
         // Force agent offline in in-memory registry
         await req.agentService.forceUnregisterAgent(agent.name)
@@ -588,7 +618,19 @@ struct AgentController: RouteCollection {
         try await scope.validateExists(on: req.db)
 
         let previousScope = agent.organizationScope
+        let ref = scope.spiceDBParentRef
+        let parentTuple = RelationshipTuple(
+            entity: "agent",
+            entityId: agentId.uuidString,
+            relation: "parent",
+            subject: ref.subjectType,
+            subjectId: ref.subjectId.uuidString
+        )
+
         if scope == previousScope {
+            // Re-touch the tuple so retrying after a partial failure below
+            // (DB committed, tuple write lost) converges instead of no-oping.
+            try await req.spicedb.touchRelationships([parentTuple])
             return try AgentResponse(from: agent)
         }
 
@@ -606,25 +648,21 @@ struct AgentController: RouteCollection {
                 reason: "Agent hosts \(hostedVMs) VM(s); migrate or delete them before changing its organization")
         }
 
-        agent.organizationScope = scope
-        try await agent.save(on: req.db)
-
+        // SpiceDB first, DB last: both tuple operations are idempotent
+        // (touch, and delete-if-present), so a failure at any step leaves the
+        // request retryable — whereas committing the DB first would make a
+        // retry short-circuit on the no-op path above with the tuples still
+        // pointing at the old org.
+        try await req.spicedb.touchRelationships([parentTuple])
         if let oldRef = previousScope?.spiceDBParentRef {
             try await req.spicedb.deleteRelationship(
                 entity: "agent", entityId: agentId.uuidString,
                 relation: "parent",
                 subject: oldRef.subjectType, subjectId: oldRef.subjectId.uuidString)
         }
-        let ref = scope.spiceDBParentRef
-        try await req.spicedb.touchRelationships([
-            RelationshipTuple(
-                entity: "agent",
-                entityId: agentId.uuidString,
-                relation: "parent",
-                subject: ref.subjectType,
-                subjectId: ref.subjectId.uuidString
-            )
-        ])
+
+        agent.organizationScope = scope
+        try await agent.save(on: req.db)
 
         req.logger.info(
             "Reassigned agent organization",

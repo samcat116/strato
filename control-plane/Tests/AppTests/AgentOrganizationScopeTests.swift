@@ -380,6 +380,52 @@ final class AgentOrganizationScopeTests {
         }
     }
 
+    @Test("Destructive agent actions require a system admin while foreign-org VMs are hosted")
+    func destructiveActionsGuardForeignVMs() async throws {
+        try await withScopedApp { app, org, _ in
+            let builder = TestDataBuilder(db: app.db)
+            // Delegated org admin: not a system admin; the mock SpiceDB grants
+            // agent#manage, so only the foreign-VM guard stands in the way.
+            let orgAdmin = try await builder.createUser(
+                username: "delegated-admin", email: "delegated-admin@example.com",
+                displayName: "Delegated Admin", isSystemAdmin: false)
+            let orgAdminToken = try await orgAdmin.generateAPIKey(on: app.db)
+
+            let agentUUID = try await app.agentService.registerAgent(
+                self.makeRegisterMessage(agentName: "shared-agent"),
+                agentName: "shared-agent",
+                organizationScope: .organization(org.id!))
+
+            // A VM from a different org placed on this agent (pre-scoping
+            // placement; the scheduler isn't org-scoped until phase 2).
+            let foreignOrg = try await builder.createOrganization(name: "Foreign Tenant")
+            let foreignProject = try await builder.createProject(
+                name: "Foreign Project", description: "p", organization: foreignOrg)
+            let foreignVM = try await builder.createVM(name: "tenant-vm", project: foreignProject)
+            foreignVM.hypervisorId = agentUUID.uuidString
+            try await foreignVM.save(on: app.db)
+
+            try await app.test(.POST, "/api/agents/\(agentUUID.uuidString)/actions/force-offline") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: orgAdminToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            try await app.test(.DELETE, "/api/agents/\(agentUUID.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: orgAdminToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+
+            // Once the foreign VM is gone, the delegated admin may act.
+            try await foreignVM.delete(on: app.db)
+            try await app.test(.POST, "/api/agents/\(agentUUID.uuidString)/actions/force-offline") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: orgAdminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+        }
+    }
+
     // MARK: - OU scope resolution
 
     @Test("An OU-scoped agent resolves its root organization through the OU")
