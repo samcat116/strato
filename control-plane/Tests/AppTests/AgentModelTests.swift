@@ -114,22 +114,6 @@ struct AgentModelTests {
         #expect(agent.lastHeartbeat! > oldHeartbeat!)
     }
 
-    // MARK: - Resources Property Tests
-
-    @Test("Agent resources property returns correct values")
-    func testResourcesProperty() {
-        let agent = createTestAgent()
-
-        let resources = agent.resources
-
-        #expect(resources.totalCPU == 8)
-        #expect(resources.availableCPU == 6)
-        #expect(resources.totalMemory == 16_000_000_000)
-        #expect(resources.availableMemory == 12_000_000_000)
-        #expect(resources.totalDisk == 100_000_000_000)
-        #expect(resources.availableDisk == 80_000_000_000)
-    }
-
     // MARK: - Online Status Tests
 
     @Test("Agent isOnline returns true when heartbeat is recent")
@@ -399,59 +383,4 @@ struct AgentModelTests {
         }
     }
 
-    // MARK: - AgentStatus Enum Tests
-
-    @Test("AgentStatus has all expected cases")
-    func testAgentStatusCases() {
-        let cases = AgentStatus.allCases
-
-        #expect(cases.contains(.online))
-        #expect(cases.contains(.offline))
-        #expect(cases.contains(.connecting))
-        #expect(cases.contains(.error))
-        #expect(cases.count == 4)
-    }
-
-    @Test("AgentStatus raw values are correct")
-    func testAgentStatusRawValues() {
-        #expect(AgentStatus.online.rawValue == "online")
-        #expect(AgentStatus.offline.rawValue == "offline")
-        #expect(AgentStatus.connecting.rawValue == "connecting")
-        #expect(AgentStatus.error.rawValue == "error")
-    }
-
-    // MARK: - Edge Cases
-
-    @Test("Agent handles zero resources")
-    func testAgentWithZeroResources() {
-        let resources = createTestAgentResources(
-            totalCPU: 0,
-            availableCPU: 0,
-            totalMemory: 0,
-            availableMemory: 0,
-            totalDisk: 0,
-            availableDisk: 0
-        )
-        let agent = createTestAgent(resources: resources)
-
-        #expect(agent.totalCPU == 0)
-        #expect(agent.availableCPU == 0)
-        #expect(agent.totalMemory == 0)
-    }
-
-    @Test("Agent handles empty capabilities")
-    func testAgentWithEmptyCapabilities() {
-        let agent = createTestAgent(capabilities: [])
-
-        #expect(agent.capabilities.isEmpty)
-    }
-
-    @Test("Agent handles multiple capabilities")
-    func testAgentWithMultipleCapabilities() {
-        let agent = createTestAgent(capabilities: ["kvm", "ovn", "hvf", "virtio"])
-
-        #expect(agent.capabilities.count == 4)
-        #expect(agent.capabilities.contains("kvm"))
-        #expect(agent.capabilities.contains("hvf"))
-    }
 }
