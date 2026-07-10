@@ -77,11 +77,15 @@ host.
 
 The compose file uses the published images
 (`ghcr.io/samcat116/strato-control-plane`, `ghcr.io/samcat116/strato-frontend`).
-Pin a release in `.env`:
+The default tag is `main`, which is rebuilt on every main-branch merge. For a
+reproducible deployment, pin an immutable per-commit build in `.env`:
 
 ```bash
-STRATO_VERSION=v0.5.0
+STRATO_VERSION=main-abc123def456
 ```
+
+Once versioned releases are published, a release tag (e.g. `v0.5.0`) works the
+same way.
 
 To build from source instead (e.g. before a release is published), comment
 out `image:` and uncomment the `build:` block in `docker-compose.yml`.
