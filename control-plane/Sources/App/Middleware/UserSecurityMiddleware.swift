@@ -92,3 +92,14 @@ extension Request {
         session.data[UserSecurityMiddleware.sessionEpochKey] = String(user.sessionEpoch)
     }
 }
+
+/// Guard for login/registration handlers: a disabled account must never get
+/// a session. `UserSecurityMiddleware` only sees already-authenticated
+/// requests, and login endpoints are reached unauthenticated — without this
+/// check they would mint a session that the middleware destroys one request
+/// later, while reporting a successful login.
+func rejectDisabledAccount(_ user: User) throws {
+    guard user.disabledAt == nil else {
+        throw Abort(.forbidden, reason: "Account is disabled")
+    }
+}

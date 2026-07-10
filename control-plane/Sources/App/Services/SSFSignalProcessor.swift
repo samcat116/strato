@@ -188,10 +188,22 @@ struct SSFSignalProcessor: SSFEventHandler {
             return try await User.find(id, on: app.db)
 
         case "iss_sub":
-            guard let sub = subject.string("sub") else { return nil }
-            return try await User.query(on: app.db)
+            // OIDC subs are only unique per issuer, so the lookup must be
+            // scoped: the user's OIDC provider has to belong to the stream's
+            // organization and be for the subject's issuer. Ambiguity fails
+            // safe (no action).
+            guard let sub = subject.string("sub"), let iss = subject.string("iss") else { return nil }
+            let candidates = try await User.query(on: app.db)
                 .filter(\.$oidcSubject == sub)
-                .first()
+                .with(\.$oidcProvider)
+                .all()
+            let matches = candidates.filter { user in
+                guard let provider = user.oidcProvider,
+                    provider.$organization.id == organizationID
+                else { return false }
+                return Self.providerMatchesIssuer(provider, issuer: iss)
+            }
+            return matches.count == 1 ? matches.first : nil
 
         case "complex":
             guard let userSubject = subject.subject("user") else { return nil }
@@ -208,6 +220,23 @@ struct SSFSignalProcessor: SSFEventHandler {
 
         default:
             return nil
+        }
+    }
+
+    /// Whether an OIDC provider is for the given issuer. Providers don't
+    /// store the issuer directly, but every configured endpoint lives under
+    /// it: the discovery URL is `<issuer>/.well-known/openid-configuration`,
+    /// and the authorization/token/JWKS endpoints are issuer-rooted.
+    static func providerMatchesIssuer(_ provider: OIDCProvider, issuer: String) -> Bool {
+        let normalizedIssuer = issuer.hasSuffix("/") ? String(issuer.dropLast()) : issuer
+        let endpoints = [
+            provider.discoveryURL, provider.authorizationEndpoint,
+            provider.tokenEndpoint, provider.jwksURI,
+        ]
+        return endpoints.contains { endpoint in
+            guard let endpoint else { return false }
+            return endpoint == normalizedIssuer
+                || endpoint.hasPrefix(normalizedIssuer + "/")
         }
     }
 

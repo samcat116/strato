@@ -193,6 +193,10 @@ struct UserController: RouteCollection {
         try await credential.$user.load(on: req.db)
         let user = credential.user
 
+        // Accounts disabled by an SSF signal must not get a session; the
+        // middleware only sees authenticated requests, so check here too.
+        try rejectDisabledAccount(user)
+
         // Create session - log the user in automatically
         req.auth.login(user)
         req.stampSessionEpoch(for: user)
@@ -251,6 +255,14 @@ struct UserController: RouteCollection {
             await req.recordAuthEvent(.loginFailed, metadata: ["error": "\(error)"])
             throw error
         }
+
+        // Accounts disabled by an SSF signal must not get a session; the
+        // middleware only sees authenticated requests, so check here too.
+        if user.disabledAt != nil {
+            await req.recordAuthEvent(
+                .loginFailed, metadata: ["error": "account disabled", "username": user.username])
+        }
+        try rejectDisabledAccount(user)
 
         // Create session
         req.auth.login(user)

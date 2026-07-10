@@ -219,6 +219,71 @@ final class SSFPushDeliveryTests {
         }
     }
 
+    @Test("iss_sub subjects resolve scoped to the issuer's provider and organization")
+    func issSubScopedToIssuer() async throws {
+        try await withTestApp { app in
+            let fixture = try await makePushFixture(app)
+            let builder = TestDataBuilder(db: app.db)
+
+            // Same OIDC `sub` at two different issuers; only the provider for
+            // the stream's transmitter (and organization) may match.
+            let provider = OIDCProvider(
+                organizationID: fixture.organization.id!,
+                name: "IdP",
+                clientID: "client",
+                clientSecret: "secret",
+                discoveryURL: "https://idp.example.com/.well-known/openid-configuration"
+            )
+            try await provider.save(on: app.db)
+
+            let otherOrg = try await builder.createOrganization(name: "Other Org")
+            let otherProvider = OIDCProvider(
+                organizationID: otherOrg.id!,
+                name: "Other IdP",
+                clientID: "client",
+                clientSecret: "secret",
+                discoveryURL: "https://other-idp.example.com/.well-known/openid-configuration"
+            )
+            try await otherProvider.save(on: app.db)
+
+            fixture.user.linkToOIDCProvider(provider.id!, subject: "shared-sub")
+            try await fixture.user.save(on: app.db)
+            let otherUser = try await builder.createUser(username: "other", email: "other@example.com")
+            try await builder.addUserToOrganization(user: otherUser, organization: otherOrg)
+            otherUser.linkToOIDCProvider(otherProvider.id!, subject: "shared-sub")
+            try await otherUser.save(on: app.db)
+
+            let set = try makeUnsignedSET(
+                iss: "https://idp.example.com",
+                events: [sessionRevokedType: [:]],
+                subID: ["format": "iss_sub", "iss": "https://idp.example.com", "sub": "shared-sub"]
+            )
+            try await self.deliver(
+                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: set,
+                expect: .accepted)
+
+            let target = try #require(try await User.find(fixture.user.id, on: app.db))
+            #expect(target.sessionEpoch == 1)
+            let bystander = try #require(try await User.find(otherUser.id, on: app.db))
+            #expect(bystander.sessionEpoch == 0)
+
+            // A foreign issuer with the same sub matches no provider in this
+            // stream's organization: nothing happens.
+            let foreign = try makeUnsignedSET(
+                iss: "https://idp.example.com",
+                events: [sessionRevokedType: [:]],
+                subID: [
+                    "format": "iss_sub", "iss": "https://other-idp.example.com", "sub": "shared-sub",
+                ]
+            )
+            try await self.deliver(
+                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: foreign,
+                expect: .accepted)
+            let unchanged = try #require(try await User.find(fixture.user.id, on: app.db))
+            #expect(unchanged.sessionEpoch == 1)
+        }
+    }
+
     @Test("Push delivery requires the stream's bearer token")
     func rejectsBadBearerToken() async throws {
         try await withTestApp { app in
