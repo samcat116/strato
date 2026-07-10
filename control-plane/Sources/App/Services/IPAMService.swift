@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import StratoShared
 
 /// Control-plane IP address management: allocates static NIC addresses from a
 /// `LogicalNetwork`'s subnet. The control plane is the IPAM owner (issue #212) —
@@ -97,30 +98,19 @@ enum IPAMService {
 
     // MARK: - IPv4 helpers
 
+    // Thin wrappers over the StratoShared address types, kept for the many
+    // existing call sites.
+
     static func parseCIDR(_ cidr: String) -> (base: UInt32, prefix: Int)? {
-        let parts = cidr.split(separator: "/")
-        guard parts.count == 2,
-            let base = parseIPv4(String(parts[0])),
-            let prefix = Int(parts[1]),
-            (0...32).contains(prefix)
-        else {
-            return nil
-        }
-        return (base, prefix)
+        guard let parsed = IPv4CIDR(cidr) else { return nil }
+        return (parsed.base.raw, parsed.prefix)
     }
 
     static func parseIPv4(_ string: String) -> UInt32? {
-        let octets = string.split(separator: ".", omittingEmptySubsequences: false)
-        guard octets.count == 4 else { return nil }
-        var value: UInt32 = 0
-        for octet in octets {
-            guard let byte = UInt8(octet) else { return nil }
-            value = (value << 8) | UInt32(byte)
-        }
-        return value
+        IPv4Address(string)?.raw
     }
 
     static func formatIPv4(_ value: UInt32) -> String {
-        "\((value >> 24) & 0xff).\((value >> 16) & 0xff).\((value >> 8) & 0xff).\(value & 0xff)"
+        IPv4Address(raw: value).description
     }
 }

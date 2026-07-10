@@ -1,4 +1,9 @@
 import Foundation
+import StratoShared
+
+/// IP address math lives in StratoShared so the control plane's IPAM and the
+/// agent share one implementation; the alias keeps existing call sites.
+public typealias IPv4Address = StratoShared.IPv4Address
 
 /// How a VM's NIC is realized on this host, as resolved by the platform network
 /// service. Hypervisor drivers translate the descriptor into their native
@@ -84,37 +89,4 @@ public func subnetCIDR(ipAddress: String?, netmask: String?) -> String? {
     }
     let network = IPv4Address(raw: ip.raw & mask.raw)
     return "\(network)/\(prefix)"
-}
-
-/// Minimal IPv4 address value for subnet math (Foundation has no portable one).
-public struct IPv4Address: CustomStringConvertible, Equatable, Sendable {
-    public let raw: UInt32
-
-    public init(raw: UInt32) {
-        self.raw = raw
-    }
-
-    public init?(_ string: String) {
-        let parts = string.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 4 else { return nil }
-        var value: UInt32 = 0
-        for part in parts {
-            guard let octet = UInt8(part) else { return nil }
-            value = (value << 8) | UInt32(octet)
-        }
-        self.raw = value
-    }
-
-    /// The prefix length when this address is a contiguous netmask
-    /// (e.g. 255.255.255.0 → 24); nil for non-contiguous masks.
-    public var prefixLength: Int? {
-        let ones = raw.nonzeroBitCount
-        // A valid mask is `ones` set bits followed only by zeros.
-        guard raw == (ones == 0 ? 0 : ~UInt32(0) << (32 - ones)) else { return nil }
-        return ones
-    }
-
-    public var description: String {
-        "\((raw >> 24) & 0xff).\((raw >> 16) & 0xff).\((raw >> 8) & 0xff).\(raw & 0xff)"
-    }
 }
