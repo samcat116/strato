@@ -37,6 +37,17 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     @OptionalField(key: "gateway")
     var gateway: String?
 
+    /// IPv6 subnet in canonical CIDR notation (always a /64), when the network
+    /// is dual-stack. New networks default to a generated RFC 4193 ULA /64;
+    /// nil means v4-only (explicit opt-out, or a network predating IPv6).
+    @OptionalField(key: "subnet6")
+    var subnet6: String?
+
+    /// IPv6 gateway (the router-port address) inside `subnet6`; excluded from
+    /// allocation and announced to guests via Router Advertisements.
+    @OptionalField(key: "gateway6")
+    var gateway6: String?
+
     /// When true, agents program OVN's native DHCP responder to deliver the
     /// control-plane-allocated IP, gateway, DNS, and MTU to guests, and cloud-init
     /// omits static L3 config. When false, guests are configured statically via
@@ -102,6 +113,8 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         name: String,
         subnet: String,
         gateway: String? = nil,
+        subnet6: String? = nil,
+        gateway6: String? = nil,
         projectID: UUID? = nil,
         createdByID: UUID? = nil,
         dhcpEnabled: Bool = true,
@@ -116,6 +129,8 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         self.name = name
         self.subnet = subnet
         self.gateway = gateway
+        self.subnet6 = subnet6
+        self.gateway6 = gateway6
         self.$project.id = projectID
         self.$site.id = siteID
         self.$createdBy.id = createdByID
@@ -179,6 +194,13 @@ struct CreateNetworkRequest: Content {
     let subnet: String
     /// Defaults to the subnet's first host address when omitted.
     let gateway: String?
+    /// IPv6 subnet (must be a /64). When omitted and IPv6 isn't disabled, a
+    /// unique-local (ULA) /64 is generated — new networks default dual-stack.
+    let subnet6: String?
+    /// Defaults to the IPv6 subnet's first host address (`<prefix>::1`).
+    let gateway6: String?
+    /// Pass false for a v4-only network (subnet6 must then be omitted).
+    let ipv6Enabled: Bool?
     /// Defaults to the caller's default project when omitted.
     let projectId: UUID?
     /// Whether agents program OVN DHCP for this network. Defaults true.
@@ -198,13 +220,17 @@ struct CreateNetworkRequest: Content {
     // Explicit init so the DHCP fields default when omitted (e.g. in tests) while
     // JSON decoding still populates them via the synthesized Codable conformance.
     init(
-        name: String, subnet: String, gateway: String? = nil, projectId: UUID? = nil,
+        name: String, subnet: String, gateway: String? = nil, subnet6: String? = nil,
+        gateway6: String? = nil, ipv6Enabled: Bool? = nil, projectId: UUID? = nil,
         dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
         leaseTime: Int? = nil, externalAccess: Bool? = nil, siteId: UUID? = nil
     ) {
         self.name = name
         self.subnet = subnet
         self.gateway = gateway
+        self.subnet6 = subnet6
+        self.gateway6 = gateway6
+        self.ipv6Enabled = ipv6Enabled
         self.projectId = projectId
         self.dhcpEnabled = dhcpEnabled
         self.dnsServers = dnsServers
@@ -222,6 +248,15 @@ struct UpdateNetworkRequest: Content {
     let subnet: String?
     /// May change anytime, but only affects future allocations.
     let gateway: String?
+    /// Adding IPv6 to a v4-only network is allowed anytime (existing NICs stay
+    /// v4; future allocations get both). Changing an established subnet6 is
+    /// rejected while any v6 address is allocated on the network.
+    let subnet6: String?
+    let gateway6: String?
+    /// Pass false to remove IPv6 from the network (rejected while any v6
+    /// address is allocated); pass true with no subnet6 to enable IPv6 with a
+    /// generated ULA /64.
+    let ipv6Enabled: Bool?
     /// DHCP settings; applied to the network and re-synced to affected agents.
     let dhcpEnabled: Bool?
     let dnsServers: [String]?
@@ -232,12 +267,16 @@ struct UpdateNetworkRequest: Content {
 
     init(
         name: String? = nil, subnet: String? = nil, gateway: String? = nil,
+        subnet6: String? = nil, gateway6: String? = nil, ipv6Enabled: Bool? = nil,
         dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
         leaseTime: Int? = nil, externalAccess: Bool? = nil
     ) {
         self.name = name
         self.subnet = subnet
         self.gateway = gateway
+        self.subnet6 = subnet6
+        self.gateway6 = gateway6
+        self.ipv6Enabled = ipv6Enabled
         self.dhcpEnabled = dhcpEnabled
         self.dnsServers = dnsServers
         self.domainName = domainName
@@ -251,6 +290,8 @@ struct NetworkResponse: Content {
     let name: String
     let subnet: String
     let gateway: String?
+    let subnet6: String?
+    let gateway6: String?
     let projectId: UUID?
     let isDefault: Bool
     let attachedInterfaceCount: Int
@@ -268,6 +309,8 @@ struct NetworkResponse: Content {
         self.name = network.name
         self.subnet = network.subnet
         self.gateway = network.gateway
+        self.subnet6 = network.subnet6
+        self.gateway6 = network.gateway6
         self.projectId = network.$project.id
         self.isDefault = network.name == LogicalNetwork.defaultNetworkName
         self.attachedInterfaceCount = attachedInterfaceCount

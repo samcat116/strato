@@ -79,17 +79,33 @@ struct VMSpecBuilderTests {
         deviceName: String = "net0",
         orderIndex: Int = 0
     ) -> VMNetworkInterface {
-        return VMNetworkInterface(
+        let interface = VMNetworkInterface(
+            id: UUID(),
             vmID: UUID(),
             network: network,
             macAddress: macAddress,
-            ipAddress: ipAddress,
-            netmask: netmask,
-            gateway: gateway,
             mtu: mtu,
             deviceName: deviceName,
             orderIndex: orderIndex
         )
+        // Addressing lives in per-family child rows now; mirror what the
+        // create path persists (an ipv4 row when IPAM allocated one).
+        if let ipAddress {
+            let prefix = netmask.flatMap { StratoShared.IPv4Address($0)?.prefixLength } ?? 24
+            interface.$addresses.value = [
+                VMInterfaceAddress(
+                    interfaceID: interface.id!,
+                    network: network,
+                    family: .ipv4,
+                    address: ipAddress,
+                    prefixLength: prefix,
+                    gateway: gateway
+                )
+            ]
+        } else {
+            interface.$addresses.value = []
+        }
+        return interface
     }
 
     struct TestAbort: Error {}

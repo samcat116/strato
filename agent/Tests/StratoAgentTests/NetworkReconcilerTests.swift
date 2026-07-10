@@ -12,6 +12,8 @@ struct NetworkReconcilerTests {
         name: String,
         subnet: String,
         gateway: String?,
+        subnet6: String? = nil,
+        gateway6: String? = nil,
         routerKey: String,
         externalAccess: Bool = true,
         generation: Int64 = 1,
@@ -22,6 +24,8 @@ struct NetworkReconcilerTests {
             name: name,
             subnet: subnet,
             gateway: gateway,
+            subnet6: subnet6,
+            gateway6: gateway6,
             routerKey: routerKey,
             externalAccess: externalAccess,
             generation: generation)
@@ -107,6 +111,54 @@ struct NetworkReconcilerTests {
         #expect(plan.routers[0].ports.count == 1)
         #expect(plan.routers[0].snatSubnets.isEmpty)
         #expect(!plan.routers[0].needsUplink)
+    }
+
+    @Test("A dual-stack network's router port carries both CIDRs and stateful RA config")
+    func dualStackRouterPort() {
+        let plan = NetworkReconciler.plan(networks: [
+            network(
+                name: "dual", subnet: "10.2.0.0/24", gateway: "10.2.0.1",
+                subnet6: "fd12:3456:789a::/64", gateway6: "fd12:3456:789a::1",
+                routerKey: "project-D")
+        ])
+        #expect(plan.routers.count == 1)
+        let port = plan.routers[0].ports[0]
+        #expect(port.cidrs == ["10.2.0.1/24", "fd12:3456:789a::1/64"])
+        // MAC stays derived from the v4 gateway: rederiving on upgrade would
+        // rewrite every existing router port's MAC.
+        #expect(port.mac == OVNNaming.routerPortMAC(gateway: "10.2.0.1"))
+        #expect(port.ipv6RAConfigs?["address_mode"] == "dhcpv6_stateful")
+        #expect(port.ipv6RAConfigs?["send_periodic"] == "true")
+        // v6 never reaches SNAT — internal-only this phase.
+        #expect(plan.routers[0].snatSubnets == ["10.2.0.0/24"])
+    }
+
+    @Test("Unparsable IPv6 config degrades the port to v4-only, never drops it")
+    func invalidIPv6DegradesToV4() {
+        for (subnet6, gateway6) in [
+            ("junk", "fd00::1"),
+            ("fd00::/64", "not-an-ip"),
+            ("fd00::/64", "fd99::1"),  // gateway outside the prefix
+        ] {
+            let plan = NetworkReconciler.plan(networks: [
+                network(
+                    name: "broken6", subnet: "10.3.0.0/24", gateway: "10.3.0.1",
+                    subnet6: subnet6, gateway6: gateway6, routerKey: "project-B")
+            ])
+            #expect(plan.routers.count == 1)
+            let port = plan.routers[0].ports[0]
+            #expect(port.cidrs == ["10.3.0.1/24"], "\(subnet6)/\(gateway6) should degrade to v4-only")
+            #expect(port.ipv6RAConfigs == nil)
+        }
+    }
+
+    @Test("A v4-only network's router port has no RA config")
+    func v4OnlyPortHasNoRAConfig() {
+        let plan = NetworkReconciler.plan(networks: [
+            network(name: "v4", subnet: "10.4.0.0/24", gateway: "10.4.0.1", routerKey: "project-V")
+        ])
+        #expect(plan.routers[0].ports[0].ipv6RAConfigs == nil)
+        #expect(plan.routers[0].ports[0].cidrs == ["10.4.0.1/24"])
     }
 
     @Test("plan is deterministic regardless of input order")

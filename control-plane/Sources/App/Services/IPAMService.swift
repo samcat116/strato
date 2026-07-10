@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import StratoShared
 
 /// Control-plane IP address management: allocates static NIC addresses from a
 /// `LogicalNetwork`'s subnet. The control plane is the IPAM owner (issue #212) —
@@ -14,6 +15,13 @@ enum IPAMService {
     struct Allocation: Equatable {
         let ipAddress: String
         let netmask: String
+        let prefixLength: Int
+    }
+
+    struct Allocation6: Equatable {
+        /// Canonical (RFC 5952) address text.
+        let ipAddress: String
+        let prefixLength: Int
     }
 
     enum IPAMError: Error, LocalizedError, Equatable {
@@ -40,10 +48,11 @@ enum IPAMService {
 
     /// Allocates the lowest free host address in `network`'s subnet.
     static func allocateIP(for network: LogicalNetwork, on db: Database) async throws -> Allocation {
-        let used = try await VMNetworkInterface.query(on: db)
+        let used = try await VMInterfaceAddress.query(on: db)
             .filter(\.$network == network.name)
+            .filter(\.$family == IPFamily.ipv4.rawValue)
             .all()
-            .compactMap { $0.ipAddress.flatMap(parseIPv4) }
+            .compactMap { parseIPv4($0.address) }
 
         return try allocateIP(
             networkName: network.name,
@@ -80,10 +89,70 @@ enum IPAMService {
         for candidate in (networkAddress + 1)..<broadcastAddress {
             if candidate == gatewayValue { continue }
             if used.contains(candidate) { continue }
-            return Allocation(ipAddress: formatIPv4(candidate), netmask: formatIPv4(mask))
+            return Allocation(
+                ipAddress: formatIPv4(candidate), netmask: formatIPv4(mask), prefixLength: prefix)
         }
 
         throw IPAMError.poolExhausted(network: networkName, subnet: subnet)
+    }
+
+    /// Allocates the next IPv6 address in `network`'s /64, or nil when the
+    /// network is v4-only.
+    static func allocateIPv6(for network: LogicalNetwork, on db: Database) async throws -> Allocation6? {
+        guard let subnet6 = network.subnet6 else { return nil }
+        let used = try await VMInterfaceAddress.query(on: db)
+            .filter(\.$network == network.name)
+            .filter(\.$family == IPFamily.ipv6.rawValue)
+            .all()
+            .compactMap { IPv6Address($0.address)?.lo }
+
+        return try allocateIPv6(
+            networkName: network.name,
+            subnet6: subnet6,
+            gateway6: network.gateway6,
+            usedInterfaceIDs: Set(used)
+        )
+    }
+
+    /// Pure IPv6 allocation core. A /64 has 2^64 hosts, so the v4 lowest-free
+    /// linear scan cannot work; instead interface IDs are handed out
+    /// sequentially past the highest one in use, starting at ::100 (keeping
+    /// addresses short and recognizably control-plane-assigned). The database's
+    /// unique (network, address) index is the backstop against concurrent
+    /// creates — callers retry the enclosing transaction on a collision.
+    static func allocateIPv6(
+        networkName: String, subnet6: String, gateway6: String?, usedInterfaceIDs: Set<UInt64>
+    ) throws -> Allocation6 {
+        guard let cidr = IPv6CIDR(subnet6), cidr.prefix == 64 else {
+            throw IPAMError.invalidSubnet(subnet6)
+        }
+        let base = cidr.networkAddress
+
+        // Same rule as v4: a malformed gateway must fail loudly, or its real
+        // address could be handed out to a VM.
+        let gatewayID: UInt64?
+        if let gateway6 {
+            guard let parsed = IPv6Address(gateway6), cidr.contains(parsed) else {
+                throw IPAMError.invalidGateway(gateway6)
+            }
+            gatewayID = parsed.lo
+        } else {
+            gatewayID = nil
+        }
+
+        var candidate = Swift.max(usedInterfaceIDs.max() ?? 0, 0xff)
+        repeat {
+            let (next, overflow) = candidate.addingReportingOverflow(1)
+            guard !overflow else {
+                // Unreachable in practice (2^64 interface IDs), but wraparound
+                // must not mint the network address.
+                throw IPAMError.poolExhausted(network: networkName, subnet: subnet6)
+            }
+            candidate = next
+        } while candidate == gatewayID || usedInterfaceIDs.contains(candidate)
+
+        return Allocation6(
+            ipAddress: base.replacingInterfaceID(candidate).description, prefixLength: cidr.prefix)
     }
 
     /// The first host address of a subnet (conventionally the gateway), e.g.
@@ -97,30 +166,19 @@ enum IPAMService {
 
     // MARK: - IPv4 helpers
 
+    // Thin wrappers over the StratoShared address types, kept for the many
+    // existing call sites.
+
     static func parseCIDR(_ cidr: String) -> (base: UInt32, prefix: Int)? {
-        let parts = cidr.split(separator: "/")
-        guard parts.count == 2,
-            let base = parseIPv4(String(parts[0])),
-            let prefix = Int(parts[1]),
-            (0...32).contains(prefix)
-        else {
-            return nil
-        }
-        return (base, prefix)
+        guard let parsed = IPv4CIDR(cidr) else { return nil }
+        return (parsed.base.raw, parsed.prefix)
     }
 
     static func parseIPv4(_ string: String) -> UInt32? {
-        let octets = string.split(separator: ".", omittingEmptySubsequences: false)
-        guard octets.count == 4 else { return nil }
-        var value: UInt32 = 0
-        for octet in octets {
-            guard let byte = UInt8(octet) else { return nil }
-            value = (value << 8) | UInt32(byte)
-        }
-        return value
+        IPv4Address(string)?.raw
     }
 
     static func formatIPv4(_ value: UInt32) -> String {
-        "\((value >> 24) & 0xff).\((value >> 16) & 0xff).\((value >> 8) & 0xff).\(value & 0xff)"
+        IPv4Address(raw: value).description
     }
 }

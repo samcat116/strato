@@ -86,6 +86,73 @@ struct IPAMServiceTests {
         #expect(allocation.ipAddress == "192.168.1.2")
     }
 
+    // MARK: - IPv6 allocation core
+
+    @Test("first IPv6 allocation is ::100")
+    func firstIPv6Allocation() throws {
+        let allocation = try IPAMService.allocateIPv6(
+            networkName: "default", subnet6: "fd12:3456:789a::/64",
+            gateway6: "fd12:3456:789a::1", usedInterfaceIDs: [])
+        #expect(allocation.ipAddress == "fd12:3456:789a::100")
+        #expect(allocation.prefixLength == 64)
+    }
+
+    @Test("IPv6 allocation is sequential past the highest used interface ID")
+    func sequentialIPv6Allocation() throws {
+        let allocation = try IPAMService.allocateIPv6(
+            networkName: "default", subnet6: "fd12:3456:789a::/64",
+            gateway6: "fd12:3456:789a::1", usedInterfaceIDs: [0x100, 0x101, 0x105])
+        // Sequential-past-max, not lowest-free: gaps are never revisited, so a
+        // freed address can't be handed to a new VM while stale state lingers.
+        #expect(allocation.ipAddress == "fd12:3456:789a::106")
+    }
+
+    @Test("an IPv6 gateway colliding with the next candidate is skipped")
+    func ipv6GatewaySkipped() throws {
+        let allocation = try IPAMService.allocateIPv6(
+            networkName: "default", subnet6: "fd12:3456:789a::/64",
+            gateway6: "fd12:3456:789a::106", usedInterfaceIDs: [0x100, 0x105])
+        #expect(allocation.ipAddress == "fd12:3456:789a::107")
+    }
+
+    @Test("IPv6 allocations format canonically even from uncanonical subnet text")
+    func ipv6CanonicalOutput() throws {
+        let allocation = try IPAMService.allocateIPv6(
+            networkName: "default", subnet6: "FD12:3456:789A:0000:0000::/64",
+            gateway6: nil, usedInterfaceIDs: [])
+        #expect(allocation.ipAddress == "fd12:3456:789a::100")
+    }
+
+    @Test("non-/64 or malformed IPv6 subnets are rejected")
+    func invalidIPv6Subnet() {
+        for subnet6 in ["fd12:3456:789a::/48", "fd12:3456:789a::/80", "junk", "10.0.0.0/24"] {
+            #expect(throws: IPAMService.IPAMError.invalidSubnet(subnet6)) {
+                try IPAMService.allocateIPv6(
+                    networkName: "x", subnet6: subnet6, gateway6: nil, usedInterfaceIDs: [])
+            }
+        }
+    }
+
+    @Test("a malformed or out-of-subnet IPv6 gateway is rejected")
+    func invalidIPv6Gateway() {
+        for gateway6 in ["not-an-ip", "fd99::1", "192.168.1.1"] {
+            #expect(throws: IPAMService.IPAMError.invalidGateway(gateway6)) {
+                try IPAMService.allocateIPv6(
+                    networkName: "x", subnet6: "fd12:3456:789a::/64", gateway6: gateway6,
+                    usedInterfaceIDs: [])
+            }
+        }
+    }
+
+    @Test("interface-ID wraparound throws poolExhausted instead of minting the network address")
+    func ipv6Wraparound() {
+        #expect(throws: IPAMService.IPAMError.poolExhausted(network: "x", subnet: "fd12:3456:789a::/64")) {
+            try IPAMService.allocateIPv6(
+                networkName: "x", subnet6: "fd12:3456:789a::/64", gateway6: nil,
+                usedInterfaceIDs: [UInt64.max])
+        }
+    }
+
     // MARK: - Helpers
 
     @Test("firstHostAddress returns the conventional gateway")

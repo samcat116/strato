@@ -22,6 +22,26 @@ struct VMController: RouteCollection {
         return (vmDir as NSString).appendingPathComponent(filename)
     }
 
+    /// Runs `body` again (up to `attempts` total) when it fails with a
+    /// database constraint violation. Used around the VM-create transaction:
+    /// two concurrent creates can race IPAM to the same address, and the
+    /// loser's unique-index violation is only recoverable by rerunning the
+    /// whole transaction with a fresh read of the used set. A violation that
+    /// persists through every attempt propagates.
+    static func retryingOnConstraintFailure<T>(
+        attempts: Int = 3, _ body: () async throws -> T
+    ) async throws -> T {
+        precondition(attempts >= 1)
+        for attempt in 1...attempts {
+            do {
+                return try await body()
+            } catch let error as any DatabaseError where error.isConstraintFailure && attempt < attempts {
+                continue
+            }
+        }
+        preconditionFailure("unreachable: the final attempt either returns or throws")
+    }
+
     func boot(routes: any RoutesBuilder) throws {
         let vms = routes.grouped("api", "vms")
         vms.get(use: index)
@@ -277,7 +297,9 @@ struct VMController: RouteCollection {
         }
 
         // Filter VMs based on user permissions
-        let allVMs = try await VM.query(on: req.db).with(\.$networkInterfaces).all()
+        let allVMs = try await VM.query(on: req.db)
+            .with(\.$networkInterfaces) { $0.with(\.$addresses) }
+            .all()
         var authorizedVMs: [VMDetailResponse] = []
 
         for vm in allVMs {
@@ -313,6 +335,9 @@ struct VMController: RouteCollection {
         let user = try req.auth.require(User.self)
         let vm = try await fetchVMWithPermission(req: req, user: user, permission: "read")
         try await vm.$networkInterfaces.load(on: req.db)
+        for interface in vm.networkInterfaces {
+            try await interface.$addresses.load(on: req.db)
+        }
 
         return VMDetailResponse(from: vm)
     }
@@ -525,75 +550,117 @@ struct VMController: RouteCollection {
         // together, so a quota rejection leaves nothing behind.
         let operation: VMOperation
         do {
-            operation = try await req.db.transaction { db in
-                // Enforce and reserve applicable project/OU/org quotas before the VM row
-                // exists. Throws Abort(.forbidden) naming the quota if it would be exceeded.
-                try await QuotaEnforcementService.reserve(
-                    for: project,
-                    environment: environment,
-                    vcpus: vm.cpu,
-                    memory: vm.memory,
-                    storage: vm.disk,
-                    on: db
-                )
+            // IPAM's unique (network, address) index is the backstop against
+            // concurrent creates racing to the same address. A violation
+            // poisons the whole Postgres transaction, so the retry wraps the
+            // transaction (not the insert): the loser re-reads the used set
+            // and allocates the next free address.
+            let initialGeneration = vm.generation
+            operation = try await Self.retryingOnConstraintFailure {
+                // A retried attempt reuses this model after its insert was
+                // rolled back: Fluent recorded the generated id and marked the
+                // model as existing, so saving again would UPDATE a row that no
+                // longer exists (and the failed attempt's setDesiredStatus
+                // already bumped the generation). Reset both so every attempt
+                // starts as a fresh insert.
+                vm.id = nil
+                vm.$id.exists = false
+                vm.generation = initialGeneration
+                return try await req.db.transaction { db in
+                    // Enforce and reserve applicable project/OU/org quotas before the VM row
+                    // exists. Throws Abort(.forbidden) naming the quota if it would be exceeded.
+                    try await QuotaEnforcementService.reserve(
+                        for: project,
+                        environment: environment,
+                        vcpus: vm.cpu,
+                        memory: vm.memory,
+                        storage: vm.disk,
+                        on: db
+                    )
 
-                // Save VM to database first to generate ID
-                try await vm.save(on: db)
+                    // Save VM to database first to generate ID
+                    try await vm.save(on: db)
 
-                // Generate unique paths and configurations using the generated ID
-                let vmID = try vm.requireID()
+                    // Generate unique paths and configurations using the generated ID
+                    let vmID = try vm.requireID()
 
-                // Image-based paths - disk will be created by agent from cached image
-                vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
+                    // Image-based paths - disk will be created by agent from cached image
+                    vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
 
-                // Set up console sockets to align with agent VM storage path
-                vm.consoleSocket = Self.socketPath(for: vmID, filename: "console.sock")
-                vm.serialSocket = Self.socketPath(for: vmID, filename: "serial.sock")
+                    // Set up console sockets to align with agent VM storage path
+                    vm.consoleSocket = Self.socketPath(for: vmID, filename: "console.sock")
+                    vm.serialSocket = Self.socketPath(for: vmID, filename: "serial.sock")
 
-                // Desired state for a fresh VM: exists but not running. The bump
-                // to generation 1 distinguishes "never confirmed by any agent"
-                // (observed_generation 0) from "confirmed" (issue #260).
-                vm.setDesiredStatus(.shutdown)
+                    // Desired state for a fresh VM: exists but not running. The bump
+                    // to generation 1 distinguishes "never confirmed by any agent"
+                    // (observed_generation 0) from "confirmed" (issue #260).
+                    vm.setDesiredStatus(.shutdown)
 
-                // Update VM with generated paths
-                try await vm.update(on: db)
+                    // Update VM with generated paths
+                    try await vm.update(on: db)
 
-                // Every VM starts with one NIC on the resolved network (the default
-                // network unless the caller picked one). The control plane owns IPAM
-                // (issue #212): allocate the NIC's address from the logical network
-                // here so agents receive it in the spec instead of inventing one.
-                // For the implicit default, a missing network row (pre-migration
-                // data) degrades to an address-less NIC, matching the old behavior;
-                // an explicitly requested network must exist, so its absence fails.
-                let networkName = resolvedNetworkName
-                var allocation: IPAMService.Allocation?
-                var networkGateway: String?
-                if let logicalNetwork = try await LogicalNetwork.query(on: db)
-                    .filter(\.$name == networkName)
-                    .first()
-                {
-                    allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
-                    networkGateway = logicalNetwork.gateway
-                } else if networkExplicitlyRequested {
-                    throw Abort(.badRequest, reason: "Network '\(networkName)' no longer exists")
+                    // Every VM starts with one NIC on the resolved network (the default
+                    // network unless the caller picked one). The control plane owns IPAM
+                    // (issue #212): allocate the NIC's address from the logical network
+                    // here so agents receive it in the spec instead of inventing one.
+                    // For the implicit default, a missing network row (pre-migration
+                    // data) degrades to an address-less NIC, matching the old behavior;
+                    // an explicitly requested network must exist, so its absence fails.
+                    let networkName = resolvedNetworkName
+                    var allocation: IPAMService.Allocation?
+                    var allocation6: IPAMService.Allocation6?
+                    var networkGateway: String?
+                    var networkGateway6: String?
+                    if let logicalNetwork = try await LogicalNetwork.query(on: db)
+                        .filter(\.$name == networkName)
+                        .first()
+                    {
+                        allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
+                        networkGateway = logicalNetwork.gateway
+                        // Dual-stack network: the NIC gets one address per family.
+                        allocation6 = try await IPAMService.allocateIPv6(for: logicalNetwork, on: db)
+                        networkGateway6 = logicalNetwork.gateway6
+                    } else if networkExplicitlyRequested {
+                        throw Abort(.badRequest, reason: "Network '\(networkName)' no longer exists")
+                    }
+
+                    let networkInterface = VMNetworkInterface(
+                        vmID: vmID,
+                        network: networkName,
+                        macAddress: VMNetworkInterface.generateMACAddress()
+                    )
+                    try await networkInterface.save(on: db)
+
+                    if let allocation {
+                        let address = VMInterfaceAddress(
+                            interfaceID: try networkInterface.requireID(),
+                            network: networkName,
+                            family: .ipv4,
+                            address: allocation.ipAddress,
+                            prefixLength: allocation.prefixLength,
+                            gateway: networkGateway
+                        )
+                        try await address.save(on: db)
+                    }
+                    if let allocation6 {
+                        let address6 = VMInterfaceAddress(
+                            interfaceID: try networkInterface.requireID(),
+                            network: networkName,
+                            family: .ipv6,
+                            address: allocation6.ipAddress,
+                            prefixLength: allocation6.prefixLength,
+                            gateway: networkGateway6
+                        )
+                        try await address6.save(on: db)
+                    }
+
+                    // The pending create operation is the client's handle on the
+                    // asynchronous agent work that follows (issue #259).
+                    let operation = VMOperation(vmID: vmID, userID: userID, kind: .create)
+                    try await operation.save(on: db)
+
+                    return operation
                 }
-
-                let networkInterface = VMNetworkInterface(
-                    vmID: vmID,
-                    network: networkName,
-                    macAddress: VMNetworkInterface.generateMACAddress(),
-                    ipAddress: allocation?.ipAddress,
-                    netmask: allocation?.netmask,
-                    gateway: networkGateway
-                )
-                try await networkInterface.save(on: db)
-
-                // The pending create operation is the client's handle on the
-                // asynchronous agent work that follows (issue #259).
-                let operation = VMOperation(vmID: vmID, userID: userID, kind: .create)
-                try await operation.save(on: db)
-
-                return operation
             }
         } catch let error as IPAMService.IPAMError {
             // The chosen network's subnet is full; the whole transaction rolled

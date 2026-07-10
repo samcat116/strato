@@ -121,6 +121,104 @@ struct CloudInitNetworkConfigTests {
         #expect(yaml?.contains("addresses: [1.1.1.1, 8.8.8.8]") == true)
     }
 
+    @Test("v4-only NICs render byte-identical YAML to pre-IPv6 agents")
+    func v4OnlyOutputUnchanged() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                gateway: "192.168.1.1"
+            )
+        ]
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(
+            yaml == """
+                version: 2
+                ethernets:
+                  nic0:
+                    match:
+                      macaddress: "52:54:00:aa:bb:cc"
+                    set-name: nic0
+                    addresses:
+                      - 192.168.1.5/24
+                    gateway4: 192.168.1.1
+                """)
+    }
+
+    @Test("dual-stack static NIC renders both addresses, gateway6, RA acceptance, and EUI-64")
+    func dualStackStaticNIC() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                gateway: "192.168.1.1",
+                ip6Address: "fd12:3456:789a::100",
+                prefixLength6: 64,
+                gateway6: "fd12:3456:789a::1",
+                dnsServers: ["1.1.1.1", "fd00::53"]
+            )
+        ]
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("- 192.168.1.5/24") == true)
+        #expect(yaml?.contains("- fd12:3456:789a::100/64") == true)
+        #expect(yaml?.contains("gateway4: 192.168.1.1") == true)
+        #expect(yaml?.contains("gateway6: fd12:3456:789a::1") == true)
+        #expect(yaml?.contains("accept-ra: true") == true)
+        // EUI-64 link-locals are what OVN port_security allows; stable-privacy
+        // link-locals would be silently dropped.
+        #expect(yaml?.contains("ipv6-address-generation: eui64") == true)
+        // The nameserver list stays mixed-family.
+        #expect(yaml?.contains("addresses: [1.1.1.1, fd00::53]") == true)
+    }
+
+    @Test("dual-stack DHCP NIC renders dhcp4 + dhcp6 with RA acceptance and EUI-64")
+    func dualStackDHCPNIC() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                gateway: "192.168.1.1",
+                ip6Address: "fd12:3456:789a::100",
+                prefixLength6: 64,
+                gateway6: "fd12:3456:789a::1",
+                dhcpEnabled: true
+            )
+        ]
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("dhcp4: true") == true)
+        #expect(yaml?.contains("dhcp6: true") == true)
+        #expect(yaml?.contains("accept-ra: true") == true)
+        #expect(yaml?.contains("ipv6-address-generation: eui64") == true)
+        #expect(yaml?.contains("addresses:") == false)
+    }
+
+    @Test("v4-only DHCP NIC renders no v6 keys")
+    func v4OnlyDHCPNoV6Keys() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                dhcpEnabled: true
+            )
+        ]
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("dhcp6") == false)
+        #expect(yaml?.contains("accept-ra") == false)
+        #expect(yaml?.contains("ipv6-address-generation") == false)
+    }
+
     @Test("multiple NICs render as separate entries with stable names")
     func multipleNICs() {
         let attachments = [

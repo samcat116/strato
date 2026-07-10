@@ -36,6 +36,9 @@ struct NetworkOrchestrator: Sendable {
                     ipAddress: spec.ipAddress,
                     netmask: spec.netmask,
                     gateway: spec.gateway,
+                    ip6Address: spec.ipv6Address,
+                    prefixLength6: spec.ipv6PrefixLength,
+                    gateway6: spec.gateway6,
                     mtu: spec.mtu,
                     // No OVN here (user-mode SLIRP), so its DHCP responder can't
                     // run; fall back to static guest config.
@@ -54,6 +57,10 @@ struct NetworkOrchestrator: Sendable {
                 ipAddress: spec.ipAddress,
                 subnet: subnetCIDR(ipAddress: spec.ipAddress, netmask: spec.netmask),
                 gateway: spec.gateway,
+                ip6Address: spec.ipv6Address,
+                prefixLength6: spec.ipv6PrefixLength,
+                gateway6: spec.gateway6,
+                subnet6: subnet6CIDR(ip6Address: spec.ipv6Address, prefixLength: spec.ipv6PrefixLength),
                 dhcpEnabled: spec.dhcpEnabled,
                 dnsServers: spec.dnsServers,
                 domainName: spec.domainName,
@@ -77,6 +84,9 @@ struct NetworkOrchestrator: Sendable {
                         ipAddress: info.ipAddress ?? spec.ipAddress,
                         netmask: spec.netmask,
                         gateway: spec.gateway,
+                        ip6Address: info.ip6Address ?? spec.ipv6Address,
+                        prefixLength6: spec.ipv6PrefixLength,
+                        gateway6: spec.gateway6,
                         mtu: spec.mtu,
                         dhcpEnabled: dhcpRealized,
                         dnsServers: spec.dnsServers
