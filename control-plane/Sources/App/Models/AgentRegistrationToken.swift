@@ -103,8 +103,13 @@ struct AgentRegistrationTokenResponse: Content {
 
         if let spire {
             self.spire = SPIREProvisioningResponse(from: spire)
+            // One curl-able installer (deploy/agent/install.sh) does everything:
+            // downloads strato-agent + spire-agent, attests the node with the
+            // join token, joins the control plane, and sets up host telemetry
+            // (Grafana Alloy + spiffe-helper pushing to /ingest/* over mTLS).
             self.bootstrapCommand =
-                "sudo strato-node-bootstrap"
+                "curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh"
+                + " | sudo bash -s --"
                 + " --registration-url '\(self.registrationURL)'"
                 + " --spire-join-token '\(spire.joinToken)'"
                 + " --spire-server-address '\(spire.serverAddress)'"

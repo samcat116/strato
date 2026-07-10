@@ -36,6 +36,13 @@ For a real hostname (WebAuthn then requires HTTPS in front of the proxy):
   provisions the Envoy server cert and trust bundle. The small helper image
   (`strato-spire-helper:local`) is built locally from `./spiffe/` on first `up`.
   See [`spiffe/`](spiffe/) for the SPIRE/Envoy config.
+- **Prometheus + Loki (host telemetry + VM logs)** — hypervisor nodes push
+  node metrics and journal logs through Envoy's mTLS listener
+  (`/ingest/metrics` → Prometheus, `/ingest/logs` → Loki), authenticated by
+  their SPIFFE identity; only `spiffe://…/agent/…` identities may write.
+  Loki also stores VM console logs (via the control plane) and backs the
+  logs UI. Neither service publishes a port. Prometheus keeps 15 days of
+  data in the `prometheus_data` volume.
 - **nginx proxy** — the browser-facing service.
 
 ## Published ports
@@ -59,10 +66,11 @@ origin (`:80`/`:443`) is independent and may sit behind a TLS terminator.
 
 In the web UI, go to Agents → Create Registration Token. Because mTLS is on by
 default, the token also provisions the node in SPIRE and the dialog shows a
-one-line `sudo strato-node-bootstrap …` command; run it on the hypervisor host.
-It starts a `spire-agent` (attested with the one-time join token) and the
-`strato-agent`, which connects over mTLS. See the agent documentation for
-details, including the `deploy/agent/strato-node-bootstrap.sh` helper.
+one-line `curl … deploy/agent/install.sh | sudo bash …` command; run it on the
+hypervisor host. It downloads the binaries, starts a `spire-agent` (attested
+with the one-time join token) and the `strato-agent` (which connects over
+mTLS), and brings up host telemetry (Grafana Alloy + spiffe-helper) pushing
+metrics and logs back here. See the agent documentation for details.
 
 ## Notes
 
