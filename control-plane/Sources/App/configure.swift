@@ -301,6 +301,7 @@ public func configure(_ app: Application) async throws {
     // Dual-stack networking: NIC addresses normalized into their own table,
     // one row per family (issue: IPv6 support).
     app.migrations.add(CreateVMInterfaceAddresses())
+    app.migrations.add(AddIPv6ToLogicalNetwork())
 
     try await app.autoMigrate()
 

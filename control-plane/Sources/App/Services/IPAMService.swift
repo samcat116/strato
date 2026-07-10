@@ -18,6 +18,12 @@ enum IPAMService {
         let prefixLength: Int
     }
 
+    struct Allocation6: Equatable {
+        /// Canonical (RFC 5952) address text.
+        let ipAddress: String
+        let prefixLength: Int
+    }
+
     enum IPAMError: Error, LocalizedError, Equatable {
         case invalidSubnet(String)
         case invalidGateway(String)
@@ -88,6 +94,65 @@ enum IPAMService {
         }
 
         throw IPAMError.poolExhausted(network: networkName, subnet: subnet)
+    }
+
+    /// Allocates the next IPv6 address in `network`'s /64, or nil when the
+    /// network is v4-only.
+    static func allocateIPv6(for network: LogicalNetwork, on db: Database) async throws -> Allocation6? {
+        guard let subnet6 = network.subnet6 else { return nil }
+        let used = try await VMInterfaceAddress.query(on: db)
+            .filter(\.$network == network.name)
+            .filter(\.$family == IPFamily.ipv6.rawValue)
+            .all()
+            .compactMap { IPv6Address($0.address)?.lo }
+
+        return try allocateIPv6(
+            networkName: network.name,
+            subnet6: subnet6,
+            gateway6: network.gateway6,
+            usedInterfaceIDs: Set(used)
+        )
+    }
+
+    /// Pure IPv6 allocation core. A /64 has 2^64 hosts, so the v4 lowest-free
+    /// linear scan cannot work; instead interface IDs are handed out
+    /// sequentially past the highest one in use, starting at ::100 (keeping
+    /// addresses short and recognizably control-plane-assigned). The database's
+    /// unique (network, address) index is the backstop against concurrent
+    /// creates — callers retry the enclosing transaction on a collision.
+    static func allocateIPv6(
+        networkName: String, subnet6: String, gateway6: String?, usedInterfaceIDs: Set<UInt64>
+    ) throws -> Allocation6 {
+        guard let cidr = IPv6CIDR(subnet6), cidr.prefix == 64 else {
+            throw IPAMError.invalidSubnet(subnet6)
+        }
+        let base = cidr.networkAddress
+
+        // Same rule as v4: a malformed gateway must fail loudly, or its real
+        // address could be handed out to a VM.
+        let gatewayID: UInt64?
+        if let gateway6 {
+            guard let parsed = IPv6Address(gateway6), cidr.contains(parsed) else {
+                throw IPAMError.invalidGateway(gateway6)
+            }
+            gatewayID = parsed.lo
+        } else {
+            gatewayID = nil
+        }
+
+        var candidate = Swift.max(usedInterfaceIDs.max() ?? 0, 0xff)
+        repeat {
+            let (next, overflow) = candidate.addingReportingOverflow(1)
+            guard !overflow else {
+                // Unreachable in practice (2^64 interface IDs), but wraparound
+                // must not mint the network address.
+                throw IPAMError.poolExhausted(network: networkName, subnet: subnet6)
+            }
+            candidate = next
+        } while candidate == gatewayID || usedInterfaceIDs.contains(candidate)
+
+        return Allocation6(
+            ipAddress: base.replacingInterfaceID(candidate).description, prefixLength: cidr.prefix)
     }
 
     /// The first host address of a subnet (conventionally the gateway), e.g.

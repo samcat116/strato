@@ -22,6 +22,26 @@ struct VMController: RouteCollection {
         return (vmDir as NSString).appendingPathComponent(filename)
     }
 
+    /// Runs `body` again (up to `attempts` total) when it fails with a
+    /// database constraint violation. Used around the VM-create transaction:
+    /// two concurrent creates can race IPAM to the same address, and the
+    /// loser's unique-index violation is only recoverable by rerunning the
+    /// whole transaction with a fresh read of the used set. A violation that
+    /// persists through every attempt propagates.
+    static func retryingOnConstraintFailure<T>(
+        attempts: Int = 3, _ body: () async throws -> T
+    ) async throws -> T {
+        precondition(attempts >= 1)
+        for attempt in 1...attempts {
+            do {
+                return try await body()
+            } catch let error as any DatabaseError where error.isConstraintFailure && attempt < attempts {
+                continue
+            }
+        }
+        preconditionFailure("unreachable: the final attempt either returns or throws")
+    }
+
     func boot(routes: any RoutesBuilder) throws {
         let vms = routes.grouped("api", "vms")
         vms.get(use: index)
@@ -530,7 +550,13 @@ struct VMController: RouteCollection {
         // together, so a quota rejection leaves nothing behind.
         let operation: VMOperation
         do {
-            operation = try await req.db.transaction { db in
+            // IPAM's unique (network, address) index is the backstop against
+            // concurrent creates racing to the same address. A violation
+            // poisons the whole Postgres transaction, so the retry wraps the
+            // transaction (not the insert): the loser re-reads the used set
+            // and allocates the next free address.
+            operation = try await Self.retryingOnConstraintFailure {
+                try await req.db.transaction { db in
                 // Enforce and reserve applicable project/OU/org quotas before the VM row
                 // exists. Throws Abort(.forbidden) naming the quota if it would be exceeded.
                 try await QuotaEnforcementService.reserve(
@@ -572,13 +598,18 @@ struct VMController: RouteCollection {
                 // an explicitly requested network must exist, so its absence fails.
                 let networkName = resolvedNetworkName
                 var allocation: IPAMService.Allocation?
+                var allocation6: IPAMService.Allocation6?
                 var networkGateway: String?
+                var networkGateway6: String?
                 if let logicalNetwork = try await LogicalNetwork.query(on: db)
                     .filter(\.$name == networkName)
                     .first()
                 {
                     allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
                     networkGateway = logicalNetwork.gateway
+                    // Dual-stack network: the NIC gets one address per family.
+                    allocation6 = try await IPAMService.allocateIPv6(for: logicalNetwork, on: db)
+                    networkGateway6 = logicalNetwork.gateway6
                 } else if networkExplicitlyRequested {
                     throw Abort(.badRequest, reason: "Network '\(networkName)' no longer exists")
                 }
@@ -601,6 +632,17 @@ struct VMController: RouteCollection {
                     )
                     try await address.save(on: db)
                 }
+                if let allocation6 {
+                    let address6 = VMInterfaceAddress(
+                        interfaceID: try networkInterface.requireID(),
+                        network: networkName,
+                        family: .ipv6,
+                        address: allocation6.ipAddress,
+                        prefixLength: allocation6.prefixLength,
+                        gateway: networkGateway6
+                    )
+                    try await address6.save(on: db)
+                }
 
                 // The pending create operation is the client's handle on the
                 // asynchronous agent work that follows (issue #259).
@@ -608,6 +650,7 @@ struct VMController: RouteCollection {
                 try await operation.save(on: db)
 
                 return operation
+                }
             }
         } catch let error as IPAMService.IPAMError {
             // The chosen network's subnet is full; the whole transaction rolled

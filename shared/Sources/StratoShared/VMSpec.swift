@@ -142,6 +142,15 @@ public struct NetworkSpec: Codable, Sendable {
     public let netmask: String?
     /// Gateway of the logical network, when the control plane knows it.
     public let gateway: String?
+    /// Static IPv6 assignment on a dual-stack network, canonical RFC 5952
+    /// form. Nil from control planes that predate IPv6; ignored by agents
+    /// that do.
+    public let ipv6Address: String?
+    /// Prefix length for `ipv6Address` (64 for tenant networks). IPv6 has no
+    /// dotted-netmask form, so the prefix travels as an integer.
+    public let ipv6PrefixLength: Int?
+    /// IPv6 gateway of the logical network, when dual-stack.
+    public let gateway6: String?
     public let mtu: Int?
 
     /// When true, the agent programs OVN's native DHCP responder to hand the
@@ -164,6 +173,9 @@ public struct NetworkSpec: Codable, Sendable {
         ipAddress: String? = nil,
         netmask: String? = nil,
         gateway: String? = nil,
+        ipv6Address: String? = nil,
+        ipv6PrefixLength: Int? = nil,
+        gateway6: String? = nil,
         mtu: Int? = nil,
         dhcpEnabled: Bool = false,
         dnsServers: [String] = [],
@@ -176,6 +188,9 @@ public struct NetworkSpec: Codable, Sendable {
         self.ipAddress = ipAddress
         self.netmask = netmask
         self.gateway = gateway
+        self.ipv6Address = ipv6Address
+        self.ipv6PrefixLength = ipv6PrefixLength
+        self.gateway6 = gateway6
         self.mtu = mtu
         self.dhcpEnabled = dhcpEnabled
         self.dnsServers = dnsServers
@@ -185,6 +200,7 @@ public struct NetworkSpec: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case network, networkId, macAddress, ipAddress, netmask, gateway, mtu
+        case ipv6Address, ipv6PrefixLength, gateway6
         case dhcpEnabled, dnsServers, domainName, leaseTime
     }
 
@@ -199,6 +215,9 @@ public struct NetworkSpec: Codable, Sendable {
         self.ipAddress = try container.decodeIfPresent(String.self, forKey: .ipAddress)
         self.netmask = try container.decodeIfPresent(String.self, forKey: .netmask)
         self.gateway = try container.decodeIfPresent(String.self, forKey: .gateway)
+        self.ipv6Address = try container.decodeIfPresent(String.self, forKey: .ipv6Address)
+        self.ipv6PrefixLength = try container.decodeIfPresent(Int.self, forKey: .ipv6PrefixLength)
+        self.gateway6 = try container.decodeIfPresent(String.self, forKey: .gateway6)
         self.mtu = try container.decodeIfPresent(Int.self, forKey: .mtu)
         self.dhcpEnabled = try container.decodeIfPresent(Bool.self, forKey: .dhcpEnabled) ?? false
         self.dnsServers = try container.decodeIfPresent([String].self, forKey: .dnsServers) ?? []

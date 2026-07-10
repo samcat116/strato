@@ -92,6 +92,36 @@ final class VMNetworkSelectionTests {
         }
     }
 
+    @Test("POST /api/vms on a dual-stack network allocates one address per family")
+    func createOnDualStackNetwork() async throws {
+        try await withApp { app, user, _, project, image, token in
+            let network = LogicalNetwork(
+                name: "dual-net", subnet: "10.101.0.0/24", gateway: "10.101.0.1",
+                subnet6: "fd00:66::/64", gateway6: "fd00:66::1",
+                projectID: project.id!, createdByID: user.id!)
+            try await network.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "dual-vm", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: network.id, networkName: nil))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let created = try await nic(forVMNamed: "dual-vm", on: app.db)
+            let ipv4 = created?.ipv4Address
+            #expect(ipv4?.address.hasPrefix("10.101.0.") == true)
+            let ipv6 = created?.ipv6Address
+            #expect(ipv6?.address == "fd00:66::100")
+            #expect(ipv6?.prefixLength == 64)
+            #expect(ipv6?.gateway == "fd00:66::1")
+        }
+    }
+
     @Test("POST /api/vms omitting the network falls back to the default network")
     func createWithoutNetworkUsesDefault() async throws {
         try await withApp { app, _, _, project, image, token in

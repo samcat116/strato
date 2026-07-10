@@ -143,6 +143,189 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("POST /api/networks defaults new networks to dual-stack with a generated ULA /64")
+    func createDefaultsToGeneratedULA() async throws {
+        try await withNetworkTestApp { app, _, project, token in
+            app.spicedbMockAllows = true
+
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "dual-net", subnet: "10.21.0.0/24", gateway: nil, projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let network = try res.content.decode(NetworkResponse.self)
+                let subnet6 = try #require(network.subnet6)
+                // RFC 4193 ULA: fd-prefixed, canonical, and always a /64.
+                #expect(subnet6.hasPrefix("fd"))
+                #expect(subnet6.hasSuffix("::/64"))
+                let gateway6 = try #require(network.gateway6)
+                #expect(gateway6 == subnet6.replacingOccurrences(of: "::/64", with: "::1"))
+            }
+        }
+    }
+
+    @Test("POST /api/networks accepts an explicit IPv6 /64 and defaults its gateway")
+    func createWithExplicitSubnet6() async throws {
+        try await withNetworkTestApp { app, _, project, token in
+            app.spicedbMockAllows = true
+
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "explicit6-net", subnet: "10.22.0.0/24", gateway: nil,
+                        subnet6: "FD00:AB:CD:12:0:0:0:0/64", projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let network = try res.content.decode(NetworkResponse.self)
+                // Canonicalized before storage.
+                #expect(network.subnet6 == "fd00:ab:cd:12::/64")
+                #expect(network.gateway6 == "fd00:ab:cd:12::1")
+            }
+        }
+    }
+
+    @Test("POST /api/networks with ipv6Enabled=false creates a v4-only network")
+    func createV4Only() async throws {
+        try await withNetworkTestApp { app, _, project, token in
+            app.spicedbMockAllows = true
+
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "v4only-net", subnet: "10.23.0.0/24", gateway: nil,
+                        ipv6Enabled: false, projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let network = try res.content.decode(NetworkResponse.self)
+                #expect(network.subnet6 == nil)
+                #expect(network.gateway6 == nil)
+            }
+
+            // subnet6 combined with the opt-out is contradictory → 400.
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "contradiction-net", subnet: "10.24.0.0/24", gateway: nil,
+                        subnet6: "fd00:1::/64", ipv6Enabled: false, projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("POST /api/networks rejects non-/64 and non-routable IPv6 subnets (400)")
+    func createRejectsInvalidSubnet6() async throws {
+        try await withNetworkTestApp { app, _, project, token in
+            app.spicedbMockAllows = true
+
+            for subnet6 in ["fd00:1::/48", "fd00:1::/80", "ff02::/64", "fe80::/64", "::/64", "junk"] {
+                try await app.test(.POST, "/api/networks") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateNetworkRequest(
+                            name: "bad6-net", subnet: "10.25.0.0/24", gateway: nil,
+                            subnet6: subnet6, projectId: project.id!))
+                } afterResponse: { res in
+                    #expect(res.status == .badRequest, "subnet6 '\(subnet6)' should be rejected")
+                }
+            }
+        }
+    }
+
+    @Test("POST /api/networks rejects an IPv6 subnet overlapping a project sibling (409)")
+    func createRejectsOverlappingSubnet6() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            app.spicedbMockAllows = true
+
+            let existing = LogicalNetwork(
+                name: "sibling6-net", subnet: "10.26.0.0/24", gateway: "10.26.0.1",
+                subnet6: "fd00:aa:bb:cc::/64", gateway6: "fd00:aa:bb:cc::1",
+                projectID: project.id!, createdByID: user.id!)
+            try await existing.save(on: app.db)
+
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "clash6-net", subnet: "10.27.0.0/24", gateway: nil,
+                        subnet6: "fd00:00aa:bb:cc::/64", projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
+    @Test("PUT /api/networks adds IPv6 to an in-use v4-only network, bumping the generation")
+    func updateAddsIPv6ToInUseNetwork() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            app.spicedbMockAllows = true
+
+            let network = LogicalNetwork(
+                name: "grow6-net", subnet: "10.28.0.0/24", gateway: "10.28.0.1",
+                projectID: project.id!, createdByID: user.id!)
+            try await network.save(on: app.db)
+            // In use by a NIC — additive IPv6 must still be allowed.
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "grow6-vm", project: project)
+            let nic = VMNetworkInterface(
+                vmID: vm.id!, network: "grow6-net", macAddress: VMNetworkInterface.generateMACAddress())
+            try await nic.save(on: app.db)
+
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(ipv6Enabled: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let updated = try res.content.decode(NetworkResponse.self)
+                #expect(updated.subnet6?.hasPrefix("fd") == true)
+                #expect(updated.gateway6 != nil)
+            }
+
+            let persisted = try await LogicalNetwork.find(network.id, on: app.db)
+            #expect(persisted?.generation == 2)
+        }
+    }
+
+    @Test("PUT /api/networks rejects removing IPv6 while v6 addresses are allocated (409)")
+    func updateRejectsRemovingIPv6InUse() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            app.spicedbMockAllows = true
+
+            let network = LogicalNetwork(
+                name: "shrink6-net", subnet: "10.29.0.0/24", gateway: "10.29.0.1",
+                subnet6: "fd00:29::/64", gateway6: "fd00:29::1",
+                projectID: project.id!, createdByID: user.id!)
+            try await network.save(on: app.db)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "shrink6-vm", project: project)
+            let nic = VMNetworkInterface(
+                vmID: vm.id!, network: "shrink6-net", macAddress: VMNetworkInterface.generateMACAddress())
+            try await nic.save(on: app.db)
+            let address6 = VMInterfaceAddress(
+                interfaceID: nic.id!, network: "shrink6-net", family: .ipv6,
+                address: "fd00:29::100", prefixLength: 64, gateway: "fd00:29::1")
+            try await address6.save(on: app.db)
+
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(ipv6Enabled: false))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            // Changing the established subnet6 is equally rejected.
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(subnet6: "fd00:99::/64"))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
     @Test("POST /api/networks rejects an invalid subnet (400)")
     func createRejectsInvalidSubnet() async throws {
         try await withNetworkTestApp { app, _, project, token in

@@ -1046,6 +1046,8 @@ actor AgentService {
                     name: network.name,
                     subnet: network.subnet,
                     gateway: network.gateway,
+                    subnet6: network.subnet6,
+                    gateway6: network.gateway6,
                     routerKey: network.routerKey,
                     externalAccess: network.externalAccess,
                     generation: Int64(network.generation)

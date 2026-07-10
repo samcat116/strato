@@ -70,6 +70,7 @@ struct VMSpecBuilder {
             .map { interface in
                 let network = networks[interface.network]
                 let ipv4 = interface.ipv4Address
+                let ipv6 = interface.ipv6Address
                 return NetworkSpec(
                     network: interface.network,
                     // The network's id, so the agent names its OVN switch after
@@ -81,6 +82,9 @@ struct VMSpecBuilder {
                     // Old agents still read a dotted netmask off the wire.
                     netmask: interface.ipv4Netmask,
                     gateway: ipv4?.gateway,
+                    ipv6Address: ipv6?.address,
+                    ipv6PrefixLength: ipv6?.prefixLength,
+                    gateway6: ipv6?.gateway,
                     mtu: interface.mtu,
                     dhcpEnabled: network?.dhcpEnabled ?? false,
                     dnsServers: network?.dnsServers ?? [],
