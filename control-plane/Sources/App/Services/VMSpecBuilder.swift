@@ -98,29 +98,6 @@ struct VMSpecBuilder {
         ]
     }
 
-    /// Builds a VM spec from VM and template (legacy method)
-    /// - Note: This method is deprecated. Use `buildVMSpec(from:image:networkInterfaces:)` instead.
-    @available(*, deprecated, message: "Use buildVMSpec(from:image:networkInterfaces:) instead")
-    static func buildVMSpec(from vm: VM, template: VMTemplate, networkInterfaces: [VMNetworkInterface]) -> VMSpec {
-        VMSpec(
-            cpus: vm.cpu,
-            maxCpus: vm.maxCpu,
-            memoryBytes: vm.memory,
-            sharedMemory: vm.sharedMemory,
-            hugepages: vm.hugepages,
-            boot: bootSource(
-                kernel: vm.kernelPath ?? template.kernelPath,
-                initramfs: vm.initramfsPath ?? template.initramfsPath,
-                cmdline: vm.cmdline ?? template.defaultCmdline,
-                firmware: vm.firmwarePath ?? template.firmwarePath
-            ),
-            volumes: legacyVolumeSpecs(from: vm),
-            networks: networkSpecs(from: networkInterfaces),
-            console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),
-            sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? []
-        )
-    }
-
     /// Builds a VM spec from VM and Image. The boot volume is materialized by the
     /// agent from the cached image (see `buildImageInfo`), so no volume entry is
     /// sent unless the VM carries a legacy disk path.

@@ -325,8 +325,7 @@ struct VMController: RouteCollection {
         struct CreateVMRequest: Content {
             let name: String
             let description: String?
-            let templateName: String?  // Optional - either template or image required
-            let imageId: UUID?  // Optional - either template or image required
+            let imageId: UUID?
             let projectId: UUID?
             let environment: String?
             let cpu: Int?
@@ -345,56 +344,36 @@ struct VMController: RouteCollection {
 
         let createRequest = try req.content.decode(CreateVMRequest.self)
 
-        // Validate that either templateName or imageId is provided (but not both)
-        if createRequest.templateName == nil && createRequest.imageId == nil {
-            throw Abort(.badRequest, reason: "Either 'templateName' or 'imageId' must be provided")
-        }
-        if createRequest.templateName != nil && createRequest.imageId != nil {
-            throw Abort(.badRequest, reason: "Cannot specify both 'templateName' and 'imageId'")
+        // An image is required to create a VM.
+        guard let imageId = createRequest.imageId else {
+            throw Abort(.badRequest, reason: "'imageId' must be provided")
         }
 
-        // Variables to hold template or image
-        var template: VMTemplate?
-        var image: Image?
-
-        if let templateName = createRequest.templateName {
-            // Find the template
-            guard
-                let foundTemplate = try await VMTemplate.query(on: req.db)
-                    .filter(\VMTemplate.$imageName, .equal, templateName)
-                    .filter(\VMTemplate.$isActive, .equal, true)
-                    .first()
-            else {
-                throw Abort(.badRequest, reason: "Template '\(templateName)' not found or inactive")
-            }
-            template = foundTemplate
-        } else if let imageId = createRequest.imageId {
-            // Find the image
-            guard let foundImage = try await Image.find(imageId, on: req.db) else {
-                throw Abort(.badRequest, reason: "Image not found")
-            }
-            // Load artifacts for the hypervisor-compatibility check below.
-            try await foundImage.$artifacts.load(on: req.db)
-
-            // Verify image is ready
-            guard foundImage.status == .ready else {
-                throw Abort(.badRequest, reason: "Image is not ready. Status: \(foundImage.status.rawValue)")
-            }
-
-            // Check user permission on image
-            let hasImagePermission = try await req.spicedb.checkPermission(
-                subject: user.id?.uuidString ?? "",
-                permission: "read",
-                resource: "image",
-                resourceId: imageId.uuidString
-            )
-
-            guard hasImagePermission else {
-                throw Abort(.forbidden, reason: "Access denied to image")
-            }
-
-            image = foundImage
+        // Find the image
+        guard let foundImage = try await Image.find(imageId, on: req.db) else {
+            throw Abort(.badRequest, reason: "Image not found")
         }
+        // Load artifacts for the hypervisor-compatibility check below.
+        try await foundImage.$artifacts.load(on: req.db)
+
+        // Verify image is ready
+        guard foundImage.status == .ready else {
+            throw Abort(.badRequest, reason: "Image is not ready. Status: \(foundImage.status.rawValue)")
+        }
+
+        // Check user permission on image
+        let hasImagePermission = try await req.spicedb.checkPermission(
+            subject: user.id?.uuidString ?? "",
+            permission: "read",
+            resource: "image",
+            resourceId: imageId.uuidString
+        )
+
+        guard hasImagePermission else {
+            throw Abort(.forbidden, reason: "Access denied to image")
+        }
+
+        let image: Image = foundImage
 
         // Determine project context
         let projectId: UUID
@@ -483,72 +462,54 @@ struct VMController: RouteCollection {
             networkExplicitlyRequested = false
         }
 
-        // Create VM instance - either from template or image
-        let vm: VM
-        if let template = template {
-            // Template-based VM creation (legacy)
-            vm = try template.createVMInstance(
-                name: createRequest.name,
-                description: createRequest.description ?? "",
-                projectID: projectId,
-                environment: environment,
-                cpu: createRequest.cpu,
-                memory: createRequest.memory,
-                disk: createRequest.disk,
-                cmdline: createRequest.cmdline
-            )
-        } else if let image = image {
-            // Image-based VM creation (new)
-            // Pre-compute values to avoid complex expression
-            let cpuValue = createRequest.cpu ?? image.defaultCpu ?? 1
-            let memoryValue = createRequest.memory ?? image.defaultMemory ?? Int64(1024 * 1024 * 1024)
-            let diskValue = createRequest.disk ?? image.defaultDisk ?? Int64(10 * 1024 * 1024 * 1024)
-            let cmdlineValue = createRequest.cmdline ?? image.defaultCmdline
+        // Create the VM instance from the image.
+        // Pre-compute values to avoid complex expression
+        let cpuValue = createRequest.cpu ?? image.defaultCpu ?? 1
+        let memoryValue = createRequest.memory ?? image.defaultMemory ?? Int64(1024 * 1024 * 1024)
+        let diskValue = createRequest.disk ?? image.defaultDisk ?? Int64(10 * 1024 * 1024 * 1024)
+        let cmdlineValue = createRequest.cmdline ?? image.defaultCmdline
 
-            // Choose the hypervisor: an explicit request wins; otherwise infer
-            // it from the image when its artifact set is compatible with exactly
-            // one hypervisor; otherwise fall back to the model default (QEMU).
-            let chosenHypervisor: HypervisorType
-            if let requested = createRequest.hypervisorType {
-                chosenHypervisor = requested
-            } else {
-                let compatible = image.compatibleHypervisors()
-                chosenHypervisor = compatible.count == 1 ? compatible.first! : .qemu
-            }
-
-            vm = VM(
-                name: createRequest.name,
-                description: createRequest.description ?? "",
-                image: image.name,
-                projectID: projectId,
-                environment: environment,
-                cpu: cpuValue,
-                memory: memoryValue,
-                disk: diskValue,
-                hypervisorType: chosenHypervisor,
-                maxCpu: cpuValue
-            )
-            vm.cmdline = cmdlineValue
-            // Link VM to source image
-            vm.$sourceImage.id = image.id
-
-            // When the image carries a typed artifact set, it must include what
-            // the target hypervisor needs (a disk image for QEMU; a kernel +
-            // rootfs for Firecracker of the image's architecture). Images with
-            // no artifacts (legacy, pre-backfill) are left permissive — their
-            // compatibility is unknown, matching pre-#214 behavior.
-            let loadedArtifacts = image.$artifacts.value ?? []
-            if !loadedArtifacts.isEmpty, !image.isUsable(by: vm.hypervisorType) {
-                let available = image.compatibleHypervisors()
-                    .map(\.rawValue).sorted().joined(separator: ", ")
-                throw Abort(
-                    .badRequest,
-                    reason: "Image '\(image.name)' (\(image.architecture.rawValue)) is not usable by "
-                        + "\(vm.hypervisorType.rawValue). Compatible hypervisors: "
-                        + (available.isEmpty ? "none" : available))
-            }
+        // Choose the hypervisor: an explicit request wins; otherwise infer
+        // it from the image when its artifact set is compatible with exactly
+        // one hypervisor; otherwise fall back to the model default (QEMU).
+        let chosenHypervisor: HypervisorType
+        if let requested = createRequest.hypervisorType {
+            chosenHypervisor = requested
         } else {
-            throw Abort(.internalServerError, reason: "Neither template nor image available")
+            let compatible = image.compatibleHypervisors()
+            chosenHypervisor = compatible.count == 1 ? compatible.first! : .qemu
+        }
+
+        let vm = VM(
+            name: createRequest.name,
+            description: createRequest.description ?? "",
+            image: image.name,
+            projectID: projectId,
+            environment: environment,
+            cpu: cpuValue,
+            memory: memoryValue,
+            disk: diskValue,
+            hypervisorType: chosenHypervisor,
+            maxCpu: cpuValue
+        )
+        vm.cmdline = cmdlineValue
+        // Link VM to source image
+        vm.$sourceImage.id = image.id
+
+        // When the image carries a typed artifact set, it must include what
+        // the target hypervisor needs (a disk image for QEMU; a kernel +
+        // rootfs for Firecracker of the image's architecture). Images with
+        // no artifacts (legacy, pre-backfill) are left permissive — their
+        // compatibility is unknown, matching pre-#214 behavior.
+        let loadedArtifacts = image.$artifacts.value ?? []
+        if !loadedArtifacts.isEmpty, !image.isUsable(by: vm.hypervisorType) {
+            let available = image.compatibleHypervisors()
+                .map(\.rawValue).sorted().joined(separator: ", ")
+            throw Abort(
+                .badRequest,
+                reason: "Image '\(image.name)' (\(image.architecture.rawValue)) is not usable by "
+                    + "\(vm.hypervisorType.rawValue). Compatible hypervisors: "
+                    + (available.isEmpty ? "none" : available))
         }
 
         // Guest login: authorize the caller-provided SSH public key via cloud-init.
@@ -556,9 +517,6 @@ struct VMController: RouteCollection {
             in: .whitespacesAndNewlines
         )
 
-        // Bind an immutable copy for the @Sendable transaction closure below; the
-        // template selection is final by this point.
-        let resolvedTemplate = template
         let userID = try user.requireID()
 
         // Reserve quota and persist the VM and its pending create operation in one
@@ -585,17 +543,8 @@ struct VMController: RouteCollection {
                 // Generate unique paths and configurations using the generated ID
                 let vmID = try vm.requireID()
 
-                if let template = resolvedTemplate {
-                    // Template-based paths
-                    vm.diskPath = template.generateDiskPath(for: vmID)
-                    vm.kernelPath = template.kernelPath
-                    vm.initramfsPath = template.initramfsPath
-                    vm.firmwarePath = template.firmwarePath
-                    vm.cmdline = vm.cmdline ?? template.defaultCmdline
-                } else {
-                    // Image-based paths - disk will be created by agent from cached image
-                    vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
-                }
+                // Image-based paths - disk will be created by agent from cached image
+                vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
 
                 // Set up console sockets to align with agent VM storage path
                 vm.consoleSocket = Self.socketPath(for: vmID, filename: "console.sock")
@@ -632,8 +581,7 @@ struct VMController: RouteCollection {
                 let networkInterface = VMNetworkInterface(
                     vmID: vmID,
                     network: networkName,
-                    macAddress: resolvedTemplate?.generateMacAddress()
-                        ?? VMNetworkInterface.generateMACAddress(),
+                    macAddress: VMNetworkInterface.generateMACAddress(),
                     ipAddress: allocation?.ipAddress,
                     netmask: allocation?.netmask,
                     gateway: networkGateway
@@ -690,7 +638,7 @@ struct VMController: RouteCollection {
             metadata: [
                 "vm_id": .string(vmID.uuidString),
                 "operation_id": .string(operation.id?.uuidString ?? ""),
-                "created_from": .string(template != nil ? "template" : "image"),
+                "created_from": .string("image"),
             ])
 
         return try Self.accepted(operation)
