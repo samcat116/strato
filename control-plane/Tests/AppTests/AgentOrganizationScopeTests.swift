@@ -426,6 +426,81 @@ final class AgentOrganizationScopeTests {
         }
     }
 
+    @Test("A network cannot pin to a site in a different organization")
+    func networkSitePinRequiresSameOrg() async throws {
+        try await withScopedApp { app, org, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(
+                username: "net-pinner", email: "net-pinner@example.com",
+                displayName: "Net Pinner", isSystemAdmin: false)
+            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+            user.currentOrganizationId = org.id
+            try await user.save(on: app.db)
+            let project = try await builder.createProject(
+                name: "Pin Project", description: "p", organization: org)
+            let token = try await user.generateAPIKey(on: app.db)
+
+            let foreignOrg = try await builder.createOrganization(name: "Pin Foreign Org")
+            let foreignSite = Site(name: "pin-foreign-dc", organizationScope: .organization(foreignOrg.id!))
+            try await foreignSite.save(on: app.db)
+            let ownSite = Site(name: "pin-own-dc", organizationScope: .organization(org.id!))
+            try await ownSite.save(on: app.db)
+
+            struct Body: Content {
+                let name: String
+                let subnet: String
+                let projectId: UUID?
+                let siteId: UUID?
+            }
+
+            // Cross-org pin refused: the site's OVN fabric and agents belong
+            // to another tenant.
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    Body(name: "sneaky-net", subnet: "10.50.0.0/24", projectId: project.id, siteId: foreignSite.id))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // Same-org pin succeeds.
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    Body(name: "honest-net", subnet: "10.51.0.0/24", projectId: project.id, siteId: ownSite.id))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+        }
+    }
+
+    @Test("The org backfill skips reconnect tokens of registered agents")
+    func backfillSkipsReconnectTokens() async throws {
+        try await withScopedApp { app, org, _ in
+            _ = try await app.agentService.registerAgent(
+                self.makeRegisterMessage(agentName: "veteran-agent"),
+                agentName: "veteran-agent",
+                organizationScope: .organization(org.id!))
+
+            // A rotated reconnect credential (scopeless, for a live agent) and
+            // a pending join token (scopeless, agent not registered yet) — the
+            // pre-migration states the backfill must tell apart.
+            let reconnect = AgentRegistrationToken(agentName: "veteran-agent", expirationHours: 24 * 30)
+            try await reconnect.save(on: app.db)
+            let pending = AgentRegistrationToken(agentName: "future-agent", expirationHours: 1)
+            try await pending.save(on: app.db)
+
+            try await BackfillInfraOrganizationScope().prepare(on: app.db)
+
+            let reloadedReconnect = try #require(
+                try await AgentRegistrationToken.find(reconnect.id, on: app.db))
+            #expect(reloadedReconnect.organizationID == nil)
+            let reloadedPending = try #require(
+                try await AgentRegistrationToken.find(pending.id, on: app.db))
+            #expect(reloadedPending.organizationID == org.id)
+        }
+    }
+
     // MARK: - OU scope resolution
 
     @Test("An OU-scoped agent resolves its root organization through the OU")

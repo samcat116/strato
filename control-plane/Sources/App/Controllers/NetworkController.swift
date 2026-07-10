@@ -118,10 +118,22 @@ struct NetworkController: RouteCollection {
         // Pinning to a site constrains all the network's VMs to that site's
         // agents, where the shared OVN deployment spans the switch across
         // nodes. Validated here so a typo'd id fails the create, not the
-        // first VM placement.
+        // first VM placement — and the site must belong to the same root
+        // organization as the network's project: sites are dedicated capacity,
+        // and a foreign project pinning a network here would get its VMs
+        // scheduled onto (and its switch realized across) another tenant's
+        // agents.
         if let siteId = request.siteId {
-            guard try await Site.find(siteId, on: req.db) != nil else {
+            guard let site = try await Site.find(siteId, on: req.db) else {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
+            }
+            let projectOrg = try await Project.find(projectId, on: req.db)?
+                .getRootOrganizationId(on: req.db)
+            let siteOrg = try await site.rootOrganizationID(on: req.db)
+            guard projectOrg != nil, projectOrg == siteOrg else {
+                throw Abort(
+                    .badRequest,
+                    reason: "Site \(siteId) belongs to a different organization than the network's project")
             }
         }
 

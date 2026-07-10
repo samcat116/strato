@@ -30,11 +30,18 @@ struct BackfillInfraOrganizationScope: AsyncMigration {
             WHERE organization_id IS NULL AND organizational_unit_id IS NULL
             """
         ).run()
+        // Tokens for an already-registered agent are rotated reconnect
+        // credentials, which are deliberately scopeless: revoking one severs a
+        // live agent's reconnect path, so they stay system-admin-only rather
+        // than becoming manageable by the guessed org's admins (the agent row
+        // itself may later be corrected to a different org). Only pending join
+        // tokens — agent not registered yet — inherit the backfilled scope.
         try await sql.raw(
             """
             UPDATE agent_registration_tokens
             SET organization_id = (SELECT id FROM organizations ORDER BY created_at LIMIT 1)
             WHERE organization_id IS NULL AND organizational_unit_id IS NULL
+              AND agent_name NOT IN (SELECT name FROM agents)
             """
         ).run()
     }
