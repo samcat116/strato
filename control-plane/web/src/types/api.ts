@@ -336,9 +336,7 @@ export interface UpdateSCIMTokenRequest {
 export interface CreateVMRequest {
   name: string;
   description?: string;
-  /** @deprecated Use imageId instead */
-  templateName?: string;
-  imageId?: string;
+  imageId: string;
   projectId?: string;
   environment?: string;
   cpu?: number;

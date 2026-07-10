@@ -191,8 +191,6 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(SessionRecord.migration)
     app.migrations.add(EnhanceVM())
     app.migrations.add(FixVMColumnNames())
-    app.migrations.add(CreateVMTemplate())
-    app.migrations.add(SeedVMTemplates())
     app.migrations.add(AddSystemAdminToUser())
 
     // Hierarchical IAM migrations
@@ -296,6 +294,9 @@ public func configure(_ app: Application) async throws {
 
     // Centralized audit logging (issue #39)
     app.migrations.add(CreateAuditEvent())
+
+    // Drop the legacy vm_templates table (VM template feature removed).
+    app.migrations.add(DropVMTemplate())
 
     try await app.autoMigrate()
 
