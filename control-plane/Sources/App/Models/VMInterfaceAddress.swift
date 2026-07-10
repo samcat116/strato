@@ -37,7 +37,7 @@ final class VMInterfaceAddress: Model, @unchecked Sendable {
     var prefixLength: Int
 
     /// Gateway for this family on the network, denormalized at allocation
-    /// time (same rationale as `VMNetworkInterface.gateway`).
+    /// time so spec building needs no network lookup.
     @OptionalField(key: "gateway")
     var gateway: String?
 

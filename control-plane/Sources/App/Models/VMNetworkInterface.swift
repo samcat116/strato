@@ -20,21 +20,6 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
     @Field(key: "mac_address")
     var macAddress: String
 
-    /// Legacy single-address columns, superseded by `addresses` rows
-    /// (`VMInterfaceAddress`). Kept mapped for one release so a binary
-    /// rollback still boots; never written by new code, and reads must go
-    /// through `addresses`.
-    @OptionalField(key: "ip_address")
-    var ipAddress: String?
-
-    @OptionalField(key: "netmask")
-    var netmask: String?
-
-    /// Gateway of the logical network, denormalized at allocation time so spec
-    /// building needs no network lookup. Legacy — see `ipAddress`.
-    @OptionalField(key: "gateway")
-    var gateway: String?
-
     /// The addresses allocated to this NIC, one row per family (requires
     /// eager loading with `.with(\.$addresses)`).
     @Children(for: \.$interface)
@@ -64,9 +49,6 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
         vmID: UUID,
         network: String = "default",
         macAddress: String,
-        ipAddress: String? = nil,
-        netmask: String? = nil,
-        gateway: String? = nil,
         mtu: Int? = nil,
         deviceName: String = "net0",
         orderIndex: Int = 0
@@ -75,9 +57,6 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
         self.$vm.id = vmID
         self.network = network
         self.macAddress = macAddress
-        self.ipAddress = ipAddress
-        self.netmask = netmask
-        self.gateway = gateway
         self.mtu = mtu
         self.deviceName = deviceName
         self.orderIndex = orderIndex

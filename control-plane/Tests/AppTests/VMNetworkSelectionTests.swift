@@ -225,7 +225,12 @@ final class VMNetworkSelectionTests {
                 #expect(detail.networkInterfaces.count == 1)
                 let iface = detail.networkInterfaces.first
                 #expect(iface?.network == "default")
-                #expect(iface?.ipAddress == "192.168.1.42")
+                #expect(iface?.addresses.count == 1)
+                let respAddress = iface?.addresses.first
+                #expect(respAddress?.family == "ipv4")
+                #expect(respAddress?.address == "192.168.1.42")
+                #expect(respAddress?.prefixLength == 24)
+                #expect(respAddress?.gateway == "192.168.1.1")
                 #expect(iface?.macAddress == "00:0c:29:aa:bb:cc")
                 #expect(iface?.deviceName == "net0")
             }

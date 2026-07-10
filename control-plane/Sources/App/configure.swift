@@ -322,6 +322,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddOrganizationScopeToInfra())
     app.migrations.add(BackfillInfraOrganizationScope())
 
+    // One release after CreateVMInterfaceAddresses: the rollback window for
+    // the legacy single-address NIC columns is over, drop them.
+    app.migrations.add(DropLegacyVMInterfaceAddressColumns())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen
