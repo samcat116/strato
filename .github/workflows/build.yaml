@@ -199,48 +199,18 @@ jobs:
         working-directory: agent
         run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/agent"
 
-  # Two control-plane jobs, one suite each: fast engine-independent coverage
-  # on SQLite, and the identical suite against the real engine production
-  # uses, validating migrations and Postgres-specific SQL (issue #195).
-  # Separate jobs (not steps or a matrix on a shared runner) because each ARC
-  # pod is its own container network — the old single-job layout existed only
-  # so two Postgres services wouldn't fight over one shared runner's port.
-  test-control-plane-sqlite:
-    name: Test Control Plane (SQLite)
-    needs: changes
-    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
-    runs-on: swift-runners-strato
-    container:
-      image: swift:6.3.2-noble
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      # Prune only this job's scratch dir — concurrent sibling jobs may share
-      # the tool-cache volume (see the comment on the shared+agent job).
-      - name: Prune build scratch dir if oversized
-        run: |
-          scratch="$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
-          if [ -d "$scratch" ]; then
-            size_kb=$(du -sk "$scratch" | cut -f1)
-            if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
-              echo "$scratch is $((size_kb / 1024 / 1024))GB (>10GB); wiping for a cold rebuild"
-              rm -rf "$scratch"
-            fi
-          fi
-
-      - name: Build Control Plane
-        working-directory: control-plane
-        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
-
-      - name: Test Control Plane (SQLite)
-        working-directory: control-plane
-        env:
-          STRATO_TEST_DATABASE: sqlite
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
-
-  test-control-plane-postgres:
-    name: Test Control Plane (Postgres)
+  # One control-plane job running the identical suite twice: fast
+  # engine-independent coverage on SQLite, then against the real engine
+  # production uses, validating migrations and Postgres-specific SQL
+  # (issue #195). These used to be two parallel jobs, but the runner pool is
+  # small and queue time — not execution time — dominates PR wall clock:
+  # each job cost a runner slot, a swift-image pull, and its own full
+  # `swift build` of the same package into a separate scratch dir. Running
+  # both suites after a single build trades ~3 minutes of in-job serialism
+  # for a whole runner slot and a duplicate ~5-minute build, which under
+  # contention saved 20-40 minutes of queueing.
+  test-control-plane:
+    name: Test Control Plane
     needs: changes
     if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: swift-runners-strato
@@ -264,9 +234,14 @@ jobs:
 
       # Prune only this job's scratch dir — concurrent sibling jobs may share
       # the tool-cache volume (see the comment on the shared+agent job).
+      # The strato-swift-build/control-plane-postgres dir is orphaned (its job
+      # merged into this one); remove it if a previous workflow left one.
+      # This can race a still-running old-workflow job during the transition —
+      # worst case that job fails its build and needs a rerun.
       - name: Prune build scratch dir if oversized
         run: |
-          scratch="$RUNNER_TOOL_CACHE/strato-swift-build/control-plane-postgres"
+          rm -rf "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane-postgres"
+          scratch="$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
           if [ -d "$scratch" ]; then
             size_kb=$(du -sk "$scratch" | cut -f1)
             if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
@@ -275,14 +250,21 @@ jobs:
             fi
           fi
 
-      # Separate scratch dir from the SQLite job: the two run concurrently,
-      # possibly against the same persistent tool-cache volume, and SwiftPM
-      # build trees don't tolerate concurrent writers.
       - name: Build Control Plane
+        id: build-cp
         working-directory: control-plane
-        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane-postgres"
+        run: swift build --build-tests --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
+
+      - name: Test Control Plane (SQLite)
+        working-directory: control-plane
+        env:
+          STRATO_TEST_DATABASE: sqlite
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
 
       - name: Test Control Plane (Postgres)
+        # Run even if the SQLite leg failed (but not if the build did) —
+        # Postgres-specific breakage should always be visible on the PR.
+        if: ${{ !cancelled() && steps.build-cp.outcome == 'success' }}
         working-directory: control-plane
         env:
           STRATO_TEST_DATABASE: postgres
@@ -300,7 +282,7 @@ jobs:
         # control-plane/Tests/AppTests/TestUtilities.swift — so the suite
         # stays far under Postgres's default max_connections=100. This leg
         # used to be forced to --no-parallel and took ~8 minutes.
-        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane-postgres"
+        run: swift test --skip-build --parallel --scratch-path "$RUNNER_TOOL_CACHE/strato-swift-build/control-plane"
 
   test-agent-macos:
     name: Build & Test Agent (macOS)
