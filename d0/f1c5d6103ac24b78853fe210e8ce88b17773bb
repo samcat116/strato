@@ -1,0 +1,30 @@
+control-plane/Sources/App/Migrations/DropLegacyVMInterfaceAddressColumns.swift
+  s_c0acd110d509fb::t_19ceb424032287 1-52
+control-plane/Sources/App/configure.swift
+  s_c0acd110d509fb::t_11ce0af4646f64 306-309
+control-plane/Tests/AppTests/VMNetworkSelectionTests.swift
+  s_c0acd110d509fb::t_38c52938c8eddd 228-233
+control-plane/Tests/AppTests/MigrationRoundTripTests.swift
+  s_c0acd110d509fb::t_e05aa9179f40d9 1
+  s_c0acd110d509fb::t_d4f23b61baef67 37-59
+control-plane/web/src/components/vms/vm-network-card.tsx
+  s_c0acd110d509fb::t_b43d32c5a81166 14,16,20
+control-plane/Sources/App/Models/VMInterfaceAddress.swift
+  s_c0acd110d509fb::t_80eadc9b174b08 40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d0f1c5d6103ac24b78853fe210e8ce88b17773bb",
+  "prompts": {},
+  "sessions": {
+    "s_c0acd110d509fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6695b3a-3d82-40a8-b418-a286fbf9d4a1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
