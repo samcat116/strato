@@ -1,0 +1,31 @@
+.github/workflows/build.yaml
+  s_50130ddc19a927::t_827b346097415b 442-444,453-458,466-467
+docs/deployment/agents.md
+  s_50130ddc19a927::t_812bea8e2fd7e4 83-88,94
+agent/Dockerfile
+  s_50130ddc19a927::t_bc3305bca7076f 47-50,55-76
+  s_50130ddc19a927::t_a8a6bc0bb0378c 6-9
+  s_50130ddc19a927::t_587fdd4a47327b 42-45
+  s_50130ddc19a927::t_a6fa7d301eb332 111-113
+  s_50130ddc19a927::t_684756f324e638 46
+.github/workflows/main-build.yaml
+  s_50130ddc19a927::t_4fbe5cb5b2e678 96-113
+  s_50130ddc19a927::t_c968740b67694d 176
+  s_50130ddc19a927::t_1b710a20fddc68 193-208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "51636faa8770a108ff3460126ceae83ab55dbfe5",
+  "prompts": {},
+  "sessions": {
+    "s_50130ddc19a927": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5112e385-dfbb-4fa7-a4fd-d821f3f1b916",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
