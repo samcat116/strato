@@ -160,15 +160,22 @@ actor AgentService {
         }
     }
 
-    /// Cancel the heartbeat monitoring loop. Called from the application's
-    /// shutdown lifecycle (see `AgentServiceLifecycleHandler`): the loop holds
-    /// the `Application` and sweeps the database every 30 seconds, so a tick
-    /// that fires after shutdown would hit Vapor's "Core not configured"
-    /// fatal error — long-lived test processes crash exactly this way.
-    func shutdown() {
+    /// Cancel the heartbeat monitoring loop and wait for an in-flight tick to
+    /// finish. Called from the application's shutdown lifecycle (see
+    /// `AgentServiceLifecycleHandler`): the loop holds the `Application` and
+    /// sweeps the database every 30 seconds, so a tick that touches `app.db`
+    /// after shutdown hits Vapor's "Core not configured" fatal error —
+    /// long-lived test processes crash exactly this way. Cancellation
+    /// interrupts the loop's sleep immediately, but a tick body already past
+    /// the sleep is mid-sweep; awaiting the task's completion keeps Vapor's
+    /// core alive until it drains. Safe on the actor: it is reentrant at this
+    /// suspension, so the tick can still hop back on to finish.
+    func shutdown() async {
         isShutDown = true
-        heartbeatTask?.cancel()
+        let task = heartbeatTask
         heartbeatTask = nil
+        task?.cancel()
+        await task?.value
     }
 
     // MARK: - Agent Registration
