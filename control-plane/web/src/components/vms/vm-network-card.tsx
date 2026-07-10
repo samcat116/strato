@@ -11,20 +11,13 @@ import {
 } from "@/components/ui/table";
 import type { VM, VMNetworkInterface } from "@/types/api";
 
-/** All addresses of a NIC as `address/prefix`, from the per-family list when
- * present, falling back to the legacy single-address fields. */
+/** All addresses of a NIC as `address/prefix`. */
 function nicAddresses(nic: VMNetworkInterface): string[] {
-  if (nic.addresses && nic.addresses.length > 0) {
-    return nic.addresses.map((a) => `${a.address}/${a.prefixLength}`);
-  }
-  return nic.ipAddress ? [nic.ipAddress] : [];
+  return (nic.addresses ?? []).map((a) => `${a.address}/${a.prefixLength}`);
 }
 
 function nicGateways(nic: VMNetworkInterface): string[] {
-  if (nic.addresses && nic.addresses.length > 0) {
-    return nic.addresses.flatMap((a) => (a.gateway ? [a.gateway] : []));
-  }
-  return nic.gateway ? [nic.gateway] : [];
+  return (nic.addresses ?? []).flatMap((a) => (a.gateway ? [a.gateway] : []));
 }
 
 export function VMNetworkCard({ vm }: { vm: VM }) {

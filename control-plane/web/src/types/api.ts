@@ -42,10 +42,6 @@ export interface VMNetworkInterface {
   id?: string;
   network: string;
   macAddress: string;
-  /** Legacy single-address fields (the IPv4 address); `addresses` is the full set. */
-  ipAddress?: string;
-  netmask?: string;
-  gateway?: string;
   /** All addresses on the NIC, one per family on a dual-stack network. */
   addresses?: InterfaceAddress[];
   mtu?: number;
