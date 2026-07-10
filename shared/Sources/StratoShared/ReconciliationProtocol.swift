@@ -161,11 +161,22 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// port's IP). Already reserved by control-plane IPAM as a non-allocatable
     /// host address. Nil disables L3 for the network (switch only).
     public let gateway: String?
+    /// The network's IPv6 subnet in CIDR form (a /64, e.g.
+    /// `fd12:3456:789a::/64`), when the network is dual-stack. Nil on
+    /// v4-only networks and from control planes that predate IPv6 support —
+    /// optional, so old payloads decode and old agents ignore it.
+    public let subnet6: String?
+    /// The IPv6 gateway (router-port address) inside `subnet6`, when
+    /// dual-stack. The agent adds it to the router port and announces it via
+    /// Router Advertisements (dhcpv6_stateful mode) — DHCPv6 itself cannot
+    /// convey a default route.
+    public let gateway6: String?
     /// Identity of the logical router this network attaches to. Networks sharing
     /// a `routerKey` share one router. Opaque to the agent — do not parse it.
     public let routerKey: String
     /// Whether the agent should program outbound SNAT to the site uplink for
-    /// this network. The uplink IP is auto-detected on the agent.
+    /// this network. The uplink IP is auto-detected on the agent. IPv4-only:
+    /// IPv6 stays internal (no NAT66, no default route) in this phase.
     public let externalAccess: Bool
     /// Monotonic per-network counter, bumped by the control plane on any change
     /// that alters realization (subnet, gateway, router membership, external
@@ -177,6 +188,8 @@ public struct DesiredNetworkState: Codable, Sendable {
         name: String,
         subnet: String,
         gateway: String?,
+        subnet6: String? = nil,
+        gateway6: String? = nil,
         routerKey: String,
         externalAccess: Bool,
         generation: Int64
@@ -185,6 +198,8 @@ public struct DesiredNetworkState: Codable, Sendable {
         self.name = name
         self.subnet = subnet
         self.gateway = gateway
+        self.subnet6 = subnet6
+        self.gateway6 = gateway6
         self.routerKey = routerKey
         self.externalAccess = externalAccess
         self.generation = generation

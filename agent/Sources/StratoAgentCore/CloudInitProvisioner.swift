@@ -183,10 +183,24 @@ public struct CloudInitProvisioner {
                     set-name: nic\(index)
                 """
 
+            // Dual-stack only when the control plane allocated a v6 address.
+            // Every v6 line below is gated on this so v4-only NICs render
+            // byte-identical config to pre-IPv6 agents.
+            let hasIPv6 = nic.ip6Address != nil
+
             if nic.dhcpEnabled {
                 // OVN's DHCP responder delivers IP, gateway, and DNS; just bring
-                // the NIC up on DHCP so it sends a request.
+                // the NIC up on DHCP so it sends a request. For v6, DHCPv6
+                // assigns the address while the router's RAs deliver the
+                // default route; the guest's link-local address must be EUI-64
+                // (derived from the MAC) or OVN port_security — which lists
+                // exactly that address — drops its NDP and DHCPv6 traffic.
                 section += "\n    dhcp4: true"
+                if hasIPv6 {
+                    section += "\n    dhcp6: true"
+                    section += "\n    accept-ra: true"
+                    section += "\n    ipv6-address-generation: eui64"
+                }
                 sections.append(section)
                 continue
             }
@@ -198,8 +212,20 @@ public struct CloudInitProvisioner {
             else { continue }
 
             section += "\n    addresses:\n      - \(ipAddress)/\(prefix)"
+            if let ip6Address = nic.ip6Address {
+                section += "\n      - \(ip6Address)/\(nic.prefixLength6 ?? 64)"
+            }
             if let gateway = nic.gateway {
                 section += "\n    gateway4: \(gateway)"
+            }
+            if hasIPv6, let gateway6 = nic.gateway6 {
+                section += "\n    gateway6: \(gateway6)"
+            }
+            if hasIPv6 {
+                // Statically addressed, but RAs still refresh the on-link
+                // prefix/route; EUI-64 link-locals keep port_security happy.
+                section += "\n    accept-ra: true"
+                section += "\n    ipv6-address-generation: eui64"
             }
             let dns = nic.dnsServers.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             if !dns.isEmpty {

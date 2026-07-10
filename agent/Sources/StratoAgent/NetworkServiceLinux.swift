@@ -185,6 +185,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // The control plane owns IPAM; an absent IP means the port is bound by
         // MAC only. The old fake allocation (random 192.168.1.x) is gone.
         var ipAddress = config.ipAddress
+        var ip6Address = config.ip6Address
 
         // The OVN switch is named after the network's id (matching the network
         // reconciler), never its user-chosen name, so user names can't collide
@@ -212,8 +213,9 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // Program OVN's native DHCP responder for this network when enabled, so
         // the guest learns the control-plane-pinned IP, gateway, and DNS over
         // DHCP instead of via cloud-init static config. Nil when DHCP is off or
-        // the subnet/gateway aren't known — the static path is used then.
-        let dhcpOptionsUUID = try await resolveDHCPOptions(for: config)
+        // that family's subnet/gateway aren't known — the static path is used
+        // then. Dual-stack networks get both a DHCPv4 and a DHCPv6 row.
+        let (dhcpOptionsUUID, dhcpV6OptionsUUID) = try await resolveDHCPOptions(for: config)
 
         // Create the logical switch port (idempotent: reuse on re-attach). A
         // port only exists to OVN when its UUID is referenced by its switch's
@@ -227,21 +229,45 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             // MAC/IP that matches OVN's port_security. Otherwise a recovery path
             // (agent restart, or retry after a failed TAP/OVS step) would launch
             // QEMU with freshly generated addresses and OVN would drop its traffic.
-            let (existingMAC, existingIP) = Self.parsePortAddress(existingPort.addresses)
+            // Per family: an existing address wins over the spec, but a family
+            // the port never had (e.g. IPv6 just enabled on the network) is
+            // taken from the spec so the port upgrades in place.
+            let (existingMAC, existingIPs) = Self.parsePortAddress(existingPort.addresses)
             if !existingMAC.isEmpty { macAddress = existingMAC }
-            if !existingIP.isEmpty { ipAddress = existingIP }
+            if let existingV4 = existingIPs.first(where: { IPv4Address($0) != nil }) {
+                ipAddress = existingV4
+            }
+            if let existingV6 = existingIPs.first(where: { IPv6Address($0) != nil }) {
+                ip6Address = existingV6
+            }
+            let desiredIPs = [ipAddress, ip6Address].compactMap { $0 }
 
             let logicalSwitch = try await ovnManager?.getLogicalSwitch(named: switchName)
             let attachedPorts = logicalSwitch?.ports ?? []
             if let existingUUID = existingPort.uuid, attachedPorts.contains(existingUUID) {
                 portUUID = existingPort.uuid
-                // Re-assert the DHCP binding on reconvergence. The row encoder
-                // omits nil fields, so this updates only dhcpv4_options and
-                // leaves the port's addresses/port_security intact.
-                if let dhcpOptionsUUID, existingPort.dhcpv4_options != dhcpOptionsUUID {
+                // Re-assert addressing and DHCP bindings on reconvergence, so a
+                // port created before the network gained IPv6 (or before a DHCP
+                // edit) upgrades in place instead of keeping its old shape
+                // forever. The row encoder omits nil/unset fields, so only the
+                // listed columns are written.
+                let desiredAddresses = [Self.portAddressEntry(mac: macAddress, ips: desiredIPs)]
+                let desiredSecurity = [Self.portSecurityEntry(mac: macAddress, ips: desiredIPs)]
+                let addressingDrifted =
+                    existingPort.addresses != desiredAddresses
+                    || existingPort.port_security != desiredSecurity
+                let dhcpDrifted =
+                    (dhcpOptionsUUID != nil && existingPort.dhcpv4_options != dhcpOptionsUUID)
+                    || (dhcpV6OptionsUUID != nil && existingPort.dhcpv6_options != dhcpV6OptionsUUID)
+                if addressingDrifted || dhcpDrifted {
                     try await ovnManager?.updateLogicalSwitchPort(
                         uuid: existingUUID,
-                        OVNLogicalSwitchPort(name: portName, dhcpv4_options: dhcpOptionsUUID))
+                        OVNLogicalSwitchPort(
+                            name: portName,
+                            addresses: desiredAddresses,
+                            port_security: desiredSecurity,
+                            dhcpv4_options: dhcpOptionsUUID,
+                            dhcpv6_options: dhcpV6OptionsUUID))
                 }
                 logger.debug(
                     "Reusing existing logical switch port",
@@ -249,6 +275,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                         "portName": .string(portName),
                         "macAddress": .string(macAddress),
                         "ipAddress": .string(ipAddress ?? "none"),
+                        "ip6Address": .string(ip6Address ?? "none"),
                     ])
             } else {
                 logger.warning(
@@ -260,12 +287,14 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 try await ovnManager?.deleteLogicalSwitchPort(named: portName)
                 portUUID = try await createAttachedLogicalSwitchPort(
                     portName: portName, vmId: vmId, switchName: switchName, networkName: config.networkName,
-                    macAddress: macAddress, ipAddress: ipAddress, dhcpOptionsUUID: dhcpOptionsUUID)
+                    macAddress: macAddress, ipAddresses: desiredIPs,
+                    dhcpOptionsUUID: dhcpOptionsUUID, dhcpV6OptionsUUID: dhcpV6OptionsUUID)
             }
         } else {
             portUUID = try await createAttachedLogicalSwitchPort(
                 portName: portName, vmId: vmId, switchName: switchName, networkName: config.networkName,
-                macAddress: macAddress, ipAddress: ipAddress, dhcpOptionsUUID: dhcpOptionsUUID)
+                macAddress: macAddress, ipAddresses: [ipAddress, ip6Address].compactMap { $0 },
+                dhcpOptionsUUID: dhcpOptionsUUID, dhcpV6OptionsUUID: dhcpV6OptionsUUID)
         }
 
         // Create TAP interface and connect to OVS bridge
@@ -279,7 +308,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             portUUID: portUUID,
             attachment: .tap(interface: tapInterface),
             macAddress: macAddress,
-            ipAddress: ipAddress
+            ipAddress: ipAddress,
+            ip6Address: ip6Address
         )
 
         logger.info(
@@ -391,8 +421,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             return nil
         }
 
-        // OVN addresses are entries like "<mac> <ip>" (or just "<mac>", or "dynamic").
-        let (macAddress, ipAddress) = Self.parsePortAddress(port.addresses)
+        // OVN addresses are entries like "<mac> <ip>..." (or just "<mac>", or "dynamic").
+        let (macAddress, ips) = Self.parsePortAddress(port.addresses)
 
         return VMNetworkInfo(
             vmId: vmId,
@@ -401,7 +431,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             portUUID: port.uuid,
             attachment: .tap(interface: tapInterfaceName(for: vmId)),
             macAddress: macAddress,
-            ipAddress: ipAddress.isEmpty ? nil : ipAddress
+            ipAddress: ips.first { IPv4Address($0) != nil },
+            ip6Address: ips.first { IPv6Address($0) != nil }
         )
         #else
         // Development mode
@@ -675,19 +706,41 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 + "OVN networking is not being advertised.")
     }
 
+    /// The `addresses` entry for a VM port: the MAC followed by its per-family
+    /// IPs (`"<mac> <ip4> <ip6>"`), or just the MAC when nothing is allocated.
+    static func portAddressEntry(mac: String, ips: [String]) -> String {
+        ([mac] + ips).joined(separator: " ")
+    }
+
+    /// The `port_security` entry for a VM port: the addresses entry plus —
+    /// when the port carries any IPv6 address — the EUI-64 link-local address
+    /// derived from the MAC. Port security with explicit IPs restricts ND/NA
+    /// and DHCPv6-client traffic to the listed sources, and guests source
+    /// those from their link-local address: omit it and IPv6 silently dies.
+    /// (Guests are configured with `ipv6-address-generation: eui64` so their
+    /// link-local matches this derivation.)
+    static func portSecurityEntry(mac: String, ips: [String]) -> String {
+        var entries = [mac] + ips
+        let hasIPv6 = ips.contains { IPv6Address($0) != nil }
+        if hasIPv6, let linkLocal = IPv6Address.linkLocalEUI64(fromMAC: mac) {
+            entries.append(linkLocal.description)
+        }
+        return entries.joined(separator: " ")
+    }
+
     /// Creates the VM NIC's logical switch port attached to its switch in one
     /// OVSDB transaction (`ovn-nbctl lsp-add` semantics) — the two steps must
     /// never diverge or the port is an orphan ovn-northd ignores.
     private func createAttachedLogicalSwitchPort(
         portName: String, vmId: String, switchName: String, networkName: String, macAddress: String,
-        ipAddress: String?, dhcpOptionsUUID: String? = nil
+        ipAddresses: [String], dhcpOptionsUUID: String? = nil, dhcpV6OptionsUUID: String? = nil
     ) async throws -> String? {
-        let portAddress = ipAddress.map { "\(macAddress) \($0)" } ?? macAddress
         let logicalPort = OVNLogicalSwitchPort(
             name: portName,
-            addresses: [portAddress],
-            port_security: [portAddress],
+            addresses: [Self.portAddressEntry(mac: macAddress, ips: ipAddresses)],
+            port_security: [Self.portSecurityEntry(mac: macAddress, ips: ipAddresses)],
             dhcpv4_options: dhcpOptionsUUID,
+            dhcpv6_options: dhcpV6OptionsUUID,
             external_ids: [
                 "vm-id": vmId,
                 "network-name": networkName,
@@ -844,16 +897,18 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         return result.status == 0
     }
 
-    /// Parses an OVN logical switch port `addresses` entry (`"<mac> <ip>"`, or just
-    /// `"<mac>"`, or `"dynamic"`) into a MAC and IP pair.
-    static func parsePortAddress(_ addresses: [String]?) -> (mac: String, ip: String) {
+    /// Parses an OVN logical switch port `addresses` entry (`"<mac> <ip>..."`
+    /// with any number of per-family IPs, or just `"<mac>"`, or `"dynamic"`)
+    /// into a MAC and its IP list. Both IPs of a dual-stack port must be
+    /// recovered — dropping one on the re-attach path would silently strip
+    /// that family from the port.
+    static func parsePortAddress(_ addresses: [String]?) -> (mac: String, ips: [String]) {
         guard let first = addresses?.first(where: { !$0.isEmpty && $0.lowercased() != "dynamic" }) else {
-            return ("", "")
+            return ("", [])
         }
         let tokens = first.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
         let mac = tokens.first ?? ""
-        let ip = tokens.count > 1 ? tokens[1] : ""
-        return (mac, ip)
+        return (mac, Array(tokens.dropFirst()))
     }
 
     private func generateMACAddress() -> String {
@@ -865,21 +920,63 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         return macBytes.map { String(format: "%02x", $0) }.joined(separator: ":")
     }
 
-    /// Resolves the OVN `DHCP_Options` UUID a VM's port should bind to, or nil
-    /// when DHCP is disabled for the network or the subnet/gateway aren't known
-    /// (OVN needs both a CIDR and a `server_id`/`router` to answer). A nil result
-    /// leaves the guest on the static cloud-init path.
-    private func resolveDHCPOptions(for config: VMNetworkConfig) async throws -> String? {
-        guard config.dhcpEnabled else { return nil }
-        guard let subnet = config.subnet, let gateway = config.gateway else {
+    /// Resolves the OVN `DHCP_Options` UUIDs a VM's port should bind to, per
+    /// family. Nil when DHCP is disabled for the network or that family's
+    /// subnet/gateway aren't known (OVN needs a CIDR and a server identity to
+    /// answer). A nil member leaves the guest on the static cloud-init path
+    /// for that family.
+    private func resolveDHCPOptions(for config: VMNetworkConfig) async throws -> (v4: String?, v6: String?) {
+        guard config.dhcpEnabled else {
+            // DHCP was turned off for the network: delete its managed
+            // DHCP_Options rows. The port columns are weak refs in the OVN
+            // schema, so the deletion clears the binding on every port of the
+            // network at once — a port update cannot do it (the row encoder
+            // omits nil fields, so nil can never overwrite a stale binding).
+            try await removeDHCPOptions(networkName: config.networkName)
+            return (nil, nil)
+        }
+
+        let v4: String?
+        if let subnet = config.subnet, let gateway = config.gateway {
+            v4 = try await ensureDHCPOptions(
+                networkName: config.networkName, subnet: subnet, gateway: gateway,
+                dnsServers: config.dnsServers, domainName: config.domainName, leaseTime: config.leaseTime)
+        } else {
             logger.warning(
                 "DHCP enabled but subnet/gateway unknown; using static guest config",
                 metadata: ["network": .string(config.networkName)])
-            return nil
+            v4 = nil
         }
-        return try await ensureDHCPOptions(
-            networkName: config.networkName, subnet: subnet, gateway: gateway,
-            dnsServers: config.dnsServers, domainName: config.domainName, leaseTime: config.leaseTime)
+
+        let v6: String?
+        if let subnet6 = config.subnet6 {
+            v6 = try await ensureDHCPOptions6(
+                networkName: config.networkName, subnet6: subnet6,
+                dnsServers: config.dnsServers, domainName: config.domainName)
+        } else {
+            v6 = nil
+        }
+
+        return (v4, v6)
+    }
+
+    /// Deletes every strato-managed `DHCP_Options` row stamped with this
+    /// network's name (both families, and any stale-subnet leftovers).
+    /// Matching by the external-id rather than CIDR means renumbered networks
+    /// are cleaned up too, and rows other networks own are never touched.
+    private func removeDHCPOptions(networkName: String) async throws {
+        guard let ovnManager else { return }
+        for row in try await ovnManager.getDHCPOptions()
+        where row.external_ids?["network-name"] == networkName
+            && row.external_ids?[Self.managedKey] == Self.managedValue
+        {
+            if let uuid = row.uuid {
+                try await ovnManager.deleteDHCPOptions(uuid: uuid)
+                logger.info(
+                    "Removed DHCP options for network with DHCP disabled",
+                    metadata: ["network": .string(networkName), "cidr": .string(row.cidr)])
+            }
+        }
     }
 
     /// Find-or-update the `DHCP_Options` row for `subnet` and return its UUID.
@@ -901,6 +998,33 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             external_ids: ["network-name": networkName, "strato-managed": "true"])
 
         if let existing = try await ovnManager.getDHCPOptions().first(where: { $0.cidr == subnet }),
+            let uuid = existing.uuid
+        {
+            if existing.options != options {
+                try await ovnManager.updateDHCPOptions(uuid: uuid, dhcp)
+            }
+            return uuid
+        }
+        return try await ovnManager.createDHCPOptions(dhcp)
+    }
+
+    /// The DHCPv6 sibling of `ensureDHCPOptions`. OVN keys the DHCP family
+    /// off the `DHCP_Options` row's CIDR — an IPv6 CIDR makes it a DHCPv6
+    /// row — so the mechanics are identical; only the option grammar differs
+    /// (see `OVNDHCPOptionsBuilder.v6Options`).
+    private func ensureDHCPOptions6(
+        networkName: String, subnet6: String, dnsServers: [String], domainName: String?
+    ) async throws -> String? {
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        let options = OVNDHCPOptionsBuilder.v6Options(
+            dnsServers: dnsServers, domainName: domainName, subnet6: subnet6)
+        let dhcp = OVNDHCPOptions(
+            cidr: subnet6, options: options,
+            external_ids: ["network-name": networkName, "strato-managed": "true"])
+
+        if let existing = try await ovnManager.getDHCPOptions().first(where: { $0.cidr == subnet6 }),
             let uuid = existing.uuid
         {
             if existing.options != options {
@@ -1069,7 +1193,8 @@ extension NetworkServiceLinux: NetworkActuator {
     func ensureRouterPort(_ port: DesiredRouterPort, onRouter routerName: String) async throws {
         #if os(Linux)
         try await ensureRouterPort(
-            name: port.name, mac: port.mac, cidr: port.cidr,
+            name: port.name, mac: port.mac, cidrs: port.cidrs,
+            ipv6RAConfigs: port.ipv6RAConfigs,
             switchName: port.switchName, switchPortName: port.switchPortName, router: routerName)
         #endif
     }
@@ -1131,9 +1256,9 @@ extension NetworkServiceLinux: NetworkActuator {
         }
 
         // Gateway router port on the external switch, at the configured
-        // dedicated external address.
+        // dedicated external address (v4-only: IPv6 has no uplink this phase).
         try await ensureRouterPort(
-            name: router.externalRouterPortName, mac: uplinkMAC, cidr: uplink.externalCIDR,
+            name: router.externalRouterPortName, mac: uplinkMAC, cidrs: [uplink.externalCIDR],
             switchName: router.externalSwitchName, switchPortName: router.externalSwitchRouterPortName,
             router: router.name)
 
@@ -1231,24 +1356,35 @@ extension NetworkServiceLinux {
     /// Create a router port and its peering `type=router` switch port in an
     /// idempotent pair (both, or neither, so the switch never has a dangling
     /// router peer). Shared by tenant ports and the external gateway port.
+    /// `ipv6_ra_configs` is always written as a concrete map (empty when nil)
+    /// so removing IPv6 from a network clears the port's RA config — the row
+    /// encoder omits nil fields, which would otherwise leave it stale.
     fileprivate func ensureRouterPort(
-        name: String, mac: String, cidr: String, switchName: String, switchPortName: String, router: String
+        name: String, mac: String, cidrs: [String], ipv6RAConfigs: [String: String]? = nil,
+        switchName: String, switchPortName: String, router: String
     ) async throws {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
+        let raConfigs = ipv6RAConfigs ?? [:]
         let desiredPort = OVNLogicalRouterPort(
-            name: name, mac: mac, networks: [cidr],
+            name: name, mac: mac, networks: cidrs,
+            ipv6_ra_configs: raConfigs,
             external_ids: ["strato-managed": "true"])
         if let existing = try await ovnManager.getLogicalRouterPort(named: name) {
-            // Re-address in place when the network's gateway/subnet changed: the
-            // port name is stable (derived from the network), so without this a
-            // subnet/gateway edit would leave a stale CIDR/MAC and break L3.
-            if existing.networks != [cidr] || existing.mac != mac, let uuid = existing.uuid {
+            // Re-address in place when the network's gateway/subnet (either
+            // family) or RA config changed: the port name is stable (derived
+            // from the network), so without this an edit would leave a stale
+            // CIDR/MAC/RA and break L3.
+            let drifted =
+                Set(existing.networks) != Set(cidrs)
+                || existing.mac != mac
+                || (existing.ipv6_ra_configs ?? [:]) != raConfigs
+            if drifted, let uuid = existing.uuid {
                 try await ovnManager.updateLogicalRouterPort(uuid: uuid, desiredPort)
                 logger.info(
                     "Updated logical router port addressing",
-                    metadata: ["port": .string(name), "cidr": .string(cidr)])
+                    metadata: ["port": .string(name), "cidrs": .string(cidrs.joined(separator: " "))])
             }
         } else {
             _ = try await ovnManager.createLogicalRouterPort(desiredPort, onRouter: router)

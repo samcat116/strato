@@ -1,4 +1,5 @@
 import Fluent
+import StratoShared
 import Vapor
 
 struct NetworkController: RouteCollection {
@@ -105,8 +106,12 @@ struct NetworkController: RouteCollection {
         }
 
         let (subnet, gateway) = try Self.validateAddressing(subnet: request.subnet, gateway: request.gateway)
+        // Dual-stack by default: absent an explicit /64 (or an explicit
+        // opt-out), every new network gets a generated unique-local /64.
+        let addressing6 = try Self.resolveIPv6Addressing(
+            subnet6: request.subnet6, gateway6: request.gateway6, ipv6Enabled: request.ipv6Enabled)
         try await Self.assertNoSubnetOverlap(
-            subnet: subnet, projectId: projectId, excluding: nil, on: req.db)
+            subnet: subnet, subnet6: addressing6?.subnet6, projectId: projectId, excluding: nil, on: req.db)
         let dnsServers = try Self.validatedDNS(request.dnsServers ?? [])
         try Self.validateLeaseTime(request.leaseTime)
 
@@ -124,6 +129,8 @@ struct NetworkController: RouteCollection {
             name: name,
             subnet: subnet,
             gateway: gateway,
+            subnet6: addressing6?.subnet6,
+            gateway6: addressing6?.gateway6,
             projectID: projectId,
             createdByID: user.id!,
             dhcpEnabled: request.dhcpEnabled ?? true,
@@ -217,6 +224,8 @@ struct NetworkController: RouteCollection {
         // generation is bumped (and agents accept the new desired network state).
         let originalSubnet = network.subnet
         let originalGateway = network.gateway
+        let originalSubnet6 = network.subnet6
+        let originalGateway6 = network.gateway6
         let originalExternalAccess = network.externalAccess
 
         if let newSubnet = request.subnet, newSubnet != network.subnet {
@@ -251,9 +260,76 @@ struct NetworkController: RouteCollection {
         network.subnet = subnet
         network.gateway = gateway
 
-        if network.subnet != originalSubnet {
+        // IPv6: enable (explicit /64 or generated ULA), change, or remove.
+        // The in-use guard counts allocated v6 addresses, not interfaces — a
+        // network full of pre-IPv6 NICs has no v6 addresses to invalidate, so
+        // *adding* IPv6 is always safe; existing NICs simply stay v4.
+        let v6AddressCount = try await VMInterfaceAddress.query(on: req.db)
+            .filter(\.$network == network.name)
+            .filter(\.$family == IPFamily.ipv6.rawValue)
+            .count()
+
+        if request.ipv6Enabled == false {
+            guard request.subnet6 == nil, request.gateway6 == nil else {
+                throw Abort(.badRequest, reason: "subnet6/gateway6 cannot be combined with ipv6Enabled=false")
+            }
+            if network.subnet6 != nil {
+                guard v6AddressCount == 0 else {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "Network has \(v6AddressCount) allocated IPv6 address(es); removing IPv6 would invalidate them"
+                    )
+                }
+                network.subnet6 = nil
+                network.gateway6 = nil
+            }
+        } else if request.subnet6 != nil || request.gateway6 != nil || request.ipv6Enabled == true {
+            let newPair: (subnet6: String, gateway6: String)
+            if let requestedSubnet6 = request.subnet6 {
+                newPair = try Self.validateAddressing6(subnet6: requestedSubnet6, gateway6: request.gateway6)
+            } else if let currentSubnet6 = network.subnet6 {
+                // Gateway-only change (or a no-op ipv6Enabled=true).
+                newPair = try Self.validateAddressing6(
+                    subnet6: currentSubnet6, gateway6: request.gateway6 ?? network.gateway6)
+            } else {
+                // Enabling with no explicit prefix: generate a ULA (a caller
+                // gateway6 makes no sense against a prefix it cannot know).
+                guard request.gateway6 == nil else {
+                    throw Abort(.badRequest, reason: "gateway6 requires subnet6 (or an existing IPv6 subnet)")
+                }
+                let generated = IPv6Address.makeULASubnet64()
+                newPair = (generated.description, generated.firstHost.description)
+            }
+
+            if newPair.subnet6 != network.subnet6 {
+                // Same rule as v4 subnet changes, scoped to v6 allocations;
+                // adding IPv6 to a v4-only network passes (no v6 addresses).
+                guard network.subnet6 == nil || v6AddressCount == 0 else {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "Network has \(v6AddressCount) allocated IPv6 address(es); changing the IPv6 subnet would invalidate them"
+                    )
+                }
+            } else if newPair.gateway6 != network.gateway6 {
+                // Same rule as v4 gateway changes: guests carry the old value.
+                guard v6AddressCount == 0 else {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "Network has \(v6AddressCount) allocated IPv6 address(es); changing the IPv6 gateway would break their L3 configuration"
+                    )
+                }
+            }
+            network.subnet6 = newPair.subnet6
+            network.gateway6 = newPair.gateway6
+        }
+
+        if network.subnet != originalSubnet || network.subnet6 != originalSubnet6 {
             try await Self.assertNoSubnetOverlap(
-                subnet: network.subnet, projectId: network.$project.id, excluding: network.id, on: req.db)
+                subnet: network.subnet, subnet6: network.subnet6, projectId: network.$project.id,
+                excluding: network.id, on: req.db)
         }
 
         if let externalAccess = request.externalAccess {
@@ -265,6 +341,8 @@ struct NetworkController: RouteCollection {
         // state; DHCP/DNS-only edits leave it untouched.
         if network.subnet != originalSubnet
             || network.gateway != originalGateway
+            || network.subnet6 != originalSubnet6
+            || network.gateway6 != originalGateway6
             || network.externalAccess != originalExternalAccess
         {
             network.generation += 1
@@ -367,14 +445,20 @@ struct NetworkController: RouteCollection {
 
     /// Whether two CIDRs overlap. For CIDRs, ranges are either disjoint or one
     /// contains the other, so masking both to the shorter prefix and comparing
-    /// the network addresses detects any overlap. Unparsable inputs don't overlap.
+    /// the network addresses detects any overlap. Family-aware: different
+    /// families never overlap. Unparsable input fails closed (treated as
+    /// overlapping) — every stored subnet was validated at write time, so an
+    /// unparsable one is corrupt data, and declaring it disjoint would let a
+    /// duplicate slide through silently.
     static func subnetsOverlap(_ a: String, _ b: String) -> Bool {
-        guard let (baseA, prefixA) = IPAMService.parseCIDR(a),
-            let (baseB, prefixB) = IPAMService.parseCIDR(b)
-        else { return false }
-        let minPrefix = min(prefixA, prefixB)
-        let mask: UInt32 = minPrefix == 0 ? 0 : ~UInt32(0) << (32 - minPrefix)
-        return (baseA & mask) == (baseB & mask)
+        let a4 = IPv4CIDR(a)
+        let b4 = IPv4CIDR(b)
+        if let a4, let b4 { return a4.overlaps(b4) }
+        let a6 = IPv6CIDR(a)
+        let b6 = IPv6CIDR(b)
+        if let a6, let b6 { return a6.overlaps(b6) }
+        if (a4 != nil || a6 != nil) && (b4 != nil || b6 != nil) { return false }
+        return true
     }
 
     /// Rejects a subnet that overlaps another network in the same project.
@@ -382,8 +466,10 @@ struct NetworkController: RouteCollection {
     /// router-port `networks` would give OVN ambiguous connected routes (and
     /// exact duplicates collide on the SNAT `logical_ip`) — issue #342. Global
     /// (project-less) networks each get their own router, so they're exempt.
+    /// Each family is checked against its own sibling column.
     static func assertNoSubnetOverlap(
-        subnet: String, projectId: UUID?, excluding networkId: UUID?, on db: any Database
+        subnet: String, subnet6: String? = nil, projectId: UUID?, excluding networkId: UUID?,
+        on db: any Database
     ) async throws {
         guard let projectId else { return }
         var query = LogicalNetwork.query(on: db).filter(\.$project.$id == projectId)
@@ -396,6 +482,17 @@ struct NetworkController: RouteCollection {
                 .conflict,
                 reason:
                     "Subnet \(subnet) overlaps network '\(clash.name)' (\(clash.subnet)) in the same project; networks sharing a project share one router and must use disjoint subnets"
+            )
+        }
+        if let subnet6,
+            let clash = siblings.first(where: { sibling in
+                sibling.subnet6.map { subnetsOverlap($0, subnet6) } ?? false
+            })
+        {
+            throw Abort(
+                .conflict,
+                reason:
+                    "IPv6 subnet \(subnet6) overlaps network '\(clash.name)' (\(clash.subnet6 ?? "")) in the same project; networks sharing a project share one router and must use disjoint subnets"
             )
         }
     }
@@ -442,17 +539,84 @@ struct NetworkController: RouteCollection {
         return (trimmedSubnet, resolvedGateway)
     }
 
-    /// Validates a list of DNS resolver addresses, dropping blanks. Each must be
-    /// a valid IPv4 address.
+    /// Resolves a create request's IPv6 addressing: an explicit /64, a
+    /// generated ULA when nothing was specified (the dual-stack default), or
+    /// nil for an explicit `ipv6Enabled: false` opt-out.
+    static func resolveIPv6Addressing(
+        subnet6: String?, gateway6: String?, ipv6Enabled: Bool?
+    ) throws -> (subnet6: String, gateway6: String)? {
+        let trimmedSubnet6 = subnet6?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        if ipv6Enabled == false {
+            guard trimmedSubnet6 == nil, gateway6?.nilIfEmpty == nil else {
+                throw Abort(.badRequest, reason: "subnet6/gateway6 cannot be combined with ipv6Enabled=false")
+            }
+            return nil
+        }
+        if let trimmedSubnet6 {
+            return try validateAddressing6(subnet6: trimmedSubnet6, gateway6: gateway6)
+        }
+        guard gateway6?.nilIfEmpty == nil else {
+            throw Abort(.badRequest, reason: "gateway6 requires an explicit subnet6")
+        }
+        let generated = IPv6Address.makeULASubnet64()
+        return (generated.description, generated.firstHost.description)
+    }
+
+    /// Validates an IPv6 subnet/gateway pair, canonicalizing both (the
+    /// database compares addresses as strings, so exactly one spelling may
+    /// exist) and defaulting a missing gateway to the subnet's first host.
+    /// Only /64 tenant prefixes are accepted: wider or narrower buys nothing
+    /// today and would complicate SLAAC/EUI-64 compatibility forever.
+    static func validateAddressing6(
+        subnet6: String, gateway6: String?
+    ) throws -> (subnet6: String, gateway6: String) {
+        let trimmed = subnet6.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let cidr = IPv6CIDR(trimmed), cidr.prefix == 64 else {
+            throw Abort(
+                .badRequest,
+                reason: "Invalid IPv6 subnet '\(subnet6)': must be CIDR notation with a /64 prefix")
+        }
+        let base = cidr.networkAddress
+        guard !base.isMulticast, !base.isLinkLocal, !base.isLoopback, !base.isUnspecified else {
+            throw Abort(
+                .badRequest,
+                reason: "Invalid IPv6 subnet '\(subnet6)': multicast, link-local, loopback, and "
+                    + "unspecified prefixes are not routable tenant networks")
+        }
+
+        let resolvedGateway: IPv6Address
+        if let gateway6, let trimmedGateway = gateway6.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
+            guard let parsed = IPv6Address(trimmedGateway) else {
+                throw Abort(.badRequest, reason: "Invalid IPv6 gateway address '\(gateway6)'")
+            }
+            guard cidr.contains(parsed), parsed != base else {
+                throw Abort(
+                    .badRequest,
+                    reason: "IPv6 gateway '\(trimmedGateway)' is not a host address inside subnet '\(trimmed)'")
+            }
+            resolvedGateway = parsed
+        } else {
+            resolvedGateway = cidr.firstHost
+        }
+
+        return (cidr.description, resolvedGateway.description)
+    }
+
+    /// Validates a list of DNS resolver addresses, dropping blanks. Either
+    /// family is accepted (the list stays mixed on the wire; the agent splits
+    /// it when programming DHCPv4 vs DHCPv6). IPv6 entries are canonicalized.
     static func validatedDNS(_ servers: [String]) throws -> [String] {
         var cleaned: [String] = []
         for server in servers {
             let trimmed = server.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { continue }
-            guard IPAMService.parseIPv4(trimmed) != nil else {
-                throw Abort(.badRequest, reason: "DNS server is not an IPv4 address: '\(server)'")
+            if IPAMService.parseIPv4(trimmed) != nil {
+                cleaned.append(trimmed)
+            } else if let canonical = IPv6Address.canonicalize(trimmed) {
+                cleaned.append(canonical)
+            } else {
+                throw Abort(.badRequest, reason: "DNS server is not an IP address: '\(server)'")
             }
-            cleaned.append(trimmed)
         }
         return cleaned
     }

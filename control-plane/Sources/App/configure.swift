@@ -298,6 +298,11 @@ public func configure(_ app: Application) async throws {
     // Drop the legacy vm_templates table (VM template feature removed).
     app.migrations.add(DropVMTemplate())
 
+    // Dual-stack networking: NIC addresses normalized into their own table,
+    // one row per family (issue: IPv6 support).
+    app.migrations.add(CreateVMInterfaceAddresses())
+    app.migrations.add(AddIPv6ToLogicalNetwork())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen

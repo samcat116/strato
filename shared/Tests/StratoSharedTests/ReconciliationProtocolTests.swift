@@ -57,6 +57,8 @@ struct ReconciliationProtocolTests {
                     name: "default",
                     subnet: "192.168.1.0/24",
                     gateway: "192.168.1.1",
+                    subnet6: "fd12:3456:789a::/64",
+                    gateway6: "fd12:3456:789a::1",
                     routerKey: projectKey,
                     externalAccess: true,
                     generation: 4
@@ -82,10 +84,26 @@ struct ReconciliationProtocolTests {
         #expect(decoded.networks[0].routerKey == projectKey)
         #expect(decoded.networks[0].externalAccess)
         #expect(decoded.networks[0].generation == 4)
+        #expect(decoded.networks[0].subnet6 == "fd12:3456:789a::/64")
+        #expect(decoded.networks[0].gateway6 == "fd12:3456:789a::1")
         // Same router key: both networks share one per-project logical router.
         #expect(decoded.networks[1].routerKey == projectKey)
         #expect(decoded.networks[1].gateway == nil)
+        #expect(decoded.networks[1].subnet6 == nil)
+        #expect(decoded.networks[1].gateway6 == nil)
         #expect(!decoded.networks[1].externalAccess)
+    }
+
+    @Test("DesiredNetworkState without v6 keys (older control plane) decodes to nils")
+    func desiredNetworkStateBackwardCompatibleIPv6() throws {
+        let legacy = """
+            {"networkId":"\(UUID().uuidString)","name":"default","subnet":"192.168.1.0/24",
+             "gateway":"192.168.1.1","routerKey":"project-x","externalAccess":true,"generation":1}
+            """
+        let decoded = try decodeJSON(DesiredNetworkState.self, from: legacy)
+        #expect(decoded.subnet6 == nil)
+        #expect(decoded.gateway6 == nil)
+        #expect(decoded.subnet == "192.168.1.0/24")
     }
 
     @Test("DesiredStateMessage carries topology authority through the envelope")

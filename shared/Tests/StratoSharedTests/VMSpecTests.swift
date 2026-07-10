@@ -111,6 +111,39 @@ struct VMSpecTests {
         #expect(decoded.memoryActualSize == 1_000_000_000)
     }
 
+    @Test func dualStackNetworkSpecRoundTrip() throws {
+        let spec = NetworkSpec(
+            network: "default",
+            macAddress: "52:54:00:00:00:01",
+            ipAddress: "10.0.0.5",
+            netmask: "255.255.255.0",
+            gateway: "10.0.0.1",
+            ipv6Address: "fd12:3456:789a::100",
+            ipv6PrefixLength: 64,
+            gateway6: "fd12:3456:789a::1"
+        )
+        let decoded = try roundTrip(spec)
+        #expect(decoded.ipv6Address == "fd12:3456:789a::100")
+        #expect(decoded.ipv6PrefixLength == 64)
+        #expect(decoded.gateway6 == "fd12:3456:789a::1")
+        #expect(decoded.ipAddress == "10.0.0.5")
+    }
+
+    /// A spec from a control plane that predates IPv6 has no v6 keys; a new
+    /// agent must decode it to nils (rolling-upgrade skew).
+    @Test func networkSpecWithoutIPv6KeysDecodesToNil() throws {
+        let json = """
+            {"network":"default","macAddress":"52:54:00:00:00:01",
+             "ipAddress":"10.0.0.5","netmask":"255.255.255.0","gateway":"10.0.0.1"}
+            """
+        let decoded = try decodeJSON(NetworkSpec.self, from: json)
+        #expect(decoded.ipv6Address == nil)
+        #expect(decoded.ipv6PrefixLength == nil)
+        #expect(decoded.gateway6 == nil)
+        #expect(decoded.ipAddress == "10.0.0.5")
+        #expect(!decoded.dhcpEnabled)
+    }
+
     /// An unknown boot-source case from a newer peer must fail loudly (there
     /// is no tolerant fallback for BootSource) — pin that so a change here is
     /// a deliberate decision, not an accident.

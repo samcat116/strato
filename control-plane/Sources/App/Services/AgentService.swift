@@ -958,7 +958,7 @@ actor AgentService {
         let vms = try await VM.query(on: db)
             .filter(\.$hypervisorId == agentId)
             .with(\.$volumes)
-            .with(\.$networkInterfaces)
+            .with(\.$networkInterfaces) { $0.with(\.$addresses) }
             // Artifacts loaded too so buildImageInfo emits the typed artifact
             // set (kernel/rootfs distribution, issue #214) rather than the
             // legacy single-file fallback.
@@ -1046,6 +1046,8 @@ actor AgentService {
                     name: network.name,
                     subnet: network.subnet,
                     gateway: network.gateway,
+                    subnet6: network.subnet6,
+                    gateway6: network.gateway6,
                     routerKey: network.routerKey,
                     externalAccess: network.externalAccess,
                     generation: Int64(network.generation)
