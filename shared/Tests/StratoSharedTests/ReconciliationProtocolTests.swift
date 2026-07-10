@@ -61,6 +61,10 @@ struct ReconciliationProtocolTests {
                     gateway6: "fd12:3456:789a::1",
                     routerKey: projectKey,
                     externalAccess: true,
+                    dhcpEnabled: true,
+                    dnsServers: ["1.1.1.1", "fd00::53"],
+                    domainName: "corp.example.com",
+                    leaseTime: 7200,
                     generation: 4
                 ),
                 DesiredNetworkState(
@@ -86,15 +90,20 @@ struct ReconciliationProtocolTests {
         #expect(decoded.networks[0].generation == 4)
         #expect(decoded.networks[0].subnet6 == "fd12:3456:789a::/64")
         #expect(decoded.networks[0].gateway6 == "fd12:3456:789a::1")
+        #expect(decoded.networks[0].dhcpEnabled == true)
+        #expect(decoded.networks[0].dnsServers == ["1.1.1.1", "fd00::53"])
+        #expect(decoded.networks[0].domainName == "corp.example.com")
+        #expect(decoded.networks[0].leaseTime == 7200)
         // Same router key: both networks share one per-project logical router.
         #expect(decoded.networks[1].routerKey == projectKey)
         #expect(decoded.networks[1].gateway == nil)
         #expect(decoded.networks[1].subnet6 == nil)
         #expect(decoded.networks[1].gateway6 == nil)
+        #expect(decoded.networks[1].dhcpEnabled == nil)
         #expect(!decoded.networks[1].externalAccess)
     }
 
-    @Test("DesiredNetworkState without v6 keys (older control plane) decodes to nils")
+    @Test("DesiredNetworkState without v6/DHCP keys (older control plane) decodes to nils")
     func desiredNetworkStateBackwardCompatibleIPv6() throws {
         let legacy = """
             {"networkId":"\(UUID().uuidString)","name":"default","subnet":"192.168.1.0/24",
@@ -103,6 +112,10 @@ struct ReconciliationProtocolTests {
         let decoded = try decodeJSON(DesiredNetworkState.self, from: legacy)
         #expect(decoded.subnet6 == nil)
         #expect(decoded.gateway6 == nil)
+        // Nil (not false): the agent must leave DHCP rows alone rather than
+        // delete them when a pre-field control plane says nothing.
+        #expect(decoded.dhcpEnabled == nil)
+        #expect(decoded.dnsServers == nil)
         #expect(decoded.subnet == "192.168.1.0/24")
     }
 

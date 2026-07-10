@@ -178,9 +178,27 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// this network. The uplink IP is auto-detected on the agent. IPv4-only:
     /// IPv6 stays internal (no NAT66, no default route) in this phase.
     public let externalAccess: Bool
+    /// Whether the network's guests are addressed by OVN's DHCP responder.
+    /// Carried here — not only on per-NIC specs — because DHCP edits don't
+    /// bump VM generations, so converged VMs never re-realize their NICs; the
+    /// level-triggered network reconcile is what converges the DHCP_Options
+    /// rows (including deleting them when DHCP is turned off). Nil from
+    /// control planes that predate the field: the agent then leaves DHCP rows
+    /// alone, preserving the old NIC-driven behavior.
+    public let dhcpEnabled: Bool?
+    /// DNS resolvers advertised over DHCP; may be mixed-family (the agent
+    /// splits per DHCP family). Nil ≙ pre-field control plane, like
+    /// `dhcpEnabled`.
+    public let dnsServers: [String]?
+    /// DNS search domain advertised over DHCP.
+    public let domainName: String?
+    /// DHCPv4 lease time in seconds; agents default it when nil.
+    public let leaseTime: Int?
     /// Monotonic per-network counter, bumped by the control plane on any change
     /// that alters realization (subnet, gateway, router membership, external
-    /// access). Lets the agent reject replayed or reordered syncs.
+    /// access). Lets the agent reject replayed or reordered syncs. DHCP-only
+    /// edits deliberately don't bump it — the network reconcile is
+    /// level-triggered, so same-generation networks still converge DHCP.
     public let generation: Int64
 
     public init(
@@ -192,6 +210,10 @@ public struct DesiredNetworkState: Codable, Sendable {
         gateway6: String? = nil,
         routerKey: String,
         externalAccess: Bool,
+        dhcpEnabled: Bool? = nil,
+        dnsServers: [String]? = nil,
+        domainName: String? = nil,
+        leaseTime: Int? = nil,
         generation: Int64
     ) {
         self.networkId = networkId
@@ -202,6 +224,10 @@ public struct DesiredNetworkState: Codable, Sendable {
         self.gateway6 = gateway6
         self.routerKey = routerKey
         self.externalAccess = externalAccess
+        self.dhcpEnabled = dhcpEnabled
+        self.dnsServers = dnsServers
+        self.domainName = domainName
+        self.leaseTime = leaseTime
         self.generation = generation
     }
 }

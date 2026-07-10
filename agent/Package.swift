@@ -109,7 +109,7 @@ var platformPackageDependencies: [Package.Dependency] {
     [
         .package(
             url: "https://github.com/samcat116/swift-ovn.git",
-            revision: "278d9f38cb5115da44bd6ec7d296f2ab356664eb")
+            revision: "d474198c454b87b62d6af68fa15241e8d1ed9bd5")
     ]
 }
 var qemuAndNetworkDependencies: [Target.Dependency] {

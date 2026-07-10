@@ -1050,6 +1050,10 @@ actor AgentService {
                     gateway6: network.gateway6,
                     routerKey: network.routerKey,
                     externalAccess: network.externalAccess,
+                    dhcpEnabled: network.dhcpEnabled,
+                    dnsServers: network.dnsServers,
+                    domainName: network.domainName,
+                    leaseTime: network.leaseTime,
                     generation: Int64(network.generation)
                 )
             }

@@ -437,7 +437,10 @@ opentelemetry:
     enabled: true
     image:
       repository: prom/prometheus
-      tag: v2.56.0
+      # NB: there is no Prometheus 2.56 — the previous v2.56.0 pin never
+      # resolved. v3.5 is the current LTS line; keep in sync with
+      # deploy/compose/docker-compose.yml.
+      tag: v3.5.0
       pullPolicy: IfNotPresent
 
     service:

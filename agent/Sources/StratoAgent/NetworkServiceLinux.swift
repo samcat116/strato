@@ -979,10 +979,22 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         }
     }
 
-    /// Find-or-update the `DHCP_Options` row for `subnet` and return its UUID.
-    /// Idempotent across restarts and reconvergence: an existing row for the
-    /// same CIDR is updated in place (so DNS/lease edits converge) rather than
-    /// duplicated.
+    /// Whether a `DHCP_Options` row is the one this network owns for `cidr`.
+    /// Rows are matched by (managed, network-name, cidr), never CIDR alone:
+    /// two networks may legitimately use the same prefix (overlap checks are
+    /// project-scoped), and sharing a row would bleed DNS/search settings
+    /// between them — and let one network's DHCP-disable delete the other's
+    /// row. Operator-created rows (no managed marker) are never adopted.
+    private static func isOwnDHCPRow(_ row: OVNDHCPOptions, networkName: String, cidr: String) -> Bool {
+        row.cidr == cidr
+            && row.external_ids?["network-name"] == networkName
+            && row.external_ids?[managedKey] == managedValue
+    }
+
+    /// Find-or-update this network's `DHCP_Options` row for `subnet` and
+    /// return its UUID. Idempotent across restarts and reconvergence: the
+    /// network's existing row for the same CIDR is updated in place (so
+    /// DNS/lease edits converge) rather than duplicated.
     private func ensureDHCPOptions(
         networkName: String, subnet: String, gateway: String,
         dnsServers: [String], domainName: String?, leaseTime: Int?
@@ -995,9 +1007,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             subnet: subnet)
         let dhcp = OVNDHCPOptions(
             cidr: subnet, options: options,
-            external_ids: ["network-name": networkName, "strato-managed": "true"])
+            external_ids: ["network-name": networkName, Self.managedKey: Self.managedValue])
 
-        if let existing = try await ovnManager.getDHCPOptions().first(where: { $0.cidr == subnet }),
+        if let existing = try await ovnManager.getDHCPOptions()
+            .first(where: { Self.isOwnDHCPRow($0, networkName: networkName, cidr: subnet) }),
             let uuid = existing.uuid
         {
             if existing.options != options {
@@ -1022,9 +1035,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             dnsServers: dnsServers, domainName: domainName, subnet6: subnet6)
         let dhcp = OVNDHCPOptions(
             cidr: subnet6, options: options,
-            external_ids: ["network-name": networkName, "strato-managed": "true"])
+            external_ids: ["network-name": networkName, Self.managedKey: Self.managedValue])
 
-        if let existing = try await ovnManager.getDHCPOptions().first(where: { $0.cidr == subnet6 }),
+        if let existing = try await ovnManager.getDHCPOptions()
+            .first(where: { Self.isOwnDHCPRow($0, networkName: networkName, cidr: subnet6) }),
             let uuid = existing.uuid
         {
             if existing.options != options {
@@ -1099,6 +1113,54 @@ extension NetworkServiceLinux {
                 "Network reconciliation could not complete",
                 metadata: ["error": .string(error.localizedDescription)])
         }
+
+        // Converge each network's DHCP_Options rows here, level-triggered,
+        // not only when a NIC is realized: DHCP edits don't bump VM or
+        // network generations, and converged VMs never re-run createVMNetwork,
+        // so this is the only path that reaches a live network whose DHCP
+        // config changed — including deleting its rows when DHCP is turned
+        // off (their weak refs clear every port's binding). A nil dhcpEnabled
+        // means the control plane predates the field; leave the rows to the
+        // NIC-driven path exactly as before.
+        for network in current {
+            guard let dhcpEnabled = network.dhcpEnabled else { continue }
+            await attemptDHCPConvergence(for: network, dhcpEnabled: dhcpEnabled)
+        }
+    }
+
+    /// Best-effort per-network DHCP row convergence; a failing network is
+    /// logged and left for the next periodic sync, like reconcile steps.
+    private func attemptDHCPConvergence(for network: DesiredNetworkState, dhcpEnabled: Bool) async {
+        #if os(Linux)
+        do {
+            if !dhcpEnabled {
+                try await removeDHCPOptions(networkName: network.name)
+                return
+            }
+            if let gateway = network.gateway, let cidr = IPv4CIDR(network.subnet) {
+                // Masked, so the row key matches what the NIC path derives
+                // from ip+netmask (the stored subnet may carry host bits).
+                _ = try await ensureDHCPOptions(
+                    networkName: network.name,
+                    subnet: "\(cidr.networkAddress)/\(cidr.prefix)",
+                    gateway: gateway,
+                    dnsServers: network.dnsServers ?? [], domainName: network.domainName,
+                    leaseTime: network.leaseTime)
+            }
+            if let subnet6 = network.subnet6 {
+                _ = try await ensureDHCPOptions6(
+                    networkName: network.name, subnet6: subnet6,
+                    dnsServers: network.dnsServers ?? [], domainName: network.domainName)
+            }
+        } catch {
+            logger.error(
+                "DHCP options convergence failed for network",
+                metadata: [
+                    "network": .string(network.name),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+        #endif
     }
 }
 
