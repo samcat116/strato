@@ -36,6 +36,16 @@ final class Site: Model, Content, @unchecked Sendable {
     @OptionalParent(key: "network_controller_agent_id")
     var networkControllerAgent: Agent?
 
+    /// Owning organization (exactly one of organization / organizational
+    /// unit). All agents in a site must share the site's root organization —
+    /// a site is one OVN deployment, and dedicated capacity must not mix
+    /// tenants on a shared SDN.
+    @OptionalParent(key: "organization_id")
+    var organization: Organization?
+
+    @OptionalParent(key: "organizational_unit_id")
+    var organizationalUnit: OrganizationalUnit?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -44,11 +54,37 @@ final class Site: Model, Content, @unchecked Sendable {
 
     init() {}
 
-    init(id: UUID? = nil, name: String, description: String? = nil, networkControllerAgentID: UUID? = nil) {
+    init(
+        id: UUID? = nil,
+        name: String,
+        description: String? = nil,
+        networkControllerAgentID: UUID? = nil,
+        organizationScope: OrganizationScope? = nil
+    ) {
         self.id = id
         self.name = name
         self.description = description
         self.$networkControllerAgent.id = networkControllerAgentID
+        self.$organization.id = organizationScope?.organizationID
+        self.$organizationalUnit.id = organizationScope?.organizationalUnitID
+    }
+
+    /// The site's org-or-OU owner; nil only for rows that predate mandatory
+    /// scoping and were never backfilled.
+    var organizationScope: OrganizationScope? {
+        get {
+            if let orgID = self.$organization.id { return .organization(orgID) }
+            if let ouID = self.$organizationalUnit.id { return .organizationalUnit(ouID) }
+            return nil
+        }
+        set {
+            self.$organization.id = newValue?.organizationID
+            self.$organizationalUnit.id = newValue?.organizationalUnitID
+        }
+    }
+
+    func rootOrganizationID(on db: Database) async throws -> UUID? {
+        try await organizationScope?.rootOrganizationID(on: db)
     }
 }
 
@@ -59,6 +95,8 @@ struct SiteResponse: Content {
     let name: String
     let description: String?
     let networkControllerAgentId: UUID?
+    let organizationId: UUID?
+    let organizationalUnitId: UUID?
     let createdAt: Date?
 
     init(from site: Site) throws {
@@ -66,6 +104,8 @@ struct SiteResponse: Content {
         self.name = site.name
         self.description = site.description
         self.networkControllerAgentId = site.$networkControllerAgent.id
+        self.organizationId = site.$organization.id
+        self.organizationalUnitId = site.$organizationalUnit.id
         self.createdAt = site.createdAt
     }
 }
@@ -73,6 +113,9 @@ struct SiteResponse: Content {
 struct CreateSiteRequest: Content {
     let name: String
     let description: String?
+    /// Owning scope; exactly one of the two is required.
+    let organizationId: UUID?
+    let organizationalUnitId: UUID?
 }
 
 /// Full-replace (PUT) semantics: every field is applied as given, so omitting

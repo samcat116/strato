@@ -63,6 +63,23 @@ struct NetworkController: RouteCollection {
         return responses
     }
 
+    /// Whether a site's owning scope contains a project: an org-scoped site
+    /// serves every project whose root org matches; an OU-scoped site serves
+    /// only projects under that OU (directly or via a descendant OU). Legacy
+    /// unscoped sites serve nothing until an operator assigns them an owner.
+    static func siteScopeContains(project: Project, site: Site, on db: Database) async throws -> Bool {
+        guard let siteScope = site.organizationScope else { return false }
+        let projectScope: OrganizationScope
+        if let orgID = project.$organization.id {
+            projectScope = .organization(orgID)
+        } else if let ouID = project.$organizationalUnit.id {
+            projectScope = .organizationalUnit(ouID)
+        } else {
+            return false
+        }
+        return try await siteScope.contains(projectScope, on: db)
+    }
+
     // MARK: - Create Network
 
     /// Create a new project-scoped network
@@ -118,10 +135,22 @@ struct NetworkController: RouteCollection {
         // Pinning to a site constrains all the network's VMs to that site's
         // agents, where the shared OVN deployment spans the switch across
         // nodes. Validated here so a typo'd id fails the create, not the
-        // first VM placement.
+        // first VM placement — and the site's owning scope must CONTAIN the
+        // network's project: sites are dedicated capacity, so an org-scoped
+        // site serves its whole org while an OU-scoped site serves only that
+        // OU's subtree. A bare root-org match would let a sibling OU's
+        // project force its VMs onto (and realize its switch across) capacity
+        // delegated to a different OU.
         if let siteId = request.siteId {
-            guard try await Site.find(siteId, on: req.db) != nil else {
+            guard let site = try await Site.find(siteId, on: req.db) else {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
+            }
+            guard let project = try await Project.find(projectId, on: req.db),
+                try await Self.siteScopeContains(project: project, site: site, on: req.db)
+            else {
+                throw Abort(
+                    .badRequest,
+                    reason: "Site \(siteId) does not serve the network's project")
             }
         }
 

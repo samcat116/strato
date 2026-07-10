@@ -4,11 +4,16 @@ metadata:
   name: {{ include "strato-control-plane.fullname" . }}
   labels:
     {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
+    # matchLabels is immutable on an existing Deployment, so the component label
+    # is deliberately absent here; it lives on the pod template and on the
+    # Service/PDB/NetworkPolicy selectors (all mutable), which is what stops
+    # cross-matching other pods that share the name/instance labels.
     matchLabels:
       {{- include "strato-control-plane.selectorLabels" . | nindent 6 }}
   template:
@@ -19,6 +24,7 @@ spec:
       {{- end }}
       labels:
         {{- include "strato-control-plane.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: control-plane
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -168,6 +174,23 @@ spec:
             # cookie the browser would drop. Force with strato.httpTlsEnabled.
             - name: HTTP_TLS_ENABLED
               value: "{{ include "strato-control-plane.tlsEnabled" . }}"
+            # Base URL for OIDC issuer/redirect URIs. Without it the code falls
+            # back to http://localhost:8080, which breaks OIDC login in-cluster;
+            # default to the resolved WebAuthn origin (the URL browsers visit)
+            # so the two can never disagree unless explicitly overridden.
+            - name: BASE_URL
+              value: "{{ .Values.strato.baseUrl | default (include "strato-control-plane.webauthnOrigin" .) }}"
+            # URL agents use to fetch signed image-download links. The code
+            # default (http://localhost:8080) is unreachable from agents, so
+            # default to the public origin agents can actually resolve.
+            - name: CONTROL_PLANE_URL
+              value: "{{ .Values.strato.controlPlaneUrl | default (include "strato-control-plane.webauthnOrigin" .) }}"
+            {{- if .Values.strato.lokiEndpoint }}
+            # Loki base URL for VM console-log queries (and the loki audit
+            # backend). The chart ships no Loki, so this is opt-in.
+            - name: LOKI_ENDPOINT
+              value: "{{ .Values.strato.lokiEndpoint }}"
+            {{- end }}
             {{- if .Values.strato.externalHostname }}
             - name: EXTERNAL_HOSTNAME
               value: "{{ .Values.strato.externalHostname }}"
@@ -186,6 +209,12 @@ spec:
               value: "{{ .Values.spire.controlPlane.requireClientCert }}"
             - name: SPIRE_BUNDLE_REFRESH_INTERVAL
               value: "{{ .Values.spire.controlPlane.bundleRefreshInterval }}"
+            # SPIRE server gRPC API, required for the control-plane-driven
+            # agent registration flow (join-token provisioning and entry
+            # revocation on agent removal). Defaults to this chart's SPIRE
+            # server Service.
+            - name: SPIRE_SERVER_API_ADDRESS
+              value: "{{ .Values.spire.controlPlane.serverApiAddress | default (printf "%s-spire-server.%s.svc.cluster.local:%v" (include "strato-control-plane.fullname" .) .Release.Namespace .Values.spire.service.grpcPort) }}"
             {{- if .Values.spire.notifier.k8sbundle.enabled }}
             # Trust bundle published to a ConfigMap by SPIRE's k8sbundle
             # notifier and mounted below. With it the control plane re-verifies
@@ -198,8 +227,6 @@ spec:
             {{- if .Values.opentelemetry.enabled }}
             - name: OTEL_SERVICE_NAME
               value: "{{ .Values.opentelemetry.serviceName }}"
-            - name: OTEL_SERVICE_VERSION
-              value: "{{ .Values.opentelemetry.serviceVersion }}"
             - name: OTEL_METRICS_ENABLED
               value: "{{ .Values.opentelemetry.metrics.enabled }}"
             - name: OTEL_LOGS_ENABLED
@@ -238,6 +265,12 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.valkeySecretName" . }}"
                   key: "{{ include "strato-control-plane.valkeySecretKey" . }}"
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            # Operator-supplied passthrough for env vars without a dedicated
+            # chart knob (SSF_*, AUDIT_*, RATE_LIMIT_*, SCHEDULING_STRATEGY,
+            # STRATO_DEFAULT_NETWORK_*, ...). Rendered with tpl.
+            {{- tpl (toYaml .) $ | nindent 12 }}
             {{- end }}
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:

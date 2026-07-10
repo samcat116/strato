@@ -34,12 +34,9 @@ data:
           - targets: ['{{ include "strato-control-plane.fullname" . }}-otel-collector:{{ .Values.opentelemetry.collector.service.prometheusPort }}']
       {{- end }}
 
-      # Scrape control plane metrics (if exposed)
-      - job_name: 'strato-control-plane'
-        static_configs:
-          - targets: ['{{ include "strato-control-plane.fullname" . }}:{{ .Values.service.port }}']
-        metrics_path: /metrics
-        scheme: http
+      # NOTE: the control plane is deliberately not scraped directly — it has
+      # no /metrics endpoint; its metrics arrive via OTLP through the
+      # collector's prometheusremotewrite exporter.
 
     # Remote write configuration for long-term storage (if needed)
     # remote_write:

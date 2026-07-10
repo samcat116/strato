@@ -20,13 +20,22 @@ import Vapor
 @Suite("Agent WebSocket Integration", .serialized)
 struct AgentWebSocketIntegrationTests {
 
+    /// New agents require an owning organization on their registration token.
+    private func makeOrg(app: Application) async throws -> OrganizationScope {
+        let org = Organization(name: "WS Org", description: "org for WS tests")
+        try await org.save(on: app.db)
+        return .organization(try org.requireID())
+    }
+
     // MARK: - (1) Token auth happy path
 
     @Test("Token auth registers, rotates the reconnect token, and consumes the presented token")
     func tokenAuthRotatesReconnectToken() async throws {
         try await withRunningApp { app, port in
             let agentName = "agent-happy"
-            let presented = AgentRegistrationToken(agentName: agentName, expirationHours: 1)
+            let presented = AgentRegistrationToken(
+                agentName: agentName, expirationHours: 1,
+                organizationScope: try await self.makeOrg(app: app))
             try await presented.save(on: app.db)
             let presentedValue = presented.token
 
@@ -85,6 +94,14 @@ struct AgentWebSocketIntegrationTests {
             app.spireService = SPIREService(config: config, logger: app.logger, httpClient: app.client)
 
             let agentName = "mtls-agent"
+            // mTLS agents never redeem the WebSocket token, but their minting
+            // flow still creates a token row carrying the owning org — the
+            // registration path reads the scope from it.
+            let provisioning = AgentRegistrationToken(
+                agentName: agentName, expirationHours: 1,
+                organizationScope: try await self.makeOrg(app: app))
+            try await provisioning.save(on: app.db)
+
             var headers = HTTPHeaders()
             headers.add(
                 name: "X-Forwarded-Client-Cert",
@@ -107,9 +124,10 @@ struct AgentWebSocketIntegrationTests {
             // the store, so background DB work has settled.
             try await client.expectDesiredStateSync()
 
-            // No stray reconnect token should have been written to the store either.
+            // No stray reconnect token should have been written to the store
+            // either — only the pre-existing provisioning token remains.
             let tokenCount = try await AgentRegistrationToken.query(on: app.db).count()
-            #expect(tokenCount == 0)
+            #expect(tokenCount == 1)
 
             try await client.close()
         }
@@ -121,7 +139,9 @@ struct AgentWebSocketIntegrationTests {
     func registerFrameSentImmediatelyAfterUpgradeIsProcessed() async throws {
         try await withRunningApp { app, port in
             let agentName = "agent-buffered"
-            let presented = AgentRegistrationToken(agentName: agentName, expirationHours: 1)
+            let presented = AgentRegistrationToken(
+                agentName: agentName, expirationHours: 1,
+                organizationScope: try await self.makeOrg(app: app))
             try await presented.save(on: app.db)
 
             var headers = HTTPHeaders()

@@ -39,7 +39,6 @@ definition organization {
     permission create_project = admin + member
     permission manage_members = admin
     permission manage_quotas = admin
-    permission manage_agents = admin
 }
 
 /** organizational_unit represents a sub-division within an organization */
@@ -64,25 +63,6 @@ definition organizational_unit {
     permission create_project = admin + member + inherited_admin
     permission manage_members = admin + inherited_admin
     permission manage_quotas = admin + inherited_admin
-    permission manage_agents = admin + inherited_admin
-}
-
-/** agent represents a hypervisor node dedicated to an organization or OU */
-definition agent {
-    /** parent is the org or OU whose workloads this agent hosts */
-    relation parent: organization | organizational_unit
-
-    permission view = parent->view_organization + parent->view_ou
-    permission manage = parent->manage_organization + parent->manage_ou
-}
-
-/** site represents an availability zone (one shared OVN deployment) */
-definition site {
-    /** parent is the org or OU that owns the site's capacity */
-    relation parent: organization | organizational_unit
-
-    permission view = parent->view_organization + parent->view_ou
-    permission manage = parent->manage_organization + parent->manage_ou
 }
 
 /** project represents a container for resources like VMs */

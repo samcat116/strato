@@ -22,6 +22,7 @@ enum AgentServiceError: Error, LocalizedError, Sendable {
     case connectionLost
     case invalidResponse(String)
     case unsupportedProtocolVersion(agentName: String, version: Int)
+    case missingOrganizationScope(agentName: String)
 
     var errorDescription: String? {
         switch self {
@@ -43,6 +44,10 @@ enum AgentServiceError: Error, LocalizedError, Sendable {
             return
                 "Agent '\(agentName)' registered with wire protocol version \(version), which predates "
                 + "desired-state sync. The imperative message path was removed (issue #261); upgrade the agent."
+        case .missingOrganizationScope(let agentName):
+            return
+                "Agent '\(agentName)' is new but its registration token carries no organization; "
+                + "agents are dedicated capacity and must be minted a token scoped to an organization or OU."
         }
     }
 }

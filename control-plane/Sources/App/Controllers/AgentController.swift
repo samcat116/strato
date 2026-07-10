@@ -16,21 +16,109 @@ struct AgentController: RouteCollection {
         agents.get(":agentId", use: getAgent)
         agents.delete(":agentId", use: deregisterAgent)
         agents.post(":agentId", "actions", "force-offline", use: forceAgentOffline)
+        // Scope reassignment corrects the migration backfill's oldest-org
+        // guess on multi-org installs; deliberately system-admin only (it
+        // moves dedicated capacity between tenants).
+        agents.patch(":agentId", "organization", use: reassignOrganization)
     }
 
     // MARK: - Authorization
 
-    /// Every agent-management operation is privileged: minting or reading a
-    /// registration token lets the caller stand up a rogue agent (which receives
-    /// VM-create dispatches, signed image URLs, and console traffic), and
-    /// force-offlining agents can DoS the fleet. Restrict the entire controller to
-    /// system admins. Defense in depth — do not rely on route-level middleware.
-    private func requireSystemAdmin(_ req: Request) throws {
+    /// Agent management is delegated to the owning organization: minting a
+    /// registration token or force-offlining agents is scoped to the org/OU
+    /// whose capacity it is (`manage_agents`), and system admins retain
+    /// unconditional access. Defense in depth — do not rely on route-level
+    /// middleware.
+    private func requireUser(_ req: Request) throws -> User {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
+        return user
+    }
+
+    private func requireSystemAdmin(_ req: Request) throws {
+        let user = try requireUser(req)
         guard user.isSystemAdmin else {
             throw Abort(.forbidden, reason: "System admin access required")
+        }
+    }
+
+    /// System admin, or `manage_agents` on the given org/OU scope.
+    private func requireManageAgents(_ req: Request, scope: OrganizationScope) async throws {
+        let user = try requireUser(req)
+        if user.isSystemAdmin { return }
+        let ref = scope.spiceDBParentRef
+        let allowed = try await req.spicedb.checkPermission(
+            subject: user.id!.uuidString,
+            permission: "manage_agents",
+            resource: ref.subjectType,
+            resourceId: ref.subjectId.uuidString
+        )
+        guard allowed else {
+            throw Abort(.forbidden, reason: "You don't have permission to manage agents for this organization")
+        }
+    }
+
+    /// System admin, or the given permission on the agent itself (resolved
+    /// through `agent#parent` in SpiceDB).
+    private func requireAgentPermission(_ req: Request, agent: Agent, permission: String) async throws {
+        let user = try requireUser(req)
+        if user.isSystemAdmin { return }
+        let allowed = try await req.spicedb.checkPermission(
+            subject: user.id!.uuidString,
+            permission: permission,
+            resource: "agent",
+            resourceId: try agent.requireID().uuidString
+        )
+        guard allowed else {
+            throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this agent")
+        }
+    }
+
+    /// Until the scheduler and volume placement enforce org-scoped placement
+    /// (phase 2 of the hierarchy overhaul), an agent may host VMs — and store
+    /// volumes, which place on any online QEMU agent — whose projects belong
+    /// to a different organization: cross-org placements from before scoping,
+    /// or new ones the still-unscoped placement paths make. A delegated org
+    /// admin must not be able to take down another tenant's workloads or
+    /// strand its detached volumes, so destructive agent actions
+    /// (force-offline, deregister) fall back to system-admin only while any
+    /// foreign-org VM or volume lives here.
+    private func requireNoForeignWorkloads(_ req: Request, agent: Agent) async throws {
+        let user = try requireUser(req)
+        if user.isSystemAdmin { return }
+
+        let agentOrg = try await agent.rootOrganizationID(on: req.db)
+        let agentIDString = try agent.requireID().uuidString
+
+        let hostedVMs = try await VM.query(on: req.db)
+            .filter(\.$hypervisorId == agentIDString)
+            .with(\.$project)
+            .all()
+        for vm in hostedVMs {
+            let vmOrg = try await vm.project.getRootOrganizationId(on: req.db)
+            guard vmOrg == agentOrg else {
+                throw Abort(
+                    .forbidden,
+                    reason:
+                        "Agent hosts VMs belonging to another organization; only a system administrator can perform this action until they are migrated"
+                )
+            }
+        }
+
+        let storedVolumes = try await Volume.query(on: req.db)
+            .filter(\.$hypervisorId == agentIDString)
+            .with(\.$project)
+            .all()
+        for volume in storedVolumes {
+            let volumeOrg = try await volume.project.getRootOrganizationId(on: req.db)
+            guard volumeOrg == agentOrg else {
+                throw Abort(
+                    .forbidden,
+                    reason:
+                        "Agent stores volumes belonging to another organization; only a system administrator can perform this action until they are migrated"
+                )
+            }
         }
     }
 
@@ -118,10 +206,14 @@ struct AgentController: RouteCollection {
     }
 
     func createRegistrationToken(req: Request) async throws -> AgentRegistrationTokenResponse {
-        try requireSystemAdmin(req)
-
         let createRequest = try req.content.decode(CreateAgentRegistrationTokenRequest.self)
         try createRequest.validate()
+
+        // Resolve and authorize the owning scope before anything else: the
+        // token's org is what the redeeming agent becomes dedicated to.
+        let scope = try createRequest.organizationScope()
+        try await scope.validateExists(on: req.db)
+        try await requireManageAgents(req, scope: scope)
 
         // Check if agent name is already in use by an existing agent
         let existingAgent = try await Agent.query(on: req.db)
@@ -146,10 +238,36 @@ struct AgentController: RouteCollection {
         let expirationHours = createRequest.expirationHours ?? 1
 
         // Resolve the target site up front so a typo'd id fails the request
-        // instead of silently minting a site-less token.
+        // instead of silently minting a site-less token — and require it to
+        // belong to the token's organization: a site is one OVN deployment
+        // owned by one org, so a foreign agent joining it would mix tenants
+        // on a shared SDN. The caller also needs manage on the site itself
+        // (not just manage_agents on the token's scope): with agents and
+        // sites delegated to different OUs of one org, a token-carried site
+        // pin must not admit an agent into a sibling OU's fabric that the
+        // site membership endpoint would refuse.
         if let siteId = createRequest.siteId {
-            guard try await Site.find(siteId, on: req.db) != nil else {
+            guard let site = try await Site.find(siteId, on: req.db) else {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
+            }
+            guard let siteScope = site.organizationScope,
+                try await siteScope.contains(scope, on: req.db)
+            else {
+                throw Abort(
+                    .badRequest,
+                    reason: "Site \(siteId)'s organization scope does not contain the token's")
+            }
+            let user = try requireUser(req)
+            if !user.isSystemAdmin {
+                let allowed = try await req.spicedb.checkPermission(
+                    subject: user.id!.uuidString,
+                    permission: "manage",
+                    resource: "site",
+                    resourceId: siteId.uuidString
+                )
+                guard allowed else {
+                    throw Abort(.forbidden, reason: "You don't have 'manage' permission on site \(siteId)")
+                }
             }
         }
 
@@ -190,7 +308,8 @@ struct AgentController: RouteCollection {
             agentName: createRequest.agentName,
             expirationHours: expirationHours,
             spireProvisioned: spireProvisioning != nil,
-            siteID: createRequest.siteId
+            siteID: createRequest.siteId,
+            organizationScope: scope
         )
 
         do {
@@ -217,26 +336,53 @@ struct AgentController: RouteCollection {
     }
 
     func listRegistrationTokens(req: Request) async throws -> [AgentRegistrationTokenListItem] {
-        try requireSystemAdmin(req)
+        let user = try requireUser(req)
 
         let tokens = try await AgentRegistrationToken.query(on: req.db)
             .sort(\.$createdAt, .descending)
             .all()
 
+        // System admins see everything; org admins see the tokens scoped to
+        // orgs/OUs they hold manage_agents on. Scopeless tokens (rotated
+        // reconnect credentials, pre-scoping rows) stay system-admin only.
+        let visible: [AgentRegistrationToken]
+        if user.isSystemAdmin {
+            visible = tokens
+        } else {
+            var allowed: [AgentRegistrationToken] = []
+            for token in tokens {
+                guard let ref = token.organizationScope?.spiceDBParentRef else { continue }
+                let ok = try await req.spicedb.checkPermission(
+                    subject: user.id!.uuidString,
+                    permission: "manage_agents",
+                    resource: ref.subjectType,
+                    resourceId: ref.subjectId.uuidString
+                )
+                if ok { allowed.append(token) }
+            }
+            visible = allowed
+        }
+
         // Never echo the raw token (or a registration URL containing it) in a list
         // response — the plaintext value is shown exactly once, at creation time.
-        return try tokens.map { try AgentRegistrationTokenListItem(from: $0) }
+        return try visible.map { try AgentRegistrationTokenListItem(from: $0) }
     }
 
     func revokeRegistrationToken(req: Request) async throws -> HTTPStatus {
-        try requireSystemAdmin(req)
-
         guard let tokenId = req.parameters.get("tokenId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid token ID")
         }
 
         guard let token = try await AgentRegistrationToken.find(tokenId, on: req.db) else {
             throw Abort(.notFound, reason: "Registration token not found")
+        }
+
+        if let scope = token.organizationScope {
+            try await requireManageAgents(req, scope: scope)
+        } else {
+            // Scopeless tokens (rotated reconnect credentials) have no org to
+            // delegate to; revoking one severs a live agent's reconnect path.
+            try requireSystemAdmin(req)
         }
 
         // Revoking a token withdraws the whole provisioning grant — including
@@ -315,25 +461,43 @@ struct AgentController: RouteCollection {
     // MARK: - Agent Management
 
     func listAgents(req: Request) async throws -> [AgentResponse] {
-        try requireSystemAdmin(req)
+        let user = try requireUser(req)
 
         let agents = try await Agent.query(on: req.db)
             .sort(\.$createdAt, .descending)
             .all()
 
+        // System admins see the whole fleet; everyone else sees the agents
+        // they can view through agent#parent (their orgs'/OUs' capacity).
+        let visible: [Agent]
+        if user.isSystemAdmin {
+            visible = agents
+        } else {
+            var allowed: [Agent] = []
+            for agent in agents {
+                guard let agentId = agent.id else { continue }
+                let ok = try await req.spicedb.checkPermission(
+                    subject: user.id!.uuidString,
+                    permission: "view",
+                    resource: "agent",
+                    resourceId: agentId.uuidString
+                )
+                if ok { allowed.append(agent) }
+            }
+            visible = allowed
+        }
+
         // Update status based on heartbeat before returning
-        for agent in agents {
+        for agent in visible {
             agent.updateStatusBasedOnHeartbeat()
         }
 
-        try await agents.map { $0.save(on: req.db) }.flatten(on: req.eventLoop).get()
+        try await visible.map { $0.save(on: req.db) }.flatten(on: req.eventLoop).get()
 
-        return try agents.map { try AgentResponse(from: $0) }
+        return try visible.map { try AgentResponse(from: $0) }
     }
 
     func getAgent(req: Request) async throws -> AgentResponse {
-        try requireSystemAdmin(req)
-
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
@@ -341,6 +505,8 @@ struct AgentController: RouteCollection {
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
+
+        try await requireAgentPermission(req, agent: agent, permission: "view")
 
         agent.updateStatusBasedOnHeartbeat()
         try await agent.save(on: req.db)
@@ -349,8 +515,6 @@ struct AgentController: RouteCollection {
     }
 
     func deregisterAgent(req: Request) async throws -> HTTPStatus {
-        try requireSystemAdmin(req)
-
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
@@ -358,6 +522,9 @@ struct AgentController: RouteCollection {
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
+
+        try await requireAgentPermission(req, agent: agent, permission: "manage")
+        try await requireNoForeignWorkloads(req, agent: agent)
 
         // Never delete a site's designated network controller: the controller
         // reference deliberately has no FK (see CreateSite), so the site would
@@ -408,6 +575,28 @@ struct AgentController: RouteCollection {
         // Delete from database
         try await agent.delete(on: req.db)
 
+        // Drop the ownership tuple; a leftover would re-grant access if the
+        // UUID were ever reused. Best-effort — a failure leaves a tuple for a
+        // row that no longer exists, which grants nothing by itself.
+        if let ref = agent.organizationScope?.spiceDBParentRef {
+            try? await req.spicedb.deleteRelationship(
+                entity: "agent", entityId: agentId.uuidString,
+                relation: "parent",
+                subject: ref.subjectType, subjectId: ref.subjectId.uuidString)
+        }
+
+        // Deregistration severs the agent's credentials: delete its unused
+        // tokens (the rotated reconnect credential in particular). Left
+        // behind, the scopeless reconnect token would be revocable only by a
+        // system admin yet block minting a new token for this agent name via
+        // the duplicate-token guard — locking the name for up to 30 days.
+        // SPIRE entries for the name were already deprovisioned above, so
+        // these rows carry no external grant.
+        try await AgentRegistrationToken.query(on: req.db)
+            .filter(\.$agentName == agent.name)
+            .filter(\.$isUsed == false)
+            .delete()
+
         req.logger.info(
             "Deregistered agent",
             metadata: [
@@ -419,8 +608,6 @@ struct AgentController: RouteCollection {
     }
 
     func forceAgentOffline(req: Request) async throws -> HTTPStatus {
-        try requireSystemAdmin(req)
-
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
@@ -428,6 +615,9 @@ struct AgentController: RouteCollection {
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
+
+        try await requireAgentPermission(req, agent: agent, permission: "manage")
+        try await requireNoForeignWorkloads(req, agent: agent)
 
         // Force agent offline in in-memory registry
         await req.agentService.forceUnregisterAgent(agent.name)
@@ -444,5 +634,107 @@ struct AgentController: RouteCollection {
             ])
 
         return .noContent
+    }
+
+    // MARK: - Organization Reassignment
+
+    struct ReassignAgentOrganizationRequest: Content {
+        let organizationId: UUID?
+        let organizationalUnitId: UUID?
+    }
+
+    /// Moves an agent's dedicated capacity to another org/OU. System-admin
+    /// only: an org admin must not be able to pull another tenant's hardware
+    /// into their own org (or donate theirs away). Same drain invariants as a
+    /// token-driven move — no hosted VMs, not in a site.
+    func reassignOrganization(req: Request) async throws -> AgentResponse {
+        try requireSystemAdmin(req)
+
+        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid agent ID")
+        }
+        guard let agent = try await Agent.find(agentId, on: req.db) else {
+            throw Abort(.notFound, reason: "Agent not found")
+        }
+
+        let update = try req.content.decode(ReassignAgentOrganizationRequest.self)
+        guard
+            let scope = try OrganizationScope.from(
+                organizationID: update.organizationId, organizationalUnitID: update.organizationalUnitId)
+        else {
+            throw Abort(.badRequest, reason: "Either organizationId or organizationalUnitId is required")
+        }
+        try await scope.validateExists(on: req.db)
+
+        let previousScope = agent.organizationScope
+        let ref = scope.spiceDBParentRef
+        let parentTuple = RelationshipTuple(
+            entity: "agent",
+            entityId: agentId.uuidString,
+            relation: "parent",
+            subject: ref.subjectType,
+            subjectId: ref.subjectId.uuidString
+        )
+
+        if scope == previousScope {
+            // Re-touch the tuple so retrying after a partial failure below
+            // (DB committed, tuple write lost) converges instead of no-oping.
+            try await req.spicedb.touchRelationships([parentTuple])
+            return try AgentResponse(from: agent)
+        }
+
+        guard agent.$site.id == nil else {
+            throw Abort(
+                .conflict,
+                reason: "Agent belongs to a site; remove it from the site before changing its organization")
+        }
+        let hostedVMs = try await VM.query(on: req.db)
+            .filter(\.$hypervisorId == agentId.uuidString)
+            .count()
+        guard hostedVMs == 0 else {
+            throw Abort(
+                .conflict,
+                reason: "Agent hosts \(hostedVMs) VM(s); migrate or delete them before changing its organization")
+        }
+        // Detached volumes anchor the old org's data to this hardware the
+        // same way VMs do: moving the agent would strand them on foreign
+        // capacity (their operations still target this agent by
+        // hypervisorId) and block the new org's delegated admins behind the
+        // foreign-workload guard.
+        let storedVolumes = try await Volume.query(on: req.db)
+            .filter(\.$hypervisorId == agentId.uuidString)
+            .count()
+        guard storedVolumes == 0 else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent stores \(storedVolumes) volume(s); migrate or delete them before changing its organization"
+            )
+        }
+
+        // SpiceDB first, DB last: both tuple operations are idempotent
+        // (touch, and delete-if-present), so a failure at any step leaves the
+        // request retryable — whereas committing the DB first would make a
+        // retry short-circuit on the no-op path above with the tuples still
+        // pointing at the old org.
+        try await req.spicedb.touchRelationships([parentTuple])
+        if let oldRef = previousScope?.spiceDBParentRef {
+            try await req.spicedb.deleteRelationship(
+                entity: "agent", entityId: agentId.uuidString,
+                relation: "parent",
+                subject: oldRef.subjectType, subjectId: oldRef.subjectId.uuidString)
+        }
+
+        agent.organizationScope = scope
+        try await agent.save(on: req.db)
+
+        req.logger.info(
+            "Reassigned agent organization",
+            metadata: [
+                "agentId": .string(agentId.uuidString),
+                "agentName": .string(agent.name),
+            ])
+
+        return try AgentResponse(from: agent)
     }
 }

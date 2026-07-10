@@ -48,6 +48,14 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     private struct CreateTokenBody: Content {
         let agentName: String
         var expirationHours: Int? = nil
+        var organizationId: UUID? = nil
+    }
+
+    /// Tokens must carry an owning organization; mint one per test app.
+    private func makeOrg(on db: Database) async throws -> UUID {
+        let org = Organization(name: "SPIRE Org", description: "org for SPIRE tests")
+        try await org.save(on: db)
+        return try org.requireID()
     }
 
     // MARK: - Token creation
@@ -56,11 +64,12 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func createTokenProvisionsSPIRE() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
+            let orgId = try await makeOrg(on: app.db)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             try await app.test(.POST, "/api/agents/registration-tokens") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateTokenBody(agentName: "node-a", expirationHours: 2))
+                try req.content.encode(CreateTokenBody(agentName: "node-a", expirationHours: 2, organizationId: orgId))
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let response = try res.content.decode(AgentRegistrationTokenResponse.self)
@@ -110,13 +119,14 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func createTokenReusesExistingEntry() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
+            let orgId = try await makeOrg(on: app.db)
             let fake = FakeSPIREServerAPI()
             await fake.setEntryResult(.alreadyExists(entryID: "existing-entry"))
             installFakeSPIRE(on: app, fake: fake)
 
             try await app.test(.POST, "/api/agents/registration-tokens") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateTokenBody(agentName: "node-a"))
+                try req.content.encode(CreateTokenBody(agentName: "node-a", organizationId: orgId))
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let response = try res.content.decode(AgentRegistrationTokenResponse.self)
@@ -129,13 +139,14 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func createTokenFailsClosedWhenSPIREUnreachable() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
+            let orgId = try await makeOrg(on: app.db)
             let fake = FakeSPIREServerAPI()
             await fake.setFailJoinToken(true)
             installFakeSPIRE(on: app, fake: fake)
 
             try await app.test(.POST, "/api/agents/registration-tokens") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateTokenBody(agentName: "node-a"))
+                try req.content.encode(CreateTokenBody(agentName: "node-a", organizationId: orgId))
             } afterResponse: { res in
                 #expect(res.status == .badGateway)
             }
@@ -149,11 +160,12 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func createTokenRejectsInvalidSPIFFEName() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
+            let orgId = try await makeOrg(on: app.db)
             installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             try await app.test(.POST, "/api/agents/registration-tokens") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateTokenBody(agentName: "node/../evil"))
+                try req.content.encode(CreateTokenBody(agentName: "node/../evil", organizationId: orgId))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
@@ -167,10 +179,11 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func createTokenWithoutSPIRE() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
+            let orgId = try await makeOrg(on: app.db)
 
             try await app.test(.POST, "/api/agents/registration-tokens") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateTokenBody(agentName: "node-a"))
+                try req.content.encode(CreateTokenBody(agentName: "node-a", organizationId: orgId))
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let response = try res.content.decode(AgentRegistrationTokenResponse.self)

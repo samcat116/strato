@@ -4,6 +4,7 @@ metadata:
   name: {{ include "strato-control-plane.fullname" . }}
   labels:
     {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -19,3 +20,4 @@ spec:
     {{- end }}
   selector:
     {{- include "strato-control-plane.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
