@@ -104,7 +104,13 @@ var swiftSettings: [SwiftSetting] {
 // SwiftOVN: Linux only (OVN/OVS not available on macOS)
 #if os(Linux)
 var platformPackageDependencies: [Package.Dependency] {
-    [.package(url: "https://github.com/samcat116/swift-ovn.git", branch: "main")]
+    // Revision-pinned (not branch) so `swift package update` on macOS can't
+    // silently move the pin. Bump by editing this revision.
+    [
+        .package(
+            url: "https://github.com/samcat116/swift-ovn.git",
+            revision: "278d9f38cb5115da44bd6ec7d296f2ab356664eb")
+    ]
 }
 var qemuAndNetworkDependencies: [Target.Dependency] {
     [
