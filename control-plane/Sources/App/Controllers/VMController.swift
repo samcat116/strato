@@ -277,7 +277,9 @@ struct VMController: RouteCollection {
         }
 
         // Filter VMs based on user permissions
-        let allVMs = try await VM.query(on: req.db).with(\.$networkInterfaces).all()
+        let allVMs = try await VM.query(on: req.db)
+            .with(\.$networkInterfaces) { $0.with(\.$addresses) }
+            .all()
         var authorizedVMs: [VMDetailResponse] = []
 
         for vm in allVMs {
@@ -313,6 +315,9 @@ struct VMController: RouteCollection {
         let user = try req.auth.require(User.self)
         let vm = try await fetchVMWithPermission(req: req, user: user, permission: "read")
         try await vm.$networkInterfaces.load(on: req.db)
+        for interface in vm.networkInterfaces {
+            try await interface.$addresses.load(on: req.db)
+        }
 
         return VMDetailResponse(from: vm)
     }
@@ -581,12 +586,21 @@ struct VMController: RouteCollection {
                 let networkInterface = VMNetworkInterface(
                     vmID: vmID,
                     network: networkName,
-                    macAddress: VMNetworkInterface.generateMACAddress(),
-                    ipAddress: allocation?.ipAddress,
-                    netmask: allocation?.netmask,
-                    gateway: networkGateway
+                    macAddress: VMNetworkInterface.generateMACAddress()
                 )
                 try await networkInterface.save(on: db)
+
+                if let allocation {
+                    let address = VMInterfaceAddress(
+                        interfaceID: try networkInterface.requireID(),
+                        network: networkName,
+                        family: .ipv4,
+                        address: allocation.ipAddress,
+                        prefixLength: allocation.prefixLength,
+                        gateway: networkGateway
+                    )
+                    try await address.save(on: db)
+                }
 
                 // The pending create operation is the client's handle on the
                 // asynchronous agent work that follows (issue #259).

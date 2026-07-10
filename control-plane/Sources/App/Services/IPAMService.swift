@@ -15,6 +15,7 @@ enum IPAMService {
     struct Allocation: Equatable {
         let ipAddress: String
         let netmask: String
+        let prefixLength: Int
     }
 
     enum IPAMError: Error, LocalizedError, Equatable {
@@ -41,10 +42,11 @@ enum IPAMService {
 
     /// Allocates the lowest free host address in `network`'s subnet.
     static func allocateIP(for network: LogicalNetwork, on db: Database) async throws -> Allocation {
-        let used = try await VMNetworkInterface.query(on: db)
+        let used = try await VMInterfaceAddress.query(on: db)
             .filter(\.$network == network.name)
+            .filter(\.$family == IPFamily.ipv4.rawValue)
             .all()
-            .compactMap { $0.ipAddress.flatMap(parseIPv4) }
+            .compactMap { parseIPv4($0.address) }
 
         return try allocateIP(
             networkName: network.name,
@@ -81,7 +83,8 @@ enum IPAMService {
         for candidate in (networkAddress + 1)..<broadcastAddress {
             if candidate == gatewayValue { continue }
             if used.contains(candidate) { continue }
-            return Allocation(ipAddress: formatIPv4(candidate), netmask: formatIPv4(mask))
+            return Allocation(
+                ipAddress: formatIPv4(candidate), netmask: formatIPv4(mask), prefixLength: prefix)
         }
 
         throw IPAMError.poolExhausted(network: networkName, subnet: subnet)
