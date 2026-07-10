@@ -154,6 +154,21 @@ tolerations: []
 
 affinity: {}
 
+# Extra environment variables for the control-plane container (also applied to
+# the migration Job, which boots the same app). Standard container-env entries,
+# rendered through tpl. Use this for settings without a dedicated chart value,
+# e.g. SSF_*, AUDIT_*, RATE_LIMIT_*, SCHEDULING_STRATEGY, IMAGE_STORAGE_PATH,
+# STRATO_DEFAULT_NETWORK_*, REQUEST_LOGGING.
+# extraEnv:
+#   - name: SCHEDULING_STRATEGY
+#     value: best_fit
+#   - name: AUDIT_WEBHOOK_URL
+#     valueFrom:
+#       secretKeyRef:
+#         name: audit-webhook
+#         key: url
+extraEnv: []
+
 # Strato Control Plane configuration
 strato:
   logLevel: info
@@ -205,6 +220,21 @@ strato:
   # External hostname for the control plane (used for WebSocket connections from agents)
   # When empty, will use the first ingress hostname or service name
   externalHostname: ""
+
+  # Base URL used for OIDC issuer and redirect URIs. Leave empty to use the
+  # resolved WebAuthn origin (recommended — browsers must reach both at the
+  # same URL); set only when OIDC is served from a different public URL.
+  baseUrl: ""
+
+  # URL agents use to fetch signed image-download links. Leave empty to use
+  # the resolved WebAuthn origin; set explicitly when agents reach the control
+  # plane at a different address than browsers do (e.g. an internal LB).
+  controlPlaneUrl: ""
+
+  # Loki base URL for VM console-log queries in the UI (e.g.
+  # "http://loki.observability:3100"). Empty disables Loki-backed log viewing;
+  # the chart does not deploy Loki itself.
+  lokiEndpoint: ""
 
   # Force the Secure session cookie + HSTS on/off. Leave null to auto-detect from
   # the WebAuthn origin scheme (https:// -> true). Set true when TLS is terminated
@@ -395,7 +425,6 @@ monitoring:
 opentelemetry:
   enabled: true
   serviceName: strato-control-plane
-  serviceVersion: 1.0.0
 
   # Enable/disable individual signals
   metrics:
@@ -596,6 +625,10 @@ spire:
     bundleRefreshInterval: 300
     # Require client certificates
     requireClientCert: true
+    # SPIRE server gRPC API address (host:port) for join-token provisioning
+    # and entry revocation. Leave empty to use this chart's SPIRE server
+    # Service; set only when the SPIRE server runs elsewhere.
+    serverApiAddress: ""
 
   # Envoy sidecar configuration for mTLS termination
   envoy:
