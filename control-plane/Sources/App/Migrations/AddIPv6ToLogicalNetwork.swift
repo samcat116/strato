@@ -50,10 +50,12 @@ struct AddIPv6ToLogicalNetwork: AsyncMigration {
         let subnet6: IPv6CIDR
         if let configured = Environment.get("STRATO_DEFAULT_NETWORK_SUBNET6") {
             // Validate here, where the failure is a clear startup error naming
-            // the bad env var (same rationale as CreateLogicalNetwork).
+            // the bad env var (same rationale as CreateLogicalNetwork). Same
+            // rules as validateAddressing6: judge the masked network address,
+            // and reject non-routable prefixes including the unspecified ::/64.
             guard let parsed = IPv6CIDR(configured), parsed.prefix == 64,
-                !parsed.base.isMulticast, !parsed.base.isLinkLocal,
-                !parsed.base.isLoopback
+                !parsed.networkAddress.isMulticast, !parsed.networkAddress.isLinkLocal,
+                !parsed.networkAddress.isLoopback, !parsed.networkAddress.isUnspecified
             else {
                 throw Abort(
                     .internalServerError,

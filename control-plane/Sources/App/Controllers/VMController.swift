@@ -555,8 +555,18 @@ struct VMController: RouteCollection {
             // poisons the whole Postgres transaction, so the retry wraps the
             // transaction (not the insert): the loser re-reads the used set
             // and allocates the next free address.
+            let initialGeneration = vm.generation
             operation = try await Self.retryingOnConstraintFailure {
-                try await req.db.transaction { db in
+                // A retried attempt reuses this model after its insert was
+                // rolled back: Fluent recorded the generated id and marked the
+                // model as existing, so saving again would UPDATE a row that no
+                // longer exists (and the failed attempt's setDesiredStatus
+                // already bumped the generation). Reset both so every attempt
+                // starts as a fresh insert.
+                vm.id = nil
+                vm.$id.exists = false
+                vm.generation = initialGeneration
+                return try await req.db.transaction { db in
                     // Enforce and reserve applicable project/OU/org quotas before the VM row
                     // exists. Throws Abort(.forbidden) naming the quota if it would be exceeded.
                     try await QuotaEnforcementService.reserve(
