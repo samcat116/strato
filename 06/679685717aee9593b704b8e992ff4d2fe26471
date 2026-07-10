@@ -1,0 +1,114 @@
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 51-58,67,72,122,129,142,149,163,168,182,186
+helm/strato-control-plane/templates/spire-server-statefulset.yaml
+  s_c0acd110d509fb::t_26efefdcddd7d9 88-94
+spicedb/schema.zed
+  s_c0acd110d509fb::t_26efefdcddd7d9 42,67-85
+control-plane/Sources/App/configure.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 320-323,347-348
+  s_c0acd110d509fb::t_99bd0875d1c27c 324
+control-plane/Sources/App/Migrations/AddOrganizationScopeToInfra.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 1-58
+control-plane/Sources/App/Models/Site.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 39-48,57-63,68-87,98-99,107-108,116-118
+helm/strato-control-plane/values.yaml
+  s_c0acd110d509fb::t_26efefdcddd7d9 157-171,224-238,249-252,254,267-270,275,283,398-400,412-415,569-572,575-577,631-634
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_c0acd110d509fb::t_26efefdcddd7d9 1-286
+Taskfile.yml
+  s_c0acd110d509fb::t_26efefdcddd7d9 1007-1009,1011,1018-1019
+helm/strato-control-plane/templates/spire-db-init-job.yaml
+  s_c0acd110d509fb::t_26efefdcddd7d9 1-87
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 1-717
+control-plane/Sources/App/Services/AgentService.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 163-173,175,177-178,185-196,208,227-242,248-278,312-327,343-371
+  s_c0acd110d509fb::t_77cff489e15468 372-373
+control-plane/web/src/lib/api/sites.ts
+  s_c0acd110d509fb::t_26efefdcddd7d9 1-30
+control-plane/Sources/App/Services/AgentService+Types.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 25,47-50
+helm/strato-control-plane/templates/networkpolicy.yaml
+  s_c0acd110d509fb::t_26efefdcddd7d9 12,74-102,126
+control-plane/web/src/components/agents/agent-table.tsx
+  s_c0acd110d509fb::t_26efefdcddd7d9 13,22-36,61,85
+control-plane/web/src/types/api.ts
+  s_c0acd110d509fb::t_26efefdcddd7d9 236-238,275-276,281-297,426-428
+helm/strato-control-plane/templates/service.yaml
+  s_c0acd110d509fb::t_26efefdcddd7d9 7,22-23
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 66-82,138-143,145,148-153
+  s_c0acd110d509fb::t_967d12fa0054da 154
+helm/strato-control-plane/templates/deployment.yaml
+  s_c0acd110d509fb::t_26efefdcddd7d9 7,13-16,27,177-193,212-217,269-274
+helm/strato-control-plane/templates/poddisruptionbudget.yaml
+  s_c0acd110d509fb::t_26efefdcddd7d9 18
+helm/strato-control-plane/templates/spire-server-configmap.yaml
+  s_c0acd110d509fb::t_26efefdcddd7d9 39-46
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 35-38,371,373-379,452,456-457,500-512,539-540,542-551
+control-plane/Sources/App/Models/AgentRegistrationToken.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 31-42,60-61,69-70,74-81,177-178,192-193,203-204,206-220,236-237
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 19-22,27-32,36-40,46-124,212-217,241-248,250,253-271,311-312,339,345-365,368,380-387,464,470-489,491,495,497,509-510,526-528,578-599,619-621,638-739
+helm/strato-control-plane/files/spicedb-schema.zed
+  s_c0acd110d509fb::t_26efefdcddd7d9 1-268
+control-plane/Sources/App/Models/OrganizationScope.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 1-106
+docs/deployment/agents.md
+  s_c0acd110d509fb::t_26efefdcddd7d9 69-72
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_c0acd110d509fb::t_26efefdcddd7d9 16-22,24,39,43-45,59-64,70,289-315
+  s_c0acd110d509fb::t_bd6b2e94bd01eb 316
+control-plane/web/src/components/layout/nav.ts
+  s_c0acd110d509fb::t_26efefdcddd7d9 14,39
+control-plane/Sources/App/Migrations/BackfillInfraOrganizationScope.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 1-53
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 23-25,29-80,95,97-115,119-121,127-135,141,149-156,162,213,229-237,243,250,253-265,307,315
+CLAUDE.md
+  s_c0acd110d509fb::t_26efefdcddd7d9 30-31
+control-plane/Sources/App/Services/SpiceDBInfraReconciliation.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 1-64
+.github/workflows/helm-test.yml
+  s_c0acd110d509fb::t_26efefdcddd7d9 11-13,19,55-63,157-162,183-208
+control-plane/Sources/App/Models/Agent.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 79-88,206-225,242-243,264-265
+control-plane/Sources/App/Services/SpiceDBSchemaBootstrap.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 10-17,24-25,27-34,41-53
+  s_c0acd110d509fb::t_e155e5aae423e4 54-55
+control-plane/Tests/AppTests/AgentWebSocketIntegrationTests.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 23-29,36-38,97-104,127-128,130,142-144
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 78-81
+control-plane/Tests/AppTests/ReplicaRoutingTests.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 164-175
+control-plane/Tests/AppTests/SiteTests.swift
+  s_c0acd110d509fb::t_26efefdcddd7d9 56-58,77-80,84-92,109-110,114-117,123,127,130-143,161,189,220,239,253,269-270,297-298,325-326,328-329,336-339,343-345,355,477,517,534
+helm/strato-control-plane/templates/configmap.yaml
+  s_c0acd110d509fb::t_26efefdcddd7d9 8-13,15
+.github/workflows/build.yaml
+  s_c0acd110d509fb::t_26efefdcddd7d9 202-213,237-240,243-244,254-258,260-262,265-267,285
+helm/strato-control-plane/templates/migration-job.yaml
+  s_c0acd110d509fb::t_26efefdcddd7d9 82-87
+helm/strato-control-plane/templates/prometheus-configmap.yaml
+  s_c0acd110d509fb::t_26efefdcddd7d9 37-39
+helm/strato-control-plane/templates/spicedb-schema-job.yaml
+  s_c0acd110d509fb::t_26efefdcddd7d9 35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "06679685717aee9593b704b8e992ff4d2fe26471",
+  "prompts": {},
+  "sessions": {
+    "s_c0acd110d509fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6695b3a-3d82-40a8-b418-a286fbf9d4a1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
