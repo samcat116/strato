@@ -93,6 +93,24 @@ jobs:
           [ -d Public ] && cp -R Public ../artifacts/control-plane/ || true
           [ -d Resources ] && cp -R Resources ../artifacts/control-plane/ || true
 
+      - name: Build Agent Release Binary
+        working-directory: agent
+        run: |
+          swift build -c release --product StratoAgent -Xlinker -ljemalloc
+          mkdir -p ../artifacts/agent/bin
+          mkdir -p ../artifacts/agent/resources
+          cp "$(swift build -c release --show-bin-path)/StratoAgent" ../artifacts/agent/bin/
+          # Copy swift-backtrace (try multiple possible locations)
+          if [ -f "/usr/lib/swift/linux/swift-backtrace-static" ]; then
+            cp "/usr/lib/swift/linux/swift-backtrace-static" ../artifacts/agent/bin/
+          elif [ -f "/usr/libexec/swift/linux/swift-backtrace-static" ]; then
+            cp "/usr/libexec/swift/linux/swift-backtrace-static" ../artifacts/agent/bin/
+          else
+            echo "Warning: swift-backtrace-static not found, skipping"
+          fi
+          # Copy resources
+          find -L "$(swift build -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/agent/resources/ \; || true
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -155,6 +173,7 @@ jobs:
           {
             echo "cp=${REPO}-control-plane:main,${REPO}-control-plane:main-${SHA}"
             echo "fe=${REPO}-frontend:main,${REPO}-frontend:main-${SHA}"
+            echo "agent=${REPO}-agent:main,${REPO}-agent:main-${SHA}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Build Control Plane Docker Image
@@ -170,6 +189,22 @@ jobs:
           cache-to: type=gha,mode=max,key=control-plane-${{ matrix.arch }}
           build-args: |
             PREBUILT_ARTIFACTS=artifacts/control-plane
+
+      # Hypervisor hosts pull this image directly (docs/deployment/agents.md),
+      # so it publishes alongside the control plane with the same tagging.
+      - name: Build Agent Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./agent/Dockerfile
+          push: ${{ matrix.arch == 'x64' }}
+          load: ${{ matrix.arch != 'x64' }}
+          platforms: ${{ matrix.arch == 'x64' && 'linux/amd64' || 'linux/arm64' }}
+          tags: ${{ matrix.arch == 'x64' && steps.tags.outputs.agent || 'strato-agent:latest' }}
+          cache-from: type=gha,key=agent-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,key=agent-${{ matrix.arch }}
+          build-args: |
+            PREBUILT_ARTIFACTS=artifacts/agent
 
       # Frontend builds from source inside its Dockerfile (bun), so it needs no
       # prebuilt artifacts. Publish amd64 only, alongside the control plane.
