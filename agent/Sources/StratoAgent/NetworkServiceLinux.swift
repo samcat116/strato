@@ -926,7 +926,15 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// answer). A nil member leaves the guest on the static cloud-init path
     /// for that family.
     private func resolveDHCPOptions(for config: VMNetworkConfig) async throws -> (v4: String?, v6: String?) {
-        guard config.dhcpEnabled else { return (nil, nil) }
+        guard config.dhcpEnabled else {
+            // DHCP was turned off for the network: delete its managed
+            // DHCP_Options rows. The port columns are weak refs in the OVN
+            // schema, so the deletion clears the binding on every port of the
+            // network at once — a port update cannot do it (the row encoder
+            // omits nil fields, so nil can never overwrite a stale binding).
+            try await removeDHCPOptions(networkName: config.networkName)
+            return (nil, nil)
+        }
 
         let v4: String?
         if let subnet = config.subnet, let gateway = config.gateway {
@@ -950,6 +958,25 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         }
 
         return (v4, v6)
+    }
+
+    /// Deletes every strato-managed `DHCP_Options` row stamped with this
+    /// network's name (both families, and any stale-subnet leftovers).
+    /// Matching by the external-id rather than CIDR means renumbered networks
+    /// are cleaned up too, and rows other networks own are never touched.
+    private func removeDHCPOptions(networkName: String) async throws {
+        guard let ovnManager else { return }
+        for row in try await ovnManager.getDHCPOptions()
+        where row.external_ids?["network-name"] == networkName
+            && row.external_ids?[Self.managedKey] == Self.managedValue
+        {
+            if let uuid = row.uuid {
+                try await ovnManager.deleteDHCPOptions(uuid: uuid)
+                logger.info(
+                    "Removed DHCP options for network with DHCP disabled",
+                    metadata: ["network": .string(networkName), "cidr": .string(row.cidr)])
+            }
+        }
     }
 
     /// Find-or-update the `DHCP_Options` row for `subnet` and return its UUID.
