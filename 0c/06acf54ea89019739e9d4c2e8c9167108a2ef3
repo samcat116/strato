@@ -1,0 +1,25 @@
+helm/strato-control-plane/values.yaml
+  s_f7434472ebe405::t_26496400b674dc 572-575,578-580
+helm/strato-control-plane/templates/spire-server-statefulset.yaml
+  s_f7434472ebe405::t_8ee881ab0893b6 88-94
+helm/strato-control-plane/templates/spire-db-init-job.yaml
+  s_f7434472ebe405::t_f1f84da6527bde 1-87
+helm/strato-control-plane/templates/spire-server-configmap.yaml
+  s_f7434472ebe405::t_78cd3ac7b598b1 39-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "0c06acf54ea89019739e9d4c2e8c9167108a2ef3",
+  "prompts": {},
+  "sessions": {
+    "s_f7434472ebe405": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "05768f38-36f7-4f4a-b281-20e830e6ac01",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
