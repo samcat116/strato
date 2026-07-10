@@ -979,10 +979,22 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         }
     }
 
-    /// Find-or-update the `DHCP_Options` row for `subnet` and return its UUID.
-    /// Idempotent across restarts and reconvergence: an existing row for the
-    /// same CIDR is updated in place (so DNS/lease edits converge) rather than
-    /// duplicated.
+    /// Whether a `DHCP_Options` row is the one this network owns for `cidr`.
+    /// Rows are matched by (managed, network-name, cidr), never CIDR alone:
+    /// two networks may legitimately use the same prefix (overlap checks are
+    /// project-scoped), and sharing a row would bleed DNS/search settings
+    /// between them — and let one network's DHCP-disable delete the other's
+    /// row. Operator-created rows (no managed marker) are never adopted.
+    private static func isOwnDHCPRow(_ row: OVNDHCPOptions, networkName: String, cidr: String) -> Bool {
+        row.cidr == cidr
+            && row.external_ids?["network-name"] == networkName
+            && row.external_ids?[managedKey] == managedValue
+    }
+
+    /// Find-or-update this network's `DHCP_Options` row for `subnet` and
+    /// return its UUID. Idempotent across restarts and reconvergence: the
+    /// network's existing row for the same CIDR is updated in place (so
+    /// DNS/lease edits converge) rather than duplicated.
     private func ensureDHCPOptions(
         networkName: String, subnet: String, gateway: String,
         dnsServers: [String], domainName: String?, leaseTime: Int?
@@ -995,9 +1007,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             subnet: subnet)
         let dhcp = OVNDHCPOptions(
             cidr: subnet, options: options,
-            external_ids: ["network-name": networkName, "strato-managed": "true"])
+            external_ids: ["network-name": networkName, Self.managedKey: Self.managedValue])
 
-        if let existing = try await ovnManager.getDHCPOptions().first(where: { $0.cidr == subnet }),
+        if let existing = try await ovnManager.getDHCPOptions()
+            .first(where: { Self.isOwnDHCPRow($0, networkName: networkName, cidr: subnet) }),
             let uuid = existing.uuid
         {
             if existing.options != options {
@@ -1022,9 +1035,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             dnsServers: dnsServers, domainName: domainName, subnet6: subnet6)
         let dhcp = OVNDHCPOptions(
             cidr: subnet6, options: options,
-            external_ids: ["network-name": networkName, "strato-managed": "true"])
+            external_ids: ["network-name": networkName, Self.managedKey: Self.managedValue])
 
-        if let existing = try await ovnManager.getDHCPOptions().first(where: { $0.cidr == subnet6 }),
+        if let existing = try await ovnManager.getDHCPOptions()
+            .first(where: { Self.isOwnDHCPRow($0, networkName: networkName, cidr: subnet6) }),
             let uuid = existing.uuid
         {
             if existing.options != options {
