@@ -93,6 +93,16 @@ else
   HAVE_SYSTEMD=0
 fi
 
+# Fail fast on a stale agent config. The config step below only writes
+# config.toml when it is absent, so a leftover file without a [spiffe] section
+# (e.g. from an earlier token-join onboarding) would silently leave the agent
+# connecting with no client certificate — the mTLS handshake then fails at the
+# proxy with an opaque TLS error. Make the operator resolve it explicitly,
+# before we start spire-agent.
+if [ -f "$STRATO_CONF_DIR/config.toml" ] && ! grep -q '^\[spiffe\]' "$STRATO_CONF_DIR/config.toml"; then
+  die "$STRATO_CONF_DIR/config.toml exists but has no [spiffe] section (it predates SPIFFE onboarding). Remove it (sudo rm $STRATO_CONF_DIR/config.toml) and re-run, or add a [spiffe] block manually."
+fi
+
 # --- spire-agent -------------------------------------------------------------
 
 mkdir -p "$SPIRE_CONF_DIR" "$SPIRE_DATA_DIR" "$SPIRE_SOCKET_DIR" "$STRATO_CONF_DIR"
@@ -184,7 +194,7 @@ workload_api_socket_path = "$SPIRE_SOCKET"
 source_type = "workload_api"
 EOF
 else
-  log "$STRATO_CONF_DIR/config.toml already exists; leaving it in place (ensure control_plane_url and [spiffe] are set)"
+  log "$STRATO_CONF_DIR/config.toml already exists with a [spiffe] section; leaving it in place"
 fi
 
 if [ "$HAVE_SYSTEMD" -eq 1 ]; then

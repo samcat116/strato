@@ -94,6 +94,7 @@ public enum SPIREServerAPIError: Error, LocalizedError {
     case unreachable(String)
     case requestFailed(String)
     case notFound(String)
+    case invalidArgument(String)
     case invalidSPIFFEID(String)
 
     public var errorDescription: String? {
@@ -106,6 +107,8 @@ public enum SPIREServerAPIError: Error, LocalizedError {
             return "SPIRE server request failed: \(details)"
         case .notFound(let details):
             return "SPIRE server reports no such resource: \(details)"
+        case .invalidArgument(let details):
+            return "SPIRE server rejected the argument: \(details)"
         case .invalidSPIFFEID(let id):
             return "Invalid SPIFFE ID: \(id)"
         }
@@ -362,6 +365,8 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
                 throw SPIREServerAPIError.unreachable("\(descriptor.method): \(error.message)")
             case .notFound:
                 throw SPIREServerAPIError.notFound("\(descriptor.method): \(error.message)")
+            case .invalidArgument:
+                throw SPIREServerAPIError.invalidArgument("\(descriptor.method): \(error.message)")
             default:
                 throw SPIREServerAPIError.requestFailed("\(descriptor.method): \(error.code) \(error.message)")
             }
