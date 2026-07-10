@@ -75,7 +75,10 @@ final class DesiredStateReconciliationTests {
             ),
             protocolVersion: protocolVersion
         )
-        let agentUUID = try await app.agentService.registerAgent(message, agentName: agentName)
+        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let agentUUID = try await app.agentService.registerAgent(
+            message, agentName: agentName,
+            organizationScope: orgID.map { .organization($0) })
         vm.hypervisorId = agentUUID.uuidString
         try await vm.save(on: app.db)
         return agentUUID.uuidString

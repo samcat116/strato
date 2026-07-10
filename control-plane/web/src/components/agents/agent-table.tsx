@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AgentStatusBadge } from "./agent-status-badge";
+import { useOrganization } from "@/providers/organization-provider";
 import type { Agent } from "@/types/api";
 
 interface AgentTableProps {
@@ -18,6 +19,21 @@ interface AgentTableProps {
 }
 
 export function AgentTable({ agents, isLoading }: AgentTableProps) {
+  const { organizations } = useOrganization();
+
+  // Agents are dedicated to an org (or an OU within one); resolve names for
+  // orgs the viewer can see, fall back to a shortened id otherwise.
+  const ownerLabel = (agent: Agent) => {
+    if (agent.organizationId) {
+      const org = organizations.find((o) => o.id === agent.organizationId);
+      return org?.name ?? `${agent.organizationId.slice(0, 8)}…`;
+    }
+    if (agent.organizationalUnitId) {
+      return `OU ${agent.organizationalUnitId.slice(0, 8)}…`;
+    }
+    return "—";
+  };
+
   if (isLoading) {
     return (
       <div className="space-y-2">
@@ -42,6 +58,7 @@ export function AgentTable({ agents, isLoading }: AgentTableProps) {
         <TableRow className="border-border hover:bg-transparent">
           <TableHead className="text-muted-foreground font-medium">Name</TableHead>
           <TableHead className="text-muted-foreground font-medium">Status</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Organization</TableHead>
           <TableHead className="text-muted-foreground font-medium">Hostname</TableHead>
           <TableHead className="text-muted-foreground font-medium">CPU</TableHead>
           <TableHead className="text-muted-foreground font-medium">Memory</TableHead>
@@ -65,6 +82,7 @@ export function AgentTable({ agents, isLoading }: AgentTableProps) {
                 status={agent.isOnline ? "online" : "offline"}
               />
             </TableCell>
+            <TableCell className="text-foreground/80">{ownerLabel(agent)}</TableCell>
             <TableCell className="text-foreground/80">{agent.hostname}</TableCell>
             <TableCell className="text-foreground/80">
               {agent.resources.availableCPU} / {agent.resources.totalCPU} cores

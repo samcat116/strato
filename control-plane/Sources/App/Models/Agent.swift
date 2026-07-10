@@ -76,6 +76,16 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "wire_protocol_version")
     var wireProtocolVersion: Int?
 
+    /// Owning organization (exactly one of organization / organizational unit;
+    /// see `organizationScope`). Agents are dedicated capacity: the scheduler
+    /// only places a VM on an agent whose root organization matches the VM's.
+    /// Assigned via the registration token, durable on the row afterwards.
+    @OptionalParent(key: "organization_id")
+    var organization: Organization?
+
+    @OptionalParent(key: "organizational_unit_id")
+    var organizationalUnit: OrganizationalUnit?
+
     init() {}
 
     init(
@@ -193,6 +203,26 @@ extension Agent {
             status = .offline
         }
     }
+
+    /// The agent's org-or-OU owner; nil only for rows that predate mandatory
+    /// scoping and were never backfilled (a fresh install has none).
+    var organizationScope: OrganizationScope? {
+        get {
+            if let orgID = self.$organization.id { return .organization(orgID) }
+            if let ouID = self.$organizationalUnit.id { return .organizationalUnit(ouID) }
+            return nil
+        }
+        set {
+            self.$organization.id = newValue?.organizationID
+            self.$organizationalUnit.id = newValue?.organizationalUnitID
+        }
+    }
+
+    /// The root organization the agent is dedicated to (OU scope resolves to
+    /// its owning org). Placement compares this against the VM project's root.
+    func rootOrganizationID(on db: Database) async throws -> UUID? {
+        try await organizationScope?.rootOrganizationID(on: db)
+    }
 }
 
 // MARK: - DTO for API responses
@@ -209,6 +239,8 @@ struct AgentResponse: Content {
     let hypervisors: [HypervisorSupport]
     let networkCapability: NetworkCapability?
     let siteId: UUID?
+    let organizationId: UUID?
+    let organizationalUnitId: UUID?
     let lastHeartbeat: Date?
     let createdAt: Date?
     let isOnline: Bool
@@ -229,6 +261,8 @@ struct AgentResponse: Content {
         self.hypervisors = agent.hypervisors
         self.networkCapability = agent.networkCapability.flatMap(NetworkCapability.init(rawValue:))
         self.siteId = agent.$site.id
+        self.organizationId = agent.$organization.id
+        self.organizationalUnitId = agent.$organizationalUnit.id
         self.lastHeartbeat = agent.lastHeartbeat
         self.createdAt = agent.createdAt
         self.isOnline = agent.isOnline

@@ -175,10 +175,18 @@ actor AgentService {
 
     /// Registers an agent and returns its database UUID.
     ///
-    /// `siteID` is the site carried by the redeemed registration token, if any.
-    /// Non-nil assigns (or moves) the agent; nil never clears — the assignment
-    /// is durable on the agent row, and rotated reconnect tokens don't carry it.
-    func registerAgent(_ message: AgentRegisterMessage, agentName: String, siteID: UUID? = nil) async throws -> UUID {
+    /// `siteID` and `organizationScope` are carried by the redeemed
+    /// registration token, if any. Non-nil assigns (or moves) the agent; nil
+    /// never clears — both assignments are durable on the agent row, and
+    /// rotated reconnect tokens don't carry them. A *new* agent must arrive
+    /// with an organization scope: agents are dedicated capacity, and an
+    /// unowned agent would be invisible to every org and schedulable by no one.
+    func registerAgent(
+        _ message: AgentRegisterMessage,
+        agentName: String,
+        siteID: UUID? = nil,
+        organizationScope: OrganizationScope? = nil
+    ) async throws -> UUID {
         // The imperative message path is gone (issue #261): an agent that
         // cannot be driven by desired-state syncs would register successfully
         // and then never converge anything — every operation would time out
@@ -190,6 +198,7 @@ actor AgentService {
         }
 
         let db = app.db
+        var organizationScope = organizationScope
 
         // Find existing agent or create new one
         let agent: Agent
@@ -208,9 +217,56 @@ actor AgentService {
             agent.updateResources(message.resources)
             agent.status = .online
         } else {
+            if organizationScope == nil {
+                // mTLS-authenticated agents never redeem the WebSocket token
+                // (they authenticate by SVID), so their scope can't arrive via
+                // token redemption. Their minting flow still created a token
+                // row for the name — read the scope from the newest valid one.
+                organizationScope = try await AgentRegistrationToken.query(on: db)
+                    .filter(\.$agentName == agentName)
+                    .sort(\.$createdAt, .descending)
+                    .all()
+                    .first { $0.organizationScope != nil && ($0.isValid || $0.isUsed) }?
+                    .organizationScope
+            }
+            guard organizationScope != nil else {
+                Telemetry.agentRegistrationFailed(reason: "missing_organization_scope")
+                throw AgentServiceError.missingOrganizationScope(agentName: agentName)
+            }
             // Create new agent
             agent = Agent.from(registration: message, name: agentName)
             agent.status = .online
+        }
+
+        let previousScope = agent.organizationScope
+        if let organizationScope, previousScope != organizationScope {
+            // A token-driven org change moves dedicated capacity between
+            // tenants, so it must honor the same drain invariant as a site
+            // change: never move an agent that still hosts VMs (they belong to
+            // the old org's projects and would be stranded on foreign
+            // hardware). An agent assigned to a site can't change org either —
+            // the site's whole OVN deployment belongs to one org. Refusals are
+            // logged, not fatal; the agent registers with its previous scope.
+            var refusalReason: String?
+            if let agentID = agent.id {
+                if agent.$site.id != nil {
+                    refusalReason = "agent belongs to a site; remove it from the site first"
+                } else {
+                    let hostedVMs = try await VM.query(on: db)
+                        .filter(\.$hypervisorId == agentID.uuidString)
+                        .count()
+                    if hostedVMs > 0 {
+                        refusalReason = "agent hosts \(hostedVMs) VM(s); drain it first"
+                    }
+                }
+            }
+            if let refusalReason {
+                app.logger.error(
+                    "Ignoring registration-token organization assignment: \(refusalReason)",
+                    metadata: ["agentName": .string(agentName)])
+            } else {
+                agent.organizationScope = organizationScope
+            }
         }
 
         // Persisted so sync assembly (which may run on any replica, from
@@ -246,6 +302,15 @@ actor AgentService {
                     }
                 }
             }
+            // A site is one OVN deployment owned by one org; an agent from a
+            // different org joining it would mix tenants on a shared SDN.
+            if refusalReason == nil {
+                let siteOrg = try await Site.find(siteID, on: db)?.rootOrganizationID(on: db)
+                let agentOrg = try await agent.rootOrganizationID(on: db)
+                if siteOrg != agentOrg {
+                    refusalReason = "site belongs to a different organization than the agent"
+                }
+            }
             if let refusalReason {
                 app.logger.error(
                     "Ignoring registration-token site assignment: \(refusalReason)",
@@ -259,6 +324,37 @@ actor AgentService {
 
         guard let agentUUID = agent.id else {
             throw AgentServiceError.invalidResponse("Failed to get agent ID after save")
+        }
+
+        // Mirror the agent's owner into SpiceDB so org admins can see and
+        // manage it (`agent#parent`). Failure is logged, not fatal: scheduling
+        // works from the database row alone, system admins retain access, and
+        // the startup backfill (`backfillInfraParentRelationships`) heals the
+        // tuple on the next boot.
+        if let scope = agent.organizationScope, scope != previousScope {
+            do {
+                if let old = previousScope, old != scope {
+                    let oldRef = old.spiceDBParentRef
+                    try await app.spicedb.deleteRelationship(
+                        entity: "agent", entityId: agentUUID.uuidString,
+                        relation: "parent",
+                        subject: oldRef.subjectType, subjectId: oldRef.subjectId.uuidString)
+                }
+                let ref = scope.spiceDBParentRef
+                try await app.spicedb.touchRelationships([
+                    RelationshipTuple(
+                        entity: "agent",
+                        entityId: agentUUID.uuidString,
+                        relation: "parent",
+                        subject: ref.subjectType,
+                        subjectId: ref.subjectId.uuidString
+                    )
+                ])
+            } catch {
+                app.logger.error(
+                    "Failed to write agent#parent SpiceDB tuple; org visibility degraded until next boot backfill",
+                    metadata: ["agentName": .string(agentName), "error": .string("\(error)")])
+            }
         }
 
         // Attach the UUID to the live socket so local routing (sync pushes,

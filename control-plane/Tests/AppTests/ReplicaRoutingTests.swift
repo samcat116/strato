@@ -161,7 +161,18 @@ final class ReplicaRoutingAgentServiceTests {
             ),
             protocolVersion: 2
         )
-        let agentUUID = try await app.agentService.registerAgent(message, agentName: agentName)
+        // New agents need an owning org; this harness creates no other data,
+        // so mint one on first use.
+        let orgID: UUID
+        if let existing = try await Organization.query(on: app.db).sort(\.$createdAt).first() {
+            orgID = try existing.requireID()
+        } else {
+            let org = Organization(name: "Routing Org", description: "org for routing tests")
+            try await org.save(on: app.db)
+            orgID = try org.requireID()
+        }
+        let agentUUID = try await app.agentService.registerAgent(
+            message, agentName: agentName, organizationScope: .organization(orgID))
         return agentUUID.uuidString
     }
 

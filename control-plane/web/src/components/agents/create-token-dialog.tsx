@@ -13,7 +13,15 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { agentsApi } from "@/lib/api/agents";
+import { useOrganization } from "@/providers/organization-provider";
 import { toast } from "sonner";
 import type { AgentRegistrationToken } from "@/types/api";
 
@@ -28,9 +36,13 @@ export function CreateTokenDialog({
   onOpenChange,
   onCreated,
 }: CreateTokenDialogProps) {
+  const { currentOrg, organizations } = useOrganization();
   const [isLoading, setIsLoading] = useState(false);
   const [agentName, setAgentName] = useState("");
   const [expirationHours, setExpirationHours] = useState("24");
+  // The org whose dedicated capacity this agent becomes; defaults to the
+  // active organization.
+  const [organizationId, setOrganizationId] = useState<string | undefined>(undefined);
   const [createdToken, setCreatedToken] = useState<AgentRegistrationToken | null>(null);
   const [copiedCommand, setCopiedCommand] = useState<
     "curl" | "join" | "docker" | "bootstrap" | null
@@ -44,11 +56,18 @@ export function CreateTokenDialog({
       return;
     }
 
+    const targetOrgId = organizationId ?? currentOrg?.id;
+    if (!targetOrgId) {
+      toast.error("Please select an organization for this agent");
+      return;
+    }
+
     setIsLoading(true);
     try {
       const token = await agentsApi.createToken({
         agentName,
         expirationHours: parseInt(expirationHours) || 24,
+        organizationId: targetOrgId,
       });
       setCreatedToken(token);
       onCreated?.();
@@ -257,6 +276,34 @@ export function CreateTokenDialog({
                   className="bg-background border-border text-foreground"
                   disabled={isLoading}
                 />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="organization" className="text-foreground">
+                  Organization
+                </Label>
+                <Select
+                  value={organizationId ?? currentOrg?.id ?? ""}
+                  onValueChange={setOrganizationId}
+                  disabled={isLoading}
+                >
+                  <SelectTrigger
+                    id="organization"
+                    className="bg-background border-border text-foreground"
+                  >
+                    <SelectValue placeholder="Select an organization" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {organizations.map((org) => (
+                      <SelectItem key={org.id} value={org.id}>
+                        {org.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-sm text-muted-foreground">
+                  The agent becomes dedicated capacity for this organization —
+                  only its VMs will be scheduled onto it.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="expiration" className="text-foreground">
