@@ -23,11 +23,14 @@ jobs:
     # x64 runs on the ARC (actions-runner-controller) Swift runner scale set;
     # scale-set runners match on the installation name as their only label.
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'swift-runners-strato' }}
-    # Both legs build inside the official Swift image (the same one the
-    # Dockerfiles build with) instead of installing a toolchain per job —
-    # vapor/swiftly-action breaks on the ARC pods ($USER is unset).
-    container:
-      image: swift:6.3.2-noble
+    # The x64 leg runs directly on the runner pod — the scale set's runner
+    # image bakes in the Swift 6.3.2 toolchain, so nothing pulls the multi-GB
+    # Swift image through dind per job. The GitHub-hosted arm64 runner has no
+    # Swift toolchain, so that leg still builds inside the official Swift
+    # image (the string form of `container:`; an empty value means "no job
+    # container"). vapor/swiftly-action remains unusable on the ARC pods
+    # ($USER is unset).
+    container: ${{ matrix.arch == 'arm64' && 'swift:6.3.2-noble' || '' }}
     strategy:
       matrix:
         include:
@@ -39,12 +42,16 @@ jobs:
         uses: actions/checkout@v4
 
       # libjemalloc-dev: the control-plane binary links -ljemalloc.
-      # unzip: setup-bun needs it to extract its download; the swift image
-      # doesn't ship it. The job runs as root in the container, so no sudo.
+      # unzip: setup-bun needs it to extract its download.
+      # arm64 runs as root inside the Swift container (which has no sudo
+      # binary); x64 runs as the runner image's non-root user (passwordless
+      # sudo) — hence the guard.
       - name: Install build dependencies
         run: |
-          apt-get update
-          apt-get install -y libjemalloc-dev unzip
+          SUDO=""
+          command -v sudo >/dev/null && SUDO=sudo
+          $SUDO apt-get update
+          $SUDO apt-get install -y libjemalloc-dev unzip
 
       - name: Cache Swift packages
         uses: actions/cache@v4

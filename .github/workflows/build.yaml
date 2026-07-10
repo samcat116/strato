@@ -137,18 +137,18 @@ jobs:
   # match on exactly one label — the installation name — so do not add
   # `self-hosted` or arch labels here.
   #
-  # Jobs build inside the official Swift image instead of installing a
-  # toolchain on the ephemeral runner each job. vapor/swiftly-action breaks on
-  # the ARC pods ($USER is unset, so it sources /home//.local/.../env.sh), and
-  # this pins the exact toolchain the Dockerfiles build with — agent/Dockerfile
-  # uses this same image. The runner image needs nothing Swift-related.
+  # Jobs run directly on the runner pod: the scale set's runner image bakes in
+  # the Swift 6.3.2 toolchain (and git, which SwiftPM needs). They used to run
+  # in a `container: swift:6.3.2-noble` job container, but that pulled the
+  # multi-GB Swift image through dind on every job. vapor/swiftly-action is
+  # still not an option on ARC pods ($USER is unset, so it sources
+  # /home//.local/.../env.sh) — a toolchain bump means rebuilding the runner
+  # image together with the Dockerfiles.
   test:
     name: Build and Test Swift Packages
     needs: changes
     if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: swift-runners-strato
-    container:
-      image: swift:6.3.2-noble
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -157,10 +157,9 @@ jobs:
       # actions/cache: the GitHub cache never helped here — PR-scoped saves
       # are unreadable by sibling PRs and nothing on main saves the key, so
       # every run paid a ~5 minute 1.4GB upload for a restore that always
-      # missed. The runner mounts its tool cache into the job container, so
-      # the path is warm across runs if the ARC scale set backs it with a
-      # persistent volume; on a plain ephemeral pod these steps are harmless
-      # and the build runs cold.
+      # missed. The path is warm across runs if the ARC scale set backs the
+      # tool cache with a persistent volume; on a plain ephemeral pod these
+      # steps are harmless and the build runs cold.
       #
       # Each job prunes only the scratch dirs it owns — the Swift test jobs
       # run concurrently, possibly against a shared tool-cache volume, so
@@ -214,8 +213,6 @@ jobs:
     needs: changes
     if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: swift-runners-strato
-    container:
-      image: swift:6.3.2-noble
     services:
       postgres:
         image: postgres:15
@@ -223,6 +220,12 @@ jobs:
           POSTGRES_DB: strato_test
           POSTGRES_USER: strato
           POSTGRES_PASSWORD: strato_password
+        # With no job container the job doesn't share a Docker network with
+        # the service, so the port must be published. The dind daemon shares
+        # the runner pod's network namespace, which puts the published port on
+        # the pod's loopback.
+        ports:
+          - 5432:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -268,10 +271,10 @@ jobs:
         working-directory: control-plane
         env:
           STRATO_TEST_DATABASE: postgres
-          # The job runs in a container on the same Docker network as the
-          # service, so Postgres is reachable by service name on its native
-          # port — no host port mapping involved.
-          DATABASE_HOST: postgres
+          # The service publishes 5432 to the runner pod (see the `ports`
+          # mapping above). 127.0.0.1 rather than localhost: docker publishes
+          # on IPv4, and localhost can resolve to ::1 first.
+          DATABASE_HOST: 127.0.0.1
           DATABASE_PORT: 5432
           DATABASE_NAME: strato_test
           DATABASE_USERNAME: strato

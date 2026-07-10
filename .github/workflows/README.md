@@ -60,28 +60,35 @@ Jobs target the scale set with `runs-on: swift-runners-strato`. ARC
 scale-set runners match on **exactly one label — the installation name** —
 so never combine it with `self-hosted`, `Linux`, or arch labels.
 
-Swift jobs run **inside the official `swift:<version>-noble` job container**
-(the same image the Dockerfiles build with), so the runner image itself needs
-no Swift toolchain, sudo, or build packages — vapor/swiftly-action is not
-used on these runners (it breaks on ARC pods, where `$USER` is unset).
+Swift jobs run **directly on the runner pod**: the scale set's runner image
+must bake in the pinned Swift toolchain (the jobs used to run inside the
+official `swift:<version>-noble` job container, but that pulled the multi-GB
+Swift image through dind on every job). vapor/swiftly-action is not used on
+these runners (it breaks on ARC pods, where `$USER` is unset). The runner
+image is managed in the homelab repo (`roles/github_runner`).
 
-Requirements for the scale set:
-- Docker available to jobs (dind mode, or kubernetes mode with container
-  hooks) — the jobs use a **job container** and the PR control-plane
-  Postgres test job adds a Postgres **service container**
-- Optional but recommended: a persistent volume backing `RUNNER_TOOL_CACHE`
-  (the runner mounts it into job containers). Swift build state lives in
-  `$RUNNER_TOOL_CACHE/strato-swift-build` (via `swift build --scratch-path`);
-  without the volume every job builds cold. Each PR job wipes its own
-  scratch subdirectory automatically past ~10GB (never the shared root —
-  concurrent sibling jobs may be building in it); it is always safe to
-  delete manually — the next run just rebuilds cold. An image registry mirror or
-  dind image cache also helps, since each job pulls `swift` and `postgres`
-  images fresh otherwise.
+Requirements for the scale set's runner image / pods:
+- Swift toolchain matching the `swift:x.y.z-noble` tag the Dockerfiles build
+  with, installed so `swift` is on `PATH` (ideally untarred into `/usr` like
+  the official image, so `/usr/lib/swift/linux/swift-backtrace-static` exists
+  for the release-binary jobs)
+- `git` (SwiftPM needs it; without it actions/checkout also falls back to a
+  REST tarball download)
+- Passwordless `sudo` for the runner user (main-build installs libjemalloc-dev
+  and unzip at job time; stock in `ghcr.io/actions/actions-runner`)
+- Docker available to jobs (dind mode) — the PR control-plane job runs a
+  Postgres **service container**, published to the pod on `127.0.0.1:5432`
+- Optional but recommended: a persistent volume backing `RUNNER_TOOL_CACHE`.
+  Swift build state lives in `$RUNNER_TOOL_CACHE/strato-swift-build` (via
+  `swift build --scratch-path`); without the volume every job builds cold.
+  Each PR job wipes its own scratch subdirectory automatically past ~10GB
+  (never the shared root — concurrent sibling jobs may be building in it); it
+  is always safe to delete manually — the next run just rebuilds cold.
 
-When bumping the Swift toolchain, update the `swift:x.y.z-noble` container
-image tags in build.yaml/main-build.yaml together with the Dockerfiles and
-the remaining `vapor/swiftly-action` pins (swift-format lint, macOS job).
+When bumping the Swift toolchain, rebuild the runner image with the new
+toolchain and update the remaining `swift:x.y.z-noble` container tag
+(main-build arm64 leg) together with the Dockerfiles and the
+`vapor/swiftly-action` pins (swift-format lint, macOS job).
 
 ### Static Self-Hosted Runner (x64/AMD64)
 Used for:
