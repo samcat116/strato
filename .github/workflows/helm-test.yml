@@ -154,7 +154,12 @@ jobs:
         run: |
           helm template strato-spire helm/strato-control-plane/ \
             --set spire.enabled=true > /tmp/spire-template.yaml
-          echo "SPIRE template generated successfully"
+          # Non-default persistence path: this once rendered a duplicate
+          # `volumes:` key that clobbered the SPIRE server's config volume.
+          helm template strato-spire-eph helm/strato-control-plane/ \
+            --set spire.enabled=true \
+            --set spire.persistence.enabled=false > /tmp/spire-ephemeral-template.yaml
+          echo "SPIRE templates generated successfully"
 
       - name: Assert SPIRE ships no dev secret and auto-generates a strong one
         run: |
@@ -175,14 +180,33 @@ jobs:
 
       - name: Validate generated YAML
         run: |
-          # Validate templates using basic YAML syntax check
-          echo "Validating YAML syntax..."
-          for file in /tmp/default-template.yaml /tmp/production-template.yaml /tmp/external-db-template.yaml /tmp/spire-template.yaml; do
-            echo "Checking $file..."
-            python3 -c "import yaml; yaml.safe_load(open('$file'))" && echo "✅ $file is valid YAML" || echo "❌ $file has YAML syntax errors"
-          done
+          # Parse every document of every render and reject duplicate mapping
+          # keys (YAML silently takes the last one — a duplicate `volumes:` key
+          # once shipped a SPIRE server that could never start). The previous
+          # incarnation of this step used safe_load (single-doc, dup-tolerant)
+          # and swallowed failures with `|| echo`, so it could never fail.
+          for file in /tmp/default-template.yaml /tmp/production-template.yaml /tmp/external-db-template.yaml /tmp/spire-template.yaml /tmp/spire-ephemeral-template.yaml; do
+            python3 - "$file" <<'EOF'
+          import sys, yaml
 
-          echo "Templates generated and validated successfully!"
+          class StrictLoader(yaml.SafeLoader):
+              pass
+
+          def no_duplicates(loader, node, deep=False):
+              seen = set()
+              for key_node, _ in node.value:
+                  key = loader.construct_object(key_node, deep=True)
+                  if key in seen:
+                      raise ValueError(f"duplicate mapping key {key!r} at line {key_node.start_mark.line + 1}")
+                  seen.add(key)
+              return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+          StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, no_duplicates)
+          path = sys.argv[1]
+          docs = list(yaml.load_all(open(path), Loader=StrictLoader))
+          print(f"✅ {path}: {len(docs)} documents, no duplicate keys")
+          EOF
+          done
 
       - name: Upload templates as artifacts
         uses: actions/upload-artifact@v4

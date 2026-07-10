@@ -246,8 +246,12 @@ spicedb:
   enabled: true
   nameOverride: ""
   fullnameOverride: ""
+  # The spicedb-operator subchart. Nothing in this chart creates a
+  # SpiceDBCluster CR — SpiceDB runs as the chart's own StatefulSet — so the
+  # operator (a Deployment plus cluster-scoped RBAC) is dead weight unless you
+  # manage your own CRs. Off by default.
   operator:
-    enabled: true
+    enabled: false
   image:
     repository: authzed/spicedb
     tag: v1.35.3
@@ -260,11 +264,15 @@ spicedb:
     httpPort: 8080
     metricsPort: 9090
     
+  # NOTE: SpiceDB's datastore is Postgres; the /data PVC this provisions is
+  # unused. It stays enabled by default only because volumeClaimTemplates are
+  # immutable — flipping it would break upgrades of existing installs. Safe
+  # (and recommended) to set false on fresh installs.
   persistence:
     enabled: true
     size: 10Gi
     storageClass: ""
-    
+
   resources:
     limits:
       cpu: 500m
@@ -272,7 +280,7 @@ spicedb:
     requests:
       cpu: 250m
       memory: 256Mi
-    
+
   # Pre-shared key for authentication.
   # Leave empty to auto-generate a strong key on first install; it is stored
   # in the <release>-strato-credentials secret and reused across upgrades.
@@ -316,9 +324,6 @@ postgresql:
     secretKeys:
       adminPasswordKey: postgres-admin-password
       userPasswordKey: db-password
-    # Create the database if it doesn't exist
-    createDatabase: true
-  
   primary:
     persistence:
       enabled: true
@@ -390,7 +395,9 @@ networkPolicy:
       ports:
         - protocol: TCP
           port: 8080
-  # Egress rules - allow traffic to specific destinations
+  # Egress rules - allow traffic to specific destinations.
+  # When spire.enabled with in-cluster SPIRE, also add TCP 8081 (SPIRE server
+  # API for join-token provisioning).
   egress:
     - to: []
       ports:
@@ -403,23 +410,13 @@ networkPolicy:
         - protocol: TCP
           port: 6379   # Valkey/Redis
         - protocol: TCP
+          port: 4317   # OTLP export to the otel-collector
+        - protocol: TCP
+          port: 443    # OIDC discovery/JWKS, SSF transmitters, audit webhooks
+        - protocol: TCP
           port: 53     # DNS
         - protocol: UDP
           port: 53     # DNS
-
-# Monitoring and observability
-monitoring:
-  serviceMonitor:
-    enabled: false
-    interval: 30s
-    scrapeTimeout: 10s
-    labels: {}
-
-  # Prometheus metrics
-  metrics:
-    enabled: false
-    port: 9090
-    path: /metrics
 
 # OpenTelemetry configuration
 opentelemetry:

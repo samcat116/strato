@@ -32,7 +32,7 @@ spec:
               until nc -w 1 -z {{ include "strato-control-plane.spicedb.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.spicedb.service.grpcPort }}; do echo waiting for SpiceDB; sleep 2; done
       containers:
         - name: schema-loader
-          image: authzed/zed:latest
+          image: authzed/zed:v1.1.1
           command:
             - zed
             - schema

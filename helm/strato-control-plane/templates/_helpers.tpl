@@ -293,28 +293,6 @@ as the ingress.tls case. An explicit strato.httpTlsEnabled overrides the default
 {{- end }}
 
 {{/*
-Common security context
-*/}}
-{{- define "strato-control-plane.securityContext" -}}
-runAsNonRoot: true
-runAsUser: 10001
-runAsGroup: 10001
-fsGroup: 10001
-{{- end }}
-
-{{/*
-Common pod security context
-*/}}
-{{- define "strato-control-plane.podSecurityContext" -}}
-runAsNonRoot: true
-runAsUser: 10001
-runAsGroup: 10001
-fsGroup: 10001
-seccompProfile:
-  type: RuntimeDefault
-{{- end }}
-
-{{/*
 Get the Valkey host
 */}}
 {{- define "strato-control-plane.valkeyHost" -}}
