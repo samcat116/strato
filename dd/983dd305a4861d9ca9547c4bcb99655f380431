@@ -1,0 +1,21 @@
+docs/architecture/networking.md
+  s_f7e464120e1099::t_c295452e8cdea2 366-370
+agent/Package.resolved
+  s_f7e464120e1099::t_abc0edf2282ade 190
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "dd983dd305a4861d9ca9547c4bcb99655f380431",
+  "prompts": {},
+  "sessions": {
+    "s_f7e464120e1099": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "06ab7421-3ec6-45ae-b53e-21edc1e8220f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
