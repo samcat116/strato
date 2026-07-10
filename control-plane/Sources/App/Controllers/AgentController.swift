@@ -75,20 +75,24 @@ struct AgentController: RouteCollection {
         }
     }
 
-    /// Until the scheduler enforces org-scoped placement (phase 2 of the
-    /// hierarchy overhaul), an agent may host VMs whose projects belong to a
-    /// different organization — cross-org placements from before scoping, or
-    /// new ones the still-unscoped scheduler makes. A delegated org admin must
-    /// not be able to take down another tenant's workloads, so destructive
-    /// agent actions (force-offline, deregister) fall back to system-admin
-    /// only while any foreign-org VM is hosted here.
-    private func requireNoForeignHostedVMs(_ req: Request, agent: Agent) async throws {
+    /// Until the scheduler and volume placement enforce org-scoped placement
+    /// (phase 2 of the hierarchy overhaul), an agent may host VMs — and store
+    /// volumes, which place on any online QEMU agent — whose projects belong
+    /// to a different organization: cross-org placements from before scoping,
+    /// or new ones the still-unscoped placement paths make. A delegated org
+    /// admin must not be able to take down another tenant's workloads or
+    /// strand its detached volumes, so destructive agent actions
+    /// (force-offline, deregister) fall back to system-admin only while any
+    /// foreign-org VM or volume lives here.
+    private func requireNoForeignWorkloads(_ req: Request, agent: Agent) async throws {
         let user = try requireUser(req)
         if user.isSystemAdmin { return }
 
         let agentOrg = try await agent.rootOrganizationID(on: req.db)
+        let agentIDString = try agent.requireID().uuidString
+
         let hostedVMs = try await VM.query(on: req.db)
-            .filter(\.$hypervisorId == agent.requireID().uuidString)
+            .filter(\.$hypervisorId == agentIDString)
             .with(\.$project)
             .all()
         for vm in hostedVMs {
@@ -98,6 +102,21 @@ struct AgentController: RouteCollection {
                     .forbidden,
                     reason:
                         "Agent hosts VMs belonging to another organization; only a system administrator can perform this action until they are migrated"
+                )
+            }
+        }
+
+        let storedVolumes = try await Volume.query(on: req.db)
+            .filter(\.$hypervisorId == agentIDString)
+            .with(\.$project)
+            .all()
+        for volume in storedVolumes {
+            let volumeOrg = try await volume.project.getRootOrganizationId(on: req.db)
+            guard volumeOrg == agentOrg else {
+                throw Abort(
+                    .forbidden,
+                    reason:
+                        "Agent stores volumes belonging to another organization; only a system administrator can perform this action until they are migrated"
                 )
             }
         }
@@ -487,7 +506,7 @@ struct AgentController: RouteCollection {
         }
 
         try await requireAgentPermission(req, agent: agent, permission: "manage")
-        try await requireNoForeignHostedVMs(req, agent: agent)
+        try await requireNoForeignWorkloads(req, agent: agent)
 
         // Never delete a site's designated network controller: the controller
         // reference deliberately has no FK (see CreateSite), so the site would
@@ -548,6 +567,18 @@ struct AgentController: RouteCollection {
                 subject: ref.subjectType, subjectId: ref.subjectId.uuidString)
         }
 
+        // Deregistration severs the agent's credentials: delete its unused
+        // tokens (the rotated reconnect credential in particular). Left
+        // behind, the scopeless reconnect token would be revocable only by a
+        // system admin yet block minting a new token for this agent name via
+        // the duplicate-token guard — locking the name for up to 30 days.
+        // SPIRE entries for the name were already deprovisioned above, so
+        // these rows carry no external grant.
+        try await AgentRegistrationToken.query(on: req.db)
+            .filter(\.$agentName == agent.name)
+            .filter(\.$isUsed == false)
+            .delete()
+
         req.logger.info(
             "Deregistered agent",
             metadata: [
@@ -568,7 +599,7 @@ struct AgentController: RouteCollection {
         }
 
         try await requireAgentPermission(req, agent: agent, permission: "manage")
-        try await requireNoForeignHostedVMs(req, agent: agent)
+        try await requireNoForeignWorkloads(req, agent: agent)
 
         // Force agent offline in in-memory registry
         await req.agentService.forceUnregisterAgent(agent.name)

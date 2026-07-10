@@ -416,12 +416,71 @@ final class AgentOrganizationScopeTests {
                 #expect(res.status == .forbidden)
             }
 
-            // Once the foreign VM is gone, the delegated admin may act.
+            // A foreign-org DETACHED VOLUME stored on the agent blocks the
+            // delegated admin the same way (volume placement is unscoped
+            // until phase 2 too).
             try await foreignVM.delete(on: app.db)
+            let foreignVolume = Volume(
+                name: "tenant-vol", description: "v", projectID: foreignProject.id!,
+                size: 1 << 30, createdByID: orgAdmin.id!)
+            foreignVolume.hypervisorId = agentUUID.uuidString
+            try await foreignVolume.save(on: app.db)
+
+            try await app.test(.POST, "/api/agents/\(agentUUID.uuidString)/actions/force-offline") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: orgAdminToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+
+            // Once the foreign workloads are gone, the delegated admin may act.
+            try await foreignVolume.delete(on: app.db)
             try await app.test(.POST, "/api/agents/\(agentUUID.uuidString)/actions/force-offline") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: orgAdminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
+            }
+        }
+    }
+
+    @Test("Deregistration deletes the agent's unused tokens so the name is reusable")
+    func deregistrationClearsUnusedTokens() async throws {
+        try await withScopedApp { app, org, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let admin = try await builder.createUser(
+                username: "dereg-admin", email: "dereg-admin@example.com",
+                displayName: "Dereg Admin", isSystemAdmin: true)
+            let adminToken = try await admin.generateAPIKey(on: app.db)
+
+            let agentUUID = try await app.agentService.registerAgent(
+                self.makeRegisterMessage(agentName: "retiring-agent"),
+                agentName: "retiring-agent",
+                organizationScope: .organization(org.id!))
+            // The rotated reconnect credential a live token-auth agent holds.
+            let reconnect = AgentRegistrationToken(agentName: "retiring-agent", expirationHours: 24 * 30)
+            try await reconnect.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/\(agentUUID.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            let leftover = try await AgentRegistrationToken.query(on: app.db)
+                .filter(\.$agentName == "retiring-agent")
+                .filter(\.$isUsed == false)
+                .count()
+            #expect(leftover == 0)
+
+            // The name is immediately reusable — no duplicate-token conflict.
+            struct Body: Content {
+                let agentName: String
+                let organizationId: UUID?
+            }
+            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(Body(agentName: "retiring-agent", organizationId: org.id))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
             }
         }
     }
