@@ -439,8 +439,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docker_agent == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
-    # Compiles Swift from source; the agent's gha cache is only saved from
-    # tag refs, which PRs cannot read, so this leg runs cold.
+    # No prebuilt artifacts on PRs, so the image compiles Swift from source.
+    # main-build's cache (saved with prebuilt artifacts) still warms the
+    # dependency-resolution layers, but not the swift build itself.
     timeout-minutes: 60
     steps:
       - name: Checkout Code
@@ -449,6 +450,12 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # The Dockerfile unconditionally COPYs ./artifacts; with no prebuilt
+      # binaries on PRs it must exist (empty), same as main-build's
+      # "Prepare build context" step.
+      - name: Prepare build context
+        run: mkdir -p ./artifacts
+
       - name: Build Agent Image
         uses: docker/build-push-action@v5
         with:
@@ -456,6 +463,8 @@ jobs:
           file: ./agent/Dockerfile
           push: false
           platforms: linux/amd64
+          # Readable from PRs because main-build saves it from main's scope.
+          cache-from: type=gha,key=agent-x64
 
   docker-web:
     name: Docker Build Check (Frontend)

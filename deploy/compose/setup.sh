@@ -134,9 +134,10 @@ HTTP_PORT=${PORT_ARG}
 # false for plaintext http:// or the browser will drop the session cookie.
 HTTP_TLS_ENABLED=$([[ "$SCHEME" == "https" ]] && echo true || echo false)
 LOG_LEVEL=info
-# Pin to a released version instead of latest for reproducible deployments,
-# e.g. STRATO_VERSION=v0.5.0
-STRATO_VERSION=latest
+# Image tag to deploy. `main` is rebuilt on every main-branch merge; pin an
+# immutable build (e.g. STRATO_VERSION=main-abc123def456) or, once versioned
+# releases exist, a release tag for reproducible deployments.
+STRATO_VERSION=main
 EOF
 
 echo "Wrote .env (mode 0600) for ${ORIGIN}"
