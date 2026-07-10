@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback } from "react";
 import Link from "next/link";
-import { Loader2, HardDrive, FileText, AlertTriangle } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,8 +27,6 @@ interface CreateVMDialogProps {
   onCreated?: () => void;
 }
 
-type SourceType = "image" | "template";
-
 export function CreateVMDialog({
   open,
   onOpenChange,
@@ -37,11 +35,9 @@ export function CreateVMDialog({
   const watch = useOperationsStore((state) => state.watch);
   const [isLoading, setIsLoading] = useState(false);
   const [quotaError, setQuotaError] = useState<string | null>(null);
-  const [sourceType, setSourceType] = useState<SourceType>("image");
   const [formData, setFormData] = useState({
     name: "",
     description: "",
-    templateName: "ubuntu-22.04",
     imageId: "",
     cpu: "2",
     memory: "4",
@@ -91,13 +87,8 @@ export function CreateVMDialog({
       return;
     }
 
-    if (sourceType === "image" && !formData.imageId) {
+    if (!formData.imageId) {
       toast.error("Please select an image");
-      return;
-    }
-
-    if (sourceType === "template" && !formData.templateName.trim()) {
-      toast.error("Please enter a template name");
       return;
     }
 
@@ -111,9 +102,7 @@ export function CreateVMDialog({
         name: formData.name,
         description: formData.description || undefined,
         projectId,
-        ...(sourceType === "image"
-          ? { imageId: formData.imageId }
-          : { templateName: formData.templateName }),
+        imageId: formData.imageId,
         cpu: parseInt(formData.cpu) || 2,
         memory: (parseInt(formData.memory) || 4) * GB,
         disk: (parseInt(formData.disk) || 50) * GB,
@@ -128,7 +117,6 @@ export function CreateVMDialog({
       setFormData({
         name: "",
         description: "",
-        templateName: "ubuntu-22.04",
         imageId: "",
         cpu: "2",
         memory: "4",
@@ -136,7 +124,6 @@ export function CreateVMDialog({
         networkId: "",
         sshPublicKey: "",
       });
-      setSourceType("image");
       setQuotaError(null);
     } catch (error) {
       const message =
@@ -153,72 +140,47 @@ export function CreateVMDialog({
     }
   };
 
-  const renderSourceSelector = () => {
-    if (sourceType === "image") {
-      return (
-        <div className="space-y-2">
-          <Label htmlFor="image" className="text-foreground">
-            Disk Image
-          </Label>
-          {!projectId ? (
-            <div className="text-sm text-muted-foreground py-2">
-              No project available. Create a project first to upload images.
-            </div>
-          ) : imagesLoading ? (
-            <div className="flex items-center gap-2 text-muted-foreground text-sm">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Loading images...
-            </div>
-          ) : readyImages.length === 0 ? (
-            <div className="text-sm text-muted-foreground py-2">
-              No images available.{" "}
-              <a href="/images" className="text-blue-600 hover:underline">
-                Upload an image
-              </a>{" "}
-              first.
-            </div>
-          ) : (
-            <select
-              value={formData.imageId}
-              onChange={(e) => handleImageSelect(e.target.value)}
-              disabled={isLoading}
-              className="w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <option value="" disabled>
-                Select an image
-              </option>
-              {readyImages.map((image) => (
-                <option key={image.id} value={image.id!}>
-                  {image.name} ({image.sizeFormatted})
-                </option>
-              ))}
-            </select>
-          )}
+  const renderImageSelector = () => (
+    <div className="space-y-2">
+      <Label htmlFor="image" className="text-foreground">
+        Disk Image
+      </Label>
+      {!projectId ? (
+        <div className="text-sm text-muted-foreground py-2">
+          No project available. Create a project first to upload images.
         </div>
-      );
-    }
-
-    return (
-      <div className="space-y-2">
-        <Label htmlFor="template" className="text-foreground">
-          OS Template (Legacy)
-        </Label>
-        <Input
-          id="template"
-          placeholder="ubuntu-22.04"
-          value={formData.templateName}
-          onChange={(e) =>
-            setFormData({ ...formData, templateName: e.target.value })
-          }
-          className="bg-background border-border text-foreground"
+      ) : imagesLoading ? (
+        <div className="flex items-center gap-2 text-muted-foreground text-sm">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading images...
+        </div>
+      ) : readyImages.length === 0 ? (
+        <div className="text-sm text-muted-foreground py-2">
+          No images available.{" "}
+          <a href="/images" className="text-blue-600 hover:underline">
+            Upload an image
+          </a>{" "}
+          first.
+        </div>
+      ) : (
+        <select
+          value={formData.imageId}
+          onChange={(e) => handleImageSelect(e.target.value)}
           disabled={isLoading}
-        />
-        <p className="text-xs text-yellow-700">
-          Templates are deprecated. Consider uploading an image instead.
-        </p>
-      </div>
-    );
-  };
+          className="w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <option value="" disabled>
+            Select an image
+          </option>
+          {readyImages.map((image) => (
+            <option key={image.id} value={image.id!}>
+              {image.name} ({image.sizeFormatted})
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -297,44 +259,7 @@ export function CreateVMDialog({
               </p>
             </div>
 
-            {/* Source Type Selector */}
-            <div className="space-y-2">
-              <Label className="text-foreground">Disk Source</Label>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant={sourceType === "image" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setSourceType("image")}
-                  className={
-                    sourceType === "image"
-                      ? "bg-primary hover:bg-primary/90"
-                      : "border-input text-foreground/80 hover:bg-accent"
-                  }
-                  disabled={isLoading}
-                >
-                  <HardDrive className="h-4 w-4 mr-2" />
-                  Image
-                </Button>
-                <Button
-                  type="button"
-                  variant={sourceType === "template" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setSourceType("template")}
-                  className={
-                    sourceType === "template"
-                      ? "bg-primary hover:bg-primary/90"
-                      : "border-input text-foreground/80 hover:bg-accent"
-                  }
-                  disabled={isLoading}
-                >
-                  <FileText className="h-4 w-4 mr-2" />
-                  Template
-                </Button>
-              </div>
-            </div>
-
-            {renderSourceSelector()}
+            {renderImageSelector()}
 
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
