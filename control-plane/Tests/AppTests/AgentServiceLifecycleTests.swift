@@ -43,4 +43,42 @@ final class AgentServiceLifecycleTests {
 
         #expect(await !service.isHeartbeatActive)
     }
+
+    /// Cancellation alone is not enough: a tick that already woke from its sleep
+    /// keeps sweeping the database after `cancel()`, and if the application tears
+    /// down underneath it, `app.db` faults with "Core not configured" (the CI
+    /// crash in `checkStaleAgents`). `shutdown()` must therefore *await* the
+    /// loop's exit. A millisecond interval keeps a tick in flight essentially
+    /// always, so shutting down here races the loop body rather than the sleep —
+    /// without the await, this test crashes the process at teardown.
+    @Test("shutdown waits for an in-flight heartbeat tick before app teardown")
+    func shutdownAwaitsInFlightTick() async throws {
+        let app = try await Application.makeForTesting()
+
+        do {
+            try await configure(app)
+            try await app.autoMigrate()
+
+            let service = AgentService(app: app, heartbeatInterval: .milliseconds(1))
+
+            // Let the startup task arm the loop and run a few ticks so shutdown
+            // lands mid-tick, not before the first one.
+            for _ in 0..<50 where await !service.isHeartbeatActive {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(await service.isHeartbeatActive)
+            try await Task.sleep(for: .milliseconds(50))
+
+            // Must not return until the loop has fully exited.
+            await service.shutdown()
+            #expect(await !service.isHeartbeatActive)
+        } catch {
+            try await app.shutdownForTesting()
+            throw error
+        }
+
+        // If shutdown() returned with the tick still running, this teardown
+        // clears app storage under it and the process fatal-errors.
+        try await app.shutdownForTesting()
+    }
 }
