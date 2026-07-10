@@ -363,11 +363,11 @@ geneve verification on real multi-node hardware (recipe in
 - **SwiftOVN model coverage is now largely complete** — `Gateway_Chassis`,
   `HA_Chassis`/`HA_Chassis_Group`, `Logical_Router_Static_Route`, `Port_Group`,
   the `dynamic-routing*` router/router-port fields, and TCP/SSL transport have
-  all landed and are consumed by the agent. Remaining upstream gap: its
-  `createBridge` inserts only the `Bridge` row without the bridge-named
-  internal `Port`/`Interface` pair that `ovs-vsctl add-br` creates, so callers
-  must add it themselves or the bridge never gets a Linux netdev (issue #371 —
-  the agent compensates in `ensureBridgeLocalPort`).
+  all landed and are consumed by the agent. Its `createBridge` gained
+  `ovs-vsctl add-br` semantics (bridge-named internal `Port`/`Interface` pair,
+  so the Linux netdev materializes — issue #371); the agent's
+  `ensureBridgeLocalPort` still runs as a repair path for bridges created by
+  older agents.
 - **Agent image** ships the chassis side only (`ovn-host` + OVS); the
   NB/SB/northd central is the separate per-site `deploy/ovn-central/` unit.
 - **OVN version floor** for dynamic routing (≥ 25.03, experimental).
