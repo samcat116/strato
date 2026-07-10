@@ -1,0 +1,24 @@
+control-plane/Sources/App/Migrations/BackfillInfraOrganizationScope.swift
+  s_0226cff00d1a8c::t_50300d1901a4fa 33-38,44
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_0226cff00d1a8c::t_9317ffd18e9656 429-503
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_0226cff00d1a8c::t_4d9a0a48d8d756 121-125,127,130-136
+  s_0226cff00d1a8c::t_6e2893a76558f0 137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "f4e9e11e2d09b9a13ec767ca903853e6b7a22612",
+  "prompts": {},
+  "sessions": {
+    "s_0226cff00d1a8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da9cd801-49ec-4180-8b17-f0414c12a6a4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
