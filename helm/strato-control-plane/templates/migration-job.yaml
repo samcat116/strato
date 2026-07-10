@@ -79,6 +79,12 @@ spec:
                   name: "{{ include "strato-control-plane.valkeySecretName" . }}"
                   key: "{{ include "strato-control-plane.valkeySecretKey" . }}"
             {{- end }}
+            {{- with .Values.extraEnv }}
+            # Same passthrough as the Deployment: the migrate command boots the
+            # full app, so bootstrap vars (e.g. STRATO_DEFAULT_NETWORK_*) that
+            # the migrations read must reach it too.
+            {{- tpl (toYaml .) $ | nindent 12 }}
+            {{- end }}
           {{- if .Values.strato.database.tlsCACert }}
           volumeMounts:
             - name: db-tls-ca

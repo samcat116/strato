@@ -71,6 +71,35 @@ spec:
         - protocol: TCP
           port: {{ include "strato-control-plane.valkeyPort" . }}
     {{- end }}
+    {{- if and .Values.opentelemetry.enabled .Values.opentelemetry.collector.enabled }}
+    # Allow OTLP export to the chart's collector
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "strato-control-plane.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: otel-collector
+      ports:
+        - protocol: TCP
+          port: {{ .Values.opentelemetry.collector.service.grpcPort }}
+    {{- end }}
+    # Allow outbound HTTPS (OIDC discovery/JWKS, SSF transmitters, audit
+    # webhooks, external image URLs)
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- if .Values.spire.enabled }}
+    # SPIRE server gRPC API (join-token provisioning, entry revocation);
+    # 8081 is the server container's bind_port
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "strato-control-plane.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: spire-server
+      ports:
+        - protocol: TCP
+          port: 8081
+    {{- end }}
     {{- end }}
 {{- end }}
 ---

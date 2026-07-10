@@ -36,7 +36,14 @@ data:
         DataStore "sql" {
             plugin_data {
                 database_type = "postgres"
-                connection_string = "host={{ include "strato-control-plane.databaseHost" . }} port={{ include "strato-control-plane.databasePort" . }} dbname=spire user={{ .Values.spire.database.username }} password=${SPIRE_DB_PASSWORD} sslmode=disable"
+                {{- /*
+                Follow the chart-wide TLS mode instead of hardcoding disable.
+                SPIRE's sql plugin uses lib/pq semantics where plain `require`
+                encrypts but skips server-cert verification, so map require to
+                verify-full — same reasoning as the SpiceDB datastore URI.
+                */}}
+                {{- $tlsMode := include "strato-control-plane.databaseTLS" . }}
+                connection_string = "host={{ include "strato-control-plane.databaseHost" . }} port={{ include "strato-control-plane.databasePort" . }} dbname=spire user={{ .Values.spire.database.username }} password=${SPIRE_DB_PASSWORD} sslmode={{ if eq $tlsMode "require" }}verify-full{{ else }}{{ $tlsMode }}{{ end }}"
             }
         }
 
