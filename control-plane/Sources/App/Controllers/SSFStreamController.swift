@@ -59,7 +59,7 @@ struct SSFStreamController: RouteCollection {
         }
 
         let request = try req.content.decode(CreateSSFStreamRequest.self)
-        try validateTransmitterURL(request.transmitterURL)
+        try SSFValidation.validateTransmitterURL(request.transmitterURL)
 
         let stream = SSFStream(
             organizationID: organizationID,
@@ -262,15 +262,4 @@ struct RegisterSSFStreamResponse: Content {
     /// Inbound push bearer token, present only for push streams and only in
     /// this response — it is stored hashed.
     let pushToken: String?
-}
-
-/// Basic sanity check for a transmitter base URL.
-private func validateTransmitterURL(_ raw: String) throws {
-    guard let url = URL(string: raw),
-        let scheme = url.scheme?.lowercased(),
-        scheme == "https" || scheme == "http",
-        url.host != nil
-    else {
-        throw Abort(.unprocessableEntity, reason: "transmitterURL must be a valid http(s) URL")
-    }
 }

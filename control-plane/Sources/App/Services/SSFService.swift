@@ -19,6 +19,40 @@ import Vapor
 ///   under `.testing` (tests drive `sweepPollStreams()` directly).
 /// - `SSF_ALLOW_UNVERIFIED_TOKENS` — accept unsigned SETs; honored only
 ///   under `.testing`.
+/// SSRF guard for transmitter base URLs: streams drive server-side HTTP
+/// requests (discovery, stream management, polling), so an org admin must not
+/// be able to point Strato at internal or metadata services, nor leak the
+/// management bearer token over cleartext. Same approach as OIDC discovery:
+/// HTTPS only, host allow-listed. `SSF_TRANSMITTER_ALLOWED_HOSTS` /
+/// `SSF_TRANSMITTER_ALLOWED_SUFFIXES` override the OIDC discovery defaults.
+enum SSFValidation {
+    static func validateTransmitterURL(_ raw: String) throws {
+        guard let url = URL(string: raw),
+            url.scheme?.lowercased() == "https",
+            let host = url.host?.lowercased()
+        else {
+            throw Abort(.unprocessableEntity, reason: "transmitterURL must be a valid HTTPS URL")
+        }
+
+        let allowedHosts =
+            Environment.get("SSF_TRANSMITTER_ALLOWED_HOSTS")
+            .map { Set(OIDCValidation.parseAllowList($0)) } ?? OIDCValidation.allowedHosts()
+        let allowedSuffixes =
+            Environment.get("SSF_TRANSMITTER_ALLOWED_SUFFIXES")
+            .map(OIDCValidation.parseAllowList) ?? OIDCValidation.allowedDomainSuffixes()
+
+        guard allowedHosts.contains(host) || allowedSuffixes.contains(where: { host.hasSuffix($0) })
+        else {
+            throw Abort(
+                .unprocessableEntity,
+                reason:
+                    "Transmitter host is not in the allowed list for security reasons. "
+                    + "Set SSF_TRANSMITTER_ALLOWED_HOSTS or SSF_TRANSMITTER_ALLOWED_SUFFIXES "
+                    + "to allow this host.")
+        }
+    }
+}
+
 actor SSFService {
     private let app: Application
     private var receivers: [UUID: SSFReceiver] = [:]
@@ -38,6 +72,9 @@ actor SSFService {
             return cached
         }
 
+        // Re-validated here (not just at create) so rows predating a
+        // tightened allow-list can't reach a now-disallowed host.
+        try SSFValidation.validateTransmitterURL(stream.transmitterURL)
         guard let transmitterURL = URL(string: stream.transmitterURL) else {
             throw Abort(.unprocessableEntity, reason: "Invalid transmitter URL")
         }
@@ -104,7 +141,13 @@ actor SSFService {
 
         if let existing = stream.remoteStreamID {
             try? await receiver.deleteStream(id: existing)
+            // Persist the unregistered state before attempting the
+            // replacement: if createStream fails below, the row must not
+            // keep claiming a remote stream that was just deleted.
             stream.remoteStreamID = nil
+            stream.pollEndpoint = nil
+            stream.verifiedAt = nil
+            try await stream.save(on: db)
         }
 
         var pushToken: String?
@@ -225,7 +268,13 @@ actor SSFService {
     /// via the coordination sweep lock. Internal so tests can drive a pass
     /// directly.
     func sweepPollStreams() async {
-        guard await app.coordination.acquireSweepLock("ssf_poll") else {
+        // The default sweep-lock TTL (25s) is tuned for quick local sweeps; a
+        // poll pass makes network requests per stream and can outlive it,
+        // letting another replica drain the same streams concurrently. Size
+        // the TTL to the sweep cadence (slightly under, so this holder's next
+        // tick can reacquire).
+        let lockTTL = max(55, pollIntervalSeconds - 5)
+        guard await app.coordination.acquireSweepLock("ssf_poll", ttlSeconds: lockTTL) else {
             return
         }
 

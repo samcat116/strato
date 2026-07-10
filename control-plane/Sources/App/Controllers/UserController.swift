@@ -183,6 +183,18 @@ struct UserController: RouteCollection {
     func finishRegistration(req: Request) async throws -> RegistrationFinishResponse {
         let finishRequest = try req.content.decode(RegistrationFinishRequest.self)
 
+        // Reject disabled accounts before finishRegistration persists the new
+        // credential (and consumes the challenge) — a user disabled by an SSF
+        // signal must not be able to add passkeys.
+        if let challengeRecord = try await AuthenticationChallenge.query(on: req.db)
+            .filter(\.$challenge == finishRequest.challenge)
+            .first(),
+            let challengeUserID = challengeRecord.userID,
+            let challengeUser = try await User.find(challengeUserID, on: req.db)
+        {
+            try rejectDisabledAccount(challengeUser)
+        }
+
         let credential = try await req.webAuthn.finishRegistration(
             challenge: finishRequest.challenge,
             credentialCreationData: finishRequest.response,

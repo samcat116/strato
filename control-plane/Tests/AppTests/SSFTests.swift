@@ -92,6 +92,7 @@ final class SSFPushDeliveryTests {
         // Honored only under .testing: lets tests deliver unsigned SETs
         // without standing up a JWKS-serving mock transmitter.
         setenv("SSF_ALLOW_UNVERIFIED_TOKENS", "true", 1)
+        setenv("SSF_TRANSMITTER_ALLOWED_SUFFIXES", ".example.com", 1)
     }
 
     private func deliver(
@@ -348,6 +349,10 @@ final class SSFPushDeliveryTests {
 
 @Suite("SSF Stream API Tests", .serialized)
 final class SSFStreamAPITests {
+    init() {
+        setenv("SSF_TRANSMITTER_ALLOWED_SUFFIXES", ".example.com", 1)
+    }
+
     @Test("Stream CRUD via the organization-scoped API")
     func streamCRUD() async throws {
         try await withTestApp { app in
@@ -431,21 +436,26 @@ final class SSFStreamAPITests {
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             let token = try await user.generateAPIKey(on: app.db)
 
-            try await app.test(.POST, "/api/organizations/\(org.id!.uuidString)/ssf-streams") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(
-                    CreateSSFStreamRequest(
-                        name: "bad",
-                        description: nil,
-                        transmitterURL: "not a url",
-                        authToken: nil,
-                        expectedIssuer: nil,
-                        expectedAudience: nil,
-                        deliveryMethod: .poll,
-                        eventsRequested: nil
-                    ))
-            } afterResponse: { res in
-                #expect(res.status == .unprocessableEntity)
+            // Malformed, plaintext, and non-allow-listed transmitter hosts are
+            // all rejected: streams drive server-side HTTP requests (SSRF).
+            for badURL in ["not a url", "http://idp.example.com", "https://169.254.169.254"] {
+                try await app.test(.POST, "/api/organizations/\(org.id!.uuidString)/ssf-streams") {
+                    req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateSSFStreamRequest(
+                            name: "bad",
+                            description: nil,
+                            transmitterURL: badURL,
+                            authToken: nil,
+                            expectedIssuer: nil,
+                            expectedAudience: nil,
+                            deliveryMethod: .poll,
+                            eventsRequested: nil
+                        ))
+                } afterResponse: { res in
+                    #expect(res.status == .unprocessableEntity, "expected 422 for \(badURL)")
+                }
             }
         }
     }
@@ -602,6 +612,7 @@ final class UserSecurityMiddlewareTests {
     @Test("End to end: a delivered session-revoked SET locks out the session")
     func endToEndSessionRevocation() async throws {
         setenv("SSF_ALLOW_UNVERIFIED_TOKENS", "true", 1)
+        setenv("SSF_TRANSMITTER_ALLOWED_SUFFIXES", ".example.com", 1)
         try await withTestApp { app in
             let fixture = try await makePushFixture(app)
 

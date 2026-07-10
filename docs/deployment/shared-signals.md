@@ -49,6 +49,10 @@ Create a stream with the transmitter's URL, an optional management-API bearer to
 | `SSF_CALLBACK_BASE_URL` | Public base URL for push delivery endpoints | `WEBAUTHN_RELYING_PARTY_ORIGIN` |
 | `SSF_POLL_INTERVAL_SECONDS` | Poll sweep cadence | `60` |
 | `SSF_POLL_ENABLED` | Force the poll sweep on/off | on (off under tests) |
+| `SSF_TRANSMITTER_ALLOWED_HOSTS` | Exact transmitter hosts allowed | OIDC discovery allow-list |
+| `SSF_TRANSMITTER_ALLOWED_SUFFIXES` | Transmitter domain suffixes allowed | OIDC discovery allow-list |
+
+Transmitter URLs must be HTTPS and their host must pass the allow-list — streams drive server-side HTTP requests (discovery, stream management, polling), so arbitrary hosts would let an org admin point the control plane at internal or metadata services. The defaults are the same well-known IdP hosts and suffixes as `OIDC_DISCOVERY_ALLOWED_HOSTS` / `OIDC_DISCOVERY_ALLOWED_SUFFIXES`; self-hosted transmitters need their host added.
 
 ## Session revocation semantics
 
