@@ -28,7 +28,25 @@ For a real hostname (WebAuthn then requires HTTPS in front of the proxy):
 - **Control plane + frontend** — published images
   (`ghcr.io/samcat116/strato-*`). Database migrations run automatically at
   startup. Pin a version with `STRATO_VERSION` in `.env`.
-- **nginx proxy** — the only service with a published port.
+- **SPIRE + Envoy (mTLS agent auth, on by default)** — a SPIRE server issues
+  X.509 SVIDs; an Envoy front terminates agent mTLS on `:8443` and forwards the
+  verified client identity to the control plane. A one-shot `spire-bootstrap`
+  provisions the Envoy server cert and trust bundle. The small helper image
+  (`strato-spire-helper:local`) is built locally from `./spiffe/` on first `up`.
+  See [`spiffe/`](spiffe/) for the SPIRE/Envoy config.
+- **nginx proxy** — the browser-facing service.
+
+## Published ports
+
+| Port | Service | For |
+|------|---------|-----|
+| `${HTTP_PORT:-80}` | nginx proxy | browser UI + API |
+| `${AGENT_MTLS_PORT:-8443}` | Envoy | agent mTLS (`wss://host:8443/agent/ws`) |
+| `${SPIRE_NODE_PORT:-8085}` | SPIRE server | agent node attestation |
+
+mTLS is end-to-end: `:8443` and `:8085` must be reachable from your hypervisor
+nodes, and you must **not** terminate TLS in front of `:8443`. The browser
+origin (`:80`/`:443`) is independent and may sit behind a TLS terminator.
 - **Image storage** — downloaded base images are written to the
   `image_storage` volume (`IMAGE_STORAGE_PATH`). A one-shot
   `image-storage-init` service chowns the volume to the non-root control-plane
@@ -37,9 +55,12 @@ For a real hostname (WebAuthn then requires HTTPS in front of the proxy):
 
 ## Adding a hypervisor
 
-In the web UI, go to Agents → Create Registration Token, then run the shown
-`strato-agent join` command on the hypervisor host. See the agent
-documentation for details.
+In the web UI, go to Agents → Create Registration Token. Because mTLS is on by
+default, the token also provisions the node in SPIRE and the dialog shows a
+one-line `sudo strato-node-bootstrap …` command; run it on the hypervisor host.
+It starts a `spire-agent` (attested with the one-time join token) and the
+`strato-agent`, which connects over mTLS. See the agent documentation for
+details, including the `deploy/agent/strato-node-bootstrap.sh` helper.
 
 ## Notes
 
