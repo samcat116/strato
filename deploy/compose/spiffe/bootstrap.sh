@@ -28,15 +28,24 @@ mkdir -p "$HANDOFF"
 
 # 1. Control-plane (Envoy) server-cert entry. The envoyproxy image runs its
 #    process as uid 101; the control-plane-side agent attests it by that uid
-#    over the Workload API. Tolerate re-runs: a duplicate entry create is a
-#    no-op error we ignore.
+#    over the Workload API. A duplicate create on re-run is tolerated, but any
+#    OTHER failure is fatal — Envoy's server SVID depends on this entry, so
+#    starting without it would leave agents unable to complete mTLS.
 log "Creating control-plane workload entry (${CP_WORKLOAD}, unix:uid:101)"
-spire-server entry create \
+if ! entry_out=$(spire-server entry create \
     -socketPath "$SOCK" \
     -parentID "$CP_NODE" \
     -spiffeID "$CP_WORKLOAD" \
     -selector unix:uid:101 \
-    -x509SVIDTTL 3600 2>&1 | sed 's/^/    /' || true
+    -x509SVIDTTL 3600 2>&1); then
+    printf '%s\n' "$entry_out" | sed 's/^/    /' >&2
+    if ! printf '%s' "$entry_out" | grep -qiE "already exists|similar entry"; then
+        die "failed to create control-plane workload entry"
+    fi
+    log "Entry already exists; continuing"
+else
+    printf '%s\n' "$entry_out" | sed 's/^/    /'
+fi
 
 # 2. Single-use join token pinned to the control-plane node identity. The agent
 #    redeems it on first attestation and uses its own node SVID thereafter, so a

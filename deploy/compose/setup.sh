@@ -54,6 +54,13 @@ if [[ -f .env ]]; then
     echo "Agents authenticate over Envoy mTLS now — set it to your hostname with"
     echo ":${AGENT_MTLS_PORT} appended, or agent bootstrap commands will dial the wrong port."
   fi
+  # An existing .env generated with HTTP_PORT == the mTLS port can't stand up:
+  # nginx and Envoy would both try to publish that host port.
+  if grep -qE "^HTTP_PORT=${AGENT_MTLS_PORT}\$" .env; then
+    echo
+    echo "WARNING: HTTP_PORT in .env is ${AGENT_MTLS_PORT}, which collides with the"
+    echo "agent mTLS port. Change HTTP_PORT — nginx and Envoy cannot share it."
+  fi
   exit 0
 fi
 
