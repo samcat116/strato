@@ -1,0 +1,131 @@
+control-plane/web/src/types/api.ts
+  s_0226cff00d1a8c::t_f075769b9cdc6c 230-232,269-270,275-291,420-422
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_0226cff00d1a8c::t_2f086e51d264b7 78-81
+control-plane/Tests/AppTests/AgentWebSocketIntegrationTests.swift
+  s_0226cff00d1a8c::t_e376ccdc0e0593 97-104
+  s_0226cff00d1a8c::t_bf789858b69725 142-144
+  s_0226cff00d1a8c::t_265ff06b4d6efd 127-128,130
+  s_0226cff00d1a8c::t_dfa77e4c2a22d7 23-29,36-38
+control-plane/Sources/App/Services/AgentService.swift
+  s_0226cff00d1a8c::t_cbfa5249162cfa 270,329-333,335-359
+  s_0226cff00d1a8c::t_769c8d1967666b 178-189,232-235,241-269
+  s_0226cff00d1a8c::t_8dcf5123e669cc 334
+  s_0226cff00d1a8c::t_37e3d84e8f488d 201,220-231
+  s_0226cff00d1a8c::t_8812fe7bfad338 305-313
+  s_0226cff00d1a8c::t_fc5a44b97f1434 271
+Taskfile.yml
+  s_0226cff00d1a8c::t_4ad6d644118f53 1007-1009,1011,1018-1019
+spicedb/schema.zed
+  s_0226cff00d1a8c::t_dc71a5fca1c783 42
+  s_0226cff00d1a8c::t_abe6158c817be5 67-85
+control-plane/Sources/App/Models/Site.swift
+  s_0226cff00d1a8c::t_70b7592a8179ca 39-48,57-63,68-87
+  s_0226cff00d1a8c::t_92285b014bb375 98-99,107-108,116-118
+control-plane/web/src/lib/api/sites.ts
+  s_0226cff00d1a8c::t_e3321314490ec4 1-30
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_0226cff00d1a8c::t_eb38ca910a3dcf 1-405
+control-plane/web/src/components/layout/nav.ts
+  s_0226cff00d1a8c::t_2f891d1fc3b020 14
+  s_0226cff00d1a8c::t_5a507b77ff656c 39
+control-plane/Sources/App/Migrations/BackfillInfraOrganizationScope.swift
+  s_0226cff00d1a8c::t_521c56aae27ed1 1-18,40-46
+  s_0226cff00d1a8c::t_5c7c2d12ecaaef 19-39
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_0226cff00d1a8c::t_bd25a3b62fa9cf 19-22,27-32,36-40,46-74
+  s_0226cff00d1a8c::t_531a3e1cd87790 267,273-293,296,308-313
+  s_0226cff00d1a8c::t_29ce64fa810c4e 239-240
+  s_0226cff00d1a8c::t_1c14a2cc95b8f3 505-514
+  s_0226cff00d1a8c::t_7ca7fcfc355ac2 534
+  s_0226cff00d1a8c::t_ef08a6ca30b27b 199,392,398-417,419,423,425,437-438,454
+  s_0226cff00d1a8c::t_05c1e518770ba6 158-163,187-190,192,195-198
+  s_0226cff00d1a8c::t_aa7391ba2d6fc0 75-76,314,552-630
+  s_0226cff00d1a8c::t_084df3d4282564 77,315,455,535
+control-plane/Sources/App/Models/OrganizationScope.swift
+  s_0226cff00d1a8c::t_5aeaed23b3c21f 1-86
+control-plane/Sources/App/configure.swift
+  s_0226cff00d1a8c::t_49f51a40db35b6 301-305
+  s_0226cff00d1a8c::t_3b1a21fb36751e 324-325
+control-plane/Sources/App/Services/SpiceDBInfraReconciliation.swift
+  s_0226cff00d1a8c::t_2e6af67739ba8a 1-64
+control-plane/Sources/App/Services/AgentService+Types.swift
+  s_0226cff00d1a8c::t_86d05c66e4503a 47-50
+  s_0226cff00d1a8c::t_78f0c792b45a73 25
+docs/deployment/agents.md
+  s_0226cff00d1a8c::t_0cd127e66e4460 65-68
+control-plane/Tests/AppTests/ReplicaRoutingTests.swift
+  s_0226cff00d1a8c::t_2fd3049279aa15 164-175
+control-plane/Sources/App/Services/SpiceDBSchemaBootstrap.swift
+  s_0226cff00d1a8c::t_42a13cd16b0c36 10-17,24-25,27-34,41-53
+  s_eb8d88f42f560f::t_084a04d9438b7c 54-55
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_0226cff00d1a8c::t_90359a4c3e93ed 59-64,70
+  s_0226cff00d1a8c::t_027b930fc3a6f4 16-22,24
+  s_0226cff00d1a8c::t_4b9928bf75648d 39,43-45
+  s_0226cff00d1a8c::t_8e4975da0ba3c8 281-307
+  s_0226cff00d1a8c::t_a66a33e19e73c4 280
+control-plane/Sources/App/Models/Agent.swift
+  s_0226cff00d1a8c::t_caa9ececff47ef 242-243
+  s_0226cff00d1a8c::t_d8c66748293c04 79-88
+  s_0226cff00d1a8c::t_8a259c6356729b 206-225
+  s_0226cff00d1a8c::t_2526e39429a8b7 264-265
+control-plane/Sources/App/Migrations/AddOrganizationScopeToInfra.swift
+  s_0226cff00d1a8c::t_39c1466ebedca5 1-58
+control-plane/web/src/components/agents/agent-table.tsx
+  s_0226cff00d1a8c::t_55c16725bbf6af 22-36
+  s_0226cff00d1a8c::t_090b1ee6dfe1e3 85
+  s_0226cff00d1a8c::t_0b2cb6b24ee6fa 13
+  s_0226cff00d1a8c::t_caa477418d202f 61
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_0226cff00d1a8c::t_3cdeb0e5b066f8 51-58,67,72,110,117,130,137,151,156,170,174
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_0226cff00d1a8c::t_f1ea2db84f2b66 1-286
+control-plane/Sources/App/Models/AgentRegistrationToken.swift
+  s_0226cff00d1a8c::t_f5d1243ed84e82 60-61,69-70,74-79
+  s_0226cff00d1a8c::t_1817fbac0eb910 80,172-173,187-188,198-199,201-215,231-232
+  s_0226cff00d1a8c::t_655600455ea6ca 31-42
+  s_eb8d88f42f560f::t_767d7d8e8d3cd0 81
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_0226cff00d1a8c::t_8a7b35dcc4cd1e 35-38
+  s_0226cff00d1a8c::t_45b5900302d7eb 452,456-457
+  s_0226cff00d1a8c::t_34675ebc7f06d9 371,373-379
+control-plane/Tests/AppTests/SiteTests.swift
+  s_0226cff00d1a8c::t_32b9ca5392992c 325-326,328-329,336-337,343-345
+  s_0226cff00d1a8c::t_dd474de89f20a8 161,189,220,239,253,269-270,297-298,355,477,517,534
+  s_0226cff00d1a8c::t_7e4ca58a97873d 56-58,77-80,84-90
+  s_0226cff00d1a8c::t_8612de95803588 338-339
+  s_0226cff00d1a8c::t_a4e4ebfb3b584d 109-110,114-117,123,127,130-143
+  s_0226cff00d1a8c::t_93ecc9ecb703b2 91-92
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_0226cff00d1a8c::t_23fccbc3a33db5 76,78-96,100-102,108-116,122,130-137,143
+  s_0226cff00d1a8c::t_8ca790b9a91dac 284
+  s_0226cff00d1a8c::t_6e922a471fb262 23-25,29-61
+  s_0226cff00d1a8c::t_b74147ea375879 194
+  s_0226cff00d1a8c::t_15206721eb1b6e 210-218,224,233-241
+  s_eb8d88f42f560f::t_ccf92e7d938bb6 242
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1a37b454397731866e1e5012f679a168f0d73933",
+  "prompts": {},
+  "sessions": {
+    "s_0226cff00d1a8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da9cd801-49ec-4180-8b17-f0414c12a6a4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_eb8d88f42f560f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "100f01e6-cb6f-4ea1-acb7-8737af15ef62",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
