@@ -15,6 +15,7 @@ spec:
   selector:
     matchLabels:
       {{- include "strato-control-plane.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: control-plane
 {{- end }}
 ---
 {{- if and .Values.spicedb.enabled .Values.spicedb.podDisruptionBudget.enabled }}
