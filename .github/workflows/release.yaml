@@ -277,8 +277,6 @@ jobs:
 
           volumes:
             db_data:
-            cloud_hypervisor_socket:
-            vm_images:
 
           networks:
             strato-network:
@@ -334,17 +332,18 @@ jobs:
               networks:
                 - strato-network
 
-            agent:
-              image: ghcr.io/${{ github.repository }}-agent:${{ github.ref_name }}
-              depends_on:
-                - control-plane
-              volumes:
-                - cloud_hypervisor_socket:/var/run/cloud-hypervisor
-                - vm_images:/images
-              networks:
-                - strato-network
-              privileged: true
-              command: ["--control-plane-url", "ws://control-plane:8080/agent/ws", "--hypervisor-socket", "/var/run/cloud-hypervisor/cloud-hypervisor.sock", "--log-level", "info"]
+            # Agents are NOT part of this stack. Each hypervisor host runs its
+            # own agent, enrolled with a per-host registration token via
+            # `strato-agent join` (or deploy/agent/install.sh). See
+            # docs/deployment/agents.md for the Docker/systemd invocation:
+            #   docker run -d --name strato-agent --restart unless-stopped \
+            #     --user root --device /dev/kvm \
+            #     -v /var/lib/strato:/var/lib/strato -v /etc/strato:/etc/strato \
+            #     ghcr.io/${{ github.repository }}-agent:${{ github.ref_name }} \
+            #     join 'ws://strato.example.com/agent/ws?token=...&name=hv-01'
+            # `--user root` is required: the root-owned /var/lib/strato and
+            # /etc/strato paths (and the join state-file write check) need root,
+            # matching the "run join as root on Linux" guidance in the docs.
 
             migrate:
               image: ghcr.io/${{ github.repository }}-control-plane:${{ github.ref_name }}

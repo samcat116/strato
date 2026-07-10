@@ -52,12 +52,17 @@ instructions if it isn't; to run unprivileged, pass `--state-file` (and
 
 ```bash
 docker run -d --name strato-agent --restart unless-stopped \
-  --device /dev/kvm \
+  --user root --device /dev/kvm \
   -v /var/lib/strato:/var/lib/strato \
   -v /etc/strato:/etc/strato \
   ghcr.io/samcat116/strato-agent:latest \
   join 'ws://strato.example.com/agent/ws?token=...&name=hv-01'
 ```
+
+`--user root` is required: the image runs as the non-root `strato` user by
+default, but the root-owned `/var/lib/strato` and `/etc/strato` paths — and
+the join state-file write check — need root, matching the same-as-`strato-agent
+join`-on-Linux guidance below.
 
 The `/var/lib/strato` mount persists both VM disks and the join state, so
 `docker restart strato-agent` reconnects without a new token. With
