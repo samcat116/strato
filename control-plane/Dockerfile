@@ -32,8 +32,10 @@ RUN swift package resolve \
 WORKDIR /build/control-plane
 COPY ./control-plane .
 
-# Copy artifacts directory (always exists due to workflow preparation)
-COPY ./artifacts /build/artifacts
+# Copy prebuilt artifacts if present. The [s] glob keeps plain
+# `docker build -f control-plane/Dockerfile .` working when ./artifacts
+# doesn't exist (a zero-match glob COPY succeeds and copies nothing).
+COPY ./artifact[s] /build/artifacts/
 
 # Build the application only if not using prebuilt artifacts
 RUN if [ -z "$PREBUILT_ARTIFACTS" ]; then \
