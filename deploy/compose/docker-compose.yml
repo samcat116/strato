@@ -164,15 +164,46 @@ services:
 
   # Bridges the SPIRE server admin socket to TCP so the control plane (a
   # different container, non-root uid) can reach the registration API without
-  # Unix-socket permission juggling.
+  # Unix-socket permission juggling. The registration API is unauthenticated, so
+  # this runs in the control-plane's network namespace and binds loopback only —
+  # reachable by the control plane (and its Envoy sidecar), never by other
+  # containers on the compose network.
   spire-api-bridge:
     image: alpine/socat
-    command: ["TCP-LISTEN:8081,fork,reuseaddr", "UNIX-CONNECT:/tmp/spire-server/private/api.sock"]
+    command: ["TCP-LISTEN:8081,fork,reuseaddr,bind=127.0.0.1", "UNIX-CONNECT:/tmp/spire-server/private/api.sock"]
+    network_mode: "service:control-plane"
     volumes:
       - spire_server_api:/tmp/spire-server/private
     depends_on:
       spire-server:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Keeps the exported trust bundle fresh. SPIRE rotates its CA within ca_ttl,
+  # and the control plane re-verifies forwarded client certs against this file,
+  # so a one-time export would go stale and reject valid agent certs after
+  # rotation. Re-exports on an interval (atomic rename); the control plane
+  # reloads it via SPIRE_BUNDLE_REFRESH_INTERVAL.
+  spire-bundle-refresher:
+    build:
+      context: ./spiffe
+    image: strato-spire-helper:local
+    command:
+      - bash
+      - -c
+      - |
+        while true; do
+          spire-server bundle show -socketPath /tmp/spire-server/private/api.sock -format pem \
+            > /handoff/bundle.pem.tmp 2>/dev/null \
+            && mv /handoff/bundle.pem.tmp /handoff/bundle.pem
+          sleep 3600
+        done
+    volumes:
+      - spire_server_api:/tmp/spire-server/private
+      - spire_handoff:/handoff
+    depends_on:
+      spire-bootstrap:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # Control-plane-side SPIRE agent: serves Envoy's SDS (server SVID + trust
@@ -269,15 +300,17 @@ services:
       # spire-bootstrap) lets the control plane re-verify forwarded client
       # certs. Trust domain defaults to strato.local (see ./spiffe/*.conf).
       SPIRE_ENABLED: "true"
-      SPIRE_SERVER_API_ADDRESS: spire-api-bridge:8081
+      # The socat bridge shares this container's network namespace, so it is on
+      # loopback (never exposed to the compose network).
+      SPIRE_SERVER_API_ADDRESS: 127.0.0.1:8081
       SPIRE_TRUST_BUNDLE_PATH: /run/spire/handoff/bundle.pem
     ports:
       # Published on behalf of the Envoy sidecar (network_mode: service:
-      # control-plane). Agents dial wss://<host>:<AGENT_MTLS_PORT>/agent/ws;
-      # 9901 is Envoy's admin, loopback only. The control plane's own :8080 is
-      # not published — it stays on the internal network behind the proxy.
+      # control-plane): agents dial wss://<host>:<AGENT_MTLS_PORT>/agent/ws. The
+      # control plane's own :8080 is not published — it stays on the internal
+      # network behind the proxy. Envoy's admin is not published either; it binds
+      # loopback inside this namespace (docker exec to reach it).
       - "${AGENT_MTLS_PORT:-8443}:8443"
-      - "127.0.0.1:9901:9901"
     volumes:
       - image_storage:/app/images
       - spire_handoff:/run/spire/handoff:ro
@@ -294,8 +327,6 @@ services:
         condition: service_completed_successfully
       spire-bootstrap:
         condition: service_completed_successfully
-      spire-api-bridge:
-        condition: service_started
     restart: unless-stopped
 
   frontend:

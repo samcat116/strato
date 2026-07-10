@@ -149,8 +149,11 @@ static_resources:
                     pipe:
                       path: /run/spire/agent/sockets/workload.sock
 
+# Admin binds loopback only. Envoy runs in the control-plane container's network
+# namespace (network_mode: service:control-plane), so 0.0.0.0 here would expose
+# admin on that container's compose-network interface to every other container.
 admin:
   address:
     socket_address:
-      address: 0.0.0.0
+      address: 127.0.0.1
       port_value: 9901

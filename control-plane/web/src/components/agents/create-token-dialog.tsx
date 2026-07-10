@@ -147,34 +147,38 @@ export function CreateTokenDialog({
               </div>
             )}
 
-            <div className="p-4 bg-background rounded-lg border border-border">
-              <Label className="text-muted-foreground text-sm">
-                {bootstrapCommand
-                  ? "Or join without SPIRE (token auth only):"
-                  : "Run this command on your hypervisor host:"}
-              </Label>
-              <div className="flex items-start gap-2 mt-2">
-                <code className="flex-1 min-w-0 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono whitespace-pre-wrap break-all">
-                  {joinCommand}
-                </code>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="border-input shrink-0"
-                  onClick={() => handleCopy("join")}
-                >
-                  {copiedCommand === "join" ? (
-                    <Check className="h-4 w-4 text-green-600" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
+            {/* Token-only join. Hidden when a bootstrap command is present:
+                the control plane requires mTLS then, so the Envoy listener
+                rejects any connection without an SVID and these commands would
+                fail before token auth runs. */}
+            {!bootstrapCommand && (
+              <div className="p-4 bg-background rounded-lg border border-border">
+                <Label className="text-muted-foreground text-sm">
+                  Run this command on your hypervisor host:
+                </Label>
+                <div className="flex items-start gap-2 mt-2">
+                  <code className="flex-1 min-w-0 p-2 bg-gray-950 rounded text-sm text-green-400 font-mono whitespace-pre-wrap break-all">
+                    {joinCommand}
+                  </code>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-input shrink-0"
+                    onClick={() => handleCopy("join")}
+                  >
+                    {copiedCommand === "join" ? (
+                      <Check className="h-4 w-4 text-green-600" />
+                    ) : (
+                      <Copy className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
+                <p className="text-sm text-muted-foreground mt-2">
+                  The agent joins, stays running, and reconnects automatically
+                  after restarts.
+                </p>
               </div>
-              <p className="text-sm text-muted-foreground mt-2">
-                The agent joins, stays running, and reconnects automatically
-                after restarts.
-              </p>
-            </div>
+            )}
 
             <div className="p-4 bg-blue-500/10 rounded-lg border border-blue-500/30">
               <p className="text-sm text-blue-800">
@@ -186,28 +190,30 @@ export function CreateTokenDialog({
               </p>
             </div>
 
-            <div className="space-y-2">
-              <Label className="text-muted-foreground text-sm">
-                Or run the agent in Docker (Linux hosts):
-              </Label>
-              <div className="flex items-start gap-2">
-                <code className="flex-1 min-w-0 p-3 bg-gray-950 rounded text-sm text-gray-200 font-mono whitespace-pre-wrap break-all">
-                  {dockerJoinCommand}
-                </code>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="border-input shrink-0"
-                  onClick={() => handleCopy("docker")}
-                >
-                  {copiedCommand === "docker" ? (
-                    <Check className="h-4 w-4 text-green-600" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
+            {!bootstrapCommand && (
+              <div className="space-y-2">
+                <Label className="text-muted-foreground text-sm">
+                  Or run the agent in Docker (Linux hosts):
+                </Label>
+                <div className="flex items-start gap-2">
+                  <code className="flex-1 min-w-0 p-3 bg-gray-950 rounded text-sm text-gray-200 font-mono whitespace-pre-wrap break-all">
+                    {dockerJoinCommand}
+                  </code>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-input shrink-0"
+                    onClick={() => handleCopy("docker")}
+                  >
+                    {copiedCommand === "docker" ? (
+                      <Check className="h-4 w-4 text-green-600" />
+                    ) : (
+                      <Copy className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         ) : (
           <form onSubmit={handleSubmit}>

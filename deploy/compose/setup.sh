@@ -44,11 +44,30 @@ done
 if [[ -f .env ]]; then
   echo ".env already exists — leaving it untouched."
   echo "To reconfigure non-secret settings, edit .env directly."
+  # Upgrade guard: agents now authenticate over Envoy mTLS on :${AGENT_MTLS_PORT},
+  # so EXTERNAL_HOSTNAME must carry that port. A .env generated before this
+  # (EXTERNAL_HOSTNAME = the browser endpoint) makes the control plane emit
+  # agent bootstrap URLs that dial the wrong port.
+  if grep -q '^EXTERNAL_HOSTNAME=' .env && ! grep -qE "^EXTERNAL_HOSTNAME=.+:${AGENT_MTLS_PORT}\$" .env; then
+    echo
+    echo "WARNING: EXTERNAL_HOSTNAME in .env is not '<hostname>:${AGENT_MTLS_PORT}'."
+    echo "Agents authenticate over Envoy mTLS now — set it to your hostname with"
+    echo ":${AGENT_MTLS_PORT} appended, or agent bootstrap commands will dial the wrong port."
+  fi
   exit 0
 fi
 
 if ! command -v openssl >/dev/null 2>&1; then
   echo "Error: openssl is required to generate secrets." >&2
+  exit 1
+fi
+
+# The Envoy agent-mTLS listener claims ${AGENT_MTLS_PORT}; the browser proxy
+# cannot also bind it. Reject the collision rather than generate an unstartable
+# stack (both services would try to publish the same host port).
+if [[ "$PORT_ARG" == "$AGENT_MTLS_PORT" ]]; then
+  echo "Error: --port $PORT_ARG collides with the agent mTLS port (${AGENT_MTLS_PORT})." >&2
+  echo "Pick a different HTTP port (the mTLS listener needs ${AGENT_MTLS_PORT})." >&2
   exit 1
 fi
 
