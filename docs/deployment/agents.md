@@ -4,7 +4,37 @@ Agents run on hypervisor hosts and execute VMs via QEMU (KVM on Linux, HVF on
 macOS; Firecracker optionally on Linux). They connect out to the control
 plane over WebSocket — no inbound ports needed on the hypervisor.
 
+## One-command install (recommended)
+
+On a fresh Linux host with nothing installed, the install script downloads the
+agent binary, installs the host dependencies (QEMU, and OVN/OVS for SDN
+networking), installs a systemd service, and joins the control plane — all from
+the registration URL you copy out of the UI (**Agents → Create Registration
+Token**):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
+  | sudo bash -s -- --registration-url 'wss://strato.example.com/agent/ws?token=...&name=hv-01'
+```
+
+The script detects the host OS/arch, verifies the download checksum, runs a
+host preflight, enables `strato-agent.service`, and hands off to systemd so the
+node survives reboots. Useful flags (`--help` lists them all):
+
+- `--network-mode user` — skip OVN/OVS packages (dev/test, no SDN)
+- `--version vX.Y.Z` — pin a release instead of `latest`
+- `--no-systemd` — install the binary + deps but don't manage a service
+- `--no-deps` — you manage host packages yourself
+
+Run it **without** `--registration-url` to install the binary, dependencies,
+and service now and register later (or re-run with the URL when you have a
+token). No published binary exists for a given OS/arch? Use the Docker image
+below, or build from source.
+
 ## Joining a control plane
+
+If the agent is already installed (via the script above, a package, or a
+manual binary drop), a single command registers it:
 
 1. In the web UI, go to **Agents → Create Registration Token**, enter a name
    for the host, and copy the generated command.
@@ -71,6 +101,8 @@ backoff keeps it from hammering the control plane.
 
 ## Running as a systemd service (Linux)
 
+The [install script](#one-command-install-recommended) writes and enables this
+unit for you. Write it by hand only if you installed the binary some other way.
 After a successful `strato-agent join`, the state and config files make plain
 restarts self-sufficient:
 
