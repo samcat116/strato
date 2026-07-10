@@ -72,6 +72,11 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(spire.trustDomain == "strato.local")
                 #expect(spire.serverAddress == "spire.example.com:8085")
 
+                // With SPIRE provisioning active, agents dial the Envoy mTLS
+                // listener, which is always TLS — the URL must be wss:// even
+                // though this test request arrived over plain HTTP.
+                #expect(response.registrationURL.hasPrefix("wss://"))
+
                 let command = try #require(response.bootstrapCommand)
                 #expect(command.contains(response.registrationURL))
                 #expect(command.contains("fake-join-token"))
@@ -304,6 +309,60 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             // The token must remain revocable after SPIRE recovers
             let remaining = try await AgentRegistrationToken.query(on: app.db).count()
             #expect(remaining == 1)
+        }
+    }
+
+    @Test("Revoking a token whose node never attested tolerates SPIRE invalidArgument on evict")
+    func revokeToleratesNeverAttestedEvict() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = FakeSPIREServerAPI()
+            // A never-redeemed join token means DeleteAgent hits "not an agent"
+            // (invalidArgument). Cancelling the grant must still succeed — there
+            // is nothing to evict — rather than 502 and strand the token.
+            await fake.setEvictInvalidArgument(true)
+            installFakeSPIRE(on: app, fake: fake)
+
+            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
+            try await token.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            // The entries were still deleted; only the (nonexistent) eviction
+            // was a no-op.
+            let deleted = await fake.deletedSPIFFEIDs
+            #expect(deleted == ["spiffe://strato.local/agent/node-a", "spiffe://strato.local/node/node-a"])
+            let remaining = try await AgentRegistrationToken.query(on: app.db).count()
+            #expect(remaining == 0)
+        }
+    }
+
+    @Test("Deregistering a legacy agent tolerates SPIRE invalidArgument on entry deletion")
+    func deregisterToleratesMalformedIDDelete() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let fake = FakeSPIREServerAPI()
+            // Legacy agent names with illegal SPIFFE characters (e.g. spaces)
+            // make ListEntries reject the filter with invalidArgument. Deleting
+            // such an agent must still succeed — no such entry can exist.
+            await fake.setDeleteInvalidArgument(true)
+            installFakeSPIRE(on: app, fake: fake)
+
+            let agent = makeAgent(named: "node-a")
+            try await agent.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            let remaining = try await Agent.query(on: app.db).count()
+            #expect(remaining == 0)
         }
     }
 
@@ -564,11 +623,19 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     private var failJoinToken = false
     private var failCreateEntry = false
     private var failDelete = false
+    private var deleteInvalidArgument = false
+    private var evictInvalidArgument = false
     private var entryResult: SPIREEntryCreationResult = .created(entryID: "entry-1")
 
     func setFailJoinToken(_ fail: Bool) { failJoinToken = fail }
     func setFailCreateEntry(_ fail: Bool) { failCreateEntry = fail }
     func setFailDelete(_ fail: Bool) { failDelete = fail }
+    /// deleteEntries throws invalidArgument, as SPIRE does for a malformed
+    /// SPIFFE ID filter (legacy agent names with illegal characters).
+    func setDeleteInvalidArgument(_ fail: Bool) { deleteInvalidArgument = fail }
+    /// evictAgent throws invalidArgument, as SPIRE does when the id is not an
+    /// attested agent (a node that never redeemed its join token).
+    func setEvictInvalidArgument(_ fail: Bool) { evictInvalidArgument = fail }
     func setEntryResult(_ result: SPIREEntryCreationResult) { entryResult = result }
 
     func createJoinToken(ttlSeconds: Int32, agentID: String?) async throws -> SPIREJoinToken {
@@ -605,6 +672,9 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
         if failDelete {
             throw SPIREServerAPIError.unreachable("fake: SPIRE server down")
         }
+        if deleteInvalidArgument {
+            throw SPIREServerAPIError.invalidArgument("fake: malformed SPIFFE ID filter")
+        }
         deletedSPIFFEIDs.append(spiffeID)
         return 1
     }
@@ -612,6 +682,9 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     func evictAgent(spiffeID: String) async throws -> Bool {
         if failDelete {
             throw SPIREServerAPIError.unreachable("fake: SPIRE server down")
+        }
+        if evictInvalidArgument {
+            throw SPIREServerAPIError.invalidArgument("fake: id is not an attested agent")
         }
         evictedAgentIDs.append(spiffeID)
         return true

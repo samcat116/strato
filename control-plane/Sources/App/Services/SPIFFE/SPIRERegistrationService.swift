@@ -126,14 +126,20 @@ public struct SPIRERegistrationService: Sendable {
     public func deprovisionAgent(named agentName: String) async throws {
         let spiffeID = agentSPIFFEID(agentName: agentName)
         let nodeID = nodeSPIFFEID(agentName: agentName)
-        let workloadDeleted = try await api.deleteEntries(spiffeID: spiffeID)
-        let aliasesDeleted = try await api.deleteEntries(spiffeID: nodeID)
+        let workloadDeleted = try await tolerateNothingToRemove(0) {
+            try await self.api.deleteEntries(spiffeID: spiffeID)
+        }
+        let aliasesDeleted = try await tolerateNothingToRemove(0) {
+            try await self.api.deleteEntries(spiffeID: nodeID)
+        }
 
         // Entry deletion stops issuance, but a node that already attested
         // keeps renewing its *agent* SVID for the stable node ID — and would
         // regain workload issuance the moment a replacement grant recreates
         // the entry. Evict it so re-joining requires a fresh join token.
-        let evicted = try await api.evictAgent(spiffeID: nodeID)
+        let evicted = try await tolerateNothingToRemove(false) {
+            try await self.api.evictAgent(spiffeID: nodeID)
+        }
 
         logger.info(
             "Deprovisioned agent in SPIRE",
@@ -144,6 +150,28 @@ public struct SPIRERegistrationService: Sendable {
                 "nodeAliasesDeleted": .string("\(aliasesDeleted)"),
                 "attestedAgentEvicted": .string(evicted ? "yes" : "no"),
             ])
+    }
+
+    /// Run a SPIRE cleanup call, treating `invalidArgument` as a benign no-op.
+    ///
+    /// A malformed SPIFFE ID filter (legacy agent names with characters the
+    /// SPIFFE spec forbids, e.g. spaces) or an id that was never an attested
+    /// agent (`DeleteAgent` on a node that never redeemed its join token) both
+    /// surface as `invalidArgument` — there is provably nothing to remove, so
+    /// failing the whole revocation would only strand the operator. Unreachable
+    /// and other errors still propagate so callers fail closed.
+    private func tolerateNothingToRemove<T>(
+        _ nothing: T, _ operation: () async throws -> T
+    ) async throws -> T {
+        do {
+            return try await operation()
+        } catch let error as SPIREServerAPIError {
+            guard case .invalidArgument(let detail) = error else { throw error }
+            logger.warning(
+                "SPIRE cleanup skipped nothing-to-remove target",
+                metadata: ["detail": .string(detail)])
+            return nothing
+        }
     }
 
     /// Agent names become SPIFFE ID path segments; restrict them to the

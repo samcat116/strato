@@ -2,12 +2,20 @@
 #
 # Quick start:
 #   ./setup.sh                 # generates .env with strong secrets (idempotent)
-#   docker compose up -d
+#   docker compose up -d       # builds the small SPIRE helper image, pulls the rest
 #   open http://localhost      # first registered user becomes system admin
 #
+# Agents authenticate with X.509 SVIDs over mTLS by default: a SPIRE server
+# issues identities, an Envoy front terminates agent mTLS on :8443, and the
+# control plane provisions SPIRE (join token + workload entry) whenever an admin
+# creates a registration token. The emitted bootstrap command brings up a
+# hypervisor node's spire-agent + strato-agent. See ./spiffe/ for the SPIRE and
+# Envoy configuration and deploy/agent/strato-node-bootstrap.sh for the node side.
+#
 # All credentials come from .env (created by setup.sh, mode 0600); nothing is
-# hardcoded here. The one-shot services (spicedb-migrate, spicedb-schema) exit
-# 0 after doing their job — that is expected in `docker compose ps`.
+# hardcoded here. The one-shot services (spicedb-migrate, spicedb-schema,
+# image-storage-init, spire-bootstrap) exit 0 after doing their job — that is
+# expected in `docker compose ps`.
 #
 # For local development from source, use the docker-compose.yml at the
 # repository root instead.
@@ -111,6 +119,137 @@ services:
       - image_storage:/images
     restart: "no"
 
+  # ---------------------------------------------------------------------------
+  # SPIFFE/SPIRE + Envoy mTLS (default agent authentication)
+  #
+  # The helper image layers the SPIRE binaries onto a shell base (the official
+  # ghcr.io/spiffe images are distroless), so the same image serves the server,
+  # the one-shot bootstrap, and the control-plane-side agent. It is built
+  # locally from ./spiffe/Dockerfile on first `up`.
+  # ---------------------------------------------------------------------------
+  spire-server:
+    build:
+      context: ./spiffe
+    image: strato-spire-helper:local
+    command: ["spire-server", "run", "-config", "/spiffe/spire-server.conf"]
+    volumes:
+      - ./spiffe:/spiffe:ro
+      - spire_server_data:/var/lib/spire/server
+      - spire_server_api:/tmp/spire-server/private
+    ports:
+      # Node API: hypervisor agents dial this for attestation.
+      - "${SPIRE_NODE_PORT:-8085}:8085"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8086/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # One-shot: create the control-plane (Envoy) workload entry, mint the CP-side
+  # agent join token, export the trust bundle. Exits 0.
+  spire-bootstrap:
+    build:
+      context: ./spiffe
+    image: strato-spire-helper:local
+    command: ["bash", "/spiffe/bootstrap.sh"]
+    volumes:
+      - ./spiffe:/spiffe:ro
+      - spire_server_api:/tmp/spire-server/private
+      - spire_handoff:/handoff
+    depends_on:
+      spire-server:
+        condition: service_healthy
+    restart: "no"
+
+  # Bridges the SPIRE server admin socket to TCP so the control plane (a
+  # different container, non-root uid) can reach the registration API without
+  # Unix-socket permission juggling. The registration API is unauthenticated, so
+  # this runs in the control-plane's network namespace and binds loopback only —
+  # reachable by the control plane (and its Envoy sidecar), never by other
+  # containers on the compose network.
+  spire-api-bridge:
+    image: alpine/socat
+    command: ["TCP-LISTEN:8081,fork,reuseaddr,bind=127.0.0.1", "UNIX-CONNECT:/tmp/spire-server/private/api.sock"]
+    network_mode: "service:control-plane"
+    volumes:
+      - spire_server_api:/tmp/spire-server/private
+    depends_on:
+      spire-server:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Keeps the exported trust bundle fresh. SPIRE rotates its CA within ca_ttl,
+  # and the control plane re-verifies forwarded client certs against this file,
+  # so a one-time export would go stale and reject valid agent certs after
+  # rotation. Re-exports on an interval (atomic rename); the control plane
+  # reloads it via SPIRE_BUNDLE_REFRESH_INTERVAL.
+  spire-bundle-refresher:
+    build:
+      context: ./spiffe
+    image: strato-spire-helper:local
+    command:
+      - bash
+      - -c
+      - |
+        while true; do
+          spire-server bundle show -socketPath /tmp/spire-server/private/api.sock -format pem \
+            > /handoff/bundle.pem.tmp 2>/dev/null \
+            && mv /handoff/bundle.pem.tmp /handoff/bundle.pem
+          sleep 3600
+        done
+    volumes:
+      - spire_server_api:/tmp/spire-server/private
+      - spire_handoff:/handoff
+    depends_on:
+      spire-bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Control-plane-side SPIRE agent: serves Envoy's SDS (server SVID + trust
+  # bundle). Attests Envoy by unix uid over the shared Workload API socket.
+  # pid: host so the unix attestor can resolve the caller's /proc (Envoy runs
+  # in its own PID namespace); without it attestation fails with "could not
+  # resolve caller information".
+  spire-agent-cp:
+    build:
+      context: ./spiffe
+    image: strato-spire-helper:local
+    command: ["bash", "/spiffe/agent-cp-entrypoint.sh"]
+    pid: host
+    volumes:
+      - ./spiffe:/spiffe:ro
+      - spire_handoff:/handoff:ro
+      - spire_agent_cp_data:/var/lib/spire/agent
+      - spire_cp_sockets:/run/spire/agent/sockets
+    depends_on:
+      spire-bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # mTLS front for agent connections. Terminates agent mTLS on :8443, validates
+  # client SVIDs against the SPIRE trust bundle, and forwards the client cert
+  # (XFCC) so the control plane re-verifies the SPIFFE identity.
+  # Envoy runs as a sidecar in the control-plane container's network namespace
+  # so it reaches the control plane over loopback — the control plane only
+  # trusts the forwarded client-cert (XFCC) header from a loopback peer. Because
+  # it shares that namespace, its listener ports (8443 mTLS, 9901 admin) are
+  # published on the control-plane service, not here.
+  envoy:
+    image: envoyproxy/envoy:v1.31.0
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]
+    network_mode: "service:control-plane"
+    volumes:
+      - ./spiffe/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - spire_cp_sockets:/run/spire/agent/sockets
+    # No healthcheck: the distroless Envoy image ships no HTTP client to probe
+    # its own /ready listener, and nothing gates on its health. Readiness is
+    # observable via the admin interface on 127.0.0.1:9901.
+    depends_on:
+      - spire-agent-cp
+      - control-plane
+    restart: unless-stopped
+
   control-plane:
     image: ghcr.io/samcat116/strato-control-plane:${STRATO_VERSION:-latest}
     # To run from source instead of the published image, comment out `image:`
@@ -136,6 +275,9 @@ services:
       WEBAUTHN_RELYING_PARTY_ID: ${WEBAUTHN_RELYING_PARTY_ID}
       WEBAUTHN_RELYING_PARTY_NAME: ${WEBAUTHN_RELYING_PARTY_NAME:-Strato}
       WEBAUTHN_RELYING_PARTY_ORIGIN: ${WEBAUTHN_RELYING_PARTY_ORIGIN}
+      # Agent-facing host:port — the Envoy mTLS listener, NOT the browser proxy.
+      # setup.sh sets this to <hostname>:<AGENT_MTLS_PORT>. The control plane
+      # derives the SPIRE node address from it as <hostname>:8085.
       EXTERNAL_HOSTNAME: ${EXTERNAL_HOSTNAME:-${STRATO_HOSTNAME}}
       # Secure session cookie + HSTS; only when TLS is terminated in front of the
       # proxy (setup.sh sets this from the origin scheme). Defaults off so a
@@ -153,8 +295,25 @@ services:
       OTEL_METRICS_ENABLED: "false"
       OTEL_LOGS_ENABLED: "false"
       OTEL_TRACES_ENABLED: "false"
+      # SPIFFE/SPIRE: enable mTLS agent auth and SPIRE provisioning. The server
+      # API is reached over the socat bridge; the trust bundle (exported by
+      # spire-bootstrap) lets the control plane re-verify forwarded client
+      # certs. Trust domain defaults to strato.local (see ./spiffe/*.conf).
+      SPIRE_ENABLED: "true"
+      # The socat bridge shares this container's network namespace, so it is on
+      # loopback (never exposed to the compose network).
+      SPIRE_SERVER_API_ADDRESS: 127.0.0.1:8081
+      SPIRE_TRUST_BUNDLE_PATH: /run/spire/handoff/bundle.pem
+    ports:
+      # Published on behalf of the Envoy sidecar (network_mode: service:
+      # control-plane): agents dial wss://<host>:<AGENT_MTLS_PORT>/agent/ws. The
+      # control plane's own :8080 is not published — it stays on the internal
+      # network behind the proxy. Envoy's admin is not published either; it binds
+      # loopback inside this namespace (docker exec to reach it).
+      - "${AGENT_MTLS_PORT:-8443}:8443"
     volumes:
       - image_storage:/app/images
+      - spire_handoff:/run/spire/handoff:ro
     depends_on:
       db:
         condition: service_healthy
@@ -165,6 +324,8 @@ services:
       valkey:
         condition: service_healthy
       image-storage-init:
+        condition: service_completed_successfully
+      spire-bootstrap:
         condition: service_completed_successfully
     restart: unless-stopped
 
@@ -195,3 +356,8 @@ volumes:
   postgres_data:
   valkey_data:
   image_storage:
+  spire_server_data:
+  spire_server_api:
+  spire_handoff:
+  spire_agent_cp_data:
+  spire_cp_sockets:
