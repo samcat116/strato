@@ -1,0 +1,65 @@
+control-plane/Sources/App/Migrations/CreateSSFStream.swift
+  s_7fd9b55b2a3f1e::t_46011830f9903d 1-41
+control-plane/Sources/App/Models/User.swift
+  s_7fd9b55b2a3f1e::t_908b52fd284f32 40-49
+  s_7fd9b55b2a3f1e::t_5494aae9927455 91-92
+control-plane/Sources/App/configure.swift
+  s_7fd9b55b2a3f1e::t_153db1165836ae 526-530
+  s_7fd9b55b2a3f1e::t_a4bf0790a42870 202-206
+  s_7fd9b55b2a3f1e::t_861b252baec5ed 312-314
+  s_7fd9b55b2a3f1e::t_58791e1e8a9e4c 136-141
+control-plane/Sources/App/Models/SSFStream.swift
+  s_7fd9b55b2a3f1e::t_d46066ddb32197 1-275
+control-plane/Sources/App/Middleware/UserSecurityMiddleware.swift
+  s_7fd9b55b2a3f1e::t_666aadfb440faa 76-79,81
+  s_7fd9b55b2a3f1e::t_ac14b37df7920a 1-75,80,82-94
+control-plane/Sources/App/Controllers/SSFStreamController.swift
+  s_7fd9b55b2a3f1e::t_f559e0566f5d3f 1-163,165-276
+  s_7fd9b55b2a3f1e::t_0cbc7c6da2860e 164
+control-plane/Sources/App/routes.swift
+  s_7fd9b55b2a3f1e::t_f4b65427a254fc 41-43
+control-plane/Sources/App/Services/SSFSignalProcessor.swift
+  s_7fd9b55b2a3f1e::t_466cde4bc724b8 1-268
+control-plane/Sources/App/Migrations/AddSecurityStateToUser.swift
+  s_7fd9b55b2a3f1e::t_2b7ec074fc1786 1-31
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_7fd9b55b2a3f1e::t_60dcb48d2f30fe 36-37,40
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_7fd9b55b2a3f1e::t_23c6207c83d469 358
+docs/.vitepress/config.mts
+  s_7fd9b55b2a3f1e::t_dbf44c99016351 55
+control-plane/Sources/App/Controllers/UserController.swift
+  s_7fd9b55b2a3f1e::t_22eb0fa06ea9d5 257
+  s_7fd9b55b2a3f1e::t_1d314adfdbe3c3 198
+docs/deployment/shared-signals.md
+  s_7fd9b55b2a3f1e::t_7958d5c77cb094 1-55
+control-plane/Tests/AppTests/SSFTests.swift
+  s_7fd9b55b2a3f1e::t_991cf9ac19cc20 428-447,455-459,469-476,486,488-491,496-499,512-515,525-532,543-549,567-571
+  s_7fd9b55b2a3f1e::t_e5652e74b64a56 1-427,448-454,460-468,477-485,487,492-495,500-511,516-524,533-542,550-566,572-575
+control-plane/Package.swift
+  s_7fd9b55b2a3f1e::t_32f6d7dcf320e5 29-33
+  s_7fd9b55b2a3f1e::t_317bb2b8854d03 88
+control-plane/Sources/App/Services/SSFService.swift
+  s_7fd9b55b2a3f1e::t_15bcd6e093a393 1-71,73-102,104-156,158-164,166-172,174-192,194-203,205-220,222-326
+  s_7fd9b55b2a3f1e::t_acfb848aae60ba 193
+  s_7fd9b55b2a3f1e::t_84bcd6fc11c769 72,103,157,165,173,204
+  s_7fd9b55b2a3f1e::t_a083664ef2aa49 221
+control-plane/Package.resolved
+  s_7fd9b55b2a3f1e::t_985f926e23bd87 2,445-452
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "51b042460df0d637c6efd3474f0fffc1ca785cdb",
+  "prompts": {},
+  "sessions": {
+    "s_7fd9b55b2a3f1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53c35a4a-65e8-4363-8020-6eed993bf100",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
