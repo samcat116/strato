@@ -165,15 +165,15 @@ jobs:
         run: |
           # A default SPIRE install must never ship the historical hardcoded
           # password; an empty value auto-generates a strong one (spire-secret.yaml).
-          if grep -q "spire_password" /tmp/spire-template.yaml \
-             || grep -q "$(echo -n spire_password | base64)" /tmp/spire-template.yaml; then
-            echo "❌ SPIRE render contains dev secret: spire_password"
-            exit 1
-          fi
+          # Check the SPIRE secret's value directly rather than substring-matching
+          # the whole render: the token "spire_password" legitimately appears as a
+          # psql variable name in spire-db-init-job.yaml (the credential itself is
+          # injected via env from this secret, never inlined).
           python3 - <<'EOF'
           import base64, re, sys
           r = open('/tmp/spire-template.yaml').read()
           pw = base64.b64decode(re.search(r'database-password: "([^"]+)"', r).group(1)).decode()
+          assert pw != "spire_password", "SPIRE secret ships the historical dev password"
           assert len(pw) >= 32, "generated SPIRE database password too short"
           print("✅ SPIRE database password auto-generated and strong")
           EOF
