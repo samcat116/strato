@@ -121,6 +121,15 @@ actor AgentService {
 
     private var heartbeatTask: Task<Void, Never>?
 
+    /// The startup task that arms the replica pub/sub subscriptions. Tracked
+    /// so `shutdown()` can wait for it — otherwise it can still be
+    /// subscribing (touching `app` storage) while the application tears down.
+    private var startupTask: Task<Void, Never>?
+
+    /// Interval between heartbeat-monitor ticks. Injectable so tests can
+    /// exercise the loop (and its shutdown race) without waiting 30s.
+    private let heartbeatInterval: Duration
+
     /// A request awaiting a response from a specific agent.
     /// Tracking the agent lets us fail all of an agent's in-flight requests when it disconnects.
     private struct PendingRequest {
@@ -150,32 +159,52 @@ actor AgentService {
     /// heartbeat monitor after `shutdown()` already ran.
     private var isShutDown = false
 
-    init(app: Application) {
+    init(app: Application, heartbeatInterval: Duration = .seconds(30)) {
         self.app = app
+        self.heartbeatInterval = heartbeatInterval
         // Start heartbeat monitoring and the replica's pub/sub subscriptions
-        // after initialization
-        Task {
-            await startHeartbeatMonitoring()
-            await startReplicaSubscriptions()
+        // after initialization. The hop through an isolated method is
+        // deliberate: a nonisolated init cannot store the task it spawns, and
+        // both background tasks must be tracked so `shutdown()` can await
+        // them.
+        Task { await self.armBackgroundWork() }
+    }
+
+    /// Arm the tracked background tasks (heartbeat loop, replica pub/sub
+    /// subscriptions). No-op if shutdown already ran.
+    private func armBackgroundWork() {
+        guard !isShutDown else { return }
+        startHeartbeatMonitoring()
+        startupTask = Task {
+            await self.startReplicaSubscriptions()
         }
     }
 
     /// Cancel the heartbeat monitoring loop and wait for an in-flight tick to
     /// finish. Called from the application's shutdown lifecycle (see
     /// `AgentServiceLifecycleHandler`): the loop holds the `Application` and
-    /// sweeps the database every 30 seconds, so a tick that touches `app.db`
-    /// after shutdown hits Vapor's "Core not configured" fatal error —
-    /// long-lived test processes crash exactly this way. Cancellation
-    /// interrupts the loop's sleep immediately, but a tick body already past
-    /// the sleep is mid-sweep; awaiting the task's completion keeps Vapor's
-    /// core alive until it drains. Safe on the actor: it is reentrant at this
-    /// suspension, so the tick can still hop back on to finish.
+    /// sweeps the database every tick, so a tick that touches `app.db` after
+    /// shutdown hits Vapor's "Core not configured" fatal error — long-lived
+    /// test processes crash exactly this way. Cancellation interrupts the
+    /// loop's sleep immediately, but a tick body already past the sleep is
+    /// mid-sweep; awaiting the task's completion keeps Vapor's core alive
+    /// until it drains. The startup task (replica pub/sub subscriptions) is
+    /// awaited for the same reason. Safe on the actor: it is reentrant at
+    /// these suspensions, so the tick can still hop back on to finish.
     func shutdown() async {
         isShutDown = true
-        let task = heartbeatTask
+        startupTask?.cancel()
+        heartbeatTask?.cancel()
+        if let startupTask {
+            await startupTask.value
+        }
+        startupTask = nil
+        // `isShutDown` was set before the await, so the startup task cannot
+        // have armed the loop in the meantime — this reads the final value.
+        if let heartbeatTask {
+            await heartbeatTask.value
+        }
         heartbeatTask = nil
-        task?.cancel()
-        await task?.value
     }
 
     // MARK: - Agent Registration
@@ -637,17 +666,23 @@ actor AgentService {
             var tick = 0
             while !Task.isCancelled {
                 do {
-                    // Sleep for 30 seconds
-                    try await Task.sleep(for: .seconds(30))
+                    try await Task.sleep(for: heartbeatInterval)
                     tick &+= 1
 
                     // Check for stale agents
                     await checkStaleAgents()
 
+                    // Shutdown cancels mid-tick and awaits the loop; checking
+                    // between steps keeps the remaining app-touching work (and
+                    // shutdown's wait) as short as possible.
+                    try Task.checkCancellation()
+
                     // Probe (and re-arm if dead) this replica's pub/sub
                     // subscriptions — a dropped Valkey connection loses them
                     // silently and RediStack does not restore them.
                     await verifyReplicaSubscriptions()
+
+                    try Task.checkCancellation()
 
                     // Periodic desired-state sync (~60s): the correctness
                     // backstop of the level-triggered design — a dropped or
@@ -657,6 +692,8 @@ actor AgentService {
                     if tick.isMultiple(of: 2) {
                         await syncDesiredStateToAllAgents()
                     }
+
+                    try Task.checkCancellation()
 
                     // Fail operations stuck pending past their budget and resolve
                     // VMs stuck in a transitional state
@@ -671,6 +708,11 @@ actor AgentService {
     }
 
     private func checkStaleAgents() async {
+        // Shutdown sets this before cancelling the loop; a tick that already
+        // slipped past its sleep must not start a database sweep it doesn't
+        // need to finish.
+        guard !isShutDown else { return }
+
         let now = Date()
         let staleThreshold: TimeInterval = 60  // 60 seconds
 
@@ -2250,8 +2292,10 @@ extension Application {
     }
 }
 
-/// Instantiates the agent service at boot and cancels its heartbeat monitor
-/// at shutdown so the periodic database sweep never outlives the application.
+/// Instantiates the agent service at boot; at shutdown, cancels its heartbeat
+/// monitor and waits for the loop to exit so the periodic database sweep
+/// never outlives the application (an in-flight tick touching `app.db` after
+/// core teardown is the "Core not configured" CI crash).
 struct AgentServiceLifecycleHandler: LifecycleHandler {
     /// Force creation at boot: the service's heartbeat/sweep loop and — since
     /// issue #261 — this replica's nudge/RPC channel subscriptions must be
