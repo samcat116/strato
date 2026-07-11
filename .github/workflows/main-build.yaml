@@ -53,6 +53,13 @@ jobs:
           $SUDO apt-get update
           $SUDO apt-get install -y libjemalloc-dev unzip
 
+      # Cache key salt (`v2`): #386 moved the x64 leg out of the swift job
+      # container (checkout at /__w/strato/strato) onto the runner image
+      # (checkout at /home/runner/_work/strato/strato). Clang bakes absolute
+      # paths into the ModuleCache .pcm files it caches under .build, so the
+      # pre-#386 container-era cache is rejected on the new path with
+      # "missing required module 'SwiftShims'". Bumping the salt stops us
+      # restoring that poisoned cache; the cold rebuild saves a consistent one.
       - name: Cache Swift packages
         uses: actions/cache@v4
         with:
@@ -60,9 +67,9 @@ jobs:
             control-plane/.build
             agent/.build
             shared/.build
-          key: ${{ runner.os }}-${{ matrix.arch }}-swift-release-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-swift-release-v2-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-swift-release-
+            ${{ runner.os }}-${{ matrix.arch }}-swift-release-v2-
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
