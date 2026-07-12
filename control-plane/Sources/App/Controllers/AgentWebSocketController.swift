@@ -577,7 +577,7 @@ struct AgentWebSocketController: RouteCollection {
                 let message = try envelope.decode(as: AgentUnregisterMessage.self)
                 Task {
                     do {
-                        try await req.agentService.unregisterAgent(message.agentId)
+                        try await req.agentService.unregisterAgent(message.agentId, fromAgentNamed: agentName)
                         self.sendSuccessResponse(
                             ws: ws, requestId: message.requestId, message: "Agent unregistered successfully",
                             logger: req.logger)
@@ -652,6 +652,19 @@ struct AgentWebSocketController: RouteCollection {
                 }
                 let message = try envelope.decode(as: VMLogMessage.self)
                 Task {
+                    // Only accept logs for a VM actually assigned to the reporting
+                    // agent. Without this a compromised agent could push fabricated
+                    // log lines tagged with another tenant's VM id, which would then
+                    // surface in that tenant's console/log view.
+                    guard await req.agentService.vmIsOwnedByAgent(vmId: message.vmId, agentName: agentName) else {
+                        req.logger.warning(
+                            "Dropping VM log for a VM not owned by the reporting agent",
+                            metadata: [
+                                "vmId": .string(message.vmId),
+                                "agentName": .string(agentName),
+                            ])
+                        return
+                    }
                     do {
                         try await req.lokiService.pushLog(message)
                         req.logger.debug(
