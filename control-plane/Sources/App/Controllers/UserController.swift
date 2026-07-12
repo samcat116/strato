@@ -367,10 +367,13 @@ struct UserController: RouteCollection {
             excludeCredentials: excludeCredentials
         )
 
+        // Store under a distinct operation so this invite-authorized challenge
+        // can only be redeemed via /auth/claim/finish — never replayed through
+        // the open /auth/register/finish path, which would skip the token check.
         try await req.webAuthn.storeChallenge(
             options.challenge.base64URLEncodedString().asString(),
             for: user.id,
-            operation: "registration",
+            operation: Self.claimChallengeOperation,
             on: req.db
         )
 
@@ -396,6 +399,7 @@ struct UserController: RouteCollection {
         let credential = try await req.webAuthn.finishRegistration(
             challenge: finishRequest.challenge,
             credentialCreationData: finishRequest.response,
+            operation: Self.claimChallengeOperation,
             on: req.db
         )
 
@@ -678,6 +682,11 @@ struct SessionResponse: Content {
 extension UserController {
     /// How long a passkey-claim invite stays valid (7 days).
     static let claimTokenTTL: TimeInterval = 7 * 24 * 60 * 60
+
+    /// Challenge namespace for the passkey-claim ceremony. Kept distinct from
+    /// "registration" so a claim challenge can't be redeemed via the open
+    /// self-registration finish endpoint, bypassing the one-time claim token.
+    static let claimChallengeOperation = "claim"
 
     /// Build the user-facing claim URL from the canonical browser origin. This
     /// mirrors the WebAuthn relying-party origin (which must match the browser

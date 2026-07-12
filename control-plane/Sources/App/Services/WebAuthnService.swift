@@ -41,6 +41,7 @@ struct WebAuthnService {
     func finishRegistration(
         challenge: String,
         credentialCreationData: RegistrationCredential,
+        operation: String = "registration",
         on database: Database
     ) async throws -> UserCredential {
         // Decode base64url challenge back to bytes
@@ -59,11 +60,13 @@ struct WebAuthnService {
             }
         )
 
-        // Find the user by challenge
+        // Find the user by challenge. The operation filter namespaces challenges
+        // so, e.g., an invite-authorized "claim" challenge cannot be redeemed
+        // through the open "registration" finish path (and vice versa).
         guard
             let authChallenge = try await AuthenticationChallenge.query(on: database)
                 .filter(\.$challenge == challenge)
-                .filter(\.$operation == "registration")
+                .filter(\.$operation == operation)
                 .first(),
             let userID = authChallenge.userID
         else {

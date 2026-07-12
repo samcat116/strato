@@ -193,6 +193,38 @@ final class UserCreationAndClaimTests: BaseTestCase {
         }
     }
 
+    @Test("claim begin stores its challenge under a claim-only operation")
+    func testClaimBeginNamespacesChallenge() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let adminToken = try await makeAdminToken(on: app.db)
+
+            var rawToken = ""
+            try await app.test(.POST, "/api/users") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(
+                    AdminCreateUserRequest(
+                        username: "neo", email: "neo@example.com", displayName: "Neo",
+                        isSystemAdmin: false))
+            } afterResponse: { res in
+                rawToken = try res.content.decode(AdminCreateUserResponse.self).claimToken
+            }
+
+            try await app.test(.POST, "/auth/claim/begin") { req in
+                try req.content.encode(ClaimBeginRequest(token: rawToken))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            // The invite-authorized challenge must be namespaced so it cannot be
+            // redeemed via the open /auth/register/finish path (which only
+            // consumes "registration" challenges).
+            let challenges = try await AuthenticationChallenge.query(on: app.db).all()
+            #expect(challenges.contains { $0.operation == "claim" })
+            #expect(challenges.allSatisfy { $0.operation != "registration" })
+        }
+    }
+
     // MARK: - invite accounts are gated to the claim flow
 
     @Test("invited accounts cannot be claimed via open self-registration")
