@@ -131,30 +131,33 @@ jobs:
           path: artifacts/
           retention-days: 1
 
-  # The three images build in their own jobs so they run in parallel on
-  # hosted runners. This previously was one job that built all three serially
-  # on the single static self-hosted runner (one job at a time), which put
-  # ~28 min of serial Docker work on the critical path.
-  #
-  # Only the amd64 legs publish: the hosted DOKS test cluster (dev.stratocloud.app)
-  # runs amd64 nodes, so arm64 stays validate-only (build + load, no push). Images
-  # go to GHCR tagged both a moving `main` (humans) and an immutable `main-<sha>`
-  # (Argo CD image-updater tracks this via a `^main-[0-9a-f]{7,40}$` allow-tags regexp).
-  docker-control-plane:
-    name: Build Control Plane Image
+  # Phase 1 — build every image on every arch in parallel, but DO NOT publish.
+  # This replaced one job that built all three images serially on the single
+  # static self-hosted runner (~28 min of serial Docker work on the critical
+  # path). x64 legs export a mode=max gha cache (also read by build.yaml's PR
+  # Docker checks and by the publish phase below); arm64 legs are validate-only
+  # (build + load) since the DOKS test cluster (dev.stratocloud.app) is amd64.
+  build-images:
+    name: Build Image (${{ matrix.image }}, ${{ matrix.arch }})
     needs: [build-swift-release]
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: x64
-          - arch: arm64
+          - { image: control-plane, arch: x64, context: ., file: ./control-plane/Dockerfile, prebuilt: artifacts/control-plane }
+          - { image: control-plane, arch: arm64, context: ., file: ./control-plane/Dockerfile, prebuilt: artifacts/control-plane }
+          - { image: agent, arch: x64, context: ., file: ./agent/Dockerfile, prebuilt: artifacts/agent }
+          - { image: agent, arch: arm64, context: ., file: ./agent/Dockerfile, prebuilt: artifacts/agent }
+          - { image: frontend, arch: x64, context: control-plane/web, file: ./control-plane/web/Dockerfile, prebuilt: "" }
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # Only the Swift images consume prebuilt binaries; the frontend builds
+      # from source (bun) inside its Dockerfile.
       - name: Download build artifacts
+        if: matrix.prebuilt != ''
         uses: actions/download-artifact@v4
         with:
           name: swift-binaries-${{ matrix.arch }}
@@ -167,106 +170,54 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
-        if: matrix.arch == 'x64'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compute image tags
-        if: matrix.arch == 'x64'
-        id: tags
-        run: |
-          SHA="${GITHUB_SHA::12}"
-          REPO="ghcr.io/${GITHUB_REPOSITORY}"
-          echo "cp=${REPO}-control-plane:main,${REPO}-control-plane:main-${SHA}" >> "$GITHUB_OUTPUT"
-
-      - name: Build Control Plane Docker Image
+      - name: Build Image (validate, no push)
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: ./control-plane/Dockerfile
-          push: ${{ matrix.arch == 'x64' }}
-          load: ${{ matrix.arch != 'x64' }}
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: false
+          load: ${{ matrix.arch == 'arm64' }}
           platforms: ${{ matrix.arch == 'x64' && 'linux/amd64' || 'linux/arm64' }}
-          tags: ${{ matrix.arch == 'x64' && steps.tags.outputs.cp || 'strato-control-plane:latest' }}
-          cache-from: type=gha,key=control-plane-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,key=control-plane-${{ matrix.arch }}
-          build-args: |
-            PREBUILT_ARTIFACTS=artifacts/control-plane
+          tags: strato-${{ matrix.image }}:ci
+          cache-from: type=gha,key=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: ${{ matrix.arch == 'x64' && format('type=gha,mode=max,key={0}-x64', matrix.image) || '' }}
+          build-args: ${{ matrix.prebuilt != '' && format('PREBUILT_ARTIFACTS={0}', matrix.prebuilt) || '' }}
 
-  # Hypervisor hosts pull this image directly (docs/deployment/agents.md),
-  # so it publishes alongside the control plane with the same tagging.
-  docker-agent:
-    name: Build Agent Image
-    needs: [build-swift-release]
-    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x64
-          - arch: arm64
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: swift-binaries-${{ matrix.arch }}
-          path: artifacts/
-        continue-on-error: true
-
-      - name: Prepare build context
-        run: mkdir -p ./artifacts
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        if: matrix.arch == 'x64'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compute image tags
-        if: matrix.arch == 'x64'
-        id: tags
-        run: |
-          SHA="${GITHUB_SHA::12}"
-          REPO="ghcr.io/${GITHUB_REPOSITORY}"
-          echo "agent=${REPO}-agent:main,${REPO}-agent:main-${SHA}" >> "$GITHUB_OUTPUT"
-
-      - name: Build Agent Docker Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./agent/Dockerfile
-          push: ${{ matrix.arch == 'x64' }}
-          load: ${{ matrix.arch != 'x64' }}
-          platforms: ${{ matrix.arch == 'x64' && 'linux/amd64' || 'linux/arm64' }}
-          tags: ${{ matrix.arch == 'x64' && steps.tags.outputs.agent || 'strato-agent:latest' }}
-          cache-from: type=gha,key=agent-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,key=agent-${{ matrix.arch }}
-          build-args: |
-            PREBUILT_ARTIFACTS=artifacts/agent
-
-  # Frontend builds from source inside its Dockerfile (bun), so it needs no
-  # prebuilt artifacts. Publish amd64 only, alongside the control plane. It
-  # still gates on build-swift-release so a failed backend build doesn't
-  # publish a frontend image for a half-built commit.
-  docker-frontend:
-    name: Build Frontend Image
-    needs: [build-swift-release]
+  # Phase 2 — publish barrier. `needs: [build-images]` succeeds only if EVERY
+  # build-images leg (all images, both arches) passed, so we never advance the
+  # moving `main` / immutable `main-<sha>` tags to a commit whose full image set
+  # wasn't built. Each leg rebuilds amd64 from the phase-1 gha cache (a cache
+  # hit — it just re-exports and pushes) and publishes. The compose deployment
+  # feeds the same STRATO_VERSION to control-plane and frontend, so keeping the
+  # push atomic across the set matters. Argo CD image-updater tracks `main-<sha>`
+  # via a `^main-[0-9a-f]{7,40}$` allow-tags regexp.
+  publish-images:
+    name: Publish Image (${{ matrix.image }})
+    needs: [build-images]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: control-plane, context: ., file: ./control-plane/Dockerfile, prebuilt: artifacts/control-plane }
+          - { image: agent, context: ., file: ./agent/Dockerfile, prebuilt: artifacts/agent }
+          - { image: frontend, context: control-plane/web, file: ./control-plane/web/Dockerfile, prebuilt: "" }
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      # The prebuilt COPY layer keys on the artifact bytes, so the publish leg
+      # must supply the same x64 artifacts as phase 1 for the cache to hit.
+      - name: Download build artifacts
+        if: matrix.prebuilt != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: swift-binaries-x64
+          path: artifacts/
+        continue-on-error: true
+
+      - name: Prepare build context
+        run: mkdir -p ./artifacts
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -283,15 +234,15 @@ jobs:
         run: |
           SHA="${GITHUB_SHA::12}"
           REPO="ghcr.io/${GITHUB_REPOSITORY}"
-          echo "fe=${REPO}-frontend:main,${REPO}-frontend:main-${SHA}" >> "$GITHUB_OUTPUT"
+          echo "t=${REPO}-${{ matrix.image }}:main,${REPO}-${{ matrix.image }}:main-${SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push Frontend Docker Image
+      - name: Push Docker Image (from phase-1 cache)
         uses: docker/build-push-action@v5
         with:
-          context: control-plane/web
-          file: ./control-plane/web/Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           push: true
           platforms: linux/amd64
-          tags: ${{ steps.tags.outputs.fe }}
-          cache-from: type=gha,key=frontend-x64
-          cache-to: type=gha,mode=max,key=frontend-x64
+          tags: ${{ steps.tags.outputs.t }}
+          cache-from: type=gha,key=${{ matrix.image }}-x64
+          build-args: ${{ matrix.prebuilt != '' && format('PREBUILT_ARTIFACTS={0}', matrix.prebuilt) || '' }}
