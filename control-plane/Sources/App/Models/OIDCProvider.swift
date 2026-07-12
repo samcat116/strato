@@ -114,9 +114,11 @@ extension OIDCProvider {
         return string
     }
 
-    /// Check if the provider has the required endpoints configured
+    /// Check if the provider has the required endpoints configured.
+    /// JWKS is required too: the callback path can't validate ID tokens
+    /// without it, so a provider missing it can never complete a login.
     func hasRequiredEndpoints() -> Bool {
-        return authorizationEndpoint != nil && tokenEndpoint != nil
+        return authorizationEndpoint != nil && tokenEndpoint != nil && jwksURI != nil
     }
 
     /// Get the authorization URL for this provider

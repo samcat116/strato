@@ -102,10 +102,10 @@ function ProviderForm({
     }
     if (
       !discoveryURL.trim() &&
-      (!authorizationEndpoint.trim() || !tokenEndpoint.trim())
+      (!authorizationEndpoint.trim() || !tokenEndpoint.trim() || !jwksURI.trim())
     ) {
       toast.error(
-        "Provide a discovery URL, or both authorization and token endpoints"
+        "Provide a discovery URL, or authorization endpoint, token endpoint, and JWKS URI"
       );
       return;
     }
@@ -290,7 +290,8 @@ function ProviderForm({
               disabled={isPending}
             />
             <p className="text-xs text-muted-foreground">
-              Required to verify ID tokens unless filled in via discovery.
+              Required to verify ID tokens; filled in automatically when a
+              discovery URL is set.
             </p>
           </div>
 

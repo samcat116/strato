@@ -16,7 +16,8 @@ final class OIDCControllerTests: BaseTestCase {
         name: String,
         enabled: Bool = true,
         authorizationEndpoint: String? = "https://idp.example.com/authorize",
-        tokenEndpoint: String? = "https://idp.example.com/token"
+        tokenEndpoint: String? = "https://idp.example.com/token",
+        jwksURI: String? = "https://idp.example.com/.well-known/jwks.json"
     ) async throws -> OIDCProvider {
         let provider = OIDCProvider(
             organizationID: organizationID,
@@ -25,6 +26,7 @@ final class OIDCControllerTests: BaseTestCase {
             clientSecret: "secret",
             authorizationEndpoint: authorizationEndpoint,
             tokenEndpoint: tokenEndpoint,
+            jwksURI: jwksURI,
             enabled: enabled
         )
         try await provider.save(on: db)
@@ -49,7 +51,7 @@ final class OIDCControllerTests: BaseTestCase {
                         authorizationEndpoint: "https://idp.example.com/authorize",
                         tokenEndpoint: "https://idp.example.com/token",
                         userinfoEndpoint: nil,
-                        jwksURI: nil,
+                        jwksURI: "https://idp.example.com/.well-known/jwks.json",
                         scopes: nil,
                         enabled: nil
                     ))
@@ -124,6 +126,27 @@ final class OIDCControllerTests: BaseTestCase {
                         discoveryURL: nil,
                         authorizationEndpoint: nil,
                         tokenEndpoint: nil,
+                        userinfoEndpoint: nil,
+                        jwksURI: nil,
+                        scopes: nil,
+                        enabled: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // Authorization + token endpoints alone are not enough: the login
+            // callback requires JWKS to validate ID tokens.
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    CreateOIDCProviderRequest(
+                        name: "No JWKS",
+                        clientID: "client-123",
+                        clientSecret: "secret-456",
+                        discoveryURL: nil,
+                        authorizationEndpoint: "https://idp.example.com/authorize",
+                        tokenEndpoint: "https://idp.example.com/token",
                         userinfoEndpoint: nil,
                         jwksURI: nil,
                         scopes: nil,
@@ -214,7 +237,7 @@ final class OIDCControllerTests: BaseTestCase {
                 on: app.db, organizationID: testOrganization.id!, name: "Configured")
             let incomplete = try await makeProvider(
                 on: app.db, organizationID: testOrganization.id!, name: "Incomplete",
-                authorizationEndpoint: nil, tokenEndpoint: nil)
+                authorizationEndpoint: nil, tokenEndpoint: nil, jwksURI: nil)
 
             try await app.test(
                 .POST, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(configured.id!)/test"

@@ -221,7 +221,10 @@ struct OIDCController: RouteCollection {
             return OIDCProviderTestResponse(valid: true, message: "Provider endpoints are configured")
         }
         return OIDCProviderTestResponse(
-            valid: false, message: "Provider configuration is incomplete: missing required endpoints")
+            valid: false,
+            message:
+                "Provider configuration is incomplete: authorization endpoint, token endpoint, and JWKS URI are required"
+        )
     }
 
     // MARK: - Public Provider Listing
@@ -484,12 +487,19 @@ struct OIDCController: RouteCollection {
             return
         }
 
-        // If no discovery URL, check for required individual endpoints
+        // If no discovery URL, check for required individual endpoints. JWKS
+        // is mandatory for manual configs: the login callback refuses to
+        // validate ID tokens without it, so a provider that passes creation
+        // without JWKS would fail every SSO login.
         guard let authEndpoint = request.authorizationEndpoint, !authEndpoint.isEmpty,
-            let tokenEndpoint = request.tokenEndpoint, !tokenEndpoint.isEmpty
+            let tokenEndpoint = request.tokenEndpoint, !tokenEndpoint.isEmpty,
+            let jwksURI = request.jwksURI, !jwksURI.isEmpty
         else {
             throw Abort(
-                .badRequest, reason: "Either discovery URL or both authorization and token endpoints must be provided")
+                .badRequest,
+                reason:
+                    "Either a discovery URL or all of authorization endpoint, token endpoint, and JWKS URI must be provided"
+            )
         }
     }
 
