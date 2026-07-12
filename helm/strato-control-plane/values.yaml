@@ -226,6 +226,15 @@ strato:
   # same URL); set only when OIDC is served from a different public URL.
   baseUrl: ""
 
+  oidc:
+    # Override the SSRF allow-list for OIDC discovery/JWKS fetches
+    # (OIDC_DISCOVERY_ALLOWED_HOSTS / OIDC_DISCOVERY_ALLOWED_SUFFIXES).
+    # Setting either REPLACES the app's built-in default list for that
+    # dimension, so include any built-in entries you still need. Empty lists
+    # keep the app defaults.
+    discoveryAllowedHosts: []
+    discoveryAllowedSuffixes: []
+
   # URL agents use to fetch signed image-download links. Leave empty to use
   # the resolved WebAuthn origin; set explicitly when agents reach the control
   # plane at a different address than browsers do (e.g. an internal LB).

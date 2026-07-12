@@ -750,40 +750,50 @@ struct OIDCController: RouteCollection {
         }
 
         // Some IdPs return `email` in the ID token but only assert
-        // `email_verified` in the UserInfo response. When the ID token doesn't
-        // already assert a verified email, consult the UserInfo endpoint so a
-        // legitimate first login isn't blocked by a missing flag. Only its claims
-        // for the same subject are trusted (OIDC 5.3.2).
-        var userInfoEmail: String?
-        var userInfoEmailVerified: Bool?
-        if claims.emailVerified != true, let endpoint = provider.userinfoEndpoint, !endpoint.isEmpty {
+        // `email_verified` in the UserInfo response, and some (e.g. Discord)
+        // put only `sub` in the ID token and return every profile claim from
+        // UserInfo. Consult the endpoint whenever the ID token leaves a gap so
+        // a legitimate first login isn't blocked or created as an anonymous
+        // `oidc_<subject>` user. Only its claims for the same subject are
+        // trusted (OIDC 5.3.2).
+        var userInfo: OIDCUserInfoResponse?
+        let idTokenIncomplete =
+            claims.emailVerified != true || claims.email == nil || claims.name == nil
+            || claims.preferredUsername == nil
+        if idTokenIncomplete, let endpoint = provider.userinfoEndpoint, !endpoint.isEmpty {
             if let info = try? await fetchUserInfo(
                 endpoint: endpoint, accessToken: tokenResponse.accessToken, on: req),
                 info.sub == claims.sub
             {
-                userInfoEmail = info.email
-                userInfoEmailVerified = info.emailVerified
+                userInfo = info
             }
         }
         let resolvedEmail = OIDCValidation.resolveEmailVerification(
             idTokenEmail: claims.email,
             idTokenEmailVerified: claims.emailVerified,
-            userInfoEmail: userInfoEmail,
-            userInfoEmailVerified: userInfoEmailVerified
+            userInfoEmail: userInfo?.email,
+            userInfoEmailVerified: userInfo?.emailVerified
+        )
+        let resolvedProfile = OIDCValidation.resolveProfile(
+            idTokenName: claims.name,
+            idTokenPreferredUsername: claims.preferredUsername,
+            userInfoName: userInfo?.name,
+            userInfoNickname: userInfo?.nickname,
+            userInfoPreferredUsername: userInfo?.preferredUsername
         )
 
         return OIDCUserInfo(
             subject: claims.sub,
             email: resolvedEmail.email,
             emailVerified: resolvedEmail.verified,
-            name: claims.name ?? claims.preferredUsername,
-            preferredUsername: claims.preferredUsername,
+            name: resolvedProfile.name,
+            preferredUsername: resolvedProfile.preferredUsername,
             groupValues: groupValues
         )
     }
 
-    /// Fetches the OIDC UserInfo endpoint with the access token. Used only to
-    /// recover `email_verified`; the caller must confirm the returned `sub`
+    /// Fetches the OIDC UserInfo endpoint with the access token. Used to
+    /// recover claims the ID token omits; the caller must confirm the returned `sub`
     /// matches the ID token before trusting the response.
     private func fetchUserInfo(
         endpoint: String,
