@@ -414,6 +414,14 @@ struct UserController: RouteCollection {
             throw Abort(.badRequest, reason: "Claim token does not match this registration")
         }
 
+        // Enforce the WebAuthn challenge TTL before consuming the invite, so an
+        // expired ceremony surfaces a clear error and leaves the (still-valid)
+        // claim token usable. finishRegistration re-checks expiry as the
+        // authoritative gate.
+        if let expiresAt = challengeRecord.expiresAt, expiresAt <= Date() {
+            throw Abort(.gone, reason: "This passkey request has expired — please restart setup")
+        }
+
         // Consume the one-time token atomically BEFORE enrolling the credential.
         // The conditional update matches only while `claimed_at` is still null,
         // so two holders of the same invite finishing concurrently can't both

@@ -62,12 +62,19 @@ struct WebAuthnService {
 
         // Find the user by challenge. The operation filter namespaces challenges
         // so, e.g., an invite-authorized "claim" challenge cannot be redeemed
-        // through the open "registration" finish path (and vice versa).
+        // through the open "registration" finish path (and vice versa). The
+        // expiry filter enforces the stored challenge TTL (mirrors the
+        // authentication path) so a response can't be replayed after the
+        // server-side challenge has expired.
+        let challengeQuery = AuthenticationChallenge.query(on: database)
+            .filter(\.$challenge == challenge)
+            .filter(\.$operation == operation)
+            .group(.or) { group in
+                group.filter(\.$expiresAt > Date())
+                    .filter(\.$expiresAt == nil)
+            }
         guard
-            let authChallenge = try await AuthenticationChallenge.query(on: database)
-                .filter(\.$challenge == challenge)
-                .filter(\.$operation == operation)
-                .first(),
+            let authChallenge = try await challengeQuery.first(),
             let userID = authChallenge.userID
         else {
             throw WebAuthnError.challengeNotFound
