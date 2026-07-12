@@ -7,7 +7,7 @@ import { Cpu, Rows3, Search, type LucideIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { agentsApi, vmsApi } from "@/lib/api";
-import { footerNavItems, navSections } from "./nav";
+import { flattenNav } from "./nav";
 
 interface PaletteEntry {
   key: string;
@@ -47,15 +47,13 @@ export function CommandPalette() {
   });
 
   const entries = useMemo<PaletteEntry[]>(() => {
-    const pages = [...navSections.flatMap((s) => s.items), ...footerNavItems].map(
-      (item) => ({
-        key: `page:${item.href}`,
-        label: item.label,
-        hint: "Page",
-        href: item.href,
-        icon: item.icon,
-      })
-    );
+    const pages = flattenNav().map((item) => ({
+      key: `page:${item.href}`,
+      label: item.label,
+      hint: "Page",
+      href: item.href!,
+      icon: item.icon,
+    }));
     const vmEntries = vms.map((vm) => ({
       key: `vm:${vm.id}`,
       label: vm.name,
