@@ -166,6 +166,17 @@ struct OIDCController: RouteCollection {
         applyOptionalURL(updateRequest.tokenEndpoint, to: \.tokenEndpoint)
         applyOptionalURL(updateRequest.userinfoEndpoint, to: \.userinfoEndpoint)
         applyOptionalURL(updateRequest.jwksURI, to: \.jwksURI)
+
+        // Any change to the discovery URL invalidates the stored issuer. If the
+        // admin cleared discovery (switching to manual endpoints, possibly a
+        // different issuer), the old discovered issuer must not linger and reject
+        // the new issuer's tokens. If they rotated to a new discovery URL, the
+        // refresh below repopulates the issuer — clearing it first means a failed
+        // refresh falls back to "skip validation" rather than validating against
+        // the previous issuer. A no-op edit (discoveryURL omitted) leaves it as-is.
+        if updateRequest.discoveryURL != nil {
+            provider.issuer = nil
+        }
         if let scopes = updateRequest.scopes { provider.setScopesArray(scopes) }
         if let enabled = updateRequest.enabled { provider.enabled = enabled }
 

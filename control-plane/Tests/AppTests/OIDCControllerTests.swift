@@ -273,6 +273,46 @@ final class OIDCControllerTests: BaseTestCase {
         }
     }
 
+    @Test("Clearing the discovery URL clears the stored issuer")
+    func testUpdateClearingDiscoveryClearsIssuer() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+            // Simulate a provider that previously discovered an issuer.
+            provider.issuer = "https://old-issuer.example.com"
+            try await provider.save(on: app.db)
+
+            // Switch to manual endpoints by clearing discovery. The stale issuer
+            // must be dropped, otherwise it would reject a new manual issuer's tokens.
+            try await app.test(
+                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id!)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    UpdateOIDCProviderRequest(
+                        name: nil,
+                        clientID: nil,
+                        clientSecret: nil,
+                        discoveryURL: "",
+                        authorizationEndpoint: "https://new-idp.example.com/authorize",
+                        tokenEndpoint: "https://new-idp.example.com/token",
+                        userinfoEndpoint: nil,
+                        jwksURI: "https://new-idp.example.com/.well-known/jwks.json",
+                        scopes: nil,
+                        enabled: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(OIDCProviderResponse.self)
+                #expect(response.issuer == nil)
+            }
+
+            let reloaded = try await OIDCProvider.find(provider.id!, on: app.db)
+            #expect(reloaded?.issuer == nil)
+        }
+    }
+
     @Test("Update rejects non-HTTPS endpoint URLs")
     func testUpdateRejectsInsecureURLs() async throws {
         try await withApp { app in
