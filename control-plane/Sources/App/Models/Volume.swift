@@ -62,7 +62,19 @@ final class Volume: Model, @unchecked Sendable {
     @OptionalField(key: "error_message")
     var errorMessage: String?
 
-    // Storage location
+    // Placement: the pool whose agents hold this volume's replicas. Nullable
+    // at the schema level only (SQLite constraint); the backfill migration and
+    // the create path guarantee it is always set.
+    @OptionalParent(key: "pool_id")
+    var pool: StoragePool?
+
+    // Where the attachment currently runs (set while attached to a VM).
+    // Replaces hypervisor_id's "single owner" role.
+    @OptionalField(key: "attached_agent_id")
+    var attachedAgentId: String?
+
+    // Legacy storage location, dual-written alongside the volume's
+    // VolumeReplica row until nothing reads these columns anymore.
     @OptionalField(key: "storage_path")
     var storagePath: String?
 
@@ -109,6 +121,7 @@ final class Volume: Model, @unchecked Sendable {
         volumeType: VolumeType = .data,
         status: VolumeStatus = .creating,
         createdByID: UUID,
+        poolID: UUID? = nil,
         sourceImageID: UUID? = nil,
         sourceVolumeID: UUID? = nil
     ) {
@@ -121,6 +134,7 @@ final class Volume: Model, @unchecked Sendable {
         self.volumeType = volumeType
         self.status = status
         self.$createdBy.id = createdByID
+        self.$pool.id = poolID
         if let sourceImageID = sourceImageID {
             self.$sourceImage.id = sourceImageID
         }
@@ -146,6 +160,8 @@ extension Volume {
         let volumeType: VolumeType
         let status: VolumeStatus
         let errorMessage: String?
+        let poolId: UUID?
+        let attachedAgentId: String?
         let storagePath: String?
         let hypervisorId: String?
         let vmId: UUID?
@@ -170,6 +186,8 @@ extension Volume {
             volumeType: self.volumeType,
             status: self.status,
             errorMessage: self.errorMessage,
+            poolId: self.$pool.id,
+            attachedAgentId: self.attachedAgentId,
             storagePath: self.storagePath,
             hypervisorId: self.hypervisorId,
             vmId: self.$vm.id,
@@ -272,6 +290,8 @@ struct VolumeResponse: Content {
     let volumeType: VolumeType
     let status: VolumeStatus
     let errorMessage: String?
+    let poolId: UUID?
+    let attachedAgentId: String?
     let hypervisorId: String?
     let vmId: UUID?
     let deviceName: String?
@@ -293,6 +313,8 @@ struct VolumeResponse: Content {
         self.volumeType = volume.volumeType
         self.status = volume.status
         self.errorMessage = volume.errorMessage
+        self.poolId = volume.$pool.id
+        self.attachedAgentId = volume.attachedAgentId
         self.hypervisorId = volume.hypervisorId
         self.vmId = volume.$vm.id
         self.deviceName = volume.deviceName

@@ -41,7 +41,14 @@ actor VolumeService {
                 return
             }
 
-            let result = try await requestVolumeCreation(volume: volume, sourceImage: sourceImage)
+            let pool = try await volume.$pool.get(on: app.db)
+            let result = try await requestVolumeCreation(
+                volume: volume,
+                sourceImage: sourceImage,
+                memberAgentIds: pool?.memberAgentIds ?? []
+            )
+
+            try await recordReplica(volumeId: volumeId, agentId: result.agentId, datasetPath: result.storagePath)
 
             volume.hypervisorId = result.agentId
             volume.storagePath = result.storagePath
@@ -80,7 +87,11 @@ actor VolumeService {
 
         do {
             let storagePath = try await requestVolumeClone(sourceVolume: source, targetVolume: target)
-            target.hypervisorId = source.hypervisorId
+            let sourcePlacement = try await placement(of: source)
+            if let agentId = sourcePlacement?.agentId {
+                try await recordReplica(volumeId: targetVolumeId, agentId: agentId, datasetPath: storagePath)
+            }
+            target.hypervisorId = sourcePlacement?.agentId ?? source.hypervisorId
             target.storagePath = storagePath
             target.status = .available
             target.errorMessage = nil
@@ -132,20 +143,60 @@ actor VolumeService {
         }
     }
 
+    // MARK: - Placement
+
+    /// The agent and path holding a volume's data. Local pools have a single
+    /// replica, so "the volume's placement" is well-defined; rows without a
+    /// replica (mid-provisioning races, pre-backfill data) fall back to the
+    /// legacy hypervisor_id/storage_path columns, which are dual-written.
+    private func placement(of volume: Volume) async throws -> (agentId: String, path: String?)? {
+        if let replica = try await VolumeReplica.query(on: app.db)
+            .filter(\.$volume.$id == volume.id!)
+            .sort(\.$createdAt)
+            .first()
+        {
+            return (replica.agentId, replica.datasetPath ?? volume.storagePath)
+        }
+        guard let agentId = volume.hypervisorId else { return nil }
+        return (agentId, volume.storagePath)
+    }
+
+    /// Record the physical copy an agent just confirmed it holds. Idempotent:
+    /// a replica already recorded for that agent is updated in place.
+    private func recordReplica(volumeId: UUID, agentId: String, datasetPath: String?) async throws {
+        if let existing = try await VolumeReplica.query(on: app.db)
+            .filter(\.$volume.$id == volumeId)
+            .filter(\.$agentId == agentId)
+            .first()
+        {
+            existing.datasetPath = datasetPath
+            existing.state = .healthy
+            try await existing.save(on: app.db)
+            return
+        }
+        try await VolumeReplica(
+            volumeID: volumeId,
+            agentId: agentId,
+            datasetPath: datasetPath,
+            state: .healthy
+        ).create(on: app.db)
+    }
+
     // MARK: - Volume Creation
 
     /// Request an agent to create a volume and await its confirmation.
     /// Returns the agent that holds the volume and the storage path it reported.
     func requestVolumeCreation(
         volume: Volume,
-        sourceImage: Image? = nil
+        sourceImage: Image? = nil,
+        memberAgentIds: [String] = []
     ) async throws -> (agentId: String, storagePath: String?) {
         // In the future, we might want to consider storage locality
         let agentService = app.agentService
 
         let agents = await agentService.getAgentList()
 
-        guard let selectedAgent = Self.selectVolumeAgent(from: agents),
+        guard let selectedAgent = Self.selectVolumeAgent(from: agents, memberAgentIds: memberAgentIds),
             let selectedAgentId = selectedAgent.id?.uuidString
         else {
             throw VolumeServiceError.noAgentsAvailable
@@ -190,12 +241,18 @@ actor VolumeService {
         return (selectedAgentId, status?.storagePath)
     }
 
-    /// Pick the agent that should host a new volume. Volume attachment goes
-    /// through QEMU's block layer and requires the volume to live on the same
-    /// agent as the VM, so only online agents that can run QEMU are eligible —
-    /// a volume placed on a Firecracker-only agent could never be attached.
-    static func selectVolumeAgent(from agents: [Agent]) -> Agent? {
-        agents.first { $0.status == .online && $0.supportedHypervisors.contains(.qemu) }
+    /// Pick the agent that should host a new volume's replica. Volume
+    /// attachment goes through QEMU's block layer and requires the volume to
+    /// live on an agent the VM can run on, so only online agents that can run
+    /// QEMU are eligible — a volume placed on a Firecracker-only agent could
+    /// never be attached. A pool with an explicit member list further
+    /// restricts candidates to those members; an empty list (the default
+    /// local pool) leaves all agents eligible.
+    static func selectVolumeAgent(from agents: [Agent], memberAgentIds: [String] = []) -> Agent? {
+        agents.first {
+            $0.status == .online && $0.supportedHypervisors.contains(.qemu)
+                && (memberAgentIds.isEmpty || memberAgentIds.contains($0.id?.uuidString ?? ""))
+        }
     }
 
     /// Request an agent to delete a volume and await its confirmation.
@@ -204,10 +261,10 @@ actor VolumeService {
     /// volumes whose create succeeded on the agent but whose response was
     /// lost (no recorded storage path). Agent-side deletion is idempotent.
     func requestVolumeDeletion(volume: Volume) async throws {
-        guard let hypervisorId = volume.hypervisorId else {
+        guard let hypervisorId = try await placement(of: volume)?.agentId else {
             // Volume was never created on an agent, just delete from DB
             logger.info(
-                "Volume has no hypervisor, skipping agent deletion",
+                "Volume has no replica on any agent, skipping agent deletion",
                 metadata: [
                     "volumeId": .string(volume.id!.uuidString)
                 ])
@@ -246,7 +303,7 @@ actor VolumeService {
             throw VolumeServiceError.firecrackerNotSupported
         }
 
-        guard let volumePath = volume.storagePath else {
+        guard let volumePath = try await placement(of: volume)?.path else {
             throw VolumeServiceError.volumeNotOnAgent
         }
 
@@ -302,11 +359,7 @@ actor VolumeService {
 
     /// Request an agent to resize a volume and await its confirmation.
     func requestVolumeResize(volume: Volume, newSizeBytes: Int64) async throws {
-        guard let hypervisorId = volume.hypervisorId else {
-            throw VolumeServiceError.volumeNotOnAgent
-        }
-
-        guard let volumePath = volume.storagePath else {
+        guard let (hypervisorId, path) = try await placement(of: volume), let volumePath = path else {
             throw VolumeServiceError.volumeNotOnAgent
         }
 
@@ -334,11 +387,7 @@ actor VolumeService {
         volume: Volume,
         snapshot: VolumeSnapshot
     ) async throws -> String? {
-        guard let hypervisorId = volume.hypervisorId else {
-            throw VolumeServiceError.volumeNotOnAgent
-        }
-
-        guard let volumePath = volume.storagePath else {
+        guard let (hypervisorId, path) = try await placement(of: volume), let volumePath = path else {
             throw VolumeServiceError.volumeNotOnAgent
         }
 
@@ -374,9 +423,9 @@ actor VolumeService {
         volume: Volume,
         snapshot: VolumeSnapshot
     ) async throws {
-        guard let hypervisorId = volume.hypervisorId else {
+        guard let hypervisorId = try await placement(of: volume)?.agentId else {
             logger.info(
-                "Volume has no hypervisor, skipping agent snapshot deletion",
+                "Volume has no replica on any agent, skipping agent snapshot deletion",
                 metadata: [
                     "volumeId": .string(volume.id!.uuidString),
                     "snapshotId": .string(snapshot.id!.uuidString),
@@ -419,11 +468,8 @@ actor VolumeService {
         sourceVolume: Volume,
         targetVolume: Volume
     ) async throws -> String? {
-        guard let hypervisorId = sourceVolume.hypervisorId else {
-            throw VolumeServiceError.volumeNotOnAgent
-        }
-
-        guard let sourceVolumePath = sourceVolume.storagePath else {
+        guard let (hypervisorId, path) = try await placement(of: sourceVolume), let sourceVolumePath = path
+        else {
             throw VolumeServiceError.volumeNotOnAgent
         }
 
