@@ -172,6 +172,26 @@ struct OIDCValidation {
         return (email, false)
     }
 
+    /// Resolves the profile identity (display name / username), merging the ID
+    /// token and (optional) UserInfo claims.
+    ///
+    /// Some IdPs (e.g. Discord) put only `sub` in the ID token and return all
+    /// profile claims from the UserInfo endpoint — without this fallback such
+    /// users would be created as `oidc_<subject>`. ID-token claims win when
+    /// present; `nickname` is the OIDC standard claim Discord uses for the
+    /// user's display name.
+    static func resolveProfile(
+        idTokenName: String?,
+        idTokenPreferredUsername: String?,
+        userInfoName: String?,
+        userInfoNickname: String?,
+        userInfoPreferredUsername: String?
+    ) -> (name: String?, preferredUsername: String?) {
+        let preferredUsername = idTokenPreferredUsername ?? userInfoPreferredUsername
+        let name = idTokenName ?? userInfoName ?? userInfoNickname ?? preferredUsername
+        return (name, preferredUsername)
+    }
+
     private static func validateOptionalHTTPSURL(_ urlString: String?, label: String) throws {
         if let urlString, !urlString.isEmpty {
             guard isValidHTTPSURL(urlString) else {
@@ -223,6 +243,7 @@ struct OIDCValidation {
         "oauth.reddit.com",
         "github.com",
         "gitlab.com",
+        "discord.com",
     ]
 
     /// Domain suffixes allowed for OIDC discovery/JWKS fetches when
