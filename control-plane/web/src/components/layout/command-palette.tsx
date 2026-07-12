@@ -7,6 +7,7 @@ import { Cpu, Rows3, Search, type LucideIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { agentsApi, vmsApi } from "@/lib/api";
+import { useAuth } from "@/providers";
 import { flattenNav } from "./nav";
 
 interface PaletteEntry {
@@ -22,6 +23,7 @@ export function CommandPalette() {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const router = useRouter();
+  const { user } = useAuth();
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -46,14 +48,18 @@ export function CommandPalette() {
     enabled: open,
   });
 
+  const isAdmin = user?.isSystemAdmin ?? false;
+
   const entries = useMemo<PaletteEntry[]>(() => {
-    const pages = flattenNav().map((item) => ({
-      key: `page:${item.href}`,
-      label: item.label,
-      hint: "Page",
-      href: item.href!,
-      icon: item.icon,
-    }));
+    const pages = flattenNav()
+      .filter((item) => !item.adminOnly || isAdmin)
+      .map((item) => ({
+        key: `page:${item.href}`,
+        label: item.label,
+        hint: "Page",
+        href: item.href!,
+        icon: item.icon,
+      }));
     const vmEntries = vms.map((vm) => ({
       key: `vm:${vm.id}`,
       label: vm.name,
@@ -69,7 +75,7 @@ export function CommandPalette() {
       icon: Cpu,
     }));
     return [...pages, ...vmEntries, ...agentEntries];
-  }, [vms, agents]);
+  }, [vms, agents, isAdmin]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
