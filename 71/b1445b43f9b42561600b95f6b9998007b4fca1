@@ -1,0 +1,26 @@
+control-plane/Sources/App/Services/WebAuthnService.swift
+  s_b36c12691fceda::t_8f5807bff2b501 63-65,69
+  s_b36c12691fceda::t_b77330a92e5882 44
+control-plane/Tests/AppTests/UserCreationAndClaimTests.swift
+  s_b36c12691fceda::t_b9f09dc5ce3635 196-227
+control-plane/Sources/App/Controllers/UserController.swift
+  s_b36c12691fceda::t_a0e4d55817ec8e 370-372,376
+  s_b36c12691fceda::t_5f5a7c1534a51e 686-690
+  s_b36c12691fceda::t_187337f42d47c1 402
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "71b1445b43f9b42561600b95f6b9998007b4fca1",
+  "prompts": {},
+  "sessions": {
+    "s_b36c12691fceda": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1c63ca92-0784-45e8-9097-491fccf4ebcb",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
