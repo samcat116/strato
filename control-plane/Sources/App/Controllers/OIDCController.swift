@@ -828,9 +828,10 @@ struct OIDCController: RouteCollection {
 
         // JWTKit selects the key by the header's `kid` and cross-checks the
         // header `alg` against the key's type (RSA/EC/OKP), so a token can't
-        // steer verification onto a mismatched algorithm.
-        let signers = try OIDCTokenVerification.makeSigners(jwksJSON: jwksJSON, logger: req.logger)
-        let claims = try signers.verify(idToken, as: OIDCIDTokenClaims.self)
+        // steer verification onto a mismatched algorithm. Unknown `kid`s are
+        // rejected rather than falling back to the first key.
+        let verifiers = try OIDCTokenVerification.makeVerifiers(jwksJSON: jwksJSON, logger: req.logger)
+        let claims = try verifiers.verify(idToken, header: header)
 
         // Additional claim validation
         try validateIDTokenClaims(claims, provider: provider, expectedNonce: expectedNonce)

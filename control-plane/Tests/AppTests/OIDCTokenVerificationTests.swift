@@ -108,8 +108,8 @@ struct OIDCTokenVerificationTests {
         signer.use(.rs256(key: signingKey), kid: "rsa-key")
         let token = try signer.sign(makeClaims(), kid: "rsa-key")
 
-        let verifiers = try OIDCTokenVerification.makeSigners(jwksJSON: jwksJSON(keys: [rsaJWK()]))
-        let claims = try verifiers.verify(token, as: OIDCIDTokenClaims.self)
+        let verifiers = try OIDCTokenVerification.makeVerifiers(jwksJSON: jwksJSON(keys: [rsaJWK()]))
+        let claims = try verifiers.verify(token, header: JWTHeader(alg: "RS256", typ: "JWT", kid: "rsa-key"))
         #expect(claims.sub == "user-123")
     }
 
@@ -127,8 +127,8 @@ struct OIDCTokenVerificationTests {
                 "x": parameters.x, "y": parameters.y,
             ]
         ])
-        let verifiers = try OIDCTokenVerification.makeSigners(jwksJSON: jwks)
-        let claims = try verifiers.verify(token, as: OIDCIDTokenClaims.self)
+        let verifiers = try OIDCTokenVerification.makeVerifiers(jwksJSON: jwks)
+        let claims = try verifiers.verify(token, header: JWTHeader(alg: "ES256", typ: "JWT", kid: "ec-key"))
         #expect(claims.sub == "user-123")
     }
 
@@ -145,8 +145,8 @@ struct OIDCTokenVerificationTests {
         let jwks = try jwksJSON(keys: [
             ["kty": "OKP", "alg": "EdDSA", "kid": "ed-key", "crv": "Ed25519", "x": x]
         ])
-        let verifiers = try OIDCTokenVerification.makeSigners(jwksJSON: jwks)
-        let claims = try verifiers.verify(token, as: OIDCIDTokenClaims.self)
+        let verifiers = try OIDCTokenVerification.makeVerifiers(jwksJSON: jwks)
+        let claims = try verifiers.verify(token, header: JWTHeader(alg: "EdDSA", typ: "JWT", kid: "ed-key"))
         #expect(claims.sub == "user-123")
     }
 
@@ -162,9 +162,9 @@ struct OIDCTokenVerificationTests {
         attackerSigner.use(.es256(key: attackerKey), kid: "rsa-key")
         let forged = try attackerSigner.sign(makeClaims(), kid: "rsa-key")
 
-        let verifiers = try OIDCTokenVerification.makeSigners(jwksJSON: jwksJSON(keys: [rsaJWK()]))
+        let verifiers = try OIDCTokenVerification.makeVerifiers(jwksJSON: jwksJSON(keys: [rsaJWK()]))
         #expect(throws: (any Error).self) {
-            try verifiers.verify(forged, as: OIDCIDTokenClaims.self)
+            try verifiers.verify(forged, header: JWTHeader(alg: "ES256", typ: "JWT", kid: "rsa-key"))
         }
     }
 
@@ -185,9 +185,25 @@ struct OIDCTokenVerificationTests {
                 "x": parameters.x, "y": parameters.y,
             ]
         ])
-        let verifiers = try OIDCTokenVerification.makeSigners(jwksJSON: jwks)
+        let verifiers = try OIDCTokenVerification.makeVerifiers(jwksJSON: jwks)
         #expect(throws: (any Error).self) {
-            try verifiers.verify(token, as: OIDCIDTokenClaims.self)
+            try verifiers.verify(token, header: JWTHeader(alg: "RS256", typ: "JWT", kid: "rsa-key"))
+        }
+    }
+
+    @Test("Token naming a kid absent from the JWKS is rejected, not defaulted")
+    func testUnknownKidRejected() throws {
+        // Even a token signed by the provider's real key must be rejected when
+        // its header names a kid the JWKS doesn't publish — JWTKit alone would
+        // silently fall back to the default (first) key here.
+        let signingKey = try RSAKey.private(pem: Self.rsaPrivatePEM)
+        let signer = JWTSigners()
+        signer.use(.rs256(key: signingKey), kid: "rotated-away")
+        let token = try signer.sign(makeClaims(), kid: "rotated-away")
+
+        let verifiers = try OIDCTokenVerification.makeVerifiers(jwksJSON: jwksJSON(keys: [rsaJWK()]))
+        #expect(throws: (any Error).self) {
+            try verifiers.verify(token, header: JWTHeader(alg: "RS256", typ: "JWT", kid: "rotated-away"))
         }
     }
 
@@ -209,8 +225,8 @@ struct OIDCTokenVerificationTests {
             rsaJWK(kid: "enc-key", use: "enc"),
             rsaJWK(),
         ])
-        let verifiers = try OIDCTokenVerification.makeSigners(jwksJSON: jwks)
-        let claims = try verifiers.verify(token, as: OIDCIDTokenClaims.self)
+        let verifiers = try OIDCTokenVerification.makeVerifiers(jwksJSON: jwks)
+        let claims = try verifiers.verify(token, header: JWTHeader(alg: "RS256", typ: "JWT", kid: "rsa-key"))
         #expect(claims.sub == "user-123")
     }
 
@@ -223,8 +239,8 @@ struct OIDCTokenVerificationTests {
 
         var jwk = rsaJWK()
         jwk.removeValue(forKey: "kid")
-        let verifiers = try OIDCTokenVerification.makeSigners(jwksJSON: jwksJSON(keys: [jwk]))
-        let claims = try verifiers.verify(token, as: OIDCIDTokenClaims.self)
+        let verifiers = try OIDCTokenVerification.makeVerifiers(jwksJSON: jwksJSON(keys: [jwk]))
+        let claims = try verifiers.verify(token, header: JWTHeader(alg: "RS256", typ: "JWT", kid: nil))
         #expect(claims.sub == "user-123")
     }
 
@@ -232,14 +248,14 @@ struct OIDCTokenVerificationTests {
     func testNoUsableKeys() throws {
         let encOnly = try jwksJSON(keys: [rsaJWK(kid: "enc-key", use: "enc")])
         #expect(throws: (any Error).self) {
-            try OIDCTokenVerification.makeSigners(jwksJSON: encOnly)
+            try OIDCTokenVerification.makeVerifiers(jwksJSON: encOnly)
         }
         let empty = try jwksJSON(keys: [])
         #expect(throws: (any Error).self) {
-            try OIDCTokenVerification.makeSigners(jwksJSON: empty)
+            try OIDCTokenVerification.makeVerifiers(jwksJSON: empty)
         }
         #expect(throws: (any Error).self) {
-            try OIDCTokenVerification.makeSigners(jwksJSON: Data("not json".utf8))
+            try OIDCTokenVerification.makeVerifiers(jwksJSON: Data("not json".utf8))
         }
     }
 }
