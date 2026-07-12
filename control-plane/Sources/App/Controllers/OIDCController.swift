@@ -880,12 +880,8 @@ struct OIDCController: RouteCollection {
         // Validate issuer (iss). The OIDC spec requires the token's issuer to
         // match the provider's known issuer; skipping it lets a token minted by a
         // different issuer that shares the same JWKS/audience (e.g. another tenant
-        // on a multi-tenant IdP) be accepted. `issuer` is populated from the
-        // discovery document; when it's unknown (a provider configured with manual
-        // endpoints and no discovery) we can't validate and leave it to the other
-        // checks, but a discovery-configured provider always has it. Templated
-        // multi-tenant issuers (e.g. Entra `common`) are matched by pattern — see
-        // `OIDCValidation.issuerMatches`.
+        // on a multi-tenant IdP) be accepted. Templated multi-tenant issuers (e.g.
+        // Entra `common`) are matched by pattern — see `OIDCValidation.issuerMatches`.
         if let expectedIssuer = provider.issuer, !expectedIssuer.isEmpty {
             guard OIDCValidation.issuerMatches(expected: expectedIssuer, actual: claims.iss) else {
                 throw Abort(
@@ -893,6 +889,19 @@ struct OIDCController: RouteCollection {
                     reason: "ID token issuer '\(claims.iss)' does not match expected issuer '\(expectedIssuer)'"
                 )
             }
+        } else if !(provider.discoveryURL ?? "").isEmpty {
+            // Discovery-configured but the issuer was never resolved (a failed
+            // discovery fetch at create/update, or an un-derivable backfill). Fail
+            // closed rather than accept a token whose issuer we can't verify — the
+            // stored endpoints alone would otherwise let a different-issuer token
+            // sharing the JWKS/audience through. An admin re-test/refresh populates
+            // the issuer. Manual-only providers (no discovery URL) legitimately have
+            // no issuer and are not affected by this branch.
+            throw Abort(
+                .badRequest,
+                reason:
+                    "OIDC provider issuer is not configured. An administrator must re-test the provider to refresh its discovery metadata before logins can proceed."
+            )
         }
 
         // Validate audience (aud) - should match our client ID
