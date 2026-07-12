@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogOut } from "lucide-react";
+import { LogOut, Monitor, Moon, Sun } from "lucide-react";
+import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import { useAuth, useOrganization } from "@/providers";
 import {
@@ -37,6 +38,46 @@ function SidebarLink({ item }: { item: NavItem }) {
   );
 }
 
+const themeOptions = [
+  { value: "system", label: "System", icon: Monitor },
+  { value: "light", label: "Light", icon: Sun },
+  { value: "dark", label: "Dark", icon: Moon },
+] as const;
+
+function ThemeToggle() {
+  // The dropdown content is portaled and only mounts client-side when the menu
+  // opens, so reading next-themes' value here can't cause a hydration mismatch.
+  const { theme: current, setTheme } = useTheme();
+
+  return (
+    <div className="px-2 py-1.5">
+      <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.6px] text-muted-foreground">
+        Theme
+      </div>
+      <div className="flex gap-0.5 rounded-[7px] bg-muted p-0.5">
+        {themeOptions.map(({ value, label, icon: Icon }) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setTheme(value)}
+            aria-label={label}
+            aria-pressed={current === value}
+            className={cn(
+              "flex flex-1 items-center justify-center gap-1 rounded-[5px] px-1.5 py-1 text-[11px] font-medium transition-colors",
+              current === value
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function UserCard() {
   const { user, logout } = useAuth();
   const { currentOrg } = useOrganization();
@@ -63,6 +104,8 @@ function UserCard() {
           <DropdownMenuLabel className="truncate text-xs font-normal text-muted-foreground">
             {user?.email}
           </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <ThemeToggle />
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={logout} className="cursor-pointer">
             <LogOut className="mr-2 h-4 w-4" />
