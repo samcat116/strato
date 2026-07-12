@@ -30,6 +30,10 @@ jobs:
     # container"). vapor/swiftly-action remains unusable on the ARC pods
     # ($USER is unset).
     container: ${{ matrix.arch == 'arm64' && 'swift:6.3.2-noble' || '' }}
+    # Backstop for a hung build: the default 360-minute timeout would pin an
+    # ARC pool slot (x64) for six hours. Warm builds take ~12 minutes; a cold
+    # arm64 release build is the slow case.
+    timeout-minutes: 90
     strategy:
       matrix:
         include:
@@ -195,6 +199,11 @@ jobs:
   # prebuilt binary from ./artifacts and aren't TARGETARCH-aware, so one
   # emulated multi-platform build can't feed a different binary per platform.
   #
+  # Phase 1 is two jobs: the Swift images below wait on the release binaries,
+  # while the frontend (which consumes no Swift artifacts) builds in its own
+  # job immediately — overlapping it with the ~12-minute Swift build instead of
+  # queueing behind it. The publish barrier still needs both.
+  #
   # `provenance: false` suppresses buildx's default SBOM/provenance attestation,
   # which was pushed as an `unknown/unknown` manifest and showed up as a bogus
   # architecture on the GHCR package page.
@@ -213,24 +222,18 @@ jobs:
           - { image: control-plane, arch: arm64, context: ., file: ./control-plane/Dockerfile, prebuilt: artifacts/control-plane }
           - { image: agent, arch: x64, context: ., file: ./agent/Dockerfile, prebuilt: artifacts/agent }
           - { image: agent, arch: arm64, context: ., file: ./agent/Dockerfile, prebuilt: artifacts/agent }
-          - { image: frontend, arch: x64, context: control-plane/web, file: ./control-plane/web/Dockerfile, prebuilt: "" }
-          - { image: frontend, arch: arm64, context: control-plane/web, file: ./control-plane/web/Dockerfile, prebuilt: "" }
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Only the Swift images consume prebuilt binaries; the frontend builds
-      # from source (bun) inside its Dockerfile.
+      # No continue-on-error here: with PREBUILT_ARTIFACTS set, the Dockerfile
+      # hard-fails on missing artifacts anyway ("no artifacts found"), so
+      # tolerating a failed download only moves the error somewhere confusing.
       - name: Download build artifacts
-        if: matrix.prebuilt != ''
         uses: actions/download-artifact@v4
         with:
           name: swift-binaries-${{ matrix.arch }}
           path: artifacts/
-        continue-on-error: true
-
-      - name: Prepare build context
-        run: mkdir -p ./artifacts
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -249,12 +252,11 @@ jobs:
           echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           echo "version=main-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
-      # Docker gha caching is kept ONLY for the frontend, which compiles from
-      # source (bun) and genuinely benefits. The control-plane and agent images
-      # consume prebuilt binaries (nothing compiles in-image), so their layers
-      # are cheap to rebuild — yet their mode=max caches were ~5GB of the repo's
-      # ~11GB cache, the churn that evicted the Swift release .build every run.
-      # Dropping them frees the budget so the caches that matter survive.
+      # No gha cache for these images: they consume prebuilt binaries (nothing
+      # compiles in-image), so their layers are cheap to rebuild — yet their
+      # mode=max caches were ~5GB of the repo's ~11GB cache, the churn that
+      # evicted the Swift release .build every run. The frontend job below is
+      # the only image that still caches.
       #
       # Dynamic OCI labels are applied here (the static, per-image descriptive
       # labels live in each Dockerfile); build-push-action merges both onto the
@@ -272,16 +274,14 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ steps.meta.outputs.created }}
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
-          cache-from: ${{ matrix.image == 'frontend' && format('type=gha,key=frontend-{0}', matrix.arch) || '' }}
-          cache-to: ${{ matrix.image == 'frontend' && format('type=gha,mode=max,key=frontend-{0}', matrix.arch) || '' }}
           # Blank lines are ignored, so each arg is gated independently. The
-          # control-plane and frontend bake the build identity (STRATO_VERSION on
-          # /health/*, and the sidebar version label respectively); the agent has
-          # none. Baked once here in the per-arch digest build — the publish phase
-          # only stitches manifests by digest and never rebuilds, so the identity
-          # must be set now, not at publish time.
+          # control-plane bakes the build identity (STRATO_VERSION on
+          # /health/*); the agent has none. Baked once here in the per-arch
+          # digest build — the publish phase only stitches manifests by digest
+          # and never rebuilds, so the identity must be set now, not at
+          # publish time.
           build-args: |
-            ${{ matrix.prebuilt != '' && format('PREBUILT_ARTIFACTS={0}', matrix.prebuilt) || '' }}
+            PREBUILT_ARTIFACTS=${{ matrix.prebuilt }}
             ${{ matrix.image != 'agent' && 'STRATO_VERSION=main' || '' }}
             ${{ matrix.image != 'agent' && format('STRATO_GIT_SHA={0}', github.sha) || '' }}
 
@@ -302,7 +302,80 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  # Phase 2 — publish barrier. `needs: [build-image-digests]` succeeds only if
+  # Frontend digests — no dependency on the Swift binaries (the image compiles
+  # from source with bun inside its Dockerfile), so this starts immediately
+  # instead of idling behind build-swift-release. gha layer caching is kept
+  # here and only here: this is the one image where a warm cache skips real
+  # compilation.
+  build-frontend-digest:
+    name: Build Digest (frontend, ${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+          - arch: arm64
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute build metadata
+        id: meta
+        run: |
+          echo "name=ghcr.io/${GITHUB_REPOSITORY}-frontend" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "version=main-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      # The frontend bakes the build identity into the client bundle (the
+      # sidebar version label) — same rationale as the control-plane above.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: control-plane/web
+          file: ./control-plane/web/Dockerfile
+          platforms: ${{ matrix.arch == 'x64' && 'linux/amd64' || 'linux/arm64' }}
+          outputs: type=image,name=${{ steps.meta.outputs.name }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+          cache-from: type=gha,key=frontend-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,key=frontend-${{ matrix.arch }}
+          build-args: |
+            STRATO_VERSION=main
+            STRATO_GIT_SHA=${{ github.sha }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digest
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digest/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-frontend-${{ matrix.arch }}
+          path: /tmp/digest/*
+          retention-days: 1
+          if-no-files-found: error
+
+  # Phase 2 — publish barrier. Needing both phase-1 jobs succeeds only if
   # EVERY leg (all images, both arches) passed, so we never publish a tag for a
   # commit whose full image set wasn't built. The multi-arch tags are created
   # here and only here, so the phase-1 digests stay invisible until this runs.
@@ -313,7 +386,7 @@ jobs:
   # image-updater tracks `main-<sha>` via a `^main-[0-9a-f]{7,40}$` regexp.
   publish-manifests:
     name: Publish Multi-Arch Manifests
-    needs: [build-image-digests]
+    needs: [build-image-digests, build-frontend-digest]
     runs-on: ubuntu-latest
     permissions:
       contents: read

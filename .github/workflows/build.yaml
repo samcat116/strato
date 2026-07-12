@@ -78,7 +78,9 @@ jobs:
   swift-format:
     name: Swift Format Lint
     needs: changes
-    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
+    # SwiftFirecracker/ is vendored and deliberately not linted, so
+    # firecracker-only changes don't trigger this job.
+    if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
     # Lightweight formatting check — runs on GitHub-hosted runners to keep the
     # Swift runner pool free for the heavy build+test job. `swift format`
     # ships with the toolchain, so no extra tooling is needed.
@@ -149,6 +151,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.firecracker == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: swift-runners-strato
+    # Backstop for a hung build/test: the default 360-minute timeout would pin
+    # a scarce runner-pool slot for six hours. Warm runs finish in ~15 minutes,
+    # cold rebuilds in ~30.
+    timeout-minutes: 60
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -213,6 +219,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: swift-runners-strato
+    # Backstop for a hung build/test (see the test job above); this job runs
+    # the suite twice, so give it more headroom for a cold build.
+    timeout-minutes: 75
     services:
       postgres:
         image: postgres:15
@@ -370,7 +379,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        # Pinned release tag — @master is a mutable ref that runs whatever the
+        # branch currently points at.
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: "fs"
           scan-ref: "."
@@ -388,7 +399,10 @@ jobs:
   # push) the affected image on hosted runners; they are rare because they
   # are gated on the Dockerfile paths themselves. `cache-to` is deliberately
   # omitted everywhere: PR-scoped buildkit caches are unreadable by sibling
-  # PRs and would only thrash the 10GB repo cache quota.
+  # PRs and would only thrash the 10GB repo cache quota. `cache-from` is only
+  # set where main-build actually saves a cache — since it dropped the
+  # control-plane/agent gha caches (kept only frontend-*), the two Swift
+  # image checks run cold.
   docker-control-plane:
     name: Docker Build Check (Control Plane)
     needs: changes
@@ -416,8 +430,6 @@ jobs:
           file: ./control-plane/Dockerfile
           push: false
           platforms: linux/amd64
-          # Readable from PRs because main-build saves it from main's scope.
-          cache-from: type=gha,key=control-plane-x64
 
   docker-agent:
     name: Docker Build Check (Agent)
@@ -425,8 +437,6 @@ jobs:
     if: needs.changes.outputs.docker_agent == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     # No prebuilt artifacts on PRs, so the image compiles Swift from source.
-    # main-build's cache (saved with prebuilt artifacts) still warms the
-    # dependency-resolution layers, but not the swift build itself.
     timeout-minutes: 60
     steps:
       - name: Checkout Code
@@ -448,8 +458,6 @@ jobs:
           file: ./agent/Dockerfile
           push: false
           platforms: linux/amd64
-          # Readable from PRs because main-build saves it from main's scope.
-          cache-from: type=gha,key=agent-x64
 
   docker-web:
     name: Docker Build Check (Frontend)
@@ -471,3 +479,7 @@ jobs:
           file: ./control-plane/web/Dockerfile
           push: false
           platforms: linux/amd64
+          # Readable from PRs because main-build saves it from main's scope —
+          # the frontend is the one image main-build still keeps a gha cache
+          # for (it compiles from source in-image).
+          cache-from: type=gha,key=frontend-x64
