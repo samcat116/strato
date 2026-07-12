@@ -422,35 +422,47 @@ struct UserController: RouteCollection {
             throw Abort(.gone, reason: "This passkey request has expired — please restart setup")
         }
 
-        // Consume the one-time token atomically BEFORE enrolling the credential.
-        // The conditional update matches only while `claimed_at` is still null,
-        // so two holders of the same invite finishing concurrently can't both
-        // enroll a passkey — exactly one wins the update; the loser gets 410.
-        guard let sql = req.db as? SQLDatabase else {
-            throw Abort(.internalServerError, reason: "Unsupported database")
-        }
-        let consumed = try await sql.raw(
-            """
-            UPDATE account_claim_tokens SET claimed_at = \(bind: Date())
-            WHERE id = \(bind: claimID) AND claimed_at IS NULL
-            RETURNING id
-            """
-        ).all()
-        guard !consumed.isEmpty else {
-            throw Abort(.gone, reason: "This invitation link has expired or was already used")
-        }
+        // Consume the one-time token and enroll the credential in a single
+        // transaction. The conditional update matches only while `claimed_at`
+        // is still null, so two holders of the same invite finishing
+        // concurrently can't both enroll — exactly one wins; the loser gets
+        // 410. Wrapping both in a transaction means a failed enrollment (bad
+        // response, challenge expired in the race window, credential
+        // insert/delete error) rolls the consume back, leaving the invite
+        // usable for a retry instead of stranding the account.
+        let webAuthn = try req.webAuthn
+        let challenge = finishRequest.challenge
+        let response = finishRequest.response
+        let operation = Self.claimChallengeOperation
+        let credential = try await req.db.transaction { db -> UserCredential in
+            guard let sql = db as? SQLDatabase else {
+                throw Abort(.internalServerError, reason: "Unsupported database")
+            }
+            let consumed = try await sql.raw(
+                """
+                UPDATE account_claim_tokens SET claimed_at = \(bind: Date())
+                WHERE id = \(bind: claimID) AND claimed_at IS NULL
+                RETURNING id
+                """
+            ).all()
+            guard !consumed.isEmpty else {
+                throw Abort(.gone, reason: "This invitation link has expired or was already used")
+            }
 
-        let credential = try await req.webAuthn.finishRegistration(
-            challenge: finishRequest.challenge,
-            credentialCreationData: finishRequest.response,
-            operation: Self.claimChallengeOperation,
-            on: req.db
-        )
+            let credential = try await webAuthn.finishRegistration(
+                challenge: challenge,
+                credentialCreationData: response,
+                operation: operation,
+                on: db
+            )
 
-        // Defense in depth: finishRegistration derives the user from the
-        // challenge; re-confirm it matches the (now consumed) token.
-        guard credential.$user.id == tokenUserID else {
-            throw Abort(.badRequest, reason: "Claim token does not match this registration")
+            // Defense in depth: finishRegistration derives the user from the
+            // challenge; a mismatch rolls the whole transaction back (no
+            // credential, token un-consumed).
+            guard credential.$user.id == tokenUserID else {
+                throw Abort(.badRequest, reason: "Claim token does not match this registration")
+            }
+            return credential
         }
 
         try await credential.$user.load(on: req.db)
