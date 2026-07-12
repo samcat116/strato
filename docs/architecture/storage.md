@@ -66,7 +66,24 @@ volumes snapshot correctly.
 
 Volumes are host-local. The control-plane `VolumeService` places volumes on
 online QEMU-capable agents (attachment goes through QEMU's block layer), and
-attachment requires the volume and VM to live on the same agent.
+attachment requires the VM's agent to be able to reach the volume's data —
+for a local pool, the same agent that holds it.
+
+### Pools and replicas (data model)
+
+Placement is expressed through the phase-1 data model from
+[`distributed-storage.md`](./distributed-storage.md): every `Volume` belongs
+to a `StoragePool` (mode `local`/`replicated`, backing
+`filesystem`/`zfs`, member agents, replication factor), and each physical
+copy of a volume is a `VolumeReplica` row (agent, agent-owned dataset path,
+health state, reconciliation generation). Today the only pool is the
+migration-seeded `default` local pool — one replica per volume, `filesystem`
+backing, any QEMU-capable agent eligible — which reproduces the host-local
+behavior above exactly. While attached, `Volume.attachedAgentId` records the
+agent the attachment runs on. The legacy `hypervisor_id`/`storage_path`
+columns are dual-written alongside the replica row until nothing reads them.
+The agent-side `StorageBackend` protocol and the wire protocol are untouched
+by this model.
 
 ## Future work
 

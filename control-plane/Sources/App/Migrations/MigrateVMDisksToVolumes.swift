@@ -1,5 +1,64 @@
 import Fluent
+import Foundation
 import Vapor
+
+/// Snapshot of the `volumes` columns as they exist at this migration's point
+/// in the order. The live `Volume` model has since grown fields (e.g.
+/// `pool_id`) whose columns don't exist yet when this migration runs — and no
+/// longer exist when it reverts — so querying through it fails on both paths.
+private final class LegacyVolume: Model, @unchecked Sendable {
+    static let schema = "volumes"
+
+    @ID(key: .id)
+    var id: UUID?
+
+    @Field(key: "name")
+    var name: String
+
+    @Field(key: "description")
+    var description: String
+
+    @Field(key: "project_id")
+    var projectId: UUID
+
+    @Field(key: "size")
+    var size: Int64
+
+    @Field(key: "format")
+    var format: String
+
+    @Field(key: "type")
+    var volumeType: String
+
+    @Field(key: "status")
+    var status: String
+
+    @OptionalField(key: "storage_path")
+    var storagePath: String?
+
+    @OptionalField(key: "hypervisor_id")
+    var hypervisorId: String?
+
+    @OptionalField(key: "vm_id")
+    var vmId: UUID?
+
+    @OptionalField(key: "device_name")
+    var deviceName: String?
+
+    @OptionalField(key: "boot_order")
+    var bootOrder: Int?
+
+    @Field(key: "created_by_id")
+    var createdById: UUID
+
+    @Timestamp(key: "created_at", on: .create)
+    var createdAt: Date?
+
+    @Timestamp(key: "updated_at", on: .update)
+    var updatedAt: Date?
+
+    init() {}
+}
 
 /// Migration to convert existing VM disk fields to Volume records
 /// This ensures backwards compatibility with VMs created before the volume system
@@ -32,9 +91,9 @@ struct MigrateVMDisksToVolumes: AsyncMigration {
             }
 
             // Check if a volume already exists for this VM
-            let existingVolume = try await Volume.query(on: database)
-                .filter(\.$vm.$id == vmId)
-                .filter(\.$volumeType == .boot)
+            let existingVolume = try await LegacyVolume.query(on: database)
+                .filter(\.$vmId == vmId)
+                .filter(\.$volumeType == "boot")
                 .first()
 
             if existingVolume != nil {
@@ -66,19 +125,18 @@ struct MigrateVMDisksToVolumes: AsyncMigration {
             }
 
             // Create a Volume record for the existing disk
-            let volume = Volume(
-                name: "\(vm.name)-boot",
-                description: "Boot volume migrated from VM disk",
-                projectID: projectId,
-                size: vm.disk,
-                format: .qcow2,  // Assume qcow2 as default
-                volumeType: .boot,
-                status: .attached,
-                createdByID: ownerId
-            )
+            let volume = LegacyVolume()
+            volume.name = "\(vm.name)-boot"
+            volume.description = "Boot volume migrated from VM disk"
+            volume.projectId = projectId
+            volume.size = vm.disk
+            volume.format = "qcow2"  // Assume qcow2 as default
+            volume.volumeType = "boot"
+            volume.status = "attached"
+            volume.createdById = ownerId
 
             // Set the VM relationship and device info
-            volume.$vm.id = vmId
+            volume.vmId = vmId
             volume.deviceName = "disk0"
             volume.bootOrder = 0
             volume.storagePath = diskPath
@@ -110,8 +168,8 @@ struct MigrateVMDisksToVolumes: AsyncMigration {
 
         // Find all volumes that were created by this migration
         // (boot volumes with description containing "migrated from VM disk")
-        let migratedVolumes = try await Volume.query(on: database)
-            .filter(\.$volumeType == .boot)
+        let migratedVolumes = try await LegacyVolume.query(on: database)
+            .filter(\.$volumeType == "boot")
             .filter(\.$description == "Boot volume migrated from VM disk")
             .all()
 
