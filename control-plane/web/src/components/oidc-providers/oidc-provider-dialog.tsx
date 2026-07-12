@@ -114,14 +114,17 @@ function ProviderForm({
 
     try {
       if (isEdit && provider) {
+        // URL fields are always sent: the backend treats an empty string as
+        // an explicit clear (omitting the field would keep the old value, so
+        // e.g. a removed discovery URL would silently survive the edit).
         const data: UpdateOIDCProviderRequest = {
           name: name.trim(),
           clientID: clientID.trim(),
-          discoveryURL: discoveryURL.trim() || undefined,
-          authorizationEndpoint: authorizationEndpoint.trim() || undefined,
-          tokenEndpoint: tokenEndpoint.trim() || undefined,
-          userinfoEndpoint: userinfoEndpoint.trim() || undefined,
-          jwksURI: jwksURI.trim() || undefined,
+          discoveryURL: discoveryURL.trim(),
+          authorizationEndpoint: authorizationEndpoint.trim(),
+          tokenEndpoint: tokenEndpoint.trim(),
+          userinfoEndpoint: userinfoEndpoint.trim(),
+          jwksURI: jwksURI.trim(),
           scopes: scopeList.length > 0 ? scopeList : undefined,
         };
         // Blank secret means "keep the current one"

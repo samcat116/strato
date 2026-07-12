@@ -134,15 +134,33 @@ struct OIDCController: RouteCollection {
         if let name = updateRequest.name { provider.name = name }
         if let clientID = updateRequest.clientID { provider.clientID = clientID }
         if let clientSecret = updateRequest.clientSecret { provider.clientSecret = clientSecret }
-        if let discoveryURL = updateRequest.discoveryURL { provider.discoveryURL = discoveryURL }
-        if let authorizationEndpoint = updateRequest.authorizationEndpoint {
-            provider.authorizationEndpoint = authorizationEndpoint
+        // Optional URL fields: omitted keeps the stored value, an empty string
+        // clears it. Without a clear path, a provider switched from discovery
+        // to manual config would keep resending the stale discovery URL and
+        // overwrite the manual endpoints on every subsequent edit.
+        func applyOptionalURL(_ value: String?, to keyPath: ReferenceWritableKeyPath<OIDCProvider, String?>) {
+            guard let value else { return }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            provider[keyPath: keyPath] = trimmed.isEmpty ? nil : trimmed
         }
-        if let tokenEndpoint = updateRequest.tokenEndpoint { provider.tokenEndpoint = tokenEndpoint }
-        if let userinfoEndpoint = updateRequest.userinfoEndpoint { provider.userinfoEndpoint = userinfoEndpoint }
-        if let jwksURI = updateRequest.jwksURI { provider.jwksURI = jwksURI }
+        applyOptionalURL(updateRequest.discoveryURL, to: \.discoveryURL)
+        applyOptionalURL(updateRequest.authorizationEndpoint, to: \.authorizationEndpoint)
+        applyOptionalURL(updateRequest.tokenEndpoint, to: \.tokenEndpoint)
+        applyOptionalURL(updateRequest.userinfoEndpoint, to: \.userinfoEndpoint)
+        applyOptionalURL(updateRequest.jwksURI, to: \.jwksURI)
         if let scopes = updateRequest.scopes { provider.setScopesArray(scopes) }
         if let enabled = updateRequest.enabled { provider.enabled = enabled }
+
+        // The resulting configuration must still be loginable: either a
+        // discovery URL, or the full manual endpoint set.
+        let hasDiscovery = !(provider.discoveryURL ?? "").isEmpty
+        guard hasDiscovery || provider.hasRequiredEndpoints() else {
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Provider must keep either a discovery URL or all of authorization endpoint, token endpoint, and JWKS URI"
+            )
+        }
 
         try await provider.save(on: req.db)
 
@@ -150,7 +168,7 @@ struct OIDCController: RouteCollection {
         // stored endpoints from its document. Without this, rotating to a new
         // issuer saves fine but logins keep using the previous issuer's
         // endpoints. Fetch failures are logged, not fatal, same as on create.
-        if let discoveryURL = updateRequest.discoveryURL, !discoveryURL.isEmpty {
+        if let discoveryURL = provider.discoveryURL, updateRequest.discoveryURL != nil, !discoveryURL.isEmpty {
             try await fetchAndUpdateProviderConfiguration(provider: provider, discoveryURL: discoveryURL, on: req)
         }
 
@@ -267,8 +285,12 @@ struct OIDCController: RouteCollection {
             .first()
         if organization == nil {
             let lowered = rawName.lowercased()
-            organization = try await Organization.query(on: req.db).all()
-                .first { $0.name.lowercased() == lowered }
+            let matches = try await Organization.query(on: req.db).all()
+                .filter { $0.name.lowercased() == lowered }
+            // Ambiguous case-insensitive matches (org names differing only by
+            // case) must not route the user to an arbitrary tenant's IdP —
+            // require exact casing in that situation.
+            organization = matches.count == 1 ? matches.first : nil
         }
 
         guard let organization, let organizationID = organization.id else {
@@ -401,7 +423,8 @@ struct OIDCController: RouteCollection {
                 userInfo: userInfo,
                 provider: provider,
                 organization: provider.organization,
-                on: req.db
+                db: req.db,
+                spicedb: req.spicedb
             )
 
             // Clean up session data
@@ -708,11 +731,15 @@ struct OIDCController: RouteCollection {
         // For production, consider validating the issuer (iss) claim matches expected values
     }
 
-    private func findOrCreateUser(
+    /// Resolve the OIDC subject to a user, provisioning one on first login.
+    /// Internal (not private) so tests can drive the first-login path, which
+    /// is otherwise only reachable through a live token exchange.
+    func findOrCreateUser(
         userInfo: OIDCUserInfo,
         provider: OIDCProvider,
         organization: Organization,
-        on db: Database
+        db: Database,
+        spicedb: SpiceDBServiceProtocol
     ) async throws -> User {
         // Try to find existing user by OIDC subject and provider
         guard let providerID = provider.id else {
@@ -737,6 +764,9 @@ struct OIDCController: RouteCollection {
                 if userOrgIDs.contains(organizationID) {
                     // Link existing user to OIDC provider
                     user.linkToOIDCProvider(providerID, subject: userInfo.subject)
+                    if user.currentOrganizationId == nil {
+                        user.currentOrganizationId = organizationID
+                    }
                     try await user.save(on: db)
                     return user
                 }
@@ -756,6 +786,9 @@ struct OIDCController: RouteCollection {
             oidcProviderID: providerID,
             oidcSubject: userInfo.subject
         )
+        // Authorization on product routes needs a current org (middleware
+        // rejects requests without one), so seed it at provisioning time.
+        user.currentOrganizationId = organization.id
 
         try await user.save(on: db)
 
@@ -771,6 +804,16 @@ struct OIDCController: RouteCollection {
             role: "member"
         )
         try await membership.save(on: db)
+
+        // Mirror the membership into SpiceDB, like OrganizationController's
+        // addMember does — without this tuple the new user authenticates but
+        // fails every permission check.
+        try await spicedb.setOrganizationRole(
+            userID: userID.uuidString,
+            organizationID: organizationID.uuidString,
+            oldRole: nil,
+            newRole: "member"
+        )
 
         return user
     }
