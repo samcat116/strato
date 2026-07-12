@@ -55,6 +55,9 @@ builds, and GitHub-hosted runners for everything lightweight.
 Used for:
 - PR validation — Swift build & test (build.yaml)
 - Main branch x64 Swift release binaries (main-build.yaml)
+- Release x64 Swift image binaries (release.yaml — the jemalloc-linked binaries
+  the container images copy in; the static-stdlib release-asset tarballs still
+  build on the static self-hosted runner)
 
 Jobs target the scale set with `runs-on: swift-runners-strato`. ARC
 scale-set runners match on **exactly one label — the installation name** —
@@ -93,7 +96,9 @@ toolchain and update the remaining `swift:x.y.z-noble` container tag
 ### Static Self-Hosted Runner (x64/AMD64)
 Used for:
 - Main branch x64 Docker image builds (main-build.yaml)
-- Release creation and x64 Docker image builds (release.yaml)
+- Release creation, x64 release-asset binary tarballs, and source assets
+  (release.yaml). x64 Docker image assembly now runs on GitHub-hosted runners
+  from prebuilt binaries — no longer on this machine.
 
 Requirements:
 - Docker
@@ -104,8 +109,10 @@ Used for:
 - All Helm chart tests (`ubuntu-latest`)
 - Claude Code workflows (`ubuntu-latest`)
 - Docs deployment (`ubuntu-latest`)
+- Release x64 Docker image assembly from prebuilt binaries (`ubuntu-latest`)
 - Main branch ARM64 builds (`ubuntu-24.04-arm`)
-- Release ARM64 Docker images (`ubuntu-latest-arm`)
+- Release ARM64 Swift binaries + Docker images (`ubuntu-24.04-arm`; the arm64
+  Swift build runs container-less on the runner's preinstalled toolchain)
 - macOS binary builds (`macos-latest`)
 
 This hybrid approach:

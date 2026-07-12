@@ -88,21 +88,156 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
 
-  build-and-push-images:
-    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-latest-arm' || 'self-hosted' }}
+  # Compile the release binaries that the container images copy in, mirroring
+  # main-build.yaml's prebuilt split: amd64 builds on the swift-runners-strato
+  # ARC scale set (its runner image bakes in the Swift 6.3.2 toolchain, so the
+  # build runs directly on the pod — no dind, no toolchain install); arm64
+  # builds container-less on the GitHub-hosted ubuntu-24.04-arm runner, which
+  # ships a preinstalled Swift toolchain (6.3.3 as of writing — a patch ahead of
+  # amd64, accepted for the arm64 leg). This keeps the heavy Swift compile off
+  # the single static self-hosted runner; build-image-digests below just copies
+  # these binaries, so the Docker steps stay light enough for GitHub-hosted
+  # runners.
+  #
+  # No build cache is configured here: releases are infrequent tag pushes where
+  # a cold compile is acceptable, and main-build.yaml deliberately keeps the
+  # repo under GitHub's 10GB actions/cache budget — a per-release Swift .build
+  # cache would evict the caches main builds depend on. (`build-swift-binaries`
+  # below still produces the statically-linked release-asset tarballs on the
+  # self-hosted runner; those are separate from these jemalloc-linked binaries.)
+  build-swift-release:
+    name: Build Swift Release (${{ matrix.arch }})
     needs: create-release
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'swift-runners-strato' }}
     strategy:
+      fail-fast: false
       matrix:
-        platform: [linux/amd64, linux/arm64]
+        include:
+          - arch: amd64
+          - arch: arm64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install jemalloc dependencies (arm64)
-        if: matrix.platform == 'linux/arm64'
+      # libjemalloc-dev: the control-plane binary links -ljemalloc.
+      # unzip: setup-bun needs it to extract its download.
+      # The ARC pod runs as a non-root user with passwordless sudo; guard in
+      # case a runner has no sudo binary.
+      - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libjemalloc-dev
+          SUDO=""
+          command -v sudo >/dev/null && SUDO=sudo
+          $SUDO apt-get update
+          $SUDO apt-get install -y libjemalloc-dev unzip
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies
+        working-directory: control-plane/web
+        run: bun install --frozen-lockfile
+
+      - name: Build and deploy frontend
+        working-directory: control-plane/web
+        run: bun run build:deploy
+
+      - name: Build Control Plane Release Binary
+        working-directory: control-plane
+        run: |
+          swift build -c release --product App -Xlinker -ljemalloc
+          BIN="$(swift build -c release --show-bin-path)"
+          # Create artifact directory structure
+          mkdir -p ../artifacts/control-plane/bin
+          mkdir -p ../artifacts/control-plane/resources
+          # Copy binary
+          cp "$BIN/App" ../artifacts/control-plane/bin/
+          # Copy swift-backtrace (try multiple possible locations)
+          if [ -f "/usr/lib/swift/linux/swift-backtrace-static" ]; then
+            cp "/usr/lib/swift/linux/swift-backtrace-static" ../artifacts/control-plane/bin/
+          elif [ -f "/usr/libexec/swift/linux/swift-backtrace-static" ]; then
+            cp "/usr/libexec/swift/linux/swift-backtrace-static" ../artifacts/control-plane/bin/
+          else
+            echo "Warning: swift-backtrace-static not found, skipping"
+          fi
+          # Copy resources
+          find -L "$BIN/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/control-plane/resources/ \; || true
+          # Copy Public and Resources directories
+          [ -d Public ] && cp -R Public ../artifacts/control-plane/ || true
+          [ -d Resources ] && cp -R Resources ../artifacts/control-plane/ || true
+
+      - name: Build Agent Release Binary
+        working-directory: agent
+        run: |
+          swift build -c release --product StratoAgent -Xlinker -ljemalloc
+          BIN="$(swift build -c release --show-bin-path)"
+          mkdir -p ../artifacts/agent/bin
+          mkdir -p ../artifacts/agent/resources
+          cp "$BIN/StratoAgent" ../artifacts/agent/bin/
+          # Copy swift-backtrace (try multiple possible locations)
+          if [ -f "/usr/lib/swift/linux/swift-backtrace-static" ]; then
+            cp "/usr/lib/swift/linux/swift-backtrace-static" ../artifacts/agent/bin/
+          elif [ -f "/usr/libexec/swift/linux/swift-backtrace-static" ]; then
+            cp "/usr/libexec/swift/linux/swift-backtrace-static" ../artifacts/agent/bin/
+          else
+            echo "Warning: swift-backtrace-static not found, skipping"
+          fi
+          # Copy resources
+          find -L "$BIN/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/agent/resources/ \; || true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-binaries-${{ matrix.arch }}
+          path: artifacts/
+          retention-days: 1
+
+  # Phase 1 — assemble each image on a GitHub-hosted runner (amd64 on
+  # ubuntu-latest, arm64 on ubuntu-24.04-arm) from the prebuilt binaries above,
+  # and push each arch by DIGEST ONLY (no tag). The Swift images just copy a
+  # binary (nothing compiles in-Docker), so these stay lightweight; the frontend
+  # image compiles from source (bun) inside its Dockerfile. Publishing the
+  # semver-tagged manifests happens in phase 2, so nothing here is consumable
+  # yet: an untagged digest is invisible to taggers until publish-manifests
+  # stitches the per-arch digests into a multi-arch manifest list.
+  #
+  # `provenance: false` suppresses buildx's default SBOM/provenance attestation,
+  # which was pushed as an `unknown/unknown` manifest and showed up as a bogus
+  # architecture on the GHCR package page.
+  build-image-digests:
+    name: Build Digest (${{ matrix.image }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    needs: build-swift-release
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: control-plane, arch: amd64, context: ., file: ./control-plane/Dockerfile, prebuilt: artifacts/control-plane }
+          - { image: control-plane, arch: arm64, context: ., file: ./control-plane/Dockerfile, prebuilt: artifacts/control-plane }
+          - { image: agent, arch: amd64, context: ., file: ./agent/Dockerfile, prebuilt: artifacts/agent }
+          - { image: agent, arch: arm64, context: ., file: ./agent/Dockerfile, prebuilt: artifacts/agent }
+          - { image: frontend, arch: amd64, context: ./control-plane/web, file: ./control-plane/web/Dockerfile, prebuilt: "" }
+          - { image: frontend, arch: arm64, context: ./control-plane/web, file: ./control-plane/web/Dockerfile, prebuilt: "" }
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Only the Swift images consume prebuilt binaries; the frontend builds
+      # from source (bun) inside its Dockerfile.
+      - name: Download build artifacts
+        if: matrix.prebuilt != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: swift-binaries-${{ matrix.arch }}
+          path: artifacts/
+        continue-on-error: true
+
+      - name: Prepare build context
+        run: mkdir -p ./artifacts
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -113,6 +248,81 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Only descriptive OCI labels are attached here; the release tags
+      # (type=ref + the three semver patterns) are applied in phase 2 by
+      # imagetools, which stamps them onto the merged manifest list.
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.image }}
+
+      # gha cache is kept ONLY for the frontend, which compiles from source (bun)
+      # and genuinely benefits; the prebuilt Swift images just copy a binary, so
+      # their layers are cheap to rebuild and a cache would only add churn.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: ${{ matrix.image == 'frontend' && format('type=gha,key=frontend-{0}', matrix.arch) || '' }}
+          cache-to: ${{ matrix.image == 'frontend' && format('type=gha,mode=max,key=frontend-{0}', matrix.arch) || '' }}
+          build-args: ${{ matrix.prebuilt != '' && format('PREBUILT_ARTIFACTS={0}', matrix.prebuilt) || '' }}
+
+      # Hand the digest to the publish job via an artifact. The filename is the
+      # digest hex (the `sha256:` prefix is stripped — colons are fragile in
+      # artifact paths); contents are irrelevant.
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digest
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digest/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.image }}-${{ matrix.arch }}
+          path: /tmp/digest/*
+          retention-days: 1
+          if-no-files-found: error
+
+  # Phase 2 — publish barrier. `needs: [build-image-digests]` succeeds only if
+  # EVERY leg (all images, both arches) passed, so we never publish a tag for a
+  # release whose full image set wasn't built. The multi-arch manifests — and
+  # every semver tag — are created here and only here, so the phase-1 digests
+  # stay invisible until this runs. Tag creation runs as ordered steps
+  # (control-plane → agent → frontend). Each image is re-run through
+  # docker/metadata-action to reproduce the same tag set (type=ref plus the
+  # three semver patterns) that phase 1 deliberately did NOT apply.
+  publish-manifests:
+    name: Publish Multi-Arch Manifests
+    needs: [build-image-digests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
 
       - name: Extract metadata for control plane image
         id: meta-control-plane
@@ -147,41 +357,51 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
 
-      - name: Build and push control plane image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./control-plane/Dockerfile
-          platforms: ${{ matrix.platform }}
-          push: true
-          tags: ${{ steps.meta-control-plane.outputs.tags }}
-          labels: ${{ steps.meta-control-plane.outputs.labels }}
-          cache-from: type=gha,key=control-plane-${{ matrix.platform }}
-          cache-to: type=gha,mode=max,key=control-plane-${{ matrix.platform }}
+      # `imagetools create` builds a fresh manifest list from the per-arch
+      # digests and pushes it under every tag metadata-action computed. Ordered
+      # control-plane → agent → frontend: a failed step stops the job before the
+      # next, and the frontend — which shares a version with the control-plane
+      # in the compose deployment — publishes last. The `docker/metadata-action`
+      # `tags` output is newline-separated fully-qualified refs; turn each into
+      # a `-t` flag.
+      - name: Publish control-plane manifest
+        env:
+          META_TAGS: ${{ steps.meta-control-plane.outputs.tags }}
+        run: |
+          REF="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_CONTROL_PLANE }}"
+          TAG_ARGS=""
+          while IFS= read -r t; do
+            [ -n "$t" ] && TAG_ARGS="$TAG_ARGS -t $t"
+          done <<< "$META_TAGS"
+          DIGESTS=$(for f in /tmp/digests/digest-control-plane-*/*; do printf '%s@sha256:%s ' "$REF" "$(basename "$f")"; done)
+          docker buildx imagetools create $TAG_ARGS $DIGESTS
+          docker buildx imagetools inspect "${REF}:${GITHUB_REF#refs/tags/}"
 
-      - name: Build and push agent image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./agent/Dockerfile
-          platforms: ${{ matrix.platform }}
-          push: true
-          tags: ${{ steps.meta-agent.outputs.tags }}
-          labels: ${{ steps.meta-agent.outputs.labels }}
-          cache-from: type=gha,key=agent-${{ matrix.platform }}
-          cache-to: type=gha,mode=max,key=agent-${{ matrix.platform }}
+      - name: Publish agent manifest
+        env:
+          META_TAGS: ${{ steps.meta-agent.outputs.tags }}
+        run: |
+          REF="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_AGENT }}"
+          TAG_ARGS=""
+          while IFS= read -r t; do
+            [ -n "$t" ] && TAG_ARGS="$TAG_ARGS -t $t"
+          done <<< "$META_TAGS"
+          DIGESTS=$(for f in /tmp/digests/digest-agent-*/*; do printf '%s@sha256:%s ' "$REF" "$(basename "$f")"; done)
+          docker buildx imagetools create $TAG_ARGS $DIGESTS
+          docker buildx imagetools inspect "${REF}:${GITHUB_REF#refs/tags/}"
 
-      - name: Build and push frontend image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./control-plane/web
-          file: ./control-plane/web/Dockerfile
-          platforms: ${{ matrix.platform }}
-          push: true
-          tags: ${{ steps.meta-frontend.outputs.tags }}
-          labels: ${{ steps.meta-frontend.outputs.labels }}
-          cache-from: type=gha,key=frontend-${{ matrix.platform }}
-          cache-to: type=gha,mode=max,key=frontend-${{ matrix.platform }}
+      - name: Publish frontend manifest
+        env:
+          META_TAGS: ${{ steps.meta-frontend.outputs.tags }}
+        run: |
+          REF="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_FRONTEND }}"
+          TAG_ARGS=""
+          while IFS= read -r t; do
+            [ -n "$t" ] && TAG_ARGS="$TAG_ARGS -t $t"
+          done <<< "$META_TAGS"
+          DIGESTS=$(for f in /tmp/digests/digest-frontend-*/*; do printf '%s@sha256:%s ' "$REF" "$(basename "$f")"; done)
+          docker buildx imagetools create $TAG_ARGS $DIGESTS
+          docker buildx imagetools inspect "${REF}:${GITHUB_REF#refs/tags/}"
 
   build-swift-binaries:
     runs-on: ${{ matrix.os }}
