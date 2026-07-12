@@ -344,6 +344,10 @@ public func configure(_ app: Application) async throws {
     // configurable default role on the provider.
     app.migrations.add(AddClaimMappingToOIDCProvider())
 
+    // Store the provider's expected issuer (from discovery) so the login flow can
+    // validate the ID token's `iss` claim.
+    app.migrations.add(AddIssuerToOIDCProvider())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen

@@ -40,6 +40,138 @@ struct OIDCValidation {
         try validateOptionalHTTPSURL(discovery.jwksURI, label: "Discovered JWKS URI")
     }
 
+    /// Whether an ID token's `iss` claim satisfies the provider's expected issuer.
+    ///
+    /// Usually an exact string compare, but multi-tenant discovery documents
+    /// return a *templated* issuer: Microsoft Entra's `common`/`organizations`
+    /// endpoints advertise `https://login.microsoftonline.com/{tenantid}/v2.0`,
+    /// while a real token carries the concrete tenant, e.g.
+    /// `https://login.microsoftonline.com/<guid>/v2.0`. Exact equality would
+    /// reject every otherwise-valid login for such providers. Any `{...}`
+    /// placeholder in the expected issuer is therefore matched as exactly one
+    /// path segment (`[^/]+`) — permissive enough for the tenant substitution,
+    /// tight enough that it can't span extra `/`-delimited segments.
+    ///
+    /// A single trailing slash is treated as insignificant on both sides: the
+    /// discovery URL (`.../.well-known/openid-configuration`) is identical whether
+    /// the issuer is `https://x` or `https://x/`, so a URL-derived issuer can't
+    /// know which form the IdP uses (Google omits it, Auth0 includes it). The two
+    /// forms denote the same issuer, so normalizing the slash can't match a
+    /// different issuer.
+    static func issuerMatches(expected: String, actual: String) -> Bool {
+        func trimTrailingSlash(_ s: String) -> String {
+            s.hasSuffix("/") ? String(s.dropLast()) : s
+        }
+        let expected = trimTrailingSlash(expected)
+        let actual = trimTrailingSlash(actual)
+
+        if expected == actual { return true }
+        // Only templated issuers need pattern matching; a plain mismatch fails.
+        guard expected.contains("{") else { return false }
+
+        // Swap each {placeholder} for a sentinel that survives regex-escaping
+        // (letters/underscores are not metacharacters), escape the literal parts,
+        // then turn the sentinel into a single-segment wildcard and anchor it.
+        let sentinel = "\u{1}OIDCTENANTWILDCARD\u{1}"
+        let templated = expected.replacingOccurrences(
+            of: "\\{[^}]+\\}", with: sentinel, options: .regularExpression)
+        let escaped = NSRegularExpression.escapedPattern(for: templated)
+        let pattern = "^" + escaped.replacingOccurrences(of: sentinel, with: "[^/]+") + "$"
+
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+        let range = NSRange(actual.startIndex..<actual.endIndex, in: actual)
+        return regex.firstMatch(in: actual, range: range) != nil
+    }
+
+    /// The well-known suffix a discovery URL appends to the issuer
+    /// (OpenID Connect Discovery 1.0 §4).
+    static let discoveryWellKnownSuffix = "/.well-known/openid-configuration"
+
+    /// Best-effort derivation of a provider's expected issuer from its discovery
+    /// URL, without a network fetch — used to backfill existing providers on
+    /// upgrade so `iss` validation applies immediately. Returns nil when the
+    /// issuer can't be derived confidently, in which case the caller leaves it
+    /// unset (the provider fails closed until an admin refresh stores the real
+    /// metadata issuer).
+    ///
+    /// Rules:
+    ///  * Non-Microsoft hosts: a spec-compliant discovery URL is
+    ///    `issuer + suffix`, so the stripped URL is the exact issuer — including
+    ///    hosts whose path happens to contain `/common/` etc.
+    ///  * Microsoft Entra `login.microsoftonline.com`:
+    ///    - v2.0 endpoints (`.../{tenant}/v2.0`): issuer is
+    ///      `.../{tenant}/v2.0`. Multi-tenant aliases (`common`/`organizations`/
+    ///      `consumers`) are templated to `{tenantid}`; a concrete tenant GUID is
+    ///      exact.
+    ///    - v1 endpoints (no `/v2.0`): the issuer lives on a *different* host,
+    ///      `https://sts.windows.net/{tenantid}/`, so it can't be recovered by
+    ///      stripping. Emit that form — templated for a multi-tenant alias,
+    ///      concrete for a specific tenant GUID. `issuerMatches` validates both.
+    ///
+    ///    A Microsoft tenant segment that is a *domain* authority (e.g.
+    ///    `contoso.onmicrosoft.com`) resolves in metadata to the tenant's GUID
+    ///    issuer, which the URL doesn't contain — so it's returned as
+    ///    unbackfillable (nil) rather than stored as the (wrong) domain URL.
+    static func discoveryIssuer(forDiscoveryURL url: String) -> String? {
+        guard url.hasSuffix(discoveryWellKnownSuffix) else { return nil }
+        let base = String(url.dropLast(discoveryWellKnownSuffix.count))
+        guard let parsed = URL(string: base), let host = parsed.host else { return nil }
+
+        guard host == "login.microsoftonline.com" else {
+            // Non-Microsoft: the stripped URL is the issuer.
+            return base
+        }
+
+        let segments = parsed.path.split(separator: "/").map(String.init)
+        let multiTenantAliases: Set<String> = ["common", "organizations", "consumers"]
+        let tenant = segments.first
+        let isAlias = tenant.map { multiTenantAliases.contains($0) } ?? false
+        // Only a tenant GUID appears verbatim in the issuer; a domain authority
+        // resolves to a GUID we can't derive from the URL.
+        let isGUID = tenant.flatMap { UUID(uuidString: $0) } != nil
+        let isV2 = segments.last == "v2.0"
+
+        if isV2 {
+            if isAlias {
+                return "https://login.microsoftonline.com/{tenantid}/v2.0"
+            }
+            return isGUID ? base : nil
+        }
+        // v1: issuer host is sts.windows.net.
+        if isAlias {
+            return "https://sts.windows.net/{tenantid}/"
+        }
+        if let tenant, isGUID {
+            return "https://sts.windows.net/\(tenant)/"
+        }
+        return nil
+    }
+
+    /// Resolves the email address to link on and whether the IdP considers it
+    /// verified, merging the ID token and (optional) UserInfo claims.
+    ///
+    /// Some IdPs return `email` in the ID token but only assert `email_verified`
+    /// in the UserInfo response, so treating the ID token's absent flag as
+    /// "unverified" would wrongly block those users from linking to an existing
+    /// account. The UserInfo flag is consulted only when the ID token omits its
+    /// own (an explicit `false` in the ID token is respected) and only for the
+    /// *same* address that will be linked, so it can't verify a different email.
+    static func resolveEmailVerification(
+        idTokenEmail: String?,
+        idTokenEmailVerified: Bool?,
+        userInfoEmail: String?,
+        userInfoEmailVerified: Bool?
+    ) -> (email: String?, verified: Bool) {
+        let email = idTokenEmail ?? userInfoEmail
+        if idTokenEmailVerified == true {
+            return (email, true)
+        }
+        if idTokenEmailVerified == nil, let verified = userInfoEmailVerified, userInfoEmail == email {
+            return (email, verified)
+        }
+        return (email, false)
+    }
+
     private static func validateOptionalHTTPSURL(_ urlString: String?, label: String) throws {
         if let urlString, !urlString.isEmpty {
             guard isValidHTTPSURL(urlString) else {

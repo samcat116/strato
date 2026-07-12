@@ -1,6 +1,7 @@
 import Foundation
 import Vapor
 import Fluent
+import SQLKit
 
 /// Enforces resource quotas across the VM lifecycle. Resolves the project/OU/org
 /// quotas that govern a VM (matching its environment), rejects creations that would
@@ -56,10 +57,12 @@ struct QuotaEnforcementService {
     /// admission check has an accurate baseline even for a quota created *after* some
     /// of its VMs already existed (whose reservations `createQuota` never backfilled).
     ///
-    /// Note: reservation reads are not row-locked, so under `READ COMMITTED` two
-    /// concurrent creates against the same quota could both pass the check and
-    /// slightly over-commit. Enforcement is best-effort accounting rather than a hard
-    /// admission gate, and the transaction still guarantees each create is all-or-nothing.
+    /// Concurrent creates that share a quota are serialized by a transaction-scoped
+    /// advisory lock per applicable quota (see ``lockQuotas``): without it, two
+    /// creates under `READ COMMITTED` could both read the same baseline, both pass
+    /// the check, and over-commit the limit. The lock is held until the enclosing
+    /// transaction commits or rolls back, so the second create re-reads a baseline
+    /// that already includes the first.
     static func reserve(
         for project: Project,
         environment: String,
@@ -69,6 +72,10 @@ struct QuotaEnforcementService {
         on db: Database
     ) async throws {
         let quotas = try await applicableQuotas(for: project, environment: environment, on: db)
+
+        // Serialize concurrent reservations that touch any of these quotas before
+        // reading the baseline, so the check-then-reserve sequence is atomic per quota.
+        try await lockQuotas(quotas, on: db)
 
         // Resync every quota to real usage, then validate all of them before mutating
         // any, so a rejection never leaves a partial reservation even within the
@@ -112,6 +119,24 @@ struct QuotaEnforcementService {
         for quota in quotas {
             try await resyncReservations(quota, on: db)
             try await quota.save(on: db)
+        }
+    }
+
+    /// Takes a transaction-scoped advisory lock on each quota so concurrent
+    /// creates that share a quota serialize their check-then-reserve sequence.
+    ///
+    /// Postgres only: `pg_advisory_xact_lock` is held until the enclosing
+    /// transaction ends, giving cross-replica serialization (every replica shares
+    /// the same Postgres) without a persisted lock row. Locks are taken in a stable
+    /// (sorted) id order so two creates touching an overlapping set of quotas can't
+    /// deadlock by acquiring them in opposite orders. On SQLite (local tests) there
+    /// is no advisory-lock primitive and writes already serialize on the database
+    /// file, so this is a no-op.
+    private static func lockQuotas(_ quotas: [ResourceQuota], on db: Database) async throws {
+        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
+        let keys = quotas.compactMap { $0.id?.uuidString }.sorted()
+        for key in keys {
+            try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: key)))").run()
         }
     }
 

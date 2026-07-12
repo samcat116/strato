@@ -30,11 +30,28 @@ struct RateLimitConfig: Sendable {
     /// than this resets the backoff.
     var failureWindow: Int
 
-    /// Trust `X-Forwarded-For`/`X-Real-IP` for the client identity. Correct when
-    /// the control plane sits behind a trusted ingress/proxy (the supported
-    /// deployment); disable if clients can reach it directly and could spoof the
-    /// header to evade per-IP limits.
+    /// Trust `X-Forwarded-For` for the client identity. Correct when the control
+    /// plane sits behind a trusted ingress/proxy (the supported deployment);
+    /// disable if clients can reach it directly and could spoof the header to
+    /// evade per-IP limits.
     var trustForwardedFor: Bool
+
+    /// Number of trusted proxy hops in front of the control plane. The client IP
+    /// is read as the `trustedProxyHops`-th entry from the right of
+    /// `X-Forwarded-For` — the address the outermost trusted proxy observed. The
+    /// rightmost entries are appended by our own proxies and are not
+    /// client-controlled; taking a value further left would trust attacker input.
+    ///
+    /// - 1 (default): a single reverse proxy directly facing clients (e.g. a lone
+    ///   nginx), which appends the real client as the last entry.
+    /// - 2: an additional upstream TLS terminator in front of that proxy (the
+    ///   supported HTTPS compose topology — nginx runs behind the terminator), so
+    ///   the client is the second-from-last entry.
+    ///
+    /// Set too low and everyone behind the outer proxy shares one bucket (one
+    /// user's failed logins could lock out the rest); set too high and a client
+    /// could spoof its own bucket. Match it to the real deployment.
+    var trustedProxyHops: Int
 
     static func fromEnvironment(for environment: Environment) -> RateLimitConfig {
         func int(_ name: String, _ fallback: Int) -> Int {
@@ -55,7 +72,8 @@ struct RateLimitConfig: Sendable {
             failureMaxDelay: int("RATE_LIMIT_FAILURE_MAX_DELAY", 300),
             failureWindow: int("RATE_LIMIT_FAILURE_WINDOW", 900),
             trustForwardedFor: Environment.get("RATE_LIMIT_TRUST_FORWARDED_FOR")
-                .flatMap(Bool.init) ?? true
+                .flatMap(Bool.init) ?? true,
+            trustedProxyHops: max(1, int("RATE_LIMIT_TRUSTED_PROXY_HOPS", 1))
         )
     }
 }
@@ -234,14 +252,23 @@ struct RateLimitMiddleware: AsyncMiddleware {
 
     private func clientIP(for request: Request) -> String {
         if config.trustForwardedFor {
-            if let forwarded = request.headers.first(name: "X-Forwarded-For"),
-                let first = forwarded.split(separator: ",").first
-            {
-                return first.trimmingCharacters(in: .whitespaces)
+            // Take the client from `X-Forwarded-For`, counting `trustedProxyHops`
+            // in from the RIGHT: our own proxies append their peer to the right,
+            // so the rightmost hops are trustworthy and everything further left is
+            // client-supplied and spoofable. `X-Real-IP` is deliberately not used —
+            // behind an upstream TLS terminator nginx sets it to the terminator's
+            // address, which would bucket every client together.
+            let forwarded =
+                request.headers.first(name: "X-Forwarded-For")?
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty } ?? []
+            if forwarded.count >= config.trustedProxyHops {
+                return forwarded[forwarded.count - config.trustedProxyHops]
             }
-            if let realIP = request.headers.first(name: "X-Real-IP") {
-                return realIP
-            }
+            // Chain shorter than expected (misconfigured hop count or a request
+            // that didn't traverse all proxies): fall back to the socket peer
+            // rather than trust a client-supplied left-most entry.
         }
         return request.remoteAddress?.ipAddress ?? "unknown"
     }

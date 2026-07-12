@@ -446,6 +446,21 @@ actor AgentService {
         return agent?.id?.uuidString
     }
 
+    /// Whether `vmId` is currently assigned to the agent authenticated as
+    /// `agentName`. Used to reject agent-reported data (VM logs, console)
+    /// tagged with a VM the reporting agent doesn't own — otherwise a compromised
+    /// agent could forge log entries for another tenant's VM. Mirrors the
+    /// `vm.hypervisorId == senderAgentId` guard in `applyStatusUpdate`.
+    func vmIsOwnedByAgent(vmId: String, agentName: String) async -> Bool {
+        guard let vmUUID = UUID(uuidString: vmId),
+            let senderAgentId = await agentId(forName: agentName),
+            let vm = try? await VM.find(vmUUID, on: app.db)
+        else {
+            return false
+        }
+        return vm.hypervisorId == senderAgentId
+    }
+
     /// Resolve an agent's name from its database UUID: the local socket's
     /// registration first (no I/O), the database otherwise.
     private func agentName(forId agentId: String) async -> String? {
@@ -457,31 +472,44 @@ actor AgentService {
         return agent?.name
     }
 
-    func unregisterAgent(_ agentId: String) async throws {
+    func unregisterAgent(_ agentId: String, fromAgentNamed connectionAgentName: String) async throws {
         let db = app.db
 
-        // Update database using UUID
-        var agentName: String?
-        if let agentUUID = UUID(uuidString: agentId),
+        // Resolve the target and confirm it belongs to the authenticated
+        // connection. Without this an agent could pass another agent's id in the
+        // message body and force *that* agent offline (cross-tenant DoS) — the
+        // same ownership guard the heartbeat/observed-state handlers enforce.
+        guard let agentUUID = UUID(uuidString: agentId),
             let agent = try await Agent.find(agentUUID, on: db)
-        {
-            agent.status = .offline
-            try await agent.save(on: db)
-            agentName = agent.name
+        else {
+            app.logger.warning(
+                "Unregister for unknown agent; ignoring", metadata: ["agentId": .string(agentId)])
+            return
         }
+
+        guard agent.name == connectionAgentName else {
+            app.logger.warning(
+                "Unregister claims an agentId not owned by the authenticated connection; ignoring",
+                metadata: [
+                    "claimedAgentId": .string(agentId),
+                    "claimedAgentName": .string(agent.name),
+                    "connectionAgentName": .string(connectionAgentName),
+                ])
+            return
+        }
+
+        agent.status = .offline
+        try await agent.save(on: db)
+        let agentName = agent.name
 
         // Fail any in-flight requests waiting on this agent before we drop it
         failPendingRequests(for: agentId)
 
-        if let name = agentName {
-            app.websocketManager.removeConnection(agentName: name)
-            await app.coordination.clearAgentRoute(agentName: name, replicaId: app.replicaID)
-        }
+        app.websocketManager.removeConnection(agentName: agentName)
+        await app.coordination.clearAgentRoute(agentName: agentName, replicaId: app.replicaID)
 
         Telemetry.agentDisconnected(reason: "unregister")
-        if let name = agentName {
-            Telemetry.recordAgentUp(agentName: name, up: false)
-        }
+        Telemetry.recordAgentUp(agentName: agentName, up: false)
         app.logger.info("Agent unregistered", metadata: ["agentId": .string(agentId)])
     }
 

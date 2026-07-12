@@ -307,6 +307,15 @@ struct ResourceQuotaController: RouteCollection {
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
+        // Verify the OU actually belongs to that organization. Membership in the
+        // path org does not grant visibility into another org's OU — without this
+        // check a member of org A could read org B's OU quotas by supplying B's OU id.
+        guard let ou = try await OrganizationalUnit.find(ouID, on: req.db),
+            ou.$organization.id == organizationID
+        else {
+            throw Abort(.notFound, reason: "Organizational unit not found")
+        }
+
         // Get all quotas for the OU
         let quotas = try await ResourceQuota.query(on: req.db)
             .filter(\.$organizationalUnit.$id == ouID)

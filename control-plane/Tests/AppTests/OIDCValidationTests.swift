@@ -129,4 +129,175 @@ struct OIDCValidationTests {
         #expect(OIDCValidation.parseAllowList("  only.com  ") == ["only.com"])
         #expect(OIDCValidation.parseAllowList(",; ,") == [])
     }
+
+    // MARK: - issuerMatches
+
+    @Test("issuerMatches accepts an exact issuer and rejects a different one")
+    func testIssuerExact() {
+        #expect(OIDCValidation.issuerMatches(expected: "https://idp.example.com", actual: "https://idp.example.com"))
+        #expect(
+            !OIDCValidation.issuerMatches(expected: "https://idp.example.com", actual: "https://evil.example.com"))
+    }
+
+    @Test("issuerMatches resolves a templated multi-tenant issuer to one path segment")
+    func testIssuerTemplated() {
+        let expected = "https://login.microsoftonline.com/{tenantid}/v2.0"
+        // Concrete tenant GUID substituted in — the real Entra `common` case.
+        #expect(
+            OIDCValidation.issuerMatches(
+                expected: expected,
+                actual: "https://login.microsoftonline.com/9188040d-6c67-4c5b-b112-36a304b66dad/v2.0"))
+        // Wrong host must still fail.
+        #expect(
+            !OIDCValidation.issuerMatches(
+                expected: expected, actual: "https://evil.example.com/9188040d/v2.0"))
+        // The wildcard is a single segment: it must not span extra `/` segments.
+        #expect(
+            !OIDCValidation.issuerMatches(
+                expected: expected, actual: "https://login.microsoftonline.com/a/b/v2.0"))
+        // A missing tenant segment must not match.
+        #expect(
+            !OIDCValidation.issuerMatches(
+                expected: expected, actual: "https://login.microsoftonline.com//v2.0"))
+    }
+
+    @Test("issuerMatches does not treat regex metacharacters in the literal as patterns")
+    func testIssuerLiteralIsEscaped() {
+        // The `.` must match a literal dot, not any character.
+        #expect(!OIDCValidation.issuerMatches(expected: "https://a.example.com", actual: "https://axexample.com"))
+    }
+
+    @Test("issuerMatches tolerates a single trailing-slash difference")
+    func testIssuerTrailingSlash() {
+        // A URL-derived issuer can't know whether the IdP uses a trailing slash
+        // (Auth0 does, Google doesn't); both forms are the same issuer.
+        #expect(
+            OIDCValidation.issuerMatches(expected: "https://tenant.auth0.com", actual: "https://tenant.auth0.com/"))
+        #expect(
+            OIDCValidation.issuerMatches(expected: "https://tenant.auth0.com/", actual: "https://tenant.auth0.com"))
+        // A genuine mismatch is still rejected even with slashes involved.
+        #expect(!OIDCValidation.issuerMatches(expected: "https://a.example.com", actual: "https://b.example.com/"))
+    }
+
+    // MARK: - discoveryIssuer
+
+    @Test("discoveryIssuer strips the well-known suffix for standard IdPs")
+    func testDiscoveryIssuerStandard() {
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL: "https://accounts.google.com/.well-known/openid-configuration")
+                == "https://accounts.google.com")
+        // A literal `/common/` segment on a non-Microsoft host is part of the issuer.
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL: "https://idp.example.com/common/.well-known/openid-configuration")
+                == "https://idp.example.com/common")
+    }
+
+    @Test("discoveryIssuer templates Entra v2.0 multi-tenant aliases, keeps concrete tenants exact")
+    func testDiscoveryIssuerEntraV2() {
+        for alias in ["common", "organizations", "consumers"] {
+            let derived = OIDCValidation.discoveryIssuer(
+                forDiscoveryURL: "https://login.microsoftonline.com/\(alias)/v2.0/.well-known/openid-configuration")
+            #expect(derived == "https://login.microsoftonline.com/{tenantid}/v2.0")
+        }
+        // Concrete single-tenant v2.0: exact.
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL:
+                    "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0/.well-known/openid-configuration"
+            ) == "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0")
+    }
+
+    @Test("discoveryIssuer maps Entra v1 endpoints to the sts.windows.net issuer")
+    func testDiscoveryIssuerEntraV1() {
+        // Multi-tenant alias → templated sts issuer.
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL: "https://login.microsoftonline.com/common/.well-known/openid-configuration")
+                == "https://sts.windows.net/{tenantid}/")
+        // Concrete tenant v1 → concrete sts issuer.
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL:
+                    "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/.well-known/openid-configuration"
+            ) == "https://sts.windows.net/11111111-1111-1111-1111-111111111111/")
+    }
+
+    @Test("discoveryIssuer leaves Entra domain authorities unbackfillable")
+    func testDiscoveryIssuerEntraDomain() {
+        // A tenant *domain* resolves to the GUID issuer in metadata, which the URL
+        // doesn't contain — must not be stored as the domain URL. nil = fail closed.
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL:
+                    "https://login.microsoftonline.com/contoso.onmicrosoft.com/v2.0/.well-known/openid-configuration")
+                == nil)
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL:
+                    "https://login.microsoftonline.com/contoso.onmicrosoft.com/.well-known/openid-configuration")
+                == nil)
+    }
+
+    @Test("discoveryIssuer returns nil for a URL without the well-known suffix")
+    func testDiscoveryIssuerNoSuffix() {
+        #expect(OIDCValidation.discoveryIssuer(forDiscoveryURL: "https://idp.example.com/issuer") == nil)
+    }
+
+    // MARK: - resolveEmailVerification
+
+    @Test("A verified email in the ID token is trusted as-is")
+    func testEmailVerifiedFromIDToken() {
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: "u@example.com", idTokenEmailVerified: true,
+            userInfoEmail: nil, userInfoEmailVerified: nil)
+        #expect(r.email == "u@example.com")
+        #expect(r.verified)
+    }
+
+    @Test("UserInfo email_verified is merged when the ID token omits the flag")
+    func testEmailVerifiedFromUserInfo() {
+        // ID token carries the email but not email_verified; UserInfo asserts it
+        // for the same address — the real case that blocked first logins.
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: "u@example.com", idTokenEmailVerified: nil,
+            userInfoEmail: "u@example.com", userInfoEmailVerified: true)
+        #expect(r.email == "u@example.com")
+        #expect(r.verified)
+    }
+
+    @Test("UserInfo email_verified is ignored for a different address")
+    func testEmailVerifiedUserInfoDifferentAddress() {
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: "u@example.com", idTokenEmailVerified: nil,
+            userInfoEmail: "other@example.com", userInfoEmailVerified: true)
+        #expect(r.email == "u@example.com")
+        #expect(!r.verified)
+    }
+
+    @Test("An explicit false in the ID token is not overridden by UserInfo")
+    func testEmailVerifiedExplicitFalseRespected() {
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: "u@example.com", idTokenEmailVerified: false,
+            userInfoEmail: "u@example.com", userInfoEmailVerified: true)
+        #expect(!r.verified)
+    }
+
+    @Test("Email is adopted from UserInfo when the ID token has none")
+    func testEmailAdoptedFromUserInfo() {
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: nil, idTokenEmailVerified: nil,
+            userInfoEmail: "u@example.com", userInfoEmailVerified: true)
+        #expect(r.email == "u@example.com")
+        #expect(r.verified)
+    }
+
+    @Test("No verification anywhere fails closed")
+    func testEmailVerifiedNoneFailsClosed() {
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: "u@example.com", idTokenEmailVerified: nil,
+            userInfoEmail: nil, userInfoEmailVerified: nil)
+        #expect(!r.verified)
+    }
 }

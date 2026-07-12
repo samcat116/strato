@@ -23,7 +23,9 @@ struct HierarchyPathResolver {
         // HierarchySearchService emits/accepts, so a caller using either vocabulary
         // gets a real path instead of silently falling through to org-root-only.
         case "organizational_unit", "ou":
-            if let ou = try await OrganizationalUnit.find(entityID, on: db) {
+            // Scope to the requested org: resolving an OU from another org would
+            // leak its name (and ancestor names) to a member of this org.
+            if let ou = try await OrganizationalUnit.find(entityID, on: db), ou.$organization.id == organizationID {
                 // Walk from the target OU up to the root, collecting each ancestor
                 // (including the target) so the chain reads root-first.
                 var ouChain: [OrganizationalUnit] = []
@@ -44,7 +46,9 @@ struct HierarchyPathResolver {
             }
 
         case "project":
-            if let project = try await Project.find(entityID, on: db) {
+            if let project = try await Project.find(entityID, on: db),
+                try await project.getRootOrganizationId(on: db) == organizationID
+            {
                 // Add OU path if project belongs to OU
                 if let ouID = project.$organizationalUnit.id {
                     let ouComponents = try await buildEntityPath(
@@ -55,7 +59,12 @@ struct HierarchyPathResolver {
             }
 
         case "vm":
-            if let vm = try await VM.find(entityID, on: db) {
+            // Scope to the requested org via the VM's project, so a VM in another
+            // org isn't resolvable by name here.
+            if let vm = try await VM.find(entityID, on: db),
+                let project = try await Project.find(vm.$project.id, on: db),
+                try await project.getRootOrganizationId(on: db) == organizationID
+            {
                 // Add project path
                 let projectComponents = try await buildEntityPath(
                     entityType: "project", entityID: vm.$project.id, organizationID: organizationID, on: db)

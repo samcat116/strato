@@ -133,6 +133,11 @@ HTTP_PORT=${PORT_ARG}
 # non-localhost origin). Makes the session cookie Secure and enables HSTS; leave
 # false for plaintext http:// or the browser will drop the session cookie.
 HTTP_TLS_ENABLED=$([[ "$SCHEME" == "https" ]] && echo true || echo false)
+# Trusted proxy hops for reading the client IP in rate limiting. An HTTPS origin
+# terminates TLS in front of nginx (terminator + nginx = 2 hops); plain http
+# reaches nginx directly (1 hop). Setting this too low would bucket every client
+# behind the outer proxy, so one user's failed logins could lock out the rest.
+RATE_LIMIT_TRUSTED_PROXY_HOPS=$([[ "$SCHEME" == "https" ]] && echo 2 || echo 1)
 LOG_LEVEL=info
 # Image tag to deploy. `main` is rebuilt on every main-branch merge; pin an
 # immutable build (e.g. STRATO_VERSION=main-abc123def456) or, once versioned

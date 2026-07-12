@@ -166,6 +166,17 @@ struct OIDCController: RouteCollection {
         applyOptionalURL(updateRequest.tokenEndpoint, to: \.tokenEndpoint)
         applyOptionalURL(updateRequest.userinfoEndpoint, to: \.userinfoEndpoint)
         applyOptionalURL(updateRequest.jwksURI, to: \.jwksURI)
+
+        // Clear the stored issuer only when discovery is being *removed* (switching
+        // to manual endpoints, possibly a different issuer) — a lingering discovered
+        // issuer would reject the new manual issuer's tokens. When a discovery URL
+        // is kept or rotated, leave the existing issuer in place: the refresh below
+        // overwrites it on success, and on a transient fetch failure the provider
+        // keeps its prior endpoints AND issuer (a consistent old-config state)
+        // rather than silently disabling the iss check.
+        if (provider.discoveryURL ?? "").isEmpty {
+            provider.issuer = nil
+        }
         if let scopes = updateRequest.scopes { provider.setScopesArray(scopes) }
         if let enabled = updateRequest.enabled { provider.enabled = enabled }
 
@@ -279,6 +290,7 @@ struct OIDCController: RouteCollection {
                 // redirect from the STORED fields, so a passing test must
                 // leave them usable. This also heals providers whose create-
                 // time discovery fetch failed non-fatally and stored nothing.
+                provider.issuer = discovery.issuer
                 provider.authorizationEndpoint = discovery.authorizationEndpoint
                 provider.tokenEndpoint = discovery.tokenEndpoint
                 provider.userinfoEndpoint = discovery.userinfoEndpoint
@@ -637,6 +649,7 @@ struct OIDCController: RouteCollection {
             try OIDCValidation.validateDiscoveredEndpoints(discovery)
 
             // Update provider with discovered endpoints
+            provider.issuer = discovery.issuer
             provider.authorizationEndpoint = discovery.authorizationEndpoint
             provider.tokenEndpoint = discovery.tokenEndpoint
             provider.userinfoEndpoint = discovery.userinfoEndpoint
@@ -736,13 +749,54 @@ struct OIDCController: RouteCollection {
             )
         }
 
+        // Some IdPs return `email` in the ID token but only assert
+        // `email_verified` in the UserInfo response. When the ID token doesn't
+        // already assert a verified email, consult the UserInfo endpoint so a
+        // legitimate first login isn't blocked by a missing flag. Only its claims
+        // for the same subject are trusted (OIDC 5.3.2).
+        var userInfoEmail: String?
+        var userInfoEmailVerified: Bool?
+        if claims.emailVerified != true, let endpoint = provider.userinfoEndpoint, !endpoint.isEmpty {
+            if let info = try? await fetchUserInfo(
+                endpoint: endpoint, accessToken: tokenResponse.accessToken, on: req),
+                info.sub == claims.sub
+            {
+                userInfoEmail = info.email
+                userInfoEmailVerified = info.emailVerified
+            }
+        }
+        let resolvedEmail = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: claims.email,
+            idTokenEmailVerified: claims.emailVerified,
+            userInfoEmail: userInfoEmail,
+            userInfoEmailVerified: userInfoEmailVerified
+        )
+
         return OIDCUserInfo(
             subject: claims.sub,
-            email: claims.email,
+            email: resolvedEmail.email,
+            emailVerified: resolvedEmail.verified,
             name: claims.name ?? claims.preferredUsername,
             preferredUsername: claims.preferredUsername,
             groupValues: groupValues
         )
+    }
+
+    /// Fetches the OIDC UserInfo endpoint with the access token. Used only to
+    /// recover `email_verified`; the caller must confirm the returned `sub`
+    /// matches the ID token before trusting the response.
+    private func fetchUserInfo(
+        endpoint: String,
+        accessToken: String,
+        on req: Request
+    ) async throws -> OIDCUserInfoResponse {
+        let response = try await req.client.get(URI(string: endpoint)) { clientReq in
+            clientReq.headers.bearerAuthorization = BearerAuthorization(token: accessToken)
+        }
+        guard response.status == .ok else {
+            throw Abort(.badGateway, reason: "UserInfo request failed")
+        }
+        return try response.content.decode(OIDCUserInfoResponse.self)
     }
 
     private func validateIDToken(
@@ -823,6 +877,33 @@ struct OIDCController: RouteCollection {
     ) throws {
         // Expiration and issued-at time validation is handled by JWTPayload.verify()
 
+        // Validate issuer (iss). The OIDC spec requires the token's issuer to
+        // match the provider's known issuer; skipping it lets a token minted by a
+        // different issuer that shares the same JWKS/audience (e.g. another tenant
+        // on a multi-tenant IdP) be accepted. Templated multi-tenant issuers (e.g.
+        // Entra `common`) are matched by pattern — see `OIDCValidation.issuerMatches`.
+        if let expectedIssuer = provider.issuer, !expectedIssuer.isEmpty {
+            guard OIDCValidation.issuerMatches(expected: expectedIssuer, actual: claims.iss) else {
+                throw Abort(
+                    .badRequest,
+                    reason: "ID token issuer '\(claims.iss)' does not match expected issuer '\(expectedIssuer)'"
+                )
+            }
+        } else if !(provider.discoveryURL ?? "").isEmpty {
+            // Discovery-configured but the issuer was never resolved (a failed
+            // discovery fetch at create/update, or an un-derivable backfill). Fail
+            // closed rather than accept a token whose issuer we can't verify — the
+            // stored endpoints alone would otherwise let a different-issuer token
+            // sharing the JWKS/audience through. An admin re-test/refresh populates
+            // the issuer. Manual-only providers (no discovery URL) legitimately have
+            // no issuer and are not affected by this branch.
+            throw Abort(
+                .badRequest,
+                reason:
+                    "OIDC provider issuer is not configured. An administrator must re-test the provider to refresh its discovery metadata before logins can proceed."
+            )
+        }
+
         // Validate audience (aud) - should match our client ID
         guard claims.aud == provider.clientID else {
             throw Abort(
@@ -834,9 +915,6 @@ struct OIDCController: RouteCollection {
         if let expectedNonce = expectedNonce, claims.nonce != expectedNonce {
             throw Abort(.badRequest, reason: "Invalid nonce in ID token")
         }
-
-        // Additional issuer validation could be added here
-        // For production, consider validating the issuer (iss) claim matches expected values
     }
 
     // MARK: - Claim Mapping Configuration

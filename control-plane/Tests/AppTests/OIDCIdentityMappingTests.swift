@@ -108,8 +108,12 @@ final class OIDCIdentityMappingTests {
         try await app.shutdownForTesting()
     }
 
-    private func userInfo(subject: String = "sub-1", email: String? = "jit@example.com") -> OIDCUserInfo {
-        OIDCUserInfo(subject: subject, email: email, name: "JIT User", preferredUsername: "jituser-\(subject)")
+    private func userInfo(
+        subject: String = "sub-1", email: String? = "jit@example.com", emailVerified: Bool = true
+    ) -> OIDCUserInfo {
+        OIDCUserInfo(
+            subject: subject, email: email, emailVerified: emailVerified,
+            name: "JIT User", preferredUsername: "jituser-\(subject)")
     }
 
     // MARK: - JIT provisioning
@@ -224,6 +228,30 @@ final class OIDCIdentityMappingTests {
                 userInfo: userInfo(subject: "sub-via-email", email: "scim@example.com"),
                 provider: other, organization: org, groupValues: [])
             #expect(byEmail.id == scimUser.id)
+        }
+    }
+
+    @Test("An unverified email does not link to or take over an existing account")
+    func unverifiedEmailDoesNotLink() async throws {
+        try await withIdentityTestApp { app, org, provider, service, _ in
+            let existing = User(
+                username: "victim", email: "victim@example.com", displayName: "Victim",
+                isSystemAdmin: false)
+            try await existing.save(on: app.db)
+            try await TestDataBuilder(db: app.db).addUserToOrganization(user: existing, organization: org)
+
+            // Same email but the IdP has NOT verified it: linking is refused, and
+            // because the address is already taken the login is denied outright
+            // (fail closed) rather than adopting or provisioning onto that account.
+            await #expect(throws: (any Error).self) {
+                _ = try await service.resolveUser(
+                    userInfo: userInfo(subject: "attacker-sub", email: "victim@example.com", emailVerified: false),
+                    provider: provider, organization: org, groupValues: [])
+            }
+
+            // The victim's account is untouched: no new identity was bound to it.
+            let victim = try await User.find(existing.id!, on: app.db)
+            #expect(victim?.$oidcProvider.id == nil)
         }
     }
 

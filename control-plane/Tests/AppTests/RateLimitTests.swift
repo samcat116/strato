@@ -47,7 +47,8 @@ struct RateLimitTests {
         failureThreshold: Int = 5,
         failureBaseDelay: Int = 2,
         failureMaxDelay: Int = 300,
-        failureWindow: Int = 900
+        failureWindow: Int = 900,
+        trustedProxyHops: Int = 1
     ) -> RateLimitConfig {
         RateLimitConfig(
             enabled: true,
@@ -59,7 +60,8 @@ struct RateLimitTests {
             failureBaseDelay: failureBaseDelay,
             failureMaxDelay: failureMaxDelay,
             failureWindow: failureWindow,
-            trustForwardedFor: true
+            trustForwardedFor: true,
+            trustedProxyHops: trustedProxyHops
         )
     }
 
@@ -170,6 +172,64 @@ struct RateLimitTests {
             // Failures start over: a single further failure must not lock out.
             try await app.test(.POST, "/auth/login/finish") { res async throws in
                 #expect(res.status == .unauthorized)
+            }
+        }
+    }
+
+    @Test("A spoofed left-most X-Forwarded-For entry can't mint a fresh bucket")
+    func testForwardedForUsesRightmostHop() async throws {
+        // Trusted proxy appends the real peer, so the right-most entry is the one
+        // the client can't forge. Two requests that vary only the left-most
+        // (attacker-supplied) entry must share a bucket — otherwise a client could
+        // evade the limiter by rotating that value per request.
+        try await withRateLimitedApp(config: baseConfig(apiLimit: 1)) { app in
+            var first = HTTPHeaders()
+            first.add(name: "X-Forwarded-For", value: "1.1.1.1, 9.9.9.9")
+            try await app.test(.GET, "/api/things", headers: first) { res async throws in
+                #expect(res.status == .ok)
+            }
+            var second = HTTPHeaders()
+            second.add(name: "X-Forwarded-For", value: "2.2.2.2, 9.9.9.9")
+            try await app.test(.GET, "/api/things", headers: second) { res async throws in
+                #expect(res.status == .tooManyRequests)
+            }
+        }
+    }
+
+    @Test("With two trusted hops the client is read second-from-right, not spoofable")
+    func testTrustedProxyHopsSelectsClient() async throws {
+        // Topology: client -> TLS terminator -> nginx -> app. The two rightmost
+        // XFF entries are appended by nginx and the terminator; the client is the
+        // third-from... i.e. hops=2 → second-from-right. Varying only the leftmost
+        // (client-supplied) entry must not create a new bucket.
+        try await withRateLimitedApp(config: baseConfig(apiLimit: 1, trustedProxyHops: 2)) { app in
+            var first = HTTPHeaders()
+            first.add(name: "X-Forwarded-For", value: "1.1.1.1, 5.5.5.5, 9.9.9.9")
+            try await app.test(.GET, "/api/things", headers: first) { res async throws in
+                #expect(res.status == .ok)
+            }
+            var second = HTTPHeaders()
+            second.add(name: "X-Forwarded-For", value: "2.2.2.2, 5.5.5.5, 9.9.9.9")
+            try await app.test(.GET, "/api/things", headers: second) { res async throws in
+                // Same second-from-right entry (5.5.5.5) → same bucket → throttled.
+                #expect(res.status == .tooManyRequests)
+            }
+        }
+    }
+
+    @Test("A distinct client second-from-right gets its own bucket")
+    func testTrustedProxyHopsDistinctClients() async throws {
+        try await withRateLimitedApp(config: baseConfig(apiLimit: 1, trustedProxyHops: 2)) { app in
+            var first = HTTPHeaders()
+            first.add(name: "X-Forwarded-For", value: "1.1.1.1, 5.5.5.5, 9.9.9.9")
+            try await app.test(.GET, "/api/things", headers: first) { res async throws in
+                #expect(res.status == .ok)
+            }
+            var second = HTTPHeaders()
+            second.add(name: "X-Forwarded-For", value: "1.1.1.1, 6.6.6.6, 9.9.9.9")
+            try await app.test(.GET, "/api/things", headers: second) { res async throws in
+                // Different second-from-right (6.6.6.6) → separate bucket → allowed.
+                #expect(res.status == .ok)
             }
         }
     }
