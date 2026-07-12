@@ -437,6 +437,22 @@ struct VMController: RouteCollection {
             throw Abort(.internalServerError, reason: "Project not found")
         }
 
+        // Require create permission on the target project. Org membership alone
+        // (checked above) is not enough: `virtual_machine.create` resolves to
+        // `project->create_resources`, so a user who only inherits `view_project`
+        // as an org member — with no role in this project — must not be able to
+        // create VMs here. Mirrors the create_volume/create_network gates on the
+        // sibling controllers.
+        let canCreate = try await req.spicedb.checkPermission(
+            subject: user.id?.uuidString ?? "",
+            permission: "create_resources",
+            resource: "project",
+            resourceId: projectId.uuidString
+        )
+        guard canCreate else {
+            throw Abort(.forbidden, reason: "You don't have permission to create VMs in this project")
+        }
+
         // Determine environment
         let environment = createRequest.environment ?? project.defaultEnvironment
 

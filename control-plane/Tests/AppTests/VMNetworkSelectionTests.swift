@@ -92,6 +92,31 @@ final class VMNetworkSelectionTests {
         }
     }
 
+    @Test("POST /api/vms is denied (403) when SpiceDB withholds project create")
+    func createDeniedWithoutProjectCreatePermission() async throws {
+        try await withApp { app, _, _, project, image, token in
+            // Org membership alone must not authorize VM creation: withhold the
+            // project-scoped `create_resources` permission (deny the "project"
+            // resource type) while image read still passes, and the create must 403.
+            app.spicedbMockDeniedResources = ["project"]
+
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "unauthorized-vm", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: nil))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+
+            // And no VM row was created as a side effect.
+            let leaked = try await VM.query(on: app.db).filter(\.$name == "unauthorized-vm").first()
+            #expect(leaked == nil)
+        }
+    }
+
     @Test("POST /api/vms on a dual-stack network allocates one address per family")
     func createOnDualStackNetwork() async throws {
         try await withApp { app, user, _, project, image, token in
