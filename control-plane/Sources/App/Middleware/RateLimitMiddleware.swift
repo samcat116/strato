@@ -234,13 +234,22 @@ struct RateLimitMiddleware: AsyncMiddleware {
 
     private func clientIP(for request: Request) -> String {
         if config.trustForwardedFor {
-            if let forwarded = request.headers.first(name: "X-Forwarded-For"),
-                let first = forwarded.split(separator: ",").first
+            // `X-Real-IP` is set by the trusted proxy to the immediate peer
+            // (`$remote_addr`), so a client can't forge it — prefer it.
+            if let realIP = request.headers.first(name: "X-Real-IP")?.trimmingCharacters(in: .whitespaces),
+                !realIP.isEmpty
             {
-                return first.trimmingCharacters(in: .whitespaces)
-            }
-            if let realIP = request.headers.first(name: "X-Real-IP") {
                 return realIP
+            }
+            // Fall back to `X-Forwarded-For`, taking the RIGHT-most entry: the
+            // trusted proxy appends the real peer (nginx `$proxy_add_x_forwarded_for`),
+            // so the right-most hop is the one value the client can't spoof. Taking
+            // the left-most entry would trust attacker-supplied input and let a
+            // client mint a fresh limiter/lockout bucket per request.
+            if let forwarded = request.headers.first(name: "X-Forwarded-For"),
+                let last = forwarded.split(separator: ",").last
+            {
+                return last.trimmingCharacters(in: .whitespaces)
             }
         }
         return request.remoteAddress?.ipAddress ?? "unknown"

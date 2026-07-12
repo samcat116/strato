@@ -174,6 +174,47 @@ struct RateLimitTests {
         }
     }
 
+    @Test("A spoofed left-most X-Forwarded-For entry can't mint a fresh bucket")
+    func testForwardedForUsesRightmostHop() async throws {
+        // Trusted proxy appends the real peer, so the right-most entry is the one
+        // the client can't forge. Two requests that vary only the left-most
+        // (attacker-supplied) entry must share a bucket — otherwise a client could
+        // evade the limiter by rotating that value per request.
+        try await withRateLimitedApp(config: baseConfig(apiLimit: 1)) { app in
+            var first = HTTPHeaders()
+            first.add(name: "X-Forwarded-For", value: "1.1.1.1, 9.9.9.9")
+            try await app.test(.GET, "/api/things", headers: first) { res async throws in
+                #expect(res.status == .ok)
+            }
+            var second = HTTPHeaders()
+            second.add(name: "X-Forwarded-For", value: "2.2.2.2, 9.9.9.9")
+            try await app.test(.GET, "/api/things", headers: second) { res async throws in
+                #expect(res.status == .tooManyRequests)
+            }
+        }
+    }
+
+    @Test("X-Real-IP is trusted over a client-supplied X-Forwarded-For")
+    func testRealIPPreferredOverForwardedFor() async throws {
+        // The proxy sets X-Real-IP to the immediate peer; a forged XFF must not
+        // override it. Both requests carry different (spoofed) XFF values but the
+        // same X-Real-IP, so they share a bucket and the second is throttled.
+        try await withRateLimitedApp(config: baseConfig(apiLimit: 1)) { app in
+            var first = HTTPHeaders()
+            first.add(name: "X-Real-IP", value: "9.9.9.9")
+            first.add(name: "X-Forwarded-For", value: "1.1.1.1")
+            try await app.test(.GET, "/api/things", headers: first) { res async throws in
+                #expect(res.status == .ok)
+            }
+            var second = HTTPHeaders()
+            second.add(name: "X-Real-IP", value: "9.9.9.9")
+            second.add(name: "X-Forwarded-For", value: "2.2.2.2")
+            try await app.test(.GET, "/api/things", headers: second) { res async throws in
+                #expect(res.status == .tooManyRequests)
+            }
+        }
+    }
+
     @Test("Disabled config lets all traffic through untouched")
     func testDisabledPassesThrough() async throws {
         try await withRateLimitedApp(config: baseConfig(apiLimit: 1).with { $0.enabled = false }) { app in
