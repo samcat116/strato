@@ -49,7 +49,10 @@ export const navSections: NavSection[] = [
       { label: "Projects", href: "/projects", icon: FolderKanban },
       { label: "Hierarchy", href: "/hierarchy", icon: FolderTree },
       { label: "Quotas", href: "/quotas", icon: Gauge },
-      { label: "Settings", href: "/organizations/settings", icon: Building2 },
+      // Deployed proxies (deploy/compose/nginx.conf, helm ingress) send the
+      // whole /organizations/ prefix to the control plane for SCIM, so
+      // frontend pages must not live under it.
+      { label: "Settings", href: "/settings/organization", icon: Building2 },
     ],
   },
   {
