@@ -283,6 +283,46 @@ final class OIDCIdentityMappingTests {
         }
     }
 
+    @Test("Clearing groupsClaim disables mapping: no removals or demotions from empty claims")
+    func unsetGroupsClaimDisablesMapping() async throws {
+        // Mappings and admin claim values remain saved, but the groups claim
+        // is cleared — the token never carries values, and that must not be
+        // read as "the user lost every mapped group and the admin role".
+        var mappedID: UUID!
+        try await withIdentityTestApp(
+            groupsClaim: nil,
+            groupMappings: { builder, org in
+                let mapped = try await builder.createGroup(
+                    name: "Mapped", description: "idp-managed", organization: org)
+                mappedID = mapped.id!
+                return [OIDCGroupMapping(claimValue: "idp-mapped", groupID: mapped.id!)]
+            },
+            adminClaimValues: ["strato-admins"]
+        ) { app, org, provider, service, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "keeper", email: "keeper@example.com")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
+            // A second admin, so it's the groupsClaim guard (not the
+            // last-admin guard) keeping the role below.
+            let other = try await builder.createUser(username: "otheradmin", email: "otheradmin@example.com")
+            try await builder.addUserToOrganization(user: other, organization: org, role: "admin")
+
+            let mapped = try await Group.find(mappedID, on: app.db)
+            try await mapped!.addMember(user.id!, on: app.db)
+
+            try await service.syncGroupMemberships(
+                user: user, provider: provider, organizationID: org.id!, groupValues: [])
+            try await service.reconcileOrganizationRole(
+                user: user, provider: provider, organizationID: org.id!, groupValues: [])
+
+            let stillMember = try await mapped!.hasMember(user.id!, on: app.db)
+            #expect(stillMember)
+            let membership = try await UserOrganization.query(on: app.db)
+                .filter(\.$user.$id == user.id!).first()
+            #expect(membership?.role == "admin")
+        }
+    }
+
     @Test("Mapping to a deleted group is skipped without failing the login")
     func groupSyncSkipsMissingGroup() async throws {
         try await withIdentityTestApp(groupMappings: { _, _ in

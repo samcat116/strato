@@ -165,6 +165,10 @@ struct OIDCIdentityService {
         organizationID: UUID,
         groupValues: [String]
     ) async throws {
+        // An unset groups claim disables claim mapping entirely: without it
+        // no values are ever extracted, and treating that as "every mapped
+        // group is absent" would strip memberships.
+        guard provider.groupsClaim != nil else { return }
         let mappings = provider.groupMappingsArray
         guard !mappings.isEmpty, let userID = user.id else { return }
 
@@ -213,6 +217,9 @@ struct OIDCIdentityService {
         organizationID: UUID,
         groupValues: [String]
     ) async throws {
+        // As with group sync, an unset groups claim disables role mapping —
+        // empty claim values must not demote anyone.
+        guard provider.groupsClaim != nil else { return }
         guard !provider.adminClaimValuesArray.isEmpty, let userID = user.id else { return }
 
         guard
