@@ -8,38 +8,30 @@ import Vapor
 struct OIDCValidation {
     /// Validates that every provided endpoint URL is a well-formed HTTPS URL.
     static func validateURLFields(request: CreateOIDCProviderRequest) throws {
-        // Validate discovery URL
-        if let discoveryURL = request.discoveryURL, !discoveryURL.isEmpty {
-            guard isValidHTTPSURL(discoveryURL) else {
-                throw Abort(.badRequest, reason: "Discovery URL must be a valid HTTPS URL")
-            }
-        }
+        try validateOptionalHTTPSURL(request.discoveryURL, label: "Discovery URL")
+        try validateOptionalHTTPSURL(request.authorizationEndpoint, label: "Authorization endpoint")
+        try validateOptionalHTTPSURL(request.tokenEndpoint, label: "Token endpoint")
+        try validateOptionalHTTPSURL(request.userinfoEndpoint, label: "Userinfo endpoint")
+        try validateOptionalHTTPSURL(request.jwksURI, label: "JWKS URI")
+    }
 
-        // Validate authorization endpoint
-        if let authEndpoint = request.authorizationEndpoint, !authEndpoint.isEmpty {
-            guard isValidHTTPSURL(authEndpoint) else {
-                throw Abort(.badRequest, reason: "Authorization endpoint must be a valid HTTPS URL")
-            }
-        }
+    /// Validates the endpoint URLs stored on a provider. The update path
+    /// mutates fields individually rather than through a create request, so it
+    /// validates the resulting model state with this before saving — otherwise
+    /// an edit could store an http:// token endpoint that later receives the
+    /// client secret.
+    static func validateURLFields(provider: OIDCProvider) throws {
+        try validateOptionalHTTPSURL(provider.discoveryURL, label: "Discovery URL")
+        try validateOptionalHTTPSURL(provider.authorizationEndpoint, label: "Authorization endpoint")
+        try validateOptionalHTTPSURL(provider.tokenEndpoint, label: "Token endpoint")
+        try validateOptionalHTTPSURL(provider.userinfoEndpoint, label: "Userinfo endpoint")
+        try validateOptionalHTTPSURL(provider.jwksURI, label: "JWKS URI")
+    }
 
-        // Validate token endpoint
-        if let tokenEndpoint = request.tokenEndpoint, !tokenEndpoint.isEmpty {
-            guard isValidHTTPSURL(tokenEndpoint) else {
-                throw Abort(.badRequest, reason: "Token endpoint must be a valid HTTPS URL")
-            }
-        }
-
-        // Validate userinfo endpoint
-        if let userinfoEndpoint = request.userinfoEndpoint, !userinfoEndpoint.isEmpty {
-            guard isValidHTTPSURL(userinfoEndpoint) else {
-                throw Abort(.badRequest, reason: "Userinfo endpoint must be a valid HTTPS URL")
-            }
-        }
-
-        // Validate JWKS URI
-        if let jwksURI = request.jwksURI, !jwksURI.isEmpty {
-            guard isValidHTTPSURL(jwksURI) else {
-                throw Abort(.badRequest, reason: "JWKS URI must be a valid HTTPS URL")
+    private static func validateOptionalHTTPSURL(_ urlString: String?, label: String) throws {
+        if let urlString, !urlString.isEmpty {
+            guard isValidHTTPSURL(urlString) else {
+                throw Abort(.badRequest, reason: "\(label) must be a valid HTTPS URL")
             }
         }
     }

@@ -152,6 +152,11 @@ struct OIDCController: RouteCollection {
         if let scopes = updateRequest.scopes { provider.setScopesArray(scopes) }
         if let enabled = updateRequest.enabled { provider.enabled = enabled }
 
+        // Same HTTPS validation the create path applies — the login flow posts
+        // the client secret to the stored token endpoint, so an edit must not
+        // be able to point it at an http:// or malformed URL.
+        try OIDCValidation.validateURLFields(provider: provider)
+
         // The resulting configuration must still be loginable: either a
         // discovery URL, or the full manual endpoint set.
         let hasDiscovery = !(provider.discoveryURL ?? "").isEmpty
@@ -232,7 +237,16 @@ struct OIDCController: RouteCollection {
         // Test the provider configuration by attempting to fetch discovery document
         if let discoveryURL = provider.discoveryURL, !discoveryURL.isEmpty {
             do {
-                _ = try await fetchDiscoveryDocument(url: discoveryURL, on: req)
+                let discovery = try await fetchDiscoveryDocument(url: discoveryURL, on: req)
+                // Persist the discovered endpoints: the login flow builds its
+                // redirect from the STORED fields, so a passing test must
+                // leave them usable. This also heals providers whose create-
+                // time discovery fetch failed non-fatally and stored nothing.
+                provider.authorizationEndpoint = discovery.authorizationEndpoint
+                provider.tokenEndpoint = discovery.tokenEndpoint
+                provider.userinfoEndpoint = discovery.userinfoEndpoint
+                provider.jwksURI = discovery.jwksURI
+                try await provider.save(on: req.db)
                 return OIDCProviderTestResponse(valid: true, message: "Provider configuration is valid")
             } catch let abort as AbortError {
                 return OIDCProviderTestResponse(

@@ -193,6 +193,42 @@ final class OIDCControllerTests: BaseTestCase {
         }
     }
 
+    @Test("Update rejects non-HTTPS endpoint URLs")
+    func testUpdateRejectsInsecureURLs() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+
+            // An http:// token endpoint would receive the client secret on the
+            // next login — the same HTTPS validation as create must apply.
+            try await app.test(
+                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id!)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    UpdateOIDCProviderRequest(
+                        name: nil,
+                        clientID: nil,
+                        clientSecret: nil,
+                        discoveryURL: nil,
+                        authorizationEndpoint: nil,
+                        tokenEndpoint: "http://insecure.example.com/token",
+                        userinfoEndpoint: nil,
+                        jwksURI: nil,
+                        scopes: nil,
+                        enabled: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // The stored endpoint must be untouched after the rejected edit.
+            let reloaded = try await OIDCProvider.find(provider.id, on: app.db)
+            #expect(reloaded?.tokenEndpoint == "https://idp.example.com/token")
+        }
+    }
+
     @Test("Update clears discovery URL when an empty string is sent")
     func testUpdateClearsDiscoveryURL() async throws {
         try await withApp { app in
