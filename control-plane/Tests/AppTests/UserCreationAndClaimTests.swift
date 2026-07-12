@@ -170,6 +170,33 @@ final class UserCreationAndClaimTests: BaseTestCase {
         }
     }
 
+    @Test("org list-all is system-admin only and includes non-member orgs")
+    func testListAllOrganizations() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let adminToken = try await makeAdminToken(on: app.db)
+
+            // An org the admin is not a member of.
+            let other = Organization(name: "Zeta Corp", description: "")
+            try await other.save(on: app.db)
+
+            try await app.test(.GET, "/api/organizations/all") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+
+            try await app.test(.GET, "/api/organizations/all") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let orgs = try res.content.decode([OrganizationResponse].self)
+                #expect(orgs.contains { $0.name == "Zeta Corp" })
+                #expect(orgs.contains { $0.id == testOrganization.id })
+            }
+        }
+    }
+
     @Test("admin create rejects an invalid org role")
     func testCreateWithInvalidRole() async throws {
         try await withApp { app in

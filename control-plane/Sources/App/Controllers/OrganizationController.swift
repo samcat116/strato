@@ -6,6 +6,7 @@ struct OrganizationController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let organizations = routes.grouped("api", "organizations")
         organizations.get(use: index)
+        organizations.get("all", use: listAll)
         organizations.post(use: create)
 
         organizations.group(":organizationID") { org in
@@ -21,6 +22,24 @@ struct OrganizationController: RouteCollection {
     }
 
     // MARK: - Organization CRUD
+
+    /// System-admin only: every organization, regardless of membership. Backs
+    /// admin flows (e.g. assigning an invited user to any org) where the caller
+    /// isn't necessarily a member of the target. `index` stays membership-scoped
+    /// for the normal org switcher.
+    func listAll(req: Request) async throws -> [OrganizationResponse] {
+        guard let user = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+        guard user.isSystemAdmin else {
+            throw Abort(.forbidden, reason: "System admin access required")
+        }
+
+        let organizations = try await Organization.query(on: req.db)
+            .sort(\.$name)
+            .all()
+        return organizations.map { OrganizationResponse(from: $0, userRole: nil) }
+    }
 
     func index(req: Request) async throws -> [OrganizationResponse] {
         guard let user = req.auth.get(User.self) else {

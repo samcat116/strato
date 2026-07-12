@@ -13,6 +13,11 @@ export const organizationsApi = {
     return api.get<Organization[]>("/api/organizations");
   },
 
+  // System-admin only: every organization, regardless of membership.
+  listAll(): Promise<Organization[]> {
+    return api.get<Organization[]>("/api/organizations/all");
+  },
+
   get(id: string): Promise<Organization> {
     return api.get<Organization>(`/api/organizations/${id}`);
   },

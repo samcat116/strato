@@ -48,9 +48,12 @@ export function CreateUserDialog({ open, onOpenChange }: CreateUserDialogProps) 
 
 function CreateUserForm({ onClose }: { onClose: () => void }) {
   const createUser = useCreateUser();
+  // System-admin dialog: list every org (not just the admin's memberships) so
+  // an invitee can be assigned to any org. Separate query key from the org
+  // switcher's ["organizations"] so the two caches don't collide.
   const { data: organizations = [], isLoading: orgsLoading } = useQuery({
-    queryKey: ["organizations"],
-    queryFn: organizationsApi.list,
+    queryKey: ["organizations", "all"],
+    queryFn: organizationsApi.listAll,
   });
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
