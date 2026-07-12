@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import Vapor
 @preconcurrency import JWT
 import Crypto
@@ -27,6 +28,10 @@ struct OIDCController: RouteCollection {
         // Public OIDC provider listing for login page
         let publicRoutes = routes.grouped("api", "public", "organizations", ":organizationID")
         publicRoutes.get("oidc-providers", use: listPublicProviders)
+
+        // Public SSO discovery for the login page: resolve an organization
+        // name to its enabled providers without knowing the org UUID.
+        routes.grouped("api", "public", "sso").get("lookup", use: lookupSSOProviders)
     }
 
     // MARK: - Provider Management
@@ -130,17 +135,48 @@ struct OIDCController: RouteCollection {
         if let name = updateRequest.name { provider.name = name }
         if let clientID = updateRequest.clientID { provider.clientID = clientID }
         if let clientSecret = updateRequest.clientSecret { provider.clientSecret = clientSecret }
-        if let discoveryURL = updateRequest.discoveryURL { provider.discoveryURL = discoveryURL }
-        if let authorizationEndpoint = updateRequest.authorizationEndpoint {
-            provider.authorizationEndpoint = authorizationEndpoint
+        // Optional URL fields: omitted keeps the stored value, an empty string
+        // clears it. Without a clear path, a provider switched from discovery
+        // to manual config would keep resending the stale discovery URL and
+        // overwrite the manual endpoints on every subsequent edit.
+        func applyOptionalURL(_ value: String?, to keyPath: ReferenceWritableKeyPath<OIDCProvider, String?>) {
+            guard let value else { return }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            provider[keyPath: keyPath] = trimmed.isEmpty ? nil : trimmed
         }
-        if let tokenEndpoint = updateRequest.tokenEndpoint { provider.tokenEndpoint = tokenEndpoint }
-        if let userinfoEndpoint = updateRequest.userinfoEndpoint { provider.userinfoEndpoint = userinfoEndpoint }
-        if let jwksURI = updateRequest.jwksURI { provider.jwksURI = jwksURI }
+        applyOptionalURL(updateRequest.discoveryURL, to: \.discoveryURL)
+        applyOptionalURL(updateRequest.authorizationEndpoint, to: \.authorizationEndpoint)
+        applyOptionalURL(updateRequest.tokenEndpoint, to: \.tokenEndpoint)
+        applyOptionalURL(updateRequest.userinfoEndpoint, to: \.userinfoEndpoint)
+        applyOptionalURL(updateRequest.jwksURI, to: \.jwksURI)
         if let scopes = updateRequest.scopes { provider.setScopesArray(scopes) }
         if let enabled = updateRequest.enabled { provider.enabled = enabled }
 
+        // Same HTTPS validation the create path applies — the login flow posts
+        // the client secret to the stored token endpoint, so an edit must not
+        // be able to point it at an http:// or malformed URL.
+        try OIDCValidation.validateURLFields(provider: provider)
+
+        // The resulting configuration must still be loginable: either a
+        // discovery URL, or the full manual endpoint set.
+        let hasDiscovery = !(provider.discoveryURL ?? "").isEmpty
+        guard hasDiscovery || provider.hasRequiredEndpoints() else {
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Provider must keep either a discovery URL or all of authorization endpoint, token endpoint, and JWKS URI"
+            )
+        }
+
         try await provider.save(on: req.db)
+
+        // Mirror creation: when a discovery URL is (re)submitted, refresh the
+        // stored endpoints from its document. Without this, rotating to a new
+        // issuer saves fine but logins keep using the previous issuer's
+        // endpoints. Fetch failures are logged, not fatal, same as on create.
+        if let discoveryURL = provider.discoveryURL, updateRequest.discoveryURL != nil, !discoveryURL.isEmpty {
+            try await fetchAndUpdateProviderConfiguration(provider: provider, discoveryURL: discoveryURL, on: req)
+        }
 
         return OIDCProviderResponse(from: provider)
     }
@@ -180,7 +216,7 @@ struct OIDCController: RouteCollection {
 
     // MARK: - Provider Testing
 
-    func testProvider(req: Request) async throws -> Response {
+    func testProvider(req: Request) async throws -> OIDCProviderTestResponse {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
             let providerID = req.parameters.get("providerID", as: UUID.self)
         else {
@@ -199,25 +235,40 @@ struct OIDCController: RouteCollection {
         }
 
         // Test the provider configuration by attempting to fetch discovery document
-        if let discoveryURL = provider.discoveryURL {
+        if let discoveryURL = provider.discoveryURL, !discoveryURL.isEmpty {
             do {
-                _ = try await fetchDiscoveryDocument(url: discoveryURL, on: req)
-                return Response(status: .ok, body: .init(string: "Provider configuration is valid"))
+                let discovery = try await fetchDiscoveryDocument(url: discoveryURL, on: req)
+                // Discovered values get the same HTTPS validation as manual
+                // ones before anything is stored or reported valid.
+                try OIDCValidation.validateDiscoveredEndpoints(discovery)
+                // Persist the discovered endpoints: the login flow builds its
+                // redirect from the STORED fields, so a passing test must
+                // leave them usable. This also heals providers whose create-
+                // time discovery fetch failed non-fatally and stored nothing.
+                provider.authorizationEndpoint = discovery.authorizationEndpoint
+                provider.tokenEndpoint = discovery.tokenEndpoint
+                provider.userinfoEndpoint = discovery.userinfoEndpoint
+                provider.jwksURI = discovery.jwksURI
+                try await provider.save(on: req.db)
+                return OIDCProviderTestResponse(valid: true, message: "Provider configuration is valid")
+            } catch let abort as AbortError {
+                return OIDCProviderTestResponse(
+                    valid: false, message: "Provider configuration test failed: \(abort.reason)")
             } catch {
-                return Response(
-                    status: .badRequest,
-                    body: .init(string: "Provider configuration test failed: \(error.localizedDescription)"))
-            }
-        } else {
-            // If no discovery URL, check that required endpoints are configured
-            if provider.hasRequiredEndpoints() {
-                return Response(status: .ok, body: .init(string: "Provider endpoints are configured"))
-            } else {
-                return Response(
-                    status: .badRequest,
-                    body: .init(string: "Provider configuration is incomplete: missing required endpoints"))
+                return OIDCProviderTestResponse(
+                    valid: false, message: "Provider configuration test failed: \(error.localizedDescription)")
             }
         }
+
+        // If no discovery URL, check that required endpoints are configured
+        if provider.hasRequiredEndpoints() {
+            return OIDCProviderTestResponse(valid: true, message: "Provider endpoints are configured")
+        }
+        return OIDCProviderTestResponse(
+            valid: false,
+            message:
+                "Provider configuration is incomplete: authorization endpoint, token endpoint, and JWKS URI are required"
+        )
     }
 
     // MARK: - Public Provider Listing
@@ -233,6 +284,61 @@ struct OIDCController: RouteCollection {
             .all()
 
         return providers.map { OIDCProviderPublicResponse(from: $0) }
+    }
+
+    func lookupSSOProviders(req: Request) async throws -> SSOLookupResponse {
+        guard
+            let rawName = req.query[String.self, at: "organization"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !rawName.isEmpty
+        else {
+            throw Abort(.badRequest, reason: "Missing 'organization' query parameter")
+        }
+
+        // Case-insensitive name match. Exact match first; the fallback scan
+        // keeps case-insensitivity portable across Postgres and the SQLite
+        // test databases (org counts are small, so the scan is cheap).
+        var organization = try await Organization.query(on: req.db)
+            .filter(\.$name == rawName)
+            .first()
+        if organization == nil, let sql = req.db as? SQLDatabase {
+            // Case-insensitive fallback done in SQL (LOWER works on both
+            // Postgres and SQLite) with LIMIT 2 — enough to detect ambiguity
+            // without scanning the org table on a public, unauthenticated
+            // endpoint. Ambiguous matches (org names differing only by case)
+            // must not route the user to an arbitrary tenant's IdP — exact
+            // casing is required in that situation.
+            let rows = try await sql.select()
+                .column("id")
+                .from(Organization.schema)
+                .where(SQLFunction("LOWER", args: SQLColumn("name")), .equal, SQLBind(rawName.lowercased()))
+                .limit(2)
+                .all()
+            if rows.count == 1 {
+                let id = try rows[0].decode(column: "id", as: UUID.self)
+                organization = try await Organization.find(id, on: req.db)
+            }
+        }
+
+        guard let organization, let organizationID = organization.id else {
+            return SSOLookupResponse(organizationID: nil, providers: [])
+        }
+
+        let providers = try await OIDCProvider.query(on: req.db)
+            .filter(\.$organization.$id == organizationID)
+            .filter(\.$enabled == true)
+            .all()
+
+        // Indistinguishable from an unknown org so the endpoint doesn't
+        // confirm which organization names exist.
+        guard !providers.isEmpty else {
+            return SSOLookupResponse(organizationID: nil, providers: [])
+        }
+
+        return SSOLookupResponse(
+            organizationID: organizationID,
+            providers: providers.map { OIDCProviderPublicResponse(from: $0) }
+        )
     }
 
     // MARK: - Authentication Flow
@@ -344,7 +450,8 @@ struct OIDCController: RouteCollection {
                 userInfo: userInfo,
                 provider: provider,
                 organization: provider.organization,
-                on: req.db
+                db: req.db,
+                spicedb: req.spicedb
             )
 
             // Clean up session data
@@ -438,12 +545,19 @@ struct OIDCController: RouteCollection {
             return
         }
 
-        // If no discovery URL, check for required individual endpoints
+        // If no discovery URL, check for required individual endpoints. JWKS
+        // is mandatory for manual configs: the login callback refuses to
+        // validate ID tokens without it, so a provider that passes creation
+        // without JWKS would fail every SSO login.
         guard let authEndpoint = request.authorizationEndpoint, !authEndpoint.isEmpty,
-            let tokenEndpoint = request.tokenEndpoint, !tokenEndpoint.isEmpty
+            let tokenEndpoint = request.tokenEndpoint, !tokenEndpoint.isEmpty,
+            let jwksURI = request.jwksURI, !jwksURI.isEmpty
         else {
             throw Abort(
-                .badRequest, reason: "Either discovery URL or both authorization and token endpoints must be provided")
+                .badRequest,
+                reason:
+                    "Either a discovery URL or all of authorization endpoint, token endpoint, and JWKS URI must be provided"
+            )
         }
     }
 
@@ -452,6 +566,10 @@ struct OIDCController: RouteCollection {
     {
         do {
             let discovery = try await fetchDiscoveryDocument(url: discoveryURL, on: req)
+
+            // Same HTTPS validation as manual fields — checked before any
+            // assignment so a bad document leaves the provider untouched.
+            try OIDCValidation.validateDiscoveredEndpoints(discovery)
 
             // Update provider with discovered endpoints
             provider.authorizationEndpoint = discovery.authorizationEndpoint
@@ -644,11 +762,15 @@ struct OIDCController: RouteCollection {
         // For production, consider validating the issuer (iss) claim matches expected values
     }
 
-    private func findOrCreateUser(
+    /// Resolve the OIDC subject to a user, provisioning one on first login.
+    /// Internal (not private) so tests can drive the first-login path, which
+    /// is otherwise only reachable through a live token exchange.
+    func findOrCreateUser(
         userInfo: OIDCUserInfo,
         provider: OIDCProvider,
         organization: Organization,
-        on db: Database
+        db: Database,
+        spicedb: SpiceDBServiceProtocol
     ) async throws -> User {
         // Try to find existing user by OIDC subject and provider
         guard let providerID = provider.id else {
@@ -673,42 +795,64 @@ struct OIDCController: RouteCollection {
                 if userOrgIDs.contains(organizationID) {
                     // Link existing user to OIDC provider
                     user.linkToOIDCProvider(providerID, subject: userInfo.subject)
+                    if user.currentOrganizationId == nil {
+                        user.currentOrganizationId = organizationID
+                    }
                     try await user.save(on: db)
                     return user
                 }
             }
         }
 
-        // Create new user
+        // Create new user. The SQL rows and the SpiceDB tuple must land
+        // together: doing the SpiceDB write inside the transaction means a
+        // failed write rolls the rows back, so the next login for this
+        // subject re-runs provisioning cleanly instead of early-returning a
+        // user that authenticates but fails every permission check.
         let username = userInfo.preferredUsername ?? userInfo.email ?? "oidc_\(userInfo.subject.prefix(8))"
         let displayName = userInfo.name ?? username
         let email = userInfo.email ?? ""
 
-        let user = User(
-            username: username,
-            email: email,
-            displayName: displayName,
-            isSystemAdmin: false,
-            oidcProviderID: providerID,
-            oidcSubject: userInfo.subject
-        )
+        return try await db.transaction { transaction in
+            let user = User(
+                username: username,
+                email: email,
+                displayName: displayName,
+                isSystemAdmin: false,
+                oidcProviderID: providerID,
+                oidcSubject: userInfo.subject
+            )
+            // Authorization on product routes needs a current org (middleware
+            // rejects requests without one), so seed it at provisioning time.
+            user.currentOrganizationId = organization.id
 
-        try await user.save(on: db)
+            try await user.save(on: transaction)
 
-        // Add user to organization as a member
-        guard let userID = user.id,
-            let organizationID = organization.id
-        else {
-            throw Abort(.internalServerError, reason: "User and organization IDs are required")
+            // Add user to organization as a member
+            guard let userID = user.id,
+                let organizationID = organization.id
+            else {
+                throw Abort(.internalServerError, reason: "User and organization IDs are required")
+            }
+            let membership = UserOrganization(
+                userID: userID,
+                organizationID: organizationID,
+                role: "member"
+            )
+            try await membership.save(on: transaction)
+
+            // Mirror the membership into SpiceDB, like OrganizationController's
+            // addMember does — without this tuple the new user authenticates
+            // but fails every permission check.
+            try await spicedb.setOrganizationRole(
+                userID: userID.uuidString,
+                organizationID: organizationID.uuidString,
+                oldRole: nil,
+                newRole: "member"
+            )
+
+            return user
         }
-        let membership = UserOrganization(
-            userID: userID,
-            organizationID: organizationID,
-            role: "member"
-        )
-        try await membership.save(on: db)
-
-        return user
     }
 
 }
