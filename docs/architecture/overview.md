@@ -221,6 +221,7 @@ services:
 - `DATABASE_URL`: PostgreSQL connection string
 - `SPICEDB_ENDPOINT`: SpiceDB HTTP API URL (required)
 - `SPICEDB_PRESHARED_KEY`: SpiceDB preshared authentication key
+- `STRATO_SECRET_ENCRYPTION_KEY`: 32-byte key (hex or base64) encrypting stored secrets (OIDC client secrets, SSF stream auth tokens) at rest; unset stores them in plaintext with a startup warning
 - `WEBAUTHN_RELYING_PARTY_*`: WebAuthn configuration
 - `VAPOR_ENV`: Application environment (development/production)
 

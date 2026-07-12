@@ -217,6 +217,15 @@ strato:
     #   - http://<hostname> otherwise
     relyingPartyOrigin: ""
 
+  # At-rest encryption of stored secrets (OIDC client secrets, SSF stream
+  # auth tokens) — STRATO_SECRET_ENCRYPTION_KEY. Optional: when unset the
+  # control plane warns and stores them unencrypted. Point existingSecret at
+  # a Secret holding a 32-byte key (hex or base64; `openssl rand -hex 32`).
+  # Losing the key makes stored secrets unreadable (re-enter them to recover).
+  secretEncryption:
+    existingSecret: ""
+    key: "encryption-key"
+
   # External hostname for the control plane (used for WebSocket connections from agents)
   # When empty, will use the first ingress hostname or service name
   externalHostname: ""
