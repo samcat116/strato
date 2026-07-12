@@ -403,6 +403,7 @@ export interface OIDCProvider {
   tokenEndpoint?: string | null;
   userinfoEndpoint?: string | null;
   jwksURI?: string | null;
+  endSessionEndpoint?: string | null;
   scopes: string[];
   enabled: boolean;
   createdAt?: string;
@@ -418,6 +419,7 @@ export interface CreateOIDCProviderRequest {
   tokenEndpoint?: string;
   userinfoEndpoint?: string;
   jwksURI?: string;
+  endSessionEndpoint?: string;
   scopes?: string[];
   enabled?: boolean;
 }
@@ -431,6 +433,7 @@ export interface UpdateOIDCProviderRequest {
   tokenEndpoint?: string;
   userinfoEndpoint?: string;
   jwksURI?: string;
+  endSessionEndpoint?: string;
   scopes?: string[];
   enabled?: boolean;
 }

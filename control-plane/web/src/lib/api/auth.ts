@@ -16,12 +16,15 @@ export const authApi = {
     }
   },
 
-  async logout(): Promise<boolean> {
+  // Returns the IdP's RP-initiated logout URL when the session was
+  // OIDC-established and the provider supports single logout; the caller
+  // should navigate there so the IdP session ends too.
+  async logout(): Promise<{ sloUrl: string | null }> {
     try {
-      await api.post("/auth/logout");
-      return true;
+      const response = await api.post<{ sloUrl?: string | null } | undefined>("/auth/logout");
+      return { sloUrl: response?.sloUrl ?? null };
     } catch {
-      return false;
+      return { sloUrl: null };
     }
   },
 

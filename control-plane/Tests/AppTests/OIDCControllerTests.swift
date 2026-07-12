@@ -18,7 +18,8 @@ final class OIDCControllerTests: BaseTestCase {
         discoveryURL: String? = nil,
         authorizationEndpoint: String? = "https://idp.example.com/authorize",
         tokenEndpoint: String? = "https://idp.example.com/token",
-        jwksURI: String? = "https://idp.example.com/.well-known/jwks.json"
+        jwksURI: String? = "https://idp.example.com/.well-known/jwks.json",
+        endSessionEndpoint: String? = nil
     ) async throws -> OIDCProvider {
         let provider = OIDCProvider(
             organizationID: organizationID,
@@ -29,6 +30,7 @@ final class OIDCControllerTests: BaseTestCase {
             authorizationEndpoint: authorizationEndpoint,
             tokenEndpoint: tokenEndpoint,
             jwksURI: jwksURI,
+            endSessionEndpoint: endSessionEndpoint,
             enabled: enabled
         )
         try await provider.save(on: db)
@@ -774,6 +776,137 @@ final class OIDCControllerTests: BaseTestCase {
 
             try await app.test(.GET, "/api/public/sso/lookup") { res async throws in
                 #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    // MARK: - PKCE
+
+    @Test("Authorize redirect carries S256 PKCE parameters")
+    func testAuthorizeRedirectIncludesPKCE() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+
+            try await app.test(
+                .GET, "/auth/oidc/\(testOrganization.id!)/\(provider.id!)/authorize"
+            ) { res async throws in
+                #expect(res.status == .seeOther)
+                let location = try #require(res.headers.first(name: .location))
+                let components = try #require(URLComponents(string: location))
+                let query = Dictionary(
+                    uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+
+                #expect(query["code_challenge_method"] == "S256")
+                // The challenge is base64url(SHA256): 43 chars, no padding.
+                let challenge = try #require(query["code_challenge"])
+                #expect(challenge.count == 43)
+                #expect(query["response_type"] == "code")
+                #expect(query["state"]?.isEmpty == false)
+                #expect(query["nonce"]?.isEmpty == false)
+            }
+        }
+    }
+
+    // MARK: - RP-initiated logout
+
+    @Test("End-session URL includes client_id, id_token_hint, and post-logout redirect")
+    func testEndSessionURL() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Okta",
+                endSessionEndpoint: "https://idp.example.com/logout")
+
+            let url = try #require(
+                provider.getEndSessionURL(
+                    idTokenHint: "id-token-abc",
+                    postLogoutRedirectURI: "https://cloud.example.com/login"))
+            let components = try #require(URLComponents(string: url))
+            #expect(components.host == "idp.example.com")
+            #expect(components.path == "/logout")
+            let query = Dictionary(
+                uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            #expect(query["client_id"] == "client-Okta")
+            #expect(query["id_token_hint"] == "id-token-abc")
+            #expect(query["post_logout_redirect_uri"] == "https://cloud.example.com/login")
+
+            // No end-session endpoint → no SLO URL.
+            let plain = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Plain")
+            #expect(plain.getEndSessionURL(idTokenHint: nil, postLogoutRedirectURI: nil) == nil)
+        }
+    }
+
+    @Test("Provider CRUD stores, updates, and validates the end-session endpoint")
+    func testEndSessionEndpointCRUD() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+
+            // Non-HTTPS end-session endpoint is rejected on create.
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    CreateOIDCProviderRequest(
+                        name: "Bad",
+                        clientID: "client-123",
+                        clientSecret: "secret-456",
+                        authorizationEndpoint: "https://idp.example.com/authorize",
+                        tokenEndpoint: "https://idp.example.com/token",
+                        jwksURI: "https://idp.example.com/.well-known/jwks.json",
+                        endSessionEndpoint: "http://idp.example.com/logout"
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // Valid endpoint round-trips through create and the response.
+            var providerID: UUID?
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    CreateOIDCProviderRequest(
+                        name: "Okta",
+                        clientID: "client-123",
+                        clientSecret: "secret-456",
+                        authorizationEndpoint: "https://idp.example.com/authorize",
+                        tokenEndpoint: "https://idp.example.com/token",
+                        jwksURI: "https://idp.example.com/.well-known/jwks.json",
+                        endSessionEndpoint: "https://idp.example.com/logout"
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let created = try res.content.decode(OIDCProviderResponse.self)
+                #expect(created.endSessionEndpoint == "https://idp.example.com/logout")
+                providerID = created.id
+            }
+
+            // An empty string clears it (same contract as the other URL fields).
+            try await app.test(
+                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(providerID!)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(UpdateOIDCProviderRequest(endSessionEndpoint: ""))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let updated = try res.content.decode(OIDCProviderResponse.self)
+                #expect(updated.endSessionEndpoint == nil)
+            }
+        }
+    }
+
+    @Test("Logout without an OIDC session returns no SLO URL")
+    func testLogoutWithoutOIDCSession() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+
+            try await app.test(.POST, "/auth/logout") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res async throws in
+                #expect(res.status == .ok)
+                let body = try res.content.decode(LogoutResponse.self)
+                #expect(body.sloUrl == nil)
             }
         }
     }

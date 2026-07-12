@@ -348,6 +348,10 @@ public func configure(_ app: Application) async throws {
     // validate the ID token's `iss` claim.
     app.migrations.add(AddIssuerToOIDCProvider())
 
+    // OIDC protocol completeness (issue #365): the provider's end-session
+    // endpoint enables RP-initiated logout at the IdP.
+    app.migrations.add(AddEndSessionEndpointToOIDCProvider())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen

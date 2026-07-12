@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 import Vapor
 
@@ -13,6 +14,7 @@ struct OIDCValidation {
         try validateOptionalHTTPSURL(request.tokenEndpoint, label: "Token endpoint")
         try validateOptionalHTTPSURL(request.userinfoEndpoint, label: "Userinfo endpoint")
         try validateOptionalHTTPSURL(request.jwksURI, label: "JWKS URI")
+        try validateOptionalHTTPSURL(request.endSessionEndpoint, label: "End session endpoint")
     }
 
     /// Validates the endpoint URLs stored on a provider. The update path
@@ -26,6 +28,7 @@ struct OIDCValidation {
         try validateOptionalHTTPSURL(provider.tokenEndpoint, label: "Token endpoint")
         try validateOptionalHTTPSURL(provider.userinfoEndpoint, label: "Userinfo endpoint")
         try validateOptionalHTTPSURL(provider.jwksURI, label: "JWKS URI")
+        try validateOptionalHTTPSURL(provider.endSessionEndpoint, label: "End session endpoint")
     }
 
     /// Validates the endpoint URLs in a fetched discovery document before they
@@ -38,6 +41,7 @@ struct OIDCValidation {
         try validateOptionalHTTPSURL(discovery.tokenEndpoint, label: "Discovered token endpoint")
         try validateOptionalHTTPSURL(discovery.userinfoEndpoint, label: "Discovered userinfo endpoint")
         try validateOptionalHTTPSURL(discovery.jwksURI, label: "Discovered JWKS URI")
+        try validateOptionalHTTPSURL(discovery.endSessionEndpoint, label: "Discovered end session endpoint")
     }
 
     /// Whether an ID token's `iss` claim satisfies the provider's expected issuer.
@@ -170,6 +174,54 @@ struct OIDCValidation {
             return (email, verified)
         }
         return (email, false)
+    }
+
+    // MARK: - PKCE (RFC 7636)
+
+    /// Generates a PKCE `code_verifier`: 32 bytes of cryptographic randomness,
+    /// base64url-encoded without padding (43 characters, within the RFC 7636
+    /// 43–128 range and drawn from its unreserved character set).
+    static func generateCodeVerifier() -> String {
+        let bytes = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
+        return base64URLEncode(bytes)
+    }
+
+    /// Derives the S256 `code_challenge` for a verifier:
+    /// base64url(SHA256(ASCII(verifier))), unpadded (RFC 7636 §4.2).
+    static func codeChallengeS256(for verifier: String) -> String {
+        let digest = SHA256.hash(data: Data(verifier.utf8))
+        return base64URLEncode(Data(digest))
+    }
+
+    /// Base64url without padding, as JWTs and PKCE use.
+    private static func base64URLEncode(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    // MARK: - Base URL resolution
+
+    /// Resolves the public base URL used to build OIDC redirect URIs.
+    ///
+    /// The `http://localhost:8080` fallback is a development convenience only:
+    /// in production a silently-defaulted base URL produces redirect URIs the
+    /// IdP rejects (or worse, ones that leak the authorization code to the
+    /// wrong host), and the misconfiguration only surfaces as a confusing
+    /// IdP-side error. Fail loudly instead.
+    static func resolveBaseURL(configured: String?, environment: Environment) throws -> String {
+        if let configured = configured?.trimmingCharacters(in: .whitespacesAndNewlines), !configured.isEmpty {
+            return configured
+        }
+        guard environment != .production else {
+            throw Abort(
+                .internalServerError,
+                reason: "BASE_URL is not configured. Set it to this deployment's public origin "
+                    + "(e.g. https://cloud.example.com) — OIDC redirect URIs cannot be built without it."
+            )
+        }
+        return "http://localhost:8080"
     }
 
     private static func validateOptionalHTTPSURL(_ urlString: String?, label: String) throws {

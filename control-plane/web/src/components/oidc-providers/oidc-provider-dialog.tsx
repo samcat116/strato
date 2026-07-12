@@ -81,6 +81,9 @@ function ProviderForm({
     provider?.userinfoEndpoint ?? ""
   );
   const [jwksURI, setJwksURI] = useState(provider?.jwksURI ?? "");
+  const [endSessionEndpoint, setEndSessionEndpoint] = useState(
+    provider?.endSessionEndpoint ?? ""
+  );
   const [scopes, setScopes] = useState(
     provider ? provider.scopes.join(" ") : DEFAULT_SCOPES
   );
@@ -125,6 +128,7 @@ function ProviderForm({
           tokenEndpoint: tokenEndpoint.trim(),
           userinfoEndpoint: userinfoEndpoint.trim(),
           jwksURI: jwksURI.trim(),
+          endSessionEndpoint: endSessionEndpoint.trim(),
           scopes: scopeList.length > 0 ? scopeList : undefined,
         };
         // Blank secret means "keep the current one"
@@ -143,6 +147,7 @@ function ProviderForm({
           tokenEndpoint: tokenEndpoint.trim() || undefined,
           userinfoEndpoint: userinfoEndpoint.trim() || undefined,
           jwksURI: jwksURI.trim() || undefined,
+          endSessionEndpoint: endSessionEndpoint.trim() || undefined,
           scopes: scopeList.length > 0 ? scopeList : undefined,
         });
         toast.success(`Provider "${name.trim()}" created`);
@@ -295,6 +300,24 @@ function ProviderForm({
             <p className="text-xs text-muted-foreground">
               Required to verify ID tokens; filled in automatically when a
               discovery URL is set.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="oidcEndSessionEndpoint" className="text-foreground">
+              End Session Endpoint (optional)
+            </Label>
+            <Input
+              id="oidcEndSessionEndpoint"
+              placeholder="https://idp.example.com/logout"
+              value={endSessionEndpoint}
+              onChange={(e) => setEndSessionEndpoint(e.target.value)}
+              className="bg-background border-border text-foreground"
+              disabled={isPending}
+            />
+            <p className="text-xs text-muted-foreground">
+              Enables signing out of the identity provider on logout; filled in
+              automatically when a discovery URL is set.
             </p>
           </div>
 

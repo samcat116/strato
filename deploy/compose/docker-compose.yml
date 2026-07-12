@@ -351,6 +351,11 @@ services:
       # origin, NOT the in-container :8080 (which only exists on the internal
       # network). Set to the browser origin by setup.sh.
       CONTROL_PLANE_URL: ${CONTROL_PLANE_URL}
+      # Public browser origin used to build OIDC redirect URIs (SSO login
+      # callback, post-logout redirect). OIDC login refuses to start without it
+      # in production. Set by setup.sh; defaults to CONTROL_PLANE_URL, which is
+      # also the browser origin in this topology.
+      BASE_URL: ${BASE_URL:-${CONTROL_PLANE_URL}}
       # Where the control plane writes downloaded base images. Backed by the
       # image_storage volume, made vapor-writable by image-storage-init.
       IMAGE_STORAGE_PATH: /app/images

@@ -14,6 +14,7 @@ struct OIDCDiscoveryDocument: Content {
     let authorizationEndpoint: String
     let tokenEndpoint: String
     let userinfoEndpoint: String?
+    let endSessionEndpoint: String?
     let jwksURI: String
     let responseTypesSupported: [String]
     let subjectTypesSupported: [String]
@@ -24,6 +25,7 @@ struct OIDCDiscoveryDocument: Content {
         case authorizationEndpoint = "authorization_endpoint"
         case tokenEndpoint = "token_endpoint"
         case userinfoEndpoint = "userinfo_endpoint"
+        case endSessionEndpoint = "end_session_endpoint"
         case jwksURI = "jwks_uri"
         case responseTypesSupported = "response_types_supported"
         case subjectTypesSupported = "subject_types_supported"
@@ -33,18 +35,20 @@ struct OIDCDiscoveryDocument: Content {
 
 // MARK: - OIDC Authentication Data Structures
 
+/// The token endpoint response. Any `refresh_token` the IdP returns is
+/// deliberately ignored: the Vapor session is the sole credential lifetime —
+/// the control plane never calls IdP APIs after login completes, so a
+/// persisted refresh token would be a stored credential with no consumer.
 struct OIDCTokenResponse: Content {
     let accessToken: String
     let tokenType: String
     let expiresIn: Int?
-    let refreshToken: String?
     let idToken: String
 
     private enum CodingKeys: String, CodingKey {
         case accessToken = "access_token"
         case tokenType = "token_type"
         case expiresIn = "expires_in"
-        case refreshToken = "refresh_token"
         case idToken = "id_token"
     }
 }
@@ -73,18 +77,22 @@ struct OIDCIDTokenClaims: Content, JWTPayload, @unchecked Sendable {
     }
 }
 
-/// The subset of the OIDC UserInfo endpoint response we consult. Fetched only
-/// to recover `email_verified` for IdPs that omit it from the ID token; `sub`
-/// is required so the caller can enforce the OIDC 5.3.2 rule that the UserInfo
-/// subject must match the ID token subject before trusting any of its claims.
+/// The subset of the OIDC UserInfo endpoint response we consult, as a fallback
+/// for providers that only expose email/name/verification there rather than in
+/// the ID token. `sub` is required so the caller can enforce the OIDC 5.3.2
+/// rule that the UserInfo subject must match the ID token subject before
+/// trusting any of its claims.
 struct OIDCUserInfoResponse: Content {
     let sub: String
     let email: String?
     let emailVerified: Bool?
+    let name: String?
+    let preferredUsername: String?
 
     private enum CodingKeys: String, CodingKey {
-        case sub, email
+        case sub, email, name
         case emailVerified = "email_verified"
+        case preferredUsername = "preferred_username"
     }
 }
 

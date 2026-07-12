@@ -88,6 +88,7 @@ struct OIDCController: RouteCollection {
             tokenEndpoint: createRequest.tokenEndpoint,
             userinfoEndpoint: createRequest.userinfoEndpoint,
             jwksURI: createRequest.jwksURI,
+            endSessionEndpoint: createRequest.endSessionEndpoint,
             scopes: createRequest.scopes ?? ["openid", "profile", "email"],
             enabled: createRequest.enabled ?? true,
             groupsClaim: normalizedGroupsClaim(createRequest.groupsClaim),
@@ -166,6 +167,7 @@ struct OIDCController: RouteCollection {
         applyOptionalURL(updateRequest.tokenEndpoint, to: \.tokenEndpoint)
         applyOptionalURL(updateRequest.userinfoEndpoint, to: \.userinfoEndpoint)
         applyOptionalURL(updateRequest.jwksURI, to: \.jwksURI)
+        applyOptionalURL(updateRequest.endSessionEndpoint, to: \.endSessionEndpoint)
 
         // Clear the stored issuer only when discovery is being *removed* (switching
         // to manual endpoints, possibly a different issuer) — a lingering discovered
@@ -294,6 +296,7 @@ struct OIDCController: RouteCollection {
                 provider.authorizationEndpoint = discovery.authorizationEndpoint
                 provider.tokenEndpoint = discovery.tokenEndpoint
                 provider.userinfoEndpoint = discovery.userinfoEndpoint
+                provider.endSessionEndpoint = discovery.endSessionEndpoint
                 provider.jwksURI = discovery.jwksURI
                 try await provider.save(on: req.db)
                 return OIDCProviderTestResponse(valid: true, message: "Provider configuration is valid")
@@ -407,26 +410,34 @@ struct OIDCController: RouteCollection {
             throw Abort(.notFound, reason: "OIDC provider not found or disabled")
         }
 
-        // Generate state and nonce for security
+        // Generate state and nonce for security, and a PKCE verifier (RFC
+        // 7636) binding the authorization code to this session. S256 is sent
+        // unconditionally: authorization servers ignore unknown parameters,
+        // so providers without PKCE support are unaffected, and those with it
+        // get code-interception protection.
         let state = UUID().uuidString
         let nonce = UUID().uuidString
+        let codeVerifier = OIDCValidation.generateCodeVerifier()
 
-        // Store state and nonce in session for verification
+        // Store state, nonce, and PKCE verifier in session for the callback
         req.session.data["oidc_state"] = state
         req.session.data["oidc_nonce"] = nonce
+        req.session.data["oidc_code_verifier"] = codeVerifier
         req.session.data["oidc_provider_id"] = providerID.uuidString
         req.session.data["oidc_organization_id"] = organizationID.uuidString
 
         // Build redirect URI
-        let baseURL = Environment.get("BASE_URL") ?? "http://localhost:8080"
-        let redirectURI = "\(baseURL)/auth/oidc/\(organizationID)/\(providerID)/callback"
+        let redirectURI = try oidcRedirectURI(
+            organizationID: organizationID, providerID: providerID, on: req)
 
         // Generate authorization URL
         guard
             let authURL = provider.getAuthorizationURL(
                 redirectURI: redirectURI,
                 state: state,
-                nonce: nonce
+                nonce: nonce,
+                codeChallenge: OIDCValidation.codeChallengeS256(for: codeVerifier),
+                codeChallengeMethod: "S256"
             )
         else {
             throw Abort(.internalServerError, reason: "Failed to generate authorization URL")
@@ -474,10 +485,14 @@ struct OIDCController: RouteCollection {
         }
 
         do {
-            // Exchange authorization code for tokens
+            // Exchange authorization code for tokens. The PKCE verifier is
+            // optional only to tolerate flows initiated before a deploy that
+            // introduced PKCE: such flows sent no code_challenge, so sending
+            // no code_verifier is the matching (and only valid) behavior.
             let tokenResponse = try await exchangeCodeForTokens(
                 provider: provider,
                 code: code,
+                codeVerifier: req.session.data["oidc_code_verifier"],
                 organizationID: organizationID,
                 providerID: providerID,
                 on: req
@@ -505,6 +520,7 @@ struct OIDCController: RouteCollection {
             // Clean up session data
             req.session.data["oidc_state"] = nil
             req.session.data["oidc_nonce"] = nil
+            req.session.data["oidc_code_verifier"] = nil
             req.session.data["oidc_provider_id"] = nil
             req.session.data["oidc_organization_id"] = nil
 
@@ -534,6 +550,14 @@ struct OIDCController: RouteCollection {
             // Authenticate user
             req.auth.login(user)
             req.stampSessionEpoch(for: user)
+
+            // Retain what RP-initiated logout needs: the provider that issued
+            // this session and the raw ID token (sent as id_token_hint so the
+            // IdP can end its session without prompting). Distinct keys from
+            // the flow-scoped oidc_* values cleared above — these live for
+            // the whole login session.
+            req.session.data["oidc_login_provider_id"] = providerID.uuidString
+            req.session.data["oidc_login_id_token"] = tokenResponse.idToken
             await req.recordAuthEvent(.oidcLogin, user: user, organizationID: organizationID)
 
             // Redirect to dashboard
@@ -547,6 +571,7 @@ struct OIDCController: RouteCollection {
             // Clean up session data on error
             req.session.data["oidc_state"] = nil
             req.session.data["oidc_nonce"] = nil
+            req.session.data["oidc_code_verifier"] = nil
             req.session.data["oidc_provider_id"] = nil
             req.session.data["oidc_organization_id"] = nil
 
@@ -653,6 +678,7 @@ struct OIDCController: RouteCollection {
             provider.authorizationEndpoint = discovery.authorizationEndpoint
             provider.tokenEndpoint = discovery.tokenEndpoint
             provider.userinfoEndpoint = discovery.userinfoEndpoint
+            provider.endSessionEndpoint = discovery.endSessionEndpoint
             provider.jwksURI = discovery.jwksURI
 
             try await provider.save(on: req.db)
@@ -691,9 +717,21 @@ struct OIDCController: RouteCollection {
 
     // MARK: - OIDC Authentication Helpers
 
+    /// Builds the OIDC callback URI from the deployment's public base URL.
+    /// Throws in production when BASE_URL is unset — see
+    /// `OIDCValidation.resolveBaseURL`.
+    private func oidcRedirectURI(organizationID: UUID, providerID: UUID, on req: Request) throws -> String {
+        let baseURL = try OIDCValidation.resolveBaseURL(
+            configured: Environment.get("BASE_URL"),
+            environment: req.application.environment
+        )
+        return "\(baseURL)/auth/oidc/\(organizationID)/\(providerID)/callback"
+    }
+
     private func exchangeCodeForTokens(
         provider: OIDCProvider,
         code: String,
+        codeVerifier: String?,
         organizationID: UUID,
         providerID: UUID,
         on req: Request
@@ -702,16 +740,19 @@ struct OIDCController: RouteCollection {
             throw Abort(.internalServerError, reason: "Token endpoint not configured")
         }
 
-        let baseURL = Environment.get("BASE_URL") ?? "http://localhost:8080"
-        let redirectURI = "\(baseURL)/auth/oidc/\(organizationID)/\(providerID)/callback"
+        let redirectURI = try oidcRedirectURI(
+            organizationID: organizationID, providerID: providerID, on: req)
 
-        let body = [
+        var body = [
             "grant_type": "authorization_code",
             "client_id": provider.clientID,
             "client_secret": provider.clientSecret,
             "code": code,
             "redirect_uri": redirectURI,
         ]
+        if let codeVerifier {
+            body["code_verifier"] = codeVerifier
+        }
 
         let response = try await req.client.post(URI(string: tokenEndpoint)) { clientReq in
             try clientReq.content.encode(body, as: .urlEncodedForm)
@@ -749,42 +790,43 @@ struct OIDCController: RouteCollection {
             )
         }
 
-        // Some IdPs return `email` in the ID token but only assert
-        // `email_verified` in the UserInfo response. When the ID token doesn't
-        // already assert a verified email, consult the UserInfo endpoint so a
-        // legitimate first login isn't blocked by a missing flag. Only its claims
-        // for the same subject are trusted (OIDC 5.3.2).
-        var userInfoEmail: String?
-        var userInfoEmailVerified: Bool?
-        if claims.emailVerified != true, let endpoint = provider.userinfoEndpoint, !endpoint.isEmpty {
+        // Some IdPs put only `sub` in the ID token and expose email, name, and
+        // `email_verified` solely through the UserInfo endpoint. Whenever any
+        // of those is missing from the (verified) ID token, consult UserInfo as
+        // a fallback so such providers still work. Only its claims for the same
+        // subject are trusted (OIDC 5.3.2); ID-token claims always win.
+        var userInfo: OIDCUserInfoResponse?
+        let idTokenIncomplete =
+            claims.emailVerified != true || claims.email == nil
+            || (claims.name == nil && claims.preferredUsername == nil)
+        if idTokenIncomplete, let endpoint = provider.userinfoEndpoint, !endpoint.isEmpty {
             if let info = try? await fetchUserInfo(
                 endpoint: endpoint, accessToken: tokenResponse.accessToken, on: req),
                 info.sub == claims.sub
             {
-                userInfoEmail = info.email
-                userInfoEmailVerified = info.emailVerified
+                userInfo = info
             }
         }
         let resolvedEmail = OIDCValidation.resolveEmailVerification(
             idTokenEmail: claims.email,
             idTokenEmailVerified: claims.emailVerified,
-            userInfoEmail: userInfoEmail,
-            userInfoEmailVerified: userInfoEmailVerified
+            userInfoEmail: userInfo?.email,
+            userInfoEmailVerified: userInfo?.emailVerified
         )
 
         return OIDCUserInfo(
             subject: claims.sub,
             email: resolvedEmail.email,
             emailVerified: resolvedEmail.verified,
-            name: claims.name ?? claims.preferredUsername,
-            preferredUsername: claims.preferredUsername,
+            name: claims.name ?? claims.preferredUsername ?? userInfo?.name ?? userInfo?.preferredUsername,
+            preferredUsername: claims.preferredUsername ?? userInfo?.preferredUsername,
             groupValues: groupValues
         )
     }
 
-    /// Fetches the OIDC UserInfo endpoint with the access token. Used only to
-    /// recover `email_verified`; the caller must confirm the returned `sub`
-    /// matches the ID token before trusting the response.
+    /// Fetches the OIDC UserInfo endpoint with the access token, as a fallback
+    /// for claims the ID token omits. The caller must confirm the returned
+    /// `sub` matches the ID token before trusting the response.
     private func fetchUserInfo(
         endpoint: String,
         accessToken: String,

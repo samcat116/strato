@@ -69,8 +69,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
-    await authApi.logout();
+    const { sloUrl } = await authApi.logout();
     setUser(null);
+    if (sloUrl) {
+      // OIDC single logout: a full navigation to the IdP ends its session;
+      // the IdP redirects back to /login afterwards.
+      window.location.assign(sloUrl);
+      return;
+    }
     router.push("/login");
   };
 

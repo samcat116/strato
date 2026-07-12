@@ -38,6 +38,9 @@ final class OIDCProvider: Model, @unchecked Sendable {
     @OptionalField(key: "jwks_uri")
     var jwksURI: String?
 
+    @OptionalField(key: "end_session_endpoint")
+    var endSessionEndpoint: String?  // RP-initiated logout (OIDC Session Management)
+
     @Field(key: "scopes")
     var scopes: String  // JSON array of scopes, default: ["openid", "profile", "email"]
 
@@ -80,6 +83,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
         tokenEndpoint: String? = nil,
         userinfoEndpoint: String? = nil,
         jwksURI: String? = nil,
+        endSessionEndpoint: String? = nil,
         scopes: [String] = ["openid", "profile", "email"],
         enabled: Bool = true,
         groupsClaim: String? = nil,
@@ -98,6 +102,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
         self.tokenEndpoint = tokenEndpoint
         self.userinfoEndpoint = userinfoEndpoint
         self.jwksURI = jwksURI
+        self.endSessionEndpoint = endSessionEndpoint
         self.scopes = Self.encodeScopesArray(scopes)
         self.enabled = enabled
         self.groupsClaim = groupsClaim
@@ -222,6 +227,25 @@ extension OIDCProvider {
         components?.queryItems = queryItems
         return components?.url?.absoluteString
     }
+
+    /// Builds the RP-initiated logout URL (OIDC RP-Initiated Logout 1.0).
+    /// `id_token_hint` tells the IdP which session to end without a prompt;
+    /// `post_logout_redirect_uri` must be registered with the IdP alongside
+    /// the login redirect URI for the IdP to honor it.
+    func getEndSessionURL(idTokenHint: String?, postLogoutRedirectURI: String?) -> String? {
+        guard let endSessionEndpoint else { return nil }
+
+        var components = URLComponents(string: endSessionEndpoint)
+        var queryItems: [URLQueryItem] = [URLQueryItem(name: "client_id", value: clientID)]
+        if let idTokenHint {
+            queryItems.append(URLQueryItem(name: "id_token_hint", value: idTokenHint))
+        }
+        if let postLogoutRedirectURI {
+            queryItems.append(URLQueryItem(name: "post_logout_redirect_uri", value: postLogoutRedirectURI))
+        }
+        components?.queryItems = queryItems
+        return components?.url?.absoluteString
+    }
 }
 
 // MARK: - DTOs
@@ -235,6 +259,7 @@ struct CreateOIDCProviderRequest: Content {
     let tokenEndpoint: String?
     let userinfoEndpoint: String?
     let jwksURI: String?
+    let endSessionEndpoint: String?
     let scopes: [String]?
     let enabled: Bool?
     let groupsClaim: String?
@@ -251,6 +276,7 @@ struct CreateOIDCProviderRequest: Content {
         tokenEndpoint: String? = nil,
         userinfoEndpoint: String? = nil,
         jwksURI: String? = nil,
+        endSessionEndpoint: String? = nil,
         scopes: [String]? = nil,
         enabled: Bool? = nil,
         groupsClaim: String? = nil,
@@ -266,6 +292,7 @@ struct CreateOIDCProviderRequest: Content {
         self.tokenEndpoint = tokenEndpoint
         self.userinfoEndpoint = userinfoEndpoint
         self.jwksURI = jwksURI
+        self.endSessionEndpoint = endSessionEndpoint
         self.scopes = scopes
         self.enabled = enabled
         self.groupsClaim = groupsClaim
@@ -284,6 +311,7 @@ struct UpdateOIDCProviderRequest: Content {
     let tokenEndpoint: String?
     let userinfoEndpoint: String?
     let jwksURI: String?
+    let endSessionEndpoint: String?
     let scopes: [String]?
     let enabled: Bool?
     let groupsClaim: String?
@@ -300,6 +328,7 @@ struct UpdateOIDCProviderRequest: Content {
         tokenEndpoint: String? = nil,
         userinfoEndpoint: String? = nil,
         jwksURI: String? = nil,
+        endSessionEndpoint: String? = nil,
         scopes: [String]? = nil,
         enabled: Bool? = nil,
         groupsClaim: String? = nil,
@@ -315,6 +344,7 @@ struct UpdateOIDCProviderRequest: Content {
         self.tokenEndpoint = tokenEndpoint
         self.userinfoEndpoint = userinfoEndpoint
         self.jwksURI = jwksURI
+        self.endSessionEndpoint = endSessionEndpoint
         self.scopes = scopes
         self.enabled = enabled
         self.groupsClaim = groupsClaim
@@ -334,6 +364,7 @@ struct OIDCProviderResponse: Content {
     let tokenEndpoint: String?
     let userinfoEndpoint: String?
     let jwksURI: String?
+    let endSessionEndpoint: String?
     let scopes: [String]
     let enabled: Bool
     let groupsClaim: String?
@@ -358,6 +389,7 @@ struct OIDCProviderResponse: Content {
         self.tokenEndpoint = provider.tokenEndpoint
         self.userinfoEndpoint = provider.userinfoEndpoint
         self.jwksURI = provider.jwksURI
+        self.endSessionEndpoint = provider.endSessionEndpoint
         self.scopes = provider.scopesArray
         self.enabled = provider.enabled
         self.groupsClaim = includeClaimMappings ? provider.groupsClaim : nil
