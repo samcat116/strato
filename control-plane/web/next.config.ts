@@ -1,9 +1,36 @@
+import { execSync } from "node:child_process";
 import type { NextConfig } from "next";
+
+// Build identity, baked into the client bundle so the UI can show which build is
+// running. Mirrors the control plane's STRATO_VERSION/STRATO_GIT_SHA convention
+// (see control-plane/Sources/App/BuildInfo.swift): CI and Helm inject these; a
+// local `next dev` has no build args, so fall back to reading the git short hash
+// directly. Inside the Docker builder there is no .git, so that fallback yields
+// "" and the injected build arg is the only source — see the web Dockerfile.
+function resolveGitSHA(): string {
+  if (process.env.STRATO_GIT_SHA) return process.env.STRATO_GIT_SHA;
+  try {
+    return execSync("git rev-parse --short HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return "";
+  }
+}
 
 const nextConfig: NextConfig = {
   output: "standalone", // Creates minimal server bundle for Docker
   images: {
     unoptimized: true,
+  },
+
+  // Inlined into the client bundle at build time (NEXT_PUBLIC_* → string
+  // literals). Consumed by src/lib/version.ts / the sidebar version label.
+  env: {
+    NEXT_PUBLIC_APP_VERSION: process.env.STRATO_VERSION ?? "",
+    NEXT_PUBLIC_GIT_SHA: resolveGitSHA(),
   },
 
   // Security headers for the user-facing HTML this service serves (/, /login,

@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { OrganizationSwitcher } from "./organization-switcher";
 import { footerNavItems, isNavActive, navSections, type NavItem } from "./nav";
+import { versionLabel, versionTitle } from "@/lib/version";
 
 function SidebarLink({ item }: { item: NavItem }) {
   const pathname = usePathname();
@@ -143,6 +144,12 @@ export function Sidebar() {
           ))}
         </div>
         <UserCard />
+        <div
+          title={versionTitle || undefined}
+          className="px-2 pt-2 font-mono text-[10px] text-muted-foreground/70"
+        >
+          {versionLabel}
+        </div>
       </nav>
     </aside>
   );

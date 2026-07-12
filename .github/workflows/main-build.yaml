@@ -274,7 +274,16 @@ jobs:
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
           cache-from: ${{ matrix.image == 'frontend' && format('type=gha,key=frontend-{0}', matrix.arch) || '' }}
           cache-to: ${{ matrix.image == 'frontend' && format('type=gha,mode=max,key=frontend-{0}', matrix.arch) || '' }}
-          build-args: ${{ matrix.prebuilt != '' && format('PREBUILT_ARTIFACTS={0}', matrix.prebuilt) || '' }}
+          # Blank lines are ignored, so each arg is gated independently. The
+          # control-plane and frontend bake the build identity (STRATO_VERSION on
+          # /health/*, and the sidebar version label respectively); the agent has
+          # none. Baked once here in the per-arch digest build — the publish phase
+          # only stitches manifests by digest and never rebuilds, so the identity
+          # must be set now, not at publish time.
+          build-args: |
+            ${{ matrix.prebuilt != '' && format('PREBUILT_ARTIFACTS={0}', matrix.prebuilt) || '' }}
+            ${{ matrix.image != 'agent' && 'STRATO_VERSION=main' || '' }}
+            ${{ matrix.image != 'agent' && format('STRATO_GIT_SHA={0}', github.sha) || '' }}
 
       # Hand the digest to the publish job via an artifact. The filename is the
       # digest hex (the `sha256:` prefix is stripped — colons are fragile in

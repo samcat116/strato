@@ -14,6 +14,16 @@ RUN bun install --frozen-lockfile
 # Copy source code
 COPY . .
 
+# Build identity, baked into the client bundle (see src/lib/version.ts). The
+# build context is control-plane/web with no .git, so next.config.ts's git
+# fallback yields nothing here — these args are the only source. Mirrors the
+# control-plane image's STRATO_VERSION/STRATO_GIT_SHA args. Pass via
+# `docker build --build-arg STRATO_VERSION=... --build-arg STRATO_GIT_SHA=...`.
+ARG STRATO_VERSION="dev"
+ARG STRATO_GIT_SHA=""
+ENV STRATO_VERSION=${STRATO_VERSION}
+ENV STRATO_GIT_SHA=${STRATO_GIT_SHA}
+
 # Build the application
 RUN bun run build
 
