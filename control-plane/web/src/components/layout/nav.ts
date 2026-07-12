@@ -8,62 +8,74 @@ import {
   FolderTree,
   Gauge,
   Globe,
+  HardDrive,
   Key,
   Layers,
   LayoutGrid,
   MapPin,
   Rows3,
   ScrollText,
+  Settings,
+  Shield,
   Users,
 } from "lucide-react";
 
 export interface NavItem {
   label: string;
-  href: string;
+  /** Omit for pure grouping toplines (e.g. Storage) that only expand children. */
+  href?: string;
   icon: LucideIcon;
-}
-
-export interface NavSection {
-  label: string;
-  items: NavItem[];
   adminOnly?: boolean;
+  children?: NavItem[];
 }
 
-export const navSections: NavSection[] = [
+/**
+ * Two-level sidebar tree. Toplines with an `href` are links; toplines with only
+ * `children` are collapsible groups. `adminOnly` is now per-item (a group can be
+ * visible to everyone while one child inside it is admin-gated).
+ */
+export const navTree: NavItem[] = [
+  { label: "Overview", href: "/dashboard", icon: LayoutGrid },
   {
-    label: "Platform",
-    items: [
-      { label: "Overview", href: "/dashboard", icon: LayoutGrid },
-      { label: "Instances", href: "/vms", icon: Rows3 },
-      { label: "Agents", href: "/agents", icon: Cpu },
-      { label: "Sites", href: "/sites", icon: MapPin },
-      { label: "Networking", href: "/networks", icon: Globe },
-      { label: "Images", href: "/images", icon: Layers },
+    label: "Instances",
+    href: "/vms",
+    icon: Rows3,
+    children: [{ label: "Images", href: "/images", icon: Layers }],
+  },
+  {
+    label: "Agents",
+    href: "/agents",
+    icon: Cpu,
+    children: [{ label: "Sites", href: "/sites", icon: MapPin }],
+  },
+  { label: "Networking", href: "/networks", icon: Globe },
+  {
+    label: "Storage",
+    icon: HardDrive,
+    children: [
       { label: "Volumes", href: "/storage/volumes", icon: Database },
       { label: "Snapshots", href: "/storage/snapshots", icon: Camera },
     ],
   },
   {
-    label: "Organization",
-    items: [
+    label: "Access",
+    icon: Shield,
+    children: [
       { label: "Projects", href: "/projects", icon: FolderKanban },
       { label: "Hierarchy", href: "/hierarchy", icon: FolderTree },
       { label: "Quotas", href: "/quotas", icon: Gauge },
-      { label: "Settings", href: "/organizations/settings", icon: Building2 },
+      { label: "Users", href: "/admin/users", icon: Users, adminOnly: true },
+      { label: "API Keys", href: "/settings/api-keys", icon: Key },
     ],
   },
   {
-    label: "Administration",
-    adminOnly: true,
-    items: [
-      { label: "Users", href: "/admin/users", icon: Users },
-      { label: "Audit Log", href: "/admin/audit", icon: ScrollText },
+    label: "Settings",
+    icon: Settings,
+    children: [
+      { label: "Organization", href: "/organizations/settings", icon: Building2 },
+      { label: "Audit Log", href: "/admin/audit", icon: ScrollText, adminOnly: true },
     ],
   },
-];
-
-export const footerNavItems: NavItem[] = [
-  { label: "API Keys", href: "/settings/api-keys", icon: Key },
 ];
 
 /** Matches the item's route and any nested route (e.g. /vms/detail highlights Instances). */
@@ -71,11 +83,24 @@ export function isNavActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+/** True if this node's own route or any descendant route matches the current path. */
+export function isSectionActive(pathname: string, item: NavItem): boolean {
+  if (item.href && isNavActive(pathname, item.href)) return true;
+  return item.children?.some((child) => isSectionActive(pathname, child)) ?? false;
+}
+
+/** All linkable items flattened depth-first (toplines and their children). */
+export function flattenNav(nodes: NavItem[] = navTree): NavItem[] {
+  return nodes.flatMap((node) => [
+    ...(node.href ? [node] : []),
+    ...(node.children ? flattenNav(node.children) : []),
+  ]);
+}
+
 export function pageTitle(pathname: string): string {
-  const all = [...navSections.flatMap((s) => s.items), ...footerNavItems];
   // Prefer the longest matching href so /storage/volumes wins over a shorter prefix.
-  const match = all
-    .filter((item) => isNavActive(pathname, item.href))
-    .sort((a, b) => b.href.length - a.href.length)[0];
+  const match = flattenNav()
+    .filter((item) => item.href && isNavActive(pathname, item.href))
+    .sort((a, b) => (b.href!.length ?? 0) - (a.href!.length ?? 0))[0];
   return match?.label ?? "Strato";
 }
