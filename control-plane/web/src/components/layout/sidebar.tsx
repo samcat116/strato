@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogOut } from "lucide-react";
+import { LogOut, Monitor, Moon, Sun } from "lucide-react";
+import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import { useAuth, useOrganization } from "@/providers";
 import {
@@ -10,6 +11,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -34,6 +37,31 @@ function SidebarLink({ item }: { item: NavItem }) {
       <Icon className="h-4 w-4 shrink-0" strokeWidth={1.6} />
       {item.label}
     </Link>
+  );
+}
+
+const themeOptions = [
+  { value: "system", label: "System", icon: Monitor },
+  { value: "light", label: "Light", icon: Sun },
+  { value: "dark", label: "Dark", icon: Moon },
+] as const;
+
+function ThemeToggle() {
+  // The dropdown content is portaled and only mounts client-side when the menu
+  // opens, so reading next-themes' value here can't cause a hydration mismatch.
+  // Radio items (rather than plain buttons) keep these in the menu's keyboard
+  // roving-focus model so they're reachable without a mouse.
+  const { theme = "system", setTheme } = useTheme();
+
+  return (
+    <DropdownMenuRadioGroup value={theme} onValueChange={setTheme}>
+      {themeOptions.map(({ value, label, icon: Icon }) => (
+        <DropdownMenuRadioItem key={value} value={value} className="cursor-pointer">
+          <Icon className="h-4 w-4 shrink-0" strokeWidth={1.6} />
+          {label}
+        </DropdownMenuRadioItem>
+      ))}
+    </DropdownMenuRadioGroup>
   );
 }
 
@@ -63,6 +91,11 @@ function UserCard() {
           <DropdownMenuLabel className="truncate text-xs font-normal text-muted-foreground">
             {user?.email}
           </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-[0.6px] text-muted-foreground">
+            Theme
+          </DropdownMenuLabel>
+          <ThemeToggle />
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={logout} className="cursor-pointer">
             <LogOut className="mr-2 h-4 w-4" />
