@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import Testing
 import Vapor
 import VaporTesting
@@ -222,6 +223,48 @@ final class UserCreationAndClaimTests: BaseTestCase {
             let challenges = try await AuthenticationChallenge.query(on: app.db).all()
             #expect(challenges.contains { $0.operation == "claim" })
             #expect(challenges.allSatisfy { $0.operation != "registration" })
+        }
+    }
+
+    @Test("claim-token consume is atomic and one-time")
+    func testClaimTokenConsumeIsOneTime() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+
+            let invitee = User(
+                username: "invitee", email: "invitee@example.com", displayName: "Invitee")
+            try await invitee.save(on: app.db)
+
+            let raw = AccountClaimToken.generateToken()
+            let token = AccountClaimToken(
+                userID: try invitee.requireID(),
+                tokenHash: AccountClaimToken.hashToken(raw),
+                tokenPrefix: AccountClaimToken.extractPrefix(raw),
+                expiresAt: Date().addingTimeInterval(3600),
+                createdByID: nil)
+            try await token.save(on: app.db)
+
+            // This is the exact conditional consume claimFinish runs before
+            // enrolling a credential: only the first attempt claims the token.
+            let sql = try #require(app.db as? SQLDatabase)
+            let claimID = try token.requireID()
+            let first = try await sql.raw(
+                """
+                UPDATE account_claim_tokens SET claimed_at = \(bind: Date())
+                WHERE id = \(bind: claimID) AND claimed_at IS NULL
+                RETURNING id
+                """
+            ).all()
+            let second = try await sql.raw(
+                """
+                UPDATE account_claim_tokens SET claimed_at = \(bind: Date())
+                WHERE id = \(bind: claimID) AND claimed_at IS NULL
+                RETURNING id
+                """
+            ).all()
+
+            #expect(first.count == 1)
+            #expect(second.isEmpty)
         }
     }
 

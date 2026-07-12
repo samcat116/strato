@@ -1,6 +1,7 @@
 import Foundation
 import Vapor
 import Fluent
+import SQLKit
 import WebAuthn
 
 struct UserController: RouteCollection {
@@ -396,6 +397,41 @@ struct UserController: RouteCollection {
         // consumed and a credential persisted.
         try rejectDisabledAccount(claim.user)
 
+        let tokenUserID = claim.$user.id
+        let claimID = try claim.requireID()
+
+        // The WebAuthn challenge carries its own target user, independent of the
+        // token. Confirm they match BEFORE finishRegistration persists a
+        // credential — otherwise a valid token for one account could attach a
+        // passkey to a different account whose challenge was captured earlier.
+        guard
+            let challengeRecord = try await AuthenticationChallenge.query(on: req.db)
+                .filter(\.$challenge == finishRequest.challenge)
+                .filter(\.$operation == Self.claimChallengeOperation)
+                .first(),
+            challengeRecord.userID == tokenUserID
+        else {
+            throw Abort(.badRequest, reason: "Claim token does not match this registration")
+        }
+
+        // Consume the one-time token atomically BEFORE enrolling the credential.
+        // The conditional update matches only while `claimed_at` is still null,
+        // so two holders of the same invite finishing concurrently can't both
+        // enroll a passkey — exactly one wins the update; the loser gets 410.
+        guard let sql = req.db as? SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Unsupported database")
+        }
+        let consumed = try await sql.raw(
+            """
+            UPDATE account_claim_tokens SET claimed_at = \(bind: Date())
+            WHERE id = \(bind: claimID) AND claimed_at IS NULL
+            RETURNING id
+            """
+        ).all()
+        guard !consumed.isEmpty else {
+            throw Abort(.gone, reason: "This invitation link has expired or was already used")
+        }
+
         let credential = try await req.webAuthn.finishRegistration(
             challenge: finishRequest.challenge,
             credentialCreationData: finishRequest.response,
@@ -403,9 +439,9 @@ struct UserController: RouteCollection {
             on: req.db
         )
 
-        // The challenge derives the user independently of the token; make sure
-        // they agree so a token can't be paired with another user's ceremony.
-        guard credential.$user.id == claim.$user.id else {
+        // Defense in depth: finishRegistration derives the user from the
+        // challenge; re-confirm it matches the (now consumed) token.
+        guard credential.$user.id == tokenUserID else {
             throw Abort(.badRequest, reason: "Claim token does not match this registration")
         }
 
@@ -413,20 +449,21 @@ struct UserController: RouteCollection {
         let user = credential.user
         try rejectDisabledAccount(user)
 
-        // Consume the one-time token.
-        claim.claimedAt = Date()
-        try await claim.save(on: req.db)
-
         req.auth.login(user)
         req.stampSessionEpoch(for: user)
         await req.recordAuthEvent(.register, user: user)
 
-        if !user.isSystemAdmin {
-            do {
-                try await ensureUserInDefaultOrganization(user: user, req: req)
-            } catch {
-                req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
-            }
+        // Admin-created accounts are org-managed by the admin (via the member
+        // UI), so — unlike self-registration — do NOT auto-join the default
+        // org. If the admin already placed them in an org, make one current so
+        // they land somewhere usable; never grant new membership here.
+        if user.currentOrganizationId == nil,
+            let membership = try await UserOrganization.query(on: req.db)
+                .filter(\.$user.$id == user.requireID())
+                .first()
+        {
+            user.currentOrganizationId = membership.$organization.id
+            try await user.save(on: req.db)
         }
 
         return RegistrationFinishResponse(
