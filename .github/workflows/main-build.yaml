@@ -127,13 +127,14 @@ jobs:
       - name: Build Control Plane Release Binary
         working-directory: control-plane
         # On x64 the release build tree lives on the persistent scratch volume;
-        # on arm64 SCRATCH is empty (default .build). Using a bash array keeps the
-        # empty case a no-op without unquoted word-splitting.
+        # on arm64 CP_SCRATCH_ARG is empty (default .build). POSIX positional
+        # params ("set --" / "$@") keep the empty case a no-op and stay valid in
+        # the arm64 job container's /bin/sh (dash), which has no bash arrays.
         run: |
-          SCRATCH=()
-          [ -n "$CP_SCRATCH_ARG" ] && SCRATCH=(--scratch-path "$CP_SCRATCH_ARG")
-          swift build -c release --product App -Xlinker -ljemalloc "${SCRATCH[@]}"
-          BIN="$(swift build -c release --show-bin-path "${SCRATCH[@]}")"
+          set --
+          [ -n "$CP_SCRATCH_ARG" ] && set -- --scratch-path "$CP_SCRATCH_ARG"
+          swift build -c release --product App -Xlinker -ljemalloc "$@"
+          BIN="$(swift build -c release --show-bin-path "$@")"
           # Create artifact directory structure
           mkdir -p ../artifacts/control-plane/bin
           mkdir -p ../artifacts/control-plane/resources
@@ -156,13 +157,14 @@ jobs:
       - name: Build Agent Release Binary
         working-directory: agent
         # On x64 the release build tree lives on the persistent scratch volume;
-        # on arm64 SCRATCH is empty (default .build). Using a bash array keeps the
-        # empty case a no-op without unquoted word-splitting.
+        # on arm64 AGENT_SCRATCH_ARG is empty (default .build). POSIX positional
+        # params ("set --" / "$@") keep the empty case a no-op and stay valid in
+        # the arm64 job container's /bin/sh (dash), which has no bash arrays.
         run: |
-          SCRATCH=()
-          [ -n "$AGENT_SCRATCH_ARG" ] && SCRATCH=(--scratch-path "$AGENT_SCRATCH_ARG")
-          swift build -c release --product StratoAgent -Xlinker -ljemalloc "${SCRATCH[@]}"
-          BIN="$(swift build -c release --show-bin-path "${SCRATCH[@]}")"
+          set --
+          [ -n "$AGENT_SCRATCH_ARG" ] && set -- --scratch-path "$AGENT_SCRATCH_ARG"
+          swift build -c release --product StratoAgent -Xlinker -ljemalloc "$@"
+          BIN="$(swift build -c release --show-bin-path "$@")"
           mkdir -p ../artifacts/agent/bin
           mkdir -p ../artifacts/agent/resources
           cp "$BIN/StratoAgent" ../artifacts/agent/bin/

@@ -22,6 +22,36 @@ struct OIDCValidationTests {
         #expect(!OIDCValidation.isValidHTTPSURL("not a url"))
     }
 
+    // MARK: - validateDiscoveredEndpoints
+
+    private func discovery(tokenEndpoint: String) -> OIDCDiscoveryDocument {
+        OIDCDiscoveryDocument(
+            issuer: "https://idp.example.com",
+            authorizationEndpoint: "https://idp.example.com/authorize",
+            tokenEndpoint: tokenEndpoint,
+            userinfoEndpoint: nil,
+            jwksURI: "https://idp.example.com/.well-known/jwks.json",
+            responseTypesSupported: ["code"],
+            subjectTypesSupported: ["public"],
+            idTokenSigningAlgValuesSupported: ["RS256"]
+        )
+    }
+
+    @Test("validateDiscoveredEndpoints accepts an all-HTTPS document")
+    func testDiscoveredEndpointsValid() throws {
+        try OIDCValidation.validateDiscoveredEndpoints(discovery(tokenEndpoint: "https://idp.example.com/token"))
+    }
+
+    @Test("validateDiscoveredEndpoints rejects an http token endpoint")
+    func testDiscoveredEndpointsInsecure() {
+        // The token endpoint receives the client secret, so a discovery
+        // document must not be able to downgrade it to http.
+        #expect(throws: Error.self) {
+            try OIDCValidation.validateDiscoveredEndpoints(
+                self.discovery(tokenEndpoint: "http://idp.example.com/token"))
+        }
+    }
+
     // MARK: - validateURLFields
 
     private func request(discoveryURL: String? = nil, jwksURI: String? = nil) -> CreateOIDCProviderRequest {

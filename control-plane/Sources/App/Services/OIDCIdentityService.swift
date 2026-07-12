@@ -76,6 +76,9 @@ struct OIDCIdentityService {
             on: db
         ), let scimUser = try await User.find(internalID, on: db) {
             scimUser.linkToOIDCProvider(providerID, subject: userInfo.subject)
+            if scimUser.currentOrganizationId == nil {
+                scimUser.currentOrganizationId = organizationID
+            }
             try await scimUser.save(on: db)
             logger.info(
                 "Linked OIDC login to SCIM-provisioned user",
@@ -97,48 +100,64 @@ struct OIDCIdentityService {
                 let userOrgIDs = user.organizations.compactMap { $0.id }
                 if userOrgIDs.contains(organizationID) {
                     user.linkToOIDCProvider(providerID, subject: userInfo.subject)
+                    if user.currentOrganizationId == nil {
+                        user.currentOrganizationId = organizationID
+                    }
                     try await user.save(on: db)
                     return user
                 }
             }
         }
 
-        // JIT-provision a new user.
+        // JIT-provision a new user. The SQL rows and the SpiceDB tuple must
+        // land together: doing the SpiceDB write inside the transaction means
+        // a failed write rolls the rows back, so the next login for this
+        // subject re-runs provisioning cleanly instead of early-returning a
+        // user that authenticates but fails every permission check.
         let username = userInfo.preferredUsername ?? userInfo.email ?? "oidc_\(userInfo.subject.prefix(8))"
         let displayName = userInfo.name ?? username
         let email = userInfo.email ?? ""
-
-        let user = User(
-            username: username,
-            email: email,
-            displayName: displayName,
-            isSystemAdmin: false,
-            oidcProviderID: providerID,
-            oidcSubject: userInfo.subject
-        )
-
-        try await user.save(on: db)
-
-        guard let userID = user.id else {
-            throw Abort(.internalServerError, reason: "User ID is required")
-        }
-
         let role = desiredOrganizationRole(provider: provider, groupValues: groupValues)
-        let membership = UserOrganization(
-            userID: userID,
-            organizationID: organizationID,
-            role: role
-        )
-        try await membership.save(on: db)
+        let spicedb = self.spicedb
 
-        try await spicedb.setOrganizationRole(
-            userID: userID.uuidString,
-            organizationID: organizationID.uuidString,
-            oldRole: nil,
-            newRole: role
-        )
+        return try await db.transaction { transaction in
+            let user = User(
+                username: username,
+                email: email,
+                displayName: displayName,
+                isSystemAdmin: false,
+                oidcProviderID: providerID,
+                oidcSubject: userInfo.subject
+            )
+            // Authorization on product routes needs a current org (middleware
+            // rejects requests without one), so seed it at provisioning time.
+            user.currentOrganizationId = organizationID
 
-        return user
+            try await user.save(on: transaction)
+
+            guard let userID = user.id else {
+                throw Abort(.internalServerError, reason: "User ID is required")
+            }
+
+            let membership = UserOrganization(
+                userID: userID,
+                organizationID: organizationID,
+                role: role
+            )
+            try await membership.save(on: transaction)
+
+            // Mirror the membership into SpiceDB, like OrganizationController's
+            // addMember does — without this tuple the new user authenticates
+            // but fails every permission check.
+            try await spicedb.setOrganizationRole(
+                userID: userID.uuidString,
+                organizationID: organizationID.uuidString,
+                oldRole: nil,
+                newRole: role
+            )
+
+            return user
+        }
     }
 
     // MARK: - SCIM deactivation

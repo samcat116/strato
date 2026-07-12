@@ -179,9 +179,11 @@ extension OIDCProvider {
         self.adminClaimValues = Self.encodeJSON(values, fallback: "[]")
     }
 
-    /// Check if the provider has the required endpoints configured
+    /// Check if the provider has the required endpoints configured.
+    /// JWKS is required too: the callback path can't validate ID tokens
+    /// without it, so a provider missing it can never complete a login.
     func hasRequiredEndpoints() -> Bool {
-        return authorizationEndpoint != nil && tokenEndpoint != nil
+        return authorizationEndpoint != nil && tokenEndpoint != nil && jwksURI != nil
     }
 
     /// Get the authorization URL for this provider
@@ -234,6 +236,38 @@ struct CreateOIDCProviderRequest: Content {
     let groupMappings: [OIDCGroupMapping]?
     let adminClaimValues: [String]?
     let defaultRole: String?
+
+    init(
+        name: String,
+        clientID: String,
+        clientSecret: String,
+        discoveryURL: String? = nil,
+        authorizationEndpoint: String? = nil,
+        tokenEndpoint: String? = nil,
+        userinfoEndpoint: String? = nil,
+        jwksURI: String? = nil,
+        scopes: [String]? = nil,
+        enabled: Bool? = nil,
+        groupsClaim: String? = nil,
+        groupMappings: [OIDCGroupMapping]? = nil,
+        adminClaimValues: [String]? = nil,
+        defaultRole: String? = nil
+    ) {
+        self.name = name
+        self.clientID = clientID
+        self.clientSecret = clientSecret
+        self.discoveryURL = discoveryURL
+        self.authorizationEndpoint = authorizationEndpoint
+        self.tokenEndpoint = tokenEndpoint
+        self.userinfoEndpoint = userinfoEndpoint
+        self.jwksURI = jwksURI
+        self.scopes = scopes
+        self.enabled = enabled
+        self.groupsClaim = groupsClaim
+        self.groupMappings = groupMappings
+        self.adminClaimValues = adminClaimValues
+        self.defaultRole = defaultRole
+    }
 }
 
 struct UpdateOIDCProviderRequest: Content {
@@ -251,6 +285,38 @@ struct UpdateOIDCProviderRequest: Content {
     let groupMappings: [OIDCGroupMapping]?
     let adminClaimValues: [String]?
     let defaultRole: String?
+
+    init(
+        name: String? = nil,
+        clientID: String? = nil,
+        clientSecret: String? = nil,
+        discoveryURL: String? = nil,
+        authorizationEndpoint: String? = nil,
+        tokenEndpoint: String? = nil,
+        userinfoEndpoint: String? = nil,
+        jwksURI: String? = nil,
+        scopes: [String]? = nil,
+        enabled: Bool? = nil,
+        groupsClaim: String? = nil,
+        groupMappings: [OIDCGroupMapping]? = nil,
+        adminClaimValues: [String]? = nil,
+        defaultRole: String? = nil
+    ) {
+        self.name = name
+        self.clientID = clientID
+        self.clientSecret = clientSecret
+        self.discoveryURL = discoveryURL
+        self.authorizationEndpoint = authorizationEndpoint
+        self.tokenEndpoint = tokenEndpoint
+        self.userinfoEndpoint = userinfoEndpoint
+        self.jwksURI = jwksURI
+        self.scopes = scopes
+        self.enabled = enabled
+        self.groupsClaim = groupsClaim
+        self.groupMappings = groupMappings
+        self.adminClaimValues = adminClaimValues
+        self.defaultRole = defaultRole
+    }
 }
 
 struct OIDCProviderResponse: Content {
@@ -302,4 +368,18 @@ struct OIDCProviderPublicResponse: Content {
         self.name = provider.name
         self.enabled = provider.enabled
     }
+}
+
+/// Anonymous login-page lookup: resolves an organization name to its enabled
+/// SSO providers. `organizationID` is nil when the organization doesn't exist
+/// OR has no enabled providers, so the response doesn't reveal which org names
+/// exist.
+struct SSOLookupResponse: Content {
+    let organizationID: UUID?
+    let providers: [OIDCProviderPublicResponse]
+}
+
+struct OIDCProviderTestResponse: Content {
+    let valid: Bool
+    let message: String
 }
