@@ -292,12 +292,7 @@ struct OIDCController: RouteCollection {
                 // redirect from the STORED fields, so a passing test must
                 // leave them usable. This also heals providers whose create-
                 // time discovery fetch failed non-fatally and stored nothing.
-                provider.issuer = discovery.issuer
-                provider.authorizationEndpoint = discovery.authorizationEndpoint
-                provider.tokenEndpoint = discovery.tokenEndpoint
-                provider.userinfoEndpoint = discovery.userinfoEndpoint
-                provider.endSessionEndpoint = discovery.endSessionEndpoint
-                provider.jwksURI = discovery.jwksURI
+                applyDiscoveredConfiguration(discovery, to: provider)
                 try await provider.save(on: req.db)
                 return OIDCProviderTestResponse(valid: true, message: "Provider configuration is valid")
             } catch let abort as AbortError {
@@ -663,6 +658,25 @@ struct OIDCController: RouteCollection {
         }
     }
 
+    /// Copies a validated discovery document onto the provider. The required
+    /// metadata fields always overwrite; the OPTIONAL ones (userinfo and
+    /// end-session endpoints) only overwrite when the document supplies them —
+    /// otherwise a discovery refresh would wipe an admin's manually configured
+    /// value every time the provider is edited (the edit form resubmits the
+    /// discovery URL on every save).
+    private func applyDiscoveredConfiguration(_ discovery: OIDCDiscoveryDocument, to provider: OIDCProvider) {
+        provider.issuer = discovery.issuer
+        provider.authorizationEndpoint = discovery.authorizationEndpoint
+        provider.tokenEndpoint = discovery.tokenEndpoint
+        provider.jwksURI = discovery.jwksURI
+        if let userinfoEndpoint = discovery.userinfoEndpoint {
+            provider.userinfoEndpoint = userinfoEndpoint
+        }
+        if let endSessionEndpoint = discovery.endSessionEndpoint {
+            provider.endSessionEndpoint = endSessionEndpoint
+        }
+    }
+
     private func fetchAndUpdateProviderConfiguration(provider: OIDCProvider, discoveryURL: String, on req: Request)
         async throws
     {
@@ -673,13 +687,7 @@ struct OIDCController: RouteCollection {
             // assignment so a bad document leaves the provider untouched.
             try OIDCValidation.validateDiscoveredEndpoints(discovery)
 
-            // Update provider with discovered endpoints
-            provider.issuer = discovery.issuer
-            provider.authorizationEndpoint = discovery.authorizationEndpoint
-            provider.tokenEndpoint = discovery.tokenEndpoint
-            provider.userinfoEndpoint = discovery.userinfoEndpoint
-            provider.endSessionEndpoint = discovery.endSessionEndpoint
-            provider.jwksURI = discovery.jwksURI
+            applyDiscoveredConfiguration(discovery, to: provider)
 
             try await provider.save(on: req.db)
         } catch {
