@@ -100,8 +100,11 @@ struct OIDCIdentityService {
             return scimUser
         }
 
-        // Fall back to an existing org member with the same email.
-        if let email = userInfo.email {
+        // Fall back to an existing org member with the same email — but only when
+        // the IdP asserts the email is verified. Linking on an unverified email
+        // would let a user who can set an arbitrary `email` claim take over a
+        // victim's existing account by matching their address.
+        if let email = userInfo.email, userInfo.emailVerified {
             let usersWithEmail = try await User.query(on: db)
                 .filter(\.$email == email)
                 .with(\.$organizations)
@@ -130,6 +133,28 @@ struct OIDCIdentityService {
         let email = userInfo.email ?? ""
         let role = desiredOrganizationRole(provider: provider, groupValues: groupValues)
         let spicedb = self.spicedb
+
+        // Reaching here with an email that already belongs to a user means we were
+        // not allowed to link to that account — either the IdP didn't verify the
+        // email, or the matching user isn't a member of this org. `users.email` is
+        // unique, so JIT-provisioning would fail the constraint; deny with a clear
+        // reason instead of surfacing a 500, and never auto-adopt the address.
+        if !email.isEmpty {
+            let emailTaken = try await User.query(on: db).filter(\.$email == email).first() != nil
+            if emailTaken {
+                logger.warning(
+                    "Refusing to JIT-provision an OIDC user whose email is already in use",
+                    metadata: [
+                        "provider_id": .string(providerID.uuidString),
+                        "subject": .string(userInfo.subject),
+                    ])
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "This email is already associated with an account and could not be automatically linked. Contact an administrator."
+                )
+            }
+        }
 
         return try await db.transaction { transaction in
             let user = User(

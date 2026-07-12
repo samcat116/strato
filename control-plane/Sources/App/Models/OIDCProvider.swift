@@ -23,6 +23,9 @@ final class OIDCProvider: Model, @unchecked Sendable {
     @OptionalField(key: "discovery_url")
     var discoveryURL: String?  // OpenID Connect discovery endpoint
 
+    @OptionalField(key: "issuer")
+    var issuer: String?  // Expected `iss` claim; populated from the discovery document
+
     @OptionalField(key: "authorization_endpoint")
     var authorizationEndpoint: String?
 
@@ -72,6 +75,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
         clientID: String,
         clientSecret: String,
         discoveryURL: String? = nil,
+        issuer: String? = nil,
         authorizationEndpoint: String? = nil,
         tokenEndpoint: String? = nil,
         userinfoEndpoint: String? = nil,
@@ -89,6 +93,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
         self.clientID = clientID
         self.clientSecret = clientSecret
         self.discoveryURL = discoveryURL
+        self.issuer = issuer
         self.authorizationEndpoint = authorizationEndpoint
         self.tokenEndpoint = tokenEndpoint
         self.userinfoEndpoint = userinfoEndpoint
@@ -324,6 +329,7 @@ struct OIDCProviderResponse: Content {
     let name: String
     let clientID: String
     let discoveryURL: String?
+    let issuer: String?
     let authorizationEndpoint: String?
     let tokenEndpoint: String?
     let userinfoEndpoint: String?
@@ -347,6 +353,7 @@ struct OIDCProviderResponse: Content {
         self.clientID = provider.clientID
         // Note: We don't expose client_secret in responses for security
         self.discoveryURL = provider.discoveryURL
+        self.issuer = provider.issuer
         self.authorizationEndpoint = provider.authorizationEndpoint
         self.tokenEndpoint = provider.tokenEndpoint
         self.userinfoEndpoint = provider.userinfoEndpoint

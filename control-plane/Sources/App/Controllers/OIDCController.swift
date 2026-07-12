@@ -279,6 +279,7 @@ struct OIDCController: RouteCollection {
                 // redirect from the STORED fields, so a passing test must
                 // leave them usable. This also heals providers whose create-
                 // time discovery fetch failed non-fatally and stored nothing.
+                provider.issuer = discovery.issuer
                 provider.authorizationEndpoint = discovery.authorizationEndpoint
                 provider.tokenEndpoint = discovery.tokenEndpoint
                 provider.userinfoEndpoint = discovery.userinfoEndpoint
@@ -637,6 +638,7 @@ struct OIDCController: RouteCollection {
             try OIDCValidation.validateDiscoveredEndpoints(discovery)
 
             // Update provider with discovered endpoints
+            provider.issuer = discovery.issuer
             provider.authorizationEndpoint = discovery.authorizationEndpoint
             provider.tokenEndpoint = discovery.tokenEndpoint
             provider.userinfoEndpoint = discovery.userinfoEndpoint
@@ -739,6 +741,8 @@ struct OIDCController: RouteCollection {
         return OIDCUserInfo(
             subject: claims.sub,
             email: claims.email,
+            // Absent claim is treated as unverified (fail closed).
+            emailVerified: claims.emailVerified ?? false,
             name: claims.name ?? claims.preferredUsername,
             preferredUsername: claims.preferredUsername,
             groupValues: groupValues
@@ -823,6 +827,22 @@ struct OIDCController: RouteCollection {
     ) throws {
         // Expiration and issued-at time validation is handled by JWTPayload.verify()
 
+        // Validate issuer (iss). The OIDC spec requires the token's issuer to
+        // match the provider's known issuer; skipping it lets a token minted by a
+        // different issuer that shares the same JWKS/audience (e.g. another tenant
+        // on a multi-tenant IdP) be accepted. `issuer` is populated from the
+        // discovery document; when it's unknown (a provider configured with manual
+        // endpoints and no discovery) we can't validate and leave it to the other
+        // checks, but a discovery-configured provider always has it.
+        if let expectedIssuer = provider.issuer, !expectedIssuer.isEmpty {
+            guard claims.iss == expectedIssuer else {
+                throw Abort(
+                    .badRequest,
+                    reason: "ID token issuer '\(claims.iss)' does not match expected issuer '\(expectedIssuer)'"
+                )
+            }
+        }
+
         // Validate audience (aud) - should match our client ID
         guard claims.aud == provider.clientID else {
             throw Abort(
@@ -834,9 +854,6 @@ struct OIDCController: RouteCollection {
         if let expectedNonce = expectedNonce, claims.nonce != expectedNonce {
             throw Abort(.badRequest, reason: "Invalid nonce in ID token")
         }
-
-        // Additional issuer validation could be added here
-        // For production, consider validating the issuer (iss) claim matches expected values
     }
 
     // MARK: - Claim Mapping Configuration

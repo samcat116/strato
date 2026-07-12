@@ -57,6 +57,7 @@ struct OIDCIDTokenClaims: Content, JWTPayload, @unchecked Sendable {
     let iat: IssuedAtClaim  // Issued at
     let nonce: String?
     let email: String?
+    let emailVerified: Bool?
     let name: String?
     let preferredUsername: String?
 
@@ -67,6 +68,7 @@ struct OIDCIDTokenClaims: Content, JWTPayload, @unchecked Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case iss, sub, aud, exp, iat, nonce, email, name
+        case emailVerified = "email_verified"
         case preferredUsername = "preferred_username"
     }
 }
@@ -74,6 +76,11 @@ struct OIDCIDTokenClaims: Content, JWTPayload, @unchecked Sendable {
 struct OIDCUserInfo {
     let subject: String
     let email: String?
+    /// Whether the IdP asserts the email is verified. Only a verified email may
+    /// be used to link an OIDC identity to an existing account (see
+    /// `OIDCIdentityService.resolveUser`); an unverified/attacker-asserted email
+    /// must not match a victim's account.
+    let emailVerified: Bool
     let name: String?
     let preferredUsername: String?
     /// Values of the provider's configured groups claim (empty when the

@@ -590,6 +590,7 @@ final class OIDCControllerTests: BaseTestCase {
                 userInfo: OIDCUserInfo(
                     subject: "subject-new",
                     email: "newcomer@example.com",
+                    emailVerified: true,
                     name: "New Comer",
                     preferredUsername: "newcomer"
                 ),
@@ -618,7 +619,7 @@ final class OIDCControllerTests: BaseTestCase {
             // Second login with the same subject reuses the user, no new rows
             let again = try await identity.resolveUser(
                 userInfo: OIDCUserInfo(
-                    subject: "subject-new", email: nil, name: nil, preferredUsername: nil),
+                    subject: "subject-new", email: nil, emailVerified: false, name: nil, preferredUsername: nil),
                 provider: provider,
                 organization: testOrganization,
                 groupValues: []
@@ -640,6 +641,7 @@ final class OIDCControllerTests: BaseTestCase {
             let userInfo = OIDCUserInfo(
                 subject: "subject-rollback",
                 email: "rollback@example.com",
+                emailVerified: true,
                 name: "Roll Back",
                 preferredUsername: "rollback"
             )
