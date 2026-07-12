@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Check, Copy, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,9 +14,21 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useCreateUser, userErrorMessage } from "@/lib/hooks/use-users";
+import { organizationsApi } from "@/lib/api/organizations";
 import { toast } from "sonner";
-import type { AdminCreateUserResponse } from "@/types/api";
+import type { AdminCreateUserRequest, AdminCreateUserResponse } from "@/types/api";
+
+// Sentinel because a Radix Select item can't have an empty-string value.
+const NO_ORG = "__none__";
+const ORG_ROLES = ["member", "admin"] as const;
 
 interface CreateUserDialogProps {
   open: boolean;
@@ -35,21 +48,31 @@ export function CreateUserDialog({ open, onOpenChange }: CreateUserDialogProps) 
 
 function CreateUserForm({ onClose }: { onClose: () => void }) {
   const createUser = useCreateUser();
+  const { data: organizations = [], isLoading: orgsLoading } = useQuery({
+    queryKey: ["organizations"],
+    queryFn: organizationsApi.list,
+  });
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [isSystemAdmin, setIsSystemAdmin] = useState(false);
+  const [organizationId, setOrganizationId] = useState(NO_ORG);
+  const [role, setRole] = useState<(typeof ORG_ROLES)[number]>("member");
   const [created, setCreated] = useState<AdminCreateUserResponse | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const payload = {
+    const payload: AdminCreateUserRequest = {
       username: username.trim(),
       email: email.trim(),
       displayName: displayName.trim(),
       isSystemAdmin,
     };
+    if (organizationId !== NO_ORG) {
+      payload.organizationId = organizationId;
+      payload.role = role;
+    }
     if (!payload.username || !payload.email || !payload.displayName) {
       toast.error("Username, email and display name are required");
       return;
@@ -135,6 +158,77 @@ function CreateUserForm({ onClose }: { onClose: () => void }) {
             />
             Grant system administrator rights
           </label>
+
+          <div className="space-y-2">
+            <Label htmlFor="newOrg" className="text-foreground">
+              Organization <span className="text-muted-foreground">(optional)</span>
+            </Label>
+            <Select
+              value={organizationId}
+              onValueChange={setOrganizationId}
+              disabled={createUser.isPending || orgsLoading}
+            >
+              <SelectTrigger
+                id="newOrg"
+                className="bg-background border-border text-foreground"
+              >
+                <SelectValue
+                  placeholder={orgsLoading ? "Loading..." : "No organization"}
+                />
+              </SelectTrigger>
+              <SelectContent className="bg-card border-border">
+                <SelectItem
+                  value={NO_ORG}
+                  className="text-foreground focus:bg-accent focus:text-accent-foreground"
+                >
+                  No organization
+                </SelectItem>
+                {organizations.map((org) => (
+                  <SelectItem
+                    key={org.id}
+                    value={org.id}
+                    className="text-foreground focus:bg-accent focus:text-accent-foreground"
+                  >
+                    {org.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Leave unset to manage membership yourself later.
+            </p>
+          </div>
+
+          {organizationId !== NO_ORG && (
+            <div className="space-y-2">
+              <Label htmlFor="newOrgRole" className="text-foreground">
+                Role
+              </Label>
+              <Select
+                value={role}
+                onValueChange={(v) => setRole(v as (typeof ORG_ROLES)[number])}
+                disabled={createUser.isPending}
+              >
+                <SelectTrigger
+                  id="newOrgRole"
+                  className="bg-background border-border text-foreground capitalize"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-card border-border">
+                  {ORG_ROLES.map((r) => (
+                    <SelectItem
+                      key={r}
+                      value={r}
+                      className="text-foreground capitalize focus:bg-accent focus:text-accent-foreground"
+                    >
+                      {r}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
 
         <DialogFooter>

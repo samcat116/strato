@@ -122,11 +122,23 @@ struct UserController: RouteCollection {
         let createdByID = currentUser.id
         let rawToken = AccountClaimToken.generateToken()
 
-        // Create the user and its claim token in one transaction so the
-        // token row is visible the instant the user row is. Otherwise a
-        // concurrent /auth/register/begin — which blocks invited accounts by
-        // counting claim tokens — could slip through the gap between the two
-        // commits and let someone attach their own passkey to the account.
+        // Optional org assignment: provisioning the invitee into an org up front
+        // keeps them admin-managed (they don't land on self-onboarding with no
+        // memberships). Only "admin"/"member" match the SpiceDB org relations.
+        let assignedOrgID = body.organizationId
+        let requestedRole = body.role?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let assignedRole = (requestedRole?.isEmpty == false ? requestedRole! : "member")
+        if assignedOrgID != nil {
+            guard assignedRole == "admin" || assignedRole == "member" else {
+                throw Abort(.badRequest, reason: "role must be 'admin' or 'member'")
+            }
+        }
+
+        // Create the user, its claim token, and any org membership in one
+        // transaction so the token row is visible the instant the user row is.
+        // Otherwise a concurrent /auth/register/begin — which blocks invited
+        // accounts by counting claim tokens — could slip through the gap
+        // between commits and let someone attach their own passkey.
         let (user, claim) = try await req.db.transaction { db -> (User, AccountClaimToken) in
             let existingUser = try await User.query(on: db)
                 .group(.or) { group in
@@ -138,6 +150,12 @@ struct UserController: RouteCollection {
                 throw Abort(.conflict, reason: "Username or email already exists")
             }
 
+            if let orgID = assignedOrgID {
+                guard try await Organization.find(orgID, on: db) != nil else {
+                    throw Abort(.badRequest, reason: "Assigned organization not found")
+                }
+            }
+
             let user = User(
                 username: username,
                 email: email,
@@ -145,6 +163,9 @@ struct UserController: RouteCollection {
                 isSystemAdmin: isSystemAdmin,
                 source: .local
             )
+            // Seed the current org so the invitee lands in it on claim rather
+            // than on the self-onboarding path.
+            user.currentOrganizationId = assignedOrgID
             try await user.save(on: db)
 
             let claim = AccountClaimToken(
@@ -155,7 +176,33 @@ struct UserController: RouteCollection {
                 createdByID: createdByID
             )
             try await claim.save(on: db)
+
+            if let orgID = assignedOrgID {
+                let membership = UserOrganization(
+                    userID: try user.requireID(),
+                    organizationID: orgID,
+                    role: assignedRole
+                )
+                try await membership.save(on: db)
+            }
             return (user, claim)
+        }
+
+        // Mirror the membership into SpiceDB. Best-effort with logging (like the
+        // registration/login paths): a transient failure is reconciled by the
+        // periodic backfill and must not strand the one-time claim link.
+        if let orgID = assignedOrgID, let userID = user.id {
+            do {
+                try await req.spicedb.setOrganizationRole(
+                    userID: userID.uuidString,
+                    organizationID: orgID.uuidString,
+                    oldRole: nil,
+                    newRole: assignedRole
+                )
+            } catch {
+                req.logger.warning(
+                    "Failed to write SpiceDB org membership for invited user \(user.username): \(error)")
+            }
         }
 
         return AdminCreateUserResponse(
@@ -603,6 +650,27 @@ struct AdminCreateUserRequest: Content {
     let email: String
     let displayName: String
     let isSystemAdmin: Bool?
+    /// Optional org to provision the invitee into up front. Without it the
+    /// account is created unassigned and the admin manages membership later.
+    let organizationId: UUID?
+    /// Org role for `organizationId` — "admin" or "member" (defaults to member).
+    let role: String?
+
+    init(
+        username: String,
+        email: String,
+        displayName: String,
+        isSystemAdmin: Bool?,
+        organizationId: UUID? = nil,
+        role: String? = nil
+    ) {
+        self.username = username
+        self.email = email
+        self.displayName = displayName
+        self.isSystemAdmin = isSystemAdmin
+        self.organizationId = organizationId
+        self.role = role
+    }
 }
 
 /// Returned once when an admin creates a user. `claimToken` / `claimUrl` are

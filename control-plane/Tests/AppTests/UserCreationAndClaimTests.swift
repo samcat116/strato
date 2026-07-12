@@ -119,6 +119,76 @@ final class UserCreationAndClaimTests: BaseTestCase {
         }
     }
 
+    @Test("admin create can provision the invitee into an organization")
+    func testCreateWithOrgAssignment() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let adminToken = try await makeAdminToken(on: app.db)
+            let orgID = try testOrganization.requireID()
+
+            var createdUserID: UUID?
+            try await app.test(.POST, "/api/users") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(
+                    AdminCreateUserRequest(
+                        username: "neo", email: "neo@example.com", displayName: "Neo",
+                        isSystemAdmin: false, organizationId: orgID, role: "admin"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let body = try res.content.decode(AdminCreateUserResponse.self)
+                #expect(body.user.currentOrganizationId == orgID)
+                createdUserID = body.user.id
+            }
+
+            let membership = try await UserOrganization.query(on: app.db)
+                .filter(\.$user.$id == #require(createdUserID))
+                .filter(\.$organization.$id == orgID)
+                .first()
+            #expect(membership?.role == "admin")
+        }
+    }
+
+    @Test("admin create rejects an unknown assigned organization")
+    func testCreateWithUnknownOrg() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let adminToken = try await makeAdminToken(on: app.db)
+
+            try await app.test(.POST, "/api/users") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(
+                    AdminCreateUserRequest(
+                        username: "neo", email: "neo@example.com", displayName: "Neo",
+                        isSystemAdmin: false, organizationId: UUID(), role: "member"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // The whole create rolls back — no orphaned user.
+            let created = try await User.query(on: app.db).filter(\.$username == "neo").first()
+            #expect(created == nil)
+        }
+    }
+
+    @Test("admin create rejects an invalid org role")
+    func testCreateWithInvalidRole() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let adminToken = try await makeAdminToken(on: app.db)
+            let orgID = try testOrganization.requireID()
+
+            try await app.test(.POST, "/api/users") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(
+                    AdminCreateUserRequest(
+                        username: "neo", email: "neo@example.com", displayName: "Neo",
+                        isSystemAdmin: false, organizationId: orgID, role: "superuser"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
     // MARK: - claim info
 
     @Test("claim info reports a valid invite")

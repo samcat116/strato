@@ -26,6 +26,10 @@ export interface AdminCreateUserRequest {
   email: string;
   displayName: string;
   isSystemAdmin?: boolean;
+  /** Optional org to provision the invitee into up front. */
+  organizationId?: string;
+  /** Org role for `organizationId` — "admin" or "member". */
+  role?: string;
 }
 
 export interface AdminCreateUserResponse {
