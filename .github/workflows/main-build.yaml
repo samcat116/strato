@@ -242,7 +242,15 @@ jobs:
           tags: strato-${{ matrix.image }}:ci
           cache-from: ${{ matrix.image == 'frontend' && 'type=gha,key=frontend-x64' || '' }}
           cache-to: ${{ matrix.image == 'frontend' && 'type=gha,mode=max,key=frontend-x64' || '' }}
-          build-args: ${{ matrix.prebuilt != '' && format('PREBUILT_ARTIFACTS={0}', matrix.prebuilt) || '' }}
+          # Blank lines are ignored, so each arg is gated independently. The
+          # control-plane and frontend bake the build identity (STRATO_VERSION on
+          # /health/*, and the sidebar version label respectively); the agent has
+          # none. Keeping these identical to the publish step keeps the gha cache
+          # warm for the frontend.
+          build-args: |
+            ${{ matrix.prebuilt != '' && format('PREBUILT_ARTIFACTS={0}', matrix.prebuilt) || '' }}
+            ${{ matrix.image != 'agent' && 'STRATO_VERSION=main' || '' }}
+            ${{ matrix.image != 'agent' && format('STRATO_GIT_SHA={0}', github.sha) || '' }}
 
   # Phase 2 — publish barrier. `needs: [build-images]` succeeds only if EVERY
   # build-images leg (all images, both arches) passed, so we never start pushing
@@ -310,6 +318,8 @@ jobs:
           tags: ${{ steps.tags.outputs.cp }}
           build-args: |
             PREBUILT_ARTIFACTS=artifacts/control-plane
+            STRATO_VERSION=main
+            STRATO_GIT_SHA=${{ github.sha }}
 
       - name: Push Agent Image
         uses: docker/build-push-action@v5
@@ -331,3 +341,6 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.tags.outputs.fe }}
           cache-from: type=gha,key=frontend-x64
+          build-args: |
+            STRATO_VERSION=main
+            STRATO_GIT_SHA=${{ github.sha }}

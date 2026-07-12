@@ -310,6 +310,12 @@ services:
     #   context: ../..
     #   dockerfile: control-plane/Dockerfile
     environment:
+      # Report the exact tag the operator pinned on /health/* (see
+      # BuildInfo.swift), overriding the image's baked default so the running
+      # process names what was actually deployed. STRATO_GIT_SHA is deliberately
+      # left unset here: the image bakes in the real commit, which is more precise
+      # than this tag string.
+      STRATO_VERSION: ${STRATO_VERSION:-main}
       DATABASE_HOST: db
       DATABASE_PORT: 5432
       DATABASE_NAME: vapor_database
