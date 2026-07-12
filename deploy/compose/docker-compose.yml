@@ -341,6 +341,11 @@ services:
       # proxy (setup.sh sets this from the origin scheme). Defaults off so a
       # plaintext http:// deploy doesn't set a Secure cookie the browser drops.
       HTTP_TLS_ENABLED: ${HTTP_TLS_ENABLED:-false}
+      # Trusted proxy hops in front of the control plane, used to read the real
+      # client IP for rate limiting. 1 = nginx alone; 2 = an upstream TLS
+      # terminator in front of nginx (the HTTPS topology). setup.sh sets it from
+      # the origin scheme; too low buckets every client behind the outer proxy.
+      RATE_LIMIT_TRUSTED_PROXY_HOPS: ${RATE_LIMIT_TRUSTED_PROXY_HOPS:-1}
       # Base URL agents use to fetch signed image-download links. Must route to
       # the control plane from the agent's network — i.e. the published proxy
       # origin, NOT the in-container :8080 (which only exists on the internal
