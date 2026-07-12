@@ -166,4 +166,60 @@ struct OIDCValidationTests {
         // The `.` must match a literal dot, not any character.
         #expect(!OIDCValidation.issuerMatches(expected: "https://a.example.com", actual: "https://axexample.com"))
     }
+
+    // MARK: - resolveEmailVerification
+
+    @Test("A verified email in the ID token is trusted as-is")
+    func testEmailVerifiedFromIDToken() {
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: "u@example.com", idTokenEmailVerified: true,
+            userInfoEmail: nil, userInfoEmailVerified: nil)
+        #expect(r.email == "u@example.com")
+        #expect(r.verified)
+    }
+
+    @Test("UserInfo email_verified is merged when the ID token omits the flag")
+    func testEmailVerifiedFromUserInfo() {
+        // ID token carries the email but not email_verified; UserInfo asserts it
+        // for the same address — the real case that blocked first logins.
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: "u@example.com", idTokenEmailVerified: nil,
+            userInfoEmail: "u@example.com", userInfoEmailVerified: true)
+        #expect(r.email == "u@example.com")
+        #expect(r.verified)
+    }
+
+    @Test("UserInfo email_verified is ignored for a different address")
+    func testEmailVerifiedUserInfoDifferentAddress() {
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: "u@example.com", idTokenEmailVerified: nil,
+            userInfoEmail: "other@example.com", userInfoEmailVerified: true)
+        #expect(r.email == "u@example.com")
+        #expect(!r.verified)
+    }
+
+    @Test("An explicit false in the ID token is not overridden by UserInfo")
+    func testEmailVerifiedExplicitFalseRespected() {
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: "u@example.com", idTokenEmailVerified: false,
+            userInfoEmail: "u@example.com", userInfoEmailVerified: true)
+        #expect(!r.verified)
+    }
+
+    @Test("Email is adopted from UserInfo when the ID token has none")
+    func testEmailAdoptedFromUserInfo() {
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: nil, idTokenEmailVerified: nil,
+            userInfoEmail: "u@example.com", userInfoEmailVerified: true)
+        #expect(r.email == "u@example.com")
+        #expect(r.verified)
+    }
+
+    @Test("No verification anywhere fails closed")
+    func testEmailVerifiedNoneFailsClosed() {
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: "u@example.com", idTokenEmailVerified: nil,
+            userInfoEmail: nil, userInfoEmailVerified: nil)
+        #expect(!r.verified)
+    }
 }

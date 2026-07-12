@@ -73,6 +73,21 @@ struct OIDCIDTokenClaims: Content, JWTPayload, @unchecked Sendable {
     }
 }
 
+/// The subset of the OIDC UserInfo endpoint response we consult. Fetched only
+/// to recover `email_verified` for IdPs that omit it from the ID token; `sub`
+/// is required so the caller can enforce the OIDC 5.3.2 rule that the UserInfo
+/// subject must match the ID token subject before trusting any of its claims.
+struct OIDCUserInfoResponse: Content {
+    let sub: String
+    let email: String?
+    let emailVerified: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case sub, email
+        case emailVerified = "email_verified"
+    }
+}
+
 struct OIDCUserInfo {
     let subject: String
     let email: String?

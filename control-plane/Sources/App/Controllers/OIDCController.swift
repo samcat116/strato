@@ -167,14 +167,14 @@ struct OIDCController: RouteCollection {
         applyOptionalURL(updateRequest.userinfoEndpoint, to: \.userinfoEndpoint)
         applyOptionalURL(updateRequest.jwksURI, to: \.jwksURI)
 
-        // Any change to the discovery URL invalidates the stored issuer. If the
-        // admin cleared discovery (switching to manual endpoints, possibly a
-        // different issuer), the old discovered issuer must not linger and reject
-        // the new issuer's tokens. If they rotated to a new discovery URL, the
-        // refresh below repopulates the issuer — clearing it first means a failed
-        // refresh falls back to "skip validation" rather than validating against
-        // the previous issuer. A no-op edit (discoveryURL omitted) leaves it as-is.
-        if updateRequest.discoveryURL != nil {
+        // Clear the stored issuer only when discovery is being *removed* (switching
+        // to manual endpoints, possibly a different issuer) — a lingering discovered
+        // issuer would reject the new manual issuer's tokens. When a discovery URL
+        // is kept or rotated, leave the existing issuer in place: the refresh below
+        // overwrites it on success, and on a transient fetch failure the provider
+        // keeps its prior endpoints AND issuer (a consistent old-config state)
+        // rather than silently disabling the iss check.
+        if (provider.discoveryURL ?? "").isEmpty {
             provider.issuer = nil
         }
         if let scopes = updateRequest.scopes { provider.setScopesArray(scopes) }
@@ -749,15 +749,54 @@ struct OIDCController: RouteCollection {
             )
         }
 
+        // Some IdPs return `email` in the ID token but only assert
+        // `email_verified` in the UserInfo response. When the ID token doesn't
+        // already assert a verified email, consult the UserInfo endpoint so a
+        // legitimate first login isn't blocked by a missing flag. Only its claims
+        // for the same subject are trusted (OIDC 5.3.2).
+        var userInfoEmail: String?
+        var userInfoEmailVerified: Bool?
+        if claims.emailVerified != true, let endpoint = provider.userinfoEndpoint, !endpoint.isEmpty {
+            if let info = try? await fetchUserInfo(
+                endpoint: endpoint, accessToken: tokenResponse.accessToken, on: req),
+                info.sub == claims.sub
+            {
+                userInfoEmail = info.email
+                userInfoEmailVerified = info.emailVerified
+            }
+        }
+        let resolvedEmail = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: claims.email,
+            idTokenEmailVerified: claims.emailVerified,
+            userInfoEmail: userInfoEmail,
+            userInfoEmailVerified: userInfoEmailVerified
+        )
+
         return OIDCUserInfo(
             subject: claims.sub,
-            email: claims.email,
-            // Absent claim is treated as unverified (fail closed).
-            emailVerified: claims.emailVerified ?? false,
+            email: resolvedEmail.email,
+            emailVerified: resolvedEmail.verified,
             name: claims.name ?? claims.preferredUsername,
             preferredUsername: claims.preferredUsername,
             groupValues: groupValues
         )
+    }
+
+    /// Fetches the OIDC UserInfo endpoint with the access token. Used only to
+    /// recover `email_verified`; the caller must confirm the returned `sub`
+    /// matches the ID token before trusting the response.
+    private func fetchUserInfo(
+        endpoint: String,
+        accessToken: String,
+        on req: Request
+    ) async throws -> OIDCUserInfoResponse {
+        let response = try await req.client.get(URI(string: endpoint)) { clientReq in
+            clientReq.headers.bearerAuthorization = BearerAuthorization(token: accessToken)
+        }
+        guard response.status == .ok else {
+            throw Abort(.badGateway, reason: "UserInfo request failed")
+        }
+        return try response.content.decode(OIDCUserInfoResponse.self)
     }
 
     private func validateIDToken(

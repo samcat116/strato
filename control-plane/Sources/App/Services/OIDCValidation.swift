@@ -70,6 +70,31 @@ struct OIDCValidation {
         return regex.firstMatch(in: actual, range: range) != nil
     }
 
+    /// Resolves the email address to link on and whether the IdP considers it
+    /// verified, merging the ID token and (optional) UserInfo claims.
+    ///
+    /// Some IdPs return `email` in the ID token but only assert `email_verified`
+    /// in the UserInfo response, so treating the ID token's absent flag as
+    /// "unverified" would wrongly block those users from linking to an existing
+    /// account. The UserInfo flag is consulted only when the ID token omits its
+    /// own (an explicit `false` in the ID token is respected) and only for the
+    /// *same* address that will be linked, so it can't verify a different email.
+    static func resolveEmailVerification(
+        idTokenEmail: String?,
+        idTokenEmailVerified: Bool?,
+        userInfoEmail: String?,
+        userInfoEmailVerified: Bool?
+    ) -> (email: String?, verified: Bool) {
+        let email = idTokenEmail ?? userInfoEmail
+        if idTokenEmailVerified == true {
+            return (email, true)
+        }
+        if idTokenEmailVerified == nil, let verified = userInfoEmailVerified, userInfoEmail == email {
+            return (email, verified)
+        }
+        return (email, false)
+    }
+
     private static func validateOptionalHTTPSURL(_ urlString: String?, label: String) throws {
         if let urlString, !urlString.isEmpty {
             guard isValidHTTPSURL(urlString) else {
