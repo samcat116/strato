@@ -513,6 +513,54 @@ final class OIDCControllerTests: BaseTestCase {
         }
     }
 
+    @Test("Failed SpiceDB write rolls back first-login provisioning")
+    func testFirstLoginRollsBackOnSpiceDBFailure() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+
+            app.spicedbMockWritesFail = true
+
+            let controller = OIDCController()
+            let userInfo = OIDCUserInfo(
+                subject: "subject-rollback",
+                email: "rollback@example.com",
+                name: "Roll Back",
+                preferredUsername: "rollback"
+            )
+
+            await #expect(throws: Error.self) {
+                _ = try await controller.findOrCreateUser(
+                    userInfo: userInfo,
+                    provider: provider,
+                    organization: self.testOrganization,
+                    db: app.db,
+                    spicedb: app.spicedb
+                )
+            }
+
+            // No half-provisioned user may survive: with the rows committed, a
+            // retry would take the findOIDCUser early return and never write
+            // the missing SpiceDB tuple.
+            let orphan = try await User.query(on: app.db)
+                .filter(\.$email == "rollback@example.com")
+                .first()
+            #expect(orphan == nil)
+
+            // With SpiceDB healthy again the same subject provisions cleanly.
+            app.spicedbMockWritesFail = false
+            let user = try await controller.findOrCreateUser(
+                userInfo: userInfo,
+                provider: provider,
+                organization: testOrganization,
+                db: app.db,
+                spicedb: app.spicedb
+            )
+            #expect(user.currentOrganizationId == testOrganization.id)
+        }
+    }
+
     @Test("SSO lookup without organization parameter fails")
     func testSSOLookupMissingParameter() async throws {
         try await withApp { app in

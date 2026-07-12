@@ -1,7 +1,10 @@
 import Foundation
 import Vapor
 
-protocol SpiceDBServiceProtocol {
+// Sendable so callers can use the service inside @Sendable contexts such as
+// Fluent transaction closures; both conforming types are value types holding
+// only Sendable state.
+protocol SpiceDBServiceProtocol: Sendable {
     func readSchema() async throws -> String?
     func writeSchema(_ schema: String) async throws
     func checkPermission(subject: String, permission: String, resource: String, resourceId: String) async throws -> Bool
@@ -602,6 +605,9 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
     /// one resource while the rest of a handler's checks still pass.
     var deniedResources: Set<String> = []
     var recorder: SpiceDBMockRecorder?
+    /// When true, relationship writes throw, so tests can exercise the
+    /// partial-failure paths of flows that pair SQL rows with SpiceDB tuples.
+    var writesFail: Bool = false
 
     func readSchema() async throws -> String? {
         return "mock schema"
@@ -619,6 +625,9 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
     func writeRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String)
         async throws
     {
+        if writesFail {
+            throw Abort(.internalServerError, reason: "Mock SpiceDB write failure")
+        }
         await recorder?.record(
             SpiceDBMockRecorder.RelationshipWrite(
                 entity: entity,
@@ -715,6 +724,18 @@ extension Application {
         set { storage[SpiceDBMockDeniedResourcesKey.self] = newValue }
     }
 
+    /// Storage key for making the testing SpiceDB mock's writes fail.
+    private struct SpiceDBMockWritesFailKey: StorageKey {
+        typealias Value = Bool
+    }
+
+    /// In testing mode, makes the mock SpiceDB throw on relationship writes so
+    /// tests can exercise partial-failure handling. Off by default.
+    var spicedbMockWritesFail: Bool {
+        get { storage[SpiceDBMockWritesFailKey.self] ?? false }
+        set { storage[SpiceDBMockWritesFailKey.self] = newValue }
+    }
+
     /// Storage key for the testing SpiceDB mock's relationship-write recorder.
     private struct SpiceDBMockRecorderKey: StorageKey {
         typealias Value = SpiceDBMockRecorder
@@ -741,7 +762,8 @@ extension Application {
                 return MockSpiceDBService(
                     checkPermissionResult: spicedbMockAllows,
                     deniedResources: spicedbMockDeniedResources,
-                    recorder: spicedbMockRecorder
+                    recorder: spicedbMockRecorder,
+                    writesFail: spicedbMockWritesFail
                 )
             }
 

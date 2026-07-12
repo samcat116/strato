@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import Vapor
 @preconcurrency import JWT
 import Crypto
@@ -283,14 +284,23 @@ struct OIDCController: RouteCollection {
         var organization = try await Organization.query(on: req.db)
             .filter(\.$name == rawName)
             .first()
-        if organization == nil {
-            let lowered = rawName.lowercased()
-            let matches = try await Organization.query(on: req.db).all()
-                .filter { $0.name.lowercased() == lowered }
-            // Ambiguous case-insensitive matches (org names differing only by
-            // case) must not route the user to an arbitrary tenant's IdP —
-            // require exact casing in that situation.
-            organization = matches.count == 1 ? matches.first : nil
+        if organization == nil, let sql = req.db as? SQLDatabase {
+            // Case-insensitive fallback done in SQL (LOWER works on both
+            // Postgres and SQLite) with LIMIT 2 — enough to detect ambiguity
+            // without scanning the org table on a public, unauthenticated
+            // endpoint. Ambiguous matches (org names differing only by case)
+            // must not route the user to an arbitrary tenant's IdP — exact
+            // casing is required in that situation.
+            let rows = try await sql.select()
+                .column("id")
+                .from(Organization.schema)
+                .where(SQLFunction("LOWER", args: SQLColumn("name")), .equal, SQLBind(rawName.lowercased()))
+                .limit(2)
+                .all()
+            if rows.count == 1 {
+                let id = try rows[0].decode(column: "id", as: UUID.self)
+                organization = try await Organization.find(id, on: req.db)
+            }
         }
 
         guard let organization, let organizationID = organization.id else {
@@ -773,49 +783,55 @@ struct OIDCController: RouteCollection {
             }
         }
 
-        // Create new user
+        // Create new user. The SQL rows and the SpiceDB tuple must land
+        // together: doing the SpiceDB write inside the transaction means a
+        // failed write rolls the rows back, so the next login for this
+        // subject re-runs provisioning cleanly instead of early-returning a
+        // user that authenticates but fails every permission check.
         let username = userInfo.preferredUsername ?? userInfo.email ?? "oidc_\(userInfo.subject.prefix(8))"
         let displayName = userInfo.name ?? username
         let email = userInfo.email ?? ""
 
-        let user = User(
-            username: username,
-            email: email,
-            displayName: displayName,
-            isSystemAdmin: false,
-            oidcProviderID: providerID,
-            oidcSubject: userInfo.subject
-        )
-        // Authorization on product routes needs a current org (middleware
-        // rejects requests without one), so seed it at provisioning time.
-        user.currentOrganizationId = organization.id
+        return try await db.transaction { transaction in
+            let user = User(
+                username: username,
+                email: email,
+                displayName: displayName,
+                isSystemAdmin: false,
+                oidcProviderID: providerID,
+                oidcSubject: userInfo.subject
+            )
+            // Authorization on product routes needs a current org (middleware
+            // rejects requests without one), so seed it at provisioning time.
+            user.currentOrganizationId = organization.id
 
-        try await user.save(on: db)
+            try await user.save(on: transaction)
 
-        // Add user to organization as a member
-        guard let userID = user.id,
-            let organizationID = organization.id
-        else {
-            throw Abort(.internalServerError, reason: "User and organization IDs are required")
+            // Add user to organization as a member
+            guard let userID = user.id,
+                let organizationID = organization.id
+            else {
+                throw Abort(.internalServerError, reason: "User and organization IDs are required")
+            }
+            let membership = UserOrganization(
+                userID: userID,
+                organizationID: organizationID,
+                role: "member"
+            )
+            try await membership.save(on: transaction)
+
+            // Mirror the membership into SpiceDB, like OrganizationController's
+            // addMember does — without this tuple the new user authenticates
+            // but fails every permission check.
+            try await spicedb.setOrganizationRole(
+                userID: userID.uuidString,
+                organizationID: organizationID.uuidString,
+                oldRole: nil,
+                newRole: "member"
+            )
+
+            return user
         }
-        let membership = UserOrganization(
-            userID: userID,
-            organizationID: organizationID,
-            role: "member"
-        )
-        try await membership.save(on: db)
-
-        // Mirror the membership into SpiceDB, like OrganizationController's
-        // addMember does — without this tuple the new user authenticates but
-        // fails every permission check.
-        try await spicedb.setOrganizationRole(
-            userID: userID.uuidString,
-            organizationID: organizationID.uuidString,
-            oldRole: nil,
-            newRole: "member"
-        )
-
-        return user
     }
 
 }
