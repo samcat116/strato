@@ -238,6 +238,9 @@ struct OIDCController: RouteCollection {
         if let discoveryURL = provider.discoveryURL, !discoveryURL.isEmpty {
             do {
                 let discovery = try await fetchDiscoveryDocument(url: discoveryURL, on: req)
+                // Discovered values get the same HTTPS validation as manual
+                // ones before anything is stored or reported valid.
+                try OIDCValidation.validateDiscoveredEndpoints(discovery)
                 // Persist the discovered endpoints: the login flow builds its
                 // redirect from the STORED fields, so a passing test must
                 // leave them usable. This also heals providers whose create-
@@ -563,6 +566,10 @@ struct OIDCController: RouteCollection {
     {
         do {
             let discovery = try await fetchDiscoveryDocument(url: discoveryURL, on: req)
+
+            // Same HTTPS validation as manual fields — checked before any
+            // assignment so a bad document leaves the provider untouched.
+            try OIDCValidation.validateDiscoveredEndpoints(discovery)
 
             // Update provider with discovered endpoints
             provider.authorizationEndpoint = discovery.authorizationEndpoint

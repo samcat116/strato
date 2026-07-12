@@ -28,6 +28,18 @@ struct OIDCValidation {
         try validateOptionalHTTPSURL(provider.jwksURI, label: "JWKS URI")
     }
 
+    /// Validates the endpoint URLs in a fetched discovery document before they
+    /// are copied onto a provider. An allow-listed discovery host can still
+    /// serve an http:// or malformed token_endpoint — which would later
+    /// receive the client secret — so discovered values get the same HTTPS
+    /// validation as manually entered ones.
+    static func validateDiscoveredEndpoints(_ discovery: OIDCDiscoveryDocument) throws {
+        try validateOptionalHTTPSURL(discovery.authorizationEndpoint, label: "Discovered authorization endpoint")
+        try validateOptionalHTTPSURL(discovery.tokenEndpoint, label: "Discovered token endpoint")
+        try validateOptionalHTTPSURL(discovery.userinfoEndpoint, label: "Discovered userinfo endpoint")
+        try validateOptionalHTTPSURL(discovery.jwksURI, label: "Discovered JWKS URI")
+    }
+
     private static func validateOptionalHTTPSURL(_ urlString: String?, label: String) throws {
         if let urlString, !urlString.isEmpty {
             guard isValidHTTPSURL(urlString) else {
