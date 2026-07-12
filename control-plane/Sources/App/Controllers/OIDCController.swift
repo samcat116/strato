@@ -71,6 +71,7 @@ struct OIDCController: RouteCollection {
         try await validateClaimMappingConfig(
             defaultRole: createRequest.defaultRole,
             groupMappings: createRequest.groupMappings,
+            adminClaimValues: createRequest.adminClaimValues,
             organizationID: organizationID,
             on: req.db
         )
@@ -167,6 +168,7 @@ struct OIDCController: RouteCollection {
         try await validateClaimMappingConfig(
             defaultRole: updateRequest.defaultRole,
             groupMappings: updateRequest.groupMappings,
+            adminClaimValues: updateRequest.adminClaimValues,
             organizationID: organizationID,
             on: req.db
         )
@@ -833,17 +835,30 @@ struct OIDCController: RouteCollection {
     }
 
     /// Validate the claim-mapping fields of a create/update request: the
-    /// default role must be a known org role and every group mapping must
-    /// reference a group in the provider's organization.
+    /// default role must be a known org role, admin claim values must not be
+    /// blank, and every group mapping must reference a group in the
+    /// provider's organization.
     private func validateClaimMappingConfig(
         defaultRole: String?,
         groupMappings: [OIDCGroupMapping]?,
+        adminClaimValues: [String]?,
         organizationID: UUID,
         on db: Database
     ) async throws {
         if let defaultRole = defaultRole {
             guard ["member", "admin"].contains(defaultRole) else {
                 throw Abort(.badRequest, reason: "Default role must be 'member' or 'admin'")
+            }
+        }
+
+        // A blank value would flip role reconciliation into authoritative
+        // mode ("adminClaimValues is non-empty") while matching no real
+        // token, silently demoting every admin on their next login.
+        if let adminClaimValues = adminClaimValues {
+            for value in adminClaimValues {
+                guard !value.trimmingCharacters(in: .whitespaces).isEmpty else {
+                    throw Abort(.badRequest, reason: "Admin claim values must not be empty")
+                }
             }
         }
 

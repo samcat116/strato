@@ -191,6 +191,24 @@ struct OIDCIdentityService {
         let mappings = provider.groupMappingsArray
         guard !mappings.isEmpty, let userID = user.id else { return }
 
+        // A user removed from the org keeps their OIDC link, so resolveUser
+        // still returns them. Granting org group memberships (which carry
+        // project permissions through SpiceDB) to a non-member would undo
+        // the removal — claims only ever map onto current org members.
+        let membership = try await UserOrganization.query(on: db)
+            .filter(\.$user.$id == userID)
+            .filter(\.$organization.$id == organizationID)
+            .first()
+        guard membership != nil else {
+            logger.warning(
+                "OIDC login for a user without org membership; skipping group claim sync",
+                metadata: [
+                    "user_id": .string(userID.uuidString),
+                    "organization_id": .string(organizationID.uuidString),
+                ])
+            return
+        }
+
         let claimValues = Set(groupValues)
 
         // Several claim values may map to the same group; membership is

@@ -323,6 +323,36 @@ final class OIDCIdentityMappingTests {
         }
     }
 
+    @Test("A user removed from the org gains no group memberships from claims")
+    func groupSyncSkipsNonMembers() async throws {
+        // Removal from the org deletes the UserOrganization row but keeps the
+        // OIDC link, so the user still resolves on a later login. Their
+        // claims must not re-grant org group memberships (which carry
+        // project permissions through SpiceDB).
+        var mappedID: UUID!
+        try await withIdentityTestApp(groupMappings: { builder, org in
+            let mapped = try await builder.createGroup(
+                name: "Mapped", description: "idp-managed", organization: org)
+            mappedID = mapped.id!
+            return [OIDCGroupMapping(claimValue: "idp-mapped", groupID: mapped.id!)]
+        }) { app, org, provider, service, recorder in
+            // OIDC-linked user with no UserOrganization row for this org.
+            let removed = User(
+                username: "removed", email: "removed@example.com", displayName: "Removed",
+                isSystemAdmin: false, oidcProviderID: provider.id!, oidcSubject: "sub-removed")
+            try await removed.save(on: app.db)
+
+            try await service.syncGroupMemberships(
+                user: removed, provider: provider, organizationID: org.id!, groupValues: ["idp-mapped"])
+
+            let mapped = try await Group.find(mappedID, on: app.db)
+            let isMember = try await mapped!.hasMember(removed.id!, on: app.db)
+            #expect(!isMember)
+            let writes = await recorder.writes
+            #expect(writes.isEmpty)
+        }
+    }
+
     @Test("Mapping to a deleted group is skipped without failing the login")
     func groupSyncSkipsMissingGroup() async throws {
         try await withIdentityTestApp(groupMappings: { _, _ in
