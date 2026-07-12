@@ -20,7 +20,10 @@ import Vapor
 /// ``encryptStoredSecrets(on:logger:)`` re-encrypts them at startup
 /// once a key is configured — so enabling encryption on an existing deployment
 /// requires only setting the variable.
-struct SecretsEncryptionService: Sendable {
+/// `@unchecked` only because Linux swift-crypto doesn't annotate
+/// `SymmetricKey` as `Sendable` (macOS CryptoKit does); the struct is
+/// immutable, so sharing it across concurrency domains is safe.
+struct SecretsEncryptionService: @unchecked Sendable {
     /// Marks a stored value as encrypted; the `v1` component versions the
     /// scheme (AES-256-GCM, combined nonce/ciphertext/tag) for future rotation.
     static let encryptedPrefix = "enc:v1:"
