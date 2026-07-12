@@ -35,9 +35,11 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         ]
         // `/ssf/events` is the RFC 8935 push-delivery endpoint: transmitters
         // authenticate with a per-stream bearer token checked in-handler.
+        // `/api/public/` serves the login page (SSO provider discovery), so it
+        // must be reachable without a session.
         let publicPrefixes = [
             "/health", "/auth", "/api/users/register", "/onboarding", "/js/", "/styles/", "/agent/ws",
-            "/ssf/events/",
+            "/ssf/events/", "/api/public/",
         ]
         // Signed image-download URLs: agents fetch base images with an HMAC
         // signature, not a session; the controller verifies the signature.

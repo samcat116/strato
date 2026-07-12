@@ -13,6 +13,7 @@ export { imagesApi } from "./images";
 export { projectsApi } from "./projects";
 export { apiKeysApi } from "./api-keys";
 export { scimTokensApi } from "./scim-tokens";
+export { oidcProvidersApi } from "./oidc-providers";
 export { groupsApi } from "./groups";
 export { organizationalUnitsApi } from "./organizational-units";
 export { quotasApi } from "./quotas";

@@ -16,6 +16,7 @@ import { MembersTable, AddMemberDialog } from "@/components/organization-members
 import { GroupsSection } from "@/components/organization-groups";
 import { OrganizationalUnitsSection } from "@/components/organizational-units";
 import { SCIMTokensSection } from "@/components/scim-tokens";
+import { OIDCProvidersSection } from "@/components/oidc-providers";
 import { useAuth, useOrganization } from "@/providers";
 import { toast } from "sonner";
 
@@ -276,19 +277,7 @@ export default function OrganizationSettingsPage() {
 
         {/* Authentication Tab */}
         <TabsContent value="auth" className="space-y-6">
-          <Card className="bg-card border-border">
-            <CardHeader>
-              <CardTitle className="text-lg font-semibold text-foreground">
-                OIDC Configuration
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-muted-foreground">
-                OIDC provider configuration coming soon. Configure SSO providers
-                for your organization.
-              </p>
-            </CardContent>
-          </Card>
+          <OIDCProvidersSection orgId={id} canManage={canManageMembers} />
 
           <SCIMTokensSection orgId={id} canManage={canManageMembers} />
         </TabsContent>

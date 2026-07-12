@@ -114,9 +114,11 @@ extension OIDCProvider {
         return string
     }
 
-    /// Check if the provider has the required endpoints configured
+    /// Check if the provider has the required endpoints configured.
+    /// JWKS is required too: the callback path can't validate ID tokens
+    /// without it, so a provider missing it can never complete a login.
     func hasRequiredEndpoints() -> Bool {
-        return authorizationEndpoint != nil && tokenEndpoint != nil
+        return authorizationEndpoint != nil && tokenEndpoint != nil && jwksURI != nil
     }
 
     /// Get the authorization URL for this provider
@@ -221,4 +223,18 @@ struct OIDCProviderPublicResponse: Content {
         self.name = provider.name
         self.enabled = provider.enabled
     }
+}
+
+/// Anonymous login-page lookup: resolves an organization name to its enabled
+/// SSO providers. `organizationID` is nil when the organization doesn't exist
+/// OR has no enabled providers, so the response doesn't reveal which org names
+/// exist.
+struct SSOLookupResponse: Content {
+    let organizationID: UUID?
+    let providers: [OIDCProviderPublicResponse]
+}
+
+struct OIDCProviderTestResponse: Content {
+    let valid: Bool
+    let message: String
 }

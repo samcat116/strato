@@ -43,6 +43,14 @@ export {
   scimTokenErrorMessage,
 } from "./use-scim-tokens";
 export {
+  useOIDCProviders,
+  useCreateOIDCProvider,
+  useUpdateOIDCProvider,
+  useDeleteOIDCProvider,
+  useTestOIDCProvider,
+  oidcProviderErrorMessage,
+} from "./use-oidc-providers";
+export {
   useOrganizationMembers,
   useAddMember,
   useRemoveMember,
