@@ -294,6 +294,25 @@ struct OIDCValidationTests {
         #expect(r.verified)
     }
 
+    @Test("ID-token email_verified does not vouch for a UserInfo-only email")
+    func testIDTokenFlagDoesNotVerifyUserInfoOnlyEmail() {
+        // An ID token asserting email_verified without an email claim refers
+        // to no address; applying it to an email adopted from UserInfo would
+        // mark an unverified address as verified and let it link to an
+        // existing account.
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: nil, idTokenEmailVerified: true,
+            userInfoEmail: "u@example.com", userInfoEmailVerified: nil)
+        #expect(r.email == "u@example.com")
+        #expect(!r.verified)
+
+        // UserInfo's own flag for its own address is still honored.
+        let verified = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: nil, idTokenEmailVerified: true,
+            userInfoEmail: "u@example.com", userInfoEmailVerified: true)
+        #expect(verified.verified)
+    }
+
     @Test("No verification anywhere fails closed")
     func testEmailVerifiedNoneFailsClosed() {
         let r = OIDCValidation.resolveEmailVerification(

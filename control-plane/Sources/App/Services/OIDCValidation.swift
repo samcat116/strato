@@ -157,9 +157,12 @@ struct OIDCValidation {
     /// Some IdPs return `email` in the ID token but only assert `email_verified`
     /// in the UserInfo response, so treating the ID token's absent flag as
     /// "unverified" would wrongly block those users from linking to an existing
-    /// account. The UserInfo flag is consulted only when the ID token omits its
-    /// own (an explicit `false` in the ID token is respected) and only for the
-    /// *same* address that will be linked, so it can't verify a different email.
+    /// account. Each source's flag vouches only for its own email: the ID
+    /// token's `email_verified` applies to the ID token's email, and an address
+    /// adopted from UserInfo needs UserInfo's own verification — otherwise an
+    /// IdP asserting `email_verified: true` without an email claim would mark
+    /// an unverified UserInfo-only address as verified and let it link to an
+    /// existing account. An explicit `false` in the ID token always wins.
     static func resolveEmailVerification(
         idTokenEmail: String?,
         idTokenEmailVerified: Bool?,
@@ -167,10 +170,10 @@ struct OIDCValidation {
         userInfoEmailVerified: Bool?
     ) -> (email: String?, verified: Bool) {
         let email = idTokenEmail ?? userInfoEmail
-        if idTokenEmailVerified == true {
+        if idTokenEmailVerified == true, idTokenEmail != nil {
             return (email, true)
         }
-        if idTokenEmailVerified == nil, let verified = userInfoEmailVerified, userInfoEmail == email {
+        if idTokenEmailVerified != false, let verified = userInfoEmailVerified, userInfoEmail == email {
             return (email, verified)
         }
         return (email, false)
