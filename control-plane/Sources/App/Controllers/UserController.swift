@@ -7,6 +7,7 @@ struct UserController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let users = routes.grouped("api", "users")
         users.post("register", use: register)
+        users.post(use: create)
         users.get(use: index)
         users.group(":userID") { user in
             user.get(use: show)
@@ -22,6 +23,12 @@ struct UserController: RouteCollection {
         auth.post("login", "finish", use: finishAuthentication)
         auth.post("logout", use: logout)
         auth.get("session", use: getSession)
+
+        // Passkey-claim flow for admin-created (invited) accounts. Public: gated
+        // by a one-time claim token rather than a session.
+        auth.get("claim", ":token", use: claimInfo)
+        auth.post("claim", "begin", use: claimBegin)
+        auth.post("claim", "finish", use: claimFinish)
     }
 
     // MARK: - User CRUD
@@ -90,6 +97,67 @@ struct UserController: RouteCollection {
         return user.asPublic()
     }
 
+    /// Admin-only: create a `.local` user with no credential and mint a one-time
+    /// passkey-claim token. Passkeys are device-bound, so the invitee finishes
+    /// enrollment themselves via the returned claim link (`/auth/claim/*`).
+    func create(req: Request) async throws -> AdminCreateUserResponse {
+        guard let currentUser = req.auth.get(User.self) else {
+            throw Abort(.unauthorized)
+        }
+        guard currentUser.isSystemAdmin else {
+            throw Abort(.forbidden, reason: "System admin access required")
+        }
+
+        let body = try req.content.decode(AdminCreateUserRequest.self)
+        let username = body.username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let email = body.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = body.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !username.isEmpty, !email.isEmpty, !displayName.isEmpty else {
+            throw Abort(.badRequest, reason: "username, email and displayName are required")
+        }
+
+        let existingUser = try await User.query(on: req.db)
+            .group(.or) { group in
+                group.filter(\.$username == username)
+                group.filter(\.$email == email)
+            }
+            .first()
+        if existingUser != nil {
+            throw Abort(.conflict, reason: "Username or email already exists")
+        }
+
+        let user = User(
+            username: username,
+            email: email,
+            displayName: displayName,
+            isSystemAdmin: body.isSystemAdmin ?? false,
+            source: .local
+        )
+        try await user.save(on: req.db)
+
+        guard let userID = user.id else {
+            throw Abort(.internalServerError, reason: "Failed to create user")
+        }
+
+        let rawToken = AccountClaimToken.generateToken()
+        let claim = AccountClaimToken(
+            userID: userID,
+            tokenHash: AccountClaimToken.hashToken(rawToken),
+            tokenPrefix: AccountClaimToken.extractPrefix(rawToken),
+            expiresAt: Date().addingTimeInterval(Self.claimTokenTTL),
+            createdByID: currentUser.id
+        )
+        try await claim.save(on: req.db)
+
+        return AdminCreateUserResponse(
+            user: user.asPublic(),
+            claimToken: rawToken,
+            claimUrl: Self.claimURL(for: rawToken),
+            claimExpiresAt: claim.expiresAt
+        )
+    }
+
     func update(req: Request) async throws -> User.Public {
         guard let currentUser = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
@@ -150,6 +218,19 @@ struct UserController: RouteCollection {
                 .first()
         else {
             throw Abort(.notFound, reason: "User not found")
+        }
+
+        // Admin-created accounts must enroll their passkey through the claim
+        // invite flow (/auth/claim/*), which is gated by a one-time token.
+        // Refuse to attach a credential to such an account through the open
+        // self-registration endpoint — otherwise anyone knowing the username
+        // could hijack a not-yet-activated invited account.
+        let hasClaimToken =
+            try await AccountClaimToken.query(on: req.db)
+            .filter(\.$user.$id == user.requireID())
+            .count() > 0
+        if hasClaimToken {
+            throw Abort(.forbidden, reason: "This account must be activated using its invitation link")
         }
 
         // Get existing credentials to exclude
@@ -223,6 +304,124 @@ struct UserController: RouteCollection {
             } catch {
                 req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
                 // Don't fail the registration if SpiceDB relationship creation fails
+            }
+        }
+
+        return RegistrationFinishResponse(
+            credentialID: credential.credentialID.base64EncodedString(),
+            success: true,
+            user: user.asPublic()
+        )
+    }
+
+    // MARK: - Passkey Claim (admin-created accounts)
+
+    /// Public: describe a claim token so the claim page can greet the invitee.
+    /// Returns 404 for an unknown token; a known-but-unusable token is reported
+    /// via the `valid`/`expired`/`alreadyClaimed` flags rather than an error.
+    func claimInfo(req: Request) async throws -> ClaimInfoResponse {
+        guard let token = req.parameters.get("token") else {
+            throw Abort(.badRequest, reason: "Missing token")
+        }
+        guard let claim = try await AccountClaimToken.findByToken(token, on: req.db) else {
+            throw Abort(.notFound, reason: "Invalid claim token")
+        }
+
+        return ClaimInfoResponse(
+            username: claim.user.username,
+            displayName: claim.user.displayName,
+            valid: claim.isValid,
+            alreadyClaimed: claim.claimedAt != nil,
+            expired: claim.isExpired
+        )
+    }
+
+    /// Public: begin the passkey ceremony for an invited account, authorized by
+    /// the claim token instead of a session.
+    func claimBegin(req: Request) async throws -> RegistrationBeginResponse {
+        let beginRequest = try req.content.decode(ClaimBeginRequest.self)
+
+        guard let claim = try await AccountClaimToken.findByToken(beginRequest.token, on: req.db) else {
+            throw Abort(.notFound, reason: "Invalid claim token")
+        }
+        guard claim.isValid else {
+            throw Abort(.gone, reason: "This invitation link has expired or was already used")
+        }
+
+        let user = claim.user
+        try rejectDisabledAccount(user)
+
+        try await user.$credentials.load(on: req.db)
+        let excludeCredentials = user.credentials.map { credential in
+            PublicKeyCredentialDescriptor(
+                type: .publicKey,
+                id: Array(credential.credentialID),
+                transports: credential.transports.compactMap { transport in
+                    PublicKeyCredentialDescriptor.AuthenticatorTransport(rawValue: transport)
+                }
+            )
+        }
+
+        let options = try await req.webAuthn.beginRegistration(
+            for: user,
+            excludeCredentials: excludeCredentials
+        )
+
+        try await req.webAuthn.storeChallenge(
+            options.challenge.base64URLEncodedString().asString(),
+            for: user.id,
+            operation: "registration",
+            on: req.db
+        )
+
+        return RegistrationBeginResponse(options: options)
+    }
+
+    /// Public: finish the passkey ceremony for an invited account, consume the
+    /// claim token, and log the user in.
+    func claimFinish(req: Request) async throws -> RegistrationFinishResponse {
+        let finishRequest = try req.content.decode(ClaimFinishRequest.self)
+
+        guard let claim = try await AccountClaimToken.findByToken(finishRequest.token, on: req.db) else {
+            throw Abort(.notFound, reason: "Invalid claim token")
+        }
+        guard claim.isValid else {
+            throw Abort(.gone, reason: "This invitation link has expired or was already used")
+        }
+
+        // Block accounts disabled by an SSF signal before the challenge is
+        // consumed and a credential persisted.
+        try rejectDisabledAccount(claim.user)
+
+        let credential = try await req.webAuthn.finishRegistration(
+            challenge: finishRequest.challenge,
+            credentialCreationData: finishRequest.response,
+            on: req.db
+        )
+
+        // The challenge derives the user independently of the token; make sure
+        // they agree so a token can't be paired with another user's ceremony.
+        guard credential.$user.id == claim.$user.id else {
+            throw Abort(.badRequest, reason: "Claim token does not match this registration")
+        }
+
+        try await credential.$user.load(on: req.db)
+        let user = credential.user
+        try rejectDisabledAccount(user)
+
+        // Consume the one-time token.
+        claim.claimedAt = Date()
+        try await claim.save(on: req.db)
+
+        req.auth.login(user)
+        req.stampSessionEpoch(for: user)
+        await req.recordAuthEvent(.register, user: user)
+
+        if !user.isSystemAdmin {
+            do {
+                try await ensureUserInDefaultOrganization(user: user, req: req)
+            } catch {
+                req.logger.warning("Failed to create organization membership for user \(user.username): \(error)")
             }
         }
 
@@ -331,6 +530,54 @@ struct UpdateUserRequest: Content {
     let email: String?
 }
 
+struct AdminCreateUserRequest: Content {
+    let username: String
+    let email: String
+    let displayName: String
+    let isSystemAdmin: Bool?
+}
+
+/// Returned once when an admin creates a user. `claimToken` / `claimUrl` are
+/// shown a single time so the admin can hand the invite to the new user.
+struct AdminCreateUserResponse: Content {
+    let user: User.Public
+    let claimToken: String
+    let claimUrl: String
+    let claimExpiresAt: Date?
+}
+
+struct ClaimInfoResponse: Content {
+    let username: String
+    let displayName: String
+    let valid: Bool
+    let alreadyClaimed: Bool
+    let expired: Bool
+}
+
+struct ClaimBeginRequest: Content {
+    let token: String
+}
+
+struct ClaimFinishRequest: Content {
+    let token: String
+    let challenge: String
+    let response: RegistrationCredential
+
+    func encode(to encoder: Encoder) throws {
+        // Decode-only, mirroring RegistrationFinishRequest: RegistrationCredential
+        // is Decodable but not Encodable.
+        throw EncodingError.invalidValue(
+            response,
+            EncodingError.Context(
+                codingPath: encoder.codingPath,
+                debugDescription: "ClaimFinishRequest should only be decoded, not encoded"))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case token, challenge, response
+    }
+}
+
 struct RegistrationBeginRequest: Content {
     let username: String
 }
@@ -429,6 +676,19 @@ struct SessionResponse: Content {
 // MARK: - Helper Functions
 
 extension UserController {
+    /// How long a passkey-claim invite stays valid (7 days).
+    static let claimTokenTTL: TimeInterval = 7 * 24 * 60 * 60
+
+    /// Build the user-facing claim URL from the canonical browser origin. This
+    /// mirrors the WebAuthn relying-party origin (which must match the browser
+    /// URL), so the `/claim` page and the passkey ceremony share an origin. The
+    /// frontend may still rebuild the link from `window.location.origin`.
+    static func claimURL(for token: String) -> String {
+        let base = (Environment.get("WEBAUTHN_RELYING_PARTY_ORIGIN") ?? "http://localhost:8080")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return "\(base)/claim?token=\(token)"
+    }
+
     private func ensureUserInDefaultOrganization(user: User, req: Request) async throws {
         // Find or create default organization
         let defaultOrg = try await findOrCreateDefaultOrganization(req: req)
@@ -494,6 +754,7 @@ extension User {
         let createdAt: Date?
         let currentOrganizationId: UUID?
         let isSystemAdmin: Bool
+        let source: UserSource
     }
 
     func asPublic() -> Public {
@@ -504,7 +765,8 @@ extension User {
             displayName: self.displayName,
             createdAt: self.createdAt,
             currentOrganizationId: self.currentOrganizationId,
-            isSystemAdmin: self.isSystemAdmin
+            isSystemAdmin: self.isSystemAdmin,
+            source: self.source
         )
     }
 }

@@ -337,6 +337,10 @@ public func configure(_ app: Application) async throws {
     // configurable default role on the provider.
     app.migrations.add(AddClaimMappingToOIDCProvider())
 
+    // Admin-created users: explicit account provenance + passkey-claim invites.
+    app.migrations.add(AddSourceToUser())
+    app.migrations.add(CreateAccountClaimToken())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen

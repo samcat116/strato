@@ -24,7 +24,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EditUserDialog } from "./edit-user-dialog";
 import { useDeleteUser, userErrorMessage } from "@/lib/hooks/use-users";
 import { toast } from "sonner";
-import type { User } from "@/types/api";
+import type { User, UserSource } from "@/types/api";
+
+// How the account was provisioned. `local` accounts are created in Strato
+// (admin-added or self-registered); `scim`/`oidc` are owned by an external IdP.
+const SOURCE_BADGE: Record<UserSource, { label: string; className: string }> = {
+  local: { label: "Local", className: "bg-muted text-foreground/80" },
+  scim: { label: "SCIM", className: "bg-blue-500/10 text-blue-700" },
+  oidc: { label: "SSO", className: "bg-teal-500/10 text-teal-700" },
+};
+
+function SourceBadge({ source }: { source: UserSource }) {
+  const { label, className } = SOURCE_BADGE[source] ?? SOURCE_BADGE.local;
+  return <Badge className={`${className} border-transparent`}>{label}</Badge>;
+}
 
 interface UserTableProps {
   users: User[];
@@ -78,6 +91,7 @@ export function UserTable({ users, isLoading, currentUserId }: UserTableProps) {
             </TableHead>
             <TableHead className="text-muted-foreground font-medium">Email</TableHead>
             <TableHead className="text-muted-foreground font-medium">Role</TableHead>
+            <TableHead className="text-muted-foreground font-medium">Source</TableHead>
             <TableHead className="text-muted-foreground font-medium">Created</TableHead>
             <TableHead className="text-muted-foreground font-medium text-right">
               Actions
@@ -117,6 +131,9 @@ export function UserTable({ users, isLoading, currentUserId }: UserTableProps) {
                     User
                   </Badge>
                 )}
+              </TableCell>
+              <TableCell>
+                <SourceBadge source={user.source} />
               </TableCell>
               <TableCell className="text-muted-foreground text-sm">
                 {user.createdAt

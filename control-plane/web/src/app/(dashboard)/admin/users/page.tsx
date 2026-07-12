@@ -1,9 +1,12 @@
 "use client";
 
-import { ShieldAlert } from "lucide-react";
+import { useState } from "react";
+import { ShieldAlert, UserPlus } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserTable } from "@/components/users/user-table";
+import { CreateUserDialog } from "@/components/users/create-user-dialog";
 import { useUsers } from "@/lib/hooks/use-users";
 import { useAuth } from "@/providers";
 
@@ -11,6 +14,7 @@ export default function AdminUsersPage() {
   const { user, isLoading: isAuthLoading } = useAuth();
   const isSystemAdmin = !!user?.isSystemAdmin;
   const { data: users = [], isLoading } = useUsers(isSystemAdmin);
+  const [createOpen, setCreateOpen] = useState(false);
 
   if (isAuthLoading) {
     return (
@@ -37,12 +41,23 @@ export default function AdminUsersPage() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
-      <div>
-        <h2 className="text-2xl font-semibold text-foreground">Users</h2>
-        <p className="text-muted-foreground">
-          Manage all user accounts on this Strato installation
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-foreground">Users</h2>
+          <p className="text-muted-foreground">
+            Manage all user accounts on this Strato installation
+          </p>
+        </div>
+        <Button
+          className="bg-primary hover:bg-primary/90 shrink-0"
+          onClick={() => setCreateOpen(true)}
+        >
+          <UserPlus className="h-4 w-4 mr-2" />
+          Create User
+        </Button>
       </div>
+
+      <CreateUserDialog open={createOpen} onOpenChange={setCreateOpen} />
 
       <Card className="bg-card border-border">
         <CardHeader>

@@ -23,6 +23,11 @@ final class User: Model, @unchecked Sendable {
     @Field(key: "is_system_admin")
     var isSystemAdmin: Bool
 
+    // Account provenance: how this user came into existence (see UserSource).
+    // Stored as the raw enum value; use `source` for typed access.
+    @Field(key: "source")
+    var sourceRaw: String
+
     // OIDC linking fields
     @OptionalParent(key: "oidc_provider_id")
     var oidcProvider: OIDCProvider?
@@ -72,6 +77,7 @@ final class User: Model, @unchecked Sendable {
         email: String,
         displayName: String,
         isSystemAdmin: Bool = false,
+        source: UserSource = .local,
         oidcProviderID: UUID? = nil,
         oidcSubject: String? = nil,
         scimProvisioned: Bool = false,
@@ -82,6 +88,7 @@ final class User: Model, @unchecked Sendable {
         self.email = email
         self.displayName = displayName
         self.isSystemAdmin = isSystemAdmin
+        self.sourceRaw = source.rawValue
         if let oidcProviderID = oidcProviderID {
             self.$oidcProvider.id = oidcProviderID
         }
@@ -148,6 +155,13 @@ extension User {
             .first()
 
         return membership != nil
+    }
+
+    /// Account provenance (see UserSource). Unknown/legacy values fall back to
+    /// `.local` so callers never have to handle a nil case.
+    var source: UserSource {
+        get { UserSource(rawValue: sourceRaw) ?? .local }
+        set { sourceRaw = newValue.rawValue }
     }
 
     /// Check if user is authenticated via OIDC
