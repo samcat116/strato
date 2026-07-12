@@ -269,6 +269,12 @@ jobs:
       # gha cache is kept ONLY for the frontend, which compiles from source (bun)
       # and genuinely benefits; the prebuilt Swift images just copy a binary, so
       # their layers are cheap to rebuild and a cache would only add churn.
+      #
+      # build-args are composed per image (each line is empty when N/A and
+      # ignored): the Swift images (control-plane, agent) get PREBUILT_ARTIFACTS;
+      # control-plane and frontend bake the release tag as build identity
+      # (STRATO_VERSION/STRATO_GIT_SHA — surfaced on /health/* and in the UI),
+      # which the agent image does not consume.
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v5
@@ -281,7 +287,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: ${{ matrix.image == 'frontend' && format('type=gha,key=frontend-{0}', matrix.arch) || '' }}
           cache-to: ${{ matrix.image == 'frontend' && format('type=gha,mode=max,key=frontend-{0}', matrix.arch) || '' }}
-          build-args: ${{ matrix.prebuilt != '' && format('PREBUILT_ARTIFACTS={0}', matrix.prebuilt) || '' }}
+          build-args: |
+            ${{ matrix.prebuilt != '' && format('PREBUILT_ARTIFACTS={0}', matrix.prebuilt) || '' }}
+            ${{ matrix.image != 'agent' && format('STRATO_VERSION={0}', github.ref_name) || '' }}
+            ${{ matrix.image != 'agent' && format('STRATO_GIT_SHA={0}', github.sha) || '' }}
 
       # Hand the digest to the publish job via an artifact. The filename is the
       # digest hex (the `sha256:` prefix is stripped — colons are fragile in
