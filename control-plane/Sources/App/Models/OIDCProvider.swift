@@ -222,3 +222,17 @@ struct OIDCProviderPublicResponse: Content {
         self.enabled = provider.enabled
     }
 }
+
+/// Anonymous login-page lookup: resolves an organization name to its enabled
+/// SSO providers. `organizationID` is nil when the organization doesn't exist
+/// OR has no enabled providers, so the response doesn't reveal which org names
+/// exist.
+struct SSOLookupResponse: Content {
+    let organizationID: UUID?
+    let providers: [OIDCProviderPublicResponse]
+}
+
+struct OIDCProviderTestResponse: Content {
+    let valid: Bool
+    let message: String
+}

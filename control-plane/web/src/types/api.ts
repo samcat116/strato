@@ -360,6 +360,69 @@ export interface UpdateSCIMTokenRequest {
   isActive?: boolean;
 }
 
+// OIDC / SSO providers (org-scoped; managed by org admins)
+export interface OIDCProvider {
+  id: string;
+  name: string;
+  clientID: string;
+  discoveryURL?: string | null;
+  authorizationEndpoint?: string | null;
+  tokenEndpoint?: string | null;
+  userinfoEndpoint?: string | null;
+  jwksURI?: string | null;
+  scopes: string[];
+  enabled: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CreateOIDCProviderRequest {
+  name: string;
+  clientID: string;
+  clientSecret: string;
+  discoveryURL?: string;
+  authorizationEndpoint?: string;
+  tokenEndpoint?: string;
+  userinfoEndpoint?: string;
+  jwksURI?: string;
+  scopes?: string[];
+  enabled?: boolean;
+}
+
+export interface UpdateOIDCProviderRequest {
+  name?: string;
+  clientID?: string;
+  clientSecret?: string;
+  discoveryURL?: string;
+  authorizationEndpoint?: string;
+  tokenEndpoint?: string;
+  userinfoEndpoint?: string;
+  jwksURI?: string;
+  scopes?: string[];
+  enabled?: boolean;
+}
+
+export interface OIDCProviderTestResult {
+  valid: boolean;
+  message: string;
+}
+
+/** Minimal provider info exposed to the (unauthenticated) login page. */
+export interface PublicOIDCProvider {
+  id: string;
+  name: string;
+  enabled: boolean;
+}
+
+/**
+ * Login-page SSO discovery. `organizationID` is null/absent when the
+ * organization doesn't exist or has no enabled providers.
+ */
+export interface SSOLookupResponse {
+  organizationID?: string | null;
+  providers: PublicOIDCProvider[];
+}
+
 // Request types
 export interface CreateVMRequest {
   name: string;

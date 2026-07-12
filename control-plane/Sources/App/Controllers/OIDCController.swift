@@ -27,6 +27,10 @@ struct OIDCController: RouteCollection {
         // Public OIDC provider listing for login page
         let publicRoutes = routes.grouped("api", "public", "organizations", ":organizationID")
         publicRoutes.get("oidc-providers", use: listPublicProviders)
+
+        // Public SSO discovery for the login page: resolve an organization
+        // name to its enabled providers without knowing the org UUID.
+        routes.grouped("api", "public", "sso").get("lookup", use: lookupSSOProviders)
     }
 
     // MARK: - Provider Management
@@ -180,7 +184,7 @@ struct OIDCController: RouteCollection {
 
     // MARK: - Provider Testing
 
-    func testProvider(req: Request) async throws -> Response {
+    func testProvider(req: Request) async throws -> OIDCProviderTestResponse {
         guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
             let providerID = req.parameters.get("providerID", as: UUID.self)
         else {
@@ -199,25 +203,25 @@ struct OIDCController: RouteCollection {
         }
 
         // Test the provider configuration by attempting to fetch discovery document
-        if let discoveryURL = provider.discoveryURL {
+        if let discoveryURL = provider.discoveryURL, !discoveryURL.isEmpty {
             do {
                 _ = try await fetchDiscoveryDocument(url: discoveryURL, on: req)
-                return Response(status: .ok, body: .init(string: "Provider configuration is valid"))
+                return OIDCProviderTestResponse(valid: true, message: "Provider configuration is valid")
+            } catch let abort as AbortError {
+                return OIDCProviderTestResponse(
+                    valid: false, message: "Provider configuration test failed: \(abort.reason)")
             } catch {
-                return Response(
-                    status: .badRequest,
-                    body: .init(string: "Provider configuration test failed: \(error.localizedDescription)"))
-            }
-        } else {
-            // If no discovery URL, check that required endpoints are configured
-            if provider.hasRequiredEndpoints() {
-                return Response(status: .ok, body: .init(string: "Provider endpoints are configured"))
-            } else {
-                return Response(
-                    status: .badRequest,
-                    body: .init(string: "Provider configuration is incomplete: missing required endpoints"))
+                return OIDCProviderTestResponse(
+                    valid: false, message: "Provider configuration test failed: \(error.localizedDescription)")
             }
         }
+
+        // If no discovery URL, check that required endpoints are configured
+        if provider.hasRequiredEndpoints() {
+            return OIDCProviderTestResponse(valid: true, message: "Provider endpoints are configured")
+        }
+        return OIDCProviderTestResponse(
+            valid: false, message: "Provider configuration is incomplete: missing required endpoints")
     }
 
     // MARK: - Public Provider Listing
@@ -233,6 +237,48 @@ struct OIDCController: RouteCollection {
             .all()
 
         return providers.map { OIDCProviderPublicResponse(from: $0) }
+    }
+
+    func lookupSSOProviders(req: Request) async throws -> SSOLookupResponse {
+        guard
+            let rawName = req.query[String.self, at: "organization"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !rawName.isEmpty
+        else {
+            throw Abort(.badRequest, reason: "Missing 'organization' query parameter")
+        }
+
+        // Case-insensitive name match. Exact match first; the fallback scan
+        // keeps case-insensitivity portable across Postgres and the SQLite
+        // test databases (org counts are small, so the scan is cheap).
+        var organization = try await Organization.query(on: req.db)
+            .filter(\.$name == rawName)
+            .first()
+        if organization == nil {
+            let lowered = rawName.lowercased()
+            organization = try await Organization.query(on: req.db).all()
+                .first { $0.name.lowercased() == lowered }
+        }
+
+        guard let organization, let organizationID = organization.id else {
+            return SSOLookupResponse(organizationID: nil, providers: [])
+        }
+
+        let providers = try await OIDCProvider.query(on: req.db)
+            .filter(\.$organization.$id == organizationID)
+            .filter(\.$enabled == true)
+            .all()
+
+        // Indistinguishable from an unknown org so the endpoint doesn't
+        // confirm which organization names exist.
+        guard !providers.isEmpty else {
+            return SSOLookupResponse(organizationID: nil, providers: [])
+        }
+
+        return SSOLookupResponse(
+            organizationID: organizationID,
+            providers: providers.map { OIDCProviderPublicResponse(from: $0) }
+        )
     }
 
     // MARK: - Authentication Flow
