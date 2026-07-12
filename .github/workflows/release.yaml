@@ -91,12 +91,16 @@ jobs:
   # Compile the release binaries that the container images copy in, mirroring
   # main-build.yaml's prebuilt split: amd64 builds on the swift-runners-strato
   # ARC scale set (its runner image bakes in the Swift 6.3.2 toolchain, so the
-  # build runs directly on the pod — no dind, no toolchain install); arm64
-  # builds container-less on the GitHub-hosted ubuntu-24.04-arm runner, which
-  # ships a preinstalled Swift toolchain (6.3.3 as of writing — a patch ahead of
-  # amd64, accepted for the arm64 leg). This keeps the heavy Swift compile off
-  # the single static self-hosted runner; build-image-digests below just copies
-  # these binaries, so the Docker steps stay light enough for GitHub-hosted
+  # build runs directly on the pod — no dind, no toolchain install); arm64 runs
+  # on the GitHub-hosted ubuntu-24.04-arm runner but INSIDE the swift:6.3.2-noble
+  # container (not the runner's newer preinstalled Swift). Both must be 6.3.2:
+  # the Dockerfiles copy the Swift runtime .so files into the final images from
+  # swift:6.3.2-noble, so a binary linked against a different Swift (the hosted
+  # arm64 runner ships 6.3.3) would run against 6.3.2 runtime libs — and Swift on
+  # Linux has no stable-ABI guarantee across versions. Pinning the container
+  # keeps build and runtime lockstep. This still keeps the heavy Swift compile
+  # off the single static self-hosted runner; build-image-digests below just
+  # copies these binaries, so the Docker steps stay light on GitHub-hosted
   # runners.
   #
   # No build cache is configured here: releases are infrequent tag pushes where
@@ -109,6 +113,10 @@ jobs:
     name: Build Swift Release (${{ matrix.arch }})
     needs: create-release
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'swift-runners-strato' }}
+    # arm64 pins the Swift toolchain to the container the Dockerfiles source
+    # runtime libs from; amd64's ARC runner image already bakes in 6.3.2, so it
+    # runs container-less on the pod (empty string = no job container).
+    container: ${{ matrix.arch == 'arm64' && 'swift:6.3.2-noble' || '' }}
     strategy:
       fail-fast: false
       matrix:

@@ -89,9 +89,9 @@ Requirements for the scale set's runner image / pods:
   is always safe to delete manually — the next run just rebuilds cold.
 
 When bumping the Swift toolchain, rebuild the runner image with the new
-toolchain and update the remaining `swift:x.y.z-noble` container tag
-(main-build arm64 leg) together with the Dockerfiles and the
-`vapor/swiftly-action` pins (swift-format lint, macOS job).
+toolchain and update the remaining `swift:x.y.z-noble` container tags
+(the main-build and release arm64 Swift legs) together with the Dockerfiles and
+the `vapor/swiftly-action` pins (swift-format lint, macOS job).
 
 ### Static Self-Hosted Runner (x64/AMD64)
 Used for:
@@ -112,7 +112,8 @@ Used for:
 - Release x64 Docker image assembly from prebuilt binaries (`ubuntu-latest`)
 - Main branch ARM64 builds (`ubuntu-24.04-arm`)
 - Release ARM64 Swift binaries + Docker images (`ubuntu-24.04-arm`; the arm64
-  Swift build runs container-less on the runner's preinstalled toolchain)
+  Swift build runs inside the pinned `swift:6.3.2-noble` container so it links
+  against the same runtime the Dockerfiles ship, not the runner's newer Swift)
 - macOS binary builds (`macos-latest`)
 
 This hybrid approach:
