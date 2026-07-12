@@ -143,7 +143,7 @@ struct SecretsEncryptionServiceTests {
             )
             try await encryptedProvider.save(on: app.db)
 
-            try await service.encryptStoredOIDCClientSecrets(on: app.db, logger: app.logger)
+            try await service.encryptStoredSecrets(on: app.db, logger: app.logger)
 
             let legacy = try await OIDCProvider.find(plaintextProvider.id, on: app.db)
             let legacySecret = try #require(legacy?.clientSecret)
@@ -156,9 +156,65 @@ struct SecretsEncryptionServiceTests {
             #expect(modern?.clientSecret == alreadyEncrypted)
 
             // A second run is a no-op.
-            try await service.encryptStoredOIDCClientSecrets(on: app.db, logger: app.logger)
+            try await service.encryptStoredSecrets(on: app.db, logger: app.logger)
             let legacyAgain = try await OIDCProvider.find(plaintextProvider.id, on: app.db)
             #expect(legacyAgain?.clientSecret == legacySecret)
+        }
+    }
+
+    @Test("Startup sweep encrypts plaintext SSF auth tokens and skips token-less streams")
+    func testStartupSweepSSFAuthTokens() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "ssfsweep", email: "ssfsweep@example.com")
+            let org = try await builder.createOrganization(name: "SSF Sweep Org")
+
+            let service = try makeService()
+
+            let plaintextStream = SSFStream(
+                organizationID: org.id!,
+                name: "Legacy",
+                transmitterURL: "https://idp.example.com",
+                authToken: "legacy-token",
+                deliveryMethod: .poll,
+                createdByID: user.id!
+            )
+            try await plaintextStream.save(on: app.db)
+
+            let tokenlessStream = SSFStream(
+                organizationID: org.id!,
+                name: "Tokenless",
+                transmitterURL: "https://idp.example.com",
+                deliveryMethod: .poll,
+                createdByID: user.id!
+            )
+            try await tokenlessStream.save(on: app.db)
+
+            let alreadyEncrypted = try service.encrypt("modern-token")
+            let encryptedStream = SSFStream(
+                organizationID: org.id!,
+                name: "Modern",
+                transmitterURL: "https://idp.example.com",
+                authToken: alreadyEncrypted,
+                deliveryMethod: .poll,
+                createdByID: user.id!
+            )
+            try await encryptedStream.save(on: app.db)
+
+            try await service.encryptStoredSecrets(on: app.db, logger: app.logger)
+
+            let legacy = try await SSFStream.find(plaintextStream.id, on: app.db)
+            let legacyToken = try #require(legacy?.authToken)
+            #expect(legacyToken.hasPrefix(SecretsEncryptionService.encryptedPrefix))
+            let legacyDecrypted = try service.decrypt(legacyToken)
+            #expect(legacyDecrypted == "legacy-token")
+
+            let tokenless = try await SSFStream.find(tokenlessStream.id, on: app.db)
+            #expect(tokenless?.authToken == nil)
+
+            // The already-encrypted row must be untouched (not double-encrypted).
+            let modern = try await SSFStream.find(encryptedStream.id, on: app.db)
+            #expect(modern?.authToken == alreadyEncrypted)
         }
     }
 }
