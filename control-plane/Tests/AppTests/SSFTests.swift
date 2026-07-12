@@ -467,6 +467,105 @@ final class SSFStreamAPITests {
         }
     }
 
+    @Test("Management auth tokens are stored encrypted at rest and re-encrypted on update")
+    func authTokenEncryptedAtRest() async throws {
+        try await withTestApp { app in
+            let key = try SecretsEncryptionService.parseKey(String(repeating: "ef", count: 32))
+            app.secretsEncryption = SecretsEncryptionService(key: key)
+
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "ssfenc", email: "enc@example.com")
+            let org = try await builder.createOrganization(name: "Enc Org")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
+            let token = try await user.generateAPIKey(on: app.db)
+            let base = "/api/organizations/\(org.id!.uuidString)/ssf-streams"
+
+            var streamID: UUID?
+            try await app.test(.POST, base) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSSFStreamRequest(
+                        name: "Okta",
+                        description: nil,
+                        transmitterURL: "https://idp.example.com",
+                        authToken: "management-secret-original",
+                        expectedIssuer: nil,
+                        expectedAudience: nil,
+                        deliveryMethod: .poll,
+                        eventsRequested: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .created)
+                streamID = try res.content.decode(SSFStreamResponse.self).id
+            }
+            let id = try #require(streamID)
+
+            let created = try await SSFStream.find(id, on: app.db)
+            let storedToken = try #require(created?.authToken)
+            #expect(storedToken.hasPrefix(SecretsEncryptionService.encryptedPrefix))
+            #expect(!storedToken.contains("management-secret-original"))
+            let decrypted = try app.secretsEncryption.decrypt(storedToken)
+            #expect(decrypted == "management-secret-original")
+
+            // Rotating the token through the update path re-encrypts it.
+            try await app.test(.PUT, "\(base)/\(id.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    UpdateSSFStreamRequest(
+                        name: nil,
+                        description: nil,
+                        authToken: "rotated-token",
+                        expectedIssuer: nil,
+                        expectedAudience: nil,
+                        eventsRequested: nil,
+                        enabled: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            let updated = try await SSFStream.find(id, on: app.db)
+            let rotatedStored = try #require(updated?.authToken)
+            #expect(rotatedStored.hasPrefix(SecretsEncryptionService.encryptedPrefix))
+            let rotatedDecrypted = try app.secretsEncryption.decrypt(rotatedStored)
+            #expect(rotatedDecrypted == "rotated-token")
+        }
+    }
+
+    @Test("Receiver construction decrypts the stored management auth token")
+    func receiverDecryptsStoredAuthToken() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "ssfrecv", email: "recv@example.com")
+            let org = try await builder.createOrganization(name: "Recv Org")
+
+            let key = try SecretsEncryptionService.parseKey(String(repeating: "ab", count: 32))
+            app.secretsEncryption = SecretsEncryptionService(key: key)
+
+            let stream = SSFStream(
+                organizationID: org.id!,
+                name: "Encrypted",
+                transmitterURL: "https://idp.example.com",
+                authToken: try app.secretsEncryption.encrypt("management-secret"),
+                deliveryMethod: .poll,
+                createdByID: user.id!
+            )
+            try await stream.save(on: app.db)
+
+            // With the key configured, building the receiver decrypts the token.
+            _ = try await app.ssf.receiver(for: stream)
+
+            // Without it, the encrypted token must fail loudly instead of being
+            // sent to the transmitter as-is.
+            let streamID = try stream.requireID()
+            await app.ssf.invalidateReceiver(for: streamID)
+            app.secretsEncryption = .disabled
+            await #expect(throws: (any Error).self) {
+                _ = try await app.ssf.receiver(for: stream)
+            }
+        }
+    }
+
     @Test("Stream creation validates the transmitter URL")
     func createRejectsInvalidTransmitterURL() async throws {
         try await withTestApp { app in

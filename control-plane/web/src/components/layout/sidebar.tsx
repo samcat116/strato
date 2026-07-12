@@ -1,8 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogOut, Monitor, Moon, Sun } from "lucide-react";
+import { ChevronRight, LogOut, Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import { useAuth, useOrganization } from "@/providers";
@@ -17,27 +18,95 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { OrganizationSwitcher } from "./organization-switcher";
-import { footerNavItems, isNavActive, navSections, type NavItem } from "./nav";
+import { isNavActive, isSectionActive, navTree, type NavItem } from "./nav";
 import { versionLabel, versionTitle } from "@/lib/version";
 
-function SidebarLink({ item }: { item: NavItem }) {
+function SidebarLink({ item, nested = false }: { item: NavItem; nested?: boolean }) {
   const pathname = usePathname();
-  const active = isNavActive(pathname, item.href);
+  const active = item.href ? isNavActive(pathname, item.href) : false;
   const Icon = item.icon;
 
   return (
     <Link
-      href={item.href}
+      href={item.href ?? "#"}
       className={cn(
-        "flex items-center gap-2.5 rounded-[7px] px-[9px] py-[7px] text-[13px] transition-colors",
+        "flex items-center gap-2.5 rounded-[7px] py-[7px] text-[13px] transition-colors",
+        nested ? "pl-[34px] pr-[9px]" : "px-[9px]",
         active
           ? "bg-accent font-semibold text-foreground"
           : "font-medium text-foreground/70 hover:bg-muted hover:text-foreground"
       )}
     >
-      <Icon className="h-4 w-4 shrink-0" strokeWidth={1.6} />
+      {!nested && <Icon className="h-4 w-4 shrink-0" strokeWidth={1.6} />}
       {item.label}
     </Link>
+  );
+}
+
+/**
+ * A topline with children: the row links to its own page (when it has an href)
+ * or toggles the group, and a chevron expands/collapses the nested items. The
+ * section auto-expands whenever the active route falls inside it.
+ */
+function SidebarSection({ item }: { item: NavItem }) {
+  const pathname = usePathname();
+  const { user } = useAuth();
+  const sectionActive = isSectionActive(pathname, item);
+  const rowActive = item.href ? isNavActive(pathname, item.href) : false;
+  const Icon = item.icon;
+
+  // The section holding the current page stays expanded; a manual toggle
+  // (`override`) takes precedence so other sections open/close on click.
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = override ?? sectionActive;
+  const toggle = () => setOverride(!open);
+
+  const children = (item.children ?? []).filter(
+    (child) => !child.adminOnly || user?.isSystemAdmin
+  );
+
+  const rowClasses = cn(
+    "flex flex-1 items-center gap-2.5 rounded-[7px] px-[9px] py-[7px] text-[13px] transition-colors",
+    rowActive
+      ? "bg-accent font-semibold text-foreground"
+      : "font-medium text-foreground/70 hover:bg-muted hover:text-foreground"
+  );
+
+  return (
+    <div>
+      <div className="flex items-center gap-0.5">
+        {item.href ? (
+          <Link href={item.href} className={rowClasses}>
+            <Icon className="h-4 w-4 shrink-0" strokeWidth={1.6} />
+            {item.label}
+          </Link>
+        ) : (
+          <button type="button" onClick={toggle} className={rowClasses}>
+            <Icon className="h-4 w-4 shrink-0" strokeWidth={1.6} />
+            {item.label}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={toggle}
+          aria-label={open ? `Collapse ${item.label}` : `Expand ${item.label}`}
+          aria-expanded={open}
+          className="rounded-[7px] p-1.5 text-foreground/50 transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <ChevronRight
+            className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")}
+            strokeWidth={1.6}
+          />
+        </button>
+      </div>
+      {open && (
+        <div className="mt-0.5 space-y-0.5">
+          {children.map((child) => (
+            <SidebarLink key={child.href ?? child.label} item={child} nested />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -109,8 +178,6 @@ function UserCard() {
 }
 
 export function Sidebar() {
-  const { user } = useAuth();
-
   return (
     <aside className="flex w-[236px] shrink-0 flex-col overflow-y-auto border-r border-border bg-card px-3 py-3.5">
       <div className="flex items-center gap-2 px-2 pb-3.5 pt-1">
@@ -123,26 +190,18 @@ export function Sidebar() {
       <OrganizationSwitcher />
 
       <nav className="flex flex-1 flex-col">
-        {navSections
-          .filter((section) => !section.adminOnly || user?.isSystemAdmin)
-          .map((section, i) => (
-            <div key={section.label} className={cn("space-y-0.5", i > 0 && "mt-4")}>
-              <div className="px-[9px] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.6px] text-muted-foreground">
-                {section.label}
-              </div>
-              {section.items.map((item) => (
-                <SidebarLink key={item.href} item={item} />
-              ))}
-            </div>
-          ))}
+        <div className="space-y-0.5">
+          {navTree.map((item) =>
+            item.children?.length ? (
+              <SidebarSection key={item.label} item={item} />
+            ) : (
+              <SidebarLink key={item.label} item={item} />
+            )
+          )}
+        </div>
 
         <div className="flex-1" />
 
-        <div className="space-y-0.5">
-          {footerNavItems.map((item) => (
-            <SidebarLink key={item.href} item={item} />
-          ))}
-        </div>
         <UserCard />
         <div
           title={versionTitle || undefined}

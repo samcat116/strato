@@ -7,8 +7,9 @@ import Vapor
 ///
 /// API keys and SCIM tokens are hashed because only equality checks are needed,
 /// but an OIDC client secret is POSTed verbatim to the IdP's token endpoint on
-/// every login, so it can only be protected with reversible encryption. Values
-/// are sealed with AES-256-GCM and stored as
+/// every login, and an SSF stream's management bearer token is sent verbatim to
+/// the transmitter's stream-management API — so they can only be protected with
+/// reversible encryption. Values are sealed with AES-256-GCM and stored as
 /// `enc:v1:<base64(nonce || ciphertext || tag)>`.
 ///
 /// The key comes from `STRATO_SECRET_ENCRYPTION_KEY` (32 bytes, hex- or
@@ -16,7 +17,7 @@ import Vapor
 /// in pass-through mode: writes store plaintext (with a startup warning) and
 /// reads return stored values unchanged. Values without the `enc:v1:` prefix
 /// are treated as legacy plaintext on read, and
-/// ``encryptStoredOIDCClientSecrets(on:logger:)`` re-encrypts them at startup
+/// ``encryptStoredSecrets(on:logger:)`` re-encrypts them at startup
 /// once a key is configured — so enabling encryption on an existing deployment
 /// requires only setting the variable.
 struct SecretsEncryptionService: Sendable {
@@ -120,21 +121,37 @@ struct SecretsEncryptionService: Sendable {
         return plaintext
     }
 
-    /// Re-encrypts any plaintext OIDC client secrets. Runs at every startup so
-    /// rows written before a key existed converge to encrypted form as soon as
-    /// one is configured. Idempotent; concurrent replicas may both re-encrypt a
-    /// row, but each writes a self-contained valid ciphertext.
-    func encryptStoredOIDCClientSecrets(on db: Database, logger: Logger) async throws {
+    /// Re-encrypts any plaintext stored secrets (OIDC client secrets, SSF
+    /// stream auth tokens). Runs at every startup so rows written before a key
+    /// existed converge to encrypted form as soon as one is configured.
+    /// Idempotent; concurrent replicas may both re-encrypt a row, but each
+    /// writes a self-contained valid ciphertext.
+    func encryptStoredSecrets(on db: Database, logger: Logger) async throws {
         guard isEnabled else { return }
+
         let providers = try await OIDCProvider.query(on: db).all()
-        var migrated = 0
+        var migratedSecrets = 0
         for provider in providers where !provider.clientSecret.hasPrefix(Self.encryptedPrefix) {
             provider.clientSecret = try encrypt(provider.clientSecret)
             try await provider.save(on: db)
-            migrated += 1
+            migratedSecrets += 1
         }
-        if migrated > 0 {
-            logger.info("Encrypted \(migrated) stored OIDC client secret(s) at rest")
+        if migratedSecrets > 0 {
+            logger.info("Encrypted \(migratedSecrets) stored OIDC client secret(s) at rest")
+        }
+
+        let streams = try await SSFStream.query(on: db).all()
+        var migratedTokens = 0
+        for stream in streams {
+            guard let token = stream.authToken, !token.hasPrefix(Self.encryptedPrefix) else {
+                continue
+            }
+            stream.authToken = try encrypt(token)
+            try await stream.save(on: db)
+            migratedTokens += 1
+        }
+        if migratedTokens > 0 {
+            logger.info("Encrypted \(migratedTokens) stored SSF stream auth token(s) at rest")
         }
     }
 }
