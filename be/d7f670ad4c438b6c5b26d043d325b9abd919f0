@@ -1,0 +1,48 @@
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_b041cfc9c7df01::t_ee0622a0c233de 78
+  s_b041cfc9c7df01::t_787fe8c730fc76 332
+  s_b041cfc9c7df01::t_47a85b2eab0559 26-28
+  s_b041cfc9c7df01::t_b31190dac358b0 356
+  s_b041cfc9c7df01::t_b48bc3d046785d 96
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_b041cfc9c7df01::t_128b24c270a48c 641
+  s_b041cfc9c7df01::t_70f9d58b3f36bc 744-745
+  s_b041cfc9c7df01::t_73cc0e0414b151 282
+  s_b041cfc9c7df01::t_9c03523acba546 830-845
+control-plane/Sources/App/Models/OIDCDTOs.swift
+  s_b041cfc9c7df01::t_28ace28c1d6d11 60,71
+  s_b041cfc9c7df01::t_48ff7a0cbdf7cb 79-83
+control-plane/Sources/App/Migrations/AddIssuerToOIDCProvider.swift
+  s_b041cfc9c7df01::t_39bfc8c2efb432 1-18
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_b041cfc9c7df01::t_ec635e8029fd99 103-107
+  s_b041cfc9c7df01::t_4f73067d43ae66 137-157
+  s_b041cfc9c7df01::t_283a2c15aa3612 158
+control-plane/Tests/AppTests/OIDCIdentityMappingTests.swift
+  s_b041cfc9c7df01::t_9293e553a1fb87 235-242
+  s_b041cfc9c7df01::t_2d53f1e89086f9 234,243-254
+  s_b041cfc9c7df01::t_e0066c1282a60c 111-116
+  s_b041cfc9c7df01::t_79f081e154a791 255-257
+control-plane/Sources/App/configure.swift
+  s_b041cfc9c7df01::t_b74726b1c6715e 340-343
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_b041cfc9c7df01::t_b34f3bd0b1b86d 644
+  s_b041cfc9c7df01::t_f66a9584067a5c 593
+  s_b041cfc9c7df01::t_ecb816e3cb4b0f 622
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "bed7f670ad4c438b6c5b26d043d325b9abd919f0",
+  "prompts": {},
+  "sessions": {
+    "s_b041cfc9c7df01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bd69bcc5-66a4-4e24-8f42-225a4bc65626",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
