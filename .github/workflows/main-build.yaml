@@ -186,16 +186,25 @@ jobs:
           path: artifacts/
           retention-days: 1
 
-  # Phase 1 — build every image on every arch in parallel, but DO NOT publish.
-  # This replaced one job that built all three images serially on the single
-  # static self-hosted runner (~28 min of serial Docker work on the critical
-  # path). x64 legs export a mode=max gha cache (also read by build.yaml's PR
-  # Docker checks and by the publish phase below); arm64 legs are validate-only
-  # (build + load) since the DOKS test cluster (dev.stratocloud.app) is amd64.
-  build-images:
-    name: Build Image (${{ matrix.image }}, ${{ matrix.arch }})
+  # Phase 1 — build every image on its native runner and push each arch by
+  # DIGEST ONLY (no tag). Publishing arch-tagged manifests happens in phase 2,
+  # so nothing here is consumable yet: an untagged digest is invisible to
+  # `:main` pullers until publish-manifests stitches the per-arch digests into a
+  # multi-arch tag. Each arch builds natively (arm64 on ubuntu-24.04-arm, amd64
+  # on ubuntu-latest) rather than under QEMU — the Dockerfiles copy a single
+  # prebuilt binary from ./artifacts and aren't TARGETARCH-aware, so one
+  # emulated multi-platform build can't feed a different binary per platform.
+  #
+  # `provenance: false` suppresses buildx's default SBOM/provenance attestation,
+  # which was pushed as an `unknown/unknown` manifest and showed up as a bogus
+  # architecture on the GHCR package page.
+  build-image-digests:
+    name: Build Digest (${{ matrix.image }}, ${{ matrix.arch }})
     needs: [build-swift-release]
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -205,6 +214,7 @@ jobs:
           - { image: agent, arch: x64, context: ., file: ./agent/Dockerfile, prebuilt: artifacts/agent }
           - { image: agent, arch: arm64, context: ., file: ./agent/Dockerfile, prebuilt: artifacts/agent }
           - { image: frontend, arch: x64, context: control-plane/web, file: ./control-plane/web/Dockerfile, prebuilt: "" }
+          - { image: frontend, arch: arm64, context: control-plane/web, file: ./control-plane/web/Dockerfile, prebuilt: "" }
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -225,64 +235,90 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute build metadata
+        id: meta
+        run: |
+          echo "name=ghcr.io/${GITHUB_REPOSITORY}-${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "version=main-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
       # Docker gha caching is kept ONLY for the frontend, which compiles from
       # source (bun) and genuinely benefits. The control-plane and agent images
       # consume prebuilt binaries (nothing compiles in-image), so their layers
       # are cheap to rebuild — yet their mode=max caches were ~5GB of the repo's
       # ~11GB cache, the churn that evicted the Swift release .build every run.
       # Dropping them frees the budget so the caches that matter survive.
-      - name: Build Image (validate, no push)
+      #
+      # Dynamic OCI labels are applied here (the static, per-image descriptive
+      # labels live in each Dockerfile); build-push-action merges both onto the
+      # pushed manifest.
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
-          push: false
-          load: ${{ matrix.arch == 'arm64' }}
           platforms: ${{ matrix.arch == 'x64' && 'linux/amd64' || 'linux/arm64' }}
-          tags: strato-${{ matrix.image }}:ci
-          cache-from: ${{ matrix.image == 'frontend' && 'type=gha,key=frontend-x64' || '' }}
-          cache-to: ${{ matrix.image == 'frontend' && 'type=gha,mode=max,key=frontend-x64' || '' }}
+          outputs: type=image,name=${{ steps.meta.outputs.name }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+          cache-from: ${{ matrix.image == 'frontend' && format('type=gha,key=frontend-{0}', matrix.arch) || '' }}
+          cache-to: ${{ matrix.image == 'frontend' && format('type=gha,mode=max,key=frontend-{0}', matrix.arch) || '' }}
           # Blank lines are ignored, so each arg is gated independently. The
           # control-plane and frontend bake the build identity (STRATO_VERSION on
           # /health/*, and the sidebar version label respectively); the agent has
-          # none. Keeping these identical to the publish step keeps the gha cache
-          # warm for the frontend.
+          # none. Baked once here in the per-arch digest build — the publish phase
+          # only stitches manifests by digest and never rebuilds, so the identity
+          # must be set now, not at publish time.
           build-args: |
             ${{ matrix.prebuilt != '' && format('PREBUILT_ARTIFACTS={0}', matrix.prebuilt) || '' }}
             ${{ matrix.image != 'agent' && 'STRATO_VERSION=main' || '' }}
             ${{ matrix.image != 'agent' && format('STRATO_GIT_SHA={0}', github.sha) || '' }}
 
-  # Phase 2 — publish barrier. `needs: [build-images]` succeeds only if EVERY
-  # build-images leg (all images, both arches) passed, so we never start pushing
-  # for a commit whose full image set wasn't built. Registry pushes of three
-  # separate images can't be truly atomic, so the pushes run as ordered steps in
-  # one job (not a parallel matrix): a failed/cancelled push fails the job before
-  # the next step, and the frontend — which shares STRATO_VERSION with the
-  # control-plane in the compose deployment — is pushed last, so it only
-  # publishes after both backend images pushed. This matches the guarantee of
-  # the prior serial x64 job. Each step rebuilds amd64 from the phase-1 gha cache
-  # (a cache hit — it just re-exports and pushes). Argo CD image-updater tracks
-  # `main-<sha>` via a `^main-[0-9a-f]{7,40}$` allow-tags regexp.
-  publish-images:
-    name: Publish Images
-    needs: [build-images]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      # Hand the digest to the publish job via an artifact. The filename is the
+      # digest hex (the `sha256:` prefix is stripped — colons are fragile in
+      # artifact paths); contents are irrelevant.
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digest
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digest/${digest#sha256:}"
 
-      # The prebuilt COPY layer keys on the artifact bytes, so the publish job
-      # must supply the same x64 artifacts as phase 1 for the cache to hit.
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
         with:
-          name: swift-binaries-x64
-          path: artifacts/
-        continue-on-error: true
+          name: digest-${{ matrix.image }}-${{ matrix.arch }}
+          path: /tmp/digest/*
+          retention-days: 1
+          if-no-files-found: error
 
-      - name: Prepare build context
-        run: mkdir -p ./artifacts
-
+  # Phase 2 — publish barrier. `needs: [build-image-digests]` succeeds only if
+  # EVERY leg (all images, both arches) passed, so we never publish a tag for a
+  # commit whose full image set wasn't built. The multi-arch tags are created
+  # here and only here, so the phase-1 digests stay invisible until this runs.
+  # Tag creation runs as ordered steps (control-plane → agent → frontend): a
+  # failed step stops the job before the next, and the frontend — which shares
+  # STRATO_VERSION with the control-plane in the compose deployment — is
+  # published last, so it only appears once both backend manifests did. Argo CD
+  # image-updater tracks `main-<sha>` via a `^main-[0-9a-f]{7,40}$` regexp.
+  publish-manifests:
+    name: Publish Multi-Arch Manifests
+    needs: [build-image-digests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -293,54 +329,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image tags
-        id: tags
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+
+      # `imagetools create` builds a fresh manifest list from the per-arch
+      # digests and pushes it under both tags. control-plane first, frontend
+      # last (see the ordering rationale above).
+      - name: Publish control-plane manifest
         run: |
+          REF="ghcr.io/${GITHUB_REPOSITORY}-control-plane"
           SHA="${GITHUB_SHA::12}"
-          REPO="ghcr.io/${GITHUB_REPOSITORY}"
-          {
-            echo "cp=${REPO}-control-plane:main,${REPO}-control-plane:main-${SHA}"
-            echo "agent=${REPO}-agent:main,${REPO}-agent:main-${SHA}"
-            echo "fe=${REPO}-frontend:main,${REPO}-frontend:main-${SHA}"
-          } >> "$GITHUB_OUTPUT"
+          DIGESTS=$(for f in /tmp/digests/digest-control-plane-*/*; do printf '%s@sha256:%s ' "$REF" "$(basename "$f")"; done)
+          docker buildx imagetools create -t "${REF}:main" -t "${REF}:main-${SHA}" $DIGESTS
+          docker buildx imagetools inspect "${REF}:main-${SHA}"
 
-      # Ordered pushes: control-plane → agent → frontend. A failed step stops
-      # the job, so frontend never publishes unless both backend images did.
-      # The prebuilt Swift images no longer keep a gha cache (see build-images),
-      # so these rebuild the cheap prebuilt layers (apt + copy binary) directly.
-      - name: Push Control Plane Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./control-plane/Dockerfile
-          push: true
-          platforms: linux/amd64
-          tags: ${{ steps.tags.outputs.cp }}
-          build-args: |
-            PREBUILT_ARTIFACTS=artifacts/control-plane
-            STRATO_VERSION=main
-            STRATO_GIT_SHA=${{ github.sha }}
+      - name: Publish agent manifest
+        run: |
+          REF="ghcr.io/${GITHUB_REPOSITORY}-agent"
+          SHA="${GITHUB_SHA::12}"
+          DIGESTS=$(for f in /tmp/digests/digest-agent-*/*; do printf '%s@sha256:%s ' "$REF" "$(basename "$f")"; done)
+          docker buildx imagetools create -t "${REF}:main" -t "${REF}:main-${SHA}" $DIGESTS
+          docker buildx imagetools inspect "${REF}:main-${SHA}"
 
-      - name: Push Agent Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./agent/Dockerfile
-          push: true
-          platforms: linux/amd64
-          tags: ${{ steps.tags.outputs.agent }}
-          build-args: |
-            PREBUILT_ARTIFACTS=artifacts/agent
-
-      - name: Push Frontend Image
-        uses: docker/build-push-action@v5
-        with:
-          context: control-plane/web
-          file: ./control-plane/web/Dockerfile
-          push: true
-          platforms: linux/amd64
-          tags: ${{ steps.tags.outputs.fe }}
-          cache-from: type=gha,key=frontend-x64
-          build-args: |
-            STRATO_VERSION=main
-            STRATO_GIT_SHA=${{ github.sha }}
+      - name: Publish frontend manifest
+        run: |
+          REF="ghcr.io/${GITHUB_REPOSITORY}-frontend"
+          SHA="${GITHUB_SHA::12}"
+          DIGESTS=$(for f in /tmp/digests/digest-frontend-*/*; do printf '%s@sha256:%s ' "$REF" "$(basename "$f")"; done)
+          docker buildx imagetools create -t "${REF}:main" -t "${REF}:main-${SHA}" $DIGESTS
+          docker buildx imagetools inspect "${REF}:main-${SHA}"

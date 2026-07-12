@@ -88,6 +88,15 @@ RUN chmod +x ./App && \
 # ================================
 FROM ubuntu:noble
 
+# OCI image labels. `image.source` links the GHCR package to this repo (and
+# grants the publishing workflow its package permissions); description and
+# licenses populate the package page. See
+# https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#labelling-container-images
+LABEL org.opencontainers.image.source="https://github.com/samcat116/strato"
+LABEL org.opencontainers.image.title="strato-control-plane"
+LABEL org.opencontainers.image.description="Strato control plane: API, scheduler, database, and authorization for the Strato private cloud platform."
+LABEL org.opencontainers.image.licenses="FSL-1.1-MIT"
+
 # Make sure all system packages are up to date, and install only essential packages.
 RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     && apt-get -q update \
