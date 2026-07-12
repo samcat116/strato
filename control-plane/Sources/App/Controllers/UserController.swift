@@ -134,6 +134,10 @@ struct UserController: RouteCollection {
             }
         }
 
+        // Fetched here (throwing getter) so the org-membership tuple can be
+        // written inside the transaction below; only needed when assigning.
+        let spicedb: SpiceDBServiceProtocol? = assignedOrgID != nil ? try req.spicedb : nil
+
         // Create the user, its claim token, and any org membership in one
         // transaction so the token row is visible the instant the user row is.
         // Otherwise a concurrent /auth/register/begin — which blocks invited
@@ -184,25 +188,23 @@ struct UserController: RouteCollection {
                     role: assignedRole
                 )
                 try await membership.save(on: db)
+
+                // Authorization reads org access from SpiceDB (e.g. VM
+                // collection checks need view_organization), and missing tuples
+                // are only reconciled by a boot-time backfill. Write the tuple
+                // inside the transaction so a failure rolls the whole create
+                // back — better to fail and let the admin retry than to hand
+                // out a claim link for a member who can't use the org.
+                if let spicedb {
+                    try await spicedb.setOrganizationRole(
+                        userID: try user.requireID().uuidString,
+                        organizationID: orgID.uuidString,
+                        oldRole: nil,
+                        newRole: assignedRole
+                    )
+                }
             }
             return (user, claim)
-        }
-
-        // Mirror the membership into SpiceDB. Best-effort with logging (like the
-        // registration/login paths): a transient failure is reconciled by the
-        // periodic backfill and must not strand the one-time claim link.
-        if let orgID = assignedOrgID, let userID = user.id {
-            do {
-                try await req.spicedb.setOrganizationRole(
-                    userID: userID.uuidString,
-                    organizationID: orgID.uuidString,
-                    oldRole: nil,
-                    newRole: assignedRole
-                )
-            } catch {
-                req.logger.warning(
-                    "Failed to write SpiceDB org membership for invited user \(user.username): \(error)")
-            }
         }
 
         return AdminCreateUserResponse(
