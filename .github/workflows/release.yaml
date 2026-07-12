@@ -158,6 +158,11 @@ jobs:
           labels: ${{ steps.meta-control-plane.outputs.labels }}
           cache-from: type=gha,key=control-plane-${{ matrix.platform }}
           cache-to: type=gha,mode=max,key=control-plane-${{ matrix.platform }}
+          # Bake the release tag as the build identity, surfaced on /health/*
+          # (see control-plane/Sources/App/BuildInfo.swift).
+          build-args: |
+            STRATO_VERSION=${{ github.ref_name }}
+            STRATO_GIT_SHA=${{ github.sha }}
 
       - name: Build and push agent image
         uses: docker/build-push-action@v5
@@ -182,6 +187,11 @@ jobs:
           labels: ${{ steps.meta-frontend.outputs.labels }}
           cache-from: type=gha,key=frontend-${{ matrix.platform }}
           cache-to: type=gha,mode=max,key=frontend-${{ matrix.platform }}
+          # Bake the release tag as the build identity so the UI shows the tag
+          # (see control-plane/web/src/lib/version.ts).
+          build-args: |
+            STRATO_VERSION=${{ github.ref_name }}
+            STRATO_GIT_SHA=${{ github.sha }}
 
   build-swift-binaries:
     runs-on: ${{ matrix.os }}
