@@ -59,9 +59,15 @@ struct AddIssuerToOIDCProvider: AsyncMigration {
             ).run()
         }
 
-        // 2. Everything else with a well-known suffix → exact issuer. Multi-tenant
-        //    alias segments we didn't template above are excluded (left NULL)
-        //    rather than stored as a literal that no token would carry.
+        // 2. Everything else with a well-known suffix → exact issuer (the URL
+        //    minus the suffix). For most IdPs the stripped URL *is* the token
+        //    issuer, including non-Microsoft providers whose issuer path happens
+        //    to contain a `/common/` etc. segment — those must be backfilled, not
+        //    skipped. The only exact-strip exclusion is Microsoft's own alias
+        //    endpoints: the v2.0 ones were templated above (already non-NULL), and
+        //    any non-v2.0 Microsoft alias (e.g. the v1.0 `common` endpoint, whose
+        //    real issuer lives on a different host) can't be derived from the URL,
+        //    so it's left NULL until a refresh stores the metadata issuer.
         try await sql.raw(
             """
             UPDATE oidc_providers
@@ -69,9 +75,14 @@ struct AddIssuerToOIDCProvider: AsyncMigration {
             WHERE issuer IS NULL
               AND discovery_url IS NOT NULL
               AND discovery_url LIKE \(bind: "%\(wellKnownSuffix)%")
-              AND discovery_url NOT LIKE \(bind: "%/common/%")
-              AND discovery_url NOT LIKE \(bind: "%/organizations/%")
-              AND discovery_url NOT LIKE \(bind: "%/consumers/%")
+              AND NOT (
+                discovery_url LIKE \(bind: "%login.microsoftonline.%")
+                AND (
+                  discovery_url LIKE \(bind: "%/common/%")
+                  OR discovery_url LIKE \(bind: "%/organizations/%")
+                  OR discovery_url LIKE \(bind: "%/consumers/%")
+                )
+              )
             """
         ).run()
     }

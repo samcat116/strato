@@ -332,7 +332,12 @@ final class OIDCControllerTests: BaseTestCase {
                 "s",
                 "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0/.well-known/openid-configuration"
             )
-            let nonMS = try await mk("n", "https://idp.example.com/common/v2.0/.well-known/openid-configuration")
+            // Non-Microsoft host with a literal `common` path segment: the exact
+            // stripped URL is its real issuer and must be backfilled, not skipped.
+            let nonMS = try await mk("n", "https://idp.example.com/common/.well-known/openid-configuration")
+            // Microsoft v1.0 `common` (no /v2.0): the real issuer is on a different
+            // host (sts.windows.net), so it can't be derived — left NULL.
+            let msV1 = try await mk("v1", "https://login.microsoftonline.com/common/.well-known/openid-configuration")
 
             try await AddIssuerToOIDCProvider.backfillIssuers(on: app.db)
 
@@ -348,10 +353,13 @@ final class OIDCControllerTests: BaseTestCase {
             // Entra single-tenant (concrete GUID): exact, not templated.
             let singleIssuer = try await OIDCProvider.find(single.id!, on: app.db)?.issuer
             #expect(singleIssuer == "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0")
-            // A `/common/` segment on a non-Microsoft host is not templated
-            // (would loosen matching) and left NULL until re-tested.
+            // A `/common/` segment on a non-Microsoft host is a literal path, not a
+            // multi-tenant alias: backfill the exact issuer.
             let nonMSIssuer = try await OIDCProvider.find(nonMS.id!, on: app.db)?.issuer
-            #expect(nonMSIssuer == nil)
+            #expect(nonMSIssuer == "https://idp.example.com/common")
+            // Microsoft v1.0 `common` can't be derived from the URL: left NULL.
+            let msV1Issuer = try await OIDCProvider.find(msV1.id!, on: app.db)?.issuer
+            #expect(msV1Issuer == nil)
         }
     }
 
