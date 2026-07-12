@@ -72,7 +72,10 @@ export const navTree: NavItem[] = [
     label: "Settings",
     icon: Settings,
     children: [
-      { label: "Organization", href: "/organizations/settings", icon: Building2 },
+      // Deployed proxies (deploy/compose/nginx.conf, helm ingress) send the
+      // whole /organizations/ prefix to the control plane for SCIM, so
+      // frontend pages must not live under it.
+      { label: "Organization", href: "/settings/organization", icon: Building2 },
       { label: "Audit Log", href: "/admin/audit", icon: ScrollText, adminOnly: true },
     ],
   },

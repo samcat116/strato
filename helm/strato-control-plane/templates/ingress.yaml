@@ -103,6 +103,9 @@ spec:
               serviceName: {{ $fullName }}
               servicePort: {{ $svcPort }}
               {{- end }}
+          # SCIM protocol + SCIM token management (bare /organizations/*
+          # control-plane routes). This prefix bypasses the frontend, so
+          # Next.js pages must not live under /organizations.
           - path: /organizations
             {{- if semverCompare ">=1.18-0" $.Capabilities.KubeVersion.GitVersion }}
             pathType: Prefix
