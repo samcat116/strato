@@ -52,14 +52,55 @@ jobs:
           $SUDO apt-get update
           $SUDO apt-get install -y libjemalloc-dev unzip
 
+      # Build-cache strategy differs by arch:
+      #
+      # x64 runs on the swift-runners-strato ARC scale set, whose
+      # RUNNER_TOOL_CACHE is a persistent volume — so the release build tree
+      # lives there via --scratch-path and stays warm across runs, off the 10GB
+      # actions/cache budget entirely. This mirrors build.yaml's Swift test jobs,
+      # which abandoned actions/cache because "every run paid a ~5 minute 1.4GB
+      # upload for a restore that always missed": the repo's ~11GB of caches
+      # (dominated by Docker type=gha blobs) exceeds GitHub's 10GB limit and
+      # evicts the 1.6GB release .build between runs, so this stage recompiled
+      # cold every single time.
+      #
+      # arm64 runs on an ephemeral GitHub-hosted runner with no persistent
+      # volume, so it stays on actions/cache + the default .build path (which now
+      # survives because the Docker cache-to churn below is trimmed).
+      - name: Configure release build cache
+        run: |
+          if [ "${{ matrix.arch }}" = "x64" ]; then
+            root="$RUNNER_TOOL_CACHE/strato-swift-build-release"
+            echo "CP_SCRATCH_ARG=$root/control-plane" >> "$GITHUB_ENV"
+            echo "AGENT_SCRATCH_ARG=$root/agent" >> "$GITHUB_ENV"
+          else
+            echo "CP_SCRATCH_ARG=" >> "$GITHUB_ENV"
+            echo "AGENT_SCRATCH_ARG=" >> "$GITHUB_ENV"
+          fi
+
+      # The persistent x64 scratch tree never shrinks on its own; wipe it if it
+      # balloons so a runaway build dir can't fill the shared volume. No-op on
+      # arm64 (the dirs don't exist there).
+      - name: Prune release build scratch if oversized
+        if: matrix.arch == 'x64'
+        run: |
+          for scratch in \
+            "$RUNNER_TOOL_CACHE/strato-swift-build-release/control-plane" \
+            "$RUNNER_TOOL_CACHE/strato-swift-build-release/agent"; do
+            if [ -d "$scratch" ]; then
+              size_kb=$(du -sk "$scratch" | cut -f1)
+              if [ "$size_kb" -gt $((12 * 1024 * 1024)) ]; then
+                echo "$scratch is $((size_kb / 1024 / 1024))GB (>12GB); wiping for a cold rebuild"
+                rm -rf "$scratch"
+              fi
+            fi
+          done
+
       # Cache key salt (`v2`): #386 moved the x64 leg out of the swift job
-      # container (checkout at /__w/strato/strato) onto the runner image
-      # (checkout at /home/runner/_work/strato/strato). Clang bakes absolute
-      # paths into the ModuleCache .pcm files it caches under .build, so the
-      # pre-#386 container-era cache is rejected on the new path with
-      # "missing required module 'SwiftShims'". Bumping the salt stops us
-      # restoring that poisoned cache; the cold rebuild saves a consistent one.
+      # container, poisoning the pre-#386 .build ModuleCache; the salt bump
+      # sidestepped it. x64 no longer uses this step (see above); arm64 does.
       - name: Cache Swift packages
+        if: matrix.arch == 'arm64'
         uses: actions/cache@v4
         with:
           path: |
@@ -85,13 +126,19 @@ jobs:
 
       - name: Build Control Plane Release Binary
         working-directory: control-plane
+        # On x64 the release build tree lives on the persistent scratch volume;
+        # on arm64 SCRATCH is empty (default .build). Using a bash array keeps the
+        # empty case a no-op without unquoted word-splitting.
         run: |
-          swift build -c release --product App -Xlinker -ljemalloc
+          SCRATCH=()
+          [ -n "$CP_SCRATCH_ARG" ] && SCRATCH=(--scratch-path "$CP_SCRATCH_ARG")
+          swift build -c release --product App -Xlinker -ljemalloc "${SCRATCH[@]}"
+          BIN="$(swift build -c release --show-bin-path "${SCRATCH[@]}")"
           # Create artifact directory structure
           mkdir -p ../artifacts/control-plane/bin
           mkdir -p ../artifacts/control-plane/resources
           # Copy binary
-          cp "$(swift build -c release --show-bin-path)/App" ../artifacts/control-plane/bin/
+          cp "$BIN/App" ../artifacts/control-plane/bin/
           # Copy swift-backtrace (try multiple possible locations)
           if [ -f "/usr/lib/swift/linux/swift-backtrace-static" ]; then
             cp "/usr/lib/swift/linux/swift-backtrace-static" ../artifacts/control-plane/bin/
@@ -101,18 +148,24 @@ jobs:
             echo "Warning: swift-backtrace-static not found, skipping"
           fi
           # Copy resources
-          find -L "$(swift build -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/control-plane/resources/ \; || true
+          find -L "$BIN/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/control-plane/resources/ \; || true
           # Copy Public and Resources directories
           [ -d Public ] && cp -R Public ../artifacts/control-plane/ || true
           [ -d Resources ] && cp -R Resources ../artifacts/control-plane/ || true
 
       - name: Build Agent Release Binary
         working-directory: agent
+        # On x64 the release build tree lives on the persistent scratch volume;
+        # on arm64 SCRATCH is empty (default .build). Using a bash array keeps the
+        # empty case a no-op without unquoted word-splitting.
         run: |
-          swift build -c release --product StratoAgent -Xlinker -ljemalloc
+          SCRATCH=()
+          [ -n "$AGENT_SCRATCH_ARG" ] && SCRATCH=(--scratch-path "$AGENT_SCRATCH_ARG")
+          swift build -c release --product StratoAgent -Xlinker -ljemalloc "${SCRATCH[@]}"
+          BIN="$(swift build -c release --show-bin-path "${SCRATCH[@]}")"
           mkdir -p ../artifacts/agent/bin
           mkdir -p ../artifacts/agent/resources
-          cp "$(swift build -c release --show-bin-path)/StratoAgent" ../artifacts/agent/bin/
+          cp "$BIN/StratoAgent" ../artifacts/agent/bin/
           # Copy swift-backtrace (try multiple possible locations)
           if [ -f "/usr/lib/swift/linux/swift-backtrace-static" ]; then
             cp "/usr/lib/swift/linux/swift-backtrace-static" ../artifacts/agent/bin/
@@ -122,7 +175,7 @@ jobs:
             echo "Warning: swift-backtrace-static not found, skipping"
           fi
           # Copy resources
-          find -L "$(swift build -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/agent/resources/ \; || true
+          find -L "$BIN/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/agent/resources/ \; || true
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -170,6 +223,12 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Docker gha caching is kept ONLY for the frontend, which compiles from
+      # source (bun) and genuinely benefits. The control-plane and agent images
+      # consume prebuilt binaries (nothing compiles in-image), so their layers
+      # are cheap to rebuild — yet their mode=max caches were ~5GB of the repo's
+      # ~11GB cache, the churn that evicted the Swift release .build every run.
+      # Dropping them frees the budget so the caches that matter survive.
       - name: Build Image (validate, no push)
         uses: docker/build-push-action@v5
         with:
@@ -179,8 +238,8 @@ jobs:
           load: ${{ matrix.arch == 'arm64' }}
           platforms: ${{ matrix.arch == 'x64' && 'linux/amd64' || 'linux/arm64' }}
           tags: strato-${{ matrix.image }}:ci
-          cache-from: type=gha,key=${{ matrix.image }}-${{ matrix.arch }}
-          cache-to: ${{ matrix.arch == 'x64' && format('type=gha,mode=max,key={0}-x64', matrix.image) || '' }}
+          cache-from: ${{ matrix.image == 'frontend' && 'type=gha,key=frontend-x64' || '' }}
+          cache-to: ${{ matrix.image == 'frontend' && 'type=gha,mode=max,key=frontend-x64' || '' }}
           build-args: ${{ matrix.prebuilt != '' && format('PREBUILT_ARTIFACTS={0}', matrix.prebuilt) || '' }}
 
   # Phase 2 — publish barrier. `needs: [build-images]` succeeds only if EVERY
@@ -237,6 +296,8 @@ jobs:
 
       # Ordered pushes: control-plane → agent → frontend. A failed step stops
       # the job, so frontend never publishes unless both backend images did.
+      # The prebuilt Swift images no longer keep a gha cache (see build-images),
+      # so these rebuild the cheap prebuilt layers (apt + copy binary) directly.
       - name: Push Control Plane Image
         uses: docker/build-push-action@v5
         with:
@@ -245,7 +306,6 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: ${{ steps.tags.outputs.cp }}
-          cache-from: type=gha,key=control-plane-x64
           build-args: |
             PREBUILT_ARTIFACTS=artifacts/control-plane
 
@@ -257,7 +317,6 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: ${{ steps.tags.outputs.agent }}
-          cache-from: type=gha,key=agent-x64
           build-args: |
             PREBUILT_ARTIFACTS=artifacts/agent
 
