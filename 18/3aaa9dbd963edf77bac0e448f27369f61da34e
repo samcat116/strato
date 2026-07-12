@@ -1,0 +1,21 @@
+control-plane/Tests/AppTests/UserCreationAndClaimTests.swift
+  s_b36c12691fceda::t_79f15c61371222 173-198
+control-plane/Sources/App/Controllers/UserController.swift
+  s_b36c12691fceda::t_c3dac43786190e 137-140,192-205,207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "183aaa9dbd963edf77bac0e448f27369f61da34e",
+  "prompts": {},
+  "sessions": {
+    "s_b36c12691fceda": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1c63ca92-0784-45e8-9097-491fccf4ebcb",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
