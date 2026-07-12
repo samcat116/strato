@@ -51,7 +51,20 @@ struct OIDCValidation {
     /// placeholder in the expected issuer is therefore matched as exactly one
     /// path segment (`[^/]+`) — permissive enough for the tenant substitution,
     /// tight enough that it can't span extra `/`-delimited segments.
+    ///
+    /// A single trailing slash is treated as insignificant on both sides: the
+    /// discovery URL (`.../.well-known/openid-configuration`) is identical whether
+    /// the issuer is `https://x` or `https://x/`, so a URL-derived issuer can't
+    /// know which form the IdP uses (Google omits it, Auth0 includes it). The two
+    /// forms denote the same issuer, so normalizing the slash can't match a
+    /// different issuer.
     static func issuerMatches(expected: String, actual: String) -> Bool {
+        func trimTrailingSlash(_ s: String) -> String {
+            s.hasSuffix("/") ? String(s.dropLast()) : s
+        }
+        let expected = trimTrailingSlash(expected)
+        let actual = trimTrailingSlash(actual)
+
         if expected == actual { return true }
         // Only templated issuers need pattern matching; a plain mismatch fails.
         guard expected.contains("{") else { return false }

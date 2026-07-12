@@ -167,6 +167,18 @@ struct OIDCValidationTests {
         #expect(!OIDCValidation.issuerMatches(expected: "https://a.example.com", actual: "https://axexample.com"))
     }
 
+    @Test("issuerMatches tolerates a single trailing-slash difference")
+    func testIssuerTrailingSlash() {
+        // A URL-derived issuer can't know whether the IdP uses a trailing slash
+        // (Auth0 does, Google doesn't); both forms are the same issuer.
+        #expect(
+            OIDCValidation.issuerMatches(expected: "https://tenant.auth0.com", actual: "https://tenant.auth0.com/"))
+        #expect(
+            OIDCValidation.issuerMatches(expected: "https://tenant.auth0.com/", actual: "https://tenant.auth0.com"))
+        // A genuine mismatch is still rejected even with slashes involved.
+        #expect(!OIDCValidation.issuerMatches(expected: "https://a.example.com", actual: "https://b.example.com/"))
+    }
+
     // MARK: - discoveryIssuer
 
     @Test("discoveryIssuer strips the well-known suffix for standard IdPs")
