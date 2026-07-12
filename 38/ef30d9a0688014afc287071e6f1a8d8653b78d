@@ -1,0 +1,29 @@
+control-plane/Sources/App/Services/OIDCTokenVerification.swift
+  s_041fa0100c6687::t_880efa29192151 83-106
+  s_041fa0100c6687::t_e3302511bf3e04 70-72
+  s_041fa0100c6687::t_a6fb30c4791e90 48
+  s_041fa0100c6687::t_d0a41c91c015fe 38
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_041fa0100c6687::t_4f1e59b3d2903b 831-834
+control-plane/Tests/AppTests/OIDCTokenVerificationTests.swift
+  s_041fa0100c6687::t_18674fc5d37a79 131,149,167,190,229,243
+  s_041fa0100c6687::t_ff63b402f79c07 194-206
+  s_041fa0100c6687::t_e816c2b1d08385 111-112,130,148,165,188,228,242,251,255,258
+  s_041fa0100c6687::t_22cf95168046ad 191-193
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "38ef30d9a0688014afc287071e6f1a8d8653b78d",
+  "prompts": {},
+  "sessions": {
+    "s_041fa0100c6687": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "43b5e7ec-987e-4360-9c72-a8198996ad58",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
