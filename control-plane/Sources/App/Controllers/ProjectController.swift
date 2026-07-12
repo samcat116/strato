@@ -351,6 +351,14 @@ struct ProjectController: RouteCollection {
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
+        // Verify the OU actually belongs to that organization. Without this a member
+        // of org A could enumerate org B's projects by supplying B's OU id.
+        guard let ou = try await OrganizationalUnit.find(ouID, on: req.db),
+            ou.$organization.id == organizationID
+        else {
+            throw Abort(.notFound, reason: "Organizational unit not found")
+        }
+
         // Get projects in OU
         let projects = try await Project.query(on: req.db)
             .filter(\.$organizationalUnit.$id == ouID)
