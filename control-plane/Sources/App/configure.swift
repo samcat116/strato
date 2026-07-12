@@ -326,6 +326,13 @@ public func configure(_ app: Application) async throws {
     // the legacy single-address NIC columns is over, drop them.
     app.migrations.add(DropLegacyVMInterfaceAddressColumns())
 
+    // Storage phase 1 (issue #349): pools + per-volume replicas; existing
+    // volumes are adopted into the seeded default local pool.
+    app.migrations.add(CreateStoragePool())
+    app.migrations.add(CreateVolumeReplica())
+    app.migrations.add(AddStoragePoolToVolume())
+    app.migrations.add(BackfillVolumePools())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen

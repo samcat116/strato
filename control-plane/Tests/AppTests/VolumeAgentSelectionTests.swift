@@ -89,4 +89,27 @@ struct VolumeAgentSelectionTests {
 
         #expect(VolumeService.selectVolumeAgent(from: agents)?.name == "dual")
     }
+
+    @Test("restricts selection to pool member agents when a member list is set")
+    func testPoolMemberRestriction() throws {
+        let member = makeAgent(id: "member", hypervisors: [hypervisor(.qemu)])
+        let outsider = makeAgent(id: "outsider", hypervisors: [hypervisor(.qemu)])
+        let memberId = try #require(member.id?.uuidString)
+
+        let selected = VolumeService.selectVolumeAgent(
+            from: [outsider, member], memberAgentIds: [memberId])
+        #expect(selected?.name == "member")
+
+        // No eligible agent is in the member list.
+        let outsiderOnly = VolumeService.selectVolumeAgent(
+            from: [outsider], memberAgentIds: [memberId])
+        #expect(outsiderOnly == nil)
+    }
+
+    @Test("an empty member list leaves every QEMU-capable agent eligible")
+    func testEmptyMemberListIsUnrestricted() {
+        let agents = [makeAgent(id: "any", hypervisors: [hypervisor(.qemu)])]
+
+        #expect(VolumeService.selectVolumeAgent(from: agents, memberAgentIds: [])?.name == "any")
+    }
 }

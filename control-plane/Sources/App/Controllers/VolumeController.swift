@@ -160,6 +160,10 @@ struct VolumeController: RouteCollection {
         // Calculate size in bytes
         let sizeBytes = Double(request.sizeGB).gbToBytes
 
+        // Every volume lives in a pool; without a pool-selection API yet,
+        // that's the default local pool seeded by migration.
+        let pool = try await StoragePool.defaultPool(on: req.db)
+
         // Create volume record
         let volume = Volume(
             name: request.name,
@@ -170,6 +174,7 @@ struct VolumeController: RouteCollection {
             volumeType: volumeType,
             status: .creating,
             createdByID: user.id!,
+            poolID: pool.id,
             sourceImageID: request.sourceImageId
         )
 
@@ -380,16 +385,34 @@ struct VolumeController: RouteCollection {
             )
         }
 
-        // Check that volume and VM are on the same hypervisor (if volume has a hypervisor)
-        if let volumeHypervisorId = volume.hypervisorId,
-            let vmHypervisorId = vm.hypervisorId,
-            volumeHypervisorId != vmHypervisorId
-        {
-            throw Abort(
-                .badRequest,
-                reason:
-                    "Volume and VM must be on the same hypervisor. Volume is on '\(volumeHypervisorId)', VM is on '\(vmHypervisorId)'"
-            )
+        // Pool-aware reachability guard: the VM's agent must be able to reach
+        // the volume's data. For a `local` pool that means the agent holding
+        // the volume's single replica — identical to the old same-hypervisor
+        // check; for a `replicated` pool, any member agent. Skipped when the
+        // VM has no agent yet, matching the old guard (the attachment request
+        // below then fails with vmNotScheduled).
+        if let vmHypervisorId = vm.hypervisorId {
+            let pool = try await volume.$pool.get(on: req.db)
+            var replicaAgentIds = try await VolumeReplica.query(on: req.db)
+                .filter(\.$volume.$id == volume.id!)
+                .all()
+                .map(\.agentId)
+            // Rows without a replica (mid-provisioning races) still carry the
+            // dual-written legacy column.
+            if replicaAgentIds.isEmpty, let legacyAgentId = volume.hypervisorId {
+                replicaAgentIds = [legacyAgentId]
+            }
+
+            guard
+                StoragePool.agentCanReach(
+                    agentId: vmHypervisorId, pool: pool, replicaAgentIds: replicaAgentIds)
+            else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "Volume is not reachable from the VM's agent. Volume is on '\(replicaAgentIds.joined(separator: ", "))', VM is on '\(vmHypervisorId)'"
+                )
+            }
         }
 
         // Generate device name if not provided
@@ -400,13 +423,14 @@ struct VolumeController: RouteCollection {
             deviceName = try await generateDeviceName(for: vm, on: req.db)
         }
 
-        // Mark as attaching. The volume's hypervisorId is set at provisioning
-        // and must not be overwritten here — the same-hypervisor check above
-        // already guarantees it matches the VM's.
+        // Mark as attaching. The volume's replica placement is set at
+        // provisioning and must not be overwritten here — the reachability
+        // check above already guarantees the VM's agent can reach it.
         volume.status = .attaching
         volume.$vm.id = vm.id
         volume.deviceName = deviceName
         volume.bootOrder = request.bootOrder
+        volume.attachedAgentId = vm.hypervisorId
         try await volume.save(on: req.db)
 
         // Send hot-plug message to agent
@@ -423,6 +447,7 @@ struct VolumeController: RouteCollection {
             volume.$vm.id = nil
             volume.deviceName = nil
             volume.bootOrder = nil
+            volume.attachedAgentId = nil
             try await volume.save(on: req.db)
             throw error
         }
@@ -497,6 +522,7 @@ struct VolumeController: RouteCollection {
         volume.$vm.id = nil
         volume.deviceName = nil
         volume.bootOrder = nil
+        volume.attachedAgentId = nil
         volume.status = .available
         try await volume.save(on: req.db)
 
@@ -698,7 +724,8 @@ struct VolumeController: RouteCollection {
         sourceVolume.status = .cloning
         try await sourceVolume.save(on: req.db)
 
-        // Create new volume record
+        // Create new volume record. The clone is materialized on the source's
+        // agent, so it lives in the source's pool.
         let newVolume = Volume(
             name: request.name,
             description: request.description ?? "Clone of \(sourceVolume.name)",
@@ -708,6 +735,7 @@ struct VolumeController: RouteCollection {
             volumeType: sourceVolume.volumeType,
             status: .creating,
             createdByID: user.id!,
+            poolID: sourceVolume.$pool.id,
             sourceVolumeID: sourceVolume.id
         )
 
