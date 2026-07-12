@@ -839,6 +839,34 @@ final class OIDCControllerTests: BaseTestCase {
         }
     }
 
+    @Test("Endpoint URLs keep their own query parameters (e.g. B2C policy selectors)")
+    func testEndpointQueryParametersPreserved() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "B2C",
+                authorizationEndpoint: "https://idp.example.com/authorize?p=b2c_1_signin",
+                endSessionEndpoint: "https://idp.example.com/logout?p=b2c_1_signin")
+
+            let authURL = try #require(
+                provider.getAuthorizationURL(
+                    redirectURI: "https://cloud.example.com/cb", state: "s", nonce: "n"))
+            let authQuery = Dictionary(
+                uniqueKeysWithValues: (URLComponents(string: authURL)?.queryItems ?? [])
+                    .map { ($0.name, $0.value ?? "") })
+            #expect(authQuery["p"] == "b2c_1_signin")
+            #expect(authQuery["client_id"] == "client-B2C")
+
+            let sloURL = try #require(
+                provider.getEndSessionURL(idTokenHint: "t", postLogoutRedirectURI: nil))
+            let sloQuery = Dictionary(
+                uniqueKeysWithValues: (URLComponents(string: sloURL)?.queryItems ?? [])
+                    .map { ($0.name, $0.value ?? "") })
+            #expect(sloQuery["p"] == "b2c_1_signin")
+            #expect(sloQuery["id_token_hint"] == "t")
+        }
+    }
+
     @Test("Provider CRUD stores, updates, and validates the end-session endpoint")
     func testEndSessionEndpointCRUD() async throws {
         try await withApp { app in

@@ -207,7 +207,11 @@ extension OIDCProvider {
         guard let authEndpoint = authorizationEndpoint else { return nil }
 
         var components = URLComponents(string: authEndpoint)
-        var queryItems: [URLQueryItem] = [
+        // Seed with the endpoint's own query items — some IdPs embed tenant or
+        // policy selectors in the URL (e.g. Azure AD B2C's `?p=<policy>`), and
+        // overwriting them would send the request to the wrong flow.
+        var queryItems: [URLQueryItem] = components?.queryItems ?? []
+        queryItems += [
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "redirect_uri", value: redirectURI),
             URLQueryItem(name: "response_type", value: "code"),
@@ -236,7 +240,10 @@ extension OIDCProvider {
         guard let endSessionEndpoint else { return nil }
 
         var components = URLComponents(string: endSessionEndpoint)
-        var queryItems: [URLQueryItem] = [URLQueryItem(name: "client_id", value: clientID)]
+        // Preserve the endpoint's own query items (tenant/policy selectors),
+        // same as getAuthorizationURL.
+        var queryItems = components?.queryItems ?? []
+        queryItems.append(URLQueryItem(name: "client_id", value: clientID))
         if let idTokenHint {
             queryItems.append(URLQueryItem(name: "id_token_hint", value: idTokenHint))
         }
