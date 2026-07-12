@@ -1,0 +1,24 @@
+docs/deployment/iam.md
+  s_8175a76a1576f0::t_5d911ddbc52920 17
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_8175a76a1576f0::t_fb48c8fce8de3b 51-53
+  s_8175a76a1576f0::t_c7c11292b452a7 72-88
+control-plane/Tests/AppTests/OIDCIdentityMappingTests.swift
+  s_8175a76a1576f0::t_4a6211b301d090 194-229
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "2f8ddb8852ec1e209f1d6beadcf7c549208daef3",
+  "prompts": {},
+  "sessions": {
+    "s_8175a76a1576f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1080cc85-15d2-47f7-a8fa-3e986c31849d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
