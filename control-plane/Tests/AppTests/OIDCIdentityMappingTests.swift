@@ -516,12 +516,26 @@ final class OIDCIdentityMappingTests {
         }
     }
 
-    @Test("The organization's last admin is never demoted by claim mapping")
+    @Test("The organization's last usable admin is never demoted by claim mapping")
     func roleReconcileLastAdminGuard() async throws {
         try await withIdentityTestApp(adminClaimValues: ["strato-admins"]) { app, org, provider, service, _ in
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(username: "lastadmin", email: "last@example.com")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
+
+            // Other admins exist but none can sign in: one disabled by SSF,
+            // one deactivated via SCIM. They must not count as available
+            // admins, or demoting `user` locks the org out.
+            let disabled = try await builder.createUser(username: "ssfdisabled", email: "ssf@example.com")
+            disabled.disabledAt = Date()
+            try await disabled.save(on: app.db)
+            try await builder.addUserToOrganization(user: disabled, organization: org, role: "admin")
+
+            let deactivated = User(
+                username: "scimgone", email: "scimgone@example.com", displayName: "Gone",
+                isSystemAdmin: false, scimProvisioned: true, scimActive: false)
+            try await deactivated.save(on: app.db)
+            try await builder.addUserToOrganization(user: deactivated, organization: org, role: "admin")
 
             try await service.reconcileOrganizationRole(
                 user: user, provider: provider, organizationID: org.id!, groupValues: [])
@@ -529,6 +543,15 @@ final class OIDCIdentityMappingTests {
             let membership = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
             #expect(membership?.role == "admin")
+
+            // With a usable second admin, the demotion proceeds.
+            let usable = try await builder.createUser(username: "usableadmin", email: "usable@example.com")
+            try await builder.addUserToOrganization(user: usable, organization: org, role: "admin")
+            try await service.reconcileOrganizationRole(
+                user: user, provider: provider, organizationID: org.id!, groupValues: [])
+            let demoted = try await UserOrganization.query(on: app.db)
+                .filter(\.$user.$id == user.id!).first()
+            #expect(demoted?.role == "member")
         }
     }
 }

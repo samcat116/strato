@@ -292,10 +292,20 @@ struct OIDCIdentityService {
         guard membership.role != desired else { return }
 
         if membership.role == "admin" {
+            // Only admins who can actually sign in count: an admin disabled
+            // by SSF or deactivated via SCIM keeps their membership row but
+            // is blocked at login, so demoting the last *usable* admin would
+            // still lock the org out.
             let otherAdmins = try await UserOrganization.query(on: db)
                 .filter(\.$organization.$id == organizationID)
                 .filter(\.$role == "admin")
                 .filter(\.$user.$id != userID)
+                .join(User.self, on: \UserOrganization.$user.$id == \User.$id)
+                .filter(User.self, \.$disabledAt == nil)
+                .group(.or) { active in
+                    active.filter(User.self, \.$scimProvisioned == false)
+                    active.filter(User.self, \.$scimActive == true)
+                }
                 .count()
             if otherAdmins == 0 {
                 logger.warning(
