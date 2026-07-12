@@ -6,11 +6,15 @@ FROM swift:6.3.2-noble AS build
 # Check if we're using prebuilt artifacts
 ARG PREBUILT_ARTIFACTS=""
 
-# Install OS updates
-RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
-    && apt-get -q update \
-    && apt-get -q dist-upgrade -y \
-    && apt-get install -y libjemalloc-dev
+# Install OS updates + the jemalloc headers the release build links against.
+# Skipped in prebuilt-artifacts mode: nothing is compiled in this stage then,
+# so the build image only serves as the source of the Swift runtime .so files.
+RUN if [ -z "$PREBUILT_ARTIFACTS" ]; then \
+        export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
+        && apt-get -q update \
+        && apt-get -q dist-upgrade -y \
+        && apt-get install -y libjemalloc-dev; \
+    fi
 
 # Set up a build area
 WORKDIR /build
@@ -25,8 +29,12 @@ COPY ./control-plane/Package.* ./control-plane/
 WORKDIR /build/control-plane
 # Update Package.swift to use absolute path for shared package in Docker
 RUN sed -i 's|.package(path: "../shared")|.package(path: "/build/shared")|' Package.swift
-RUN swift package resolve \
-    $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true)
+# Resolving fetches all ~60 dependency checkouts purely to feed the compile,
+# so skip it in prebuilt-artifacts mode where nothing is compiled here.
+RUN if [ -z "$PREBUILT_ARTIFACTS" ]; then \
+        swift package resolve \
+            $([ -f ./Package.resolved ] && echo "--force-resolved-versions" || true); \
+    fi
 
 # Copy entire control-plane repo into container
 WORKDIR /build/control-plane

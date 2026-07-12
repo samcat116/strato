@@ -10,9 +10,8 @@ permissions:
   packages: write
   actions: read
 
-# Rapid merges to main can stack builds on the runners (the x64 Docker job
-# still runs on the single static self-hosted runner). This build only
-# validates (Docker push: false), so keep just the latest.
+# Rapid merges to main can stack builds on the runners, so keep just the
+# latest run per ref.
 concurrency:
   group: main-build-${{ github.ref }}
   cancel-in-progress: true
@@ -132,16 +131,25 @@ jobs:
           path: artifacts/
           retention-days: 1
 
-  build:
-    name: Build Docker Images
+  # The three images build in their own jobs so they run in parallel on
+  # hosted runners. This previously was one job that built all three serially
+  # on the single static self-hosted runner (one job at a time), which put
+  # ~28 min of serial Docker work on the critical path.
+  #
+  # Only the amd64 legs publish: the hosted DOKS test cluster (dev.stratocloud.app)
+  # runs amd64 nodes, so arm64 stays validate-only (build + load, no push). Images
+  # go to GHCR tagged both a moving `main` (humans) and an immutable `main-<sha>`
+  # (Argo CD image-updater tracks this via a `^main-[0-9a-f]{7,40}$` allow-tags regexp).
+  docker-control-plane:
+    name: Build Control Plane Image
     needs: [build-swift-release]
-    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'self-hosted' }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: x64
           - arch: arm64
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -154,22 +162,11 @@ jobs:
         continue-on-error: true
 
       - name: Prepare build context
-        run: |
-          # Create empty artifacts directory if it doesn't exist
-          mkdir -p ./artifacts
-          if [ -d "artifacts/control-plane" ]; then
-            echo "Artifacts found, ready for Docker build"
-          else
-            echo "No artifacts found, will build from source"
-          fi
+        run: mkdir -p ./artifacts
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Only the amd64 leg publishes: the hosted DOKS test cluster (dev.stratocloud.app)
-      # runs amd64 nodes, so arm64 stays validate-only. Images go to GHCR tagged both a
-      # moving `main` (humans) and an immutable `main-<sha>` (Argo CD image-updater tracks
-      # this via a `^main-[0-9a-f]{7,40}$` allow-tags regexp).
       - name: Log in to GHCR
         if: matrix.arch == 'x64'
         uses: docker/login-action@v3
@@ -184,11 +181,7 @@ jobs:
         run: |
           SHA="${GITHUB_SHA::12}"
           REPO="ghcr.io/${GITHUB_REPOSITORY}"
-          {
-            echo "cp=${REPO}-control-plane:main,${REPO}-control-plane:main-${SHA}"
-            echo "fe=${REPO}-frontend:main,${REPO}-frontend:main-${SHA}"
-            echo "agent=${REPO}-agent:main,${REPO}-agent:main-${SHA}"
-          } >> "$GITHUB_OUTPUT"
+          echo "cp=${REPO}-control-plane:main,${REPO}-control-plane:main-${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Build Control Plane Docker Image
         uses: docker/build-push-action@v5
@@ -204,8 +197,51 @@ jobs:
           build-args: |
             PREBUILT_ARTIFACTS=artifacts/control-plane
 
-      # Hypervisor hosts pull this image directly (docs/deployment/agents.md),
-      # so it publishes alongside the control plane with the same tagging.
+  # Hypervisor hosts pull this image directly (docs/deployment/agents.md),
+  # so it publishes alongside the control plane with the same tagging.
+  docker-agent:
+    name: Build Agent Image
+    needs: [build-swift-release]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+          - arch: arm64
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: swift-binaries-${{ matrix.arch }}
+          path: artifacts/
+        continue-on-error: true
+
+      - name: Prepare build context
+        run: mkdir -p ./artifacts
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: matrix.arch == 'x64'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        if: matrix.arch == 'x64'
+        id: tags
+        run: |
+          SHA="${GITHUB_SHA::12}"
+          REPO="ghcr.io/${GITHUB_REPOSITORY}"
+          echo "agent=${REPO}-agent:main,${REPO}-agent:main-${SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Build Agent Docker Image
         uses: docker/build-push-action@v5
         with:
@@ -220,10 +256,36 @@ jobs:
           build-args: |
             PREBUILT_ARTIFACTS=artifacts/agent
 
-      # Frontend builds from source inside its Dockerfile (bun), so it needs no
-      # prebuilt artifacts. Publish amd64 only, alongside the control plane.
+  # Frontend builds from source inside its Dockerfile (bun), so it needs no
+  # prebuilt artifacts. Publish amd64 only, alongside the control plane. It
+  # still gates on build-swift-release so a failed backend build doesn't
+  # publish a frontend image for a half-built commit.
+  docker-frontend:
+    name: Build Frontend Image
+    needs: [build-swift-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          SHA="${GITHUB_SHA::12}"
+          REPO="ghcr.io/${GITHUB_REPOSITORY}"
+          echo "fe=${REPO}-frontend:main,${REPO}-frontend:main-${SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Build and push Frontend Docker Image
-        if: matrix.arch == 'x64'
         uses: docker/build-push-action@v5
         with:
           context: control-plane/web
@@ -231,5 +293,5 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: ${{ steps.tags.outputs.fe }}
-          cache-from: type=gha,key=frontend-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,key=frontend-${{ matrix.arch }}
+          cache-from: type=gha,key=frontend-x64
+          cache-to: type=gha,mode=max,key=frontend-x64
