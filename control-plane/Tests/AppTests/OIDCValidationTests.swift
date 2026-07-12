@@ -212,6 +212,22 @@ struct OIDCValidationTests {
             ) == "https://sts.windows.net/11111111-1111-1111-1111-111111111111/")
     }
 
+    @Test("discoveryIssuer leaves Entra domain authorities unbackfillable")
+    func testDiscoveryIssuerEntraDomain() {
+        // A tenant *domain* resolves to the GUID issuer in metadata, which the URL
+        // doesn't contain — must not be stored as the domain URL. nil = fail closed.
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL:
+                    "https://login.microsoftonline.com/contoso.onmicrosoft.com/v2.0/.well-known/openid-configuration")
+                == nil)
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL:
+                    "https://login.microsoftonline.com/contoso.onmicrosoft.com/.well-known/openid-configuration")
+                == nil)
+    }
+
     @Test("discoveryIssuer returns nil for a URL without the well-known suffix")
     func testDiscoveryIssuerNoSuffix() {
         #expect(OIDCValidation.discoveryIssuer(forDiscoveryURL: "https://idp.example.com/issuer") == nil)

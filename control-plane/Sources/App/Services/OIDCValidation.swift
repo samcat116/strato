@@ -88,11 +88,17 @@ struct OIDCValidation {
     ///  * Microsoft Entra `login.microsoftonline.com`:
     ///    - v2.0 endpoints (`.../{tenant}/v2.0`): issuer is
     ///      `.../{tenant}/v2.0`. Multi-tenant aliases (`common`/`organizations`/
-    ///      `consumers`) are templated to `{tenantid}`; a concrete tenant is exact.
+    ///      `consumers`) are templated to `{tenantid}`; a concrete tenant GUID is
+    ///      exact.
     ///    - v1 endpoints (no `/v2.0`): the issuer lives on a *different* host,
-    ///      `https://sts.windows.net/{tenant}/`, so it can't be recovered by
+    ///      `https://sts.windows.net/{tenantid}/`, so it can't be recovered by
     ///      stripping. Emit that form — templated for a multi-tenant alias,
-    ///      concrete for a specific tenant. `issuerMatches` validates both.
+    ///      concrete for a specific tenant GUID. `issuerMatches` validates both.
+    ///
+    ///    A Microsoft tenant segment that is a *domain* authority (e.g.
+    ///    `contoso.onmicrosoft.com`) resolves in metadata to the tenant's GUID
+    ///    issuer, which the URL doesn't contain — so it's returned as
+    ///    unbackfillable (nil) rather than stored as the (wrong) domain URL.
     static func discoveryIssuer(forDiscoveryURL url: String) -> String? {
         guard url.hasSuffix(discoveryWellKnownSuffix) else { return nil }
         let base = String(url.dropLast(discoveryWellKnownSuffix.count))
@@ -106,19 +112,26 @@ struct OIDCValidation {
         let segments = parsed.path.split(separator: "/").map(String.init)
         let multiTenantAliases: Set<String> = ["common", "organizations", "consumers"]
         let tenant = segments.first
+        let isAlias = tenant.map { multiTenantAliases.contains($0) } ?? false
+        // Only a tenant GUID appears verbatim in the issuer; a domain authority
+        // resolves to a GUID we can't derive from the URL.
+        let isGUID = tenant.flatMap { UUID(uuidString: $0) } != nil
         let isV2 = segments.last == "v2.0"
 
         if isV2 {
-            if let tenant, multiTenantAliases.contains(tenant) {
+            if isAlias {
                 return "https://login.microsoftonline.com/{tenantid}/v2.0"
             }
-            return base
+            return isGUID ? base : nil
         }
         // v1: issuer host is sts.windows.net.
-        if let tenant, !multiTenantAliases.contains(tenant) {
+        if isAlias {
+            return "https://sts.windows.net/{tenantid}/"
+        }
+        if let tenant, isGUID {
             return "https://sts.windows.net/\(tenant)/"
         }
-        return "https://sts.windows.net/{tenantid}/"
+        return nil
     }
 
     /// Resolves the email address to link on and whether the IdP considers it

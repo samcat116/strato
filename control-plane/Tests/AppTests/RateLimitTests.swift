@@ -47,7 +47,8 @@ struct RateLimitTests {
         failureThreshold: Int = 5,
         failureBaseDelay: Int = 2,
         failureMaxDelay: Int = 300,
-        failureWindow: Int = 900
+        failureWindow: Int = 900,
+        trustedProxyHops: Int = 1
     ) -> RateLimitConfig {
         RateLimitConfig(
             enabled: true,
@@ -59,7 +60,8 @@ struct RateLimitTests {
             failureBaseDelay: failureBaseDelay,
             failureMaxDelay: failureMaxDelay,
             failureWindow: failureWindow,
-            trustForwardedFor: true
+            trustForwardedFor: true,
+            trustedProxyHops: trustedProxyHops
         )
     }
 
@@ -194,23 +196,40 @@ struct RateLimitTests {
         }
     }
 
-    @Test("X-Real-IP is trusted over a client-supplied X-Forwarded-For")
-    func testRealIPPreferredOverForwardedFor() async throws {
-        // The proxy sets X-Real-IP to the immediate peer; a forged XFF must not
-        // override it. Both requests carry different (spoofed) XFF values but the
-        // same X-Real-IP, so they share a bucket and the second is throttled.
-        try await withRateLimitedApp(config: baseConfig(apiLimit: 1)) { app in
+    @Test("With two trusted hops the client is read second-from-right, not spoofable")
+    func testTrustedProxyHopsSelectsClient() async throws {
+        // Topology: client -> TLS terminator -> nginx -> app. The two rightmost
+        // XFF entries are appended by nginx and the terminator; the client is the
+        // third-from... i.e. hops=2 → second-from-right. Varying only the leftmost
+        // (client-supplied) entry must not create a new bucket.
+        try await withRateLimitedApp(config: baseConfig(apiLimit: 1, trustedProxyHops: 2)) { app in
             var first = HTTPHeaders()
-            first.add(name: "X-Real-IP", value: "9.9.9.9")
-            first.add(name: "X-Forwarded-For", value: "1.1.1.1")
+            first.add(name: "X-Forwarded-For", value: "1.1.1.1, 5.5.5.5, 9.9.9.9")
             try await app.test(.GET, "/api/things", headers: first) { res async throws in
                 #expect(res.status == .ok)
             }
             var second = HTTPHeaders()
-            second.add(name: "X-Real-IP", value: "9.9.9.9")
-            second.add(name: "X-Forwarded-For", value: "2.2.2.2")
+            second.add(name: "X-Forwarded-For", value: "2.2.2.2, 5.5.5.5, 9.9.9.9")
             try await app.test(.GET, "/api/things", headers: second) { res async throws in
+                // Same second-from-right entry (5.5.5.5) → same bucket → throttled.
                 #expect(res.status == .tooManyRequests)
+            }
+        }
+    }
+
+    @Test("A distinct client second-from-right gets its own bucket")
+    func testTrustedProxyHopsDistinctClients() async throws {
+        try await withRateLimitedApp(config: baseConfig(apiLimit: 1, trustedProxyHops: 2)) { app in
+            var first = HTTPHeaders()
+            first.add(name: "X-Forwarded-For", value: "1.1.1.1, 5.5.5.5, 9.9.9.9")
+            try await app.test(.GET, "/api/things", headers: first) { res async throws in
+                #expect(res.status == .ok)
+            }
+            var second = HTTPHeaders()
+            second.add(name: "X-Forwarded-For", value: "1.1.1.1, 6.6.6.6, 9.9.9.9")
+            try await app.test(.GET, "/api/things", headers: second) { res async throws in
+                // Different second-from-right (6.6.6.6) → separate bucket → allowed.
+                #expect(res.status == .ok)
             }
         }
     }
