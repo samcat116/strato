@@ -275,6 +275,55 @@ final class OIDCControllerTests: BaseTestCase {
         }
     }
 
+    @Test("Client secrets are stored encrypted at rest and re-encrypted on update")
+    func testClientSecretEncryptedAtRest() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let key = try SecretsEncryptionService.parseKey(String(repeating: "ef", count: 32))
+            app.secretsEncryption = SecretsEncryptionService(key: key)
+
+            var providerID: UUID?
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    CreateOIDCProviderRequest(
+                        name: "Okta",
+                        clientID: "client-123",
+                        clientSecret: "top-secret-original",
+                        authorizationEndpoint: "https://idp.example.com/authorize",
+                        tokenEndpoint: "https://idp.example.com/token",
+                        jwksURI: "https://idp.example.com/.well-known/jwks.json"
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                providerID = try res.content.decode(OIDCProviderResponse.self).id
+            }
+
+            let created = try await OIDCProvider.find(providerID, on: app.db)
+            let storedSecret = try #require(created?.clientSecret)
+            #expect(storedSecret.hasPrefix(SecretsEncryptionService.encryptedPrefix))
+            #expect(!storedSecret.contains("top-secret-original"))
+            let decrypted = try app.secretsEncryption.decrypt(storedSecret)
+            #expect(decrypted == "top-secret-original")
+
+            // Rotating the secret through the update path re-encrypts it.
+            try await app.test(
+                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(providerID!)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(UpdateOIDCProviderRequest(clientSecret: "rotated-secret"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            let updated = try await OIDCProvider.find(providerID, on: app.db)
+            let rotatedStored = try #require(updated?.clientSecret)
+            #expect(rotatedStored.hasPrefix(SecretsEncryptionService.encryptedPrefix))
+            let rotatedDecrypted = try app.secretsEncryption.decrypt(rotatedStored)
+            #expect(rotatedDecrypted == "rotated-secret")
+        }
+    }
+
     @Test("Clearing the discovery URL clears the stored issuer")
     func testUpdateClearingDiscoveryClearsIssuer() async throws {
         try await withApp { app in

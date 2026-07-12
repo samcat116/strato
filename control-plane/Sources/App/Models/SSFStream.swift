@@ -33,8 +33,8 @@ final class SSFStream: Model, @unchecked Sendable {
     var transmitterURL: String
 
     /// Bearer token for the transmitter's stream-management API.
-    /// Stored plaintext (like OIDCProvider.clientSecret); never serialized
-    /// into API responses.
+    /// Stored encrypted at rest by `SecretsEncryptionService` (like
+    /// OIDCProvider.clientSecret); never serialized into API responses.
     @OptionalField(key: "auth_token")
     var authToken: String?
 

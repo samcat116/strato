@@ -161,6 +161,14 @@ spec:
                   name: "{{ include "strato-control-plane.spicedb.fullname" . }}-config"
                   key: "preshared-key"
             {{- end }}
+            {{- if .Values.strato.secretEncryption.existingSecret }}
+            # At-rest encryption key for stored secrets (OIDC client secrets).
+            - name: STRATO_SECRET_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Values.strato.secretEncryption.existingSecret }}"
+                  key: "{{ .Values.strato.secretEncryption.key }}"
+            {{- end }}
             - name: WEBAUTHN_RELYING_PARTY_ID
               value: "{{ include "strato-control-plane.webauthnRelyingPartyId" . }}"
             - name: WEBAUTHN_RELYING_PARTY_NAME
@@ -185,6 +193,16 @@ spec:
             # default to the public origin agents can actually resolve.
             - name: CONTROL_PLANE_URL
               value: "{{ .Values.strato.controlPlaneUrl | default (include "strato-control-plane.webauthnOrigin" .) }}"
+            {{- with .Values.strato.oidc }}
+            {{- if .discoveryAllowedHosts }}
+            - name: OIDC_DISCOVERY_ALLOWED_HOSTS
+              value: "{{ join "," .discoveryAllowedHosts }}"
+            {{- end }}
+            {{- if .discoveryAllowedSuffixes }}
+            - name: OIDC_DISCOVERY_ALLOWED_SUFFIXES
+              value: "{{ join "," .discoveryAllowedSuffixes }}"
+            {{- end }}
+            {{- end }}
             {{- if .Values.strato.lokiEndpoint }}
             # Loki base URL for VM console-log queries (and the loki audit
             # backend). The chart ships no Loki, so this is opt-in.

@@ -88,7 +88,7 @@ actor SSFService {
         let audience = stream.expectedAudienceArray
         let configuration = SSFReceiverConfiguration(
             transmitterURL: transmitterURL,
-            authToken: stream.authToken,
+            authToken: try stream.authToken.map { try app.secretsEncryption.decrypt($0) },
             expectedIssuer: stream.expectedIssuer.flatMap(URL.init(string:)),
             expectedAudience: audience.isEmpty ? nil : audience,
             allowUnverifiedTokens: allowUnverified,

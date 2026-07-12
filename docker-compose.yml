@@ -72,6 +72,9 @@ services:
       DATABASE_TLS: disable
       SPICEDB_ENDPOINT: http://spicedb:8080
       SPICEDB_PRESHARED_KEY: strato-dev-key
+      # Fixed dev key so local development exercises the at-rest encryption
+      # path for OIDC client secrets. Never reuse outside local dev.
+      STRATO_SECRET_ENCRYPTION_KEY: 6465616462656566646561646265656664656164626565666465616462656566
       # In-memory SpiceDB starts with no schema; the control plane loads this
       # one at startup (see ensureSpiceDBSchema).
       SPICEDB_SCHEMA_PATH: /app/spicedb/schema.zed

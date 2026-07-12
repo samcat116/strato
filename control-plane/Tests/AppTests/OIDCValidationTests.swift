@@ -116,6 +116,7 @@ struct OIDCValidationTests {
     func testDefaultAllowedHosts() {
         #expect(OIDCValidation.defaultAllowedHosts.contains("accounts.google.com"))
         #expect(OIDCValidation.defaultAllowedHosts.contains("login.microsoftonline.com"))
+        #expect(OIDCValidation.defaultAllowedHosts.contains("discord.com"))
     }
 
     @Test("default suffix allow-list contains the well-known suffixes")
@@ -371,5 +372,45 @@ struct OIDCValidationTests {
     func testResolveBaseURLDevelopmentFallback() throws {
         let url = try OIDCValidation.resolveBaseURL(configured: nil, environment: .development)
         #expect(url == "http://localhost:8080")
+    }
+
+    // MARK: - resolveProfile
+
+    @Test("ID-token profile claims win over UserInfo")
+    func testProfileIDTokenWins() {
+        let r = OIDCValidation.resolveProfile(
+            idTokenName: "Token Name", idTokenPreferredUsername: "tokenuser",
+            userInfoName: "Info Name", userInfoNickname: "nick", userInfoPreferredUsername: "infouser")
+        #expect(r.name == "Token Name")
+        #expect(r.preferredUsername == "tokenuser")
+    }
+
+    @Test("Profile is recovered from UserInfo when the ID token has only sub")
+    func testProfileFromUserInfo() {
+        // The Discord shape: bare ID token, display name in `nickname` and
+        // username in `preferred_username` on the UserInfo response.
+        let r = OIDCValidation.resolveProfile(
+            idTokenName: nil, idTokenPreferredUsername: nil,
+            userInfoName: nil, userInfoNickname: "Display Name", userInfoPreferredUsername: "discorduser")
+        #expect(r.name == "Display Name")
+        #expect(r.preferredUsername == "discorduser")
+    }
+
+    @Test("Name falls back to the merged preferred username as a last resort")
+    func testProfileNameFallsBackToUsername() {
+        let r = OIDCValidation.resolveProfile(
+            idTokenName: nil, idTokenPreferredUsername: nil,
+            userInfoName: nil, userInfoNickname: nil, userInfoPreferredUsername: "onlyuser")
+        #expect(r.name == "onlyuser")
+        #expect(r.preferredUsername == "onlyuser")
+    }
+
+    @Test("Absent claims everywhere resolve to nil, not empty strings")
+    func testProfileAllAbsent() {
+        let r = OIDCValidation.resolveProfile(
+            idTokenName: nil, idTokenPreferredUsername: nil,
+            userInfoName: nil, userInfoNickname: nil, userInfoPreferredUsername: nil)
+        #expect(r.name == nil)
+        #expect(r.preferredUsername == nil)
     }
 }

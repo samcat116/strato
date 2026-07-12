@@ -330,6 +330,10 @@ services:
       VALKEY_HOST: valkey
       VALKEY_PORT: 6379
       VALKEY_PASSWORD: ${VALKEY_PASSWORD}
+      # At-rest encryption key for stored secrets (OIDC client secrets).
+      # Optional so .env files generated before it existed keep working — the
+      # control plane warns and stores plaintext when it's unset.
+      STRATO_SECRET_ENCRYPTION_KEY: ${STRATO_SECRET_ENCRYPTION_KEY:-}
       WEBAUTHN_RELYING_PARTY_ID: ${WEBAUTHN_RELYING_PARTY_ID}
       WEBAUTHN_RELYING_PARTY_NAME: ${WEBAUTHN_RELYING_PARTY_NAME:-Strato}
       WEBAUTHN_RELYING_PARTY_ORIGIN: ${WEBAUTHN_RELYING_PARTY_ORIGIN}

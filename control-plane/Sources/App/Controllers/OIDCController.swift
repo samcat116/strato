@@ -82,7 +82,7 @@ struct OIDCController: RouteCollection {
             organizationID: organizationID,
             name: createRequest.name,
             clientID: createRequest.clientID,
-            clientSecret: createRequest.clientSecret,
+            clientSecret: try req.secretsEncryption.encrypt(createRequest.clientSecret),
             discoveryURL: createRequest.discoveryURL,
             authorizationEndpoint: createRequest.authorizationEndpoint,
             tokenEndpoint: createRequest.tokenEndpoint,
@@ -152,7 +152,9 @@ struct OIDCController: RouteCollection {
 
         if let name = updateRequest.name { provider.name = name }
         if let clientID = updateRequest.clientID { provider.clientID = clientID }
-        if let clientSecret = updateRequest.clientSecret { provider.clientSecret = clientSecret }
+        if let clientSecret = updateRequest.clientSecret {
+            provider.clientSecret = try req.secretsEncryption.encrypt(clientSecret)
+        }
         // Optional URL fields: omitted keeps the stored value, an empty string
         // clears it. Without a clear path, a provider switched from discovery
         // to manual config would keep resending the stale discovery URL and
@@ -754,7 +756,7 @@ struct OIDCController: RouteCollection {
         var body = [
             "grant_type": "authorization_code",
             "client_id": provider.clientID,
-            "client_secret": provider.clientSecret,
+            "client_secret": try req.secretsEncryption.decrypt(provider.clientSecret),
             "code": code,
             "redirect_uri": redirectURI,
         ]
@@ -798,15 +800,17 @@ struct OIDCController: RouteCollection {
             )
         }
 
-        // Some IdPs put only `sub` in the ID token and expose email, name, and
-        // `email_verified` solely through the UserInfo endpoint. Whenever any
-        // of those is missing from the (verified) ID token, consult UserInfo as
-        // a fallback so such providers still work. Only its claims for the same
-        // subject are trusted (OIDC 5.3.2); ID-token claims always win.
+        // Some IdPs return `email` in the ID token but only assert
+        // `email_verified` in the UserInfo response, and some (e.g. Discord)
+        // put only `sub` in the ID token and return every profile claim from
+        // UserInfo. Consult the endpoint whenever the ID token leaves a gap so
+        // a legitimate first login isn't blocked or created as an anonymous
+        // `oidc_<subject>` user. Only its claims for the same subject are
+        // trusted (OIDC 5.3.2).
         var userInfo: OIDCUserInfoResponse?
         let idTokenIncomplete =
-            claims.emailVerified != true || claims.email == nil
-            || (claims.name == nil && claims.preferredUsername == nil)
+            claims.emailVerified != true || claims.email == nil || claims.name == nil
+            || claims.preferredUsername == nil
         if idTokenIncomplete, let endpoint = provider.userinfoEndpoint, !endpoint.isEmpty {
             if let info = try? await fetchUserInfo(
                 endpoint: endpoint, accessToken: tokenResponse.accessToken, on: req),
@@ -821,20 +825,27 @@ struct OIDCController: RouteCollection {
             userInfoEmail: userInfo?.email,
             userInfoEmailVerified: userInfo?.emailVerified
         )
+        let resolvedProfile = OIDCValidation.resolveProfile(
+            idTokenName: claims.name,
+            idTokenPreferredUsername: claims.preferredUsername,
+            userInfoName: userInfo?.name,
+            userInfoNickname: userInfo?.nickname,
+            userInfoPreferredUsername: userInfo?.preferredUsername
+        )
 
         return OIDCUserInfo(
             subject: claims.sub,
             email: resolvedEmail.email,
             emailVerified: resolvedEmail.verified,
-            name: claims.name ?? claims.preferredUsername ?? userInfo?.name ?? userInfo?.preferredUsername,
-            preferredUsername: claims.preferredUsername ?? userInfo?.preferredUsername,
+            name: resolvedProfile.name,
+            preferredUsername: resolvedProfile.preferredUsername,
             groupValues: groupValues
         )
     }
 
-    /// Fetches the OIDC UserInfo endpoint with the access token, as a fallback
-    /// for claims the ID token omits. The caller must confirm the returned
-    /// `sub` matches the ID token before trusting the response.
+    /// Fetches the OIDC UserInfo endpoint with the access token. Used to
+    /// recover claims the ID token omits; the caller must confirm the returned `sub`
+    /// matches the ID token before trusting the response.
     private func fetchUserInfo(
         endpoint: String,
         accessToken: String,
@@ -861,31 +872,25 @@ struct OIDCController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid ID token format")
         }
 
-        // Decode JWT header
+        // Decode the JWT header and pin the algorithm to the asymmetric
+        // allow-list before any signature work.
         let headerData = try OIDCValidation.decodeBase64URLSafe(String(tokenParts[0]))
         let header = try JSONDecoder().decode(JWTHeader.self, from: headerData)
+        try OIDCTokenVerification.requireAllowedAlgorithm(header)
 
         // Get JWKS from provider
         guard let jwksURI = provider.jwksURI else {
             throw Abort(.internalServerError, reason: "JWKS URI not configured for provider")
         }
 
-        let jwks = try await fetchJWKS(uri: jwksURI, on: req)
+        let jwksJSON = try await fetchJWKS(uri: jwksURI, on: req)
 
-        // Find the matching key
-        guard let jwk = jwks.keys.first(where: { $0.kid == header.kid && $0.kty == "RSA" }) else {
-            throw Abort(.badRequest, reason: "Unable to find matching RSA key for ID token")
-        }
-
-        // Create RSA key for verification
-        let rsaKey = try jwk.createRSAPublicKey()
-
-        // Configure JWT signers and verify signature
-        let signers = JWTSigners()
-        signers.use(.rs256(key: rsaKey))
-
-        // Verify JWT signature and decode claims
-        let claims = try signers.verify(idToken, as: OIDCIDTokenClaims.self)
+        // JWTKit selects the key by the header's `kid` and cross-checks the
+        // header `alg` against the key's type (RSA/EC/OKP), so a token can't
+        // steer verification onto a mismatched algorithm. Unknown `kid`s are
+        // rejected rather than falling back to the first key.
+        let verifiers = try OIDCTokenVerification.makeVerifiers(jwksJSON: jwksJSON, logger: req.logger)
+        let claims = try verifiers.verify(idToken, header: header)
 
         // Additional claim validation
         try validateIDTokenClaims(claims, provider: provider, expectedNonce: expectedNonce)
@@ -901,7 +906,10 @@ struct OIDCController: RouteCollection {
         return claims
     }
 
-    private func fetchJWKS(uri: String, on req: Request) async throws -> JWKS {
+    /// Fetches the provider's JWKS document as raw JSON; decoding happens
+    /// per-key in `OIDCTokenVerification.makeSigners` so one unsupported key
+    /// can't invalidate the whole set.
+    private func fetchJWKS(uri: String, on req: Request) async throws -> Data {
         // Validate JWKS URI for security
         guard let url = URL(string: uri),
             let scheme = url.scheme,
@@ -917,7 +925,10 @@ struct OIDCController: RouteCollection {
             throw Abort(.badGateway, reason: "Failed to fetch JWKS from \(uri)")
         }
 
-        return try response.content.decode(JWKS.self)
+        guard let body = response.body else {
+            throw Abort(.badGateway, reason: "Empty JWKS response from \(uri)")
+        }
+        return Data(buffer: body)
     }
 
     private func validateIDTokenClaims(

@@ -69,6 +69,13 @@ expected.
   initialized
 - `SPICEDB_PRESHARED_KEY`
 - `VALKEY_PASSWORD`
+- `STRATO_SECRET_ENCRYPTION_KEY` — encrypts stored secrets (OIDC client
+  secrets, SSF stream auth tokens) at rest in the database. Do not lose or
+  change it after secrets are configured: stored values are unreadable
+  without the original key (recover by re-entering them in the provider or
+  stream settings). Deployments whose `.env` predates this key can add it at
+  any time (`openssl rand -hex 32`); existing plaintext secrets are
+  encrypted automatically at the next startup.
 
 There is nothing to rotate before production use; the values never leave the
 host.

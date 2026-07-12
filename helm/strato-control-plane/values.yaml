@@ -217,6 +217,15 @@ strato:
     #   - http://<hostname> otherwise
     relyingPartyOrigin: ""
 
+  # At-rest encryption of stored secrets (OIDC client secrets, SSF stream
+  # auth tokens) — STRATO_SECRET_ENCRYPTION_KEY. Optional: when unset the
+  # control plane warns and stores them unencrypted. Point existingSecret at
+  # a Secret holding a 32-byte key (hex or base64; `openssl rand -hex 32`).
+  # Losing the key makes stored secrets unreadable (re-enter them to recover).
+  secretEncryption:
+    existingSecret: ""
+    key: "encryption-key"
+
   # External hostname for the control plane (used for WebSocket connections from agents)
   # When empty, will use the first ingress hostname or service name
   externalHostname: ""
@@ -225,6 +234,15 @@ strato:
   # resolved WebAuthn origin (recommended — browsers must reach both at the
   # same URL); set only when OIDC is served from a different public URL.
   baseUrl: ""
+
+  oidc:
+    # Override the SSRF allow-list for OIDC discovery/JWKS fetches
+    # (OIDC_DISCOVERY_ALLOWED_HOSTS / OIDC_DISCOVERY_ALLOWED_SUFFIXES).
+    # Setting either REPLACES the app's built-in default list for that
+    # dimension, so include any built-in entries you still need. Empty lists
+    # keep the app defaults.
+    discoveryAllowedHosts: []
+    discoveryAllowedSuffixes: []
 
   # URL agents use to fetch signed image-download links. Leave empty to use
   # the resolved WebAuthn origin; set explicitly when agents reach the control

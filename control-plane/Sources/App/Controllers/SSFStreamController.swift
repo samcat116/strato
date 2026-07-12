@@ -66,7 +66,7 @@ struct SSFStreamController: RouteCollection {
             name: request.name,
             description: request.description,
             transmitterURL: request.transmitterURL,
-            authToken: request.authToken,
+            authToken: try request.authToken.map { try req.secretsEncryption.encrypt($0) },
             expectedIssuer: request.expectedIssuer,
             expectedAudience: request.expectedAudience ?? [],
             deliveryMethod: request.deliveryMethod,
@@ -96,7 +96,9 @@ struct SSFStreamController: RouteCollection {
         let request = try req.content.decode(UpdateSSFStreamRequest.self)
         if let name = request.name { stream.name = name }
         if let description = request.description { stream.description = description }
-        if let authToken = request.authToken { stream.authToken = authToken }
+        if let authToken = request.authToken {
+            stream.authToken = try req.secretsEncryption.encrypt(authToken)
+        }
         if let expectedIssuer = request.expectedIssuer { stream.expectedIssuer = expectedIssuer }
         if let expectedAudience = request.expectedAudience {
             stream.expectedAudienceArray = expectedAudience

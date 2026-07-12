@@ -92,6 +92,19 @@ public func configure(_ app: Application) async throws {
     }
     app.middleware.use(app.sessions.middleware)
 
+    // At-rest encryption for recoverable secrets (OIDC client secrets, SSF
+    // stream auth tokens). A malformed key fails startup — a typo must not
+    // silently downgrade to plaintext storage — while an absent key runs
+    // pass-through with a warning so existing deployments keep working until
+    // the operator sets one.
+    let secretsEncryption = try SecretsEncryptionService.fromEnvironment()
+    app.secretsEncryption = secretsEncryption
+    if !secretsEncryption.isEnabled {
+        app.logger.warning(
+            "STRATO_SECRET_ENCRYPTION_KEY is not set — OIDC client secrets and SSF auth tokens will be stored unencrypted. Generate a key with `openssl rand -hex 32` and set it to enable encryption at rest."
+        )
+    }
+
     // Configure user authentication with sessions
     app.middleware.use(User.sessionAuthenticator())
 
@@ -353,6 +366,12 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddEndSessionEndpointToOIDCProvider())
 
     try await app.autoMigrate()
+
+    // Converge any plaintext stored secrets (OIDC client secrets, SSF auth
+    // tokens) to encrypted form. Runs every startup (not a one-shot migration)
+    // so a key added after upgrade still picks up rows written before it
+    // existed. No-op without a key.
+    try await secretsEncryption.encryptStoredSecrets(on: app.db, logger: app.logger)
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen
     // before anything writes relationships — the dev auth bypass below is the

@@ -77,20 +77,22 @@ struct OIDCIDTokenClaims: Content, JWTPayload, @unchecked Sendable {
     }
 }
 
-/// The subset of the OIDC UserInfo endpoint response we consult, as a fallback
-/// for providers that only expose email/name/verification there rather than in
-/// the ID token. `sub` is required so the caller can enforce the OIDC 5.3.2
-/// rule that the UserInfo subject must match the ID token subject before
-/// trusting any of its claims.
+/// The subset of the OIDC UserInfo endpoint response we consult. Fetched to
+/// recover claims that IdPs omit from the ID token: `email_verified`, and the
+/// profile claims for providers like Discord whose ID token carries only
+/// `sub`. `sub` is required so the caller can enforce the OIDC 5.3.2 rule that
+/// the UserInfo subject must match the ID token subject before trusting any of
+/// its claims.
 struct OIDCUserInfoResponse: Content {
     let sub: String
     let email: String?
     let emailVerified: Bool?
     let name: String?
     let preferredUsername: String?
+    let nickname: String?
 
     private enum CodingKeys: String, CodingKey {
-        case sub, email, name
+        case sub, email, name, nickname
         case emailVerified = "email_verified"
         case preferredUsername = "preferred_username"
     }
@@ -111,132 +113,16 @@ struct OIDCUserInfo {
     var groupValues: [String] = []
 }
 
-// MARK: - JWT and JWKS Data Structures
+// MARK: - JWT Header
 
+/// The decoded JOSE header of an ID token, parsed to pin the signature
+/// algorithm (see `OIDCTokenVerification.requireAllowedAlgorithm`) before
+/// JWTKit verifies the signature. All fields optional: `typ` is commonly
+/// omitted by IdPs, and a missing `alg` is rejected by the allow-list check
+/// rather than as a decode failure. Key material itself is handled by JWTKit's
+/// JWK/JWKS types.
 struct JWTHeader: Codable {
-    let alg: String
-    let typ: String
+    let alg: String?
+    let typ: String?
     let kid: String?
-}
-
-struct JWKS: Codable {
-    let keys: [JWK]
-}
-
-struct JWK: Codable {
-    let kty: String  // Key type (RSA)
-    let use: String?  // Key usage (sig)
-    let kid: String?  // Key ID
-    let n: String  // RSA modulus (base64url)
-    let e: String  // RSA exponent (base64url)
-    let alg: String?  // Algorithm
-
-    func createRSAPublicKey() throws -> RSAKey {
-        // Decode the base64url-encoded modulus and exponent (shared, unit-tested decoder)
-        let modulusData = try OIDCValidation.decodeBase64URLSafe(n)
-        let exponentData = try OIDCValidation.decodeBase64URLSafe(e)
-
-        // Create DER representation manually since we can't use internal APIs
-        let derData = try createRSAPublicKeyDER(modulus: modulusData, exponent: exponentData)
-        let base64String = derData.base64EncodedString()
-
-        // Format as PEM
-        let pemHeader = "-----BEGIN PUBLIC KEY-----"
-        let pemFooter = "-----END PUBLIC KEY-----"
-
-        // Split base64 string into 64-character lines
-        let chunks = base64String.chunked(into: 64)
-        let pemBody = chunks.joined(separator: "\n")
-
-        let pemString = "\(pemHeader)\n\(pemBody)\n\(pemFooter)"
-        return try RSAKey.public(pem: pemString)
-    }
-
-    private func createRSAPublicKeyDER(modulus: Data, exponent: Data) throws -> Data {
-        // RSA Public Key DER format:
-        // SEQUENCE {
-        //   SEQUENCE {
-        //     OBJECT IDENTIFIER rsaEncryption
-        //     NULL
-        //   }
-        //   BIT STRING {
-        //     SEQUENCE {
-        //       INTEGER modulus
-        //       INTEGER exponent
-        //     }
-        //   }
-        // }
-
-        // RSA encryption OID: 1.2.840.113549.1.1.1
-        let rsaOID = Data([0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00])
-
-        // Build inner SEQUENCE with modulus and exponent
-        var innerSequence = Data()
-        innerSequence.append(encodeASN1Integer(modulus))
-        innerSequence.append(encodeASN1Integer(exponent))
-        let innerSequenceData = encodeASN1Sequence(innerSequence)
-
-        // Build BIT STRING containing the inner sequence
-        var bitString = Data([0x00])  // unused bits = 0
-        bitString.append(innerSequenceData)
-        let bitStringData = encodeASN1BitString(bitString)
-
-        // Build outer SEQUENCE
-        var outerSequence = Data()
-        outerSequence.append(rsaOID)
-        outerSequence.append(bitStringData)
-
-        return encodeASN1Sequence(outerSequence)
-    }
-
-    private func encodeASN1Integer(_ data: Data) -> Data {
-        var result = Data([0x02])  // INTEGER tag
-        var integerData = data
-
-        // Add leading zero if first bit is set (to ensure positive number)
-        if let firstByte = integerData.first, firstByte & 0x80 != 0 {
-            integerData.insert(0x00, at: 0)
-        }
-
-        result.append(encodeASN1Length(integerData.count))
-        result.append(integerData)
-        return result
-    }
-
-    private func encodeASN1Sequence(_ data: Data) -> Data {
-        var result = Data([0x30])  // SEQUENCE tag
-        result.append(encodeASN1Length(data.count))
-        result.append(data)
-        return result
-    }
-
-    private func encodeASN1BitString(_ data: Data) -> Data {
-        var result = Data([0x03])  // BIT STRING tag
-        result.append(encodeASN1Length(data.count))
-        result.append(data)
-        return result
-    }
-
-    private func encodeASN1Length(_ length: Int) -> Data {
-        if length < 0x80 {
-            return Data([UInt8(length)])
-        } else {
-            let lengthBytes = withUnsafeBytes(of: length.bigEndian) { Data($0) }
-                .drop { $0 == 0 }
-            var result = Data([0x80 | UInt8(lengthBytes.count)])
-            result.append(lengthBytes)
-            return result
-        }
-    }
-
-}
-
-extension String {
-    func chunked(into size: Int) -> [String] {
-        return stride(from: 0, to: count, by: size).map {
-            let start = index(startIndex, offsetBy: $0)
-            let end = index(start, offsetBy: min(size, count - $0))
-            return String(self[start..<end])
-        }
-    }
 }
