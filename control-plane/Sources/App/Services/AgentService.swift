@@ -172,8 +172,17 @@ actor AgentService {
 
     /// Arm the tracked background tasks (heartbeat loop, replica pub/sub
     /// subscriptions). No-op if shutdown already ran.
+    ///
+    /// Also a no-op when the *application* has shut down: `agentService` is a
+    /// lazy getter, so a stray late caller (a detached task from a request or
+    /// socket handler running after `asyncShutdown` cleared storage) creates
+    /// a fresh service on a dead app. `AgentServiceLifecycleHandler` has
+    /// already run by then and nothing will ever shut this instance down, so
+    /// an armed heartbeat's first tick touches `app.db` after core teardown
+    /// and dies with Vapor's "Core not configured" fatal error — the
+    /// recurring CI crash.
     private func armBackgroundWork() {
-        guard !isShutDown else { return }
+        guard !isShutDown, !app.didShutdown else { return }
         startHeartbeatMonitoring()
         startupTask = Task {
             await self.startReplicaSubscriptions()
@@ -710,8 +719,10 @@ actor AgentService {
     private func checkStaleAgents() async {
         // Shutdown sets this before cancelling the loop; a tick that already
         // slipped past its sleep must not start a database sweep it doesn't
-        // need to finish.
-        guard !isShutDown else { return }
+        // need to finish. The app-level check is a backstop for loops armed
+        // outside the lifecycle handler's reach: touching `app.db` after
+        // core teardown is a process-killing fatal error, not a throw.
+        guard !isShutDown, !app.didShutdown else { return }
 
         let now = Date()
         let staleThreshold: TimeInterval = 60  // 60 seconds
