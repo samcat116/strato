@@ -1,0 +1,22 @@
+control-plane/Sources/App/Migrations/AddIssuerToOIDCProvider.swift
+  s_b041cfc9c7df01::t_f41aa88cec7c2b 62-70,78-85
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_b041cfc9c7df01::t_1fab18ddb1e7a5 335-340
+  s_b041cfc9c7df01::t_6643577c7108a7 356-357,359-362
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "f0c2b1ed51a1b2a1eae22b2814a558405be21f83",
+  "prompts": {},
+  "sessions": {
+    "s_b041cfc9c7df01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bd69bcc5-66a4-4e24-8f42-225a4bc65626",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
