@@ -10,6 +10,12 @@ permissions:
   packages: write
   actions: read
 
+# One release at a time per tag; never cancel a mid-publish release run (a
+# half-published manifest set is worse than a queued duplicate).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME_CONTROL_PLANE: ${{ github.repository }}-control-plane
@@ -17,11 +23,12 @@ env:
   IMAGE_NAME_FRONTEND: ${{ github.repository }}-frontend
 
 jobs:
+  # Lightweight (changelog + one API call) — runs hosted so the static
+  # self-hosted runner is free for the Linux tarball build below.
   create-release:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     outputs:
-      release_id: ${{ steps.create_release.outputs.id }}
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      release_id: ${{ steps.create_release.outputs.release_id }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -76,17 +83,21 @@ jobs:
           \`\`\`
           EOF
 
+      # gh replaces the archived actions/create-release@v1. The numeric
+      # release id is exported for the binary jobs, which upload assets via
+      # the raw REST endpoint (the static self-hosted runner has no gh CLI).
       - name: Create Release
         id: create_release
-        uses: actions/create-release@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          body_path: release_notes.md
-          draft: false
-          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          PRERELEASE=""
+          case "$TAG" in
+            *alpha*|*beta*|*rc*) PRERELEASE="--prerelease" ;;
+          esac
+          gh release create "$TAG" --title "Release $TAG" --notes-file release_notes.md $PRERELEASE
+          echo "release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)" >> "$GITHUB_OUTPUT"
 
   # Compile the release binaries that the container images copy in, mirroring
   # main-build.yaml's prebuilt split: amd64 builds on the swift-runners-strato
@@ -117,6 +128,10 @@ jobs:
     # runtime libs from; amd64's ARC runner image already bakes in 6.3.2, so it
     # runs container-less on the pod (empty string = no job container).
     container: ${{ matrix.arch == 'arm64' && 'swift:6.3.2-noble' || '' }}
+    # Backstop for a hung build: the default 360-minute timeout would pin an
+    # ARC pool slot (amd64) for six hours. Release builds run cold by design,
+    # so allow well over the ~30-minute worst case.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -204,11 +219,16 @@ jobs:
   # Phase 1 — assemble each image on a GitHub-hosted runner (amd64 on
   # ubuntu-latest, arm64 on ubuntu-24.04-arm) from the prebuilt binaries above,
   # and push each arch by DIGEST ONLY (no tag). The Swift images just copy a
-  # binary (nothing compiles in-Docker), so these stay lightweight; the frontend
-  # image compiles from source (bun) inside its Dockerfile. Publishing the
-  # semver-tagged manifests happens in phase 2, so nothing here is consumable
-  # yet: an untagged digest is invisible to taggers until publish-manifests
-  # stitches the per-arch digests into a multi-arch manifest list.
+  # binary (nothing compiles in-Docker), so these stay lightweight. Publishing
+  # the semver-tagged manifests happens in phase 2, so nothing here is
+  # consumable yet: an untagged digest is invisible to taggers until
+  # publish-manifests stitches the per-arch digests into a multi-arch manifest
+  # list.
+  #
+  # Phase 1 is two jobs, mirroring main-build.yaml: the Swift images below wait
+  # on the release binaries, while the frontend (which consumes no Swift
+  # artifacts) builds in its own job immediately, overlapping the Swift
+  # compile. The publish barrier still needs both.
   #
   # `provenance: false` suppresses buildx's default SBOM/provenance attestation,
   # which was pushed as an `unknown/unknown` manifest and showed up as a bogus
@@ -228,24 +248,18 @@ jobs:
           - { image: control-plane, arch: arm64, context: ., file: ./control-plane/Dockerfile, prebuilt: artifacts/control-plane }
           - { image: agent, arch: amd64, context: ., file: ./agent/Dockerfile, prebuilt: artifacts/agent }
           - { image: agent, arch: arm64, context: ., file: ./agent/Dockerfile, prebuilt: artifacts/agent }
-          - { image: frontend, arch: amd64, context: ./control-plane/web, file: ./control-plane/web/Dockerfile, prebuilt: "" }
-          - { image: frontend, arch: arm64, context: ./control-plane/web, file: ./control-plane/web/Dockerfile, prebuilt: "" }
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Only the Swift images consume prebuilt binaries; the frontend builds
-      # from source (bun) inside its Dockerfile.
+      # No continue-on-error here: with PREBUILT_ARTIFACTS set, the Dockerfile
+      # hard-fails on missing artifacts anyway ("no artifacts found"), so
+      # tolerating a failed download only moves the error somewhere confusing.
       - name: Download build artifacts
-        if: matrix.prebuilt != ''
         uses: actions/download-artifact@v4
         with:
           name: swift-binaries-${{ matrix.arch }}
           path: artifacts/
-        continue-on-error: true
-
-      - name: Prepare build context
-        run: mkdir -p ./artifacts
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -266,15 +280,13 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.image }}
 
-      # gha cache is kept ONLY for the frontend, which compiles from source (bun)
-      # and genuinely benefits; the prebuilt Swift images just copy a binary, so
-      # their layers are cheap to rebuild and a cache would only add churn.
+      # No gha cache for these images: they just copy a prebuilt binary, so
+      # their layers are cheap to rebuild and a cache would only add churn
+      # against the 10GB repo budget (see main-build.yaml).
       #
-      # build-args are composed per image (each line is empty when N/A and
-      # ignored): the Swift images (control-plane, agent) get PREBUILT_ARTIFACTS;
-      # control-plane and frontend bake the release tag as build identity
-      # (STRATO_VERSION/STRATO_GIT_SHA — surfaced on /health/* and in the UI),
-      # which the agent image does not consume.
+      # build-args: both images get PREBUILT_ARTIFACTS; the control-plane also
+      # bakes the release tag as build identity (STRATO_VERSION/STRATO_GIT_SHA,
+      # surfaced on /health/*), which the agent image does not consume.
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v5
@@ -285,10 +297,8 @@ jobs:
           outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: ${{ matrix.image == 'frontend' && format('type=gha,key=frontend-{0}', matrix.arch) || '' }}
-          cache-to: ${{ matrix.image == 'frontend' && format('type=gha,mode=max,key=frontend-{0}', matrix.arch) || '' }}
           build-args: |
-            ${{ matrix.prebuilt != '' && format('PREBUILT_ARTIFACTS={0}', matrix.prebuilt) || '' }}
+            PREBUILT_ARTIFACTS=${{ matrix.prebuilt }}
             ${{ matrix.image != 'agent' && format('STRATO_VERSION={0}', github.ref_name) || '' }}
             ${{ matrix.image != 'agent' && format('STRATO_GIT_SHA={0}', github.sha) || '' }}
 
@@ -309,7 +319,76 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  # Phase 2 — publish barrier. `needs: [build-image-digests]` succeeds only if
+  # Frontend digests — independent of the Swift binaries; starts immediately.
+  # cache-from maps to the keys main-build actually saves (frontend-x64 /
+  # frontend-arm64 — main-build names the amd64 arch "x64"); tag-scoped runs
+  # can read default-branch caches. No cache-to: a cache saved from a tag ref
+  # is only restorable by that same tag, so writing one is pure churn against
+  # the 10GB budget that evicts the caches main builds depend on.
+  build-frontend-digest:
+    name: Build Digest (frontend, ${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+          - arch: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}-frontend
+
+      # The frontend bakes the release tag into the client bundle (the sidebar
+      # version label) — same build-identity rationale as the control-plane.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ./control-plane/web
+          file: ./control-plane/web/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository }}-frontend,push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,key=frontend-${{ matrix.arch == 'amd64' && 'x64' || matrix.arch }}
+          build-args: |
+            STRATO_VERSION=${{ github.ref_name }}
+            STRATO_GIT_SHA=${{ github.sha }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digest
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digest/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-frontend-${{ matrix.arch }}
+          path: /tmp/digest/*
+          retention-days: 1
+          if-no-files-found: error
+
+  # Phase 2 — publish barrier. Needing both phase-1 jobs succeeds only if
   # EVERY leg (all images, both arches) passed, so we never publish a tag for a
   # release whose full image set wasn't built. The multi-arch manifests — and
   # every semver tag — are created here and only here, so the phase-1 digests
@@ -319,7 +398,7 @@ jobs:
   # three semver patterns) that phase 1 deliberately did NOT apply.
   publish-manifests:
     name: Publish Multi-Arch Manifests
-    needs: [build-image-digests]
+    needs: [build-image-digests, build-frontend-digest]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -423,13 +502,23 @@ jobs:
   build-swift-binaries:
     runs-on: ${{ matrix.os }}
     needs: create-release
+    # Backstop for a hung cold build (default would be 360 minutes).
+    timeout-minutes: 90
     strategy:
       matrix:
         include:
           - os: self-hosted
             asset_name: strato-linux-x86_64
+          # macos-latest runners are Apple Silicon (arm64) — this asset was
+          # previously mislabeled strato-macos-x86_64. The macOS leg builds
+          # with the runner's Xcode toolchain rather than the 6.3.2 pin used
+          # everywhere else: that drift is intentional (the pinned 6.3.2
+          # toolchain cannot compile the agent's NIOEmbedded dependency on
+          # macOS; newer Xcode Swift can), and these standalone binaries link
+          # the OS-provided runtime, so there is no lockstep requirement with
+          # the swift:6.3.2-noble image runtimes.
           - os: macos-latest
-            asset_name: strato-macos-x86_64
+            asset_name: strato-macos-arm64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -439,12 +528,6 @@ jobs:
         uses: vapor/swiftly-action@v0.2
         with:
           toolchain: "6.3.2"
-
-      - name: Debug jemalloc
-        if: matrix.os == 'self-hosted'
-        run: |
-          ldconfig -p | grep -i jemalloc || echo "jemalloc missing"
-          find /usr -name "libjemalloc*"
 
       - name: Build Swift binaries
         run: |
@@ -478,57 +561,46 @@ jobs:
             shasum -a 256 ${{ matrix.asset_name }}.tar.gz > ${{ matrix.asset_name }}.tar.gz.sha256
           fi
 
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+      # Raw REST upload rather than `gh release upload`: the static
+      # self-hosted runner has no gh CLI, and curl exists everywhere. This
+      # also replaces the archived actions/upload-release-asset@v1.
+      - name: Upload release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.asset_name }}.tar.gz
-          asset_name: ${{ matrix.asset_name }}.tar.gz
-          asset_content_type: application/gzip
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        run: |
+          for f in "${{ matrix.asset_name }}.tar.gz" "${{ matrix.asset_name }}.tar.gz.sha256"; do
+            case "$f" in
+              *.sha256) ct="text/plain" ;;
+              *) ct="application/gzip" ;;
+            esac
+            curl -sSf -X POST \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "Content-Type: $ct" \
+              --data-binary "@$f" \
+              "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${f}" >/dev/null
+            echo "Uploaded $f"
+          done
 
-      - name: Upload Release Asset checksum
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.asset_name }}.tar.gz.sha256
-          asset_name: ${{ matrix.asset_name }}.tar.gz.sha256
-          asset_content_type: text/plain
-
+  # Lightweight (git archive + heredocs + uploads) — runs hosted so the static
+  # self-hosted runner is free for the Linux tarball build. Everything is
+  # staged first and uploaded in a single `gh release upload` at the end.
   upload-source-assets:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: create-release
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # The archive filename must match the upload below exactly — an earlier
+      # version of this workflow created `strato-1.2.3-source.tar.gz` but tried
+      # to upload `strato-v1.2.3-source.tar.gz` (github.ref_name keeps the v).
       - name: Create source archive
         run: |
-          git archive --format=tar.gz --prefix=strato-${GITHUB_REF#refs/tags/v}/ HEAD > strato-${GITHUB_REF#refs/tags/v}-source.tar.gz
-          git archive --format=zip --prefix=strato-${GITHUB_REF#refs/tags/v}/ HEAD > strato-${GITHUB_REF#refs/tags/v}-source.zip
-
-      - name: Upload source tar.gz
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./strato-${{ github.ref_name }}-source.tar.gz
-          asset_name: strato-${{ github.ref_name }}-source.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload source zip
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./strato-${{ github.ref_name }}-source.zip
-          asset_name: strato-${{ github.ref_name }}-source.zip
-          asset_content_type: application/zip
+          VERSION="${GITHUB_REF_NAME#v}"
+          git archive --format=tar.gz --prefix="strato-${VERSION}/" HEAD > "strato-${VERSION}-source.tar.gz"
+          git archive --format=zip --prefix="strato-${VERSION}/" HEAD > "strato-${VERSION}-source.zip"
 
       - name: Create docker-compose release file
         run: |
@@ -768,42 +840,17 @@ jobs:
           }
           EOF
 
-      - name: Upload nginx config file
-        uses: actions/upload-release-asset@v1
+      # Asset names are the file basenames (deploy/agent/install.sh uploads
+      # as install.sh, which is what the docs point users at).
+      - name: Upload release assets
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./nginx.conf
-          asset_name: nginx.conf
-          asset_content_type: text/plain
-
-      - name: Upload docker-compose release file
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./docker-compose.release.yml
-          asset_name: docker-compose.release.yml
-          asset_content_type: text/yaml
-
-      - name: Upload SpiceDB schema file
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./schema.zed
-          asset_name: schema.zed
-          asset_content_type: text/plain
-
-      - name: Upload agent install script
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./deploy/agent/install.sh
-          asset_name: install.sh
-          asset_content_type: text/x-shellscript
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release upload "$GITHUB_REF_NAME" \
+            "strato-${VERSION}-source.tar.gz" \
+            "strato-${VERSION}-source.zip" \
+            nginx.conf \
+            docker-compose.release.yml \
+            schema.zed \
+            deploy/agent/install.sh

@@ -8,6 +8,7 @@ on:
     paths:
       - 'docs/**'
       - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/deploy-docs.yml'
 
   # Allow manual trigger

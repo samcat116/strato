@@ -65,7 +65,6 @@ jobs:
         run: |
           cd helm/strato-control-plane
           helm dependency build
-          helm dependency update
 
   template-validation:
     runs-on: ubuntu-latest
@@ -415,11 +414,12 @@ jobs:
       - name: Check for hardcoded secrets
         run: |
           # Check for potential hardcoded secrets in templates
-          # Look for patterns like 'password: "actual-password"' but exclude proper template usage
-          if grep -r 'password.*:.*["\x27]' helm/strato-control-plane/templates/ | grep -v "secretKeyRef" | grep -v "valueFrom" | grep -v "{{" | grep -v "#"; then
+          # Look for patterns like 'password: "actual-password"' but exclude
+          # proper template usage. (The bracket expression previously used
+          # \x27, which grep treats as the literal characters \ x 2 7, not an
+          # apostrophe.)
+          if grep -r "password.*:.*[\"']" helm/strato-control-plane/templates/ | grep -v "secretKeyRef" | grep -v "valueFrom" | grep -v "{{" | grep -v "#"; then
             echo "⚠️  Potential hardcoded secrets found in templates!"
-            echo "Found hardcoded secrets (not using Helm templates):"
-            grep -r 'password.*:.*["\x27]' helm/strato-control-plane/templates/ | grep -v "secretKeyRef" | grep -v "valueFrom" | grep -v "{{" | grep -v "#" || true
             exit 1
           else
             echo "✅ No hardcoded secrets found in templates"

@@ -1,6 +1,6 @@
 # GitHub Actions Workflows
 
-This directory contains GitHub Actions workflows for the Strato project. Workflows use a **hybrid runner strategy**: the heavy Swift build/test and release binary jobs run on the `swift-runners-strato` runner scale set (self-hosted, managed by [actions-runner-controller](https://github.com/actions/actions-runner-controller)); Docker image builds that need a Docker daemon stay on the single static self-hosted runner; lightweight jobs — frontend lint/build, Trivy scans, Helm tests, ARM64/macOS builds — run on GitHub-hosted runners so they don't queue behind Swift work. PR and main-branch workflows also use `concurrency` groups to cancel superseded runs on new pushes.
+This directory contains GitHub Actions workflows for the Strato project. Workflows use a **hybrid runner strategy**: the heavy Swift build/test and release binary jobs run on the `swift-runners-strato` runner scale set (self-hosted, managed by [actions-runner-controller](https://github.com/actions/actions-runner-controller)); the static self-hosted runner only builds the Linux release-asset tarball; everything else — Docker image assembly from prebuilt binaries, frontend lint/build, Trivy scans, Helm tests, ARM64/macOS builds, release housekeeping — runs on GitHub-hosted runners so it doesn't queue behind Swift work. PR and main-branch workflows also use `concurrency` groups to cancel superseded runs on new pushes.
 
 ## Workflows
 
@@ -95,13 +95,16 @@ the `vapor/swiftly-action` pins (swift-format lint, macOS job).
 
 ### Static Self-Hosted Runner (x64/AMD64)
 Used for:
-- Main branch x64 Docker image builds (main-build.yaml)
-- Release creation, x64 release-asset binary tarballs, and source assets
-  (release.yaml). x64 Docker image assembly now runs on GitHub-hosted runners
-  from prebuilt binaries — no longer on this machine.
+- The Linux x86_64 release-asset binary tarball (release.yaml,
+  `build-swift-binaries`) — the only job left on this machine. Release
+  creation, source assets, and all Docker image assembly run on GitHub-hosted
+  runners.
 
 Requirements:
-- Docker
+- curl (release assets upload via the raw REST endpoint — the runner needs no
+  gh CLI)
+- swiftly-installable environment (the job installs Swift 6.3.2 via
+  vapor/swiftly-action) and libjemalloc
 
 ### GitHub-Hosted Runners
 Used for:
