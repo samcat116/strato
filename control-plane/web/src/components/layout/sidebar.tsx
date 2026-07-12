@@ -11,6 +11,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -47,34 +49,19 @@ const themeOptions = [
 function ThemeToggle() {
   // The dropdown content is portaled and only mounts client-side when the menu
   // opens, so reading next-themes' value here can't cause a hydration mismatch.
-  const { theme: current, setTheme } = useTheme();
+  // Radio items (rather than plain buttons) keep these in the menu's keyboard
+  // roving-focus model so they're reachable without a mouse.
+  const { theme = "system", setTheme } = useTheme();
 
   return (
-    <div className="px-2 py-1.5">
-      <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.6px] text-muted-foreground">
-        Theme
-      </div>
-      <div className="flex gap-0.5 rounded-[7px] bg-muted p-0.5">
-        {themeOptions.map(({ value, label, icon: Icon }) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => setTheme(value)}
-            aria-label={label}
-            aria-pressed={current === value}
-            className={cn(
-              "flex flex-1 items-center justify-center gap-1 rounded-[5px] px-1.5 py-1 text-[11px] font-medium transition-colors",
-              current === value
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
-            {label}
-          </button>
-        ))}
-      </div>
-    </div>
+    <DropdownMenuRadioGroup value={theme} onValueChange={setTheme}>
+      {themeOptions.map(({ value, label, icon: Icon }) => (
+        <DropdownMenuRadioItem key={value} value={value} className="cursor-pointer">
+          <Icon className="h-4 w-4 shrink-0" strokeWidth={1.6} />
+          {label}
+        </DropdownMenuRadioItem>
+      ))}
+    </DropdownMenuRadioGroup>
   );
 }
 
@@ -105,6 +92,9 @@ function UserCard() {
             {user?.email}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
+          <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-[0.6px] text-muted-foreground">
+            Theme
+          </DropdownMenuLabel>
           <ThemeToggle />
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={logout} className="cursor-pointer">
