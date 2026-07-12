@@ -333,6 +333,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddStoragePoolToVolume())
     app.migrations.add(BackfillVolumePools())
 
+    // OIDC authz & identity mapping (issue #363): group/role claim mapping and
+    // configurable default role on the provider.
+    app.migrations.add(AddClaimMappingToOIDCProvider())
+
     try await app.autoMigrate()
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen

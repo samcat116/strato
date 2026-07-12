@@ -76,6 +76,9 @@ struct OIDCUserInfo {
     let email: String?
     let name: String?
     let preferredUsername: String?
+    /// Values of the provider's configured groups claim (empty when the
+    /// provider has no groups claim configured or the token omits it).
+    var groupValues: [String] = []
 }
 
 // MARK: - JWT and JWKS Data Structures

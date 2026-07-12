@@ -28,7 +28,8 @@ struct OIDCValidationTests {
         CreateOIDCProviderRequest(
             name: "p", clientID: "c", clientSecret: "s",
             discoveryURL: discoveryURL, authorizationEndpoint: nil, tokenEndpoint: nil,
-            userinfoEndpoint: nil, jwksURI: jwksURI, scopes: nil, enabled: nil
+            userinfoEndpoint: nil, jwksURI: jwksURI, scopes: nil, enabled: nil,
+            groupsClaim: nil, groupMappings: nil, adminClaimValues: nil, defaultRole: nil
         )
     }
 
