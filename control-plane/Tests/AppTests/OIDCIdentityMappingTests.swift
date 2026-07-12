@@ -365,6 +365,41 @@ final class OIDCIdentityMappingTests {
         }
     }
 
+    @Test("Failed SpiceDB write rolls back the group row so the next login retries")
+    func groupSyncRollsBackOnSpiceDBFailure() async throws {
+        var mappedID: UUID!
+        try await withIdentityTestApp(groupMappings: { builder, org in
+            let mapped = try await builder.createGroup(
+                name: "Mapped", description: "idp-managed", organization: org)
+            mappedID = mapped.id!
+            return [OIDCGroupMapping(claimValue: "idp-mapped", groupID: mapped.id!)]
+        }) { app, org, provider, service, recorder in
+            let user = try await service.resolveUser(
+                userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
+
+            app.spicedbMockWritesFail = true
+            let failing = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
+            await #expect(throws: Error.self) {
+                try await failing.syncGroupMemberships(
+                    user: user, provider: provider, organizationID: org.id!, groupValues: ["idp-mapped"])
+            }
+
+            // The row must not survive the failed tuple write — a committed
+            // row would make the next login skip the SpiceDB retry.
+            let mapped = try await Group.find(mappedID, on: app.db)
+            let memberAfterFailure = try await mapped!.hasMember(user.id!, on: app.db)
+            #expect(!memberAfterFailure)
+
+            // With SpiceDB healthy again, the next login converges.
+            app.spicedbMockWritesFail = false
+            let healthy = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
+            try await healthy.syncGroupMemberships(
+                user: user, provider: provider, organizationID: org.id!, groupValues: ["idp-mapped"])
+            let memberAfterRetry = try await mapped!.hasMember(user.id!, on: app.db)
+            #expect(memberAfterRetry)
+        }
+    }
+
     // MARK: - Org role reconciliation
 
     @Test("Admin claim value promotes an existing member; losing it demotes back")
@@ -396,6 +431,36 @@ final class OIDCIdentityMappingTests {
             let demoted = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
             #expect(demoted?.role == "member")
+        }
+    }
+
+    @Test("Failed SpiceDB write rolls back a role change so the next login retries")
+    func roleReconcileRollsBackOnSpiceDBFailure() async throws {
+        try await withIdentityTestApp(adminClaimValues: ["strato-admins"]) { app, org, provider, service, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "promotee", email: "promotee@example.com")
+            try await builder.addUserToOrganization(user: user, organization: org, role: "member")
+
+            app.spicedbMockWritesFail = true
+            let failing = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
+            await #expect(throws: Error.self) {
+                try await failing.reconcileOrganizationRole(
+                    user: user, provider: provider, organizationID: org.id!, groupValues: ["strato-admins"])
+            }
+
+            // Role must stay unchanged in the DB, otherwise the next login
+            // sees it converged and never retries the tuple update.
+            let afterFailure = try await UserOrganization.query(on: app.db)
+                .filter(\.$user.$id == user.id!).first()
+            #expect(afterFailure?.role == "member")
+
+            app.spicedbMockWritesFail = false
+            let healthy = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
+            try await healthy.reconcileOrganizationRole(
+                user: user, provider: provider, organizationID: org.id!, groupValues: ["strato-admins"])
+            let afterRetry = try await UserOrganization.query(on: app.db)
+                .filter(\.$user.$id == user.id!).first()
+            #expect(afterRetry?.role == "admin")
         }
     }
 

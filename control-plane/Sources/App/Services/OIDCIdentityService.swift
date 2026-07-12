@@ -229,13 +229,22 @@ struct OIDCIdentityService {
                 continue
             }
 
+            // The SpiceDB call runs inside the transaction so a failed call
+            // rolls the row back: with the row committed, the next login
+            // would see the DB already converged and never retry the tuple,
+            // leaving permissions permanently out of sync.
             let isMember = try await group.hasMember(userID, on: db)
+            let spicedb = self.spicedb
             if desired && !isMember {
-                try await group.addMember(userID, on: db)
-                try await spicedb.addUserToGroup(userID: userID.uuidString, groupID: groupID.uuidString)
+                try await db.transaction { transaction in
+                    try await group.addMember(userID, on: transaction)
+                    try await spicedb.addUserToGroup(userID: userID.uuidString, groupID: groupID.uuidString)
+                }
             } else if !desired && isMember {
-                try await group.removeMember(userID, on: db)
-                try await spicedb.removeUserFromGroup(userID: userID.uuidString, groupID: groupID.uuidString)
+                try await db.transaction { transaction in
+                    try await group.removeMember(userID, on: transaction)
+                    try await spicedb.removeUserFromGroup(userID: userID.uuidString, groupID: groupID.uuidString)
+                }
             }
         }
     }
@@ -290,14 +299,19 @@ struct OIDCIdentityService {
 
         let oldRole = membership.role
         membership.role = desired
-        try await membership.save(on: db)
-
-        try await spicedb.setOrganizationRole(
-            userID: userID.uuidString,
-            organizationID: organizationID.uuidString,
-            oldRole: oldRole,
-            newRole: desired
-        )
+        // As in group sync, the SpiceDB update runs inside the transaction:
+        // committing the row first would make the next login see
+        // membership.role == desired and never retry the tuple change.
+        let spicedb = self.spicedb
+        try await db.transaction { transaction in
+            try await membership.save(on: transaction)
+            try await spicedb.setOrganizationRole(
+                userID: userID.uuidString,
+                organizationID: organizationID.uuidString,
+                oldRole: oldRole,
+                newRole: desired
+            )
+        }
     }
 
     /// The org role the token's claims call for: "admin" when any configured
