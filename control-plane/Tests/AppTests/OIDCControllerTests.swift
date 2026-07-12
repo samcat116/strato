@@ -191,6 +191,42 @@ final class OIDCControllerTests: BaseTestCase {
         }
     }
 
+    @Test("Update with unreachable discovery URL still succeeds and keeps stored endpoints")
+    func testUpdateWithFailingDiscoveryDoesNotBreak() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+
+            // Not in the discovery allow-list, so the refresh attempt fails
+            // before any network I/O; the update must still succeed and the
+            // stored endpoints must survive.
+            try await app.test(
+                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id!)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    UpdateOIDCProviderRequest(
+                        name: nil,
+                        clientID: nil,
+                        clientSecret: nil,
+                        discoveryURL: "https://not-allowlisted.example.com/.well-known/openid-configuration",
+                        authorizationEndpoint: nil,
+                        tokenEndpoint: nil,
+                        userinfoEndpoint: nil,
+                        jwksURI: nil,
+                        scopes: nil,
+                        enabled: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(OIDCProviderResponse.self)
+                #expect(response.authorizationEndpoint == "https://idp.example.com/authorize")
+                #expect(response.tokenEndpoint == "https://idp.example.com/token")
+            }
+        }
+    }
+
     @Test("Delete provider is blocked while users are linked")
     func testDeleteProviderWithLinkedUsers() async throws {
         try await withApp { app in

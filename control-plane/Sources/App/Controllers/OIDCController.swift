@@ -146,6 +146,14 @@ struct OIDCController: RouteCollection {
 
         try await provider.save(on: req.db)
 
+        // Mirror creation: when a discovery URL is (re)submitted, refresh the
+        // stored endpoints from its document. Without this, rotating to a new
+        // issuer saves fine but logins keep using the previous issuer's
+        // endpoints. Fetch failures are logged, not fatal, same as on create.
+        if let discoveryURL = updateRequest.discoveryURL, !discoveryURL.isEmpty {
+            try await fetchAndUpdateProviderConfiguration(provider: provider, discoveryURL: discoveryURL, on: req)
+        }
+
         return OIDCProviderResponse(from: provider)
     }
 
