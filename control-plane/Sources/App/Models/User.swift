@@ -180,14 +180,6 @@ extension User {
         self.$oidcProvider.id = providerID
         self.oidcSubject = subject
     }
-
-    /// Find user by OIDC subject and provider
-    static func findByOIDCSubject(_ subject: String, providerID: UUID, on db: Database) async throws -> User? {
-        return try await User.query(on: db)
-            .filter(\.$oidcSubject == subject)
-            .filter(\.$oidcProvider.$id == providerID)
-            .first()
-    }
 }
 
 // MARK: - UserCredential Model for Passkeys
