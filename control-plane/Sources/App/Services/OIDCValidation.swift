@@ -40,6 +40,36 @@ struct OIDCValidation {
         try validateOptionalHTTPSURL(discovery.jwksURI, label: "Discovered JWKS URI")
     }
 
+    /// Whether an ID token's `iss` claim satisfies the provider's expected issuer.
+    ///
+    /// Usually an exact string compare, but multi-tenant discovery documents
+    /// return a *templated* issuer: Microsoft Entra's `common`/`organizations`
+    /// endpoints advertise `https://login.microsoftonline.com/{tenantid}/v2.0`,
+    /// while a real token carries the concrete tenant, e.g.
+    /// `https://login.microsoftonline.com/<guid>/v2.0`. Exact equality would
+    /// reject every otherwise-valid login for such providers. Any `{...}`
+    /// placeholder in the expected issuer is therefore matched as exactly one
+    /// path segment (`[^/]+`) — permissive enough for the tenant substitution,
+    /// tight enough that it can't span extra `/`-delimited segments.
+    static func issuerMatches(expected: String, actual: String) -> Bool {
+        if expected == actual { return true }
+        // Only templated issuers need pattern matching; a plain mismatch fails.
+        guard expected.contains("{") else { return false }
+
+        // Swap each {placeholder} for a sentinel that survives regex-escaping
+        // (letters/underscores are not metacharacters), escape the literal parts,
+        // then turn the sentinel into a single-segment wildcard and anchor it.
+        let sentinel = "\u{1}OIDCTENANTWILDCARD\u{1}"
+        let templated = expected.replacingOccurrences(
+            of: "\\{[^}]+\\}", with: sentinel, options: .regularExpression)
+        let escaped = NSRegularExpression.escapedPattern(for: templated)
+        let pattern = "^" + escaped.replacingOccurrences(of: sentinel, with: "[^/]+") + "$"
+
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+        let range = NSRange(actual.startIndex..<actual.endIndex, in: actual)
+        return regex.firstMatch(in: actual, range: range) != nil
+    }
+
     private static func validateOptionalHTTPSURL(_ urlString: String?, label: String) throws {
         if let urlString, !urlString.isEmpty {
             guard isValidHTTPSURL(urlString) else {

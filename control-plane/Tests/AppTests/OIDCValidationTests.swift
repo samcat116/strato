@@ -129,4 +129,41 @@ struct OIDCValidationTests {
         #expect(OIDCValidation.parseAllowList("  only.com  ") == ["only.com"])
         #expect(OIDCValidation.parseAllowList(",; ,") == [])
     }
+
+    // MARK: - issuerMatches
+
+    @Test("issuerMatches accepts an exact issuer and rejects a different one")
+    func testIssuerExact() {
+        #expect(OIDCValidation.issuerMatches(expected: "https://idp.example.com", actual: "https://idp.example.com"))
+        #expect(
+            !OIDCValidation.issuerMatches(expected: "https://idp.example.com", actual: "https://evil.example.com"))
+    }
+
+    @Test("issuerMatches resolves a templated multi-tenant issuer to one path segment")
+    func testIssuerTemplated() {
+        let expected = "https://login.microsoftonline.com/{tenantid}/v2.0"
+        // Concrete tenant GUID substituted in — the real Entra `common` case.
+        #expect(
+            OIDCValidation.issuerMatches(
+                expected: expected,
+                actual: "https://login.microsoftonline.com/9188040d-6c67-4c5b-b112-36a304b66dad/v2.0"))
+        // Wrong host must still fail.
+        #expect(
+            !OIDCValidation.issuerMatches(
+                expected: expected, actual: "https://evil.example.com/9188040d/v2.0"))
+        // The wildcard is a single segment: it must not span extra `/` segments.
+        #expect(
+            !OIDCValidation.issuerMatches(
+                expected: expected, actual: "https://login.microsoftonline.com/a/b/v2.0"))
+        // A missing tenant segment must not match.
+        #expect(
+            !OIDCValidation.issuerMatches(
+                expected: expected, actual: "https://login.microsoftonline.com//v2.0"))
+    }
+
+    @Test("issuerMatches does not treat regex metacharacters in the literal as patterns")
+    func testIssuerLiteralIsEscaped() {
+        // The `.` must match a literal dot, not any character.
+        #expect(!OIDCValidation.issuerMatches(expected: "https://a.example.com", actual: "https://axexample.com"))
+    }
 }

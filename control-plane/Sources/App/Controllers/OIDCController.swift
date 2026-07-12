@@ -844,9 +844,11 @@ struct OIDCController: RouteCollection {
         // on a multi-tenant IdP) be accepted. `issuer` is populated from the
         // discovery document; when it's unknown (a provider configured with manual
         // endpoints and no discovery) we can't validate and leave it to the other
-        // checks, but a discovery-configured provider always has it.
+        // checks, but a discovery-configured provider always has it. Templated
+        // multi-tenant issuers (e.g. Entra `common`) are matched by pattern — see
+        // `OIDCValidation.issuerMatches`.
         if let expectedIssuer = provider.issuer, !expectedIssuer.isEmpty {
-            guard claims.iss == expectedIssuer else {
+            guard OIDCValidation.issuerMatches(expected: expectedIssuer, actual: claims.iss) else {
                 throw Abort(
                     .badRequest,
                     reason: "ID token issuer '\(claims.iss)' does not match expected issuer '\(expectedIssuer)'"

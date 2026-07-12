@@ -18,9 +18,19 @@ struct AddIssuerToOIDCProvider: AsyncMigration {
         // applies on upgrade rather than staying off until an admin re-tests each
         // one. A spec-compliant discovery URL is `issuer + wellKnownSuffix`, so
         // stripping that suffix yields the issuer without any network fetch.
-        // `replace()` is available on both Postgres and SQLite. Rows whose
-        // discovery URL doesn't carry the suffix are left NULL (validation stays
-        // skipped for them, i.e. the prior behavior) rather than guessing wrong.
+        // `replace()` is available on both Postgres and SQLite.
+        //
+        // Deliberately conservative: rows are left NULL (validation stays skipped,
+        // i.e. prior behavior — never a false rejection) rather than guessing wrong
+        // whenever the URL can't be turned into the token's literal issuer:
+        //   * URLs without the well-known suffix.
+        //   * Multi-tenant endpoints whose discovery metadata advertises a
+        //     *templated* issuer (e.g. Microsoft Entra `common`/`organizations`/
+        //     `consumers` → `.../{tenantid}/v2.0`). The URL strips to a literal
+        //     `.../common/v2.0`, which no real token carries, so storing it would
+        //     reject every login. These are picked up correctly on the next
+        //     provider test/refresh, which stores the templated issuer from
+        //     metadata (matched by OIDCValidation.issuerMatches).
         if let sql = database as? SQLDatabase {
             try await sql.raw(
                 """
@@ -29,6 +39,9 @@ struct AddIssuerToOIDCProvider: AsyncMigration {
                 WHERE issuer IS NULL
                   AND discovery_url IS NOT NULL
                   AND discovery_url LIKE \(bind: "%\(Self.wellKnownSuffix)%")
+                  AND discovery_url NOT LIKE \(bind: "%/common/%")
+                  AND discovery_url NOT LIKE \(bind: "%/organizations/%")
+                  AND discovery_url NOT LIKE \(bind: "%/consumers/%")
                 """
             ).run()
         }
