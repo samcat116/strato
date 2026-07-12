@@ -118,38 +118,45 @@ struct UserController: RouteCollection {
             throw Abort(.badRequest, reason: "username, email and displayName are required")
         }
 
-        let existingUser = try await User.query(on: req.db)
-            .group(.or) { group in
-                group.filter(\.$username == username)
-                group.filter(\.$email == email)
-            }
-            .first()
-        if existingUser != nil {
-            throw Abort(.conflict, reason: "Username or email already exists")
-        }
-
-        let user = User(
-            username: username,
-            email: email,
-            displayName: displayName,
-            isSystemAdmin: body.isSystemAdmin ?? false,
-            source: .local
-        )
-        try await user.save(on: req.db)
-
-        guard let userID = user.id else {
-            throw Abort(.internalServerError, reason: "Failed to create user")
-        }
-
+        let isSystemAdmin = body.isSystemAdmin ?? false
+        let createdByID = currentUser.id
         let rawToken = AccountClaimToken.generateToken()
-        let claim = AccountClaimToken(
-            userID: userID,
-            tokenHash: AccountClaimToken.hashToken(rawToken),
-            tokenPrefix: AccountClaimToken.extractPrefix(rawToken),
-            expiresAt: Date().addingTimeInterval(Self.claimTokenTTL),
-            createdByID: currentUser.id
-        )
-        try await claim.save(on: req.db)
+
+        // Create the user and its claim token in one transaction so the
+        // token row is visible the instant the user row is. Otherwise a
+        // concurrent /auth/register/begin — which blocks invited accounts by
+        // counting claim tokens — could slip through the gap between the two
+        // commits and let someone attach their own passkey to the account.
+        let (user, claim) = try await req.db.transaction { db -> (User, AccountClaimToken) in
+            let existingUser = try await User.query(on: db)
+                .group(.or) { group in
+                    group.filter(\.$username == username)
+                    group.filter(\.$email == email)
+                }
+                .first()
+            if existingUser != nil {
+                throw Abort(.conflict, reason: "Username or email already exists")
+            }
+
+            let user = User(
+                username: username,
+                email: email,
+                displayName: displayName,
+                isSystemAdmin: isSystemAdmin,
+                source: .local
+            )
+            try await user.save(on: db)
+
+            let claim = AccountClaimToken(
+                userID: try user.requireID(),
+                tokenHash: AccountClaimToken.hashToken(rawToken),
+                tokenPrefix: AccountClaimToken.extractPrefix(rawToken),
+                expiresAt: Date().addingTimeInterval(Self.claimTokenTTL),
+                createdByID: createdByID
+            )
+            try await claim.save(on: db)
+            return (user, claim)
+        }
 
         return AdminCreateUserResponse(
             user: user.asPublic(),
