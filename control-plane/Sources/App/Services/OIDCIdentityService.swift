@@ -137,6 +137,7 @@ struct OIDCIdentityService {
                 email: email,
                 displayName: displayName,
                 isSystemAdmin: false,
+                source: .oidc,
                 oidcProviderID: providerID,
                 oidcSubject: userInfo.subject
             )

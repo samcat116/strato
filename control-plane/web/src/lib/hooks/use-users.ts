@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { usersApi } from "@/lib/api/users";
 import { ApiError } from "@/lib/api/client";
-import type { UpdateUserRequest } from "@/types/api";
+import type { AdminCreateUserRequest, UpdateUserRequest } from "@/types/api";
 
 // System-admin only; gate callers on user.isSystemAdmin so the query
 // doesn't fire (and 403) for regular users.
@@ -10,6 +10,17 @@ export function useUsers(enabled: boolean = true) {
     queryKey: ["users"],
     queryFn: () => usersApi.list(),
     enabled,
+  });
+}
+
+export function useCreateUser() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: AdminCreateUserRequest) => usersApi.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+    },
   });
 }
 

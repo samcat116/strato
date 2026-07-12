@@ -31,7 +31,7 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         // Swift type-checker ("unable to type-check in reasonable time").
         let path = request.url.path
         let exactPublic: Set<String> = [
-            "/", "/hello", "/login", "/register", "/api/docs", "/openapi.json", "/favicon.ico",
+            "/", "/hello", "/login", "/register", "/claim", "/api/docs", "/openapi.json", "/favicon.ico",
         ]
         // `/ssf/events` is the RFC 8935 push-delivery endpoint: transmitters
         // authenticate with a per-stream bearer token checked in-handler.

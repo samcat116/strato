@@ -1,12 +1,23 @@
 // User API endpoints
 
 import { api } from "./client";
-import type { CreateUserRequest, UpdateUserRequest, User } from "@/types/api";
+import type {
+  AdminCreateUserRequest,
+  AdminCreateUserResponse,
+  CreateUserRequest,
+  UpdateUserRequest,
+  User,
+} from "@/types/api";
 
 export const usersApi = {
   // Create the account record before starting the passkey ceremony.
   register(data: CreateUserRequest): Promise<User> {
     return api.post<User>("/api/users/register", data);
+  },
+
+  // System-admin only: create a user and mint a passkey-claim invite.
+  create(data: AdminCreateUserRequest): Promise<AdminCreateUserResponse> {
+    return api.post<AdminCreateUserResponse>("/api/users", data);
   },
 
   // System-admin only.

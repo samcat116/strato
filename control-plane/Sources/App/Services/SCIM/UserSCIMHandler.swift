@@ -34,6 +34,7 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             username: resource.userName,
             email: email,
             displayName: resource.displayName ?? resource.name?.formatted ?? resource.userName,
+            source: .scim,
             scimProvisioned: true,
             scimActive: resource.active ?? true
         )

@@ -157,6 +157,33 @@ export class WebAuthnClient {
   }
 
   /**
+   * Claim an admin-created account: enroll a passkey authorized by a one-time
+   * claim token rather than by self-registration. The account already exists,
+   * so no user record is created here.
+   */
+  async claim(token: string): Promise<{ success: boolean; user: User }> {
+    // Step 1: Begin the ceremony against the invited account.
+    const { options } = await authApi.claimBegin(token);
+    const challenge = options.challenge;
+
+    // Step 2: Create credential with browser API.
+    const credential = (await navigator.credentials.create({
+      publicKey: this.prepareCreationOptions(options),
+    })) as PublicKeyCredential | null;
+
+    if (!credential) {
+      throw new Error("Failed to create credential");
+    }
+
+    // Step 3: Finish — consumes the token and logs the user in.
+    const prepared = this.prepareCreationResponse(credential, challenge) as {
+      challenge: string;
+      response: unknown;
+    };
+    return authApi.claimFinish({ token, ...prepared });
+  }
+
+  /**
    * Authenticate with passkey
    */
   async authenticate(

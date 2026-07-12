@@ -1,5 +1,8 @@
 // API Types - matches Vapor backend response types
 
+/** How a user account came into existence (see backend UserSource). */
+export type UserSource = "local" | "scim" | "oidc";
+
 export interface User {
   id: string;
   username: string;
@@ -8,12 +11,42 @@ export interface User {
   createdAt: string;
   currentOrganizationId?: string;
   isSystemAdmin: boolean;
+  source: UserSource;
 }
 
 export interface CreateUserRequest {
   username: string;
   email: string;
   displayName: string;
+}
+
+/** Admin-only user creation (mints a passkey-claim invite). */
+export interface AdminCreateUserRequest {
+  username: string;
+  email: string;
+  displayName: string;
+  isSystemAdmin?: boolean;
+  /** Optional org to provision the invitee into up front. */
+  organizationId?: string;
+  /** Org role for `organizationId` — "admin" or "member". */
+  role?: string;
+}
+
+export interface AdminCreateUserResponse {
+  user: User;
+  /** Raw claim token — shown once. */
+  claimToken: string;
+  /** Server-built claim URL (may be rebuilt from window.location.origin). */
+  claimUrl: string;
+  claimExpiresAt?: string;
+}
+
+export interface ClaimInfoResponse {
+  username: string;
+  displayName: string;
+  valid: boolean;
+  alreadyClaimed: boolean;
+  expired: boolean;
 }
 
 export interface UpdateUserRequest {
