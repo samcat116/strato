@@ -48,8 +48,9 @@ struct OIDCIdentityService {
     ///
     /// Resolution order converges the OIDC and SCIM identity paths on a single
     /// user record: (1) previously linked OIDC user, (2) SCIM-provisioned user
-    /// whose externalId matches the OIDC subject, (3) org member with the same
-    /// email; both (2) and (3) link the user to the provider. Otherwise a new
+    /// whose externalId matches the OIDC subject (only when this is the org's
+    /// sole provider — subjects aren't unique across issuers), (3) org member
+    /// with the same email; both (2) and (3) link the user to the provider. Otherwise a new
     /// user is created and added to the org with the role derived from the
     /// provider's admin claim values and configured default role, mirrored to
     /// SpiceDB (previously the tuple was never written for JIT users).
@@ -68,13 +69,23 @@ struct OIDCIdentityService {
         }
 
         // A SCIM-provisioned user whose externalId matches the OIDC subject is
-        // the same identity arriving via the other provisioning path.
-        if let internalID = try await SCIMExternalID.findInternalID(
-            externalId: userInfo.subject,
-            resourceType: .user,
-            organizationID: organizationID,
-            on: db
-        ), let scimUser = try await User.find(internalID, on: db) {
+        // the same identity arriving via the other provisioning path. Subjects
+        // are only unique per issuer and SCIM mappings don't record which IdP
+        // they came from, so take this shortcut only when this is the org's
+        // sole provider — with several providers, a subject collision across
+        // IdPs could log the caller into another user's account. Multi-provider
+        // orgs still converge on one record via the email match below.
+        let orgProviderCount = try await OIDCProvider.query(on: db)
+            .filter(\.$organization.$id == organizationID)
+            .count()
+        if orgProviderCount == 1,
+            let internalID = try await SCIMExternalID.findInternalID(
+                externalId: userInfo.subject,
+                resourceType: .user,
+                organizationID: organizationID,
+                on: db
+            ), let scimUser = try await User.find(internalID, on: db)
+        {
             scimUser.linkToOIDCProvider(providerID, subject: userInfo.subject)
             if scimUser.currentOrganizationId == nil {
                 scimUser.currentOrganizationId = organizationID

@@ -14,4 +14,4 @@ Each organization can configure OIDC providers for single sign-on. Beyond authen
 
 ### SCIM and OIDC convergence
 
-When both SCIM provisioning and OIDC login are configured for the same IdP, the two identity paths converge on one user record: an OIDC login whose `sub` matches a SCIM user's `externalId` links to (rather than duplicates) the SCIM-provisioned user. Users deactivated via SCIM (`active: false`) are denied OIDC login.
+When both SCIM provisioning and OIDC login are configured for the same IdP, the two identity paths converge on one user record: an OIDC login whose `sub` matches a SCIM user's `externalId` links to (rather than duplicates) the SCIM-provisioned user. Because subjects are only unique per issuer and SCIM mappings don't record their IdP, this `sub` match applies only in organizations with a single OIDC provider; with several providers, identities converge via matching verified email instead. Users deactivated via SCIM (`active: false`) are denied OIDC login.

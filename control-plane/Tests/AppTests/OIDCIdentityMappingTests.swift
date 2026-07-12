@@ -191,6 +191,42 @@ final class OIDCIdentityMappingTests {
         }
     }
 
+    @Test("SCIM externalId matching is skipped when the org has multiple providers")
+    func scimExternalIDRequiresSoleProvider() async throws {
+        try await withIdentityTestApp { app, org, provider, service, _ in
+            // Second provider: subjects are no longer attributable to one
+            // IdP, so a sub match must not log the caller into the SCIM
+            // user's account.
+            let other = OIDCProvider(
+                organizationID: org.id!, name: "Other IdP", clientID: "other", clientSecret: "secret")
+            try await other.save(on: app.db)
+
+            let scimUser = User(
+                username: "scimuser", email: "scim@example.com", displayName: "SCIM User",
+                isSystemAdmin: false, scimProvisioned: true, scimActive: true)
+            try await scimUser.save(on: app.db)
+            try await TestDataBuilder(db: app.db).addUserToOrganization(user: scimUser, organization: org)
+            try await SCIMExternalID.upsert(
+                organizationID: org.id!, resourceType: .user,
+                externalId: "idp-sub-42", internalId: scimUser.id!, on: app.db)
+
+            let resolved = try await service.resolveUser(
+                userInfo: userInfo(subject: "idp-sub-42", email: "different@example.com"),
+                provider: provider, organization: org, groupValues: [])
+
+            // JIT-provisioned as a fresh user, not linked to the SCIM record.
+            #expect(resolved.id != scimUser.id)
+            let userCount = try await User.query(on: app.db).count()
+            #expect(userCount == 2)
+
+            // A verified email match still converges the identities.
+            let byEmail = try await service.resolveUser(
+                userInfo: userInfo(subject: "sub-via-email", email: "scim@example.com"),
+                provider: other, organization: org, groupValues: [])
+            #expect(byEmail.id == scimUser.id)
+        }
+    }
+
     @Test("SCIM-deactivated users are denied login")
     func scimDeactivatedDenied() async throws {
         try await withIdentityTestApp { app, org, provider, service, _ in
