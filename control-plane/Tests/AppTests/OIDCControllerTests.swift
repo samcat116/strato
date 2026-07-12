@@ -335,8 +335,8 @@ final class OIDCControllerTests: BaseTestCase {
             // Non-Microsoft host with a literal `common` path segment: the exact
             // stripped URL is its real issuer and must be backfilled, not skipped.
             let nonMS = try await mk("n", "https://idp.example.com/common/.well-known/openid-configuration")
-            // Microsoft v1.0 `common` (no /v2.0): the real issuer is on a different
-            // host (sts.windows.net), so it can't be derived — left NULL.
+            // Microsoft v1.0 `common` (no /v2.0): the real issuer is on the
+            // sts.windows.net host, templated per tenant.
             let msV1 = try await mk("v1", "https://login.microsoftonline.com/common/.well-known/openid-configuration")
 
             try await AddIssuerToOIDCProvider.backfillIssuers(on: app.db)
@@ -357,9 +357,10 @@ final class OIDCControllerTests: BaseTestCase {
             // multi-tenant alias: backfill the exact issuer.
             let nonMSIssuer = try await OIDCProvider.find(nonMS.id!, on: app.db)?.issuer
             #expect(nonMSIssuer == "https://idp.example.com/common")
-            // Microsoft v1.0 `common` can't be derived from the URL: left NULL.
+            // Microsoft v1.0 multi-tenant `common`: issuer is on sts.windows.net,
+            // templated per tenant.
             let msV1Issuer = try await OIDCProvider.find(msV1.id!, on: app.db)?.issuer
-            #expect(msV1Issuer == nil)
+            #expect(msV1Issuer == "https://sts.windows.net/{tenantid}/")
         }
     }
 

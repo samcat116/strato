@@ -70,6 +70,57 @@ struct OIDCValidation {
         return regex.firstMatch(in: actual, range: range) != nil
     }
 
+    /// The well-known suffix a discovery URL appends to the issuer
+    /// (OpenID Connect Discovery 1.0 §4).
+    static let discoveryWellKnownSuffix = "/.well-known/openid-configuration"
+
+    /// Best-effort derivation of a provider's expected issuer from its discovery
+    /// URL, without a network fetch — used to backfill existing providers on
+    /// upgrade so `iss` validation applies immediately. Returns nil when the
+    /// issuer can't be derived confidently, in which case the caller leaves it
+    /// unset (the provider fails closed until an admin refresh stores the real
+    /// metadata issuer).
+    ///
+    /// Rules:
+    ///  * Non-Microsoft hosts: a spec-compliant discovery URL is
+    ///    `issuer + suffix`, so the stripped URL is the exact issuer — including
+    ///    hosts whose path happens to contain `/common/` etc.
+    ///  * Microsoft Entra `login.microsoftonline.com`:
+    ///    - v2.0 endpoints (`.../{tenant}/v2.0`): issuer is
+    ///      `.../{tenant}/v2.0`. Multi-tenant aliases (`common`/`organizations`/
+    ///      `consumers`) are templated to `{tenantid}`; a concrete tenant is exact.
+    ///    - v1 endpoints (no `/v2.0`): the issuer lives on a *different* host,
+    ///      `https://sts.windows.net/{tenant}/`, so it can't be recovered by
+    ///      stripping. Emit that form — templated for a multi-tenant alias,
+    ///      concrete for a specific tenant. `issuerMatches` validates both.
+    static func discoveryIssuer(forDiscoveryURL url: String) -> String? {
+        guard url.hasSuffix(discoveryWellKnownSuffix) else { return nil }
+        let base = String(url.dropLast(discoveryWellKnownSuffix.count))
+        guard let parsed = URL(string: base), let host = parsed.host else { return nil }
+
+        guard host == "login.microsoftonline.com" else {
+            // Non-Microsoft: the stripped URL is the issuer.
+            return base
+        }
+
+        let segments = parsed.path.split(separator: "/").map(String.init)
+        let multiTenantAliases: Set<String> = ["common", "organizations", "consumers"]
+        let tenant = segments.first
+        let isV2 = segments.last == "v2.0"
+
+        if isV2 {
+            if let tenant, multiTenantAliases.contains(tenant) {
+                return "https://login.microsoftonline.com/{tenantid}/v2.0"
+            }
+            return base
+        }
+        // v1: issuer host is sts.windows.net.
+        if let tenant, !multiTenantAliases.contains(tenant) {
+            return "https://sts.windows.net/\(tenant)/"
+        }
+        return "https://sts.windows.net/{tenantid}/"
+    }
+
     /// Resolves the email address to link on and whether the IdP considers it
     /// verified, merging the ID token and (optional) UserInfo claims.
     ///

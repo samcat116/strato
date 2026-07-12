@@ -167,6 +167,56 @@ struct OIDCValidationTests {
         #expect(!OIDCValidation.issuerMatches(expected: "https://a.example.com", actual: "https://axexample.com"))
     }
 
+    // MARK: - discoveryIssuer
+
+    @Test("discoveryIssuer strips the well-known suffix for standard IdPs")
+    func testDiscoveryIssuerStandard() {
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL: "https://accounts.google.com/.well-known/openid-configuration")
+                == "https://accounts.google.com")
+        // A literal `/common/` segment on a non-Microsoft host is part of the issuer.
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL: "https://idp.example.com/common/.well-known/openid-configuration")
+                == "https://idp.example.com/common")
+    }
+
+    @Test("discoveryIssuer templates Entra v2.0 multi-tenant aliases, keeps concrete tenants exact")
+    func testDiscoveryIssuerEntraV2() {
+        for alias in ["common", "organizations", "consumers"] {
+            let derived = OIDCValidation.discoveryIssuer(
+                forDiscoveryURL: "https://login.microsoftonline.com/\(alias)/v2.0/.well-known/openid-configuration")
+            #expect(derived == "https://login.microsoftonline.com/{tenantid}/v2.0")
+        }
+        // Concrete single-tenant v2.0: exact.
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL:
+                    "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0/.well-known/openid-configuration"
+            ) == "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0")
+    }
+
+    @Test("discoveryIssuer maps Entra v1 endpoints to the sts.windows.net issuer")
+    func testDiscoveryIssuerEntraV1() {
+        // Multi-tenant alias → templated sts issuer.
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL: "https://login.microsoftonline.com/common/.well-known/openid-configuration")
+                == "https://sts.windows.net/{tenantid}/")
+        // Concrete tenant v1 → concrete sts issuer.
+        #expect(
+            OIDCValidation.discoveryIssuer(
+                forDiscoveryURL:
+                    "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/.well-known/openid-configuration"
+            ) == "https://sts.windows.net/11111111-1111-1111-1111-111111111111/")
+    }
+
+    @Test("discoveryIssuer returns nil for a URL without the well-known suffix")
+    func testDiscoveryIssuerNoSuffix() {
+        #expect(OIDCValidation.discoveryIssuer(forDiscoveryURL: "https://idp.example.com/issuer") == nil)
+    }
+
     // MARK: - resolveEmailVerification
 
     @Test("A verified email in the ID token is trusted as-is")
