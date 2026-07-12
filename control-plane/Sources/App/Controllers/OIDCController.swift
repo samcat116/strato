@@ -828,7 +828,7 @@ struct OIDCController: RouteCollection {
 
     /// Treat an empty groups claim as "not configured".
     private func normalizedGroupsClaim(_ claim: String?) -> String? {
-        guard let claim = claim?.trimmingCharacters(in: .whitespaces), !claim.isEmpty else {
+        guard let claim = claim?.trimmingCharacters(in: .whitespacesAndNewlines), !claim.isEmpty else {
             return nil
         }
         return claim
@@ -856,7 +856,7 @@ struct OIDCController: RouteCollection {
         // token, silently demoting every admin on their next login.
         if let adminClaimValues = adminClaimValues {
             for value in adminClaimValues {
-                guard !value.trimmingCharacters(in: .whitespaces).isEmpty else {
+                guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     throw Abort(.badRequest, reason: "Admin claim values must not be empty")
                 }
             }
@@ -865,7 +865,7 @@ struct OIDCController: RouteCollection {
         guard let groupMappings = groupMappings, !groupMappings.isEmpty else { return }
 
         for mapping in groupMappings {
-            guard !mapping.claimValue.trimmingCharacters(in: .whitespaces).isEmpty else {
+            guard !mapping.claimValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw Abort(.badRequest, reason: "Group mapping claim values must not be empty")
             }
         }

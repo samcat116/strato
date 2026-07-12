@@ -45,21 +45,23 @@ final class OIDCControllerTests: BaseTestCase {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
 
-            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(
-                    CreateOIDCProviderRequest(
-                        name: "Okta",
-                        clientID: "client-123",
-                        clientSecret: "secret-456",
-                        authorizationEndpoint: "https://idp.example.com/authorize",
-                        tokenEndpoint: "https://idp.example.com/token",
-                        jwksURI: "https://idp.example.com/.well-known/jwks.json",
-                        groupsClaim: "groups",
-                        adminClaimValues: ["  "]
-                    ))
-            } afterResponse: { res in
-                #expect(res.status == .badRequest)
+            for blank in ["  ", "\n", "\t\n "] {
+                try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                    try req.content.encode(
+                        CreateOIDCProviderRequest(
+                            name: "Okta",
+                            clientID: "client-123",
+                            clientSecret: "secret-456",
+                            authorizationEndpoint: "https://idp.example.com/authorize",
+                            tokenEndpoint: "https://idp.example.com/token",
+                            jwksURI: "https://idp.example.com/.well-known/jwks.json",
+                            groupsClaim: "groups",
+                            adminClaimValues: [blank]
+                        ))
+                } afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                }
             }
         }
     }
