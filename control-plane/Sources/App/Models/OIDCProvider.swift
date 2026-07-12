@@ -331,13 +331,17 @@ struct OIDCProviderResponse: Content {
     let scopes: [String]
     let enabled: Bool
     let groupsClaim: String?
-    let groupMappings: [OIDCGroupMapping]
-    let adminClaimValues: [String]
-    let defaultRole: String
+    let groupMappings: [OIDCGroupMapping]?
+    let adminClaimValues: [String]?
+    let defaultRole: String?
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from provider: OIDCProvider) {
+    /// Claim-mapping fields describe which IdP claims grant which Strato
+    /// groups and the admin role — administration detail that plain org
+    /// members have no need to see. Pass `includeClaimMappings: false` on
+    /// member-accessible read paths to redact them.
+    init(from provider: OIDCProvider, includeClaimMappings: Bool = true) {
         self.id = provider.id
         self.name = provider.name
         self.clientID = provider.clientID
@@ -349,10 +353,10 @@ struct OIDCProviderResponse: Content {
         self.jwksURI = provider.jwksURI
         self.scopes = provider.scopesArray
         self.enabled = provider.enabled
-        self.groupsClaim = provider.groupsClaim
-        self.groupMappings = provider.groupMappingsArray
-        self.adminClaimValues = provider.adminClaimValuesArray
-        self.defaultRole = provider.defaultRole
+        self.groupsClaim = includeClaimMappings ? provider.groupsClaim : nil
+        self.groupMappings = includeClaimMappings ? provider.groupMappingsArray : nil
+        self.adminClaimValues = includeClaimMappings ? provider.adminClaimValuesArray : nil
+        self.defaultRole = includeClaimMappings ? provider.defaultRole : nil
         self.createdAt = provider.createdAt
         self.updatedAt = provider.updatedAt
     }

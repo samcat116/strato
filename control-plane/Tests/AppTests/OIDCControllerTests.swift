@@ -142,6 +142,57 @@ final class OIDCControllerTests: BaseTestCase {
         }
     }
 
+    @Test("Claim mapping config is redacted for non-admin members")
+    func testClaimMappingRedactedForMembers() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+            provider.groupsClaim = "groups"
+            provider.setAdminClaimValuesArray(["strato-admins"])
+            provider.defaultRole = "member"
+            try await provider.save(on: app.db)
+
+            let memberUser = User(
+                username: "memberuser",
+                email: "member@example.com",
+                displayName: "Member User"
+            )
+            try await memberUser.save(on: app.db)
+            let memberOrg = UserOrganization(
+                userID: memberUser.id!,
+                organizationID: testOrganization.id!,
+                role: "member"
+            )
+            try await memberOrg.save(on: app.db)
+            let memberToken = try await memberUser.generateAPIKey(on: app.db)
+
+            // A plain member can list providers but must not see which IdP
+            // claims map groups or grant admin.
+            try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let providers = try res.content.decode([OIDCProviderResponse].self)
+                #expect(providers.first?.groupsClaim == nil)
+                #expect(providers.first?.adminClaimValues == nil)
+                #expect(providers.first?.groupMappings == nil)
+                #expect(providers.first?.defaultRole == nil)
+            }
+
+            // Admins see the full configuration.
+            try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let providers = try res.content.decode([OIDCProviderResponse].self)
+                #expect(providers.first?.groupsClaim == "groups")
+                #expect(providers.first?.adminClaimValues == ["strato-admins"])
+            }
+        }
+    }
+
     @Test("Create provider without discovery URL or endpoints fails")
     func testCreateProviderRequiresEndpoints() async throws {
         try await withApp { app in

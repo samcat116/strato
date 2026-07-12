@@ -48,7 +48,9 @@ struct OIDCController: RouteCollection {
             .filter(\.$organization.$id == organizationID)
             .all()
 
-        return providers.map { OIDCProviderResponse(from: $0) }
+        // Claim mappings are authorization configuration; only admins see them.
+        let isAdmin = await isOrganizationAdmin(req: req, organizationID: organizationID)
+        return providers.map { OIDCProviderResponse(from: $0, includeClaimMappings: isAdmin) }
     }
 
     func createProvider(req: Request) async throws -> OIDCProviderResponse {
@@ -122,7 +124,9 @@ struct OIDCController: RouteCollection {
             throw Abort(.notFound, reason: "OIDC provider not found")
         }
 
-        return OIDCProviderResponse(from: provider)
+        // Claim mappings are authorization configuration; only admins see them.
+        let isAdmin = await isOrganizationAdmin(req: req, organizationID: organizationID)
+        return OIDCProviderResponse(from: provider, includeClaimMappings: isAdmin)
     }
 
     func updateProvider(req: Request) async throws -> OIDCProviderResponse {
@@ -573,6 +577,17 @@ struct OIDCController: RouteCollection {
 
         guard membership != nil else {
             throw Abort(.forbidden, reason: "Admin access required")
+        }
+    }
+
+    /// Non-throwing variant of `verifyOrganizationAdminAccess` for read paths
+    /// that stay member-accessible but redact admin-only detail.
+    private func isOrganizationAdmin(req: Request, organizationID: UUID) async -> Bool {
+        do {
+            try await verifyOrganizationAdminAccess(req: req, organizationID: organizationID)
+            return true
+        } catch {
+            return false
         }
     }
 
