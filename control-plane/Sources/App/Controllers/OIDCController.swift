@@ -48,7 +48,9 @@ struct OIDCController: RouteCollection {
             .filter(\.$organization.$id == organizationID)
             .all()
 
-        return providers.map { OIDCProviderResponse(from: $0) }
+        // Claim mappings are authorization configuration; only admins see them.
+        let isAdmin = await isOrganizationAdmin(req: req, organizationID: organizationID)
+        return providers.map { OIDCProviderResponse(from: $0, includeClaimMappings: isAdmin) }
     }
 
     func createProvider(req: Request) async throws -> OIDCProviderResponse {
@@ -67,6 +69,15 @@ struct OIDCController: RouteCollection {
         // Validate URL fields
         try OIDCValidation.validateURLFields(request: createRequest)
 
+        // Validate claim-mapping configuration
+        try await validateClaimMappingConfig(
+            defaultRole: createRequest.defaultRole,
+            groupMappings: createRequest.groupMappings,
+            adminClaimValues: createRequest.adminClaimValues,
+            organizationID: organizationID,
+            on: req.db
+        )
+
         let provider = OIDCProvider(
             organizationID: organizationID,
             name: createRequest.name,
@@ -78,7 +89,11 @@ struct OIDCController: RouteCollection {
             userinfoEndpoint: createRequest.userinfoEndpoint,
             jwksURI: createRequest.jwksURI,
             scopes: createRequest.scopes ?? ["openid", "profile", "email"],
-            enabled: createRequest.enabled ?? true
+            enabled: createRequest.enabled ?? true,
+            groupsClaim: normalizedGroupsClaim(createRequest.groupsClaim),
+            groupMappings: createRequest.groupMappings ?? [],
+            adminClaimValues: createRequest.adminClaimValues ?? [],
+            defaultRole: createRequest.defaultRole ?? "member"
         )
 
         try await provider.save(on: req.db)
@@ -109,7 +124,9 @@ struct OIDCController: RouteCollection {
             throw Abort(.notFound, reason: "OIDC provider not found")
         }
 
-        return OIDCProviderResponse(from: provider)
+        // Claim mappings are authorization configuration; only admins see them.
+        let isAdmin = await isOrganizationAdmin(req: req, organizationID: organizationID)
+        return OIDCProviderResponse(from: provider, includeClaimMappings: isAdmin)
     }
 
     func updateProvider(req: Request) async throws -> OIDCProviderResponse {
@@ -151,6 +168,23 @@ struct OIDCController: RouteCollection {
         applyOptionalURL(updateRequest.jwksURI, to: \.jwksURI)
         if let scopes = updateRequest.scopes { provider.setScopesArray(scopes) }
         if let enabled = updateRequest.enabled { provider.enabled = enabled }
+
+        try await validateClaimMappingConfig(
+            defaultRole: updateRequest.defaultRole,
+            groupMappings: updateRequest.groupMappings,
+            adminClaimValues: updateRequest.adminClaimValues,
+            organizationID: organizationID,
+            on: req.db
+        )
+        // An empty string clears the groups claim (disables mapping).
+        if let groupsClaim = updateRequest.groupsClaim {
+            provider.groupsClaim = normalizedGroupsClaim(groupsClaim)
+        }
+        if let groupMappings = updateRequest.groupMappings { provider.setGroupMappingsArray(groupMappings) }
+        if let adminClaimValues = updateRequest.adminClaimValues {
+            provider.setAdminClaimValuesArray(adminClaimValues)
+        }
+        if let defaultRole = updateRequest.defaultRole { provider.defaultRole = defaultRole }
 
         // Same HTTPS validation the create path applies — the login flow posts
         // the client secret to the stored token endpoint, so an edit must not
@@ -445,13 +479,15 @@ struct OIDCController: RouteCollection {
                 on: req
             )
 
-            // Find or create user
-            let user = try await findOrCreateUser(
+            // Resolve the user and converge identity/authz state with the
+            // token's claims (issue #363).
+            let identity = OIDCIdentityService(db: req.db, spicedb: try req.spicedb, logger: req.logger)
+
+            let user = try await identity.resolveUser(
                 userInfo: userInfo,
                 provider: provider,
                 organization: provider.organization,
-                db: req.db,
-                spicedb: req.spicedb
+                groupValues: userInfo.groupValues
             )
 
             // Clean up session data
@@ -463,7 +499,25 @@ struct OIDCController: RouteCollection {
             // Accounts disabled by an SSF signal must not get a session; the
             // middleware only sees authenticated requests, so check here too.
             // Thrown into the catch below, which records the failed login.
+            // SCIM-deactivated users are denied the same way.
             try rejectDisabledAccount(user)
+            try identity.enforceSCIMActive(user)
+
+            // Sync IdP-managed group memberships and the org role from the
+            // token's claims (after the deactivation checks: a denied user
+            // must not have authz state written).
+            try await identity.syncGroupMemberships(
+                user: user,
+                provider: provider,
+                organizationID: organizationID,
+                groupValues: userInfo.groupValues
+            )
+            try await identity.reconcileOrganizationRole(
+                user: user,
+                provider: provider,
+                organizationID: organizationID,
+                groupValues: userInfo.groupValues
+            )
 
             // Authenticate user
             req.auth.login(user)
@@ -523,6 +577,17 @@ struct OIDCController: RouteCollection {
 
         guard membership != nil else {
             throw Abort(.forbidden, reason: "Admin access required")
+        }
+    }
+
+    /// Non-throwing variant of `verifyOrganizationAdminAccess` for read paths
+    /// that stay member-accessible but redact admin-only detail.
+    private func isOrganizationAdmin(req: Request, organizationID: UUID) async -> Bool {
+        do {
+            try await verifyOrganizationAdminAccess(req: req, organizationID: organizationID)
+            return true
+        } catch {
+            return false
         }
     }
 
@@ -660,11 +725,23 @@ struct OIDCController: RouteCollection {
             on: req
         )
 
+        // The groups claim name is configurable per provider, so it is read
+        // from the (already verified) token payload rather than decoded into
+        // the fixed claims struct.
+        var groupValues: [String] = []
+        if let groupsClaim = provider.groupsClaim {
+            groupValues = try OIDCIdentityService.extractGroupClaimValues(
+                idToken: tokenResponse.idToken,
+                claim: groupsClaim
+            )
+        }
+
         return OIDCUserInfo(
             subject: claims.sub,
             email: claims.email,
             name: claims.name ?? claims.preferredUsername,
-            preferredUsername: claims.preferredUsername
+            preferredUsername: claims.preferredUsername,
+            groupValues: groupValues
         )
     }
 
@@ -762,96 +839,59 @@ struct OIDCController: RouteCollection {
         // For production, consider validating the issuer (iss) claim matches expected values
     }
 
-    /// Resolve the OIDC subject to a user, provisioning one on first login.
-    /// Internal (not private) so tests can drive the first-login path, which
-    /// is otherwise only reachable through a live token exchange.
-    func findOrCreateUser(
-        userInfo: OIDCUserInfo,
-        provider: OIDCProvider,
-        organization: Organization,
-        db: Database,
-        spicedb: SpiceDBServiceProtocol
-    ) async throws -> User {
-        // Try to find existing user by OIDC subject and provider
-        guard let providerID = provider.id else {
-            throw Abort(.internalServerError, reason: "Provider ID is required")
+    // MARK: - Claim Mapping Configuration
+
+    /// Treat an empty groups claim as "not configured".
+    private func normalizedGroupsClaim(_ claim: String?) -> String? {
+        guard let claim = claim?.trimmingCharacters(in: .whitespacesAndNewlines), !claim.isEmpty else {
+            return nil
         }
-        if let existingUser = try await User.findOIDCUser(subject: userInfo.subject, providerID: providerID, on: db) {
-            return existingUser
+        return claim
+    }
+
+    /// Validate the claim-mapping fields of a create/update request: the
+    /// default role must be a known org role, admin claim values must not be
+    /// blank, and every group mapping must reference a group in the
+    /// provider's organization.
+    private func validateClaimMappingConfig(
+        defaultRole: String?,
+        groupMappings: [OIDCGroupMapping]?,
+        adminClaimValues: [String]?,
+        organizationID: UUID,
+        on db: Database
+    ) async throws {
+        if let defaultRole = defaultRole {
+            guard ["member", "admin"].contains(defaultRole) else {
+                throw Abort(.badRequest, reason: "Default role must be 'member' or 'admin'")
+            }
         }
 
-        // Try to find user by email within the same organization
-        if let email = userInfo.email {
-            let usersWithEmail = try await User.query(on: db)
-                .filter(\.$email == email)
-                .with(\.$organizations)
-                .all()
-
-            for user in usersWithEmail {
-                let userOrgIDs = user.organizations.compactMap { $0.id }
-                guard let organizationID = organization.id else {
-                    continue
-                }
-                if userOrgIDs.contains(organizationID) {
-                    // Link existing user to OIDC provider
-                    user.linkToOIDCProvider(providerID, subject: userInfo.subject)
-                    if user.currentOrganizationId == nil {
-                        user.currentOrganizationId = organizationID
-                    }
-                    try await user.save(on: db)
-                    return user
+        // A blank value would flip role reconciliation into authoritative
+        // mode ("adminClaimValues is non-empty") while matching no real
+        // token, silently demoting every admin on their next login.
+        if let adminClaimValues = adminClaimValues {
+            for value in adminClaimValues {
+                guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw Abort(.badRequest, reason: "Admin claim values must not be empty")
                 }
             }
         }
 
-        // Create new user. The SQL rows and the SpiceDB tuple must land
-        // together: doing the SpiceDB write inside the transaction means a
-        // failed write rolls the rows back, so the next login for this
-        // subject re-runs provisioning cleanly instead of early-returning a
-        // user that authenticates but fails every permission check.
-        let username = userInfo.preferredUsername ?? userInfo.email ?? "oidc_\(userInfo.subject.prefix(8))"
-        let displayName = userInfo.name ?? username
-        let email = userInfo.email ?? ""
+        guard let groupMappings = groupMappings, !groupMappings.isEmpty else { return }
 
-        return try await db.transaction { transaction in
-            let user = User(
-                username: username,
-                email: email,
-                displayName: displayName,
-                isSystemAdmin: false,
-                oidcProviderID: providerID,
-                oidcSubject: userInfo.subject
-            )
-            // Authorization on product routes needs a current org (middleware
-            // rejects requests without one), so seed it at provisioning time.
-            user.currentOrganizationId = organization.id
-
-            try await user.save(on: transaction)
-
-            // Add user to organization as a member
-            guard let userID = user.id,
-                let organizationID = organization.id
-            else {
-                throw Abort(.internalServerError, reason: "User and organization IDs are required")
+        for mapping in groupMappings {
+            guard !mapping.claimValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw Abort(.badRequest, reason: "Group mapping claim values must not be empty")
             }
-            let membership = UserOrganization(
-                userID: userID,
-                organizationID: organizationID,
-                role: "member"
-            )
-            try await membership.save(on: transaction)
+        }
 
-            // Mirror the membership into SpiceDB, like OrganizationController's
-            // addMember does — without this tuple the new user authenticates
-            // but fails every permission check.
-            try await spicedb.setOrganizationRole(
-                userID: userID.uuidString,
-                organizationID: organizationID.uuidString,
-                oldRole: nil,
-                newRole: "member"
-            )
-
-            return user
+        let groupIDs = Set(groupMappings.map { $0.groupID })
+        let orgGroupCount = try await Group.query(on: db)
+            .filter(\.$organization.$id == organizationID)
+            .filter(\.$id ~~ Array(groupIDs))
+            .count()
+        guard orgGroupCount == groupIDs.count else {
+            throw Abort(.badRequest, reason: "Group mappings must reference groups in this organization")
         }
     }
 

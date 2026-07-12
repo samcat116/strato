@@ -172,8 +172,17 @@ actor AgentService {
 
     /// Arm the tracked background tasks (heartbeat loop, replica pub/sub
     /// subscriptions). No-op if shutdown already ran.
+    ///
+    /// Also a no-op when the *application* has shut down: `agentService` is a
+    /// lazy getter, so a stray late caller (a detached task from a request or
+    /// socket handler running after `asyncShutdown` cleared storage) creates
+    /// a fresh service on a dead app. `AgentServiceLifecycleHandler` has
+    /// already run by then and nothing will ever shut this instance down, so
+    /// an armed heartbeat's first tick touches `app.db` after core teardown
+    /// and dies with Vapor's "Core not configured" fatal error — the
+    /// recurring CI crash.
     private func armBackgroundWork() {
-        guard !isShutDown else { return }
+        guard !isShutDown, !app.didShutdown else { return }
         startHeartbeatMonitoring()
         startupTask = Task {
             await self.startReplicaSubscriptions()
@@ -669,20 +678,26 @@ actor AgentService {
                     try await Task.sleep(for: heartbeatInterval)
                     tick &+= 1
 
+                    // Shutdown cancels mid-tick and awaits the loop; checking
+                    // between steps keeps the remaining app-touching work (and
+                    // shutdown's wait) as short as possible. The application
+                    // check is the last line of defense for a loop that
+                    // somehow outlives its app: every step below touches
+                    // app.db or app storage, which is a process-killing fatal
+                    // error (not a throw) after core teardown.
+                    try self.checkTickPreconditions()
+
                     // Check for stale agents
                     await checkStaleAgents()
 
-                    // Shutdown cancels mid-tick and awaits the loop; checking
-                    // between steps keeps the remaining app-touching work (and
-                    // shutdown's wait) as short as possible.
-                    try Task.checkCancellation()
+                    try self.checkTickPreconditions()
 
                     // Probe (and re-arm if dead) this replica's pub/sub
                     // subscriptions — a dropped Valkey connection loses them
                     // silently and RediStack does not restore them.
                     await verifyReplicaSubscriptions()
 
-                    try Task.checkCancellation()
+                    try self.checkTickPreconditions()
 
                     // Periodic desired-state sync (~60s): the correctness
                     // backstop of the level-triggered design — a dropped or
@@ -693,7 +708,7 @@ actor AgentService {
                         await syncDesiredStateToAllAgents()
                     }
 
-                    try Task.checkCancellation()
+                    try self.checkTickPreconditions()
 
                     // Fail operations stuck pending past their budget and resolve
                     // VMs stuck in a transitional state
@@ -702,16 +717,30 @@ actor AgentService {
                     if !Task.isCancelled {
                         app.logger.error("Error in heartbeat monitoring task: \(error)")
                     }
+                    // A dead application never comes back: exit rather than
+                    // spin on a loop whose every step would be skipped.
+                    if app.didShutdown { return }
                 }
             }
+        }
+    }
+
+    /// Throws when the current tick must stop: the task was cancelled, the
+    /// service shut down, or the application itself has been torn down.
+    private func checkTickPreconditions() throws {
+        try Task.checkCancellation()
+        guard !isShutDown, !app.didShutdown else {
+            throw CancellationError()
         }
     }
 
     private func checkStaleAgents() async {
         // Shutdown sets this before cancelling the loop; a tick that already
         // slipped past its sleep must not start a database sweep it doesn't
-        // need to finish.
-        guard !isShutDown else { return }
+        // need to finish. The app-level check is a backstop for loops armed
+        // outside the lifecycle handler's reach: touching `app.db` after
+        // core teardown is a process-killing fatal error, not a throw.
+        guard !isShutDown, !app.didShutdown else { return }
 
         let now = Date()
         let staleThreshold: TimeInterval = 60  // 60 seconds
@@ -781,6 +810,10 @@ actor AgentService {
     ///
     /// Internal rather than private so tests can drive a pass directly.
     func sweepStuckOperations() async {
+        // Never touch app.db (a fatal error, not a throw, after core
+        // teardown) once shutdown has begun — this was the crashing frame of
+        // the recurring "Core not configured" CI crash.
+        guard !isShutDown, !app.didShutdown else { return }
         // Cluster-singleton: with multiple replicas, only one may sweep per interval.
         guard await app.coordination.acquireSweepLock("stuck_operations") else {
             app.logger.debug("Skipping stuck-operation sweep; lock held by another control-plane instance")
@@ -887,6 +920,7 @@ actor AgentService {
     /// logged and repaired by the next tick. Each replica syncs exactly its
     /// own sockets, so no cluster coordination is needed here.
     func syncDesiredStateToAllAgents() async {
+        guard !isShutDown, !app.didShutdown else { return }
         for (name, agentId) in app.websocketManager.registeredAgents() {
             await syncDesiredStateLocally(agentId: agentId, agentName: name)
         }
@@ -1006,7 +1040,7 @@ actor AgentService {
     /// channel is already subscribed on a live connection, and leases a fresh
     /// pub/sub connection when the previous one died.
     private func startReplicaSubscriptions() async {
-        guard !isShutDown else { return }
+        guard !isShutDown, !app.didShutdown else { return }
         let replicaId = app.replicaID
         do {
             try await app.coordination.subscribe(
@@ -1046,7 +1080,7 @@ actor AgentService {
     /// connection is dead, and everything is re-armed. Runs on the 30s
     /// heartbeat tick, bounding the silent window to about two ticks.
     func verifyReplicaSubscriptions() async {
-        guard !isShutDown else { return }
+        guard !isShutDown, !app.didShutdown else { return }
 
         if !subscriptionsEstablished {
             // The initial subscribe failed; keep retrying from here.

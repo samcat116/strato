@@ -41,6 +41,18 @@ final class OIDCProvider: Model, @unchecked Sendable {
     @Field(key: "enabled")
     var enabled: Bool
 
+    @OptionalField(key: "groups_claim")
+    var groupsClaim: String?  // ID-token claim holding group/role values (e.g. "groups", "roles")
+
+    @Field(key: "group_mappings")
+    var groupMappings: String  // JSON array of OIDCGroupMapping
+
+    @Field(key: "admin_claim_values")
+    var adminClaimValues: String  // JSON array of claim values granting the org "admin" role
+
+    @Field(key: "default_role")
+    var defaultRole: String  // Org role for JIT-provisioned users, default "member"
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -65,7 +77,11 @@ final class OIDCProvider: Model, @unchecked Sendable {
         userinfoEndpoint: String? = nil,
         jwksURI: String? = nil,
         scopes: [String] = ["openid", "profile", "email"],
-        enabled: Bool = true
+        enabled: Bool = true,
+        groupsClaim: String? = nil,
+        groupMappings: [OIDCGroupMapping] = [],
+        adminClaimValues: [String] = [],
+        defaultRole: String = "member"
     ) {
         self.id = id
         self.$organization.id = organizationID
@@ -79,7 +95,22 @@ final class OIDCProvider: Model, @unchecked Sendable {
         self.jwksURI = jwksURI
         self.scopes = Self.encodeScopesArray(scopes)
         self.enabled = enabled
+        self.groupsClaim = groupsClaim
+        self.groupMappings = Self.encodeJSON(groupMappings, fallback: "[]")
+        self.adminClaimValues = Self.encodeJSON(adminClaimValues, fallback: "[]")
+        self.defaultRole = defaultRole
     }
+}
+
+/// Maps a value of the provider's groups claim to a Strato group. Groups that
+/// appear in a provider's mappings are IdP-managed: on every OIDC login the
+/// user's membership is added or removed to match the token's claim values.
+struct OIDCGroupMapping: Content, Equatable {
+    /// The claim value as sent by the IdP (a group name, or an object ID for
+    /// IdPs like Entra ID that emit group GUIDs).
+    let claimValue: String
+    /// The Strato group (must belong to the provider's organization).
+    let groupID: UUID
 }
 
 extension OIDCProvider: Content {}
@@ -106,12 +137,46 @@ extension OIDCProvider {
 
     /// Encode scopes array to JSON string
     private static func encodeScopesArray(_ scopesArray: [String]) -> String {
-        guard let data = try? JSONEncoder().encode(scopesArray),
+        return encodeJSON(scopesArray, fallback: "[\"openid\",\"profile\",\"email\"]")
+    }
+
+    static func encodeJSON<T: Encodable>(_ value: T, fallback: String) -> String {
+        guard let data = try? JSONEncoder().encode(value),
             let string = String(data: data, encoding: .utf8)
         else {
-            return "[\"openid\",\"profile\",\"email\"]"
+            return fallback
         }
         return string
+    }
+
+    /// Get group mappings as a typed array
+    var groupMappingsArray: [OIDCGroupMapping] {
+        guard let data = groupMappings.data(using: .utf8),
+            let array = try? JSONDecoder().decode([OIDCGroupMapping].self, from: data)
+        else {
+            return []
+        }
+        return array
+    }
+
+    /// Set group mappings from a typed array
+    func setGroupMappingsArray(_ mappings: [OIDCGroupMapping]) {
+        self.groupMappings = Self.encodeJSON(mappings, fallback: "[]")
+    }
+
+    /// Get admin claim values as an array
+    var adminClaimValuesArray: [String] {
+        guard let data = adminClaimValues.data(using: .utf8),
+            let array = try? JSONDecoder().decode([String].self, from: data)
+        else {
+            return []
+        }
+        return array
+    }
+
+    /// Set admin claim values from an array
+    func setAdminClaimValuesArray(_ values: [String]) {
+        self.adminClaimValues = Self.encodeJSON(values, fallback: "[]")
     }
 
     /// Check if the provider has the required endpoints configured.
@@ -167,6 +232,42 @@ struct CreateOIDCProviderRequest: Content {
     let jwksURI: String?
     let scopes: [String]?
     let enabled: Bool?
+    let groupsClaim: String?
+    let groupMappings: [OIDCGroupMapping]?
+    let adminClaimValues: [String]?
+    let defaultRole: String?
+
+    init(
+        name: String,
+        clientID: String,
+        clientSecret: String,
+        discoveryURL: String? = nil,
+        authorizationEndpoint: String? = nil,
+        tokenEndpoint: String? = nil,
+        userinfoEndpoint: String? = nil,
+        jwksURI: String? = nil,
+        scopes: [String]? = nil,
+        enabled: Bool? = nil,
+        groupsClaim: String? = nil,
+        groupMappings: [OIDCGroupMapping]? = nil,
+        adminClaimValues: [String]? = nil,
+        defaultRole: String? = nil
+    ) {
+        self.name = name
+        self.clientID = clientID
+        self.clientSecret = clientSecret
+        self.discoveryURL = discoveryURL
+        self.authorizationEndpoint = authorizationEndpoint
+        self.tokenEndpoint = tokenEndpoint
+        self.userinfoEndpoint = userinfoEndpoint
+        self.jwksURI = jwksURI
+        self.scopes = scopes
+        self.enabled = enabled
+        self.groupsClaim = groupsClaim
+        self.groupMappings = groupMappings
+        self.adminClaimValues = adminClaimValues
+        self.defaultRole = defaultRole
+    }
 }
 
 struct UpdateOIDCProviderRequest: Content {
@@ -180,6 +281,42 @@ struct UpdateOIDCProviderRequest: Content {
     let jwksURI: String?
     let scopes: [String]?
     let enabled: Bool?
+    let groupsClaim: String?
+    let groupMappings: [OIDCGroupMapping]?
+    let adminClaimValues: [String]?
+    let defaultRole: String?
+
+    init(
+        name: String? = nil,
+        clientID: String? = nil,
+        clientSecret: String? = nil,
+        discoveryURL: String? = nil,
+        authorizationEndpoint: String? = nil,
+        tokenEndpoint: String? = nil,
+        userinfoEndpoint: String? = nil,
+        jwksURI: String? = nil,
+        scopes: [String]? = nil,
+        enabled: Bool? = nil,
+        groupsClaim: String? = nil,
+        groupMappings: [OIDCGroupMapping]? = nil,
+        adminClaimValues: [String]? = nil,
+        defaultRole: String? = nil
+    ) {
+        self.name = name
+        self.clientID = clientID
+        self.clientSecret = clientSecret
+        self.discoveryURL = discoveryURL
+        self.authorizationEndpoint = authorizationEndpoint
+        self.tokenEndpoint = tokenEndpoint
+        self.userinfoEndpoint = userinfoEndpoint
+        self.jwksURI = jwksURI
+        self.scopes = scopes
+        self.enabled = enabled
+        self.groupsClaim = groupsClaim
+        self.groupMappings = groupMappings
+        self.adminClaimValues = adminClaimValues
+        self.defaultRole = defaultRole
+    }
 }
 
 struct OIDCProviderResponse: Content {
@@ -193,10 +330,18 @@ struct OIDCProviderResponse: Content {
     let jwksURI: String?
     let scopes: [String]
     let enabled: Bool
+    let groupsClaim: String?
+    let groupMappings: [OIDCGroupMapping]?
+    let adminClaimValues: [String]?
+    let defaultRole: String?
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from provider: OIDCProvider) {
+    /// Claim-mapping fields describe which IdP claims grant which Strato
+    /// groups and the admin role — administration detail that plain org
+    /// members have no need to see. Pass `includeClaimMappings: false` on
+    /// member-accessible read paths to redact them.
+    init(from provider: OIDCProvider, includeClaimMappings: Bool = true) {
         self.id = provider.id
         self.name = provider.name
         self.clientID = provider.clientID
@@ -208,6 +353,10 @@ struct OIDCProviderResponse: Content {
         self.jwksURI = provider.jwksURI
         self.scopes = provider.scopesArray
         self.enabled = provider.enabled
+        self.groupsClaim = includeClaimMappings ? provider.groupsClaim : nil
+        self.groupMappings = includeClaimMappings ? provider.groupMappingsArray : nil
+        self.adminClaimValues = includeClaimMappings ? provider.adminClaimValuesArray : nil
+        self.defaultRole = includeClaimMappings ? provider.defaultRole : nil
         self.createdAt = provider.createdAt
         self.updatedAt = provider.updatedAt
     }

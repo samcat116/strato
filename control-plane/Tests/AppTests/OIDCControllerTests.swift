@@ -37,6 +37,35 @@ final class OIDCControllerTests: BaseTestCase {
 
     // MARK: - Provider management
 
+    @Test("Create provider with blank admin claim values fails")
+    func testCreateProviderRejectsBlankAdminClaimValues() async throws {
+        // A saved blank value would make adminClaimValuesArray non-empty,
+        // flipping role reconciliation into authoritative mode while matching
+        // no real token — demoting every admin on their next login.
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+
+            for blank in ["  ", "\n", "\t\n "] {
+                try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                    try req.content.encode(
+                        CreateOIDCProviderRequest(
+                            name: "Okta",
+                            clientID: "client-123",
+                            clientSecret: "secret-456",
+                            authorizationEndpoint: "https://idp.example.com/authorize",
+                            tokenEndpoint: "https://idp.example.com/token",
+                            jwksURI: "https://idp.example.com/.well-known/jwks.json",
+                            groupsClaim: "groups",
+                            adminClaimValues: [blank]
+                        ))
+                } afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                }
+            }
+        }
+    }
+
     @Test("Create OIDC provider as org admin")
     func testCreateProvider() async throws {
         try await withApp { app in
@@ -109,6 +138,57 @@ final class OIDCControllerTests: BaseTestCase {
                     ))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
+            }
+        }
+    }
+
+    @Test("Claim mapping config is redacted for non-admin members")
+    func testClaimMappingRedactedForMembers() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+            provider.groupsClaim = "groups"
+            provider.setAdminClaimValuesArray(["strato-admins"])
+            provider.defaultRole = "member"
+            try await provider.save(on: app.db)
+
+            let memberUser = User(
+                username: "memberuser",
+                email: "member@example.com",
+                displayName: "Member User"
+            )
+            try await memberUser.save(on: app.db)
+            let memberOrg = UserOrganization(
+                userID: memberUser.id!,
+                organizationID: testOrganization.id!,
+                role: "member"
+            )
+            try await memberOrg.save(on: app.db)
+            let memberToken = try await memberUser.generateAPIKey(on: app.db)
+
+            // A plain member can list providers but must not see which IdP
+            // claims map groups or grant admin.
+            try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let providers = try res.content.decode([OIDCProviderResponse].self)
+                #expect(providers.first?.groupsClaim == nil)
+                #expect(providers.first?.adminClaimValues == nil)
+                #expect(providers.first?.groupMappings == nil)
+                #expect(providers.first?.defaultRole == nil)
+            }
+
+            // Admins see the full configuration.
+            try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let providers = try res.content.decode([OIDCProviderResponse].self)
+                #expect(providers.first?.groupsClaim == "groups")
+                #expect(providers.first?.adminClaimValues == ["strato-admins"])
             }
         }
     }
@@ -505,8 +585,8 @@ final class OIDCControllerTests: BaseTestCase {
             let recorder = SpiceDBMockRecorder()
             app.spicedbMockRecorder = recorder
 
-            let controller = OIDCController()
-            let user = try await controller.findOrCreateUser(
+            let identity = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
+            let user = try await identity.resolveUser(
                 userInfo: OIDCUserInfo(
                     subject: "subject-new",
                     email: "newcomer@example.com",
@@ -515,8 +595,7 @@ final class OIDCControllerTests: BaseTestCase {
                 ),
                 provider: provider,
                 organization: testOrganization,
-                db: app.db,
-                spicedb: app.spicedb
+                groupValues: []
             )
 
             // The session-issuing path relies on both of these for the user's
@@ -537,13 +616,12 @@ final class OIDCControllerTests: BaseTestCase {
             #expect(memberTuple != nil)
 
             // Second login with the same subject reuses the user, no new rows
-            let again = try await controller.findOrCreateUser(
+            let again = try await identity.resolveUser(
                 userInfo: OIDCUserInfo(
                     subject: "subject-new", email: nil, name: nil, preferredUsername: nil),
                 provider: provider,
                 organization: testOrganization,
-                db: app.db,
-                spicedb: app.spicedb
+                groupValues: []
             )
             #expect(again.id == user.id)
         }
@@ -558,7 +636,7 @@ final class OIDCControllerTests: BaseTestCase {
 
             app.spicedbMockWritesFail = true
 
-            let controller = OIDCController()
+            let identity = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
             let userInfo = OIDCUserInfo(
                 subject: "subject-rollback",
                 email: "rollback@example.com",
@@ -567,12 +645,11 @@ final class OIDCControllerTests: BaseTestCase {
             )
 
             await #expect(throws: Error.self) {
-                _ = try await controller.findOrCreateUser(
+                _ = try await identity.resolveUser(
                     userInfo: userInfo,
                     provider: provider,
                     organization: self.testOrganization,
-                    db: app.db,
-                    spicedb: app.spicedb
+                    groupValues: []
                 )
             }
 
@@ -586,12 +663,12 @@ final class OIDCControllerTests: BaseTestCase {
 
             // With SpiceDB healthy again the same subject provisions cleanly.
             app.spicedbMockWritesFail = false
-            let user = try await controller.findOrCreateUser(
+            let healthyIdentity = OIDCIdentityService(db: app.db, spicedb: try app.spicedb, logger: app.logger)
+            let user = try await healthyIdentity.resolveUser(
                 userInfo: userInfo,
                 provider: provider,
                 organization: testOrganization,
-                db: app.db,
-                spicedb: app.spicedb
+                groupValues: []
             )
             #expect(user.currentOrganizationId == testOrganization.id)
         }

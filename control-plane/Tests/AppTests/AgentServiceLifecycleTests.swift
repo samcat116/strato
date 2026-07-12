@@ -81,4 +81,33 @@ final class AgentServiceLifecycleTests {
         // clears app storage under it and the process fatal-errors.
         try await app.shutdownForTesting()
     }
+
+    /// The lifecycle handler only shuts down the service instance that exists
+    /// at shutdown time. `Application.agentService` is a lazy getter, so a
+    /// stray late caller — a detached request/socket task running after
+    /// `asyncShutdown` cleared storage — creates a *fresh* service on the dead
+    /// app that nothing will ever shut down. Its heartbeat must refuse to arm:
+    /// an armed tick touching `app.db` after core teardown is the recurring
+    /// "Core not configured" CI crash.
+    @Test("a service created after app shutdown never arms its heartbeat")
+    func postShutdownServiceStaysDisarmed() async throws {
+        let app = try await Application.makeForTesting()
+        do {
+            try await configure(app)
+            try await app.autoMigrate()
+        } catch {
+            try await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+
+        // Simulate the stray late caller. A millisecond interval means an
+        // armed loop would tick (and crash the process) within the wait below.
+        let resurrected = AgentService(app: app, heartbeatInterval: .milliseconds(1))
+
+        // Give the init's arming task ample time to run; the guard must have
+        // kept the loop disarmed.
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(await !resurrected.isHeartbeatActive)
+    }
 }
