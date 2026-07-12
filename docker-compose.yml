@@ -80,6 +80,10 @@ services:
       WEBAUTHN_RELYING_PARTY_ID: localhost
       WEBAUTHN_RELYING_PARTY_NAME: Strato
       WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost
+      # Public browser origin used to build OIDC redirect URIs. The image's
+      # default CMD runs --env production, where OIDC login fails loudly if
+      # this is unset — keep it matching the WebAuthn origin.
+      BASE_URL: http://localhost
       LOG_LEVEL: debug
       DEV_AUTH_BYPASS: "true"
       # Loki endpoint for querying VM logs
