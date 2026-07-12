@@ -229,6 +229,13 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateSCIMExternalID())
     app.migrations.add(AddSCIMFieldsToUser())
     app.migrations.add(AddSCIMFieldsToGroup())
+    // Admin-created users: explicit account provenance + passkey-claim invites.
+    // Must run before any data migration that loads the live `User` model
+    // (e.g. MigrateVMDisksToVolumes) — the model now selects the required
+    // `source` column, so it has to exist by then. Ordered after the OIDC/SCIM
+    // user-field migrations because the backfill reads those columns.
+    app.migrations.add(AddSourceToUser())
+    app.migrations.add(CreateAccountClaimToken())
     app.migrations.add(AlterSCIMTokenForeignKey())
     app.migrations.add(AddSCIMExternalIDIndex())
 
@@ -336,10 +343,6 @@ public func configure(_ app: Application) async throws {
     // OIDC authz & identity mapping (issue #363): group/role claim mapping and
     // configurable default role on the provider.
     app.migrations.add(AddClaimMappingToOIDCProvider())
-
-    // Admin-created users: explicit account provenance + passkey-claim invites.
-    app.migrations.add(AddSourceToUser())
-    app.migrations.add(CreateAccountClaimToken())
 
     try await app.autoMigrate()
 
