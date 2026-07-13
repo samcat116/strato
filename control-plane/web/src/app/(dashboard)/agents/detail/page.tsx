@@ -8,7 +8,6 @@ import {
   HardDrive,
   MemoryStick,
   Clock,
-  Server,
   Activity,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -192,7 +191,19 @@ export default function AgentDetailPage() {
             </div>
             <div>
               <p className="text-muted-foreground">Version</p>
-              <p className="text-foreground">{agent.version}</p>
+              <p className="text-foreground flex items-center gap-2">
+                {agent.version}
+                {agent.updateAvailable && (
+                  <Badge
+                    variant="outline"
+                    className="border-amber-500/50 text-amber-600 dark:text-amber-400"
+                  >
+                    {agent.targetVersion
+                      ? `Update available: ${agent.targetVersion}`
+                      : "Update available"}
+                  </Badge>
+                )}
+              </p>
             </div>
             <div>
               <p className="text-muted-foreground">Hostname</p>

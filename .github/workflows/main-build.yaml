@@ -274,16 +274,16 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ steps.meta.outputs.created }}
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
-          # Blank lines are ignored, so each arg is gated independently. The
-          # control-plane bakes the build identity (STRATO_VERSION on
-          # /health/*); the agent has none. Baked once here in the per-arch
-          # digest build — the publish phase only stitches manifests by digest
-          # and never rebuilds, so the identity must be set now, not at
-          # publish time.
+          # Both Swift images bake the build identity (STRATO_VERSION /
+          # STRATO_GIT_SHA): the control-plane surfaces it on /health/*, the
+          # agent reports it in registration and `--version`. Baked once here
+          # in the per-arch digest build — the publish phase only stitches
+          # manifests by digest and never rebuilds, so the identity must be
+          # set now, not at publish time.
           build-args: |
             PREBUILT_ARTIFACTS=${{ matrix.prebuilt }}
-            ${{ matrix.image != 'agent' && 'STRATO_VERSION=main' || '' }}
-            ${{ matrix.image != 'agent' && format('STRATO_GIT_SHA={0}', github.sha) || '' }}
+            STRATO_VERSION=main
+            STRATO_GIT_SHA=${{ github.sha }}
 
       # Hand the digest to the publish job via an artifact. The filename is the
       # digest hex (the `sha256:` prefix is stripped — colons are fragile in

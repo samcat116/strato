@@ -15,6 +15,29 @@ enum BuildInfo {
     static let gitSHA: String = Environment.get("STRATO_GIT_SHA") ?? "unknown"
 }
 
+/// The version agents are expected to run, compared against each agent's
+/// reported build version to surface `updateAvailable` on `AgentResponse`.
+///
+/// Defaults to the control plane's own build version — in a released
+/// deployment the control-plane and agent images share a tag, so "matches my
+/// version" is the right baseline. `AGENT_TARGET_VERSION` overrides it for
+/// deployments that pin agents separately. A "dev" target (local builds with
+/// no injected identity) means there is nothing meaningful to compare
+/// against, so no update is ever flagged.
+enum AgentVersionTarget {
+    /// Nil when no meaningful target exists (dev builds without an override).
+    static let version: String? = normalize(Environment.get("AGENT_TARGET_VERSION") ?? BuildInfo.version)
+
+    static func normalize(_ raw: String) -> String? {
+        raw == "dev" ? nil : raw
+    }
+
+    static func updateAvailable(agentVersion: String, target: String?) -> Bool {
+        guard let target else { return false }
+        return agentVersion != target
+    }
+}
+
 /// Per-process runtime identity captured once at boot.
 ///
 /// The motivating incident: a stale duplicate control plane silently intercepted

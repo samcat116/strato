@@ -9,6 +9,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import { AgentStatusBadge } from "./agent-status-badge";
 import { useOrganization } from "@/providers/organization-provider";
 import type { Agent } from "@/types/api";
@@ -75,7 +76,22 @@ export function AgentTable({ agents, isLoading }: AgentTableProps) {
           >
             <TableCell>
               <span className="font-medium text-foreground">{agent.name}</span>
-              <p className="text-sm text-muted-foreground">v{agent.version}</p>
+              <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+                {agent.version}
+                {agent.updateAvailable && (
+                  <Badge
+                    variant="outline"
+                    className="border-amber-500/50 text-amber-600 dark:text-amber-400"
+                    title={
+                      agent.targetVersion
+                        ? `Update available: ${agent.targetVersion}`
+                        : "Update available"
+                    }
+                  >
+                    Update available
+                  </Badge>
+                )}
+              </p>
             </TableCell>
             <TableCell>
               <AgentStatusBadge

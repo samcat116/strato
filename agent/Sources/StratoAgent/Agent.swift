@@ -581,7 +581,7 @@ actor Agent {
         let message = AgentRegisterMessage(
             agentId: initialAgentID,
             hostname: ProcessInfo.processInfo.hostName,
-            version: "1.0.0",
+            version: BuildInfo.version,
             capabilities: capabilities,
             resources: resources,
             hypervisorType: hypervisorType,

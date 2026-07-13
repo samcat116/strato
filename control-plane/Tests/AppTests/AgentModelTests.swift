@@ -383,4 +383,27 @@ struct AgentModelTests {
         }
     }
 
+    // MARK: - AgentVersionTarget
+
+    @Test("A dev target normalizes to nil, everything else passes through")
+    func testTargetVersionNormalization() {
+        #expect(AgentVersionTarget.normalize("dev") == nil)
+        #expect(AgentVersionTarget.normalize("v1.2.3") == "v1.2.3")
+        #expect(AgentVersionTarget.normalize("main") == "main")
+    }
+
+    @Test("updateAvailable flags any agent version that differs from the target")
+    func testUpdateAvailableComparison() {
+        #expect(AgentVersionTarget.updateAvailable(agentVersion: "v1.2.2", target: "v1.2.3"))
+        #expect(AgentVersionTarget.updateAvailable(agentVersion: "1.0.0", target: "v1.2.3"))
+        #expect(AgentVersionTarget.updateAvailable(agentVersion: "dev", target: "v1.2.3"))
+        #expect(!AgentVersionTarget.updateAvailable(agentVersion: "v1.2.3", target: "v1.2.3"))
+    }
+
+    @Test("updateAvailable is never flagged without a meaningful target")
+    func testUpdateAvailableWithoutTarget() {
+        #expect(!AgentVersionTarget.updateAvailable(agentVersion: "1.0.0", target: nil))
+        #expect(!AgentVersionTarget.updateAvailable(agentVersion: "dev", target: nil))
+    }
+
 }
