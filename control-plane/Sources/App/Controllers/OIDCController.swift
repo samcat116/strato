@@ -99,12 +99,16 @@ struct OIDCController: RouteCollection {
 
         try await provider.save(on: req.db)
 
-        // If discovery URL is provided, attempt to fetch configuration. The
-        // document is authoritative for a newly configured discovery URL, so
-        // optional endpoints it omits are cleared rather than kept.
+        // If discovery URL is provided, attempt to fetch configuration.
+        // discoveryChanged is false here: omission-clearing exists to purge
+        // endpoints left over from a *previous* IdP configuration, and at
+        // create time every stored value came from this very request — an
+        // explicitly supplied optional endpoint (e.g. a manual logout URL for
+        // an IdP whose metadata omits end_session_endpoint) must survive the
+        // initial discovery fetch.
         if let discoveryURL = createRequest.discoveryURL, !discoveryURL.isEmpty {
             try await fetchAndUpdateProviderConfiguration(
-                provider: provider, discoveryURL: discoveryURL, discoveryChanged: true, on: req)
+                provider: provider, discoveryURL: discoveryURL, discoveryChanged: false, on: req)
         }
 
         return OIDCProviderResponse(from: provider)
