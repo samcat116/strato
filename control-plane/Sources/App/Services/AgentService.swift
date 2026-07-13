@@ -1334,12 +1334,22 @@ actor AgentService {
                 ))
         }
 
+        // The agent's authoritative sandbox set (issue #413). Loaded before the
+        // network scope so a sandbox's NIC network is realized on its host even
+        // when no VM references it (issue #416). Specs are assembled fresh from
+        // the database like VM specs.
+        let sandboxes = try await Sandbox.query(on: db)
+            .filter(\.$hypervisorId == agentId)
+            .with(\.$networkInterfaces) { $0.with(\.$addresses) }
+            .all()
+
         // First-class network desired state (issue #342): the logical networks
         // the agent should realize as level-triggered desired state (switches,
         // per-project routers, SNAT uplinks). Which networks — and whether this
         // agent may write topology at all — depends on its site membership
         // (issue #343); see `networkAssemblyScope`.
-        let scope = try await networkAssemblyScope(agentId: agentId, ownVMs: vms, on: db)
+        let scope = try await networkAssemblyScope(
+            agentId: agentId, ownVMs: vms, ownSandboxes: sandboxes, on: db)
         let networkStates =
             scope.networkNames
             .sorted()
@@ -1362,15 +1372,10 @@ actor AgentService {
                 )
             }
 
-        // The agent's authoritative sandbox set (issue #413). Specs are
-        // assembled fresh from the database like VM specs. This is also the
-        // slot where registry material is refreshed (issue #414), mirroring
-        // signed image URLs: unpinned tags resolve to digests exactly once,
-        // and a short-lived pull credential is minted for private images.
-        let sandboxes = try await Sandbox.query(on: db)
-            .filter(\.$hypervisorId == agentId)
-            .all()
-
+        // Registry material is refreshed here (issue #414), mirroring signed
+        // image URLs: unpinned tags resolve to digests exactly once, and a
+        // short-lived pull credential is minted for private images.
+        //
         // One credential fetch for all the sandboxes' projects; matched per
         // sandbox by the image's registry host.
         let sandboxProjectIDs = Set(sandboxes.map { $0.$project.id })
@@ -1393,10 +1398,17 @@ actor AgentService {
                 sandbox,
                 secrets: pullSecretsByProject[sandbox.$project.id] ?? [],
                 on: db)
+            // The sandbox's single NIC spec (issue #416), built from its
+            // eager-loaded interface + the interface's logical network (for
+            // DHCP/DNS config), reusing the networks index gathered above.
+            let interface = sandbox.networkInterfaces.first
+            let networkSpec = SandboxSpecBuilder.networkSpec(
+                from: interface,
+                network: interface.flatMap { networksByName[$0.network] })
             sandboxEntries.append(
                 DesiredSandboxState(
                     sandboxId: sandboxId,
-                    spec: sandbox.buildSpec(),
+                    spec: sandbox.buildSpec(network: networkSpec),
                     desiredStatus: sandbox.desiredStatus,
                     generation: sandbox.generation,
                     registryCredential: registryCredential
@@ -1543,9 +1555,12 @@ actor AgentService {
     ///   its own VMs' ports to the shared NB, but topology belongs to the
     ///   controller — two level-triggered writers would fight over teardown.
     private func networkAssemblyScope(
-        agentId: String, ownVMs: [VM], on db: any Database
+        agentId: String, ownVMs: [VM], ownSandboxes: [Sandbox], on db: any Database
     ) async throws -> (networkNames: Set<String>, authoritative: Bool) {
-        let ownReferences = Set(ownVMs.flatMap { $0.networkInterfaces.map(\.network) })
+        // A network referenced by either a VM or a sandbox on this host must be
+        // realized here (issue #416).
+        var ownReferences = Set(ownVMs.flatMap { $0.networkInterfaces.map(\.network) })
+        ownReferences.formUnion(ownSandboxes.flatMap { $0.networkInterfaces.map(\.network) })
 
         guard let agentUUID = UUID(uuidString: agentId),
             let agent = try await Agent.find(agentUUID, on: db),
@@ -1593,6 +1608,13 @@ actor AgentService {
             .with(\.$networkInterfaces)
             .all()
         var names = Set(siteVMs.flatMap { $0.networkInterfaces.map(\.network) })
+        // Sandboxes placed anywhere in the site reference networks the
+        // controller must realize too (issue #416).
+        let siteSandboxes = try await Sandbox.query(on: db)
+            .filter(\.$hypervisorId ~~ siteAgentIDs)
+            .with(\.$networkInterfaces)
+            .all()
+        names.formUnion(siteSandboxes.flatMap { $0.networkInterfaces.map(\.network) })
         let pinned = try await LogicalNetwork.query(on: db)
             .filter(\.$site.$id == siteID)
             .all()

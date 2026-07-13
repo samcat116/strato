@@ -10,10 +10,11 @@ entrypoint/cmd/env/workdir.
 
 > **Status**: phase 1 in progress. The wire protocol (issue #411), the
 > generalized operation machinery (#412), the control-plane model/API (#413),
-> registry pull secrets + tag→digest resolution (#414), and scheduler gating
-> + quota accounting (#415) are landed; IPAM and the agent runtime are
-> tracked in issues #416–#422. Sections below describe the agreed design;
-> anything not yet landed is marked with its issue.
+> registry pull secrets + tag→digest resolution (#414), scheduler gating
+> + quota accounting (#415), and the NIC/address model + IPAM integration
+> (#416) are landed; the agent runtime is tracked in issues #417–#422.
+> Sections below describe the agreed design; anything not yet landed is marked
+> with its issue.
 
 ## Decision: native Swift Firecracker path
 
@@ -39,8 +40,9 @@ A sandbox is described by `SandboxSpec`
 - **Sizing**: vCPUs and memory bytes only.
 - **Process**: optional entrypoint/cmd/workdir overrides and an env map,
   merged over the image config by the guest agent.
-- **Networking**: at most one NIC, reusing the VM `NetworkSpec` so agents
-  realize it through the same OVN/user-mode paths (IPAM integration is #416).
+- **Networking**: at most one NIC on a `LogicalNetwork`, reusing the VM
+  `NetworkSpec` so agents realize it through the same OVN/user-mode paths
+  (#416, landed — see the control-plane section).
 - **No** volumes, firmware, boot source, or hypervisor choice — sandboxes are
   Firecracker-only, and v1 has no attachable storage.
 

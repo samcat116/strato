@@ -396,6 +396,12 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddSandboxCapableToAgent())
     app.migrations.add(AddSandboxCountToResourceQuota())
 
+    // Sandbox NIC + IPAM integration (issue #416): a per-sandbox NIC on a
+    // logical network with per-family address rows, allocated by the same IPAM
+    // as VMs.
+    app.migrations.add(CreateSandboxNetworkInterface())
+    app.migrations.add(CreateSandboxInterfaceAddresses())
+
     try await app.autoMigrate()
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth

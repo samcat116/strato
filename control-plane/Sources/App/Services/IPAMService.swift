@@ -48,17 +48,28 @@ enum IPAMService {
 
     /// Allocates the lowest free host address in `network`'s subnet.
     static func allocateIP(for network: LogicalNetwork, on db: Database) async throws -> Allocation {
-        let used = try await VMInterfaceAddress.query(on: db)
+        // The used set is the union of VM and sandbox addresses on the network
+        // (issue #416): both draw from the same subnet, so an allocation must
+        // see the other's addresses or two workloads could get the same IP.
+        // Each table's own `(network, address)` unique index backstops
+        // concurrent same-table creates.
+        let usedVM = try await VMInterfaceAddress.query(on: db)
             .filter(\.$network == network.name)
             .filter(\.$family == IPFamily.ipv4.rawValue)
             .all()
             .compactMap { parseIPv4($0.address) }
+        let usedSandbox = try await SandboxInterfaceAddress.query(on: db)
+            .filter(\.$network == network.name)
+            .filter(\.$family == IPFamily.ipv4.rawValue)
+            .all()
+            .compactMap { parseIPv4($0.address) }
+        let used = Set(usedVM).union(usedSandbox)
 
         return try allocateIP(
             networkName: network.name,
             subnet: network.subnet,
             gateway: network.gateway,
-            used: Set(used)
+            used: used
         )
     }
 
@@ -100,7 +111,14 @@ enum IPAMService {
     /// network is v4-only.
     static func allocateIPv6(for network: LogicalNetwork, on db: Database) async throws -> Allocation6? {
         guard let subnet6 = network.subnet6 else { return nil }
-        let used = try await VMInterfaceAddress.query(on: db)
+        // Union of VM and sandbox interface IDs on the network (issue #416),
+        // for the same reason as the v4 path.
+        let usedVM = try await VMInterfaceAddress.query(on: db)
+            .filter(\.$network == network.name)
+            .filter(\.$family == IPFamily.ipv6.rawValue)
+            .all()
+            .compactMap { IPv6Address($0.address)?.lo }
+        let usedSandbox = try await SandboxInterfaceAddress.query(on: db)
             .filter(\.$network == network.name)
             .filter(\.$family == IPFamily.ipv6.rawValue)
             .all()
@@ -110,7 +128,7 @@ enum IPAMService {
             networkName: network.name,
             subnet6: subnet6,
             gateway6: network.gateway6,
-            usedInterfaceIDs: Set(used)
+            usedInterfaceIDs: Set(usedVM).union(usedSandbox)
         )
     }
 
