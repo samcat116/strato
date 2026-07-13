@@ -101,14 +101,15 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             return
         }
 
-        // Firecracker realizes only TAP attachments; reject anything else up
-        // front rather than booting a sandbox missing its NIC.
-        for nic in networkAttachments {
-            guard case .tap = nic.attachment else {
-                throw HypervisorServiceError.notSupported(
-                    "sandboxes only support tap network attachments; got \(nic.attachment) "
-                        + "for network \(nic.network)")
-            }
+        // v1 has no in-guest networking: the guest init mounts the rootfs and
+        // execs the workload without bringing up eth0 or DHCP, and the guest
+        // kernel has no IP autoconfiguration. Attaching a TAP would leave the
+        // workload with an unconfigured interface while the sandbox reported
+        // running, so reject networked specs rather than mis-converging. (The
+        // scheduler/IPAM path exists — #415/#416 — but the guest cannot yet use
+        // it; enabling it is a guest-image change.)
+        guard spec.network == nil, networkAttachments.isEmpty else {
+            throw SandboxRuntimeError.networkingUnsupported
         }
 
         logger.info(
@@ -168,12 +169,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             try await manager.configureDrive(
                 Drive.dataDrive(id: "config", path: configPath, readOnly: true))
 
-            for (index, nic) in networkAttachments.enumerated() {
-                guard case .tap(let tapName) = nic.attachment else { continue }
-                try await manager.configureNetwork(
-                    NetworkInterface.tap(
-                        id: "eth\(index)", tapName: tapName, macAddress: nic.macAddress ?? ""))
-            }
+            // No network interface: networked specs are rejected above until the
+            // guest image can configure one.
 
             try await manager.configureVsock(
                 VsockConfig(guestCid: Self.guestCID, udsPath: vsockUdsPath))
