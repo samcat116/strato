@@ -105,6 +105,15 @@ public func configure(_ app: Application) async throws {
         )
     }
 
+    // Registry client for sandbox tag→digest resolution and pull-token
+    // minting (issue #414). Tests get the no-network client so sync assembly
+    // never does registry I/O in the suite; tests that exercise the flow
+    // install a scripted client of their own.
+    app.registryClient =
+        app.environment == .testing
+        ? NoopRegistryClient()
+        : DistributionRegistryClient(app: app)
+
     // Configure user authentication with sessions
     app.middleware.use(User.sessionAuthenticator())
 
@@ -373,6 +382,10 @@ public func configure(_ app: Application) async throws {
     // Sandboxes (issue #413): OCI-image Firecracker microVMs as a first-class
     // workload type, parallel to VMs.
     app.migrations.add(CreateSandbox())
+
+    // Registry pull secrets (issue #414): per-project credentials for private
+    // OCI registries, encrypted at rest.
+    app.migrations.add(CreateRegistryPullSecret())
 
     // Agent OS reporting for update artifact resolution (issue #432).
     app.migrations.add(AddOperatingSystemToAgent())

@@ -125,7 +125,7 @@ struct SecretsEncryptionService: @unchecked Sendable {
     }
 
     /// Re-encrypts any plaintext stored secrets (OIDC client secrets, SSF
-    /// stream auth tokens). Runs at every startup so rows written before a key
+    /// stream auth tokens, registry pull secrets). Runs at every startup so rows written before a key
     /// existed converge to encrypted form as soon as one is configured.
     /// Idempotent; concurrent replicas may both re-encrypt a row, but each
     /// writes a self-contained valid ciphertext.
@@ -155,6 +155,17 @@ struct SecretsEncryptionService: @unchecked Sendable {
         }
         if migratedTokens > 0 {
             logger.info("Encrypted \(migratedTokens) stored SSF stream auth token(s) at rest")
+        }
+
+        let pullSecrets = try await RegistryPullSecret.query(on: db).all()
+        var migratedPullSecrets = 0
+        for pullSecret in pullSecrets where !pullSecret.secret.hasPrefix(Self.encryptedPrefix) {
+            pullSecret.secret = try encrypt(pullSecret.secret)
+            try await pullSecret.save(on: db)
+            migratedPullSecrets += 1
+        }
+        if migratedPullSecrets > 0 {
+            logger.info("Encrypted \(migratedPullSecrets) stored registry pull secret(s) at rest")
         }
     }
 }
