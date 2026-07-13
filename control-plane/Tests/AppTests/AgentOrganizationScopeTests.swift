@@ -399,8 +399,21 @@ final class AgentOrganizationScopeTests {
                 #expect(res.status == .conflict)
             }
 
-            // A detached volume anchors the agent the same way.
+            // A hosted sandbox anchors the agent the same way.
             try await vm.delete(on: app.db)
+            let sandbox = try await builder.createSandbox(name: "anchor-sbx", project: project)
+            sandbox.hypervisorId = agentUUID.uuidString
+            try await sandbox.save(on: app.db)
+
+            try await app.test(.PATCH, "/api/agents/\(agentUUID.uuidString)/organization") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(Body(organizationId: org.id))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            // A detached volume anchors the agent the same way.
+            try await sandbox.delete(on: app.db)
             let volume = Volume(
                 name: "anchor-vol", description: "v", projectID: project.id!,
                 size: 1 << 30, createdByID: admin.id!)

@@ -9,6 +9,7 @@ import StratoShared
 /// dispatch on this enum, not forking the 202/poll/sweep machinery.
 enum OperationResourceKind: String, Codable, CaseIterable, Sendable {
     case virtualMachine = "virtual_machine"
+    case sandbox = "sandbox"
 
     /// Short noun for client-facing messages ("An operation is already
     /// pending for this VM").
@@ -16,6 +17,8 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable {
         switch self {
         case .virtualMachine:
             return "VM"
+        case .sandbox:
+            return "sandbox"
         }
     }
 
@@ -40,6 +43,19 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable {
                 // runVMDeletion).
                 return 300
             case .shutdown, .reboot, .pause, .resume:
+                return 120
+            }
+        case .sandbox:
+            switch kind {
+            case .create, .boot:
+                // Both may pull a multi-gigabyte OCI image on a cold agent
+                // cache before the microVM can boot.
+                return 600
+            case .delete:
+                return 300
+            case .shutdown, .reboot, .pause, .resume:
+                // Pause/resume are unreachable for sandboxes (no endpoint
+                // issues them) but the budget total function stays total.
                 return 120
             }
         }
@@ -104,6 +120,10 @@ final class ResourceOperation: Model, @unchecked Sendable {
     /// VM sugar for the dominant resource kind.
     convenience init(vmID: UUID, userID: UUID, kind: VMOperationKind) {
         self.init(resourceKind: .virtualMachine, resourceID: vmID, userID: userID, kind: kind)
+    }
+
+    convenience init(sandboxID: UUID, userID: UUID, kind: VMOperationKind) {
+        self.init(resourceKind: .sandbox, resourceID: sandboxID, userID: userID, kind: kind)
     }
 }
 
@@ -182,11 +202,14 @@ extension ResourceOperation {
 
 /// Wire shape of an operation. `vmId` predates the resource-kind
 /// generalization and is kept verbatim — it is what the frontend's operation
-/// polling decodes; a resource-kind-aware DTO can extend this when a second
-/// resource kind actually ships.
+/// polling decodes — even though for a sandbox operation it carries the
+/// sandbox's id; `resourceKind`/`resourceId` are the kind-aware fields new
+/// clients should read.
 struct OperationResponse: Content {
     let id: UUID?
     let vmId: UUID
+    let resourceKind: OperationResourceKind
+    let resourceId: UUID
     let kind: VMOperationKind
     let status: VMOperationStatus
     let error: String?
@@ -196,6 +219,8 @@ struct OperationResponse: Content {
     init(from operation: ResourceOperation) {
         self.id = operation.id
         self.vmId = operation.resourceID
+        self.resourceKind = operation.resourceKind
+        self.resourceId = operation.resourceID
         self.kind = operation.kind
         self.status = operation.status
         self.error = operation.error

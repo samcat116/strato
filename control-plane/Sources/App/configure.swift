@@ -370,6 +370,10 @@ public func configure(_ app: Application) async throws {
     // discriminator, so new resource types reuse the 202/poll/sweep pattern.
     app.migrations.add(GeneralizeVMOperations())
 
+    // Sandboxes (issue #413): OCI-image Firecracker microVMs as a first-class
+    // workload type, parallel to VMs.
+    app.migrations.add(CreateSandbox())
+
     try await app.autoMigrate()
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth

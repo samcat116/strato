@@ -294,6 +294,15 @@ struct SiteController: RouteCollection {
                     .conflict,
                     reason: "Agent hosts \(hostedVMs) VM(s); migrate or delete them before changing its site")
             }
+            let hostedSandboxes = try await Sandbox.query(on: req.db)
+                .filter(\.$hypervisorId == agentId.uuidString)
+                .count()
+            guard hostedSandboxes == 0 else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Agent hosts \(hostedSandboxes) sandbox(es); delete them before changing its site")
+            }
         }
 
         agent.$site.id = targetSiteId
@@ -327,6 +336,12 @@ struct SiteController: RouteCollection {
         let hostedVMs = try await VM.query(on: req.db).filter(\.$hypervisorId == agentId.uuidString).count()
         guard hostedVMs == 0 else {
             throw Abort(.conflict, reason: "Agent hosts \(hostedVMs) VM(s); migrate or delete them first")
+        }
+        let hostedSandboxes = try await Sandbox.query(on: req.db)
+            .filter(\.$hypervisorId == agentId.uuidString)
+            .count()
+        guard hostedSandboxes == 0 else {
+            throw Abort(.conflict, reason: "Agent hosts \(hostedSandboxes) sandbox(es); delete them first")
         }
 
         agent.$site.id = nil
