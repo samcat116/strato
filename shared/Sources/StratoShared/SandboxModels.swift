@@ -79,12 +79,21 @@ public struct RegistryCredential: Codable, Sendable {
     /// When the material expires, for agent awareness (skip a doomed pull and
     /// surface a fresh-sync need instead).
     public let expiresAt: Date?
+    /// When true, `password` is a distribution bearer token the control plane
+    /// already minted: present it directly as `Authorization: Bearer` on
+    /// registry requests. Nil/false means Basic credentials (the agent runs
+    /// the registry's own challenge flow with them). Optional so payloads
+    /// from control planes that predate token minting still decode.
+    public let bearer: Bool?
 
-    public init(registry: String, username: String, password: String, expiresAt: Date? = nil) {
+    public init(
+        registry: String, username: String, password: String, expiresAt: Date? = nil, bearer: Bool? = nil
+    ) {
         self.registry = registry
         self.username = username
         self.password = password
         self.expiresAt = expiresAt
+        self.bearer = bearer
     }
 }
 
