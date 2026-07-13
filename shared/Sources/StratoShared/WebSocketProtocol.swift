@@ -290,6 +290,25 @@ public struct AgentUpdateMessage: WebSocketMessage {
     }
 }
 
+extension AgentUpdateMessage {
+    /// Artifact URLs may carry credentials — presigned query tokens or
+    /// userinfo are often the only way to authenticate a private mirror
+    /// download. Log this form, never the raw value, on both sides of the
+    /// wire.
+    public static func redactURL(_ raw: String) -> String {
+        guard var components = URLComponents(string: raw) else { return "<unparseable-url>" }
+        let hadQuery = components.query != nil
+        components.query = nil
+        components.fragment = nil
+        components.user = nil
+        components.password = nil
+        guard let base = components.string else { return "<unparseable-url>" }
+        return hadQuery ? base + "?[redacted]" : base
+    }
+
+    public var redactedArtifactURL: String { Self.redactURL(artifactURL) }
+}
+
 public struct AgentRegisterResponseMessage: WebSocketMessage {
     public let type: MessageType = .agentRegisterResponse
     public let requestId: String

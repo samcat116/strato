@@ -167,7 +167,9 @@ public struct AgentUpdater: Sendable {
         guard let url = URL(string: artifactURL), let scheme = url.scheme,
             ["https", "http", "file"].contains(scheme.lowercased())
         else {
-            throw AgentUpdateError.invalidArtifactURL(artifactURL)
+            // Redacted: the error travels into logs on both sides, and the
+            // URL's query string may be a presigned credential.
+            throw AgentUpdateError.invalidArtifactURL(AgentUpdateMessage.redactURL(artifactURL))
         }
 
         let binaryPath = try resolveBinaryPath()
@@ -188,7 +190,10 @@ public struct AgentUpdater: Sendable {
 
         logger.info(
             "Downloading agent update artifact",
-            metadata: ["url": .string(artifactURL), "kind": .string(artifactKind.rawValue)])
+            metadata: [
+                "url": .string(AgentUpdateMessage.redactURL(artifactURL)),
+                "kind": .string(artifactKind.rawValue),
+            ])
         let artifactPath = workspace + "/artifact"
         try await download(url, artifactPath)
 
@@ -307,6 +312,22 @@ public struct AgentUpdater: Sendable {
 
     @Sendable
     public static func defaultDownload(from url: URL, to destination: String) async throws {
+        // Local file artifacts (air-gapped hosts: the operator copies the
+        // artifact onto the node and passes a file:// override). URLSession
+        // rejects file URLs on Linux, so copy directly — the checksum is
+        // still verified against the copy before anything is swapped.
+        if url.isFileURL {
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                throw AgentUpdateError.downloadFailed("no file at \(url.path)")
+            }
+            do {
+                try FileManager.default.copyItem(atPath: url.path, toPath: destination)
+            } catch {
+                throw AgentUpdateError.downloadFailed("could not copy local artifact: \(error)")
+            }
+            return
+        }
+
         let temporaryURL: URL
         let response: URLResponse
         do {
@@ -316,7 +337,8 @@ public struct AgentUpdater: Sendable {
         }
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             try? FileManager.default.removeItem(at: temporaryURL)
-            throw AgentUpdateError.downloadFailed("HTTP \(http.statusCode) from \(url)")
+            throw AgentUpdateError.downloadFailed(
+                "HTTP \(http.statusCode) from \(AgentUpdateMessage.redactURL(url.absoluteString))")
         }
         do {
             try FileManager.default.moveItem(atPath: temporaryURL.path, toPath: destination)

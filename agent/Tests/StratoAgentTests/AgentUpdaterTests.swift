@@ -344,6 +344,51 @@ struct AgentUpdaterTests {
         #expect(currentBinary == "old build")
     }
 
+    @Test("file:// artifacts are copied by the default downloader (air-gapped path)")
+    func fileURLArtifactSwaps() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let binaryPath = dir + "/strato-agent"
+        try write("old build", to: binaryPath, executable: true)
+        let fixture = dir + "/local-artifact"
+        try write("new build", to: fixture)
+
+        // Deliberately uses the DEFAULT downloader: file:// must be handled
+        // by copy, since URLSession rejects file URLs on Linux.
+        let updater = AgentUpdater(
+            logger: logger,
+            installMode: .supervisedBinary,
+            binaryPath: binaryPath,
+            probe: noopProbe
+        )
+
+        let outcome = try await updater.applyUpdate(
+            artifactURL: "file://" + fixture,
+            sha256: sha256Hex(of: "new build"),
+            artifactKind: .binary,
+            tarballMember: nil
+        )
+        let swappedBinary = try String(contentsOfFile: outcome.binaryPath, encoding: .utf8)
+        #expect(swappedBinary == "new build")
+
+        // A missing local artifact fails as a download error, not a crash.
+        do {
+            _ = try await updater.applyUpdate(
+                artifactURL: "file://" + dir + "/does-not-exist",
+                sha256: sha256Hex(of: "new build"),
+                artifactKind: .binary,
+                tarballMember: nil
+            )
+            Issue.record("expected downloadFailed")
+        } catch let error as AgentUpdateError {
+            guard case .downloadFailed = error else {
+                Issue.record("expected downloadFailed, got \(error)")
+                return
+            }
+        }
+    }
+
     @Test("Invalid artifact URL is refused before any filesystem work")
     func invalidURLRefused() async throws {
         let updater = AgentUpdater(

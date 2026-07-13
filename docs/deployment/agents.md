@@ -248,7 +248,8 @@ Request-body overrides for air-gapped deployments or unreleased builds
 run as the agent, so delegated org admins are limited to the release path):
 `{"artifactUrl": "...", "sha256": "<hex>"}` skips artifact resolution and
 hands the agent exactly that file (the URL must be reachable *from the agent
-host*). The override defaults to the release tarball shape; add
+host*; a `file:///path/on/the/host` URL works for artifacts already copied
+onto the node). The override defaults to the release tarball shape; add
 `"artifactKind": "binary"` when the URL points at a bare `strato-agent`
 executable, or `"tarballMember": "..."` for a tarball whose agent binary
 lives at a different member path. Main-branch builds have no release

@@ -1577,7 +1577,8 @@ extension Agent {
             "Received agent update command",
             metadata: [
                 "targetVersion": .string(message.targetVersion),
-                "artifactURL": .string(message.artifactURL),
+                // Redacted: the URL's query string may be a presigned credential.
+                "artifactURL": .string(message.redactedArtifactURL),
                 "currentVersion": .string(BuildInfo.version),
             ])
 

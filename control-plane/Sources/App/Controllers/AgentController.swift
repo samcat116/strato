@@ -830,7 +830,9 @@ struct AgentController: RouteCollection {
                 "agentName": .string(agent.name),
                 "currentVersion": .string(agent.version),
                 "targetVersion": .string(targetVersion),
-                "artifactUrl": .string(artifactURL),
+                // Redacted: explicit overrides may be presigned URLs whose
+                // query string is a credential.
+                "artifactUrl": .string(AgentUpdateMessage.redactURL(artifactURL)),
             ])
 
         let message = AgentUpdateMessage(

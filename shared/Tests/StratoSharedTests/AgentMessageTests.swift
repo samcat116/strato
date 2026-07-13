@@ -116,6 +116,23 @@ struct AgentMessageTests {
         #expect(decoded.tarballMember == nil)
     }
 
+    @Test("Artifact URL redaction strips credentials but keeps the shape")
+    func agentUpdateURLRedaction() {
+        // Presigned query tokens are credentials.
+        #expect(
+            AgentUpdateMessage.redactURL(
+                "https://cdn.example.com/strato.tar.gz?X-Amz-Signature=secret&X-Amz-Credential=key")
+                == "https://cdn.example.com/strato.tar.gz?[redacted]")
+        // Userinfo is a credential.
+        #expect(
+            AgentUpdateMessage.redactURL("https://user:pass@mirror.internal/strato.tar.gz")
+                == "https://mirror.internal/strato.tar.gz")
+        // Plain URLs pass through unchanged.
+        let plain = "https://github.com/samcat116/strato/releases/download/v1.2.3/strato-linux-x86_64.tar.gz"
+        #expect(AgentUpdateMessage.redactURL(plain) == plain)
+        #expect(AgentUpdateMessage.redactURL("://not a url") == "<unparseable-url>")
+    }
+
     @Test func agentHeartbeatRoundTrip() throws {
         let message = AgentHeartbeatMessage(
             requestId: Fixtures.requestId,
