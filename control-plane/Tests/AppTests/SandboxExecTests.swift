@@ -391,6 +391,57 @@ final class SandboxExecTests {
         }
     }
 
+    @Test("Agent disconnect tears down that agent's attached and pending sessions")
+    func agentDisconnectClosesSessions() async throws {
+        try await withSandboxTestApp { app, _, _, _, _ in
+            let manager = app.sandboxExecSessionManager
+
+            // One attached and one still-pending session for the
+            // disconnecting agent...
+            let attached = self.mintPendingSession(manager)
+            _ = try manager.attachSession(
+                sessionId: attached.sessionId,
+                sandboxId: attached.sandboxId,
+                userId: attached.userId,
+                websocket: nil
+            )
+            let pending = self.mintPendingSession(manager)
+
+            // ...and an attached session on a different agent that must
+            // survive the teardown.
+            let otherSandboxId = UUID().uuidString
+            let otherUserId = UUID().uuidString
+            let other = manager.createPendingSession(
+                sandboxId: otherSandboxId,
+                agentName: "other-agent",
+                userId: otherUserId,
+                command: ["/bin/sh"],
+                env: nil,
+                workingDir: nil,
+                tty: false,
+                rows: nil,
+                cols: nil
+            )
+            _ = try manager.attachSession(
+                sessionId: other.sessionId,
+                sandboxId: otherSandboxId,
+                userId: otherUserId,
+                websocket: nil
+            )
+
+            manager.closeAllSessions(forAgent: "exec-agent", reason: "agent disconnected")
+
+            #expect(manager.getSession(sessionId: attached.sessionId) == nil)
+            let attachedIndex = manager.getSessionsForSandbox(sandboxId: attached.sandboxId)
+            #expect(attachedIndex.isEmpty)
+            let pendingSurvives = manager.hasPendingSession(sessionId: pending.sessionId)
+            #expect(pendingSurvives == false)
+
+            // The other agent's session is untouched.
+            #expect(manager.getSession(sessionId: other.sessionId) != nil)
+        }
+    }
+
     @Test("Input routing for an unattached session throws sessionNotFound")
     func inputRequiresAttachedSession() async throws {
         try await withSandboxTestApp { app, _, _, _, _ in

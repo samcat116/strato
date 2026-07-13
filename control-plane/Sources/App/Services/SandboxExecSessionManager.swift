@@ -224,6 +224,42 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         }
     }
 
+    /// Tear down every session targeting `agentName` because its socket is
+    /// gone (crash, network drop, or graceful unregister). Each attached
+    /// browser gets a terminal error frame and a close — instead of a
+    /// silently frozen terminal — and pending sessions that could never
+    /// start are dropped.
+    func closeAllSessions(forAgent agentName: String, reason: String) {
+        let closed: [(sessionId: String, websocket: WebSocket?)] = lock.withLock {
+            for (sessionId, pending) in pendingSessions where pending.agentName == agentName {
+                pendingSessions.removeValue(forKey: sessionId)
+            }
+            var closed: [(String, WebSocket?)] = []
+            for (sessionId, session) in sessions where session.agentName == agentName {
+                sessions.removeValue(forKey: sessionId)
+                let websocket = frontendConnections.removeValue(forKey: sessionId)
+                sandboxSessions[session.sandboxId]?.remove(sessionId)
+                if sandboxSessions[session.sandboxId]?.isEmpty == true {
+                    sandboxSessions.removeValue(forKey: session.sandboxId)
+                }
+                closed.append((sessionId, websocket))
+            }
+            return closed
+        }
+
+        for (sessionId, websocket) in closed {
+            app.logger.info(
+                "Closed sandbox exec session: agent disconnected",
+                metadata: [
+                    "sessionId": .string(sessionId),
+                    "agentName": .string(agentName),
+                ])
+            guard let websocket else { continue }
+            websocket.send(Self.controlFrame(BrowserControlFrame(type: "error", message: reason)))
+            _ = websocket.close(code: .normalClosure)
+        }
+    }
+
     // MARK: - Browser → agent
 
     /// Send the exec start message to the agent for a freshly attached session.
@@ -285,7 +321,21 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     /// frame (stdout and stderr interleaved).
     func handleOutput(sessionId: String, fromAgentNamed agentName: String, data: Data) {
         guard let ws = frontendConnection(sessionId: sessionId, fromAgentNamed: agentName, event: "output")
-        else { return }
+        else {
+            // An entirely unknown session (control-plane restart, or the
+            // session was already cleaned up) means the agent is streaming
+            // into the void: tell it to tear down its orphaned bridge. Not
+            // sent on an agent-name mismatch — a known session stays intact.
+            // Replying to every such frame (rather than deduplicating) is
+            // deliberate: the agent's exec close is idempotent and the burst
+            // is bounded by the frames already in flight when the close
+            // round-trips.
+            let sessionExists = lock.withLock { sessions[sessionId] != nil }
+            if !sessionExists {
+                sendOrphanedBridgeClose(sessionId: sessionId, toAgentNamed: agentName)
+            }
+            return
+        }
         ws.send([UInt8](data))
     }
 
@@ -344,6 +394,24 @@ final class SandboxExecSessionManager: @unchecked Sendable {
             return nil
         }
         return websocket
+    }
+
+    /// Best-effort `SandboxExecCloseMessage` to an agent that reported output
+    /// for a session this control plane does not know, so the agent tears the
+    /// orphaned bridge down instead of streaming forever. Errors are swallowed:
+    /// this is advisory, and the agent's own sandbox-stop path also reaps
+    /// bridges.
+    private func sendOrphanedBridgeClose(sessionId: String, toAgentNamed agentName: String) {
+        guard let websocket = app.websocketManager.getConnection(agentName: agentName) else { return }
+        let message = SandboxExecCloseMessage(sessionId: sessionId, reason: "unknown exec session")
+        guard
+            let envelope = try? MessageEnvelope(message: message),
+            let data = try? WireProtocol.makeEncoder().encode(envelope)
+        else { return }
+        websocket.send(data)
+        app.logger.debug(
+            "Sent exec close for unknown session back to reporting agent",
+            metadata: ["sessionId": .string(sessionId), "agentName": .string(agentName)])
     }
 
     /// Remove a session on a terminal agent event when no browser socket is

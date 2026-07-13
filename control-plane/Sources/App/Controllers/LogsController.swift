@@ -82,7 +82,7 @@ struct LogsController: RouteCollection {
     /// mirroring the VM logs endpoint.
     @Sendable
     func getSandboxLogs(req: Request) async throws -> [LogEntry] {
-        let user = try req.auth.require(User.self)
+        _ = try req.auth.require(User.self)
 
         guard let sandboxIdString = req.parameters.get("sandboxID"),
             let sandboxId = UUID(uuidString: sandboxIdString)
@@ -90,23 +90,11 @@ struct LogsController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid sandbox ID")
         }
 
-        // Verify the sandbox exists and the caller may read it (defense in
-        // depth alongside SpiceDBAuthMiddleware).
+        // Verify the sandbox exists and enforce the per-sandbox read
+        // permission (defense in depth alongside SpiceDBAuthMiddleware).
+        // `authorizedSandbox` already runs the SpiceDB check with the
+        // system-admin bypass, so no separate check is needed here.
         _ = try await req.authorizedSandbox(sandboxId, permission: "read")
-
-        // Enforce per-sandbox read permission (system admins bypass)
-        if !user.isSystemAdmin {
-            let hasPermission = try await req.spicedb.checkPermission(
-                subject: user.id!.uuidString,
-                permission: "read",
-                resource: "sandbox",
-                resourceId: sandboxId.uuidString
-            )
-
-            guard hasPermission else {
-                throw Abort(.forbidden, reason: "You don't have 'read' permission on this sandbox")
-            }
-        }
 
         // Check if Loki is enabled
         guard req.application.lokiEnabled else {

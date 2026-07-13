@@ -589,6 +589,10 @@ actor AgentService {
         failPendingRequests(for: agentId)
 
         app.websocketManager.removeConnection(agentName: agentName)
+        // The eventual socket close skips its cleanup once the connection is
+        // gone (`removeConnection(ifCurrent:)` no longer matches), so exec
+        // sessions must be torn down here for the graceful-unregister path.
+        app.sandboxExecSessionManager.closeAllSessions(forAgent: agentName, reason: "agent unregistered")
         await app.coordination.clearAgentRoute(agentName: agentName, replicaId: app.replicaID)
 
         Telemetry.agentDisconnected(reason: "unregister")
@@ -607,6 +611,9 @@ actor AgentService {
         failPendingRequests(for: agentId)
 
         app.websocketManager.removeConnection(agentName: agentName)
+        // Same reasoning as `unregisterAgent`: the socket-close handler will
+        // not run its cleanup once the connection entry is gone.
+        app.sandboxExecSessionManager.closeAllSessions(forAgent: agentName, reason: "agent unregistered")
         await app.coordination.clearAgentRoute(agentName: agentName, replicaId: app.replicaID)
 
         app.logger.info(

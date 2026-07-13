@@ -77,9 +77,11 @@ public enum SandboxControlProtocol {
         /// evicted are silently skipped).
         case streamLogs(sinceSeq: UInt64)
 
-        /// Flat encoding shape for the tagged request union. Optional fields
-        /// are omitted (not null) when absent, matching the guest's serde
-        /// contract.
+        /// Flat encoding shape for the tagged request union. The synthesized
+        /// `Encodable` conformance already does exactly what the guest's serde
+        /// contract needs: fields encode in declaration order (`type` first)
+        /// and optionals are omitted (not null) when absent — pinned by the
+        /// byte-exact v1 lines in `SandboxControlProtocolTests`.
         private struct RawRequest: Encodable {
             let type: String
             var argv: [String]?
@@ -101,19 +103,6 @@ public enum SandboxControlProtocol {
                 case cols
                 case data
                 case sinceSeq = "since_seq"
-            }
-
-            func encode(to encoder: Encoder) throws {
-                var container = encoder.container(keyedBy: CodingKeys.self)
-                try container.encode(type, forKey: .type)
-                try container.encodeIfPresent(argv, forKey: .argv)
-                try container.encodeIfPresent(env, forKey: .env)
-                try container.encodeIfPresent(cwd, forKey: .cwd)
-                try container.encodeIfPresent(tty, forKey: .tty)
-                try container.encodeIfPresent(rows, forKey: .rows)
-                try container.encodeIfPresent(cols, forKey: .cols)
-                try container.encodeIfPresent(data, forKey: .data)
-                try container.encodeIfPresent(sinceSeq, forKey: .sinceSeq)
             }
         }
 

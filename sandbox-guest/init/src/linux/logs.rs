@@ -44,6 +44,10 @@ pub fn spawn_workload_pump(
         .name(name.to_string())
         .spawn(move || pump_workload_stream(src, console_fd, stream, &logs));
     if let Err(e) = spawned {
+        // Accepted tradeoff: the pipe read end drops here, so the workload can
+        // die of SIGPIPE (exit 141) on its next write to this stream — which
+        // v1's console inheritance could not. A visible exit beats a silent
+        // stall, and thread-spawn failure in this init is close to unreachable.
         eprintln!("[sandbox-init] spawn {name} pump: {e}");
     }
 }

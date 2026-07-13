@@ -52,6 +52,10 @@ export function useSandboxExec({
   const wsRef = useRef<WSWithCleanup | null>(null);
   const isReadyRef = useRef(false);
   const hasExitedRef = useRef(false);
+  // Bumped by every teardown (new session, disconnect, unmount) so a start()
+  // suspended in the exec POST can detect it went stale and must not open a
+  // WebSocket against a disposed terminal.
+  const sessionEpochRef = useRef(0);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -72,6 +76,7 @@ export function useSandboxExec({
   }, [onConnected, onDisconnected, onExit, onError]);
 
   const teardownSocket = useCallback(() => {
+    sessionEpochRef.current += 1;
     const ws = wsRef.current;
     if (ws) {
       ws._termDisposables?.forEach((d) => d.dispose());
@@ -91,6 +96,7 @@ export function useSandboxExec({
     async (terminal: Terminal, command: string[]) => {
       // Replace any previous session (one live session per hook instance).
       teardownSocket();
+      const epoch = sessionEpochRef.current;
 
       isReadyRef.current = false;
       hasExitedRef.current = false;
@@ -116,6 +122,11 @@ export function useSandboxExec({
         onErrorRef.current?.(err);
         return;
       }
+
+      // The component may have unmounted (or another session started) while
+      // the POST was in flight; the unclaimed pending session just expires
+      // server-side. Opening the socket now would leak it past unmount.
+      if (sessionEpochRef.current !== epoch) return;
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const ws = new WebSocket(
@@ -217,17 +228,10 @@ export function useSandboxExec({
     teardownSocket();
   }, [teardownSocket]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      const ws = wsRef.current;
-      if (ws) {
-        ws._termDisposables?.forEach((d) => d.dispose());
-        ws.close();
-        wsRef.current = null;
-      }
-    };
-  }, []);
+  // Cleanup on unmount: full teardown (handler detach included) so a socket
+  // closed here can't fire events into an unmounted component, and any start()
+  // still awaiting its POST goes stale via the epoch bump.
+  useEffect(() => teardownSocket, [teardownSocket]);
 
   return { start, disconnect, isConnected, isConnecting, exitCode, error };
 }

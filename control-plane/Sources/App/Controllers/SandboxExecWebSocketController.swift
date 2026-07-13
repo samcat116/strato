@@ -77,35 +77,45 @@ struct SandboxExecWebSocketController: RouteCollection {
                     "agentName": .string(session.agentName),
                 ])
 
+            // Inbound frames flow through a single serial pump: the frame
+            // handlers yield synchronously (preserving WebSocket arrival
+            // order) and one task relays them to the agent one at a time.
+            // Spawning a Task per frame would let the scheduler transpose
+            // rapid stdin frames (fast typing, paste), corrupting what runs
+            // in the sandbox. Errors are still handled per frame.
+            let (frames, frameContinuation) = AsyncStream.makeStream(of: InboundFrame.self)
+            Task {
+                for await frame in frames {
+                    do {
+                        switch frame {
+                        case .input(let data):
+                            try await manager.routeInput(sessionId: sessionId, data: data)
+                        case .resize(let rows, let cols):
+                            try await manager.routeResize(sessionId: sessionId, rows: rows, cols: cols)
+                        }
+                    } catch {
+                        req.logger.error("Failed to route exec frame to agent: \(error)")
+                    }
+                }
+            }
+
             // Binary frames are stdin bytes for the exec process.
             ws.onBinary { _, buffer in
                 let bytes = buffer.getBytes(at: 0, length: buffer.readableBytes) ?? []
-                let data = Data(bytes)
-
-                Task {
-                    do {
-                        try await manager.routeInput(sessionId: sessionId, data: data)
-                    } catch {
-                        req.logger.error("Failed to route exec input to agent: \(error)")
-                    }
-                }
+                frameContinuation.yield(.input(Data(bytes)))
             }
 
             // Text frames are JSON control messages; only resize is defined.
             // Unknown or malformed frames are ignored.
             ws.onText { _, text in
                 guard let resize = Self.decodeResizeFrame(text) else { return }
-
-                Task {
-                    do {
-                        try await manager.routeResize(sessionId: sessionId, rows: resize.rows, cols: resize.cols)
-                    } catch {
-                        req.logger.error("Failed to route exec resize to agent: \(error)")
-                    }
-                }
+                frameContinuation.yield(.resize(rows: resize.rows, cols: resize.cols))
             }
 
             ws.onClose.whenComplete { result in
+                // No more inbound frames: let the pump drain what it has and
+                // exit.
+                frameContinuation.finish()
                 switch result {
                 case .success:
                     req.logger.info(
@@ -144,6 +154,13 @@ struct SandboxExecWebSocketController: RouteCollection {
                 try? await ws.close(code: .unexpectedServerError)
             }
         }
+    }
+
+    /// One browser → control-plane frame, queued for the per-connection
+    /// serial pump.
+    private enum InboundFrame: Sendable {
+        case input(Data)
+        case resize(rows: Int, cols: Int)
     }
 
     private struct ResizeFrame: Decodable {

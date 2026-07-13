@@ -282,6 +282,12 @@ struct AgentWebSocketController: RouteCollection {
                 return
             }
 
+            // Attached exec sessions cannot outlive the agent socket: close
+            // their browser sockets with an error frame instead of leaving
+            // frozen terminals behind.
+            req.application.sandboxExecSessionManager.closeAllSessions(
+                forAgent: agentName, reason: "agent disconnected")
+
             // Mark agent as offline asynchronously
             Task {
                 await req.agentService.removeAgent(agentName)
@@ -676,26 +682,11 @@ struct AgentWebSocketController: RouteCollection {
                     break
                 }
                 let message = try envelope.decode(as: SandboxLogMessage.self)
-                Task {
-                    // Only accept logs for a sandbox actually assigned to the
-                    // reporting agent — anti-spoofing parity with `.vmLog`.
-                    let owned = await req.agentService.sandboxIsOwnedByAgent(
-                        sandboxId: message.sandboxId, agentName: agentName)
-                    guard owned else {
-                        req.logger.warning(
-                            "Dropping sandbox log for a sandbox not owned by the reporting agent",
-                            metadata: [
-                                "sandboxId": .string(message.sandboxId),
-                                "agentName": .string(agentName),
-                            ])
-                        return
-                    }
-                    do {
-                        try await req.lokiService.pushSandboxLog(message)
-                    } catch {
-                        req.logger.error("Failed to push sandbox log to Loki: \(error)")
-                    }
-                }
+                // Enqueue only: the ingestor's single serial consumer keeps
+                // the agent's line order (Loki rejects out-of-order entries
+                // per stream) and caches the per-line ownership check instead
+                // of issuing a DB point query per line.
+                req.application.sandboxLogIngestor.enqueue(message, fromAgentNamed: agentName)
 
             case .vmLog:
                 // Handle VM log messages from agent - push to Loki.
@@ -840,6 +831,12 @@ struct AgentWebSocketController: RouteCollection {
                         ])
                     return
                 }
+
+                // Attached exec sessions cannot outlive the agent socket:
+                // close their browser sockets with an error frame instead of
+                // leaving frozen terminals behind.
+                req.application.sandboxExecSessionManager.closeAllSessions(
+                    forAgent: agentName, reason: "agent disconnected")
 
                 // Mark agent as offline asynchronously
                 Task {

@@ -2572,9 +2572,17 @@ extension Agent {
             return
         }
         if message.data != nil && message.rawData == nil {
+            // The payload is present but not decodable base64: the stream is
+            // corrupt, and forwarding nothing would silently swallow
+            // keystrokes. Treat it as session-fatal, like the handler's other
+            // failure paths: tear the session down and tell the control plane.
             logger.warning(
-                "Invalid sandbox exec input received (failed to decode base64)",
+                "Invalid sandbox exec input received (failed to decode base64); closing session",
                 metadata: ["sessionId": .string(message.sessionId)])
+            await runtime.closeExec(sessionId: message.sessionId)
+            await sendSandboxExecClosed(
+                sessionId: message.sessionId, reason: "undecodable exec input (invalid base64)")
+            return
         }
         do {
             try await runtime.sendExecInput(sessionId: message.sessionId, data: message.rawData, eof: message.eof)
@@ -2624,19 +2632,32 @@ extension Agent {
     /// exec pump, so events are sent strictly in the order the runtime
     /// delivered them.
     private func sendSandboxExecEvent(sandboxId: String, sessionId: String, event: SandboxExecEvent) async {
+        guard let websocketClient else {
+            // No control-plane socket: the event (possibly the session's
+            // terminal one) is dropped. The control plane's agent-disconnect
+            // cleanup handles the user-facing side; just make the drop
+            // observable.
+            logger.warning(
+                "Dropping sandbox exec event: no control plane connection",
+                metadata: [
+                    "sessionId": .string(sessionId),
+                    "event": .string(String(describing: event)),
+                ])
+            return
+        }
         do {
             switch event {
             case .started:
-                try await websocketClient?.sendMessage(
+                try await websocketClient.sendMessage(
                     SandboxExecStartedMessage(sandboxId: sandboxId, sessionId: sessionId))
             case .output(let stream, let data):
-                try await websocketClient?.sendMessage(
+                try await websocketClient.sendMessage(
                     SandboxExecOutputMessage(sessionId: sessionId, stream: stream, rawData: data))
             case .exited(let code):
-                try await websocketClient?.sendMessage(
+                try await websocketClient.sendMessage(
                     SandboxExecExitMessage(sessionId: sessionId, exitCode: code))
             case .closed(let reason):
-                try await websocketClient?.sendMessage(
+                try await websocketClient.sendMessage(
                     SandboxExecClosedMessage(sessionId: sessionId, reason: reason))
             }
         } catch {
@@ -2650,8 +2671,16 @@ extension Agent {
     }
 
     private func sendSandboxExecClosed(sessionId: String, reason: String?) async {
+        guard let websocketClient else {
+            // Terminal for the session but undeliverable; see
+            // `sendSandboxExecEvent` for why a warning is enough.
+            logger.warning(
+                "Dropping sandbox exec closed message: no control plane connection",
+                metadata: ["sessionId": .string(sessionId), "reason": .string(reason ?? "")])
+            return
+        }
         do {
-            try await websocketClient?.sendMessage(SandboxExecClosedMessage(sessionId: sessionId, reason: reason))
+            try await websocketClient.sendMessage(SandboxExecClosedMessage(sessionId: sessionId, reason: reason))
         } catch {
             logger.error(
                 "Failed to send sandbox exec closed message",

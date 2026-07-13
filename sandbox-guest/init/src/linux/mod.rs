@@ -16,7 +16,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::{Arc, Mutex};
 
 use nix::sys::reboot::{reboot, RebootMode};
-use nix::unistd::{setgroups, Gid, Pid};
+use nix::unistd::{setgid, setgroups, setuid, Gid, Pid, Uid};
 
 use strato_sandbox_init::config::{GuestConfig, ResolvedProcess};
 use strato_sandbox_init::logbuf::LogBuffer;
@@ -122,12 +122,11 @@ fn spawn_workload(
 
     let uid = process.uid;
     let gid = process.gid;
-    // Drop supplementary groups to just the primary gid before the runtime
-    // applies uid/gid. Runs in the child, still privileged, pre-exec.
+    // Full credential drop inside pre_exec; see [`drop_credentials`] for why
+    // Command::uid/gid must not be used here.
     unsafe {
-        cmd.pre_exec(move || setgroups(&[Gid::from_raw(gid)]).map_err(std::io::Error::from));
+        cmd.pre_exec(move || drop_credentials(uid, gid));
     }
-    cmd.gid(gid).uid(uid);
 
     let mut child = cmd
         .spawn()
@@ -151,6 +150,24 @@ fn spawn_workload(
         );
     }
     Ok(Pid::from_raw(child.id() as i32))
+}
+
+/// Drop to the workload's credentials: supplementary groups reduce to just
+/// the primary gid, then setgid, then setuid — the classic order, run inside
+/// a pre_exec closure while the child is still privileged.
+///
+/// `Command::uid`/`gid` are deliberately NOT used: std applies them BEFORE
+/// pre_exec closures run, so a setgroups in pre_exec would fail EPERM for any
+/// non-root uid — and `CommandExt::groups`, which would let std order the
+/// calls correctly, is still unstable (rust-lang/rust#90747).
+///
+/// Async-signal-safe: three raw syscalls, no allocation.
+pub(crate) fn drop_credentials(uid: u32, gid: u32) -> std::io::Result<()> {
+    let gid = Gid::from_raw(gid);
+    setgroups(&[gid]).map_err(std::io::Error::from)?;
+    setgid(gid).map_err(std::io::Error::from)?;
+    setuid(Uid::from_raw(uid)).map_err(std::io::Error::from)?;
+    Ok(())
 }
 
 /// Parse `strato.config=<device>` from the kernel command line, if present.

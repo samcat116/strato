@@ -16,11 +16,13 @@
 //!
 //! Lifecycle: `exec_started` after a successful spawn (an `error` line and
 //! connection close otherwise) → `output` chunks pumped by reader threads →
-//! interleaved host `stdin`/`stdin_eof`/`resize` applied by the connection
-//! thread → child reaped **by PID 1's central reaper** (delivered through the
-//! [`ChildRegistry`]) → output pumps drained → one terminal `exec_exit` →
-//! connection shutdown. If the host closes the connection before `exec_exit`,
-//! the whole process group is SIGKILLed.
+//! interleaved host `resize` applied by the connection thread and
+//! `stdin`/`stdin_eof` forwarded to a dedicated writer thread (a child that
+//! never drains its stdin must not block the connection loop, or it would
+//! never observe host disconnect) → child reaped **by PID 1's central reaper**
+//! (delivered through the [`ChildRegistry`]) → output pumps drained → one
+//! terminal `exec_exit` → connection shutdown. If the host closes the
+//! connection before `exec_exit`, the whole process group is SIGKILLed.
 //!
 //! Responses are written by several threads (output pumps, the exit waiter,
 //! the connection thread), so the write half sits behind a mutex and every
@@ -34,13 +36,13 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use nix::pty::{openpty, Winsize};
 use nix::sys::signal::{killpg, Signal};
-use nix::unistd::{setgroups, setsid, Gid, Pid};
+use nix::unistd::{setsid, Pid};
 
 use strato_sandbox_init::config::merge_env;
 use strato_sandbox_init::protocol::{
@@ -152,8 +154,9 @@ fn session(
             .stdout(Stdio::from(stdout_slave))
             .stderr(Stdio::from(pty.slave));
 
-        // New session with the PTY slave as controlling terminal, plus the
-        // same supplementary-groups reset the workload spawn does. Runs in
+        // New session with the PTY slave as controlling terminal, then the
+        // same full credential drop the workload spawn does (see
+        // [`super::drop_credentials`] for why not Command::uid/gid). Runs in
         // the child, pre-exec.
         unsafe {
             cmd.pre_exec(move || {
@@ -161,7 +164,7 @@ fn session(
                 // SAFETY (of the ioctl): fd 0 is the PTY slave, and this
                 // fresh session has no controlling terminal yet.
                 tiocsctty(0, 0).map_err(std::io::Error::from)?;
-                setgroups(&[Gid::from_raw(gid)]).map_err(std::io::Error::from)
+                super::drop_credentials(uid, gid)
             });
         }
     } else {
@@ -172,10 +175,9 @@ fn session(
         // whole tree without touching the workload.
         cmd.process_group(0);
         unsafe {
-            cmd.pre_exec(move || setgroups(&[Gid::from_raw(gid)]).map_err(std::io::Error::from));
+            cmd.pre_exec(move || super::drop_credentials(uid, gid));
         }
     }
-    cmd.gid(gid).uid(uid);
 
     let mut child = cmd.spawn().map_err(|e| format!("spawn {program}: {e}"))?;
     // Drop the Command now: it still holds the PTY slave Stdio handles, and
@@ -197,7 +199,7 @@ fn session(
     // Output pumps and the stdin sink.
     let exited = Arc::new(AtomicBool::new(false));
     let mut pumps: Vec<JoinHandle<()>> = Vec::new();
-    let mut stdin_sink: Option<Box<dyn Write + Send>>;
+    let stdin_sink: Option<Box<dyn Write + Send>>;
     if tty {
         if let Some(read_half) = pty_master_read.take() {
             pumps.extend(spawn_output_pump(
@@ -236,6 +238,13 @@ fn session(
     // not kill or wait — reaping is the central reaper's job.
     drop(child);
 
+    // Stdin goes through a dedicated writer thread: a child that never drains
+    // its stdin would otherwise block write_all on the connection thread once
+    // the pipe fills, and that thread must keep reading to observe host
+    // disconnect (and reach kill_group below). The channel is unbounded, which
+    // is fine — input is interactive and host-paced.
+    let mut stdin_tx = stdin_sink.and_then(spawn_stdin_writer);
+
     spawn_exit_waiter(exit_rx, pumps, exited.clone(), writer.clone());
 
     // Host-input loop: stdin/stdin_eof/resize until the host closes the
@@ -255,19 +264,21 @@ fn session(
         match decode_request(&line) {
             Ok(Request::Stdin { data }) => match decode_base64(&data) {
                 Ok(bytes) => {
-                    if let Some(sink) = stdin_sink.as_mut() {
-                        if let Err(e) = sink.write_all(&bytes).and_then(|_| sink.flush()) {
-                            eprintln!("[sandbox-init] exec stdin write: {e}");
-                            stdin_sink = None;
+                    if let Some(tx) = stdin_tx.as_ref() {
+                        // A send error means the writer thread died on a write
+                        // error (already logged there); stop queueing.
+                        if tx.send(bytes).is_err() {
+                            stdin_tx = None;
                         }
                     }
                 }
                 Err(e) => eprintln!("[sandbox-init] exec stdin: bad base64: {e}"),
             },
             Ok(Request::StdinEof) => {
-                // Pipe mode: dropping the sink closes the child's stdin.
+                // Dropping the sender lets the writer drain its queue, then
+                // drop the sink. Pipe mode: that closes the child's stdin.
                 // tty mode: only stops writes (per spec, a permitted no-op).
-                stdin_sink = None;
+                stdin_tx = None;
             }
             Ok(Request::Resize { rows, cols }) => {
                 if let Some(master) = &pty_master {
@@ -298,6 +309,32 @@ fn session(
         kill_group(pid);
     }
     Ok(())
+}
+
+/// Spawn the dedicated stdin writer thread and hand back its sender. Dropping
+/// the sender signals EOF: the thread drains the queue, then drops the sink
+/// (closing the child's stdin in pipe mode). A write error is logged and ends
+/// the thread — never the session; the sink drops with it. A thread-spawn
+/// failure is logged and yields `None` (the session runs without stdin).
+fn spawn_stdin_writer(mut sink: Box<dyn Write + Send>) -> Option<Sender<Vec<u8>>> {
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let spawned = std::thread::Builder::new()
+        .name("exec-stdin".to_string())
+        .spawn(move || {
+            for bytes in rx {
+                if let Err(e) = sink.write_all(&bytes).and_then(|_| sink.flush()) {
+                    eprintln!("[sandbox-init] exec stdin write: {e}");
+                    return;
+                }
+            }
+        });
+    match spawned {
+        Ok(_) => Some(tx),
+        Err(e) => {
+            eprintln!("[sandbox-init] exec: spawn stdin writer: {e}");
+            None
+        }
+    }
 }
 
 /// Pump one output source into base64 `output` lines. Returns the handle, or

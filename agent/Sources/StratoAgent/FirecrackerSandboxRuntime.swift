@@ -60,6 +60,12 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         /// The workload's exit code once it has ended, cached so it survives a
         /// guest that later stops answering.
         var lastExitCode: Int?
+        /// Bumped whenever this sandbox's exec sessions are swept (stop or
+        /// delete). `startExec` snapshots it before its awaits and re-checks
+        /// after, so a session whose handshake raced a sweep is refused
+        /// instead of being registered against a stopped sandbox (where it
+        /// would never receive a terminal event).
+        var execSweepEpoch: UInt64 = 0
     }
 
     private var sandboxes: [String: Managed] = [:]
@@ -337,9 +343,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
         let status = await mappedStatus(
             instance: info.state, udsPath: vsockUDSPath(sandboxId), sandboxId: sandboxId)
-        if status == .running {
-            // Same contract as boot: a running guest's workload output is
-            // shipped as long as the sandbox is managed. Seq state from a
+        if info.state == .running {
+            // Same contract as boot: while the microVM runs, the guest serves
+            // vsock and its retained ring buffer must ship — even when the
+            // workload itself is still starting or has already exited (its
+            // final output is still buffered guest-side). Seq state from a
             // previous incarnation is gone, so this resumes from the oldest
             // retained ring-buffer record.
             startLogFollow(sandboxId: sandboxId)
@@ -392,6 +400,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 "tty": .stringConvertible(request.tty),
             ])
 
+        // Snapshot the sweep epoch before suspending: a concurrent stop or
+        // delete sweeps `execSessions` while this session is still mid-
+        // handshake and would miss it.
+        let sweepEpoch = managed.execSweepEpoch
+
         // A dedicated connection per session: its first line (`exec`) turns it
         // into the session's channel, and closing it later kills the exec
         // process group guest-side.
@@ -410,6 +423,18 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         } catch {
             await connection.close()
             throw error
+        }
+
+        // Back on the actor: re-check that no teardown raced the awaits above.
+        // If the sandbox was deleted, or a stop/delete swept its exec sessions
+        // (epoch bumped) before this one was registered, registering now would
+        // bind the session to a stopped/deleted sandbox that can never deliver
+        // a terminal event — refuse instead; the thrown error becomes the
+        // control plane's `sandboxExecClosed`.
+        guard let current = sandboxes[sandboxId], current.execSweepEpoch == sweepEpoch else {
+            await connection.close()
+            throw SandboxRuntimeError.sandboxNotFound(
+                "\(sandboxId) (stopped or deleted while the exec session was starting)")
         }
 
         // Confirmed: report `.started` before any output, then drain the
@@ -459,8 +484,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     /// Terminal teardown of every live exec session of one sandbox (stop or
     /// delete): each session's control-plane side gets a `.closed` with the
-    /// reason.
+    /// reason. Bumps the sandbox's sweep epoch so a `startExec` still awaiting
+    /// its handshake refuses to register a session this sweep could not see.
     private func closeExecSessions(sandboxId: String, reason: String) async {
+        sandboxes[sandboxId]?.execSweepEpoch += 1
         for (sessionId, session) in execSessions where session.sandboxId == sandboxId {
             execSessions.removeValue(forKey: sessionId)
             await session.connection.close()
@@ -493,25 +520,18 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     ) async throws -> Data {
         try await connection.write(request.encodedLine())
 
-        var buffer = Data()
-        while true {
-            if let newline = buffer.firstIndex(of: 0x0A) {
-                let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
-                let response = try SandboxControlProtocol.Response.decode(line: line)
-                if case .error(let message) = response {
-                    throw SandboxControlError.guestError(message)
-                }
-                guard case .execStarted = response else {
-                    throw SandboxControlError.malformedResponse("expected exec_started, got \(response)")
-                }
-                return Data(buffer[buffer.index(after: newline)...])
-            }
-            let chunk = try await connection.read(maxLength: 4096)
-            if chunk.isEmpty {
-                throw SandboxControlError.malformedResponse("guest closed before confirming exec start")
-            }
-            buffer.append(chunk)
+        var reader = VsockLineReader(readSize: 4096)
+        guard let line = try await reader.nextLine(on: connection) else {
+            throw SandboxControlError.malformedResponse("guest closed before confirming exec start")
         }
+        let response = try SandboxControlProtocol.Response.decode(line: line)
+        if case .error(let message) = response {
+            throw SandboxControlError.guestError(message)
+        }
+        guard case .execStarted = response else {
+            throw SandboxControlError.malformedResponse("expected exec_started, got \(response)")
+        }
+        return reader.leftover
     }
 
     /// Drains one exec session's connection for its whole life: decodes
@@ -527,51 +547,45 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         runtime: FirecrackerSandboxRuntime?,
         logger: Logger
     ) async {
-        var buffer = initial
+        var reader = VsockLineReader(initial: initial, readSize: 65536)
 
         func finish(_ terminal: SandboxExecEvent) async {
             await runtime?.execSessionEnded(sessionId: sessionId, terminal: terminal)
         }
 
         while true {
-            // Drain every complete line already buffered before reading more.
-            while let newline = buffer.firstIndex(of: 0x0A) {
-                let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
-                buffer = Data(buffer[buffer.index(after: newline)...])
-
-                let response: SandboxControlProtocol.Response
-                do {
-                    response = try SandboxControlProtocol.Response.decode(line: line)
-                } catch {
-                    await finish(.closed(reason: "malformed exec record from guest"))
-                    return
-                }
-                switch response {
-                case .output(let stream, let data):
-                    events(.output(stream: stream, data: data))
-                case .execExit(let exitCode):
-                    await finish(.exited(code: exitCode))
-                    return
-                case .error(let message):
-                    await finish(.closed(reason: "guest error: \(message)"))
-                    return
-                default:
-                    await finish(.closed(reason: "unexpected exec record from guest"))
-                    return
-                }
-            }
-
+            let line: String?
             do {
-                let chunk = try await connection.read(maxLength: 65536)
-                if chunk.isEmpty {
-                    await finish(.closed(reason: "sandbox exec channel closed"))
-                    return
-                }
-                buffer.append(chunk)
+                line = try await reader.nextLine(on: connection)
             } catch {
                 // A read failure on a session we tore down ourselves is the
                 // expected wakeup; `execSessionEnded` stays silent then.
                 await finish(.closed(reason: "sandbox exec channel failed: \(error.localizedDescription)"))
+                return
+            }
+            guard let line else {
+                await finish(.closed(reason: "sandbox exec channel closed"))
+                return
+            }
+
+            let response: SandboxControlProtocol.Response
+            do {
+                response = try SandboxControlProtocol.Response.decode(line: line)
+            } catch {
+                await finish(.closed(reason: "malformed exec record from guest"))
+                return
+            }
+            switch response {
+            case .output(let stream, let data):
+                events(.output(stream: stream, data: data))
+            case .execExit(let exitCode):
+                await finish(.exited(code: exitCode))
+                return
+            case .error(let message):
+                await finish(.closed(reason: "guest error: \(message)"))
+                return
+            default:
+                await finish(.closed(reason: "unexpected exec record from guest"))
                 return
             }
         }
@@ -754,26 +768,18 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         runtime: FirecrackerSandboxRuntime,
         backoff: inout TimeInterval
     ) async throws {
-        var buffer = Data()
+        var reader = VsockLineReader(readSize: 65536)
         while true {
-            let chunk = try await connection.read(maxLength: 65536)
-            if chunk.isEmpty {
+            guard let line = try await reader.nextLine(on: connection) else {
                 return  // guest closed; the loop reconnects
             }
-            buffer.append(chunk)
-
-            while let newline = buffer.firstIndex(of: 0x0A) {
-                let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
-                buffer = Data(buffer[buffer.index(after: newline)...])
-
-                guard case .log(let seq, let stream, let data) = try SandboxControlProtocol.Response.decode(line: line)
-                else {
-                    throw SandboxControlError.malformedResponse(line)
-                }
-                await runtime.recordLog(
-                    sandboxId: sandboxId, generation: generation, seq: seq, stream: stream, data: data)
-                backoff = 1
+            guard case .log(let seq, let stream, let data) = try SandboxControlProtocol.Response.decode(line: line)
+            else {
+                throw SandboxControlError.malformedResponse(line)
             }
+            await runtime.recordLog(
+                sandboxId: sandboxId, generation: generation, seq: seq, stream: stream, data: data)
+            backoff = 1
         }
     }
 
@@ -848,8 +854,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     /// Race `operation` against a deadline. When the deadline wins, the
     /// connection is closed so any blocking read the operation is parked in
-    /// returns instead of hanging, and `SandboxControlError.timeout` is
-    /// thrown. The caller still owns closing the connection on success.
+    /// returns instead of hanging (`VsockConnection.close()` shuts the socket
+    /// down before closing it, which is what actually wakes a parked
+    /// `read(2)`), and `SandboxControlError.timeout` is thrown. The caller
+    /// still owns closing the connection on success.
     private static func withConnectionDeadline<T: Sendable>(
         _ connection: VsockConnection, timeout: TimeInterval,
         operation: @escaping @Sendable () async throws -> T
@@ -874,22 +882,15 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     ) async throws -> SandboxControlProtocol.Response {
         try await connection.write(request.encodedLine())
 
-        var buffer = Data()
-        while true {
-            if let newline = buffer.firstIndex(of: 0x0A) {
-                let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
-                let response = try SandboxControlProtocol.Response.decode(line: line)
-                if case .error(let message) = response {
-                    throw SandboxControlError.guestError(message)
-                }
-                return response
-            }
-            let chunk = try await connection.read(maxLength: 4096)
-            if chunk.isEmpty {
-                throw SandboxControlError.malformedResponse("guest closed before sending a full response line")
-            }
-            buffer.append(chunk)
+        var reader = VsockLineReader(readSize: 4096)
+        guard let line = try await reader.nextLine(on: connection) else {
+            throw SandboxControlError.malformedResponse("guest closed before sending a full response line")
         }
+        let response = try SandboxControlProtocol.Response.decode(line: line)
+        if case .error(let message) = response {
+            throw SandboxControlError.guestError(message)
+        }
+        return response
     }
 
     // MARK: - Paths
@@ -904,6 +905,50 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     private func removeArtifacts(_ sandboxId: String) {
         try? FileManager.default.removeItem(atPath: sandboxDirectory(sandboxId))
+    }
+}
+
+/// Incremental newline framing over a vsock connection, shared by every read
+/// loop in the runtime (control exchange, exec handshake, exec reader, log
+/// follow) so buffering and line-splitting behavior cannot drift between them.
+///
+/// `nextLine` returns complete lines (without the `\n`) one at a time, reading
+/// more from the connection only when no complete line is buffered; `nil`
+/// means the guest closed the connection (EOF). Read errors and timeouts
+/// propagate from `VsockConnection.read` untouched, so callers keep their own
+/// EOF/error semantics and any external deadline racing (`withConnectionDeadline`)
+/// works exactly as it does against a bare read.
+private struct VsockLineReader {
+    /// Bytes received but not yet returned: everything past the last returned
+    /// line's newline.
+    private(set) var buffer: Data
+    /// Per-read chunk size (small for one-line control exchanges, large for
+    /// streaming loops).
+    private let readSize: Int
+
+    init(initial: Data = Data(), readSize: Int) {
+        self.buffer = initial
+        self.readSize = readSize
+    }
+
+    /// Bytes buffered past the last returned line (e.g. early exec output
+    /// received in the same chunk as the `exec_started` confirmation).
+    var leftover: Data { buffer }
+
+    /// The next complete line, or nil once the guest closes the connection.
+    mutating func nextLine(on connection: VsockConnection) async throws -> String? {
+        while true {
+            if let newline = buffer.firstIndex(of: 0x0A) {
+                let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
+                buffer = Data(buffer[buffer.index(after: newline)...])
+                return line
+            }
+            let chunk = try await connection.read(maxLength: readSize)
+            if chunk.isEmpty {
+                return nil
+            }
+            buffer.append(chunk)
+        }
     }
 }
 
