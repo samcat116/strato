@@ -125,6 +125,18 @@ struct SandboxConfigDriveTests {
             spec: spec())
         #expect(try drive.blockImage().count >= 512)
     }
+
+    /// `decode(fromBlockImage:)` recovers the document (and its nonce) from the
+    /// padded block image — the path the runtime uses to re-learn a sandbox's
+    /// identity after an agent restart.
+    @Test("decode(fromBlockImage:) recovers the document from padding")
+    func decodeFromBlockImageRecoversNonce() throws {
+        let drive = SandboxConfigDrive(
+            sandboxId: "sb-5", identityNonce: "boot-nonce-xyz", guestConfig: guestConfig(), spec: spec())
+        let decoded = try SandboxConfigDrive.decode(fromBlockImage: try drive.blockImage())
+        #expect(decoded.sandboxId == "sb-5")
+        #expect(decoded.identityNonce == "boot-nonce-xyz")
+    }
 }
 
 @Suite("Sandbox Control Protocol Tests")

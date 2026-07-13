@@ -96,6 +96,10 @@ public enum SandboxControlError: Error, LocalizedError, Equatable, Sendable {
     case guestError(String)
     /// No response arrived before the deadline.
     case timeout
+    /// The guest echoed an identity that does not match the sandbox we expect
+    /// to be talking to — a stale generation still serving the deterministic
+    /// vsock UDS (a leaked process, a pre-adoption resume).
+    case identityMismatch(expected: String, got: String)
 
     public var errorDescription: String? {
         switch self {
@@ -105,6 +109,8 @@ public enum SandboxControlError: Error, LocalizedError, Equatable, Sendable {
             return "guest control agent error: \(message)"
         case .timeout:
             return "timed out waiting for the sandbox guest control agent"
+        case .identityMismatch(let expected, let got):
+            return "sandbox guest identity mismatch: expected \(expected), got \(got)"
         }
     }
 }
