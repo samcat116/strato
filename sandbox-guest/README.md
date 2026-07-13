@@ -31,11 +31,13 @@ as PID 1 and:
    init is never written into it;
 4. resolves the process to run by merging the image's OCI config with the
    sandbox's overrides (entrypoint/cmd/env/workdir/user);
-5. execs the workload as a child, keeping PID 1 to reap zombies;
-6. serves a tiny **vsock** control surface — health `ping` and `get_status`
-   (which returns the workload's exit code once it ends).
-
-Exec/stdio streaming is deliberately out of scope for v1 (phase 2, [#423]).
+5. execs the workload as a child (stdin `/dev/null`; stdout/stderr captured
+   via pipes, mirrored byte-for-byte to the console **and** retained in a
+   256 KiB ring buffer), keeping PID 1 as a forever-running reaper that routes
+   every child's exit code;
+6. serves the **vsock** control surface — health `ping` / `get_status`,
+   interactive `exec` sessions (PTY or pipes), and `stream_logs` follow
+   streams of the workload's captured stdio ([#423]).
 
 ### Config-drive schema (the host's contract — produced by [#421])
 
@@ -57,14 +59,36 @@ size (no filesystem). Fields: see [`init/src/config.rs`](init/src/config.rs)
 }
 ```
 
-### vsock control protocol
+### vsock control protocol (v2)
 
-Newline-delimited JSON, host connects to the guest port. See
-[`init/src/protocol.rs`](init/src/protocol.rs). v1: `{"type":"ping"}` →
-`{"type":"pong",…}`; `{"type":"get_status"}` →
-`{"type":"status","state":"running|exited","exit_code":…}`. Every response
-echoes `sandbox_id` + `nonce` so a host can re-identify a guest after a
-snapshot/resume (phase 4, [#426]).
+Newline-delimited JSON, host connects to the guest port; one guest thread per
+connection. See [`init/src/protocol.rs`](init/src/protocol.rs). The **first
+request on a connection determines its role**:
+
+- **Control** — `{"type":"ping"}` → `{"type":"pong",…}`;
+  `{"type":"get_status"}` →
+  `{"type":"status","state":"running|exited","exit_code":…}` (the v1 surface,
+  unchanged; the connection keeps serving requests). Every control response
+  echoes `sandbox_id` + `nonce` so a host can re-identify a guest after a
+  snapshot/resume (phase 4, [#426]).
+- **Exec session** ([#423]) —
+  `{"type":"exec","argv":[…],"env":{…},"cwd":…,"tty":…,"rows":…,"cols":…}`
+  runs a command in the workload's context (its resolved env with the
+  request's merged over it, its cwd unless overridden, its uid/gid). The
+  guest answers `{"type":"exec_started"}` (or `{"type":"error",…}`), streams
+  `{"type":"output","stream":"stdout|stderr","data":"<base64>"}` chunks, and
+  accepts interleaved `{"type":"stdin","data":"<base64>"}`,
+  `{"type":"stdin_eof"}`, and `{"type":"resize","rows":…,"cols":…}`. With
+  `tty:true` the child gets a PTY in a new session (all output reported as
+  `stdout`); otherwise three pipes in its own process group. After the child
+  is reaped and output flushed the guest sends one terminal
+  `{"type":"exec_exit","exit_code":N}` (signal N → `128+N`) and closes. A
+  host disconnect before that SIGKILLs the exec process group.
+- **Log follow stream** ([#423]) — `{"type":"stream_logs","since_seq":N}`
+  replays retained workload stdio records (`seq` starts at 1, monotonic
+  across streams; already-evicted records are silently skipped) and then
+  follows new output forever as
+  `{"type":"log","seq":…,"stream":"stdout|stderr","data":"<base64>"}` lines.
 
 ## Building
 

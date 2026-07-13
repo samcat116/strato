@@ -261,17 +261,19 @@ impl GuestConfig {
     }
 }
 
-/// Merge image env (`KEY=VALUE` list) with an overrides map. Overrides replace
-/// existing keys in place and are otherwise appended in sorted order, so the
-/// result is deterministic.
-fn merge_env(
-    image_env: &[String],
+/// Merge a base env (`KEY=VALUE` list) with an overrides map. Overrides
+/// replace existing keys in place and are otherwise appended in sorted order,
+/// so the result is deterministic. Used both for the image-config/sandbox
+/// merge here and for exec sessions layering request env over the workload's
+/// resolved env (issue #423).
+pub fn merge_env(
+    base_env: &[String],
     overrides: &std::collections::BTreeMap<String, String>,
 ) -> Vec<String> {
-    let mut out: Vec<String> = Vec::with_capacity(image_env.len() + overrides.len());
+    let mut out: Vec<String> = Vec::with_capacity(base_env.len() + overrides.len());
     let mut seen: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
 
-    for entry in image_env {
+    for entry in base_env {
         let key = entry.split('=').next().unwrap_or(entry).to_string();
         seen.insert(key, out.len());
         out.push(entry.clone());
