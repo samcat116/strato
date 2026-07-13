@@ -1,0 +1,41 @@
+agent/Tests/StratoAgentTests/SandboxRuntimeProbeTests.swift
+  s_322c2d216f0cf7::t_78ea8678f0bf0b 43,52,60,68,77,85,90,97
+  s_322c2d216f0cf7::t_f0b4fe3644f1cb 28-39
+agent/Sources/StratoAgentCore/SandboxRuntimeProbe.swift
+  s_322c2d216f0cf7::t_e03a3e176fdd71 24-32
+  s_322c2d216f0cf7::t_23388c494fd282 56-68
+control-plane/Sources/App/Migrations/AddSandboxCountToResourceQuota.swift
+  s_322c2d216f0cf7::t_1b83da2ecf1300 13-24,36-38,42-62
+  s_b1fd57a7028f8c::t_164a8ca3e9aae2 63-64
+docs/architecture/sandboxes.md
+  s_322c2d216f0cf7::t_66ecb80948fc72 96-103
+docs/architecture/scheduler.md
+  s_322c2d216f0cf7::t_a889a8deb64726 152-156
+control-plane/Tests/AppTests/QuotaEnforcementTests.swift
+  s_322c2d216f0cf7::t_f65ae7f95329e8 341-375
+  s_322c2d216f0cf7::t_434e95a28e48c0 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "c05d7874efa857d28f923c29a384b46f8ba3c4e6",
+  "prompts": {},
+  "sessions": {
+    "s_322c2d216f0cf7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0c9de6f-7cb8-444e-a2e3-f4db6ccd7604",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b1fd57a7028f8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "24d3be9f-19d3-48c9-8583-12204042473f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
