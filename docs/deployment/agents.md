@@ -85,6 +85,66 @@ the state file is writable **before** consuming the token and exits with
 instructions if it isn't; to run unprivileged, pass `--state-file` (and
 `--config-file`) pointing at writable locations.
 
+## Release binaries and the agent manifest
+
+Every tagged release publishes one **combined** binary tarball per supported
+platform, each with a `.sha256` sidecar the installer (and the agent update
+flow) verifies before use:
+
+| Asset | Platform |
+| --- | --- |
+| `strato-linux-x86_64.tar.gz` | Linux x86_64 (static Swift stdlib — no toolchain needed on the host) |
+| `strato-linux-arm64.tar.gz` | Linux arm64/aarch64 (static Swift stdlib) |
+| `strato-macos-arm64.tar.gz` | macOS Apple Silicon (dev/test) |
+
+Each tarball contains both `strato-control-plane` and `strato-agent`. There is
+deliberately **no separate agent-only asset**: every consumer extracts just the
+`strato-agent` member (`install.sh` and the agent self-update flow both do a
+single-member `tar -xzf ... strato-agent`), and one asset per platform keeps
+the release matrix and checksum handling simple. If download size ever matters
+for large fleets, a lean per-arch agent asset can be added later without
+breaking consumers — the manifest below names assets explicitly rather than by
+convention.
+
+### agent-manifest.json
+
+Each release also publishes `agent-manifest.json`, a machine-readable pointer
+to the release's binaries. The latest release's manifest is always at a stable
+URL:
+
+```
+https://github.com/samcat116/strato/releases/latest/download/agent-manifest.json
+```
+
+```json
+{
+  "schemaVersion": 1,
+  "version": "v1.2.3",
+  "gitSHA": "abc123...",
+  "assets": [
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "asset": "strato-linux-arm64.tar.gz",
+      "url": "https://github.com/samcat116/strato/releases/download/v1.2.3/strato-linux-arm64.tar.gz",
+      "sha256": "…",
+      "size": 123456789,
+      "agentBinaryPath": "strato-agent"
+    }
+  ]
+}
+```
+
+The control plane uses this to discover the newest agent version and the
+per-platform download URL + checksum to hand an agent when instructing it to
+update. `agentBinaryPath` is the tarball member to extract, so a future
+asset-shape change is just a manifest change.
+
+Air-gapped deployments are an open question: the control plane may need to
+proxy or mirror release assets rather than hand agents `github.com` URLs. The
+manifest's URLs are absolute, so a mirror can serve a rewritten
+`agent-manifest.json` pointing at itself without any agent-side changes.
+
 ## Running in Docker (Linux)
 
 The agent image is published from the `main` branch as
