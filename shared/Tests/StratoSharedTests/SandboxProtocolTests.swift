@@ -43,7 +43,8 @@ struct SandboxProtocolTests {
                         registry: "ghcr.io",
                         username: "pull-bot",
                         password: "short-lived-token",
-                        expiresAt: Fixtures.laterDate
+                        expiresAt: Fixtures.laterDate,
+                        bearer: true
                     )
                 )
             ]
@@ -69,6 +70,16 @@ struct SandboxProtocolTests {
         #expect(sandbox.registryCredential?.username == "pull-bot")
         #expect(sandbox.registryCredential?.password == "short-lived-token")
         #expect(sandbox.registryCredential?.expiresAt == Fixtures.laterDate)
+        #expect(sandbox.registryCredential?.bearer == true)
+    }
+
+    @Test("RegistryCredential without a bearer key decodes (pre-token control planes)")
+    func registryCredentialBearerBackCompat() throws {
+        let legacy = #"{"registry":"ghcr.io","username":"pull-bot","password":"pw"}"#
+        let decoded = try JSONDecoder().decode(RegistryCredential.self, from: Data(legacy.utf8))
+        #expect(decoded.bearer == nil)
+        #expect(decoded.expiresAt == nil)
+        #expect(decoded.password == "pw")
     }
 
     @Test("Minimal SandboxSpec round-trips: overrides nil, no network, no credential")
