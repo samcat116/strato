@@ -1,0 +1,45 @@
+sandbox-guest/init/src/logbuf.rs
+  s_a36dd7ef4412d5::t_890917f04604a5 43-47
+  s_a36dd7ef4412d5::t_7d65d6f62ca212 157-161
+  s_a36dd7ef4412d5::t_c5a1f90b7ddadd 285-335
+  s_a36dd7ef4412d5::t_f1cde8396a8db5 100-127
+  s_a36dd7ef4412d5::t_f4d30fee0e6adc 70-71
+sandbox-guest/init/src/linux/mod.rs
+  s_a36dd7ef4412d5::t_d08cd808d40941 134-141,147-148,150-151,157-158
+docs/architecture/sandboxes.md
+  s_a36dd7ef4412d5::t_f5fb6c3df60dc4 288-292
+sandbox-guest/init/src/linux/logs.rs
+  s_a36dd7ef4412d5::t_85044eddd899ae 51-54
+  s_a36dd7ef4412d5::t_2c88590997d760 36-40
+  s_a36dd7ef4412d5::t_c469b5f13226ed 48,61
+  s_a36dd7ef4412d5::t_8e5df5a055730b 122-128
+sandbox-guest/init/src/protocol.rs
+  s_a36dd7ef4412d5::t_2bc654b4920418 404-410
+  s_a36dd7ef4412d5::t_62e1478896bbac 157-162
+  s_a36dd7ef4412d5::t_9521be6b1ea74b 403
+agent/Sources/StratoAgentCore/SandboxControlProtocol.swift
+  s_a36dd7ef4412d5::t_4f7b7c256572d3 170-173
+  s_a36dd7ef4412d5::t_edb697e847ecc5 209-210
+agent/Tests/StratoAgentTests/SandboxControlProtocolTests.swift
+  s_a36dd7ef4412d5::t_0e946fc2b8ad67 198-203
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_a36dd7ef4412d5::t_443cd36dc8d38e 793-795,802,806,808-816
+  s_a36dd7ef4412d5::t_471e76a1f72123 700-716
+  s_a36dd7ef4412d5::t_01a0d3691c1259 750,754,767-771
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "947c24e17f82221167680a3f7ef06d5ccda538e3",
+  "prompts": {},
+  "sessions": {
+    "s_a36dd7ef4412d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c139a913-0184-4109-9812-bbb47da69e4c",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
