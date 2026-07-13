@@ -53,6 +53,7 @@ struct OIDCTokenVerificationTests {
             aud: "client-abc",
             exp: ExpirationClaim(value: Date().addingTimeInterval(3600)),
             iat: IssuedAtClaim(value: Date()),
+            azp: nil,
             nonce: nil,
             email: "user@example.com",
             emailVerified: true,

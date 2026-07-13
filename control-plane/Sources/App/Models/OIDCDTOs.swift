@@ -91,6 +91,7 @@ struct OIDCIDTokenClaims: Content, JWTPayload {
     let aud: OIDCAudienceClaim  // Audience — a single string or an array (RFC 7519 §4.1.3)
     let exp: ExpirationClaim  // Expiration time
     let iat: IssuedAtClaim  // Issued at
+    let azp: String?  // Authorized party (OIDC Core §3.1.3.7) — must be our client ID when present
     let nonce: String?
     let email: String?
     let emailVerified: Bool?
@@ -102,7 +103,7 @@ struct OIDCIDTokenClaims: Content, JWTPayload {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case iss, sub, aud, exp, iat, nonce, email, name
+        case iss, sub, aud, exp, iat, azp, nonce, email, name
         case emailVerified = "email_verified"
         case preferredUsername = "preferred_username"
     }
