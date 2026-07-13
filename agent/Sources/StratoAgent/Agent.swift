@@ -7,6 +7,11 @@ import StratoShared
 import StratoAgentCore
 import StratoAgentSPIFFE
 
+#if os(Linux)
+// One shared Firecracker client backs both VMs and sandboxes (issue #421).
+import SwiftFirecracker
+#endif
+
 enum AgentError: Error, LocalizedError {
     case registrationTimeout
     /// The control plane explicitly rejected our credentials (`invalid_token`
@@ -344,14 +349,40 @@ actor Agent {
 
         #if os(Linux)
         logger.info("Initializing Firecracker service (Linux only)")
+        // One Firecracker client backs both VMs and sandboxes so they share the
+        // process registry, socket directory, and re-adoption machinery.
+        let firecrackerClient = FirecrackerClient(
+            firecrackerBinaryPath: firecrackerBinaryPath,
+            socketDirectory: firecrackerSocketDir,
+            logger: logger
+        )
         hypervisorServices[.firecracker] = FirecrackerService(
             logger: logger,
             storage: storageBackend,
             imageSource: imageCacheService,
             vmStoragePath: vmStoragePath,
             firecrackerBinaryPath: firecrackerBinaryPath,
-            socketDirectory: firecrackerSocketDir
+            socketDirectory: firecrackerSocketDir,
+            firecrackerClient: firecrackerClient
         )
+
+        // The sandbox runtime (issue #421) shares that client. It lights up only
+        // when a guest base image (issue #419) is configured — the same
+        // prerequisite the capability probe gates on — so a build without one
+        // leaves `sandboxRuntime` nil and never attracts sandbox placements.
+        if let sandboxGuestImagePath {
+            logger.info("Initializing sandbox runtime (Linux only)")
+            sandboxRuntime = FirecrackerSandboxRuntime(
+                logger: logger,
+                client: firecrackerClient,
+                imageService: SandboxImageService(logger: logger),
+                socketDirectory: firecrackerSocketDir,
+                sandboxStoragePath: vmStoragePath,
+                guestImagePath: sandboxGuestImagePath
+            )
+        } else {
+            logger.info("Sandbox guest image path not configured; sandbox runtime disabled")
+        }
         #endif
 
         // The reconciler drives desired-state syncs onto the shared per-VM
@@ -2910,7 +2941,24 @@ extension Agent: ReconcileActuator {
             throw SandboxRuntimeError.sandboxNotFound(item.id)
         }
 
-        let status = try await runtime.adoptSandbox(sandboxId: item.id, spec: spec)
+        let status: SandboxStatus
+        do {
+            status = try await runtime.adoptSandbox(sandboxId: item.id, spec: spec)
+        } catch SandboxRuntimeError.adoptionTargetGone(let reason) {
+            // The orphan's Firecracker process is gone, so there is nothing to
+            // re-attach — but its artifacts persist and create is idempotent, so
+            // a fresh create rebuilds the same sandbox in the "exists, not
+            // running" state. The next sync plans any remaining power-state
+            // steps from `.stopped`. Requires the desired entry (present for an
+            // orphan the control plane still wants); without it, re-adoption
+            // simply failed.
+            guard item.desiredSandbox != nil else { throw SandboxRuntimeError.sandboxNotFound(item.id) }
+            logger.warning(
+                "Orphaned sandbox has no live process; re-creating it from the desired entry",
+                metadata: ["sandboxId": .string(item.id), "reason": .string(reason)])
+            try await sandboxReconcileCreate(item)
+            return .stopped
+        }
         managedSandboxes[item.id] = entry
         orphanedSandboxes.removeValue(forKey: item.id)
         persistManifest()
@@ -3077,6 +3125,15 @@ extension Agent: ReconcileActuator {
             throw HypervisorServiceError.invalidConfiguration("create work item without a desired entry")
         }
         let runtime = try requireSandboxRuntime()
+
+        // v1 has no in-guest networking (the runtime rejects networked specs).
+        // Fail here, before reserving host-side NICs, so an unsupported spec
+        // surfaces the permanent `networkingUnsupported` reason immediately
+        // instead of a transient network-prep failure that retries until the
+        // operation budget expires.
+        guard desired.spec.network == nil else {
+            throw SandboxRuntimeError.networkingUnsupported
+        }
 
         // Same contract as the VM path: the orchestrator realizes the
         // sandbox's NIC on this host before the runtime runs, and rolls it

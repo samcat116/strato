@@ -30,7 +30,8 @@ actor FirecrackerService: HypervisorService {
         imageSource: (any ImageSource)? = nil,
         vmStoragePath: String,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
-        socketDirectory: String = "/tmp/firecracker"
+        socketDirectory: String = "/tmp/firecracker",
+        firecrackerClient: FirecrackerClient? = nil
     ) {
         self.logger = logger
         self.storage = storage
@@ -38,6 +39,10 @@ actor FirecrackerService: HypervisorService {
         self.vmStoragePath = vmStoragePath
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.socketDirectory = socketDirectory
+        // A shared client (created by the Agent) lets VMs and sandboxes drive
+        // Firecracker through one process registry and socket directory; when
+        // absent (e.g. tests) it is created lazily on first use.
+        self.firecrackerClient = firecrackerClient
 
         logger.info(
             "Firecracker service initialized",

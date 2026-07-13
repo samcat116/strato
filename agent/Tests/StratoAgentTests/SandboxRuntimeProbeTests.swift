@@ -25,13 +25,24 @@ struct SandboxRuntimeProbeTests {
     private let presentPath = "/bin/ls"
     private let missingPath = "/nonexistent/sandbox/guest"
 
-    @Test("this build never advertises the capability: the runtime (issue #421) has not landed")
-    func buildGateHoldsCapabilityOff() {
-        // No runtimeBuilt override: the build's own constant must win even
-        // with every host prerequisite satisfied, because the reconciler
-        // would ignore desired sandboxes and placements would hang.
+    @Test("the runtime (issue #421) has landed: the build gate no longer forces the capability off")
+    func buildGateOpenWithRuntime() {
+        // No runtimeBuilt override: the build's own constant now permits the
+        // capability, so with every host prerequisite satisfied the probe
+        // reports capable. The reconciler drives desired sandboxes on this build.
         let report = SandboxRuntimeProbe.probe(
             firecracker: firecrackerAvailable, guestImagePath: presentPath)
+
+        #expect(report.capable)
+        #expect(report.unavailabilityReason == nil)
+    }
+
+    @Test("an explicit unbuilt runtime still forces the capability off")
+    func explicitUnbuiltRuntimeGatesOff() {
+        // Injecting runtimeBuilt: false proves the build gate still dominates
+        // every host prerequisite when a build genuinely lacks the runtime.
+        let report = SandboxRuntimeProbe.probe(
+            firecracker: firecrackerAvailable, guestImagePath: presentPath, runtimeBuilt: false)
 
         #expect(!report.capable)
         #expect(report.unavailabilityReason?.contains("does not include the sandbox runtime") == true)

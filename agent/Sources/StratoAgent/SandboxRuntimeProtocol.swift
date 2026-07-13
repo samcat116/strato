@@ -55,12 +55,22 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
     /// (pause/resume have no sandbox meaning in v1). Permanent: replanning
     /// the same generation yields the same step.
     case unsupportedStep(String)
+    /// An orphaned sandbox's Firecracker process is gone, so there is nothing
+    /// to re-attach. The Agent catches this during adoption and re-creates the
+    /// sandbox from its desired entry (mirroring the VM path).
+    case adoptionTargetGone(String)
+    /// The sandbox requested a NIC, but v1 has no in-guest networking: the guest
+    /// init does not bring up `eth0`/DHCP and the guest kernel has no IP
+    /// autoconfiguration, so a TAP would leave the workload with an
+    /// unconfigured interface while the sandbox reported running. Permanent
+    /// until guest-side networking lands (a guest-image change).
+    case networkingUnsupported
 
     var failureClassification: FailureClassification {
         switch self {
-        case .runtimeUnavailable, .unsupportedStep:
+        case .runtimeUnavailable, .unsupportedStep, .networkingUnsupported:
             return .permanent
-        case .sandboxNotFound:
+        case .sandboxNotFound, .adoptionTargetGone:
             return .transient
         }
     }
@@ -73,6 +83,10 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
             return "sandbox not found: \(id)"
         case .unsupportedStep(let step):
             return "step '\(step)' is not supported for sandbox workloads"
+        case .adoptionTargetGone(let reason):
+            return "sandbox adoption target gone: \(reason)"
+        case .networkingUnsupported:
+            return "networked sandboxes are not supported yet (the guest image has no in-guest networking)"
         }
     }
 }
