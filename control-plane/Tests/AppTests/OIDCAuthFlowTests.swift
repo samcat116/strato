@@ -140,6 +140,55 @@ private func signIDToken(
     return try await keys.sign(claims, kid: JWKIdentifier(string: kid))
 }
 
+/// Same as `TestIDTokenClaims` but with a multi-valued `aud`, mirroring
+/// providers (e.g. Discord) that encode the audience as a JSON array. A plain
+/// `[String]` always encodes as an array, even for a single element.
+private struct TestIDTokenArrayAudClaims: JWTPayload {
+    var iss: String
+    var sub: String
+    var aud: [String]
+    var exp: ExpirationClaim
+    var iat: IssuedAtClaim
+    var nonce: String?
+    var email: String?
+    var emailVerified: Bool?
+    var name: String?
+
+    func verify(using algorithm: some JWTAlgorithm) async throws {}
+
+    private enum CodingKeys: String, CodingKey {
+        case iss, sub, aud, exp, iat, nonce, email, name
+        case emailVerified = "email_verified"
+    }
+}
+
+private func signIDTokenArrayAud(
+    aud: [String],
+    iss: String = "https://idp.example.com",
+    sub: String = "sub-123",
+    expiresIn: TimeInterval = 300,
+    nonce: String?,
+    email: String? = "sso-user@example.com",
+    kid: String = TestRSAKeys.keyID,
+    privateKeyPEM: String = TestRSAKeys.privateKeyPEM
+) async throws -> String {
+    let claims = TestIDTokenArrayAudClaims(
+        iss: iss,
+        sub: sub,
+        aud: aud,
+        exp: ExpirationClaim(value: Date().addingTimeInterval(expiresIn)),
+        iat: IssuedAtClaim(value: Date()),
+        nonce: nonce,
+        email: email,
+        emailVerified: true,
+        name: "SSO User"
+    )
+    let keys = JWTKeyCollection()
+    let key = try Insecure.RSA.PrivateKey(pem: privateKeyPEM)
+    await keys.add(rsa: key, digestAlgorithm: .sha256, kid: JWKIdentifier(string: kid))
+    return try await keys.sign(claims, kid: JWKIdentifier(string: kid))
+}
+
 private func jwksJSON(kid: String = TestRSAKeys.keyID, modulus: String = TestRSAKeys.modulus) -> String {
     """
     {"keys":[{"kty":"RSA","use":"sig","kid":"\(kid)","n":"\(modulus)","e":"\(TestRSAKeys.exponent)","alg":"RS256"}]}
@@ -579,6 +628,51 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
+        }
+    }
+
+    @Test("An ID token whose aud is a JSON array containing our client ID is accepted")
+    func testAudienceArrayAccepted() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            // Discord (and others) encode `aud` as an array. RFC 7519 §4.1.3
+            // permits this, and our client ID is one of the values, so the
+            // login must succeed rather than fail to decode the token.
+            let idToken = try await signIDTokenArrayAud(
+                aud: ["client-abc", "another-audience"], nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                #expect(res.status == .seeOther)
+                #expect(res.headers.first(name: .location) == "/")
+            }
+
+            let count = try await userCount(on: app.db)
+            #expect(count == 1)
+        }
+    }
+
+    @Test("An ID token whose array aud omits our client ID is rejected")
+    func testAudienceArrayMismatchRejected() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            let idToken = try await signIDTokenArrayAud(
+                aud: ["someone-else", "another-one"], nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                self.expectLoginFailedRedirect(res)
+            }
+            let count = try await userCount(on: app.db)
+            #expect(count == 0)
         }
     }
 

@@ -56,7 +56,7 @@ struct OIDCTokenResponse: Content {
 struct OIDCIDTokenClaims: Content, JWTPayload {
     let iss: String  // Issuer
     let sub: String  // Subject
-    let aud: String  // Audience
+    let aud: AudienceClaim  // Audience — may be a single string or an array (RFC 7519 §4.1.3)
     let exp: ExpirationClaim  // Expiration time
     let iat: IssuedAtClaim  // Issued at
     let nonce: String?
