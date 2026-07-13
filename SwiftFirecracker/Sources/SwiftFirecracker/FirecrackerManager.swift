@@ -101,6 +101,59 @@ public actor FirecrackerManager {
         ])
     }
 
+    // MARK: - Vsock Configuration
+
+    /// Configures the virtio-vsock device (host↔guest control channel).
+    /// Must be called before starting the VM.
+    ///
+    /// After boot, reach a guest-listening port through the configured UDS with
+    /// ``VsockConnection/connect(udsPath:port:timeout:retryInterval:logger:)``.
+    public func configureVsock(_ vsock: VsockConfig) async throws {
+        let body = try encoder.encode(vsock)
+        let response = try await httpClient.request(method: .PUT, path: "/vsock", body: body)
+        try handleResponse(response)
+        logger.info("Vsock configured", metadata: [
+            "guest_cid": "\(vsock.guestCid)",
+            "uds_path": "\(vsock.udsPath)"
+        ])
+    }
+
+    // MARK: - MMDS (Metadata Service)
+
+    /// Configures the microVM metadata service (version, allowed network
+    /// interfaces, endpoint address). Must be called before starting the VM.
+    public func configureMMDS(_ config: MMDSConfig) async throws {
+        let body = try encoder.encode(config)
+        let response = try await httpClient.request(method: .PUT, path: "/mmds/config", body: body)
+        try handleResponse(response)
+        logger.info("MMDS configured", metadata: [
+            "interfaces": "\(config.networkInterfaces.joined(separator: ","))",
+            "version": "\(config.version ?? "default")"
+        ])
+    }
+
+    /// Replaces the MMDS metadata store with the given JSON-encodable value.
+    /// The guest reads this back over the MMDS HTTP endpoint.
+    public func setMMDSData<T: Encodable>(_ data: T) async throws {
+        let body = try encoder.encode(data)
+        try await putMMDSData(body)
+    }
+
+    /// Replaces the MMDS metadata store with a pre-encoded JSON payload.
+    /// - Throws: ``FirecrackerError/serializationError`` if `json` is not valid JSON.
+    public func setMMDSData(rawJSON json: Data) async throws {
+        guard (try? JSONSerialization.jsonObject(with: json)) != nil else {
+            throw FirecrackerError.serializationError("MMDS data store payload is not valid JSON")
+        }
+        try await putMMDSData(json)
+    }
+
+    private func putMMDSData(_ body: Data) async throws {
+        let response = try await httpClient.request(method: .PUT, path: "/mmds", body: body)
+        try handleResponse(response)
+        logger.info("MMDS data store updated", metadata: ["bytes": "\(body.count)"])
+    }
+
     // MARK: - VM Lifecycle
 
     /// Starts the VM
@@ -199,7 +252,8 @@ extension FirecrackerManager {
         machineConfig: MachineConfig,
         bootSource: BootSource,
         rootDrive: Drive,
-        networkInterface: NetworkInterface? = nil
+        networkInterface: NetworkInterface? = nil,
+        vsock: VsockConfig? = nil
     ) async throws {
         // Configure machine
         try await configureMachine(machineConfig)
@@ -213,6 +267,11 @@ extension FirecrackerManager {
         // Configure network if provided
         if let network = networkInterface {
             try await configureNetwork(network)
+        }
+
+        // Configure vsock if provided (host↔guest control channel)
+        if let vsock {
+            try await configureVsock(vsock)
         }
 
         // Start the VM
