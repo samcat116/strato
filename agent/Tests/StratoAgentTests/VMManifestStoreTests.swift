@@ -146,6 +146,54 @@ struct VMManifestStoreTests {
         #expect(store.load().isEmpty)
     }
 
+    @Test("Sandbox entries round-trip with their kind, spec, and synthesized reservation")
+    func sandboxEntryRoundTrip() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let store = makeStore(dir: dir)
+
+        let sandboxSpec = SandboxSpec(
+            image: "ghcr.io/acme/worker:v3", imageDigest: "sha256:abc", cpus: 3, memoryBytes: 536_870_912)
+        store.save([
+            "vm-a": VMManifestEntry(hypervisorType: .qemu, spec: makeSpec(cpus: 2)),
+            "sb-a": VMManifestEntry(sandboxSpec: sandboxSpec),
+        ])
+
+        let loaded = store.load()
+        #expect(loaded.count == 2)
+        #expect(loaded["vm-a"]?.kind == .vm)
+        #expect(loaded["vm-a"]?.sandboxSpec == nil)
+        #expect(loaded["sb-a"]?.kind == .sandbox)
+        #expect(loaded["sb-a"]?.hypervisorType == .firecracker)
+        #expect(loaded["sb-a"]?.sandboxSpec?.image == "ghcr.io/acme/worker:v3")
+        #expect(loaded["sb-a"]?.sandboxSpec?.imageDigest == "sha256:abc")
+        // The reservation projection is what restart-survival capacity
+        // accounting reads, for both kinds.
+        #expect(loaded["sb-a"]?.spec.cpus == 3)
+        #expect(loaded["sb-a"]?.spec.memoryBytes == 536_870_912)
+    }
+
+    @Test("Manifest entries without a kind (pre-sandbox agents) decode as VMs")
+    func kindlessEntryDecodesAsVM() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let store = makeStore(dir: dir)
+
+        // Exactly what a pre-#417 agent persisted: hypervisorType + spec only.
+        struct LegacyEntry: Encodable {
+            let hypervisorType: HypervisorType
+            let spec: VMSpec
+        }
+        let legacy = ["vm-old": LegacyEntry(hypervisorType: .firecracker, spec: makeSpec(cpus: 5))]
+        try JSONEncoder().encode(legacy).write(to: URL(fileURLWithPath: store.path))
+
+        let loaded = store.load()
+        #expect(loaded["vm-old"]?.kind == .vm)
+        #expect(loaded["vm-old"]?.hypervisorType == .firecracker)
+        #expect(loaded["vm-old"]?.spec.cpus == 5)
+        #expect(loaded["vm-old"]?.sandboxSpec == nil)
+    }
+
     @Test("Save creates intermediate directories")
     func savesIntoMissingDirectory() throws {
         let dir = try makeTempDir()

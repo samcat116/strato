@@ -113,6 +113,17 @@ actor Agent {
     private let manifestStore: VMManifestStore
     private var managedVMs: [String: VMManifestEntry] = [:]
     private var orphanedVMs: [String: VMManifestEntry] = [:]
+
+    // Sandbox workload tracking (issue #417): same manifest contract as VMs,
+    // kept in separate maps so the VM paths never have to filter by kind. The
+    // runtime driver (issue #421) is not built yet, so `sandboxRuntime` stays
+    // nil and `managedSandboxes` empty; only orphaned entries — written by a
+    // newer incarnation, then inherited across a downgrade/restart — can
+    // appear. They keep reserving capacity and can be deleted (manifest-only),
+    // but cannot be re-adopted until the runtime lands.
+    private var sandboxRuntime: (any SandboxRuntimeService)?
+    private var managedSandboxes: [String: VMManifestEntry] = [:]
+    private var orphanedSandboxes: [String: VMManifestEntry] = [:]
     // Set when a manifest write failed (disk full, permissions); the write is
     // retried on every heartbeat until it succeeds, so a transient failure only
     // leaves the on-disk manifest stale for a bounded window.
@@ -248,17 +259,18 @@ actor Agent {
             return
         }
 
-        // Recover the VM manifest from a previous incarnation of this agent. These
-        // VMs are not re-adopted (Option A) — the control plane surfaces them for
-        // attention via reconciliation — but they stay routable to the backend that
+        // Recover the workload manifest from a previous incarnation of this agent.
+        // These workloads are not re-adopted here — the reconciler re-adopts them
+        // when the backend supports it — but they stay routable to the backend that
         // owns them and keep reserving capacity until deleted or re-created.
         let previousManifest = manifestStore.load()
         if !previousManifest.isEmpty {
-            orphanedVMs = previousManifest
+            orphanedVMs = previousManifest.filter { $0.value.kind == .vm }
+            orphanedSandboxes = previousManifest.filter { $0.value.kind == .sandbox }
             logger.warning(
-                "Found \(previousManifest.count) VM(s) managed before restart; their hypervisor processes are now unmanaged but their resources stay reserved",
+                "Found \(previousManifest.count) workload(s) managed before restart; their processes are now unmanaged but their resources stay reserved",
                 metadata: [
-                    "vmIds": .string(previousManifest.keys.sorted().joined(separator: ","))
+                    "workloadIds": .string(previousManifest.keys.sorted().joined(separator: ","))
                 ])
         }
 
@@ -494,10 +506,12 @@ actor Agent {
         }
         svidManager = nil
 
-        // Clear the in-memory VM records; the on-disk manifest keeps them for the
-        // next incarnation to recover as orphans.
+        // Clear the in-memory workload records; the on-disk manifest keeps them
+        // for the next incarnation to recover as orphans.
         managedVMs.removeAll()
         orphanedVMs.removeAll()
+        managedSandboxes.removeAll()
+        orphanedSandboxes.removeAll()
 
         logger.info("Agent stopped")
 
@@ -1190,6 +1204,18 @@ actor Agent {
             reservedMemory += entry.spec.memoryBytes
         }
 
+        // Sandbox reservations always come from the manifest (managed and
+        // orphaned alike): the sandbox runtime seam has no reservation query,
+        // and the manifest entry is authoritative for the workload's sizing.
+        for entry in managedSandboxes.values {
+            reservedCPU += entry.spec.cpus
+            reservedMemory += entry.spec.memoryBytes
+        }
+        for entry in orphanedSandboxes.values {
+            reservedCPU += entry.spec.cpus
+            reservedMemory += entry.spec.memoryBytes
+        }
+
         let availableCPU = max(0, totalCPU - reservedCPU)
         let availableMemory = max(0, totalMemory - reservedMemory)
 
@@ -1300,7 +1326,12 @@ extension Agent {
                     await networkService?.reconcileNetworks(
                         message.networks, authoritative: message.networksAuthoritative)
                 }
-                await reconciler?.apply(message)
+                // Sandbox reconciliation is likewise gated on the sender: a
+                // control plane older than the sandbox protocol (v5) omits
+                // `sandboxes` (decoded as []), which must NOT be read as
+                // "tear down all sandboxes" under full-list semantics.
+                await reconciler?.apply(
+                    message, includeSandboxes: WireProtocol.supportsSandboxSync(envelope.senderVersion))
                 // Declarative agent self-update (issue #434), after the
                 // reconciler so freshly enqueued work items are visible to the
                 // precondition gate — the update only runs on a sync that
@@ -1423,12 +1454,12 @@ extension Agent {
         return getHypervisorService(for: entry.hypervisorType)
     }
 
-    /// Persists managed + orphaned VMs to the on-disk manifest so they can be
-    /// detected as orphaned after an agent restart. Orphaned entries are carried
-    /// over (active entries win on ID collision) so a second restart still knows
-    /// about them.
+    /// Persists managed + orphaned workloads (VMs and sandboxes) to the on-disk
+    /// manifest so they can be detected as orphaned after an agent restart.
+    /// Orphaned entries are carried over (active entries win on ID collision)
+    /// so a second restart still knows about them.
     ///
-    /// A write failure does not fail the VM operation that triggered it — the
+    /// A write failure does not fail the operation that triggered it — the
     /// hypervisor-level change has already happened, so failing the response
     /// would diverge control-plane state from reality worse than a stale
     /// manifest does. Instead the failure is flagged and the write retried on
@@ -1436,7 +1467,12 @@ extension Agent {
     /// heals all missed updates). The stale manifest only matters if the agent
     /// restarts before a retry succeeds.
     private func persistManifest() {
-        manifestPersistFailed = !manifestStore.save(orphanedVMs.merging(managedVMs) { _, active in active })
+        // One flat map for every workload kind; ids cannot collide across kinds
+        // (both sides are UUIDs minted by the control plane), so the only real
+        // collisions are orphaned-vs-active within a kind — active wins.
+        var manifest = orphanedVMs.merging(managedVMs) { _, active in active }
+        manifest.merge(orphanedSandboxes.merging(managedSandboxes) { _, active in active }) { _, sandbox in sandbox }
+        manifestPersistFailed = !manifestStore.save(manifest)
     }
 
     private func handleVMCreate(_ message: VMCreateMessage) async {
@@ -1705,9 +1741,16 @@ extension Agent {
             return
         }
 
+        // Restarting mid-convergence is equally disruptive for either
+        // workload kind, so the gate counts VM and sandbox items alike.
+        var inFlightReconcileItems = 0
+        if let reconciler {
+            inFlightReconcileItems += await reconciler.inFlightWorkloads(kind: .vm).count
+            inFlightReconcileItems += await reconciler.inFlightWorkloads(kind: .sandbox).count
+        }
         let conditions = AutoUpdateGate.Conditions(
             installMode: AgentInstallMode.detect(),
-            inFlightReconcileItems: await reconciler?.inFlightVMs().count ?? 0
+            inFlightReconcileItems: inFlightReconcileItems
         )
         if let reason = AutoUpdateGate.blockedReason(conditions) {
             let changed = autoUpdateStatus?.reason != reason
@@ -2764,10 +2807,12 @@ extension Agent {
 
 // MARK: - Reconciliation (issue #260)
 
-/// Hypervisor side effects for the reconcile loop. These mirror the imperative
+/// Runtime side effects for the reconcile loop. VM items mirror the imperative
 /// handlers (same manifest bookkeeping, same driver-registry routing) minus
 /// the per-request response messaging: convergence outcomes are reported via
-/// `ObservedStateReport` instead of success/error envelopes.
+/// `ObservedStateReport` instead of success/error envelopes. Sandbox items
+/// route to the sandbox runtime seam (issue #417; the driver itself is issue
+/// #421) with the same manifest contract.
 extension Agent: ReconcileActuator {
     func observedPresence() async -> [String: VMPresence] {
         var presence: [String: VMPresence] = [:]
@@ -2832,7 +2877,57 @@ extension Agent: ReconcileActuator {
         return status
     }
 
+    func observedSandboxPresence() async -> [String: SandboxPresence] {
+        var presence: [String: SandboxPresence] = [:]
+        for sandboxId in managedSandboxes.keys {
+            guard let runtime = sandboxRuntime else {
+                presence[sandboxId] = .managed(.unknown)
+                continue
+            }
+            let status = (try? await runtime.getSandboxStatus(sandboxId: sandboxId)) ?? .unknown
+            presence[sandboxId] = .managed(status)
+        }
+        for sandboxId in orphanedSandboxes.keys where presence[sandboxId] == nil {
+            presence[sandboxId] = .orphaned
+        }
+        return presence
+    }
+
+    func adoptSandbox(_ item: ReconcileWorkItem) async throws -> SandboxStatus {
+        guard let entry = orphanedSandboxes[item.id] else {
+            // A replayed sync may race re-adoption; if the sandbox is already
+            // managed, adoption is satisfied.
+            if managedSandboxes[item.id] != nil {
+                return try await requireSandboxRuntime().getSandboxStatus(sandboxId: item.id)
+            }
+            throw SandboxRuntimeError.sandboxNotFound(item.id)
+        }
+        let runtime = try requireSandboxRuntime()
+        guard let spec = entry.sandboxSpec else {
+            // A sandbox-kind entry without its spec cannot be reattached; only
+            // deletion can release it.
+            throw SandboxRuntimeError.sandboxNotFound(item.id)
+        }
+
+        let status = try await runtime.adoptSandbox(sandboxId: item.id, spec: spec)
+        managedSandboxes[item.id] = entry
+        orphanedSandboxes.removeValue(forKey: item.id)
+        persistManifest()
+
+        logger.info(
+            "Orphaned sandbox re-adopted and managed again",
+            metadata: [
+                "sandboxId": .string(item.id),
+                "status": .string(status.rawValue),
+            ])
+        return status
+    }
+
     func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
+        if item.kind == .sandbox {
+            try await performSandbox(step, item: item)
+            return
+        }
         switch step {
         case .adopt:
             // Adoption flows through adoptVM (the reconciler needs the
@@ -2946,6 +3041,99 @@ extension Agent: ReconcileActuator {
             message: "VM deleted by reconciliation", operation: "delete")
     }
 
+    // MARK: Sandbox actuation (issue #417)
+
+    private func requireSandboxRuntime() throws -> any SandboxRuntimeService {
+        guard let sandboxRuntime else {
+            throw SandboxRuntimeError.runtimeUnavailable
+        }
+        return sandboxRuntime
+    }
+
+    private func performSandbox(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
+        switch step {
+        case .adopt:
+            // Adoption flows through adoptSandbox (the reconciler needs the
+            // observed status back to plan the remaining steps).
+            _ = try await adoptSandbox(item)
+        case .create:
+            try await sandboxReconcileCreate(item)
+        case .boot:
+            try await requireSandboxRuntime().bootSandbox(sandboxId: item.id)
+        case .shutdown:
+            try await requireSandboxRuntime().shutdownSandbox(sandboxId: item.id)
+        case .delete:
+            try await sandboxReconcileDelete(item)
+        case .pause, .resume:
+            // Not in the sandbox step vocabulary (v1); the planner never
+            // emits these for sandbox items.
+            throw SandboxRuntimeError.unsupportedStep(String(describing: step))
+        }
+    }
+
+    private func sandboxReconcileCreate(_ item: ReconcileWorkItem) async throws {
+        guard let desired = item.desiredSandbox else {
+            throw HypervisorServiceError.invalidConfiguration("create work item without a desired entry")
+        }
+        let runtime = try requireSandboxRuntime()
+
+        // Same contract as the VM path: the orchestrator realizes the
+        // sandbox's NIC on this host before the runtime runs, and rolls it
+        // back if the runtime never created the sandbox.
+        let networks = desired.spec.network.map { [$0] } ?? []
+        let attachments = try await networkOrchestrator.prepareAttachments(vmId: item.id, networks: networks)
+        do {
+            try await runtime.createSandbox(
+                sandboxId: item.id, spec: desired.spec,
+                registryCredential: desired.registryCredential, networkAttachments: attachments)
+        } catch {
+            await networkOrchestrator.teardownAttachments(vmId: item.id, count: attachments.count)
+            throw error
+        }
+
+        managedSandboxes[item.id] = VMManifestEntry(sandboxSpec: desired.spec)
+        orphanedSandboxes.removeValue(forKey: item.id)
+        persistManifest()
+    }
+
+    private func sandboxReconcileDelete(_ item: ReconcileWorkItem) async throws {
+        // Orphan with no live session: try to re-adopt first so the surviving
+        // process is actually torn down instead of leaking. If the session
+        // cannot be reattached (no runtime in this build, dead process), fall
+        // back to releasing the manifest entry — the same manual-cleanup
+        // contract as the VM path.
+        if managedSandboxes[item.id] == nil, let entry = orphanedSandboxes[item.id] {
+            if let runtime = sandboxRuntime, let spec = entry.sandboxSpec,
+                (try? await runtime.adoptSandbox(sandboxId: item.id, spec: spec)) != nil
+            {
+                managedSandboxes[item.id] = entry
+            } else {
+                orphanedSandboxes.removeValue(forKey: item.id)
+                persistManifest()
+                // Host-side network resources are derived from deterministic
+                // names, so they can be torn down even with no live session.
+                await networkOrchestrator.teardownAttachments(
+                    vmId: item.id, count: entry.sandboxSpec?.network != nil ? 1 : 0)
+                logger.warning(
+                    "Deleted orphaned sandbox from manifest; any surviving process must be cleaned up manually",
+                    metadata: ["sandboxId": .string(item.id)])
+                return
+            }
+        }
+
+        guard let entry = managedSandboxes[item.id] else {
+            return  // already absent — deletion is idempotent
+        }
+        try await requireSandboxRuntime().deleteSandbox(sandboxId: item.id)
+
+        await networkOrchestrator.teardownAttachments(
+            vmId: item.id, count: entry.sandboxSpec?.network != nil ? 1 : 0)
+
+        managedSandboxes.removeValue(forKey: item.id)
+        orphanedSandboxes.removeValue(forKey: item.id)
+        persistManifest()
+    }
+
     /// Assemble and send the full observed state of this host: every managed
     /// VM with its live status, still-orphaned VMs, and VMs mid-convergence
     /// that don't exist on a hypervisor yet. Full-list semantics — a VM absent
@@ -2999,7 +3187,7 @@ extension Agent: ReconcileActuator {
         // VMs still converging toward first existence (mid-create): include
         // them so the control plane sees progress and never mistakes an
         // in-flight create for an absence.
-        for (vmId, _) in await reconciler.inFlightVMs() where !reported.contains(vmId) {
+        for (vmId, _) in await reconciler.inFlightWorkloads(kind: .vm) where !reported.contains(vmId) {
             guard let uuid = UUID(uuidString: vmId) else { continue }
             observed.append(
                 ObservedVMState(
@@ -3017,7 +3205,7 @@ extension Agent: ReconcileActuator {
         // (e.g. a create that never produced a process): reported with the
         // error so the control plane can fail the pending operation with the
         // real reason instead of waiting out its budget.
-        for (vmId, failure) in await reconciler.failedConvergences() where !reported.contains(vmId) {
+        for (vmId, failure) in await reconciler.failedConvergences(kind: .vm) where !reported.contains(vmId) {
             guard let uuid = UUID(uuidString: vmId) else { continue }
             observed.append(
                 ObservedVMState(
@@ -3033,6 +3221,7 @@ extension Agent: ReconcileActuator {
         let report = ObservedStateReport(
             agentId: effectiveAgentID,
             vms: observed,
+            sandboxes: await observedSandboxStates(reconciler: reconciler),
             resources: await getAgentResources(),
             agentUpdateStatus: autoUpdateStatus
         )
@@ -3041,5 +3230,91 @@ extension Agent: ReconcileActuator {
         } catch {
             logger.error("Failed to send observed-state report: \(error)")
         }
+    }
+
+    /// Assemble the sandbox half of the observed-state report, mirroring the
+    /// VM assembly section by section: managed sandboxes with their live
+    /// status, still-orphaned ones, in-flight creates, and failed
+    /// convergences with no runtime presence. Same full-list semantics — a
+    /// sandbox absent from the report does not exist here.
+    private func observedSandboxStates(reconciler: Reconciler) async -> [ObservedSandboxState] {
+        var observed: [ObservedSandboxState] = []
+        var reported = Set<String>()
+
+        for sandboxId in managedSandboxes.keys {
+            guard let uuid = UUID(uuidString: sandboxId) else { continue }
+            var status: SandboxStatus = .unknown
+            var exitCode: Int?
+            if let runtime = sandboxRuntime {
+                status = (try? await runtime.getSandboxStatus(sandboxId: sandboxId)) ?? .unknown
+                if status == .exited {
+                    exitCode = await runtime.exitCode(sandboxId: sandboxId)
+                }
+            }
+            observed.append(
+                ObservedSandboxState(
+                    sandboxId: uuid,
+                    status: status,
+                    observedGeneration: await reconciler.observedGeneration(for: sandboxId, kind: .sandbox),
+                    convergencePhase: await reconciler.convergencePhase(for: sandboxId, kind: .sandbox),
+                    lastError: await reconciler.lastError(for: sandboxId, kind: .sandbox),
+                    failedGeneration: await reconciler.failedGeneration(for: sandboxId, kind: .sandbox),
+                    exitCode: exitCode
+                ))
+            reported.insert(sandboxId)
+        }
+
+        // Orphans carry no synthesized error, for the same reason as VM
+        // orphans: real adoption failures surface through the reconciler's
+        // failure tracking.
+        for sandboxId in orphanedSandboxes.keys where !reported.contains(sandboxId) {
+            guard let uuid = UUID(uuidString: sandboxId) else { continue }
+            observed.append(
+                ObservedSandboxState(
+                    sandboxId: uuid,
+                    status: .unknown,
+                    observedGeneration: await reconciler.observedGeneration(for: sandboxId, kind: .sandbox),
+                    convergencePhase: await reconciler.convergencePhase(for: sandboxId, kind: .sandbox),
+                    lastError: await reconciler.lastError(for: sandboxId, kind: .sandbox),
+                    failedGeneration: await reconciler.failedGeneration(for: sandboxId, kind: .sandbox)
+                ))
+            reported.insert(sandboxId)
+        }
+
+        // Sandboxes still converging toward first existence (mid-create).
+        for (sandboxId, _) in await reconciler.inFlightWorkloads(kind: .sandbox)
+        where !reported.contains(sandboxId) {
+            guard let uuid = UUID(uuidString: sandboxId) else { continue }
+            observed.append(
+                ObservedSandboxState(
+                    sandboxId: uuid,
+                    status: .unknown,
+                    observedGeneration: await reconciler.observedGeneration(for: sandboxId, kind: .sandbox),
+                    convergencePhase: await reconciler.convergencePhase(for: sandboxId, kind: .sandbox)
+                        ?? "converging",
+                    lastError: await reconciler.lastError(for: sandboxId, kind: .sandbox),
+                    failedGeneration: await reconciler.failedGeneration(for: sandboxId, kind: .sandbox)
+                ))
+            reported.insert(sandboxId)
+        }
+
+        // Sandboxes whose convergence failed with no runtime presence (e.g. a
+        // create that never produced anything), so the control plane can fail
+        // the pending operation with the real reason.
+        for (sandboxId, failure) in await reconciler.failedConvergences(kind: .sandbox)
+        where !reported.contains(sandboxId) {
+            guard let uuid = UUID(uuidString: sandboxId) else { continue }
+            observed.append(
+                ObservedSandboxState(
+                    sandboxId: uuid,
+                    status: .unknown,
+                    observedGeneration: await reconciler.observedGeneration(for: sandboxId, kind: .sandbox),
+                    convergencePhase: nil,
+                    lastError: failure.error,
+                    failedGeneration: failure.generation
+                ))
+        }
+
+        return observed
     }
 }

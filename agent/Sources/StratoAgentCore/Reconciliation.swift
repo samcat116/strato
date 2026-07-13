@@ -6,91 +6,233 @@ import StratoShared
 //
 // `Reconciler.plan` is the pure diff engine: it compares the control plane's
 // authoritative desired set against what is actually present on this host and
-// yields per-VM work items. The `Reconciler` actor drives those items onto the
-// shared `SerialTaskQueue` VM lanes and tracks per-VM generations so replayed
-// or reordered syncs cannot roll state backward. All hypervisor side effects
-// go through `ReconcileActuator`, implemented by the Agent — this file stays
-// free of SwiftQEMU so the whole engine is unit-testable.
+// yields per-workload work items. The `Reconciler` actor drives those items
+// onto the shared `SerialTaskQueue` lanes and tracks per-workload generations
+// so replayed or reordered syncs cannot roll state backward. All runtime side
+// effects go through `ReconcileActuator`, implemented by the Agent — this file
+// stays free of SwiftQEMU so the whole engine is unit-testable.
+//
+// Issue #417 generalized the engine over `WorkloadKind`: the diff, generation
+// guard, attempt cap, and failure classification are shared between VMs and
+// sandboxes (deliberately not forked — two copies would drift); only the step
+// vocabulary and the actuator routing differ per kind.
 
 // MARK: - Observed presence
 
-/// What this agent knows about one VM when a sync arrives.
-public enum VMPresence: Equatable, Sendable {
-    /// Actively managed by a hypervisor service, with its last observed status.
-    case managed(VMStatus)
+/// What this agent knows about one workload when a sync arrives.
+public enum WorkloadPresence<Status: Equatable & Sendable>: Equatable, Sendable {
+    /// Actively managed by a runtime/hypervisor service, with its last
+    /// observed status.
+    case managed(Status)
     /// Recorded in the manifest by a previous incarnation of the agent; its
-    /// hypervisor process may still be running but is not attached.
+    /// backing process may still be running but is not attached.
     case orphaned
 }
+
+public typealias VMPresence = WorkloadPresence<VMStatus>
+public typealias SandboxPresence = WorkloadPresence<SandboxStatus>
 
 // MARK: - Work items
 
 /// A single convergence action. Items are executed in order within one
 /// `ReconcileWorkItem`; the steps after `.adopt` are recomputed from the
-/// adopted VM's actual status, which is unknowable until the QMP socket is
-/// reconnected.
+/// adopted workload's actual status, which is unknowable until the runtime
+/// session is reconnected.
+///
+/// Sandboxes use a subset of the vocabulary (create/adopt/boot/shutdown/
+/// delete): there is no pause/resume for sandboxes in v1, and the planner
+/// never emits those steps for sandbox items.
 public enum ReconcileStep: Equatable, Sendable {
-    /// Materialize disks and define the VM (ends "exists, not running").
+    /// Materialize disks/rootfs and define the workload (ends "exists, not
+    /// running").
     case create
-    /// Reconnect an orphan's hypervisor session and move it back to managed.
+    /// Reconnect an orphan's runtime session and move it back to managed.
     case adopt
     case boot
     case pause
     case resume
     case shutdown
-    /// Gracefully stop (best effort) and remove the VM from this host.
+    /// Gracefully stop (best effort) and remove the workload from this host.
     case delete
 }
 
-/// The planned convergence for one VM out of one sync.
+/// The desired entry driving a work item, tagged by workload kind.
+public enum ReconcileTarget: Sendable {
+    case vm(DesiredVMState)
+    case sandbox(DesiredSandboxState)
+}
+
+/// The planned convergence for one workload out of one sync.
 public struct ReconcileWorkItem: Sendable {
-    /// Canonical (uppercase) UUID string, matching the manifest keys and the
-    /// per-VM serialization lanes.
-    public let vmId: String
-    /// The desired-state generation this item converges toward. 0 for VMs the
-    /// control plane no longer lists (full-list semantics: undesired).
+    public let kind: WorkloadKind
+    /// Canonical (uppercase) UUID string, matching the manifest keys.
+    public let id: String
+    /// The desired-state generation this item converges toward. 0 for
+    /// workloads the control plane no longer lists (full-list semantics:
+    /// undesired).
     public let generation: Int64
     public let steps: [ReconcileStep]
-    /// The desired entry driving this item; nil only for undesired VMs (whose
-    /// single step is `.delete`).
-    public let desired: DesiredVMState?
+    /// The desired entry driving this item; nil only for undesired workloads
+    /// (whose single step is `.delete`).
+    public let target: ReconcileTarget?
 
-    public init(vmId: String, generation: Int64, steps: [ReconcileStep], desired: DesiredVMState?) {
-        self.vmId = vmId
+    /// The workload id under its historical name from the VM-only reconciler.
+    /// VM actuation and the existing tests read this; new kind-aware code
+    /// should prefer `id`.
+    public var vmId: String { id }
+
+    /// The VM desired entry, when this is a VM-kind item driven by one.
+    public var desired: DesiredVMState? {
+        if case .vm(let entry)? = target { return entry }
+        return nil
+    }
+
+    /// The sandbox desired entry, when this is a sandbox-kind item driven by
+    /// one.
+    public var desiredSandbox: DesiredSandboxState? {
+        if case .sandbox(let entry)? = target { return entry }
+        return nil
+    }
+
+    /// Serial-lane key for this item. VM items share their lane with the
+    /// imperative per-VM message handlers (the bare vmId), so the two modes
+    /// can never interleave operations on one VM; sandbox items get their own
+    /// namespace ("sandbox/" cannot collide with a UUID string).
+    public var laneKey: String {
+        switch kind {
+        case .vm: return id
+        case .sandbox: return "sandbox/" + id
+        }
+    }
+
+    public init(kind: WorkloadKind, id: String, generation: Int64, steps: [ReconcileStep], target: ReconcileTarget?) {
+        self.kind = kind
+        self.id = id
         self.generation = generation
         self.steps = steps
-        self.desired = desired
+        self.target = target
     }
 }
 
 // MARK: - Actuator
 
-/// Hypervisor side effects the reconciler needs, implemented by the Agent.
-/// Every method must be idempotent at the "already satisfied" level — e.g.
-/// creating a VM that exists is a no-op — because level-triggered syncs will
-/// re-drive any step whose effect was not yet observed.
+/// Runtime side effects the reconciler needs, implemented by the Agent, which
+/// routes VM items to the hypervisor driver registry and sandbox items to the
+/// sandbox runtime. Every method must be idempotent at the "already satisfied"
+/// level — e.g. creating a workload that exists is a no-op — because
+/// level-triggered syncs will re-drive any step whose effect was not yet
+/// observed.
 public protocol ReconcileActuator: Sendable {
-    /// Snapshot of everything present on this host (managed + orphaned).
+    /// Snapshot of every VM present on this host (managed + orphaned).
     func observedPresence() async -> [String: VMPresence]
-    /// Re-adopt an orphan and return its observed status, so the reconciler
-    /// can plan the remaining convergence steps toward the desired status.
+    /// Re-adopt an orphaned VM and return its observed status, so the
+    /// reconciler can plan the remaining convergence steps toward the desired
+    /// status.
     func adoptVM(_ item: ReconcileWorkItem) async throws -> VMStatus
-    /// Execute one non-adopt step.
+    /// Snapshot of every sandbox present on this host (managed + orphaned).
+    func observedSandboxPresence() async -> [String: SandboxPresence]
+    /// Re-adopt an orphaned sandbox and return its observed status.
+    func adoptSandbox(_ item: ReconcileWorkItem) async throws -> SandboxStatus
+    /// Execute one non-adopt step; `item.kind` selects the runtime.
     func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws
     /// Called after every work item finishes (success or failure) so the agent
     /// can push a fresh `ObservedStateReport` to the control plane.
     func convergenceDidChange() async
 }
 
+/// Thrown by the default sandbox hooks when an actuator without sandbox
+/// support receives sandbox work. Should be unreachable: such agents never
+/// advertise the sandbox capability, so the control plane never places
+/// sandboxes on them — permanent, because retrying cannot grow a runtime.
+public struct SandboxActuationUnsupportedError: ClassifiableError, LocalizedError {
+    public var failureClassification: FailureClassification { .permanent }
+    public var errorDescription: String? { "this actuator does not support sandbox workloads" }
+
+    public init() {}
+}
+
+/// Sandbox defaults so VM-only actuators (including the pre-#417
+/// conformances) stay source-compatible; the reconciler only calls these when
+/// a sync plans sandbox work.
+extension ReconcileActuator {
+    public func observedSandboxPresence() async -> [String: SandboxPresence] { [:] }
+
+    public func adoptSandbox(_ item: ReconcileWorkItem) async throws -> SandboxStatus {
+        throw SandboxActuationUnsupportedError()
+    }
+}
+
+// MARK: - Desired-state adapters
+
+/// What the generic diff engine needs from a per-kind desired-state DTO. The
+/// engine itself never mentions VMs or sandboxes — these adapters keep one
+/// copy of the generation/orphan/full-list logic across kinds.
+protocol ReconcilableDesired: Sendable {
+    associatedtype ObservedStatus: Equatable & Sendable
+    static var workloadKind: WorkloadKind { get }
+    /// The observed status a completed `.create` step leaves the workload in,
+    /// from which the remaining convergence steps are planned.
+    static var statusAfterCreate: ObservedStatus { get }
+    var workloadId: UUID { get }
+    var generation: Int64 { get }
+    /// True when the entry asks for the workload to not exist on this host.
+    var wantsAbsent: Bool { get }
+    /// Steps converging `observed` toward this entry's desired status; empty
+    /// when the observation already satisfies it.
+    func convergenceSteps(from observed: ObservedStatus) -> [ReconcileStep]
+    var asTarget: ReconcileTarget { get }
+}
+
+extension DesiredVMState: ReconcilableDesired {
+    static var workloadKind: WorkloadKind { .vm }
+    static var statusAfterCreate: VMStatus { .created }
+    var workloadId: UUID { vmId }
+    var wantsAbsent: Bool { desiredStatus == .absent }
+    func convergenceSteps(from observed: VMStatus) -> [ReconcileStep] {
+        Reconciler.statusSteps(desired: desiredStatus, observed: observed)
+    }
+    var asTarget: ReconcileTarget { .vm(self) }
+}
+
+extension DesiredSandboxState: ReconcilableDesired {
+    static var workloadKind: WorkloadKind { .sandbox }
+    static var statusAfterCreate: SandboxStatus { .stopped }
+    var workloadId: UUID { sandboxId }
+    var wantsAbsent: Bool { desiredStatus == .absent }
+    func convergenceSteps(from observed: SandboxStatus) -> [ReconcileStep] {
+        Reconciler.sandboxStatusSteps(desired: desiredStatus, observed: observed)
+    }
+    var asTarget: ReconcileTarget { .sandbox(self) }
+}
+
 // MARK: - Reconciler
 
 public actor Reconciler {
-    /// Attempts per (vmId, generation) before the reconciler stops re-driving
-    /// a failing convergence. A new generation resets the count, so operator
-    /// action (retry, spec fix) always re-arms the loop; without a cap, a
-    /// permanently failing create (e.g. bad image) would re-run on every
-    /// periodic sync forever.
+    /// Attempts per (workload, generation) before the reconciler stops
+    /// re-driving a failing convergence. A new generation resets the count, so
+    /// operator action (retry, spec fix) always re-arms the loop; without a
+    /// cap, a permanently failing create (e.g. bad image) would re-run on
+    /// every periodic sync forever.
     public static let maxAttemptsPerGeneration = 3
+
+    /// Identity of one workload across the reconciler's bookkeeping: ids only
+    /// collide across kinds by UUID accident, but the kind is what routes
+    /// actuation, so generations/failures/phases must never be shared between
+    /// a VM and a sandbox that happen to reuse an id.
+    private struct WorkloadRef: Hashable {
+        let kind: WorkloadKind
+        let id: String
+
+        init(_ item: ReconcileWorkItem) {
+            self.kind = item.kind
+            self.id = item.id
+        }
+
+        init(kind: WorkloadKind, id: String) {
+            self.kind = kind
+            self.id = id
+        }
+    }
 
     private struct ConvergenceFailure {
         var generation: Int64
@@ -102,17 +244,17 @@ public actor Reconciler {
     private let queue: SerialTaskQueue
     private let logger: Logger
 
-    /// Last generation fully applied per VM. Rejects older syncs (the
+    /// Last generation fully applied per workload. Rejects older syncs (the
     /// generation guard) and feeds `observed_generation` in reports.
-    private var lastApplied: [String: Int64] = [:]
-    /// Generation currently being converged per VM, so the periodic sync
-    /// doesn't stack duplicate work behind a long-running item (e.g. a
+    private var lastApplied: [WorkloadRef: Int64] = [:]
+    /// Generation currently being converged per workload, so the periodic
+    /// sync doesn't stack duplicate work behind a long-running item (e.g. a
     /// multi-GB image download).
-    private var inFlight: [String: Int64] = [:]
-    /// Human-readable current step per in-flight VM, surfaced as
+    private var inFlight: [WorkloadRef: Int64] = [:]
+    /// Human-readable current step per in-flight workload, surfaced as
     /// `convergencePhase` in observed reports.
-    private var currentPhase: [String: String] = [:]
-    private var failures: [String: ConvergenceFailure] = [:]
+    private var currentPhase: [WorkloadRef: String] = [:]
+    private var failures: [WorkloadRef: ConvergenceFailure] = [:]
 
     public init(actuator: any ReconcileActuator, queue: SerialTaskQueue, logger: Logger) {
         self.actuator = actuator
@@ -122,78 +264,106 @@ public actor Reconciler {
 
     // MARK: Report accessors
 
-    public func observedGeneration(for vmId: String) -> Int64 {
-        lastApplied[vmId] ?? 0
+    public func observedGeneration(for id: String, kind: WorkloadKind = .vm) -> Int64 {
+        lastApplied[WorkloadRef(kind: kind, id: id)] ?? 0
     }
 
-    public func convergencePhase(for vmId: String) -> String? {
-        currentPhase[vmId]
+    public func convergencePhase(for id: String, kind: WorkloadKind = .vm) -> String? {
+        currentPhase[WorkloadRef(kind: kind, id: id)]
     }
 
-    public func lastError(for vmId: String) -> String? {
-        failures[vmId]?.lastError
+    public func lastError(for id: String, kind: WorkloadKind = .vm) -> String? {
+        failures[WorkloadRef(kind: kind, id: id)]?.lastError
     }
 
-    /// The generation whose convergence produced `lastError(for:)`. Reported
-    /// alongside the error so the control plane can tell a failure of the
-    /// *current* generation from a stale one still carried on heartbeats.
-    public func failedGeneration(for vmId: String) -> Int64? {
-        failures[vmId]?.generation
+    /// The generation whose convergence produced `lastError(for:kind:)`.
+    /// Reported alongside the error so the control plane can tell a failure
+    /// of the *current* generation from a stale one still carried on
+    /// heartbeats.
+    public func failedGeneration(for id: String, kind: WorkloadKind = .vm) -> Int64? {
+        failures[WorkloadRef(kind: kind, id: id)]?.generation
     }
 
-    /// VMs currently converging that may not exist on the hypervisor yet
-    /// (mid-create), so report assembly can still surface their progress.
-    public func inFlightVMs() -> [String: Int64] {
-        inFlight
+    /// Workloads of `kind` currently converging that may not exist on their
+    /// runtime yet (mid-create), so report assembly can still surface their
+    /// progress.
+    public func inFlightWorkloads(kind: WorkloadKind) -> [String: Int64] {
+        var result: [String: Int64] = [:]
+        for (ref, generation) in inFlight where ref.kind == kind {
+            result[ref.id] = generation
+        }
+        return result
     }
 
-    /// VMs whose last convergence attempt failed, with the failing generation
-    /// and error. Report assembly includes these even when the VM has no
-    /// hypervisor presence at all (e.g. a create that never got off the
-    /// ground) — otherwise the control plane could never learn why and would
-    /// wait out the operation's full completion budget.
-    public func failedConvergences() -> [String: (generation: Int64, error: String)] {
-        failures.mapValues { ($0.generation, $0.lastError) }
+    /// Workloads of `kind` whose last convergence attempt failed, with the
+    /// failing generation and error. Report assembly includes these even when
+    /// the workload has no runtime presence at all (e.g. a create that never
+    /// got off the ground) — otherwise the control plane could never learn
+    /// why and would wait out the operation's full completion budget.
+    public func failedConvergences(kind: WorkloadKind) -> [String: (generation: Int64, error: String)] {
+        var result: [String: (generation: Int64, error: String)] = [:]
+        for (ref, failure) in failures where ref.kind == kind {
+            result[ref.id] = (failure.generation, failure.lastError)
+        }
+        return result
     }
 
     // MARK: Applying a sync
 
     /// Diff a desired-state sync against reality and enqueue the work. Returns
-    /// quickly — long convergence actions run on the per-VM lanes.
-    public func apply(_ message: DesiredStateMessage) async {
-        let present = await actuator.observedPresence()
-        let items = Self.plan(desired: message.vms, present: present, lastApplied: lastApplied)
+    /// quickly — long convergence actions run on the per-workload lanes.
+    ///
+    /// `includeSandboxes` gates the sandbox half of the sync: a control plane
+    /// older than the sandbox protocol omits `sandboxes` (decoded as `[]`),
+    /// and full-list semantics would read that as "tear down every sandbox".
+    /// The caller passes `WireProtocol.supportsSandboxSync(senderVersion)`.
+    public func apply(_ message: DesiredStateMessage, includeSandboxes: Bool = false) async {
+        let presentVMs = await actuator.observedPresence()
+        var items = Self.plan(
+            desired: message.vms, present: presentVMs, lastApplied: appliedGenerations(kind: .vm))
+
+        var presentSandboxCount = 0
+        if includeSandboxes {
+            let presentSandboxes = await actuator.observedSandboxPresence()
+            presentSandboxCount = presentSandboxes.count
+            items += Self.planSandboxes(
+                desired: message.sandboxes, present: presentSandboxes,
+                lastApplied: appliedGenerations(kind: .sandbox))
+        }
 
         logger.debug(
             "Applying desired-state sync",
             metadata: [
                 "syncId": .string(message.syncId),
                 "desiredVMs": .stringConvertible(message.vms.count),
-                "presentVMs": .stringConvertible(present.count),
+                "presentVMs": .stringConvertible(presentVMs.count),
+                "desiredSandboxes": .stringConvertible(includeSandboxes ? message.sandboxes.count : 0),
+                "presentSandboxes": .stringConvertible(presentSandboxCount),
                 "workItems": .stringConvertible(items.count),
             ])
 
         var advancedWithoutWork = false
         for item in items {
             guard shouldExecute(item) else { continue }
+            let ref = WorkloadRef(item)
 
             // Converged-but-newer-generation items (no steps) just advance the
-            // applied generation; no need to occupy the VM lane.
+            // applied generation; no need to occupy the workload lane.
             if item.steps.isEmpty {
-                lastApplied[item.vmId] = item.generation
-                failures.removeValue(forKey: item.vmId)
+                lastApplied[ref] = item.generation
+                failures.removeValue(forKey: ref)
                 advancedWithoutWork = true
                 continue
             }
 
-            inFlight[item.vmId] = item.generation
-            currentPhase[item.vmId] = "queued"
-            await queue.enqueue(key: item.vmId) { [weak self] in
+            inFlight[ref] = item.generation
+            currentPhase[ref] = "queued"
+            await queue.enqueue(key: item.laneKey) { [weak self] in
                 await self?.execute(item)
             }
         }
 
-        // Generations that advanced with no hypervisor work still need a fresh
+        // Generations that advanced with no runtime work still need a fresh
         // report, or the control plane would wait a full heartbeat interval to
         // learn `observed_generation` caught up (and to complete operations).
         if advancedWithoutWork {
@@ -201,25 +371,35 @@ public actor Reconciler {
         }
     }
 
+    private func appliedGenerations(kind: WorkloadKind) -> [String: Int64] {
+        var result: [String: Int64] = [:]
+        for (ref, generation) in lastApplied where ref.kind == kind {
+            result[ref.id] = generation
+        }
+        return result
+    }
+
     private func shouldExecute(_ item: ReconcileWorkItem) -> Bool {
-        if let running = inFlight[item.vmId], running >= item.generation {
+        let ref = WorkloadRef(item)
+        if let running = inFlight[ref], running >= item.generation {
             // The same (or a newer) generation is already converging; the
             // level-triggered timer will pick up any residual drift afterward.
             return false
         }
-        // Undesired-VM deletes (no control-plane row, generation 0) are exempt
-        // from the attempt cap: nothing can ever mint a new generation for
-        // them, so a cap would permanently leak the stray process. They are
-        // level-triggered and cheap, so retrying on every sync is fine.
-        if let failure = failures[item.vmId],
-            item.desired != nil,
+        // Undesired-workload deletes (no control-plane row, generation 0) are
+        // exempt from the attempt cap: nothing can ever mint a new generation
+        // for them, so a cap would permanently leak the stray process. They
+        // are level-triggered and cheap, so retrying on every sync is fine.
+        if let failure = failures[ref],
+            item.target != nil,
             failure.generation == item.generation,
             failure.attempts >= Self.maxAttemptsPerGeneration
         {
             logger.debug(
                 "Skipping convergence retry; attempt cap reached for this generation",
                 metadata: [
-                    "vmId": .string(item.vmId),
+                    "kind": .string(item.kind.rawValue),
+                    "workloadId": .string(item.id),
                     "generation": .stringConvertible(item.generation),
                     "lastError": .string(failure.lastError),
                 ])
@@ -228,63 +408,78 @@ public actor Reconciler {
         return true
     }
 
+    /// Adopt an orphan and return the steps that remain after adoption, which
+    /// depend on the orphan's actual state — unknowable before the runtime
+    /// session is reconnected.
+    private func adoptAndReplan(_ item: ReconcileWorkItem) async throws -> [ReconcileStep] {
+        switch item.target {
+        case .vm(let desired):
+            let observed = try await actuator.adoptVM(item)
+            return Self.statusSteps(desired: desired.desiredStatus, observed: observed)
+        case .sandbox(let desired):
+            let observed = try await actuator.adoptSandbox(item)
+            return Self.sandboxStatusSteps(desired: desired.desiredStatus, observed: observed)
+        case nil:
+            // The planner never emits `.adopt` without a desired entry
+            // (undesired workloads plan `.delete` instead).
+            return []
+        }
+    }
+
     private func execute(_ item: ReconcileWorkItem) async {
+        let ref = WorkloadRef(item)
         do {
             var steps = item.steps
             var index = 0
             while index < steps.count {
                 let step = steps[index]
-                currentPhase[item.vmId] = phaseDescription(step)
+                currentPhase[ref] = phaseDescription(step)
                 if step == .adopt {
-                    // The remaining plan depends on the orphan's actual state,
-                    // unknowable before the hypervisor session is reconnected.
-                    let observed = try await actuator.adoptVM(item)
-                    if let desired = item.desired {
-                        let remaining = Self.statusSteps(desired: desired.desiredStatus, observed: observed)
-                        steps = Array(steps[...index]) + remaining
-                    }
+                    steps = Array(steps[...index]) + (try await adoptAndReplan(item))
                 } else {
                     try await actuator.perform(step, item: item)
                 }
                 index += 1
             }
-            lastApplied[item.vmId] = item.generation
-            failures.removeValue(forKey: item.vmId)
+            lastApplied[ref] = item.generation
+            failures.removeValue(forKey: ref)
             logger.info(
-                "VM converged to desired state",
+                "Workload converged to desired state",
                 metadata: [
-                    "vmId": .string(item.vmId),
+                    "kind": .string(item.kind.rawValue),
+                    "workloadId": .string(item.id),
                     "generation": .stringConvertible(item.generation),
                 ])
         } catch {
             let classification = (error as? ClassifiableError)?.failureClassification ?? .transient
 
             // Waiting on another component (e.g. the site network controller
-            // hasn't realized this VM's switch in the shared NB yet) is not a
-            // failure: recording it would report `lastError` and fail the
-            // pending operation on the control plane before the dependency has
-            // a chance to land. Record nothing and burn no attempts — the
+            // hasn't realized this workload's switch in the shared NB yet) is
+            // not a failure: recording it would report `lastError` and fail
+            // the pending operation on the control plane before the dependency
+            // has a chance to land. Record nothing and burn no attempts — the
             // periodic level-triggered sync re-drives the item, and the
             // operation's completion budget backstops a dependency that never
             // arrives.
             if classification == .waitingOnDependency {
                 logger.info(
-                    "VM convergence waiting on a dependency; will retry on the next sync",
+                    "Workload convergence waiting on a dependency; will retry on the next sync",
                     metadata: [
-                        "vmId": .string(item.vmId),
+                        "kind": .string(item.kind.rawValue),
+                        "workloadId": .string(item.id),
                         "generation": .stringConvertible(item.generation),
                         "waitingOn": .string(error.localizedDescription),
                     ])
-                if inFlight[item.vmId] == item.generation {
-                    inFlight.removeValue(forKey: item.vmId)
-                    currentPhase.removeValue(forKey: item.vmId)
+                if inFlight[ref] == item.generation {
+                    inFlight.removeValue(forKey: ref)
+                    currentPhase.removeValue(forKey: ref)
                 }
                 await actuator.convergenceDidChange()
                 return
             }
 
             var failure =
-                failures[item.vmId]
+                failures[ref]
                 ?? ConvergenceFailure(generation: item.generation, attempts: 0, lastError: "")
             if failure.generation != item.generation {
                 failure = ConvergenceFailure(generation: item.generation, attempts: 0, lastError: "")
@@ -299,13 +494,14 @@ public actor Reconciler {
                 failure.attempts = max(failure.attempts, Self.maxAttemptsPerGeneration)
             }
             failure.lastError = error.localizedDescription
-            failures[item.vmId] = failure
+            failures[ref] = failure
             logger.error(
                 classification == .permanent
-                    ? "VM convergence failed permanently; not retrying this generation (operator action required)"
-                    : "VM convergence failed",
+                    ? "Workload convergence failed permanently; not retrying this generation (operator action required)"
+                    : "Workload convergence failed",
                 metadata: [
-                    "vmId": .string(item.vmId),
+                    "kind": .string(item.kind.rawValue),
+                    "workloadId": .string(item.id),
                     "generation": .stringConvertible(item.generation),
                     "attempt": .stringConvertible(failure.attempts),
                     "error": .string(error.localizedDescription),
@@ -314,11 +510,11 @@ public actor Reconciler {
         // Only clear the marker this item owns: a newer-generation item may
         // already be queued behind this one (shouldExecute admits it and
         // apply() re-keyed the entry), and clearing unconditionally would both
-        // re-admit duplicate work for that generation and hide a mid-create VM
-        // from the observed-state report's in-flight section.
-        if inFlight[item.vmId] == item.generation {
-            inFlight.removeValue(forKey: item.vmId)
-            currentPhase.removeValue(forKey: item.vmId)
+        // re-admit duplicate work for that generation and hide a mid-create
+        // workload from the observed-state report's in-flight section.
+        if inFlight[ref] == item.generation {
+            inFlight.removeValue(forKey: ref)
+            currentPhase.removeValue(forKey: ref)
         }
         await actuator.convergenceDidChange()
     }
@@ -337,66 +533,90 @@ public actor Reconciler {
 
     // MARK: Pure diff engine
 
-    /// Compute the convergence plan for one sync. Pure: no side effects, fully
-    /// unit-testable.
-    ///
-    /// * Entries older than the last applied generation are dropped (replays
-    ///   and reordered syncs cannot roll state backward). An *equal*
-    ///   generation is still re-planned — that is drift correction: if the VM
-    ///   regressed out of band, the same generation converges it again.
-    /// * Present VMs missing from the desired set are deleted (full-list
-    ///   semantics: omission means "should not exist here").
-    /// * Desired-and-satisfied VMs whose generation advanced yield an
-    ///   empty-step item so the applied generation still catches up.
+    /// Compute the VM convergence plan for one sync. Pure: no side effects,
+    /// fully unit-testable.
     public static func plan(
         desired: [DesiredVMState],
         present: [String: VMPresence],
         lastApplied: [String: Int64]
     ) -> [ReconcileWorkItem] {
+        planCore(desired: desired, present: present, lastApplied: lastApplied)
+    }
+
+    /// Compute the sandbox convergence plan for one sync. Same engine, same
+    /// semantics as the VM `plan`. Named (not an overload) so the VM call
+    /// sites' unqualified `.running`-style literals stay unambiguous.
+    public static func planSandboxes(
+        desired: [DesiredSandboxState],
+        present: [String: SandboxPresence],
+        lastApplied: [String: Int64]
+    ) -> [ReconcileWorkItem] {
+        planCore(desired: desired, present: present, lastApplied: lastApplied)
+    }
+
+    /// The kind-neutral diff. Rules, identical for every workload kind:
+    ///
+    /// * Entries older than the last applied generation are dropped (replays
+    ///   and reordered syncs cannot roll state backward). An *equal*
+    ///   generation is still re-planned — that is drift correction: if the
+    ///   workload regressed out of band, the same generation converges it
+    ///   again.
+    /// * Present workloads missing from the desired set are deleted
+    ///   (full-list semantics: omission means "should not exist here").
+    /// * Desired-and-satisfied workloads whose generation advanced yield an
+    ///   empty-step item so the applied generation still catches up.
+    private static func planCore<Desired: ReconcilableDesired>(
+        desired: [Desired],
+        present: [String: WorkloadPresence<Desired.ObservedStatus>],
+        lastApplied: [String: Int64]
+    ) -> [ReconcileWorkItem] {
         var items: [ReconcileWorkItem] = []
         var desiredIds = Set<String>()
+        let kind = Desired.workloadKind
 
         for entry in desired {
-            let vmId = entry.vmId.uuidString
-            desiredIds.insert(vmId)
+            let id = entry.workloadId.uuidString
+            desiredIds.insert(id)
 
-            if let applied = lastApplied[vmId], entry.generation < applied {
+            if let applied = lastApplied[id], entry.generation < applied {
                 continue  // stale: an older sync must never undo a newer one
             }
 
             let steps: [ReconcileStep]
-            switch present[vmId] {
+            switch present[id] {
             case .managed(let observed):
-                if entry.desiredStatus == .absent {
+                if entry.wantsAbsent {
                     steps = [.delete]
                 } else {
-                    steps = statusSteps(desired: entry.desiredStatus, observed: observed)
+                    steps = entry.convergenceSteps(from: observed)
                 }
             case .orphaned:
                 // Deleting an orphan also goes through adopt-first so the
-                // surviving hypervisor process is actually torn down; the
+                // surviving runtime process is actually torn down; the
                 // actuator falls back to manifest-only removal if the
                 // session cannot be reconnected.
-                steps = entry.desiredStatus == .absent ? [.delete] : [.adopt]
+                steps = entry.wantsAbsent ? [.delete] : [.adopt]
             case nil:
-                if entry.desiredStatus == .absent {
+                if entry.wantsAbsent {
                     steps = []  // already absent; just record the generation
                 } else {
-                    steps = [.create] + statusSteps(desired: entry.desiredStatus, observed: .created)
+                    steps = [.create] + entry.convergenceSteps(from: Desired.statusAfterCreate)
                 }
             }
 
             // Nothing to do and nothing to record — skip entirely.
-            if steps.isEmpty, let applied = lastApplied[vmId], applied >= entry.generation {
+            if steps.isEmpty, let applied = lastApplied[id], applied >= entry.generation {
                 continue
             }
-            items.append(ReconcileWorkItem(vmId: vmId, generation: entry.generation, steps: steps, desired: entry))
+            items.append(
+                ReconcileWorkItem(
+                    kind: kind, id: id, generation: entry.generation, steps: steps, target: entry.asTarget))
         }
 
         // Full-list semantics: anything on this host the control plane did not
         // list should not exist here.
-        for (vmId, _) in present where !desiredIds.contains(vmId) {
-            items.append(ReconcileWorkItem(vmId: vmId, generation: 0, steps: [.delete], desired: nil))
+        for (id, _) in present where !desiredIds.contains(id) {
+            items.append(ReconcileWorkItem(kind: kind, id: id, generation: 0, steps: [.delete], target: nil))
         }
 
         return items
@@ -421,6 +641,27 @@ public actor Reconciler {
                 return [.pause]
             }
         case .shutdown:
+            return [.shutdown]
+        case .absent:
+            return [.delete]
+        }
+    }
+
+    /// The steps that take a sandbox from `observed` to `desired`. Empty when
+    /// the observed status already satisfies the goal — including `.exited`
+    /// for both `.running` and `.stopped` (see
+    /// `DesiredSandboxStatus.isSatisfied(by:)`): phase 1 has no restart
+    /// policy, so a finished one-shot workload is never relaunched. Named
+    /// (not an overload of `statusSteps`) for the same ambiguity reason as
+    /// `planSandboxes`.
+    public static func sandboxStatusSteps(desired: DesiredSandboxStatus, observed: SandboxStatus) -> [ReconcileStep] {
+        if desired.isSatisfied(by: observed) {
+            return []
+        }
+        switch desired {
+        case .running:
+            return [.boot]
+        case .stopped:
             return [.shutdown]
         case .absent:
             return [.delete]
