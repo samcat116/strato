@@ -1,0 +1,94 @@
+agent/Dockerfile
+  s_b1fd57a7028f8c::t_c670060cfaaa91 153-157
+control-plane/web/src/lib/api/agents.ts
+  s_b1fd57a7028f8c::t_95fd39c3333993 8,29-32
+  s_b1fd57a7028f8c::t_449b492d856a59 33-34
+agent/Sources/StratoAgentCore/AgentUpdater.swift
+  s_b1fd57a7028f8c::t_b3c4bad91b3037 1-328
+control-plane/web/src/lib/hooks/use-agents.ts
+  s_b1fd57a7028f8c::t_98925364577a3f 1
+  s_b1fd57a7028f8c::t_6a06f8a965076f 38-52
+control-plane/Tests/AppTests/AgentUpdateEndpointTests.swift
+  s_b1fd57a7028f8c::t_8f4a4228d4d29a 1-193
+control-plane/web/src/components/agents/agent-table.tsx
+  s_b1fd57a7028f8c::t_d399f2b2d03007 70-72
+  s_b1fd57a7028f8c::t_b8e780ea94b3c4 14
+  s_b1fd57a7028f8c::t_ca182f057d5f09 119-121
+control-plane/web/src/types/api.ts
+  s_b1fd57a7028f8c::t_94647a94c09213 267-269
+  s_b1fd57a7028f8c::t_7dfbb5139692ae 284-292
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_b1fd57a7028f8c::t_466666fa05004e 347-355
+control-plane/Sources/App/Models/Agent.swift
+  s_b1fd57a7028f8c::t_b57171f3fb7536 253
+  s_b1fd57a7028f8c::t_434a07b320a629 159,171-172
+  s_b1fd57a7028f8c::t_328363130c53aa 57-62
+  s_b1fd57a7028f8c::t_a277eb7e3ddd62 280
+  s_b1fd57a7028f8c::t_231b84187179c0 187-192
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_b1fd57a7028f8c::t_869aff65d4a410 16
+  s_b1fd57a7028f8c::t_006e99138376d4 56
+control-plane/web/src/components/agents/agent-update-action.tsx
+  s_b1fd57a7028f8c::t_a1644380a7e2d5 1-143
+control-plane/Sources/App/Migrations/AddOperatingSystemToAgent.swift
+  s_b1fd57a7028f8c::t_61c84d5f593083 1-20
+control-plane/Sources/App/Services/AgentService.swift
+  s_b1fd57a7028f8c::t_df908fafeb6ea8 256-267,272
+shared/Sources/StratoShared/OperatingSystem.swift
+  s_b1fd57a7028f8c::t_96da2983abfea1 1-25
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_b1fd57a7028f8c::t_a0903ee7b76477 71-72,82-83
+  s_b1fd57a7028f8c::t_33271c740a214a 62-70,73-81,84-118
+control-plane/web/src/app/(dashboard)/agents/detail/page.tsx
+  s_b1fd57a7028f8c::t_aa41a39f054c4f 108
+  s_b1fd57a7028f8c::t_1ee5fa2a69f23c 17
+shared/Sources/StratoShared/WireProtocol.swift
+  s_b1fd57a7028f8c::t_f78a1d80504213 87-97
+  s_b1fd57a7028f8c::t_5ce7f627244bb5 151-162
+control-plane/Sources/App/Services/AgentUpdateArtifacts.swift
+  s_b1fd57a7028f8c::t_33fd45b2f444d3 58-59
+  s_b1fd57a7028f8c::t_7e561ab2e6f221 1-57,60-95
+agent/Package.swift
+  s_b1fd57a7028f8c::t_3ba483f1aa5927 39
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_b1fd57a7028f8c::t_32a3f4f0ddce8f 641-838
+  s_b1fd57a7028f8c::t_0a89fbe5ca0b60 2,20
+control-plane/Sources/App/configure.swift
+  s_b1fd57a7028f8c::t_378b6c29b7f80c 373-375
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_b1fd57a7028f8c::t_d1f0fed5b18b24 126-131,146-147,162
+  s_b1fd57a7028f8c::t_9412b19a7e72c6 11-14
+  s_b1fd57a7028f8c::t_8c0a11c5153e94 235-292
+control-plane/Tests/AppTests/AgentUpdateArtifactsTests.swift
+  s_b1fd57a7028f8c::t_aaa912322eb684 1-81
+agent/Tests/StratoAgentTests/AgentUpdaterTests.swift
+  s_b1fd57a7028f8c::t_a0903ee7b76477 142-143,176-177,210-213,261-264,307-308,343-344
+  s_b1fd57a7028f8c::t_44d2519b2c0a03 1-141,144-175,178-209,214-260,265-306,309-342,345-363
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_b1fd57a7028f8c::t_7552ad2a437688 40-50
+agent/Sources/StratoAgent/Agent.swift
+  s_b1fd57a7028f8c::t_62c2d7109ec036 595-596
+  s_b1fd57a7028f8c::t_e179f3421b3c4e 1231-1233
+  s_b1fd57a7028f8c::t_dfaf7efbb98b96 162-166
+  s_b1fd57a7028f8c::t_45f92c90aecf03 1562-1619
+docs/deployment/agents.md
+  s_b1fd57a7028f8c::t_f9a8a516de50fd 138-202
+control-plane/web/src/lib/hooks/index.ts
+  s_b1fd57a7028f8c::t_3cc672c68fc55e 9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "ddaea69d8fa955cdcded23baeeaaedcb21ae566c",
+  "prompts": {},
+  "sessions": {
+    "s_b1fd57a7028f8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "24d3be9f-19d3-48c9-8583-12204042473f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
