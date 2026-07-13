@@ -272,6 +272,10 @@ export interface Agent {
   lastHeartbeat?: string;
   createdAt: string;
   isOnline: boolean;
+  // The version this agent should be running (the control plane's own build
+  // version, or its AGENT_TARGET_VERSION override); absent for dev builds.
+  targetVersion?: string;
+  updateAvailable: boolean;
 }
 
 // Returned only from the create endpoint — the plaintext `token` and the

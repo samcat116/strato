@@ -15,6 +15,50 @@ enum BuildInfo {
     static let gitSHA: String = Environment.get("STRATO_GIT_SHA") ?? "unknown"
 }
 
+/// The version agents are expected to run, compared against each agent's
+/// reported build version to surface `updateAvailable` on `AgentResponse`.
+///
+/// Defaults to the control plane's own build version — in a released
+/// deployment the control-plane and agent images share a tag, so "matches my
+/// version" is the right baseline. `AGENT_TARGET_VERSION` overrides it for
+/// deployments that pin agents separately. A "dev" target (local builds with
+/// no injected identity) means there is nothing meaningful to compare
+/// against, so no update is ever flagged.
+enum AgentVersionTarget {
+    /// Nil when no meaningful target exists (dev builds without an override).
+    static let version: String? = normalize(Environment.get("AGENT_TARGET_VERSION") ?? BuildInfo.version)
+
+    static func normalize(_ raw: String) -> String? {
+        raw == "dev" ? nil : raw
+    }
+
+    /// Collapses the aliases under which one build travels, so same-artifact
+    /// deployments never flag a false update: release tags appear both
+    /// v-prefixed (`github.ref_name`, baked into agents) and bare (the semver
+    /// image-tag patterns, which Helm feeds back as the control plane's
+    /// STRATO_VERSION), and main-branch images are baked as "main" but
+    /// published under `main-<sha>` tags. `main-<sha>` deliberately loses the
+    /// sha: two "main" builds are indistinguishable to this comparison anyway
+    /// (agents bake plain "main"), so drift within main never flags.
+    static func canonical(_ version: String) -> String {
+        if version.first == "v", version.dropFirst().first?.isNumber == true {
+            return String(version.dropFirst())
+        }
+        let mainPrefix = "main-"
+        if version.hasPrefix(mainPrefix), version.count > mainPrefix.count,
+            version.dropFirst(mainPrefix.count).allSatisfy(\.isHexDigit)
+        {
+            return "main"
+        }
+        return version
+    }
+
+    static func updateAvailable(agentVersion: String, target: String?) -> Bool {
+        guard let target else { return false }
+        return canonical(agentVersion) != canonical(target)
+    }
+}
+
 /// Per-process runtime identity captured once at boot.
 ///
 /// The motivating incident: a stale duplicate control plane silently intercepted

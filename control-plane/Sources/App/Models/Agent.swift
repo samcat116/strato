@@ -244,6 +244,10 @@ struct AgentResponse: Content {
     let lastHeartbeat: Date?
     let createdAt: Date?
     let isOnline: Bool
+    /// The version this agent should be running (see `AgentVersionTarget`);
+    /// nil when the deployment has no meaningful target (dev builds).
+    let targetVersion: String?
+    let updateAvailable: Bool
 
     init(from agent: Agent) throws {
         guard let id = agent.id else {
@@ -266,5 +270,10 @@ struct AgentResponse: Content {
         self.lastHeartbeat = agent.lastHeartbeat
         self.createdAt = agent.createdAt
         self.isOnline = agent.isOnline
+        self.targetVersion = AgentVersionTarget.version
+        self.updateAvailable = AgentVersionTarget.updateAvailable(
+            agentVersion: agent.version,
+            target: AgentVersionTarget.version
+        )
     }
 }

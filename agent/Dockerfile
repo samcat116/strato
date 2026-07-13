@@ -142,6 +142,14 @@ COPY --from=build --chown=strato:strato /staging /app
 # Provide configuration needed by the built-in crash reporter and some sensible default behaviors.
 ENV SWIFT_BACKTRACE=enable=yes,sanitize=yes,threads=all,images=all,interactive=no,swift-backtrace=./swift-backtrace-static
 
+# Build identity, reported in agent registration and `--version` (see
+# BuildInfo.swift). Pass via `docker build --build-arg STRATO_VERSION=...
+# --build-arg STRATO_GIT_SHA=...`; defaults keep local builds honest.
+ARG STRATO_VERSION="dev"
+ARG STRATO_GIT_SHA="unknown"
+ENV STRATO_VERSION=${STRATO_VERSION}
+ENV STRATO_GIT_SHA=${STRATO_GIT_SHA}
+
 # Ensure all further commands run as the strato user
 USER strato:strato
 
