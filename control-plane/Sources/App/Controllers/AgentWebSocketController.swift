@@ -282,6 +282,12 @@ struct AgentWebSocketController: RouteCollection {
                 return
             }
 
+            // Console sessions cannot outlive the agent socket: close their
+            // browser sockets with an error frame instead of leaving frozen
+            // terminals behind.
+            req.application.consoleSessionManager.closeAllSessions(
+                forAgent: agentName, reason: "agent disconnected")
+
             // Mark agent as offline asynchronously
             Task {
                 await req.agentService.removeAgent(agentName)
@@ -789,6 +795,12 @@ struct AgentWebSocketController: RouteCollection {
                         ])
                     return
                 }
+
+                // Console sessions cannot outlive the agent socket: close
+                // their browser sockets with an error frame instead of
+                // leaving frozen terminals behind.
+                req.application.consoleSessionManager.closeAllSessions(
+                    forAgent: agentName, reason: "agent disconnected")
 
                 // Mark agent as offline asynchronously
                 Task {
