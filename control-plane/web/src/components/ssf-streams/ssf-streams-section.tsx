@@ -342,6 +342,7 @@ export function SSFStreamsSection({ orgId, canManage }: SSFStreamsSectionProps) 
                           </>
                         )}
                         {stream.registered &&
+                          stream.enabled &&
                           stream.deliveryMethod === "poll" && (
                             <Button
                               size="icon-sm"
