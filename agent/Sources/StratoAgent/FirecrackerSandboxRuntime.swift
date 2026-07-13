@@ -64,6 +64,48 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     private var sandboxes: [String: Managed] = [:]
 
+    // MARK: Exec/log state (issue #423)
+
+    /// One live exec session: a dedicated guest connection plus the detached
+    /// reader task draining its output. Keyed by the control plane's
+    /// sessionId in `execSessions`; `sandboxId` lets a sandbox teardown find
+    /// its sessions.
+    private struct ExecSession {
+        let sandboxId: String
+        let connection: VsockConnection
+        let events: @Sendable (SandboxExecEvent) -> Void
+        var reader: Task<Void, Never>?
+    }
+
+    private var execSessions: [String: ExecSession] = [:]
+
+    /// Per-sandbox log follow state. The entry outlives individual follow
+    /// tasks (shutdown stops the task, boot starts a new one) so `lastSeq`
+    /// resumes delivery where it left off and a partial line buffered in
+    /// `assembler` is completed rather than split across a pause.
+    private struct LogFollow {
+        /// Monotonic ownership token: every (re)started follow task gets a
+        /// fresh generation, and only the current generation may register a
+        /// connection or record records — a superseded loop that limps past
+        /// its cancellation cannot corrupt its successor's state.
+        var generation: UInt64
+        var task: Task<Void, Never>?
+        /// The loop's live connection, registered so a stop can close it and
+        /// unblock the loop's blocking read.
+        var connection: VsockConnection?
+        /// Highest ring-buffer seq recorded; the next connect resumes at
+        /// `lastSeq + 1`.
+        var lastSeq: UInt64
+        var assembler: SandboxLogLineAssembler
+    }
+
+    private var logFollows: [String: LogFollow] = [:]
+    private var logHandler: (@Sendable (String, String, String) -> Void)?
+
+    /// Wall-clock budget for opening an exec/log connection and for the exec
+    /// spawn handshake.
+    private static let execConnectTimeout: TimeInterval = 10
+
     init(
         logger: Logger,
         client: FirecrackerClient,
@@ -214,12 +256,24 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             throw SandboxControlError.malformedResponse("expected pong, got \(response)")
         }
         logger.info("Sandbox guest agent healthy", metadata: ["sandboxId": .string(sandboxId)])
+
+        // The guest is confirmed up: ship its workload output from here on
+        // (resuming from the last seq this host saw, so a pause/resume cycle
+        // doesn't drop or duplicate lines).
+        startLogFollow(sandboxId: sandboxId)
     }
 
     func shutdownSandbox(sandboxId: String) async throws {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
+        // A paused guest can't serve exec sessions or the log follow stream:
+        // end the former (terminal for their control-plane sessions) and stop
+        // the latter. The log follow keeps its seq/partial-line state so a
+        // later boot resumes cleanly.
+        await closeExecSessions(sandboxId: sandboxId, reason: "sandbox stopped")
+        await stopLogFollow(sandboxId: sandboxId, retire: false)
+
         // Firecracker cannot stop-and-keep-state, so a "stopped" sandbox is a
         // paused microVM. Only a running one needs pausing; a not-started or
         // already-paused sandbox is idempotently satisfied.
@@ -232,6 +286,12 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     func deleteSandbox(sandboxId: String) async throws {
         logger.info("Deleting sandbox", metadata: ["sandboxId": .string(sandboxId)])
+        // End interactive/log streams first: the guest is about to disappear,
+        // and their control-plane sessions must learn why. Deleting is the
+        // true end-of-stream for the workload's logs, so flush any partial
+        // line the assembler is holding.
+        await closeExecSessions(sandboxId: sandboxId, reason: "sandbox deleted")
+        await stopLogFollow(sandboxId: sandboxId, retire: true)
         // Tear the Firecracker process down (idempotent — a sandbox whose
         // process the client no longer tracks throws, which we ignore), then
         // remove the per-sandbox artifacts.
@@ -277,6 +337,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
         let status = await mappedStatus(
             instance: info.state, udsPath: vsockUDSPath(sandboxId), sandboxId: sandboxId)
+        if status == .running {
+            // Same contract as boot: a running guest's workload output is
+            // shipped as long as the sandbox is managed. Seq state from a
+            // previous incarnation is gone, so this resumes from the oldest
+            // retained ring-buffer record.
+            startLogFollow(sandboxId: sandboxId)
+        }
         logger.info(
             "Sandbox re-adopted",
             metadata: ["sandboxId": .string(sandboxId), "status": .string(status.rawValue)])
@@ -298,6 +365,416 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     func exitCode(sandboxId: String) async -> Int? {
         sandboxes[sandboxId]?.lastExitCode
+    }
+
+    // MARK: - Exec sessions (issue #423)
+
+    func startExec(
+        sandboxId: String,
+        sessionId: String,
+        request: SandboxExecRequest,
+        events: @escaping @Sendable (SandboxExecEvent) -> Void
+    ) async throws {
+        guard let managed = sandboxes[sandboxId] else {
+            throw SandboxRuntimeError.sandboxNotFound(sandboxId)
+        }
+        guard execSessions[sessionId] == nil else {
+            // Session ids are minted per attach by the control plane; a
+            // duplicate start is a stream replay we must not double-bridge.
+            return
+        }
+
+        logger.info(
+            "Starting sandbox exec session",
+            metadata: [
+                "sandboxId": .string(sandboxId),
+                "sessionId": .string(sessionId),
+                "tty": .stringConvertible(request.tty),
+            ])
+
+        // A dedicated connection per session: its first line (`exec`) turns it
+        // into the session's channel, and closing it later kills the exec
+        // process group guest-side.
+        let connection = try await VsockConnection.connect(
+            udsPath: managed.vsockUdsPath, port: SandboxConfigDrive.defaultVsockPort,
+            timeout: Self.execConnectTimeout, logger: logger)
+
+        // Wait (bounded) for the guest to confirm the spawn. Bytes the guest
+        // sent after `exec_started` in the same chunk are handed to the reader
+        // so no early output is lost.
+        let leftover: Data
+        do {
+            leftover = try await Self.withConnectionDeadline(connection, timeout: Self.execConnectTimeout) {
+                try await Self.awaitExecStarted(.exec(request.guestRequest), on: connection)
+            }
+        } catch {
+            await connection.close()
+            throw error
+        }
+
+        // Confirmed: report `.started` before any output, then drain the
+        // session on a detached reader (its reads block between output chunks,
+        // which must never park the actor).
+        events(.started)
+        var session = ExecSession(sandboxId: sandboxId, connection: connection, events: events, reader: nil)
+        session.reader = Task.detached { [weak self, logger] in
+            await Self.runExecReader(
+                sessionId: sessionId, connection: connection, initial: leftover,
+                events: events, runtime: self, logger: logger)
+        }
+        execSessions[sessionId] = session
+    }
+
+    func sendExecInput(sessionId: String, data: Data?, eof: Bool) async throws {
+        guard let session = execSessions[sessionId] else {
+            throw SandboxRuntimeError.execSessionNotFound(sessionId)
+        }
+        if let data, !data.isEmpty {
+            try await session.connection.write(SandboxControlProtocol.Request.stdin(data).encodedLine())
+        }
+        if eof {
+            try await session.connection.write(SandboxControlProtocol.Request.stdinEof.encodedLine())
+        }
+    }
+
+    func resizeExec(sessionId: String, rows: Int, cols: Int) async throws {
+        guard let session = execSessions[sessionId] else {
+            throw SandboxRuntimeError.execSessionNotFound(sessionId)
+        }
+        try await session.connection.write(
+            SandboxControlProtocol.Request.resize(rows: rows, cols: cols).encodedLine())
+    }
+
+    func closeExec(sessionId: String) async {
+        guard let session = execSessions.removeValue(forKey: sessionId) else { return }
+        logger.info(
+            "Closing sandbox exec session",
+            metadata: ["sandboxId": .string(session.sandboxId), "sessionId": .string(sessionId)])
+        // Closing the connection kills the exec process group guest-side and
+        // unblocks the reader, whose end-of-session callback finds the session
+        // already deregistered and stays silent — the closer needs no event.
+        await session.connection.close()
+        session.reader?.cancel()
+    }
+
+    /// Terminal teardown of every live exec session of one sandbox (stop or
+    /// delete): each session's control-plane side gets a `.closed` with the
+    /// reason.
+    private func closeExecSessions(sandboxId: String, reason: String) async {
+        for (sessionId, session) in execSessions where session.sandboxId == sandboxId {
+            execSessions.removeValue(forKey: sessionId)
+            await session.connection.close()
+            session.reader?.cancel()
+            session.events(.closed(reason: reason))
+        }
+    }
+
+    /// The reader's end-of-session callback: emits the terminal event unless
+    /// the session was already deregistered (an explicit `closeExec` or a
+    /// sandbox teardown, which speak for themselves).
+    private func execSessionEnded(sessionId: String, terminal: SandboxExecEvent) async {
+        guard let session = execSessions.removeValue(forKey: sessionId) else { return }
+        await session.connection.close()
+        logger.info(
+            "Sandbox exec session ended",
+            metadata: [
+                "sandboxId": .string(session.sandboxId),
+                "sessionId": .string(sessionId),
+                "terminal": .string(String(describing: terminal)),
+            ])
+        session.events(terminal)
+    }
+
+    /// Write the `exec` line and read until the guest confirms `exec_started`.
+    /// Returns any bytes read past the confirmation line (early output for the
+    /// reader). A guest `error` line (spawn failure) throws.
+    private static func awaitExecStarted(
+        _ request: SandboxControlProtocol.Request, on connection: VsockConnection
+    ) async throws -> Data {
+        try await connection.write(request.encodedLine())
+
+        var buffer = Data()
+        while true {
+            if let newline = buffer.firstIndex(of: 0x0A) {
+                let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
+                let response = try SandboxControlProtocol.Response.decode(line: line)
+                if case .error(let message) = response {
+                    throw SandboxControlError.guestError(message)
+                }
+                guard case .execStarted = response else {
+                    throw SandboxControlError.malformedResponse("expected exec_started, got \(response)")
+                }
+                return Data(buffer[buffer.index(after: newline)...])
+            }
+            let chunk = try await connection.read(maxLength: 4096)
+            if chunk.isEmpty {
+                throw SandboxControlError.malformedResponse("guest closed before confirming exec start")
+            }
+            buffer.append(chunk)
+        }
+    }
+
+    /// Drains one exec session's connection for its whole life: decodes
+    /// `output` records into `.output` events and finishes the session on
+    /// `exec_exit`, a guest `error`, or the channel dying. Runs detached — the
+    /// reads block between output chunks (fine off-actor: they park on
+    /// `DispatchQueue.global()`, not the cooperative pool).
+    private static func runExecReader(
+        sessionId: String,
+        connection: VsockConnection,
+        initial: Data,
+        events: @escaping @Sendable (SandboxExecEvent) -> Void,
+        runtime: FirecrackerSandboxRuntime?,
+        logger: Logger
+    ) async {
+        var buffer = initial
+
+        func finish(_ terminal: SandboxExecEvent) async {
+            await runtime?.execSessionEnded(sessionId: sessionId, terminal: terminal)
+        }
+
+        while true {
+            // Drain every complete line already buffered before reading more.
+            while let newline = buffer.firstIndex(of: 0x0A) {
+                let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
+                buffer = Data(buffer[buffer.index(after: newline)...])
+
+                let response: SandboxControlProtocol.Response
+                do {
+                    response = try SandboxControlProtocol.Response.decode(line: line)
+                } catch {
+                    await finish(.closed(reason: "malformed exec record from guest"))
+                    return
+                }
+                switch response {
+                case .output(let stream, let data):
+                    events(.output(stream: stream, data: data))
+                case .execExit(let exitCode):
+                    await finish(.exited(code: exitCode))
+                    return
+                case .error(let message):
+                    await finish(.closed(reason: "guest error: \(message)"))
+                    return
+                default:
+                    await finish(.closed(reason: "unexpected exec record from guest"))
+                    return
+                }
+            }
+
+            do {
+                let chunk = try await connection.read(maxLength: 65536)
+                if chunk.isEmpty {
+                    await finish(.closed(reason: "sandbox exec channel closed"))
+                    return
+                }
+                buffer.append(chunk)
+            } catch {
+                // A read failure on a session we tore down ourselves is the
+                // expected wakeup; `execSessionEnded` stays silent then.
+                await finish(.closed(reason: "sandbox exec channel failed: \(error.localizedDescription)"))
+                return
+            }
+        }
+    }
+
+    // MARK: - Workload log shipping (issue #423)
+
+    func setSandboxLogHandler(_ handler: @escaping @Sendable (String, String, String) -> Void) async {
+        logHandler = handler
+    }
+
+    /// Start (or restart) the sandbox's log follow loop. Idempotent while a
+    /// loop is live; seq/partial-line state carries over from a previous loop
+    /// so delivery resumes without loss or duplication.
+    private func startLogFollow(sandboxId: String) {
+        guard logHandler != nil else { return }
+        guard let managed = sandboxes[sandboxId] else { return }
+        if logFollows[sandboxId]?.task != nil { return }
+
+        var follow =
+            logFollows[sandboxId]
+            ?? LogFollow(generation: 0, task: nil, connection: nil, lastSeq: 0, assembler: SandboxLogLineAssembler())
+        follow.generation += 1
+        let generation = follow.generation
+        let udsPath = managed.vsockUdsPath
+
+        logger.debug(
+            "Starting sandbox log follow",
+            metadata: ["sandboxId": .string(sandboxId), "sinceSeq": .stringConvertible(follow.lastSeq + 1)])
+
+        follow.task = Task.detached { [weak self, logger] in
+            await Self.runLogFollowLoop(
+                sandboxId: sandboxId, generation: generation, udsPath: udsPath,
+                runtime: self, logger: logger)
+        }
+        logFollows[sandboxId] = follow
+    }
+
+    /// Stop the sandbox's log follow loop. `retire: true` (delete) is the
+    /// workload's end-of-stream: any buffered partial line is flushed and the
+    /// state dropped; `retire: false` (stop/pause) keeps seq and partial-line
+    /// state for the next boot.
+    private func stopLogFollow(sandboxId: String, retire: Bool) async {
+        guard var follow = logFollows[sandboxId] else { return }
+        // Bump the generation so a loop iteration already past its
+        // cancellation check can no longer register connections or records.
+        follow.generation += 1
+        follow.task?.cancel()
+        follow.task = nil
+        if let connection = follow.connection {
+            // Unblocks the loop's in-flight blocking read.
+            await connection.close()
+            follow.connection = nil
+        }
+        if retire {
+            logFollows.removeValue(forKey: sandboxId)
+            for line in follow.assembler.flush() {
+                logHandler?(sandboxId, line.stream, line.text)
+            }
+        } else {
+            logFollows[sandboxId] = follow
+        }
+    }
+
+    /// The follow loop's per-connect checkpoint: the seq to resume from, or
+    /// nil once this loop generation has been superseded or retired.
+    private func logFollowSinceSeq(sandboxId: String, generation: UInt64) -> UInt64? {
+        guard let follow = logFollows[sandboxId], follow.generation == generation else { return nil }
+        return follow.lastSeq + 1
+    }
+
+    /// Adopt `connection` as the follow loop's live connection so a stop can
+    /// close it. Returns false when the loop generation was superseded — the
+    /// caller must close the connection and exit.
+    private func registerLogConnection(
+        sandboxId: String, generation: UInt64, connection: VsockConnection
+    ) -> Bool {
+        guard var follow = logFollows[sandboxId], follow.generation == generation else { return false }
+        follow.connection = connection
+        logFollows[sandboxId] = follow
+        return true
+    }
+
+    private func unregisterLogConnection(sandboxId: String, generation: UInt64) {
+        guard var follow = logFollows[sandboxId], follow.generation == generation else { return }
+        follow.connection = nil
+        logFollows[sandboxId] = follow
+    }
+
+    /// Record one ring-buffer record: advance the resume seq, feed the line
+    /// assembler, and hand every completed line to the log handler (in order —
+    /// the follow loop awaits each record, so this runs sequentially).
+    private func recordLog(
+        sandboxId: String, generation: UInt64, seq: UInt64, stream: String, data: Data
+    ) {
+        guard var follow = logFollows[sandboxId], follow.generation == generation else { return }
+        follow.lastSeq = max(follow.lastSeq, seq)
+        let lines = follow.assembler.append(stream: stream, data: data)
+        logFollows[sandboxId] = follow
+        for line in lines {
+            logHandler?(sandboxId, line.stream, line.text)
+        }
+    }
+
+    /// The long-lived follow loop for one sandbox: connect, send
+    /// `stream_logs` resuming after the last recorded seq, and feed records to
+    /// the actor until the connection dies; then reconnect with 1s..30s
+    /// exponential backoff for as long as the loop generation stays current.
+    /// A paused sandbox surfaces as connect timeouts, so the loop idles at the
+    /// backoff cap instead of spinning. Runs detached: the follow read blocks
+    /// indefinitely between records, which is fine off-actor.
+    private static func runLogFollowLoop(
+        sandboxId: String,
+        generation: UInt64,
+        udsPath: String,
+        runtime: FirecrackerSandboxRuntime?,
+        logger: Logger
+    ) async {
+        var backoff: TimeInterval = 1
+
+        while !Task.isCancelled {
+            guard let runtime else { return }
+            guard let sinceSeq = await runtime.logFollowSinceSeq(sandboxId: sandboxId, generation: generation)
+            else { return }
+
+            do {
+                let connection = try await VsockConnection.connect(
+                    udsPath: udsPath, port: SandboxConfigDrive.defaultVsockPort,
+                    timeout: execConnectTimeout, logger: logger)
+                guard
+                    await runtime.registerLogConnection(
+                        sandboxId: sandboxId, generation: generation, connection: connection)
+                else {
+                    await connection.close()
+                    return
+                }
+
+                do {
+                    try await connection.write(
+                        SandboxControlProtocol.Request.streamLogs(sinceSeq: sinceSeq).encodedLine())
+                    try await Self.followLogStream(
+                        sandboxId: sandboxId, generation: generation, connection: connection,
+                        runtime: runtime, backoff: &backoff)
+                } catch {
+                    logger.debug(
+                        "Sandbox log follow stream ended",
+                        metadata: [
+                            "sandboxId": .string(sandboxId),
+                            "error": .string(error.localizedDescription),
+                        ])
+                }
+                await runtime.unregisterLogConnection(sandboxId: sandboxId, generation: generation)
+                await connection.close()
+            } catch {
+                logger.debug(
+                    "Sandbox log follow connect failed",
+                    metadata: [
+                        "sandboxId": .string(sandboxId),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+
+            if Task.isCancelled { return }
+            do {
+                try await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+            } catch {
+                return  // cancelled during backoff
+            }
+            backoff = min(backoff * 2, 30)
+        }
+    }
+
+    /// Read one follow connection to exhaustion, decoding `log` records and
+    /// recording each with the actor. Any delivered record resets the caller's
+    /// reconnect backoff (the guest is demonstrably healthy).
+    private static func followLogStream(
+        sandboxId: String,
+        generation: UInt64,
+        connection: VsockConnection,
+        runtime: FirecrackerSandboxRuntime,
+        backoff: inout TimeInterval
+    ) async throws {
+        var buffer = Data()
+        while true {
+            let chunk = try await connection.read(maxLength: 65536)
+            if chunk.isEmpty {
+                return  // guest closed; the loop reconnects
+            }
+            buffer.append(chunk)
+
+            while let newline = buffer.firstIndex(of: 0x0A) {
+                let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
+                buffer = Data(buffer[buffer.index(after: newline)...])
+
+                guard case .log(let seq, let stream, let data) = try SandboxControlProtocol.Response.decode(line: line)
+                else {
+                    throw SandboxControlError.malformedResponse(line)
+                }
+                await runtime.recordLog(
+                    sandboxId: sandboxId, generation: generation, seq: seq, stream: stream, data: data)
+                backoff = 1
+            }
+        }
     }
 
     // MARK: - Status mapping
@@ -357,24 +834,35 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let connection = try await VsockConnection.connect(
             udsPath: udsPath, port: SandboxConfigDrive.defaultVsockPort, timeout: timeout, logger: logger)
 
-        return try await withThrowingTaskGroup(of: SandboxControlProtocol.Response.self) { group in
-            group.addTask { try await Self.exchange(request, on: connection) }
+        do {
+            let response = try await Self.withConnectionDeadline(connection, timeout: timeout) {
+                try await Self.exchange(request, on: connection)
+            }
+            await connection.close()
+            return response
+        } catch {
+            await connection.close()
+            throw error
+        }
+    }
+
+    /// Race `operation` against a deadline. When the deadline wins, the
+    /// connection is closed so any blocking read the operation is parked in
+    /// returns instead of hanging, and `SandboxControlError.timeout` is
+    /// thrown. The caller still owns closing the connection on success.
+    private static func withConnectionDeadline<T: Sendable>(
+        _ connection: VsockConnection, timeout: TimeInterval,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                // Deadline hit: close the socket so any blocking read the other
-                // task is parked in returns instead of hanging.
                 await connection.close()
                 throw SandboxControlError.timeout
             }
             defer { group.cancelAll() }
-            do {
-                let response = try await group.next()!
-                await connection.close()
-                return response
-            } catch {
-                await connection.close()
-                throw error
-            }
+            return try await group.next()!
         }
     }
 
@@ -463,6 +951,29 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     func exitCode(sandboxId: String) async -> Int? {
         nil
+    }
+
+    func startExec(
+        sandboxId: String, sessionId: String, request: SandboxExecRequest,
+        events: @escaping @Sendable (SandboxExecEvent) -> Void
+    ) async throws {
+        throw HypervisorServiceError.notSupported("sandboxes are only available on Linux")
+    }
+
+    func sendExecInput(sessionId: String, data: Data?, eof: Bool) async throws {
+        throw HypervisorServiceError.notSupported("sandboxes are only available on Linux")
+    }
+
+    func resizeExec(sessionId: String, rows: Int, cols: Int) async throws {
+        throw HypervisorServiceError.notSupported("sandboxes are only available on Linux")
+    }
+
+    func closeExec(sessionId: String) async {
+        // No sessions can exist on non-Linux hosts.
+    }
+
+    func setSandboxLogHandler(_ handler: @escaping @Sendable (String, String, String) -> Void) async {
+        // No sandboxes can run on non-Linux hosts, so no logs will flow.
     }
 }
 #endif

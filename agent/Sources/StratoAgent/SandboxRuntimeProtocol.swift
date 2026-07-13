@@ -4,17 +4,16 @@ import StratoShared
 
 /// Driver seam for the sandbox runtime (issue #421): the reconciler's sandbox
 /// work items route here, exactly as VM items route to `HypervisorService`
-/// implementations.
-///
-/// No implementation ships yet — `Agent.sandboxRuntime` stays nil and
-/// `SandboxRuntimeProbe.runtimeBuilt` keeps the sandbox capability off, so the
-/// control plane never places sandboxes on this build; sandbox work reaching a
-/// nil runtime fails permanently with `SandboxRuntimeError.runtimeUnavailable`.
-/// Issue #421 registers the real runtime and flips both.
+/// implementations. `FirecrackerSandboxRuntime` is the shipping driver (Linux
+/// only); on builds without one, `Agent.sandboxRuntime` stays nil, the sandbox
+/// capability stays off, and sandbox work reaching a nil runtime fails
+/// permanently with `SandboxRuntimeError.runtimeUnavailable`.
 ///
 /// Method contracts mirror `HypervisorService`: every operation must be
 /// idempotent at the "already satisfied" level, because level-triggered syncs
-/// re-drive any step whose effect was not yet observed.
+/// re-drive any step whose effect was not yet observed. The exec/log surface
+/// (issue #423) is stream-shaped instead: sessions are keyed by the control
+/// plane's sessionId and end with exactly one terminal event.
 protocol SandboxRuntimeService: Sendable {
     /// Materialize the sandbox's rootfs from its OCI image and define the
     /// microVM (ends "exists, not running" — `SandboxStatus.stopped`).
@@ -41,6 +40,41 @@ protocol SandboxRuntimeService: Sendable {
     /// Exit code of an `.exited` sandbox's workload, when the guest agent
     /// reported one over vsock.
     func exitCode(sandboxId: String) async -> Int?
+
+    // MARK: Exec sessions and workload logs (issue #423)
+
+    /// Start an exec session inside a running sandbox: spawn `request.command`
+    /// in the workload's container context over a dedicated guest connection.
+    ///
+    /// Returns once the guest confirmed the spawn (after emitting `.started`
+    /// through `events`); throws if the sandbox is unknown or the guest
+    /// refused/failed the spawn. After a successful return, `events` receives
+    /// the session's `.output` records in guest order, ending with exactly one
+    /// terminal event: `.exited` (process reaped) or `.closed` (channel died,
+    /// sandbox stopped, or `closeExec`).
+    func startExec(
+        sandboxId: String,
+        sessionId: String,
+        request: SandboxExecRequest,
+        events: @escaping @Sendable (SandboxExecEvent) -> Void
+    ) async throws
+
+    /// Write stdin bytes to a live exec session and/or close its stdin.
+    func sendExecInput(sessionId: String, data: Data?, eof: Bool) async throws
+
+    /// Resize a live exec session's PTY.
+    func resizeExec(sessionId: String, rows: Int, cols: Int) async throws
+
+    /// Tear down an exec session: closing the guest connection kills the exec
+    /// process group. Idempotent; no event is emitted for a session closed
+    /// this way (the requester already knows).
+    func closeExec(sessionId: String) async
+
+    /// Install the handler that receives the workload's stdout/stderr, one
+    /// assembled line at a time, as `(sandboxId, stream, line)`. Lines for one
+    /// sandbox are delivered in order. Set once, at agent startup, before any
+    /// sandbox runs.
+    func setSandboxLogHandler(_ handler: @escaping @Sendable (String, String, String) -> Void) async
 }
 
 /// Sandbox actuation failures raised by the Agent's reconcile routing (the
@@ -59,12 +93,16 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
     /// to re-attach. The Agent catches this during adoption and re-creates the
     /// sandbox from its desired entry (mirroring the VM path).
     case adoptionTargetGone(String)
+    /// An exec input/resize referenced a session this runtime is not tracking
+    /// (never started, or already ended). The Agent answers with
+    /// `sandboxExecClosed` so the control plane tears its side down.
+    case execSessionNotFound(String)
 
     var failureClassification: FailureClassification {
         switch self {
         case .runtimeUnavailable, .unsupportedStep:
             return .permanent
-        case .sandboxNotFound, .adoptionTargetGone:
+        case .sandboxNotFound, .adoptionTargetGone, .execSessionNotFound:
             return .transient
         }
     }
@@ -79,6 +117,8 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
             return "step '\(step)' is not supported for sandbox workloads"
         case .adoptionTargetGone(let reason):
             return "sandbox adoption target gone: \(reason)"
+        case .execSessionNotFound(let sessionId):
+            return "exec session not found: \(sessionId)"
         }
     }
 }
