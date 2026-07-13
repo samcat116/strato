@@ -1,6 +1,12 @@
 import Foundation
 import Logging
 
+#if os(Linux)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
+
 /// Client for spawning and managing Firecracker processes
 /// Handles the full lifecycle including process creation, socket management, and cleanup
 public actor FirecrackerClient {
@@ -12,9 +18,24 @@ public actor FirecrackerClient {
 
     /// Information about a running VM
     private struct RunningVM {
-        let process: Process
+        /// The child process, when this client spawned it. `nil` for a VM
+        /// re-adopted after an agent restart, whose process this client never
+        /// spawned and can only reach by signalling `adoptedPID`.
+        let process: Process?
+        /// PID of a re-adopted Firecracker process, discovered from `/proc` at
+        /// adoption time. `nil` for spawned VMs (use `process` instead).
+        let adoptedPID: Int32?
         let socketPath: String
         let manager: FirecrackerManager
+    }
+
+    /// The deterministic API socket path for a VM, shared by spawn and
+    /// re-adoption so the two can never drift. Kept flat under
+    /// `socketDirectory` today; when sandboxes gain the jailer (#425) this is
+    /// the single place that derives the path, so a per-chroot layout can be
+    /// introduced without reworking re-attach (#433).
+    public static func socketPath(socketDirectory: String, vmId: String) -> String {
+        "\(socketDirectory)/\(vmId).sock"
     }
 
     /// Creates a new FirecrackerClient
@@ -53,7 +74,7 @@ public actor FirecrackerClient {
             attributes: nil
         )
 
-        let socketPath = "\(socketDirectory)/\(vmId).sock"
+        let socketPath = Self.socketPath(socketDirectory: socketDirectory, vmId: vmId)
 
         // Remove existing socket if present
         if FileManager.default.fileExists(atPath: socketPath) {
@@ -99,12 +120,64 @@ public actor FirecrackerClient {
         // Store VM info
         runningVMs[vmId] = RunningVM(
             process: process,
+            adoptedPID: nil,
             socketPath: socketPath,
             manager: manager
         )
 
         logger.info("VM created successfully", metadata: ["vm_id": "\(vmId)"])
         return manager
+    }
+
+    /// Re-attaches to a Firecracker process that outlived the owning agent, by
+    /// connecting to its existing API socket *without* spawning a new process
+    /// (orphan re-adoption after an agent restart, issue #433). Returns the
+    /// connected manager together with the microVM's current instance info.
+    ///
+    /// Throws `invalidSocketPath` when the deterministic socket is missing, and
+    /// `connectionFailed` when it exists but no live Firecracker is listening
+    /// (a stale socket left behind by a dead process). The caller leaves the VM
+    /// orphaned in both cases.
+    public func adoptVM(vmId: String) async throws -> (manager: FirecrackerManager, info: InstanceInfo) {
+        if let existing = runningVMs[vmId] {
+            // Already managed (a replayed sync can race adoption): just report
+            // the current instance info against the live manager.
+            let info = try await existing.manager.getInstanceInfo()
+            return (existing.manager, info)
+        }
+
+        let socketPath = Self.socketPath(socketDirectory: socketDirectory, vmId: vmId)
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            throw FirecrackerError.invalidSocketPath(socketPath)
+        }
+
+        // connect() opens the Unix socket and a real GET proves a live
+        // Firecracker is answering; a stale socket from a dead process refuses
+        // the connection and surfaces as connectionFailed.
+        let manager = FirecrackerManager(socketPath: socketPath, logger: logger)
+        try await manager.connect()
+        let info = try await manager.getInstanceInfo()
+
+        // Learn the surviving process's PID so it can still be terminated on
+        // delete despite this client never having spawned it.
+        let pid = Self.discoverPID(socketPath: socketPath)
+
+        runningVMs[vmId] = RunningVM(
+            process: nil,
+            adoptedPID: pid,
+            socketPath: socketPath,
+            manager: manager
+        )
+
+        logger.info(
+            "Re-adopted Firecracker VM via existing API socket",
+            metadata: [
+                "vm_id": "\(vmId)",
+                "socket": "\(socketPath)",
+                "state": "\(info.state.rawValue)",
+                "pid": "\(pid.map(String.init) ?? "unknown")",
+            ])
+        return (manager, info)
     }
 
     /// Gets the manager for an existing VM
@@ -126,10 +199,16 @@ public actor FirecrackerClient {
         // Disconnect manager
         await vm.manager.disconnect()
 
-        // Terminate process
-        if vm.process.isRunning {
-            vm.process.terminate()
-            vm.process.waitUntilExit()
+        // Terminate the Firecracker process. Spawned VMs have a child Process
+        // handle; re-adopted VMs (issue #433) do not, so signal the PID we
+        // discovered at adoption time — Firecracker exits on SIGTERM.
+        if let process = vm.process {
+            if process.isRunning {
+                process.terminate()
+                process.waitUntilExit()
+            }
+        } else if let pid = vm.adoptedPID {
+            Self.terminate(pid: pid)
         }
 
         // Remove socket
@@ -153,7 +232,56 @@ public actor FirecrackerClient {
         guard let vm = runningVMs[vmId] else {
             return false
         }
-        return vm.process.isRunning
+        if let process = vm.process {
+            return process.isRunning
+        }
+        if let pid = vm.adoptedPID {
+            return Self.processAlive(pid)
+        }
+        return false
+    }
+
+    // MARK: - Adopted-process helpers
+
+    /// Finds the PID of the Firecracker process bound to `socketPath` by
+    /// scanning `/proc` for the `--api-sock <socketPath>` argument pair the
+    /// process was spawned with. Linux-only (Firecracker's only platform);
+    /// returns `nil` when no match is found.
+    static func discoverPID(socketPath: String) -> Int32? {
+        #if os(Linux)
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: "/proc") else {
+            return nil
+        }
+        for entry in entries {
+            guard let pid = Int32(entry),
+                let data = FileManager.default.contents(atPath: "/proc/\(entry)/cmdline")
+            else { continue }
+            // /proc/<pid>/cmdline is NUL-separated argv.
+            let args = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
+            if let i = args.firstIndex(of: "--api-sock"), i + 1 < args.count, args[i + 1] == socketPath {
+                return pid
+            }
+        }
+        return nil
+        #else
+        return nil
+        #endif
+    }
+
+    /// Sends SIGTERM to a re-adopted Firecracker process.
+    static func terminate(pid: Int32) {
+        #if os(Linux) || canImport(Darwin)
+        _ = kill(pid, SIGTERM)
+        #endif
+    }
+
+    /// Liveness probe for a re-adopted process (`kill(pid, 0)`).
+    static func processAlive(_ pid: Int32) -> Bool {
+        #if os(Linux) || canImport(Darwin)
+        return kill(pid, 0) == 0
+        #else
+        return false
+        #endif
     }
 
     /// Waits for a Unix socket to become available
