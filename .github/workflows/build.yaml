@@ -358,6 +358,18 @@ jobs:
       - name: Verify Swift toolchain
         run: swift --version
 
+      # Gating guard against Package.resolved drift on macOS. The manifest is
+      # platform-agnostic (Linux-only products are gated with `.when(platforms:)`
+      # rather than `#if os(Linux)`), so resolving on macOS must produce the exact
+      # same pins as Linux. If this diff is non-empty, someone reintroduced host-
+      # conditional dependency declarations and macOS would drop pins (e.g.
+      # swift-ovn) from Package.resolved.
+      - name: Check Package.resolved does not drift on macOS
+        working-directory: agent
+        run: |
+          swift package resolve
+          git diff --exit-code Package.resolved
+
       - name: Build Agent
         working-directory: agent
         continue-on-error: true
