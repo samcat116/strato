@@ -53,12 +53,45 @@ struct OIDCTokenResponse: Content {
     }
 }
 
+/// The `aud` (audience) claim. Per RFC 7519 §4.1.3 it may be encoded as a
+/// single string or an array of strings, so we accept both. We decode it
+/// ourselves rather than using JWTKit's `AudienceClaim`, whose initializer
+/// `precondition`s on a non-empty array — a token with `aud: []` would *trap*
+/// the process during decode instead of throwing, crashing the login callback
+/// past its `do/catch`. Here an empty (or otherwise non-matching) audience is
+/// just a value the audience check rejects, so it fails the login cleanly.
+struct OIDCAudienceClaim: Codable, Sendable, ExpressibleByStringLiteral {
+    let values: [String]
+
+    init(values: [String]) { self.values = values }
+    init(stringLiteral value: String) { self.values = [value] }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let single = try? container.decode(String.self) {
+            self.values = [single]
+        } else {
+            self.values = try container.decode([String].self)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        if values.count == 1 {
+            try container.encode(values[0])
+        } else {
+            try container.encode(values)
+        }
+    }
+}
+
 struct OIDCIDTokenClaims: Content, JWTPayload {
     let iss: String  // Issuer
     let sub: String  // Subject
-    let aud: String  // Audience
+    let aud: OIDCAudienceClaim  // Audience — a single string or an array (RFC 7519 §4.1.3)
     let exp: ExpirationClaim  // Expiration time
     let iat: IssuedAtClaim  // Issued at
+    let azp: String?  // Authorized party (OIDC Core §3.1.3.7) — must be our client ID when present
     let nonce: String?
     let email: String?
     let emailVerified: Bool?
@@ -70,7 +103,7 @@ struct OIDCIDTokenClaims: Content, JWTPayload {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case iss, sub, aud, exp, iat, nonce, email, name
+        case iss, sub, aud, exp, iat, azp, nonce, email, name
         case emailVerified = "email_verified"
         case preferredUsername = "preferred_username"
     }

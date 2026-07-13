@@ -99,6 +99,7 @@ private struct TestIDTokenClaims: JWTPayload {
     var aud: String
     var exp: ExpirationClaim
     var iat: IssuedAtClaim
+    var azp: String?
     var nonce: String?
     var email: String?
     var emailVerified: Bool?
@@ -107,7 +108,7 @@ private struct TestIDTokenClaims: JWTPayload {
     func verify(using algorithm: some JWTAlgorithm) async throws {}
 
     private enum CodingKeys: String, CodingKey {
-        case iss, sub, aud, exp, iat, nonce, email, name
+        case iss, sub, aud, exp, iat, azp, nonce, email, name
         case emailVerified = "email_verified"
     }
 }
@@ -116,6 +117,7 @@ private func signIDToken(
     iss: String = "https://idp.example.com",
     sub: String = "sub-123",
     aud: String = "client-abc",
+    azp: String? = nil,
     expiresIn: TimeInterval = 300,
     nonce: String?,
     email: String? = "sso-user@example.com",
@@ -129,9 +131,62 @@ private func signIDToken(
         aud: aud,
         exp: ExpirationClaim(value: Date().addingTimeInterval(expiresIn)),
         iat: IssuedAtClaim(value: Date()),
+        azp: azp,
         nonce: nonce,
         email: email,
         emailVerified: emailVerified,
+        name: "SSO User"
+    )
+    let keys = JWTKeyCollection()
+    let key = try Insecure.RSA.PrivateKey(pem: privateKeyPEM)
+    await keys.add(rsa: key, digestAlgorithm: .sha256, kid: JWKIdentifier(string: kid))
+    return try await keys.sign(claims, kid: JWKIdentifier(string: kid))
+}
+
+/// Same as `TestIDTokenClaims` but with a multi-valued `aud`, mirroring
+/// providers (e.g. Discord) that encode the audience as a JSON array. A plain
+/// `[String]` always encodes as an array, even for a single element.
+private struct TestIDTokenArrayAudClaims: JWTPayload {
+    var iss: String
+    var sub: String
+    var aud: [String]
+    var exp: ExpirationClaim
+    var iat: IssuedAtClaim
+    var azp: String?
+    var nonce: String?
+    var email: String?
+    var emailVerified: Bool?
+    var name: String?
+
+    func verify(using algorithm: some JWTAlgorithm) async throws {}
+
+    private enum CodingKeys: String, CodingKey {
+        case iss, sub, aud, exp, iat, azp, nonce, email, name
+        case emailVerified = "email_verified"
+    }
+}
+
+private func signIDTokenArrayAud(
+    aud: [String],
+    azp: String? = nil,
+    iss: String = "https://idp.example.com",
+    sub: String = "sub-123",
+    expiresIn: TimeInterval = 300,
+    nonce: String?,
+    email: String? = "sso-user@example.com",
+    kid: String = TestRSAKeys.keyID,
+    privateKeyPEM: String = TestRSAKeys.privateKeyPEM
+) async throws -> String {
+    let claims = TestIDTokenArrayAudClaims(
+        iss: iss,
+        sub: sub,
+        aud: aud,
+        exp: ExpirationClaim(value: Date().addingTimeInterval(expiresIn)),
+        iat: IssuedAtClaim(value: Date()),
+        azp: azp,
+        nonce: nonce,
+        email: email,
+        emailVerified: true,
         name: "SSO User"
     )
     let keys = JWTKeyCollection()
@@ -579,6 +634,138 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
+        }
+    }
+
+    @Test("An ID token whose aud is a single-element JSON array is accepted")
+    func testAudienceArrayAccepted() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            // Discord (and others) encode `aud` as an array even for a single
+            // audience. RFC 7519 §4.1.3 permits this, and our client ID is the
+            // sole value, so the login must succeed rather than fail to decode.
+            let idToken = try await signIDTokenArrayAud(aud: ["client-abc"], nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                #expect(res.status == .seeOther)
+                #expect(res.headers.first(name: .location) == "/")
+            }
+
+            let count = try await userCount(on: app.db)
+            #expect(count == 1)
+        }
+    }
+
+    @Test("An ID token that also lists an untrusted co-audience is rejected")
+    func testExtraAudienceRejected() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            // Our client ID is present, but so is another audience we don't
+            // trust. OIDC Core §3.1.3.7 requires rejecting untrusted extra
+            // audiences, and we keep no allow-list, so this must fail.
+            let idToken = try await signIDTokenArrayAud(
+                aud: ["client-abc", "another-client"], nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                self.expectLoginFailedRedirect(res)
+            }
+            let count = try await userCount(on: app.db)
+            #expect(count == 0)
+        }
+    }
+
+    @Test("An ID token whose azp is not our client ID is rejected")
+    func testAuthorizedPartyMismatchRejected() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            // aud is valid (our client ID) but azp names a different party.
+            // OIDC Core §3.1.3.7 step 5 requires azp, when present, to be us.
+            let idToken = try await signIDToken(
+                aud: "client-abc", azp: "another-client", nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                self.expectLoginFailedRedirect(res)
+            }
+            let count = try await userCount(on: app.db)
+            #expect(count == 0)
+        }
+    }
+
+    @Test("An ID token whose azp is our client ID is accepted")
+    func testAuthorizedPartyMatchAccepted() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            let idToken = try await signIDToken(
+                aud: "client-abc", azp: "client-abc", nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                #expect(res.status == .seeOther)
+                #expect(res.headers.first(name: .location) == "/")
+            }
+
+            let count = try await userCount(on: app.db)
+            #expect(count == 1)
+        }
+    }
+
+    @Test("An ID token whose array aud omits our client ID is rejected")
+    func testAudienceArrayMismatchRejected() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            let idToken = try await signIDTokenArrayAud(
+                aud: ["someone-else", "another-one"], nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                self.expectLoginFailedRedirect(res)
+            }
+            let count = try await userCount(on: app.db)
+            #expect(count == 0)
+        }
+    }
+
+    @Test("An ID token with an empty aud array is rejected, not crashed on")
+    func testEmptyAudienceRejected() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            // `aud: []` must fail the login cleanly. It must NOT trap the
+            // process during claim decode (JWTKit's AudienceClaim would).
+            let idToken = try await signIDTokenArrayAud(aud: [], nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                self.expectLoginFailedRedirect(res)
+            }
+            let count = try await userCount(on: app.db)
+            #expect(count == 0)
         }
     }
 

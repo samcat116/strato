@@ -1017,10 +1017,37 @@ struct OIDCController: RouteCollection {
             )
         }
 
-        // Validate audience (aud) - should match our client ID
-        guard claims.aud == provider.clientID else {
+        // Validate audience (aud). OIDC Core §3.1.3.7: the token MUST list our
+        // client ID as an audience, and MUST be rejected if it carries any
+        // audience the client does not trust. `aud` may be a single string or
+        // an array (RFC 7519 §4.1.3; Discord uses a single-element array). We
+        // keep no allow-list of additional trusted audiences, so our client ID
+        // must be the only audience — a multi-audience token is rejected rather
+        // than honored on the basis of an untrusted co-audience. (To support
+        // multi-audience tokens later, add a trusted-audiences list to the
+        // provider and permit those values here.)
+        let audiences = claims.aud.values
+        guard audiences.contains(provider.clientID) else {
+            let list = audiences.joined(separator: ", ")
             throw Abort(
-                .badRequest, reason: "ID token audience '\(claims.aud)' does not match client ID '\(provider.clientID)'"
+                .badRequest,
+                reason: "ID token audience '\(list)' does not include client ID '\(provider.clientID)'"
+            )
+        }
+        let untrusted = audiences.filter { $0 != provider.clientID }
+        guard untrusted.isEmpty else {
+            throw Abort(
+                .badRequest,
+                reason: "ID token lists untrusted audiences: \(untrusted.joined(separator: ", "))"
+            )
+        }
+
+        // OIDC Core §3.1.3.7 step 5: if an azp (authorized party) claim is
+        // present, it MUST be our client ID.
+        if let azp = claims.azp, azp != provider.clientID {
+            throw Abort(
+                .badRequest,
+                reason: "ID token azp '\(azp)' does not match client ID '\(provider.clientID)'"
             )
         }
 
