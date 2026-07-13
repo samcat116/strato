@@ -447,11 +447,18 @@ actor Agent {
         messageConsumerTask?.cancel()
         messageConsumerTask = nil
 
-        // Unregister from control plane
-        do {
-            try await unregisterFromControlPlane()
-        } catch {
-            logger.error("Failed to unregister from control plane: \(error)")
+        // Unregister from control plane — but not when restarting into an
+        // updated binary: the agent re-registers seconds later, and the
+        // unregister both marks it offline and fails the control plane's
+        // in-flight requests for it, which races the just-sent update success
+        // reply (frames are handled in independent tasks over there) into a
+        // spurious connectionLost/502.
+        if !updateRestartPending {
+            do {
+                try await unregisterFromControlPlane()
+            } catch {
+                logger.error("Failed to unregister from control plane: \(error)")
+            }
         }
 
         if let client = websocketClient {
@@ -1614,7 +1621,15 @@ extension Agent {
         logger.notice(
             "Agent update applied; shutting down for supervisor restart",
             metadata: ["binaryPath": .string(outcome.binaryPath)])
-        Task { await self.stop() }
+        Task {
+            // Grace period before dropping the socket: the control plane
+            // handles frames in independent tasks, so an immediate close can
+            // still fail the awaiting update request as connectionLost before
+            // the success reply's task resumes it. stop() also skips the
+            // unregister message on this path for the same reason.
+            try? await Task.sleep(for: .seconds(1))
+            await self.stop()
+        }
     }
 
     private func handleVMPause(_ message: VMOperationMessage) async {
