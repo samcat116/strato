@@ -17,6 +17,7 @@ import { GroupsSection } from "@/components/organization-groups";
 import { OrganizationalUnitsSection } from "@/components/organizational-units";
 import { SCIMTokensSection } from "@/components/scim-tokens";
 import { OIDCProvidersSection } from "@/components/oidc-providers";
+import { SSFStreamsSection } from "@/components/ssf-streams";
 import { useAuth, useOrganization } from "@/providers";
 import { toast } from "sonner";
 
@@ -280,6 +281,8 @@ export default function OrganizationSettingsPage() {
           <OIDCProvidersSection orgId={id} canManage={canManageMembers} />
 
           <SCIMTokensSection orgId={id} canManage={canManageMembers} />
+
+          <SSFStreamsSection orgId={id} canManage={canManageMembers} />
         </TabsContent>
       </Tabs>
 
