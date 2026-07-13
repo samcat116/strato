@@ -30,6 +30,7 @@ struct OIDCValidationTests {
             authorizationEndpoint: "https://idp.example.com/authorize",
             tokenEndpoint: tokenEndpoint,
             userinfoEndpoint: nil,
+            endSessionEndpoint: nil,
             jwksURI: "https://idp.example.com/.well-known/jwks.json",
             responseTypesSupported: ["code"],
             subjectTypesSupported: ["public"],
@@ -294,12 +295,83 @@ struct OIDCValidationTests {
         #expect(r.verified)
     }
 
+    @Test("ID-token email_verified does not vouch for a UserInfo-only email")
+    func testIDTokenFlagDoesNotVerifyUserInfoOnlyEmail() {
+        // An ID token asserting email_verified without an email claim refers
+        // to no address; applying it to an email adopted from UserInfo would
+        // mark an unverified address as verified and let it link to an
+        // existing account.
+        let r = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: nil, idTokenEmailVerified: true,
+            userInfoEmail: "u@example.com", userInfoEmailVerified: nil)
+        #expect(r.email == "u@example.com")
+        #expect(!r.verified)
+
+        // UserInfo's own flag for its own address is still honored.
+        let verified = OIDCValidation.resolveEmailVerification(
+            idTokenEmail: nil, idTokenEmailVerified: true,
+            userInfoEmail: "u@example.com", userInfoEmailVerified: true)
+        #expect(verified.verified)
+    }
+
     @Test("No verification anywhere fails closed")
     func testEmailVerifiedNoneFailsClosed() {
         let r = OIDCValidation.resolveEmailVerification(
             idTokenEmail: "u@example.com", idTokenEmailVerified: nil,
             userInfoEmail: nil, userInfoEmailVerified: nil)
         #expect(!r.verified)
+    }
+
+    // MARK: - PKCE
+
+    @Test("codeChallengeS256 matches the RFC 7636 appendix B vector")
+    func testCodeChallengeKnownVector() {
+        let challenge = OIDCValidation.codeChallengeS256(
+            for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+        #expect(challenge == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
+    }
+
+    @Test("generateCodeVerifier produces RFC 7636-compliant, unique verifiers")
+    func testGenerateCodeVerifier() {
+        let allowed = CharacterSet(
+            charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        var seen = Set<String>()
+        for _ in 0..<32 {
+            let verifier = OIDCValidation.generateCodeVerifier()
+            // 32 random bytes base64url-encode to exactly 43 characters, the
+            // RFC 7636 minimum length.
+            #expect(verifier.count == 43)
+            #expect(verifier.unicodeScalars.allSatisfy { allowed.contains($0) })
+            seen.insert(verifier)
+        }
+        #expect(seen.count == 32)
+    }
+
+    // MARK: - Base URL resolution
+
+    @Test("resolveBaseURL returns the configured value when set")
+    func testResolveBaseURLConfigured() throws {
+        let url = try OIDCValidation.resolveBaseURL(
+            configured: "https://cloud.example.com", environment: .production)
+        #expect(url == "https://cloud.example.com")
+    }
+
+    @Test("resolveBaseURL throws in production when BASE_URL is unset or blank")
+    func testResolveBaseURLProductionUnset() {
+        // A silently-defaulted localhost base URL produces redirect URIs the
+        // IdP rejects; production must fail loudly instead.
+        #expect(throws: Error.self) {
+            try OIDCValidation.resolveBaseURL(configured: nil, environment: .production)
+        }
+        #expect(throws: Error.self) {
+            try OIDCValidation.resolveBaseURL(configured: "  ", environment: .production)
+        }
+    }
+
+    @Test("resolveBaseURL falls back to localhost outside production")
+    func testResolveBaseURLDevelopmentFallback() throws {
+        let url = try OIDCValidation.resolveBaseURL(configured: nil, environment: .development)
+        #expect(url == "http://localhost:8080")
     }
 
     // MARK: - resolveProfile

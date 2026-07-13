@@ -642,6 +642,10 @@ jobs:
                 WEBAUTHN_RELYING_PARTY_ID: localhost
                 WEBAUTHN_RELYING_PARTY_NAME: Strato
                 WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost
+                # Public browser origin used to build OIDC redirect URIs. The
+                # control plane runs --env production here, where OIDC login
+                # fails loudly if this is unset — keep it the browser origin.
+                BASE_URL: http://localhost
               depends_on:
                 db:
                   condition: service_healthy

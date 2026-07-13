@@ -126,6 +126,10 @@ EXTERNAL_HOSTNAME=${EXTERNAL_HOSTNAME}
 # control plane through the published proxy, so it must be the browser origin
 # (not the in-container :8080).
 CONTROL_PLANE_URL=${ORIGIN}
+# Public origin used to build OIDC redirect URIs (SSO login callback and
+# post-logout redirect). Must be the exact browser origin; OIDC login fails
+# loudly in production when this is unset.
+BASE_URL=${ORIGIN}
 WEBAUTHN_RELYING_PARTY_ID=${HOSTNAME_ARG}
 WEBAUTHN_RELYING_PARTY_NAME=Strato
 WEBAUTHN_RELYING_PARTY_ORIGIN=${ORIGIN}

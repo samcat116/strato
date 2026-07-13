@@ -616,13 +616,46 @@ struct UserController: RouteCollection {
 
     // MARK: - Session Management
 
-    func logout(req: Request) async throws -> HTTPStatus {
+    func logout(req: Request) async throws -> LogoutResponse {
         let user = req.auth.get(User.self)
+
+        // RP-initiated logout (OIDC): when this session was established via an
+        // OIDC provider that advertises an end_session_endpoint, hand the
+        // frontend the IdP's logout URL so it can end the IdP session too —
+        // otherwise the next SSO login silently signs straight back in.
+        // Computed before the session is destroyed, which drops the stored
+        // provider reference and ID token.
+        // Best-effort: a failed provider lookup (transient DB error) must not
+        // abort logout — leaving the session and its stored ID token alive
+        // would be worse than skipping the IdP redirect.
+        var sloUrl: String?
+        if let providerIDString = req.session.data["oidc_login_provider_id"],
+            let providerID = UUID(uuidString: providerIDString),
+            let provider = try? await OIDCProvider.find(providerID, on: req.db)
+        {
+            // post_logout_redirect_uri only works if registered at the IdP;
+            // in production an unset BASE_URL means OIDC login never worked,
+            // so the failed resolution (nil) can only occur for stale sessions.
+            let postLogoutRedirectURI =
+                (try? OIDCValidation.resolveBaseURL(
+                    configured: Environment.get("BASE_URL"),
+                    environment: req.application.environment
+                )).map { "\($0)/login" }
+            sloUrl = provider.getEndSessionURL(
+                idTokenHint: req.session.data["oidc_login_id_token"],
+                postLogoutRedirectURI: postLogoutRedirectURI
+            )
+        }
+
         req.auth.logout(User.self)
+        // Destroy the whole session, not just the auth entry: it still holds
+        // the OIDC ID token and provider reference, which must not outlive
+        // the login they belong to.
+        req.session.destroy()
         if let user {
             await req.recordAuthEvent(.logout, user: user)
         }
-        return .noContent
+        return LogoutResponse(sloUrl: sloUrl)
     }
 
     func getSession(req: Request) async throws -> SessionResponse {
@@ -635,6 +668,13 @@ struct UserController: RouteCollection {
 }
 
 // MARK: - DTOs
+
+/// Logout result. `sloUrl` is the IdP's RP-initiated logout URL when the
+/// session was OIDC-established and the provider supports it; the frontend
+/// should navigate there to end the IdP session as well.
+struct LogoutResponse: Content {
+    let sloUrl: String?
+}
 
 struct CreateUserRequest: Content {
     let username: String

@@ -18,7 +18,8 @@ final class OIDCControllerTests: BaseTestCase {
         discoveryURL: String? = nil,
         authorizationEndpoint: String? = "https://idp.example.com/authorize",
         tokenEndpoint: String? = "https://idp.example.com/token",
-        jwksURI: String? = "https://idp.example.com/.well-known/jwks.json"
+        jwksURI: String? = "https://idp.example.com/.well-known/jwks.json",
+        endSessionEndpoint: String? = nil
     ) async throws -> OIDCProvider {
         let provider = OIDCProvider(
             organizationID: organizationID,
@@ -29,6 +30,7 @@ final class OIDCControllerTests: BaseTestCase {
             authorizationEndpoint: authorizationEndpoint,
             tokenEndpoint: tokenEndpoint,
             jwksURI: jwksURI,
+            endSessionEndpoint: endSessionEndpoint,
             enabled: enabled
         )
         try await provider.save(on: db)
@@ -823,6 +825,240 @@ final class OIDCControllerTests: BaseTestCase {
 
             try await app.test(.GET, "/api/public/sso/lookup") { res async throws in
                 #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    // MARK: - PKCE
+
+    @Test("Authorize redirect carries S256 PKCE parameters")
+    func testAuthorizeRedirectIncludesPKCE() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+
+            try await app.test(
+                .GET, "/auth/oidc/\(testOrganization.id!)/\(provider.id!)/authorize"
+            ) { res async throws in
+                #expect(res.status == .seeOther)
+                let location = try #require(res.headers.first(name: .location))
+                let components = try #require(URLComponents(string: location))
+                let query = Dictionary(
+                    uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+
+                #expect(query["code_challenge_method"] == "S256")
+                // The challenge is base64url(SHA256): 43 chars, no padding.
+                let challenge = try #require(query["code_challenge"])
+                #expect(challenge.count == 43)
+                #expect(query["response_type"] == "code")
+                #expect(query["state"]?.isEmpty == false)
+                #expect(query["nonce"]?.isEmpty == false)
+            }
+        }
+    }
+
+    // MARK: - RP-initiated logout
+
+    @Test("End-session URL includes client_id, id_token_hint, and post-logout redirect")
+    func testEndSessionURL() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Okta",
+                endSessionEndpoint: "https://idp.example.com/logout")
+
+            let url = try #require(
+                provider.getEndSessionURL(
+                    idTokenHint: "id-token-abc",
+                    postLogoutRedirectURI: "https://cloud.example.com/login"))
+            let components = try #require(URLComponents(string: url))
+            #expect(components.host == "idp.example.com")
+            #expect(components.path == "/logout")
+            let query = Dictionary(
+                uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            #expect(query["client_id"] == "client-Okta")
+            #expect(query["id_token_hint"] == "id-token-abc")
+            #expect(query["post_logout_redirect_uri"] == "https://cloud.example.com/login")
+
+            // No end-session endpoint → no SLO URL.
+            let plain = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Plain")
+            #expect(plain.getEndSessionURL(idTokenHint: nil, postLogoutRedirectURI: nil) == nil)
+        }
+    }
+
+    @Test("Endpoint URLs keep their own query parameters (e.g. B2C policy selectors)")
+    func testEndpointQueryParametersPreserved() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "B2C",
+                authorizationEndpoint: "https://idp.example.com/authorize?p=b2c_1_signin",
+                endSessionEndpoint: "https://idp.example.com/logout?p=b2c_1_signin")
+
+            let authURL = try #require(
+                provider.getAuthorizationURL(
+                    redirectURI: "https://cloud.example.com/cb", state: "s", nonce: "n"))
+            let authQuery = Dictionary(
+                uniqueKeysWithValues: (URLComponents(string: authURL)?.queryItems ?? [])
+                    .map { ($0.name, $0.value ?? "") })
+            #expect(authQuery["p"] == "b2c_1_signin")
+            #expect(authQuery["client_id"] == "client-B2C")
+
+            let sloURL = try #require(
+                provider.getEndSessionURL(idTokenHint: "t", postLogoutRedirectURI: nil))
+            let sloQuery = Dictionary(
+                uniqueKeysWithValues: (URLComponents(string: sloURL)?.queryItems ?? [])
+                    .map { ($0.name, $0.value ?? "") })
+            #expect(sloQuery["p"] == "b2c_1_signin")
+            #expect(sloQuery["id_token_hint"] == "t")
+        }
+    }
+
+    @Test("Provider CRUD stores, updates, and validates the end-session endpoint")
+    func testEndSessionEndpointCRUD() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+
+            // Non-HTTPS end-session endpoint is rejected on create.
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    CreateOIDCProviderRequest(
+                        name: "Bad",
+                        clientID: "client-123",
+                        clientSecret: "secret-456",
+                        authorizationEndpoint: "https://idp.example.com/authorize",
+                        tokenEndpoint: "https://idp.example.com/token",
+                        jwksURI: "https://idp.example.com/.well-known/jwks.json",
+                        endSessionEndpoint: "http://idp.example.com/logout"
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // Valid endpoint round-trips through create and the response.
+            var providerID: UUID?
+            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    CreateOIDCProviderRequest(
+                        name: "Okta",
+                        clientID: "client-123",
+                        clientSecret: "secret-456",
+                        authorizationEndpoint: "https://idp.example.com/authorize",
+                        tokenEndpoint: "https://idp.example.com/token",
+                        jwksURI: "https://idp.example.com/.well-known/jwks.json",
+                        endSessionEndpoint: "https://idp.example.com/logout"
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let created = try res.content.decode(OIDCProviderResponse.self)
+                #expect(created.endSessionEndpoint == "https://idp.example.com/logout")
+                providerID = created.id
+            }
+
+            // An empty string clears it (same contract as the other URL fields).
+            try await app.test(
+                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(providerID!)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(UpdateOIDCProviderRequest(endSessionEndpoint: ""))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let updated = try res.content.decode(OIDCProviderResponse.self)
+                #expect(updated.endSessionEndpoint == nil)
+            }
+        }
+    }
+
+    @Test("Discovery refresh preserves manual optional endpoints, rotation clears them")
+    func testDiscoveryOptionalEndpointSemantics() async throws {
+        func doc(issuer: String, userinfo: String? = nil, endSession: String? = nil) -> OIDCDiscoveryDocument {
+            OIDCDiscoveryDocument(
+                issuer: issuer,
+                authorizationEndpoint: "\(issuer)/authorize",
+                tokenEndpoint: "\(issuer)/token",
+                userinfoEndpoint: userinfo,
+                endSessionEndpoint: endSession,
+                jwksURI: "\(issuer)/jwks",
+                responseTypesSupported: ["code"],
+                subjectTypesSupported: ["public"],
+                idTokenSigningAlgValuesSupported: ["RS256"]
+            )
+        }
+        let controller = OIDCController()
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Okta",
+                endSessionEndpoint: "https://manual.example.com/logout")
+
+            // Same-URL, same-issuer refresh with metadata omitting the
+            // optional endpoints: the manual logout URL must survive.
+            controller.applyDiscoveredConfiguration(
+                doc(issuer: "https://idp.example.com"), to: provider, discoveryChanged: false)
+            #expect(provider.endSessionEndpoint == "https://manual.example.com/logout")
+
+            // Rotating the discovery document to a different issuer clears
+            // the previous IdP's optional endpoints — a stale logout URL
+            // would redirect users to the old provider.
+            controller.applyDiscoveredConfiguration(
+                doc(issuer: "https://other.example.com"), to: provider, discoveryChanged: false)
+            #expect(provider.endSessionEndpoint == nil)
+            #expect(provider.issuer == "https://other.example.com")
+
+            // And when the new metadata supplies them, they're adopted.
+            controller.applyDiscoveredConfiguration(
+                doc(
+                    issuer: "https://third.example.com",
+                    userinfo: "https://third.example.com/userinfo",
+                    endSession: "https://third.example.com/logout"),
+                to: provider, discoveryChanged: false)
+            #expect(provider.userinfoEndpoint == "https://third.example.com/userinfo")
+            #expect(provider.endSessionEndpoint == "https://third.example.com/logout")
+
+            // A manual→discovery switch has no stored issuer to compare, so
+            // a newly added/changed discovery URL alone must clear manual
+            // optional endpoints the document omits.
+            let manual = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Manual",
+                endSessionEndpoint: "https://manual.example.com/logout")
+            controller.applyDiscoveredConfiguration(
+                doc(issuer: "https://new-idp.example.com"), to: manual, discoveryChanged: true)
+            #expect(manual.endSessionEndpoint == nil)
+            #expect(manual.userinfoEndpoint == nil)
+
+            // But a value the same request explicitly set to something new
+            // (an admin supplying a fallback for metadata they know is
+            // incomplete) survives even a discovery change.
+            manual.endSessionEndpoint = "https://new-idp.example.com/custom-logout"
+            controller.applyDiscoveredConfiguration(
+                doc(issuer: "https://newer-idp.example.com"), to: manual,
+                discoveryChanged: true, explicitEndSessionEndpoint: true)
+            #expect(manual.endSessionEndpoint == "https://new-idp.example.com/custom-logout")
+
+            // Metadata that supplies the endpoint still wins over the
+            // explicit flag — the document is authoritative for its issuer.
+            controller.applyDiscoveredConfiguration(
+                doc(issuer: "https://final.example.com", endSession: "https://final.example.com/logout"),
+                to: manual, discoveryChanged: true, explicitEndSessionEndpoint: true)
+            #expect(manual.endSessionEndpoint == "https://final.example.com/logout")
+        }
+    }
+
+    @Test("Logout without an OIDC session returns no SLO URL")
+    func testLogoutWithoutOIDCSession() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+
+            try await app.test(.POST, "/auth/logout") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res async throws in
+                #expect(res.status == .ok)
+                let body = try res.content.decode(LogoutResponse.self)
+                #expect(body.sloUrl == nil)
             }
         }
     }

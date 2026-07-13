@@ -88,6 +88,7 @@ struct OIDCController: RouteCollection {
             tokenEndpoint: createRequest.tokenEndpoint,
             userinfoEndpoint: createRequest.userinfoEndpoint,
             jwksURI: createRequest.jwksURI,
+            endSessionEndpoint: createRequest.endSessionEndpoint,
             scopes: createRequest.scopes ?? ["openid", "profile", "email"],
             enabled: createRequest.enabled ?? true,
             groupsClaim: normalizedGroupsClaim(createRequest.groupsClaim),
@@ -98,9 +99,16 @@ struct OIDCController: RouteCollection {
 
         try await provider.save(on: req.db)
 
-        // If discovery URL is provided, attempt to fetch configuration
+        // If discovery URL is provided, attempt to fetch configuration.
+        // discoveryChanged is false here: omission-clearing exists to purge
+        // endpoints left over from a *previous* IdP configuration, and at
+        // create time every stored value came from this very request — an
+        // explicitly supplied optional endpoint (e.g. a manual logout URL for
+        // an IdP whose metadata omits end_session_endpoint) must survive the
+        // initial discovery fetch.
         if let discoveryURL = createRequest.discoveryURL, !discoveryURL.isEmpty {
-            try await fetchAndUpdateProviderConfiguration(provider: provider, discoveryURL: discoveryURL, on: req)
+            try await fetchAndUpdateProviderConfiguration(
+                provider: provider, discoveryURL: discoveryURL, discoveryChanged: false, on: req)
         }
 
         return OIDCProviderResponse(from: provider)
@@ -163,11 +171,18 @@ struct OIDCController: RouteCollection {
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             provider[keyPath: keyPath] = trimmed.isEmpty ? nil : trimmed
         }
+        // Captured before the update lands so the refresh below can tell a
+        // same-value resubmit (the edit form always sends every URL field)
+        // from a real change.
+        let previousDiscoveryURL = provider.discoveryURL
+        let previousUserinfoEndpoint = provider.userinfoEndpoint
+        let previousEndSessionEndpoint = provider.endSessionEndpoint
         applyOptionalURL(updateRequest.discoveryURL, to: \.discoveryURL)
         applyOptionalURL(updateRequest.authorizationEndpoint, to: \.authorizationEndpoint)
         applyOptionalURL(updateRequest.tokenEndpoint, to: \.tokenEndpoint)
         applyOptionalURL(updateRequest.userinfoEndpoint, to: \.userinfoEndpoint)
         applyOptionalURL(updateRequest.jwksURI, to: \.jwksURI)
+        applyOptionalURL(updateRequest.endSessionEndpoint, to: \.endSessionEndpoint)
 
         // Clear the stored issuer only when discovery is being *removed* (switching
         // to manual endpoints, possibly a different issuer) — a lingering discovered
@@ -222,7 +237,18 @@ struct OIDCController: RouteCollection {
         // issuer saves fine but logins keep using the previous issuer's
         // endpoints. Fetch failures are logged, not fatal, same as on create.
         if let discoveryURL = provider.discoveryURL, updateRequest.discoveryURL != nil, !discoveryURL.isEmpty {
-            try await fetchAndUpdateProviderConfiguration(provider: provider, discoveryURL: discoveryURL, on: req)
+            // A field this request set to a NEW non-empty value is an explicit
+            // manual fallback and survives metadata omission; an unchanged
+            // resubmitted form value is not explicit, so a discovery change
+            // still purges it (it may belong to the previous IdP).
+            try await fetchAndUpdateProviderConfiguration(
+                provider: provider, discoveryURL: discoveryURL,
+                discoveryChanged: discoveryURL != previousDiscoveryURL,
+                explicitUserinfoEndpoint: provider.userinfoEndpoint != nil
+                    && provider.userinfoEndpoint != previousUserinfoEndpoint,
+                explicitEndSessionEndpoint: provider.endSessionEndpoint != nil
+                    && provider.endSessionEndpoint != previousEndSessionEndpoint,
+                on: req)
         }
 
         return OIDCProviderResponse(from: provider)
@@ -292,11 +318,7 @@ struct OIDCController: RouteCollection {
                 // redirect from the STORED fields, so a passing test must
                 // leave them usable. This also heals providers whose create-
                 // time discovery fetch failed non-fatally and stored nothing.
-                provider.issuer = discovery.issuer
-                provider.authorizationEndpoint = discovery.authorizationEndpoint
-                provider.tokenEndpoint = discovery.tokenEndpoint
-                provider.userinfoEndpoint = discovery.userinfoEndpoint
-                provider.jwksURI = discovery.jwksURI
+                applyDiscoveredConfiguration(discovery, to: provider, discoveryChanged: false)
                 try await provider.save(on: req.db)
                 return OIDCProviderTestResponse(valid: true, message: "Provider configuration is valid")
             } catch let abort as AbortError {
@@ -409,26 +431,34 @@ struct OIDCController: RouteCollection {
             throw Abort(.notFound, reason: "OIDC provider not found or disabled")
         }
 
-        // Generate state and nonce for security
+        // Generate state and nonce for security, and a PKCE verifier (RFC
+        // 7636) binding the authorization code to this session. S256 is sent
+        // unconditionally: authorization servers ignore unknown parameters,
+        // so providers without PKCE support are unaffected, and those with it
+        // get code-interception protection.
         let state = UUID().uuidString
         let nonce = UUID().uuidString
+        let codeVerifier = OIDCValidation.generateCodeVerifier()
 
-        // Store state and nonce in session for verification
+        // Store state, nonce, and PKCE verifier in session for the callback
         req.session.data["oidc_state"] = state
         req.session.data["oidc_nonce"] = nonce
+        req.session.data["oidc_code_verifier"] = codeVerifier
         req.session.data["oidc_provider_id"] = providerID.uuidString
         req.session.data["oidc_organization_id"] = organizationID.uuidString
 
         // Build redirect URI
-        let baseURL = Environment.get("BASE_URL") ?? "http://localhost:8080"
-        let redirectURI = "\(baseURL)/auth/oidc/\(organizationID)/\(providerID)/callback"
+        let redirectURI = try oidcRedirectURI(
+            organizationID: organizationID, providerID: providerID, on: req)
 
         // Generate authorization URL
         guard
             let authURL = provider.getAuthorizationURL(
                 redirectURI: redirectURI,
                 state: state,
-                nonce: nonce
+                nonce: nonce,
+                codeChallenge: OIDCValidation.codeChallengeS256(for: codeVerifier),
+                codeChallengeMethod: "S256"
             )
         else {
             throw Abort(.internalServerError, reason: "Failed to generate authorization URL")
@@ -476,10 +506,14 @@ struct OIDCController: RouteCollection {
         }
 
         do {
-            // Exchange authorization code for tokens
+            // Exchange authorization code for tokens. The PKCE verifier is
+            // optional only to tolerate flows initiated before a deploy that
+            // introduced PKCE: such flows sent no code_challenge, so sending
+            // no code_verifier is the matching (and only valid) behavior.
             let tokenResponse = try await exchangeCodeForTokens(
                 provider: provider,
                 code: code,
+                codeVerifier: req.session.data["oidc_code_verifier"],
                 organizationID: organizationID,
                 providerID: providerID,
                 on: req
@@ -507,6 +541,7 @@ struct OIDCController: RouteCollection {
             // Clean up session data
             req.session.data["oidc_state"] = nil
             req.session.data["oidc_nonce"] = nil
+            req.session.data["oidc_code_verifier"] = nil
             req.session.data["oidc_provider_id"] = nil
             req.session.data["oidc_organization_id"] = nil
 
@@ -536,6 +571,14 @@ struct OIDCController: RouteCollection {
             // Authenticate user
             req.auth.login(user)
             req.stampSessionEpoch(for: user)
+
+            // Retain what RP-initiated logout needs: the provider that issued
+            // this session and the raw ID token (sent as id_token_hint so the
+            // IdP can end its session without prompting). Distinct keys from
+            // the flow-scoped oidc_* values cleared above — these live for
+            // the whole login session.
+            req.session.data["oidc_login_provider_id"] = providerID.uuidString
+            req.session.data["oidc_login_id_token"] = tokenResponse.idToken
             await req.recordAuthEvent(.oidcLogin, user: user, organizationID: organizationID)
 
             // Redirect to dashboard
@@ -549,6 +592,7 @@ struct OIDCController: RouteCollection {
             // Clean up session data on error
             req.session.data["oidc_state"] = nil
             req.session.data["oidc_nonce"] = nil
+            req.session.data["oidc_code_verifier"] = nil
             req.session.data["oidc_provider_id"] = nil
             req.session.data["oidc_organization_id"] = nil
 
@@ -640,7 +684,51 @@ struct OIDCController: RouteCollection {
         }
     }
 
-    private func fetchAndUpdateProviderConfiguration(provider: OIDCProvider, discoveryURL: String, on req: Request)
+    /// Copies a validated discovery document onto the provider. The required
+    /// metadata fields always overwrite; the OPTIONAL ones (userinfo and
+    /// end-session endpoints) follow the rules in the body: preserved across a
+    /// same-config refresh, cleared when the provider is repointed at a
+    /// different IdP. `discoveryChanged` is the caller's knowledge of whether
+    /// the discovery URL itself was newly added or changed.
+    func applyDiscoveredConfiguration(
+        _ discovery: OIDCDiscoveryDocument, to provider: OIDCProvider, discoveryChanged: Bool,
+        explicitUserinfoEndpoint: Bool = false, explicitEndSessionEndpoint: Bool = false
+    ) {
+        // Optional endpoints the document omits are cleared when the provider
+        // is pointing at a (possibly) different IdP — a stale userinfo or
+        // logout URL would receive the new IdP's access token or redirect
+        // users to the old provider. That's the case when the discovery URL
+        // was newly added or changed (covers manual→discovery switches, where
+        // no stored issuer exists to compare) or when the discovered issuer
+        // differs from the stored one. Exceptions that preserve a value the
+        // metadata omits: a same-URL, same-issuer refresh (the edit form
+        // resubmitting an unchanged config), and a field the same request
+        // explicitly set to a NEW value (`explicit*` — the admin deliberately
+        // supplied a fallback for metadata they know is incomplete; a
+        // resubmitted unchanged form value does not count as explicit).
+        let issuerChanged = provider.issuer != nil && provider.issuer != discovery.issuer
+        let clearOmittedOptionals = discoveryChanged || issuerChanged
+        provider.issuer = discovery.issuer
+        provider.authorizationEndpoint = discovery.authorizationEndpoint
+        provider.tokenEndpoint = discovery.tokenEndpoint
+        provider.jwksURI = discovery.jwksURI
+        if discovery.userinfoEndpoint != nil {
+            provider.userinfoEndpoint = discovery.userinfoEndpoint
+        } else if clearOmittedOptionals && !explicitUserinfoEndpoint {
+            provider.userinfoEndpoint = nil
+        }
+        if discovery.endSessionEndpoint != nil {
+            provider.endSessionEndpoint = discovery.endSessionEndpoint
+        } else if clearOmittedOptionals && !explicitEndSessionEndpoint {
+            provider.endSessionEndpoint = nil
+        }
+    }
+
+    private func fetchAndUpdateProviderConfiguration(
+        provider: OIDCProvider, discoveryURL: String, discoveryChanged: Bool,
+        explicitUserinfoEndpoint: Bool = false, explicitEndSessionEndpoint: Bool = false,
+        on req: Request
+    )
         async throws
     {
         do {
@@ -650,12 +738,10 @@ struct OIDCController: RouteCollection {
             // assignment so a bad document leaves the provider untouched.
             try OIDCValidation.validateDiscoveredEndpoints(discovery)
 
-            // Update provider with discovered endpoints
-            provider.issuer = discovery.issuer
-            provider.authorizationEndpoint = discovery.authorizationEndpoint
-            provider.tokenEndpoint = discovery.tokenEndpoint
-            provider.userinfoEndpoint = discovery.userinfoEndpoint
-            provider.jwksURI = discovery.jwksURI
+            applyDiscoveredConfiguration(
+                discovery, to: provider, discoveryChanged: discoveryChanged,
+                explicitUserinfoEndpoint: explicitUserinfoEndpoint,
+                explicitEndSessionEndpoint: explicitEndSessionEndpoint)
 
             try await provider.save(on: req.db)
         } catch {
@@ -693,9 +779,21 @@ struct OIDCController: RouteCollection {
 
     // MARK: - OIDC Authentication Helpers
 
+    /// Builds the OIDC callback URI from the deployment's public base URL.
+    /// Throws in production when BASE_URL is unset — see
+    /// `OIDCValidation.resolveBaseURL`.
+    private func oidcRedirectURI(organizationID: UUID, providerID: UUID, on req: Request) throws -> String {
+        let baseURL = try OIDCValidation.resolveBaseURL(
+            configured: Environment.get("BASE_URL"),
+            environment: req.application.environment
+        )
+        return "\(baseURL)/auth/oidc/\(organizationID)/\(providerID)/callback"
+    }
+
     private func exchangeCodeForTokens(
         provider: OIDCProvider,
         code: String,
+        codeVerifier: String?,
         organizationID: UUID,
         providerID: UUID,
         on req: Request
@@ -704,16 +802,19 @@ struct OIDCController: RouteCollection {
             throw Abort(.internalServerError, reason: "Token endpoint not configured")
         }
 
-        let baseURL = Environment.get("BASE_URL") ?? "http://localhost:8080"
-        let redirectURI = "\(baseURL)/auth/oidc/\(organizationID)/\(providerID)/callback"
+        let redirectURI = try oidcRedirectURI(
+            organizationID: organizationID, providerID: providerID, on: req)
 
-        let body = [
+        var body = [
             "grant_type": "authorization_code",
             "client_id": provider.clientID,
             "client_secret": try req.secretsEncryption.decrypt(provider.clientSecret),
             "code": code,
             "redirect_uri": redirectURI,
         ]
+        if let codeVerifier {
+            body["code_verifier"] = codeVerifier
+        }
 
         let response = try await req.client.post(URI(string: tokenEndpoint)) { clientReq in
             try clientReq.content.encode(body, as: .urlEncodedForm)

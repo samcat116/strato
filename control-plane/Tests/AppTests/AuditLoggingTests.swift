@@ -164,7 +164,9 @@ final class AuditLoggingTests {
             try await app.test(.POST, "/auth/logout") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
-                #expect(res.status == .noContent)
+                // 200 with a LogoutResponse body (sloUrl) since RP-initiated
+                // logout support (#365); 204 was the old contract.
+                #expect(res.status == .ok)
             }
 
             let recorded = try await self.events(ofType: "auth.logout", on: app.db)

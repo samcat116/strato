@@ -361,6 +361,10 @@ public func configure(_ app: Application) async throws {
     // validate the ID token's `iss` claim.
     app.migrations.add(AddIssuerToOIDCProvider())
 
+    // OIDC protocol completeness (issue #365): the provider's end-session
+    // endpoint enables RP-initiated logout at the IdP.
+    app.migrations.add(AddEndSessionEndpointToOIDCProvider())
+
     try await app.autoMigrate()
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth
