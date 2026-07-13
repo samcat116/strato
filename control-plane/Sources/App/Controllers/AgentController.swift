@@ -682,6 +682,9 @@ struct AgentController: RouteCollection {
     struct AgentUpdateResponse: Content {
         let status: String
         let targetVersion: String
+        /// Redacted form (query/userinfo stripped): a private mirror's
+        /// manifest may resolve to presigned URLs, and this response goes to
+        /// any delegated agent#manage holder, not just system admins.
         let artifactUrl: String
         let message: String?
     }
@@ -874,7 +877,7 @@ struct AgentController: RouteCollection {
             return AgentUpdateResponse(
                 status: "updating",
                 targetVersion: targetVersion,
-                artifactUrl: artifactURL,
+                artifactUrl: AgentUpdateMessage.redactURL(artifactURL),
                 message:
                     "Agent verified and installed the new binary and is restarting; it will re-register as \(targetVersion)."
             )
