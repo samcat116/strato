@@ -25,10 +25,22 @@ struct SandboxRuntimeProbeTests {
     private let presentPath = "/bin/ls"
     private let missingPath = "/nonexistent/sandbox/guest"
 
+    @Test("this build never advertises the capability: the runtime (issue #421) has not landed")
+    func buildGateHoldsCapabilityOff() {
+        // No runtimeBuilt override: the build's own constant must win even
+        // with every host prerequisite satisfied, because the reconciler
+        // would ignore desired sandboxes and placements would hang.
+        let report = SandboxRuntimeProbe.probe(
+            firecracker: firecrackerAvailable, guestImagePath: presentPath)
+
+        #expect(!report.capable)
+        #expect(report.unavailabilityReason?.contains("does not include the sandbox runtime") == true)
+    }
+
     @Test("capable when Firecracker is usable and the guest image is present")
     func capableWithAllPrerequisites() {
         let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: presentPath)
+            firecracker: firecrackerAvailable, guestImagePath: presentPath, runtimeBuilt: true)
 
         #expect(report.capable)
         #expect(report.unavailabilityReason == nil)
@@ -37,7 +49,7 @@ struct SandboxRuntimeProbeTests {
     @Test("a directory satisfies the guest image presence check")
     func directoryCountsAsPresent() {
         let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: "/tmp")
+            firecracker: firecrackerAvailable, guestImagePath: "/tmp", runtimeBuilt: true)
 
         #expect(report.capable)
     }
@@ -45,7 +57,7 @@ struct SandboxRuntimeProbeTests {
     @Test("not capable when Firecracker is unavailable, carrying its reason")
     func notCapableWithoutFirecracker() {
         let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerUnavailable, guestImagePath: presentPath)
+            firecracker: firecrackerUnavailable, guestImagePath: presentPath, runtimeBuilt: true)
 
         #expect(!report.capable)
         #expect(report.unavailabilityReason == "/dev/kvm not present")
@@ -53,7 +65,7 @@ struct SandboxRuntimeProbeTests {
 
     @Test("not capable when Firecracker was never probed")
     func notCapableWithoutProbe() {
-        let report = SandboxRuntimeProbe.probe(firecracker: nil, guestImagePath: presentPath)
+        let report = SandboxRuntimeProbe.probe(firecracker: nil, guestImagePath: presentPath, runtimeBuilt: true)
 
         #expect(!report.capable)
         #expect(report.unavailabilityReason?.contains("not probed") == true)
@@ -62,7 +74,7 @@ struct SandboxRuntimeProbeTests {
     @Test("a non-Firecracker report is rejected rather than misread")
     func rejectsWrongHypervisorReport() {
         let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
-        let report = SandboxRuntimeProbe.probe(firecracker: qemu, guestImagePath: presentPath)
+        let report = SandboxRuntimeProbe.probe(firecracker: qemu, guestImagePath: presentPath, runtimeBuilt: true)
 
         #expect(!report.capable)
     }
@@ -70,19 +82,19 @@ struct SandboxRuntimeProbeTests {
     @Test("not capable when the guest image path is unconfigured or empty")
     func notCapableWithoutConfiguredPath() {
         let unconfigured = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: nil)
+            firecracker: firecrackerAvailable, guestImagePath: nil, runtimeBuilt: true)
         #expect(!unconfigured.capable)
         #expect(unconfigured.unavailabilityReason?.contains("sandbox_guest_image_path") == true)
 
         let empty = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: "")
+            firecracker: firecrackerAvailable, guestImagePath: "", runtimeBuilt: true)
         #expect(!empty.capable)
     }
 
     @Test("not capable when nothing exists at the guest image path")
     func notCapableWithoutGuestImage() {
         let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: missingPath)
+            firecracker: firecrackerAvailable, guestImagePath: missingPath, runtimeBuilt: true)
 
         #expect(!report.capable)
         #expect(report.unavailabilityReason?.contains(missingPath) == true)

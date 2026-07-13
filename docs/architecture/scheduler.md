@@ -149,10 +149,11 @@ differently than requested:
   OVN-backed agents, never on user-mode (SLIRP) agents.
 - **Sandbox runtime**: Sandboxes (OCI-image Firecracker microVMs, issue #415)
   only place on agents that explicitly advertised the sandbox runtime at
-  registration (`AgentRegisterMessage.sandboxCapable` — Firecracker + KVM
-  usable and the sandbox guest base image on disk) **and** registered with a
-  wire protocol that carries sandbox desired state (v5+). Firecracker support
-  alone never qualifies an agent, and neither does the protocol version alone.
+  registration (`AgentRegisterMessage.sandboxCapable` — a build carrying the
+  runtime driver, Firecracker + KVM usable, and the sandbox guest base image
+  on disk) **and** registered with a wire protocol that carries sandbox
+  desired state (v5+). Firecracker support alone never qualifies an agent,
+  and neither does the protocol version alone.
 
 ## Agent Selection Process
 

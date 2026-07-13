@@ -1,6 +1,7 @@
 import Testing
 import Vapor
 import Fluent
+import SQLKit
 import VaporTesting
 @testable import App
 
@@ -334,6 +335,41 @@ final class QuotaEnforcementTests {
             #expect(after.reservedVCPUs == 2)  // the VM's reservation survives
             #expect(after.vmCount == 1)
             #expect(after.sandboxCount == 0)
+        }
+    }
+
+    @Test("the migration recount corrects counters left by the interim VM-shaped path")
+    func migrationRecountCorrectsCounters() async throws {
+        try await withApp { app, _, org, project, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+
+            // Simulate a pre-upgrade state: a sandbox that was reserved through
+            // the VM-shaped path (so it sits in vm_count) plus a real VM, on an
+            // org-scoped quota so the recount exercises scope resolution.
+            _ = try await builder.createVM(name: "real-vm", project: project)
+            _ = try await builder.createSandbox(name: "old-sandbox", project: project)
+            let quota = try await builder.createResourceQuota(name: "upgraded", organization: org)
+            quota.vmCount = 2  // interim path counted the sandbox as a VM
+            quota.sandboxCount = 0
+            try await quota.save(on: app.db)
+
+            guard let sql = app.db as? SQLDatabase else {
+                Issue.record("test database is not SQL-backed")
+                return
+            }
+            try await sql.raw(
+                SQLQueryString(
+                    AddSandboxCountToResourceQuota.recountSQL(
+                        workloadTable: "sandboxes", countColumn: "sandbox_count"))
+            ).run()
+            try await sql.raw(
+                SQLQueryString(
+                    AddSandboxCountToResourceQuota.recountSQL(workloadTable: "vms", countColumn: "vm_count"))
+            ).run()
+
+            let recounted = try await ResourceQuota.find(quota.id, on: app.db)!
+            #expect(recounted.vmCount == 1)
+            #expect(recounted.sandboxCount == 1)
         }
     }
 

@@ -21,6 +21,15 @@ public enum SandboxRuntimeProbe {
     /// display; the scheduler reads only the typed flag).
     public static let capabilityName = "sandbox_runtime"
 
+    /// Whether this agent build actually contains the sandbox runtime driver
+    /// (`SandboxRuntimeService`, issue #421). Until it lands, the reconciler
+    /// neither plans desired sandboxes nor reports them back, so advertising
+    /// the capability from host prerequisites alone would attract placements
+    /// that sit pending until the sweep fails them. This constant is the hard
+    /// gate — issue #421 flips it when the runtime registers in the driver
+    /// registry.
+    public static let runtimeBuilt = false
+
     /// Result of probing the sandbox runtime's host prerequisites.
     public struct Report: Equatable, Sendable {
         /// Whether this host can run sandbox workloads right now.
@@ -44,7 +53,19 @@ public enum SandboxRuntimeProbe {
     ///     (`sandbox_guest_image_path`). File or directory — the internal
     ///     layout is owned by the guest-image work (issue #419); this probe
     ///     only asserts presence.
-    public static func probe(firecracker: HypervisorSupport?, guestImagePath: String?) -> Report {
+    ///   - runtimeBuilt: Whether the running build includes the sandbox
+    ///     runtime driver. Defaults to this build's `runtimeBuilt` constant;
+    ///     injectable so tests can exercise the host-prerequisite checks.
+    public static func probe(
+        firecracker: HypervisorSupport?,
+        guestImagePath: String?,
+        runtimeBuilt: Bool = SandboxRuntimeProbe.runtimeBuilt
+    ) -> Report {
+        guard runtimeBuilt else {
+            return Report(
+                capable: false,
+                unavailabilityReason: "this agent build does not include the sandbox runtime (issue #421)")
+        }
         guard let firecracker, firecracker.type == .firecracker else {
             return Report(capable: false, unavailabilityReason: "Firecracker was not probed on this host")
         }

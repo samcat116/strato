@@ -93,11 +93,14 @@ same asymmetric hazard as the v3 networks list:
   none back. Agents therefore advertise sandbox support explicitly at
   registration (`AgentRegisterMessage.sandboxCapable`), and the scheduler keys
   eligibility on that flag plus the version (#415) — never on the version
-  alone. Agent-side, the flag comes from `SandboxRuntimeProbe`: Firecracker
-  usable (binary + KVM, from the hypervisor probe) **and** the sandbox guest
-  base image (#419) present at `sandbox_guest_image_path` (default
-  `/var/lib/strato/sandbox/guest`) — so the capability lights up exactly when
-  the runtime's artifacts are installed on a capable host.
+  alone. Agent-side, the flag comes from `SandboxRuntimeProbe`: the build must
+  contain the runtime driver (`SandboxRuntimeProbe.runtimeBuilt`, hard-false
+  until #421 lands — a runtime-less agent would silently ignore desired
+  sandboxes), Firecracker must be usable (binary + KVM, from the hypervisor
+  probe), **and** the sandbox guest base image (#419) must be present at
+  `sandbox_guest_image_path` (default `/var/lib/strato/sandbox/guest`) — so
+  the capability lights up exactly when a runtime-carrying agent has the
+  artifacts installed on a capable host.
 
 ## Control plane (issues #412–#416)
 
