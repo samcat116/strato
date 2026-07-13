@@ -149,14 +149,15 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             return
         }
 
-        // Firecracker realizes only TAP attachments; reject anything else up
-        // front rather than booting a sandbox missing its NIC.
-        for nic in networkAttachments {
-            guard case .tap = nic.attachment else {
-                throw HypervisorServiceError.notSupported(
-                    "sandboxes only support tap network attachments; got \(nic.attachment) "
-                        + "for network \(nic.network)")
-            }
+        // v1 has no in-guest networking: the guest init mounts the rootfs and
+        // execs the workload without bringing up eth0 or DHCP, and the guest
+        // kernel has no IP autoconfiguration. Attaching a TAP would leave the
+        // workload with an unconfigured interface while the sandbox reported
+        // running, so reject networked specs rather than mis-converging. (The
+        // scheduler/IPAM path exists — #415/#416 — but the guest cannot yet use
+        // it; enabling it is a guest-image change.)
+        guard spec.network == nil, networkAttachments.isEmpty else {
+            throw SandboxRuntimeError.networkingUnsupported
         }
 
         logger.info(
@@ -216,12 +217,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             try await manager.configureDrive(
                 Drive.dataDrive(id: "config", path: configPath, readOnly: true))
 
-            for (index, nic) in networkAttachments.enumerated() {
-                guard case .tap(let tapName) = nic.attachment else { continue }
-                try await manager.configureNetwork(
-                    NetworkInterface.tap(
-                        id: "eth\(index)", tapName: tapName, macAddress: nic.macAddress ?? ""))
-            }
+            // No network interface: networked specs are rejected above until the
+            // guest image can configure one.
 
             try await manager.configureVsock(
                 VsockConfig(guestCid: Self.guestCID, udsPath: vsockUdsPath))
@@ -258,8 +255,14 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // guest is actually up. A miss here is transient — the reconciler
         // re-drives boot on the next sync.
         let response = try await sendControl(.ping, udsPath: managed.vsockUdsPath, timeout: 20)
-        guard case .pong = response else {
+        guard case .pong(let echoedId, let echoedNonce) = response else {
             throw SandboxControlError.malformedResponse("expected pong, got \(response)")
+        }
+        // Confirm it is this sandbox's current generation answering, not a stale
+        // process still bound to the deterministic vsock UDS.
+        guard identityMatches(response, sandboxId: sandboxId, expectedNonce: managed.identityNonce) else {
+            throw SandboxControlError.identityMismatch(
+                expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(echoedId)/\(echoedNonce)")
         }
         logger.info("Sandbox guest agent healthy", metadata: ["sandboxId": .string(sandboxId)])
 
@@ -337,9 +340,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         }
 
         let dir = sandboxDirectory(sandboxId)
+        // Recover the boot nonce from the staged config drive so post-adoption
+        // identity checks can still distinguish this generation.
+        let identityNonce = recoverIdentityNonce(sandboxId: sandboxId)
         sandboxes[sandboxId] = Managed(
             spec: spec, rootfsPath: dir + "/rootfs.ext4", configPath: dir + "/config.img",
-            vsockUdsPath: vsockUDSPath(sandboxId), identityNonce: "", manager: manager, lastExitCode: nil)
+            vsockUdsPath: vsockUDSPath(sandboxId), identityNonce: identityNonce, manager: manager,
+            lastExitCode: nil)
 
         let status = await mappedStatus(
             instance: info.state, udsPath: vsockUDSPath(sandboxId), sandboxId: sandboxId)
@@ -803,6 +810,16 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 guard case .status(_, _, let state, let exitCode) = response else {
                     return .starting
                 }
+                // Ignore a response from a stale generation still bound to the
+                // deterministic UDS rather than reporting another sandbox's
+                // status/exit code and advancing convergence on it.
+                let expectedNonce = sandboxes[sandboxId]?.identityNonce ?? ""
+                guard identityMatches(response, sandboxId: sandboxId, expectedNonce: expectedNonce) else {
+                    logger.warning(
+                        "Ignoring sandbox control status from a mismatched guest identity",
+                        metadata: ["sandboxId": .string(sandboxId)])
+                    return .unknown
+                }
                 switch state {
                 case .starting:
                     return .starting
@@ -891,6 +908,44 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             throw SandboxControlError.guestError(message)
         }
         return response
+    }
+
+    // MARK: - Guest identity
+
+    /// Confirm a control response echoes this sandbox's identity, so a stale
+    /// generation still serving the deterministic vsock UDS (a leaked process, a
+    /// pre-adoption resume) cannot be mistaken for the current one. The nonce is
+    /// checked when known; an empty expected nonce (not yet recovered) falls
+    /// back to the id alone.
+    private func identityMatches(
+        _ response: SandboxControlProtocol.Response, sandboxId: String, expectedNonce: String
+    ) -> Bool {
+        let echoedId: String
+        let echoedNonce: String
+        switch response {
+        case .pong(let id, let nonce):
+            (echoedId, echoedNonce) = (id, nonce)
+        case .status(let id, let nonce, _, _):
+            (echoedId, echoedNonce) = (id, nonce)
+        default:
+            return false
+        }
+        guard echoedId == sandboxId else { return false }
+        if !expectedNonce.isEmpty, echoedNonce != expectedNonce { return false }
+        return true
+    }
+
+    /// Read the boot nonce back from a sandbox's staged config drive. Empty when
+    /// the drive is missing or unreadable, in which case identity checks fall
+    /// back to the sandbox id alone.
+    private func recoverIdentityNonce(sandboxId: String) -> String {
+        let configPath = sandboxDirectory(sandboxId) + "/config.img"
+        guard let data = FileManager.default.contents(atPath: configPath),
+            let drive = try? SandboxConfigDrive.decode(fromBlockImage: data)
+        else {
+            return ""
+        }
+        return drive.identityNonce
     }
 
     // MARK: - Paths

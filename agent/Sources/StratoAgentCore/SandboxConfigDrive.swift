@@ -166,6 +166,19 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
         return try encoder.encode(self)
     }
 
+    /// Decode a config document from a raw config block image, mirroring the
+    /// guest's parse: strip the trailing NUL/whitespace padding, then decode the
+    /// leading JSON. Used to recover a sandbox's identity (nonce) from its
+    /// staged config drive after an agent restart.
+    public static func decode(fromBlockImage data: Data) throws -> SandboxConfigDrive {
+        let isPadding: (UInt8) -> Bool = { byte in
+            byte == 0 || byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0B || byte == 0x0C
+                || byte == 0x0D
+        }
+        let end = data.lastIndex(where: { !isPadding($0) }).map { data.index(after: $0) } ?? data.startIndex
+        return try JSONDecoder().decode(SandboxConfigDrive.self, from: data[data.startIndex..<end])
+    }
+
     /// Render the config document as a raw block-device image: the JSON bytes
     /// followed by NUL padding out to a whole number of 512-byte sectors.
     ///

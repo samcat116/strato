@@ -97,10 +97,16 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
     /// (never started, or already ended). The Agent answers with
     /// `sandboxExecClosed` so the control plane tears its side down.
     case execSessionNotFound(String)
+    /// The sandbox requested a NIC, but v1 has no in-guest networking: the guest
+    /// init does not bring up `eth0`/DHCP and the guest kernel has no IP
+    /// autoconfiguration, so a TAP would leave the workload with an
+    /// unconfigured interface while the sandbox reported running. Permanent
+    /// until guest-side networking lands (a guest-image change).
+    case networkingUnsupported
 
     var failureClassification: FailureClassification {
         switch self {
-        case .runtimeUnavailable, .unsupportedStep:
+        case .runtimeUnavailable, .unsupportedStep, .networkingUnsupported:
             return .permanent
         case .sandboxNotFound, .adoptionTargetGone, .execSessionNotFound:
             return .transient
@@ -119,6 +125,8 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
             return "sandbox adoption target gone: \(reason)"
         case .execSessionNotFound(let sessionId):
             return "exec session not found: \(sessionId)"
+        case .networkingUnsupported:
+            return "networked sandboxes are not supported yet (the guest image has no in-guest networking)"
         }
     }
 }

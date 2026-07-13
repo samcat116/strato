@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { CopyButton } from "@/components/ui/copy-button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { organizationsApi } from "@/lib/api/organizations";
@@ -202,11 +203,19 @@ export default function OrganizationSettingsPage() {
                 </div>
                 <div className="space-y-2">
                   <Label className="text-foreground">Organization ID</Label>
-                  <Input
-                    value={id}
-                    className="bg-muted/50 font-mono text-muted-foreground"
-                    disabled
-                  />
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={id}
+                      className="bg-muted/50 font-mono text-muted-foreground"
+                      disabled
+                    />
+                    <CopyButton
+                      value={id}
+                      label="Copy organization ID"
+                      toastMessage="Organization ID copied to clipboard"
+                      variant="outline"
+                    />
+                  </div>
                 </div>
                 <Button
                   type="submit"

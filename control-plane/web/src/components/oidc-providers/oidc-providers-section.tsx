@@ -21,6 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { CopyButton } from "@/components/ui/copy-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { OIDCProviderDialog } from "./oidc-provider-dialog";
 import {
@@ -152,6 +153,9 @@ export function OIDCProvidersSection({
                   Name
                 </TableHead>
                 <TableHead className="text-muted-foreground font-medium">
+                  Provider ID
+                </TableHead>
+                <TableHead className="text-muted-foreground font-medium">
                   Client ID
                 </TableHead>
                 <TableHead className="text-muted-foreground font-medium">
@@ -177,6 +181,18 @@ export function OIDCProvidersSection({
                     <span className="font-medium text-foreground">
                       {provider.name}
                     </span>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      <span className="text-foreground/80 font-mono text-sm max-w-48 truncate">
+                        {provider.id}
+                      </span>
+                      <CopyButton
+                        value={provider.id}
+                        label={`Copy ${provider.name} provider ID`}
+                        toastMessage="Provider ID copied to clipboard"
+                      />
+                    </div>
                   </TableCell>
                   <TableCell className="text-foreground/80 font-mono text-sm max-w-48 truncate">
                     {provider.clientID}

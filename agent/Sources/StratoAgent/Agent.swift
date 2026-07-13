@@ -3379,6 +3379,15 @@ extension Agent: ReconcileActuator {
         }
         let runtime = try requireSandboxRuntime()
 
+        // v1 has no in-guest networking (the runtime rejects networked specs).
+        // Fail here, before reserving host-side NICs, so an unsupported spec
+        // surfaces the permanent `networkingUnsupported` reason immediately
+        // instead of a transient network-prep failure that retries until the
+        // operation budget expires.
+        guard desired.spec.network == nil else {
+            throw SandboxRuntimeError.networkingUnsupported
+        }
+
         // Same contract as the VM path: the orchestrator realizes the
         // sandbox's NIC on this host before the runtime runs, and rolls it
         // back if the runtime never created the sandbox.
