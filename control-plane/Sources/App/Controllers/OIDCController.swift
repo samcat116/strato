@@ -666,16 +666,24 @@ struct OIDCController: RouteCollection {
     /// otherwise a discovery refresh would wipe an admin's manually configured
     /// value every time the provider is edited (the edit form resubmits the
     /// discovery URL on every save).
-    private func applyDiscoveredConfiguration(_ discovery: OIDCDiscoveryDocument, to provider: OIDCProvider) {
+    func applyDiscoveredConfiguration(_ discovery: OIDCDiscoveryDocument, to provider: OIDCProvider) {
+        // Rotating to a different issuer means any stored optional endpoints
+        // belong to the *previous* IdP: keeping them would send access tokens
+        // to the old userinfo URL or logout redirects to the old provider. A
+        // same-issuer refresh instead preserves values the metadata omits
+        // (typically an admin's manual configuration). A nil stored issuer
+        // (first discovery fetch, or a manual→discovery switch that cleared
+        // it) counts as unchanged so manual values survive that transition.
+        let issuerChanged = provider.issuer != nil && provider.issuer != discovery.issuer
         provider.issuer = discovery.issuer
         provider.authorizationEndpoint = discovery.authorizationEndpoint
         provider.tokenEndpoint = discovery.tokenEndpoint
         provider.jwksURI = discovery.jwksURI
-        if let userinfoEndpoint = discovery.userinfoEndpoint {
-            provider.userinfoEndpoint = userinfoEndpoint
+        if discovery.userinfoEndpoint != nil || issuerChanged {
+            provider.userinfoEndpoint = discovery.userinfoEndpoint
         }
-        if let endSessionEndpoint = discovery.endSessionEndpoint {
-            provider.endSessionEndpoint = endSessionEndpoint
+        if discovery.endSessionEndpoint != nil || issuerChanged {
+            provider.endSessionEndpoint = discovery.endSessionEndpoint
         }
     }
 

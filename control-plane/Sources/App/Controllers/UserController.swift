@@ -625,10 +625,13 @@ struct UserController: RouteCollection {
         // otherwise the next SSO login silently signs straight back in.
         // Computed before the session is destroyed, which drops the stored
         // provider reference and ID token.
+        // Best-effort: a failed provider lookup (transient DB error) must not
+        // abort logout — leaving the session and its stored ID token alive
+        // would be worse than skipping the IdP redirect.
         var sloUrl: String?
         if let providerIDString = req.session.data["oidc_login_provider_id"],
             let providerID = UUID(uuidString: providerIDString),
-            let provider = try await OIDCProvider.find(providerID, on: req.db)
+            let provider = try? await OIDCProvider.find(providerID, on: req.db)
         {
             // post_logout_redirect_uri only works if registered at the IdP;
             // in production an unset BASE_URL means OIDC login never worked,

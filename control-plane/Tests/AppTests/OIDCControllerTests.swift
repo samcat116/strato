@@ -973,6 +973,53 @@ final class OIDCControllerTests: BaseTestCase {
         }
     }
 
+    @Test("Discovery refresh preserves manual optional endpoints, rotation clears them")
+    func testDiscoveryOptionalEndpointSemantics() async throws {
+        func doc(issuer: String, userinfo: String? = nil, endSession: String? = nil) -> OIDCDiscoveryDocument {
+            OIDCDiscoveryDocument(
+                issuer: issuer,
+                authorizationEndpoint: "\(issuer)/authorize",
+                tokenEndpoint: "\(issuer)/token",
+                userinfoEndpoint: userinfo,
+                endSessionEndpoint: endSession,
+                jwksURI: "\(issuer)/jwks",
+                responseTypesSupported: ["code"],
+                subjectTypesSupported: ["public"],
+                idTokenSigningAlgValuesSupported: ["RS256"]
+            )
+        }
+        let controller = OIDCController()
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Okta",
+                endSessionEndpoint: "https://manual.example.com/logout")
+
+            // Same-issuer refresh (issuer previously unset counts as
+            // unchanged) with metadata omitting the optional endpoints: the
+            // manual logout URL must survive.
+            controller.applyDiscoveredConfiguration(doc(issuer: "https://idp.example.com"), to: provider)
+            #expect(provider.endSessionEndpoint == "https://manual.example.com/logout")
+
+            // Rotating the discovery document to a different issuer clears
+            // the previous IdP's optional endpoints — a stale logout URL
+            // would redirect users to the old provider.
+            controller.applyDiscoveredConfiguration(doc(issuer: "https://other.example.com"), to: provider)
+            #expect(provider.endSessionEndpoint == nil)
+            #expect(provider.issuer == "https://other.example.com")
+
+            // And when the new metadata supplies them, they're adopted.
+            controller.applyDiscoveredConfiguration(
+                doc(
+                    issuer: "https://third.example.com",
+                    userinfo: "https://third.example.com/userinfo",
+                    endSession: "https://third.example.com/logout"),
+                to: provider)
+            #expect(provider.userinfoEndpoint == "https://third.example.com/userinfo")
+            #expect(provider.endSessionEndpoint == "https://third.example.com/logout")
+        }
+    }
+
     @Test("Logout without an OIDC session returns no SLO URL")
     func testLogoutWithoutOIDCSession() async throws {
         try await withApp { app in
