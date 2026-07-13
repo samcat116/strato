@@ -44,15 +44,14 @@ function SidebarLink({ item, nested = false }: { item: NavItem; nested?: boolean
 }
 
 /**
- * A topline with children: the row links to its own page (when it has an href)
- * or toggles the group, and a chevron expands/collapses the nested items. The
- * section auto-expands whenever the active route falls inside it.
+ * A section header with children. The header itself is not a link — it only
+ * toggles the group open/closed; navigation lives entirely in the nested items.
+ * The section auto-expands whenever the active route falls inside it.
  */
 function SidebarSection({ item }: { item: NavItem }) {
   const pathname = usePathname();
   const { user } = useAuth();
   const sectionActive = isSectionActive(pathname, item);
-  const rowActive = item.href ? isNavActive(pathname, item.href) : false;
   const Icon = item.icon;
 
   // The section holding the current page stays expanded; a manual toggle
@@ -65,40 +64,25 @@ function SidebarSection({ item }: { item: NavItem }) {
     (child) => !child.adminOnly || user?.isSystemAdmin
   );
 
-  const rowClasses = cn(
-    "flex flex-1 items-center gap-2.5 rounded-[7px] px-[9px] py-[7px] text-[13px] transition-colors",
-    rowActive
-      ? "bg-accent font-semibold text-foreground"
-      : "font-medium text-foreground/70 hover:bg-muted hover:text-foreground"
-  );
-
   return (
     <div>
-      <div className="flex items-center gap-0.5">
-        {item.href ? (
-          <Link href={item.href} className={rowClasses}>
-            <Icon className="h-4 w-4 shrink-0" strokeWidth={1.6} />
-            {item.label}
-          </Link>
-        ) : (
-          <button type="button" onClick={toggle} className={rowClasses}>
-            <Icon className="h-4 w-4 shrink-0" strokeWidth={1.6} />
-            {item.label}
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={toggle}
-          aria-label={open ? `Collapse ${item.label}` : `Expand ${item.label}`}
-          aria-expanded={open}
-          className="rounded-[7px] p-1.5 text-foreground/50 transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <ChevronRight
-            className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")}
-            strokeWidth={1.6}
-          />
-        </button>
-      </div>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={open ? `Collapse ${item.label}` : `Expand ${item.label}`}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2.5 rounded-[7px] px-[9px] py-[7px] text-[13px] font-medium text-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
+      >
+        <Icon className="h-4 w-4 shrink-0" strokeWidth={1.6} />
+        {item.label}
+        <ChevronRight
+          className={cn(
+            "ml-auto h-3.5 w-3.5 shrink-0 transition-transform",
+            open && "rotate-90"
+          )}
+          strokeWidth={1.6}
+        />
+      </button>
       {open && (
         <div className="mt-0.5 space-y-0.5">
           {children.map((child) => (
