@@ -1,0 +1,115 @@
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 2,178-179,183,188-190,200-212,214-215,219-220,224-225,229-233,235,239,243-244,248,262-266,270,273-279,281-299,767-769,776
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 2,20,512-514,658-891
+  s_322c2d216f0cf7::t_c9816fbcc87ec3 892
+control-plane/Sources/App/Services/RateLimitService.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 2,13,17,33,35,39-40,52-58,64,68,72-73,77
+control-plane/web/src/lib/hooks/index.ts
+  s_322c2d216f0cf7::t_684575ee0c5431 9
+control-plane/Package.resolved
+  s_322c2d216f0cf7::t_684575ee0c5431 2,9-10,18-19,27-28,45-46,63-64,72-73,81-82,90-91,99-100,108-109,126-127,135-136,144-145,162-163,180-181,198-199,207-208,216-217,225-226,234-235,243-253,270-271,279-280,288-289,297-298,306-307,315-316,322,324-325,333-334,342-343,351-352,369-370,378-379,396-397,405-406,415,423-424,432-433,449-450,458-459,471-479,485-486,495,503-504,512-513
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 291-298,300-304,306-307,309-315,317-322,325-326,335-342,346-392,395-410
+control-plane/Package.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 15,17,19,21,23,28,34,36,47-48,96
+agent/Dockerfile
+  s_322c2d216f0cf7::t_684575ee0c5431 153-157
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 16,56
+control-plane/web/src/lib/hooks/use-agents.ts
+  s_322c2d216f0cf7::t_684575ee0c5431 1,38-49
+  s_322c2d216f0cf7::t_40fcff9551ec1e 50-52
+docs/deployment/agents.md
+  s_322c2d216f0cf7::t_684575ee0c5431 198-270
+control-plane/Tests/AppTests/OIDCTokenVerificationTests.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 5,89,93,98,105-109,111-112,117-118,120-122,130-131,136,140-143,148-149,156,160-163,165-167,172-176,180,188-190,195,199-202,204-206,213-217,228-229,234-238,242-243,248,250-251,254-255,257-258
+shared/Sources/StratoShared/OperatingSystem.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 1-25
+agent/Package.resolved
+  s_322c2d216f0cf7::t_684575ee0c5431 2,242-243
+control-plane/Sources/App/configure.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 6,85-86,88
+  s_322c2d216f0cf7::t_f0a782eb45525c 390-392
+control-plane/web/src/lib/api/agents.ts
+  s_322c2d216f0cf7::t_684575ee0c5431 8,29-32
+  s_322c2d216f0cf7::t_3ed22e5af317d8 33-34
+control-plane/Tests/AppTests/AgentUpdateArtifactsTests.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 1-175
+agent/Sources/StratoAgent/Agent.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 166-170,456-467,631,1266-1268,1597-1661
+  s_322c2d216f0cf7::t_3aab8179733bce 630
+  s_322c2d216f0cf7::t_396933709bbb7c 1662-1663
+control-plane/Sources/App/Models/OIDCDTOs.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 2,4-5,56,68,115,122-124
+control-plane/Sources/App/Migrations/AddOperatingSystemToAgent.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 1-20
+control-plane/Sources/App/Services/AgentUpdateArtifacts.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 1-234
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 279
+control-plane/Sources/App/Services/ValkeyService.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 2-3,48-66,82-100,102-112,115-116,119,138-139,155-179
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 303,306
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 4,930,944-945
+control-plane/web/src/components/agents/agent-table.tsx
+  s_322c2d216f0cf7::t_684575ee0c5431 14,70-72,119-120
+  s_322c2d216f0cf7::t_5b1ae31363156a 121
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 11-14,126-131,146-147,162,235-310
+  s_322c2d216f0cf7::t_833b19d7110172 311
+control-plane/web/src/types/api.ts
+  s_322c2d216f0cf7::t_684575ee0c5431 267-269,284-290
+  s_322c2d216f0cf7::t_f26fea8e0beef1 291-292
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 62-138
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 40-50
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 351-359
+control-plane/Sources/App/Controllers/ConsoleWebSocketController.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 1,4,27-31,33-54,56-60,63,65-67,69-73,76,78-93,96,98-99,101,104-115,117,120-123,127-145,147,149-151,155-157,169-179,181-191,193-198,200-205,207-214,216-220,222-227
+control-plane/Sources/App/Services/ValkeySessions.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 1-63
+control-plane/web/src/app/(dashboard)/agents/detail/page.tsx
+  s_322c2d216f0cf7::t_684575ee0c5431 17,108
+agent/Sources/StratoAgentCore/AgentUpdater.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 1-350
+control-plane/Sources/App/Models/Agent.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 57-62,170,183-184,199-204,265,293
+control-plane/Sources/App/Services/OIDCTokenVerification.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 2,23,38,45,68,83,93,100,106
+control-plane/web/src/components/agents/agent-update-action.tsx
+  s_322c2d216f0cf7::t_684575ee0c5431 1-144
+control-plane/Tests/AppTests/AgentUpdateEndpointTests.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 1-286
+control-plane/Sources/App/Services/AgentService.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 256-267,272
+shared/Sources/StratoShared/WireProtocol.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 87-97,151-160
+  s_322c2d216f0cf7::t_053f53c01407ff 161-162
+agent/Tests/StratoAgentTests/AgentUpdaterTests.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 1-416
+agent/Package.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 18,47
+control-plane/Tests/AppTests/OIDCAuthFlowTests.swift
+  s_322c2d216f0cf7::t_684575ee0c5431 9,107,125,137-140,328,377,453,520,539,556,573,590,609,632
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "467175e316030bc6f8308ff75461f15e31c822af",
+  "prompts": {},
+  "sessions": {
+    "s_322c2d216f0cf7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0c9de6f-7cb8-444e-a2e3-f4db6ccd7604",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
