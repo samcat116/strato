@@ -1,0 +1,21 @@
+sandbox-guest/init/src/linux/vsock.rs
+  s_dcd496c937e3d0::t_e13fbe0407280e 18-20
+sandbox-guest/init/src/linux/mod.rs
+  s_dcd496c937e3d0::t_cb9a0df5f4828a 94-99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "6ef2efc2c69cd21a9b62dc92713ef46f42b756ab",
+  "prompts": {},
+  "sessions": {
+    "s_dcd496c937e3d0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f88344f9-1e80-44cc-94cb-a047d1266c62",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
