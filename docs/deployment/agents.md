@@ -135,6 +135,71 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
+## Updating agents
+
+The control plane compares each agent's reported build version against its
+target version (its own version, or `AGENT_TARGET_VERSION` when agents are
+pinned separately) and shows an **Update available** badge on the Agents page
+when they differ.
+
+### Remote update (bare-binary installs)
+
+For agents installed as a bare binary under systemd (the install-script
+layout), click **Update** on the agent row or detail page — or call the API:
+
+```bash
+curl -X POST https://strato.example.com/api/agents/<agent-id>/actions/update \
+  -H 'Authorization: Bearer <api-key>' -H 'Content-Type: application/json' -d '{}'
+```
+
+The control plane resolves the release tarball for the agent's OS/arch
+(`strato-<os>-<arch>.tar.gz` from GitHub releases, or a mirror via
+`AGENT_UPDATE_ARTIFACT_BASE_URL`), fetches its `.sha256` sidecar, and sends
+the agent an update command. The agent then:
+
+1. downloads the artifact into a staging workspace next to its own binary,
+2. verifies the SHA-256 checksum and extracts the `strato-agent` member,
+3. runs the staged binary's `--version` as a sanity probe,
+4. preserves the current binary as `strato-agent.prev`, atomically renames
+   the new one over its own executable path,
+5. reports success, shuts down cleanly, and exits with code 75 so systemd
+   (`Restart=on-failure`) starts the new binary.
+
+The updated agent proves itself by re-registering with its new version; the
+control plane logs the old→new transition and the badge clears. Any failure
+before the final rename (download error, checksum mismatch, failed probe)
+aborts with the running binary untouched and is reported back as the request's
+error. A crash-looping update can be rolled back by hand:
+`mv /usr/local/bin/strato-agent.prev /usr/local/bin/strato-agent`.
+
+Caveats the UI confirms before dispatching:
+
+- The agent disconnects briefly and re-registers on restart.
+- Running QEMU VMs keep running and are re-adopted via their deterministic
+  QMP sockets.
+- Running **Firecracker VMs are not re-adopted** — they keep running as
+  orphans that can only be deleted afterwards. The endpoint refuses in this
+  case unless `{"force": true}` is passed.
+
+Request-body overrides for air-gapped deployments or unreleased builds:
+`{"artifactUrl": "...", "sha256": "<hex>"}` skips artifact resolution and
+hands the agent exactly that file (the URL must be reachable *from the agent
+host*). Main-branch builds have no release tarballs, so updating to them
+always requires this override.
+
+Remote updates need an agent new enough to understand the command (wire
+protocol v6+); older agents must be updated manually once — re-run install.sh
+or replace the binary — after which remote updates work.
+
+### Docker / Kubernetes (managed externally)
+
+Agents running in a container refuse remote updates with a "managed
+externally" error: the binary is part of an immutable image layer, so the
+image is the update mechanism. Pull the new image and recreate the container
+(or roll the Deployment). The refusal is automatic — the agent image carries
+`STRATO_INSTALL_MODE=container`, and agents also detect standard container
+fingerprints (`/.dockerenv`, container cgroups) when the marker is absent.
+
 ## Configuration
 
 Most settings have platform defaults; see

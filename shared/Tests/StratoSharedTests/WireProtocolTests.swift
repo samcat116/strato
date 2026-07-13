@@ -37,6 +37,17 @@ struct WireProtocolTests {
         #expect(try envelope.decode(as: VMInfoRequestMessage.self).vmId == "vm-1")
     }
 
+    @Test("agent update gate: only v6+ agents can be sent the update command")
+    func agentUpdateGate() {
+        // A pre-v6 agent has no `agent_update` MessageType case: it fails the
+        // envelope decode silently and never replies, so the control plane
+        // must refuse rather than send and time out.
+        #expect(!WireProtocol.supportsAgentUpdate(0))
+        #expect(!WireProtocol.supportsAgentUpdate(5))
+        #expect(WireProtocol.supportsAgentUpdate(6))
+        #expect(WireProtocol.supportsAgentUpdate(WireProtocol.currentVersion))
+    }
+
     // MARK: - Registration version negotiation
 
     @Test("registration messages default to the current wire version")

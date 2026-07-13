@@ -159,6 +159,11 @@ actor Agent {
     // rejected); start() rethrows it so the process exits non-zero instead
     // of idling disconnected.
     private var terminalError: Error?
+    // Set after a successful self-update binary swap (issue #432): stop() is
+    // about to run and the process must exit with
+    // `AgentUpdater.restartExitCode` so the supervisor (Restart=on-failure)
+    // starts the new binary. Read by launchAgent once start() returns.
+    private(set) var updateRestartPending = false
 
     init(
         agentID: String,
@@ -587,7 +592,8 @@ actor Agent {
             hypervisorType: hypervisorType,
             architecture: CPUArchitecture.current,
             hypervisors: hypervisors,
-            networkCapability: networkCapability
+            networkCapability: networkCapability,
+            operatingSystem: OperatingSystem.current
         )
 
         if let client = websocketClient {
@@ -1222,6 +1228,9 @@ extension Agent {
             case .vmReboot:
                 let message = try envelope.decode(as: VMOperationMessage.self)
                 await handleVMReboot(message)
+            case .agentUpdate:
+                let message = try envelope.decode(as: AgentUpdateMessage.self)
+                await handleAgentUpdate(message)
             case .vmPause:
                 let message = try envelope.decode(as: VMOperationMessage.self)
                 await handleVMPause(message)
@@ -1548,6 +1557,64 @@ extension Agent {
                 "Failed to reboot VM",
                 metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
         }
+    }
+
+    /// Operator-triggered self-update (issue #432): download, verify, and swap
+    /// this process's own binary, then shut down and exit for the supervisor
+    /// to restart the new build. The success reply is sent *after* the swap
+    /// (so it reports the real outcome) but *before* the shutdown that closes
+    /// the socket. Any failure leaves the running binary untouched and is
+    /// reported as a correlated error.
+    private func handleAgentUpdate(_ message: AgentUpdateMessage) async {
+        logger.notice(
+            "Received agent update command",
+            metadata: [
+                "targetVersion": .string(message.targetVersion),
+                "artifactURL": .string(message.artifactURL),
+                "currentVersion": .string(BuildInfo.version),
+            ])
+
+        guard !updateRestartPending else {
+            await sendError(
+                for: message.requestId,
+                error: "An update was already applied; the agent is restarting")
+            return
+        }
+
+        let outcome: AgentUpdateOutcome
+        do {
+            let updater = AgentUpdater(logger: logger)
+            outcome = try await updater.applyUpdate(
+                artifactURL: message.artifactURL,
+                sha256: message.sha256,
+                artifactKind: message.artifactKind,
+                tarballMember: message.tarballMember
+            )
+        } catch let error as AgentUpdateError {
+            logger.error("Agent update failed", metadata: ["error": .string(error.description)])
+            await sendError(for: message.requestId, error: "Agent update failed", details: error.description)
+            return
+        } catch {
+            logger.error("Agent update failed", metadata: ["error": .string("\(error)")])
+            await sendError(for: message.requestId, error: "Agent update failed", details: "\(error)")
+            return
+        }
+
+        updateRestartPending = true
+        await sendSuccess(
+            for: message.requestId,
+            message:
+                "Binary updated to \(message.targetVersion) (previous preserved at \(outcome.previousBinaryPath)); restarting"
+        )
+
+        // Shut down from a separate task: this handler runs on the inbound
+        // message pipeline, and stop() tears that pipeline down — stopping
+        // inline would cancel ourselves mid-teardown. start() returns once
+        // stop() completes and launchAgent exits with the restart code.
+        logger.notice(
+            "Agent update applied; shutting down for supervisor restart",
+            metadata: ["binaryPath": .string(outcome.binaryPath)])
+        Task { await self.stop() }
     }
 
     private func handleVMPause(_ message: VMOperationMessage) async {

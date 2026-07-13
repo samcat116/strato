@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { AgentUpdateAction } from "@/components/agents/agent-update-action";
 import { useAgent } from "@/lib/hooks";
 
 export default function AgentDetailPage() {
@@ -104,6 +105,7 @@ export default function AgentDetailPage() {
           </div>
           <p className="text-muted-foreground mt-1">{agent.hostname}</p>
         </div>
+        <AgentUpdateAction agent={agent} />
       </div>
 
       {/* Resources */}

@@ -59,6 +59,63 @@ struct AgentMessageTests {
         #expect(decodedCapable.sandboxCapable == true)
     }
 
+    @Test("Operating system reporting: absent for old builds, carried when reported")
+    func agentRegisterOperatingSystem() throws {
+        let implicit = AgentRegisterMessage(
+            agentId: "agent-1",
+            hostname: "hv-01.example",
+            version: "1.2.3",
+            capabilities: ["kvm"],
+            resources: Fixtures.resources
+        )
+        let decodedImplicit = try throughEnvelope(implicit)
+        #expect(decodedImplicit.operatingSystem == nil)
+
+        let reporting = AgentRegisterMessage(
+            agentId: "agent-2",
+            hostname: "hv-02.example",
+            version: "1.2.3",
+            capabilities: ["kvm"],
+            resources: Fixtures.resources,
+            operatingSystem: .linux
+        )
+        let decodedReporting = try throughEnvelope(reporting)
+        #expect(decodedReporting.operatingSystem == .linux)
+    }
+
+    @Test func agentUpdateRoundTrip() throws {
+        let message = AgentUpdateMessage(
+            requestId: Fixtures.requestId,
+            timestamp: Fixtures.timestamp,
+            targetVersion: "1.3.0",
+            artifactURL:
+                "https://github.com/samcat116/strato/releases/download/v1.3.0/strato-linux-x86_64.tar.gz",
+            sha256: String(repeating: "ab", count: 32)
+        )
+        let decoded = try throughEnvelope(message)
+        #expect(decoded.type == .agentUpdate)
+        #expect(decoded.requestId == message.requestId)
+        #expect(decoded.targetVersion == "1.3.0")
+        #expect(decoded.artifactURL == message.artifactURL)
+        #expect(decoded.sha256 == message.sha256)
+        #expect(decoded.artifactKind == .tarball)
+        #expect(decoded.tarballMember == "strato-agent")
+    }
+
+    @Test("Bare-binary artifact kind survives the wire")
+    func agentUpdateBinaryKind() throws {
+        let message = AgentUpdateMessage(
+            targetVersion: "1.3.0",
+            artifactURL: "https://mirror.internal/strato-agent",
+            sha256: String(repeating: "0f", count: 32),
+            artifactKind: .binary,
+            tarballMember: nil
+        )
+        let decoded = try throughEnvelope(message)
+        #expect(decoded.artifactKind == .binary)
+        #expect(decoded.tarballMember == nil)
+    }
+
     @Test func agentHeartbeatRoundTrip() throws {
         let message = AgentHeartbeatMessage(
             requestId: Fixtures.requestId,

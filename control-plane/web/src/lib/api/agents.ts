@@ -5,6 +5,7 @@ import type {
   Agent,
   AgentRegistrationToken,
   AgentRegistrationTokenListItem,
+  AgentUpdateResult,
   CreateAgentRegistrationTokenRequest,
 } from "@/types/api";
 
@@ -23,6 +24,12 @@ export const agentsApi = {
 
   forceOffline(id: string): Promise<void> {
     return api.post(`/api/agents/${id}/actions/force-offline`);
+  },
+
+  // Synchronous long poll: the control plane replies only after the agent has
+  // downloaded, verified, and installed the new binary (or refused).
+  update(id: string, options?: { force?: boolean }): Promise<AgentUpdateResult> {
+    return api.post<AgentUpdateResult>(`/api/agents/${id}/actions/update`, options ?? {});
   },
 
   // Registration tokens

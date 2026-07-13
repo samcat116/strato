@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentsApi } from "@/lib/api/agents";
 import { ApiError } from "@/lib/api/client";
 
@@ -32,6 +32,21 @@ export function useAgentTokens() {
   return useQuery({
     queryKey: ["agent-tokens"],
     queryFn: agentsApi.listTokens,
+  });
+}
+
+// Triggers an agent self-update. The request resolves only once the agent has
+// installed the binary and started restarting (or refused), so `isPending`
+// spans the whole download-and-verify window.
+export function useUpdateAgent() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
+      agentsApi.update(id, { force }),
+    onSuccess: (_result, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      queryClient.invalidateQueries({ queryKey: ["agents", id] });
+    },
   });
 }
 
