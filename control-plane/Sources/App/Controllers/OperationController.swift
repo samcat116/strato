@@ -2,9 +2,10 @@ import Fluent
 import Vapor
 import StratoShared
 
-/// Read API for asynchronous VM operations (issue #259). Mutation endpoints
-/// return an operation with `202 Accepted`; clients poll here until it reaches
-/// a terminal state. Per-VM history lives under `GET /api/vms/:vmID/operations`.
+/// Read API for asynchronous resource operations (issue #259). Mutation
+/// endpoints return an operation with `202 Accepted`; clients poll here until
+/// it reaches a terminal state. Per-VM history lives under
+/// `GET /api/vms/:vmID/operations`.
 struct OperationController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
         let operations = routes.grouped("api", "operations")
@@ -18,19 +19,25 @@ struct OperationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid operation ID")
         }
 
-        guard let operation = try await VMOperation.find(operationID, on: req.db) else {
+        guard let operation = try await ResourceOperation.find(operationID, on: req.db) else {
             throw Abort(.notFound)
         }
 
-        // Operation visibility follows the VM's `read` permission. A delete
-        // operation outlives its VM row, so once the VM is gone fall back to
-        // initiator visibility (the client polling its own delete to completion).
-        if try await VM.find(operation.vmID, on: req.db) != nil {
-            _ = try await req.authorizedVM(operation.vmID, permission: "read")
-        } else {
-            guard user.isSystemAdmin || operation.userID == user.id else {
-                throw Abort(.notFound)
+        // Operation visibility follows the resource's `read` permission while
+        // it exists — each resource kind supplies its own check. A delete
+        // operation outlives the row it removes, so once the resource is gone
+        // fall back to initiator visibility (the client polling its own
+        // delete to completion).
+        switch operation.resourceKind {
+        case .virtualMachine:
+            if try await VM.find(operation.resourceID, on: req.db) != nil {
+                _ = try await req.authorizedVM(operation.resourceID, permission: "read")
+                return OperationResponse(from: operation)
             }
+        }
+
+        guard user.isSystemAdmin || operation.userID == user.id else {
+            throw Abort(.notFound)
         }
 
         return OperationResponse(from: operation)

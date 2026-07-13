@@ -75,9 +75,9 @@ final class VMOperationTests {
     /// write.
     private func pollOperationCompleted(
         _ operationId: UUID, on db: any Database
-    ) async throws -> VMOperation? {
+    ) async throws -> ResourceOperation? {
         for _ in 0..<100 {
-            if let operation = try await VMOperation.find(operationId, on: db),
+            if let operation = try await ResourceOperation.find(operationId, on: db),
                 operation.status != .pending
             {
                 return operation
@@ -123,7 +123,7 @@ final class VMOperationTests {
     @Test("A pending operation on the VM rejects a new mutation with 409")
     func conflictingPendingOperationRejected() async throws {
         try await withVMTestApp { app, user, vm, token in
-            let pending = VMOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
+            let pending = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
             try await pending.save(on: app.db)
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
@@ -144,10 +144,10 @@ final class VMOperationTests {
             // The database, not just the controller's read-then-insert check,
             // must reject a second pending operation — that is what closes the
             // race between two concurrent mutations.
-            let first = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            let first = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
             try await first.save(on: app.db)
 
-            let second = VMOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
+            let second = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
             await #expect(throws: (any Error).self) {
                 try await second.save(on: app.db)
             }
@@ -155,7 +155,7 @@ final class VMOperationTests {
             // Terminal operations do not block new pending ones (the index is
             // partial on status = 'pending').
             _ = try await first.completeIfPending(as: .failed, error: "boom", on: app.db)
-            let third = VMOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
+            let third = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
             try await third.save(on: app.db)
         }
     }
@@ -170,14 +170,14 @@ final class VMOperationTests {
             vm.setStatus(.starting, at: Date().addingTimeInterval(-400))
             try await vm.save(on: app.db)
 
-            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
             try await operation.save(on: app.db)
             operation.createdAt = Date().addingTimeInterval(-400)  // past the 180s boot budget
             try await operation.save(on: app.db)
 
             await app.agentService.sweepStuckOperations()
 
-            let swept = try await VMOperation.find(operation.id, on: app.db)
+            let swept = try await ResourceOperation.find(operation.id, on: app.db)
             #expect(swept?.status == .failed)
             #expect(swept?.error?.contains("timed out") == true)
             #expect(swept?.completedAt != nil)
@@ -190,14 +190,14 @@ final class VMOperationTests {
     @Test("The sweep fails a stuck create and marks the .created VM as error")
     func sweepFailsStuckCreate() async throws {
         try await withVMTestApp { app, user, vm, _ in
-            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .create)
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .create)
             try await operation.save(on: app.db)
             operation.createdAt = Date().addingTimeInterval(-700)  // past the 600s create budget
             try await operation.save(on: app.db)
 
             await app.agentService.sweepStuckOperations()
 
-            let swept = try await VMOperation.find(operation.id, on: app.db)
+            let swept = try await ResourceOperation.find(operation.id, on: app.db)
             #expect(swept?.status == .failed)
 
             // `.created` counts as stuck for a create operation specifically.
@@ -212,12 +212,12 @@ final class VMOperationTests {
             vm.setStatus(.starting)
             try await vm.save(on: app.db)
 
-            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
             try await operation.save(on: app.db)
 
             await app.agentService.sweepStuckOperations()
 
-            let fresh = try await VMOperation.find(operation.id, on: app.db)
+            let fresh = try await ResourceOperation.find(operation.id, on: app.db)
             #expect(fresh?.status == .pending)
 
             let freshVM = try await VM.find(vm.id, on: app.db)
@@ -230,7 +230,7 @@ final class VMOperationTests {
     @Test("GET /api/operations/:id follows the VM's read permission")
     func operationReadFollowsVMPermission() async throws {
         try await withVMTestApp { app, user, vm, token in
-            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
             try await operation.save(on: app.db)
 
             app.spicedbMockAllows = true
@@ -255,7 +255,7 @@ final class VMOperationTests {
     @Test("An operation whose VM is gone is visible to its initiator only")
     func operationForDeletedVMVisibleToInitiatorOnly() async throws {
         try await withVMTestApp { app, user, vm, token in
-            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .delete)
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .delete)
             operation.status = .succeeded
             try await operation.save(on: app.db)
 
@@ -289,13 +289,13 @@ final class VMOperationTests {
     @Test("GET /api/vms/:id/operations lists newest first and honors limit")
     func listOperationsNewestFirst() async throws {
         try await withVMTestApp { app, user, vm, token in
-            let older = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            let older = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
             older.status = .succeeded
             try await older.save(on: app.db)
             older.createdAt = Date().addingTimeInterval(-60)
             try await older.save(on: app.db)
 
-            let newer = VMOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
+            let newer = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
             newer.status = .succeeded
             try await newer.save(on: app.db)
 

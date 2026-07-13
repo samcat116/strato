@@ -155,9 +155,9 @@ final class DesiredStateReconciliationTests {
             }
 
             // The dispatch fails immediately — not after the sweep budget.
-            var operation: VMOperation?
+            var operation: ResourceOperation?
             for _ in 0..<250 {
-                operation = try await VMOperation.find(operationId, on: app.db)
+                operation = try await ResourceOperation.find(operationId, on: app.db)
                 if operation?.status == .failed { break }
                 try await Task.sleep(for: .milliseconds(20))
             }
@@ -196,8 +196,8 @@ final class DesiredStateReconciliationTests {
             #expect(refreshed?.generation == 1)
 
             // The operation stays pending until an observed report confirms.
-            let pending = try await VMOperation.query(on: app.db)
-                .filter(\.$vmID == vm.id!)
+            let pending = try await ResourceOperation.query(on: app.db)
+                .filter(\.$resourceID == vm.id!)
                 .filter(\.$status == .pending)
                 .count()
             #expect(pending == 1)
@@ -303,7 +303,7 @@ final class DesiredStateReconciliationTests {
 
             vm.setDesiredStatus(.running)
             try await vm.save(on: app.db)
-            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
             try await operation.save(on: app.db)
 
             let envelope = try self.report(
@@ -316,7 +316,7 @@ final class DesiredStateReconciliationTests {
             #expect(refreshed?.status == .running)
             #expect(refreshed?.observedGeneration == 1)
 
-            let completed = try await VMOperation.find(operation.id, on: app.db)
+            let completed = try await ResourceOperation.find(operation.id, on: app.db)
             #expect(completed?.status == .succeeded)
         }
     }
@@ -328,7 +328,7 @@ final class DesiredStateReconciliationTests {
 
             vm.setDesiredStatus(.running)
             try await vm.save(on: app.db)
-            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
             try await operation.save(on: app.db)
 
             // Generation 1 was attempted and failed; the agent reports the
@@ -344,7 +344,7 @@ final class DesiredStateReconciliationTests {
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
 
-            let failed = try await VMOperation.find(operation.id, on: app.db)
+            let failed = try await ResourceOperation.find(operation.id, on: app.db)
             #expect(failed?.status == .failed)
             #expect(failed?.error == "boot failed: no bootable device")
 
@@ -366,7 +366,7 @@ final class DesiredStateReconciliationTests {
             vm.setDesiredStatus(.running)  // gen 1
             vm.setDesiredStatus(.running)  // gen 2 (retry)
             try await vm.save(on: app.db)
-            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
             try await operation.save(on: app.db)
 
             // A heartbeat report still carrying generation 1's error arrives
@@ -383,7 +383,7 @@ final class DesiredStateReconciliationTests {
             await app.agentService.applyObservedStateReport(envelope, fromAgentNamed: "recon-agent")
 
             // The fresh operation must not be failed by the stale error.
-            let stillPending = try await VMOperation.find(operation.id, on: app.db)
+            let stillPending = try await ResourceOperation.find(operation.id, on: app.db)
             #expect(stillPending?.status == .pending)
         }
     }
@@ -395,7 +395,7 @@ final class DesiredStateReconciliationTests {
 
             vm.setDesiredStatus(.running)
             try await vm.save(on: app.db)
-            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .create)
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .create)
             try await operation.save(on: app.db)
 
             let envelope = try self.report(
@@ -411,7 +411,7 @@ final class DesiredStateReconciliationTests {
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.status == .created)  // untouched
 
-            let stillPending = try await VMOperation.find(operation.id, on: app.db)
+            let stillPending = try await ResourceOperation.find(operation.id, on: app.db)
             #expect(stillPending?.status == .pending)
         }
     }
@@ -423,7 +423,7 @@ final class DesiredStateReconciliationTests {
 
             vm.setDesiredStatus(.absent)
             try await vm.save(on: app.db)
-            let operation = VMOperation(vmID: vm.id!, userID: user.id!, kind: .delete)
+            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .delete)
             try await operation.save(on: app.db)
 
             // Full-list semantics: the VM is missing from the agent's report.
@@ -433,7 +433,7 @@ final class DesiredStateReconciliationTests {
             let gone = try await VM.find(vm.id, on: app.db)
             #expect(gone == nil)
 
-            let completed = try await VMOperation.find(operation.id, on: app.db)
+            let completed = try await ResourceOperation.find(operation.id, on: app.db)
             #expect(completed?.status == .succeeded)
         }
     }

@@ -87,7 +87,7 @@ The control plane is declarative, not imperative:
 
 ### Async VM operations
 
-VM mutation endpoints (create/start/stop/delete/reboot/pause/resume) insert a `VMOperation` row in the same transaction as the desired-state change and return **202 Accepted** with the operation object. The operation completes when the agent reports success/error, or a stuck-operation sweep fails it after a kind-specific budget. Operation rows deliberately have no FK to the VM so delete operations survive VM row removal; the frontend polls operations to terminal state.
+VM mutation endpoints (create/start/stop/delete/reboot/pause/resume) insert a `ResourceOperation` row (`resource_kind` discriminator, `virtual_machine` today; issue #412 generalized the machinery for future resource types) in the same transaction as the desired-state change and return **202 Accepted** with the operation object. The operation completes when the agent reports success/error, or a stuck-operation sweep fails it after a per-resource-kind budget. Operation rows deliberately have no FK to the resource so delete operations survive row removal; the frontend polls operations to terminal state.
 
 ### Multi-replica control plane (Valkey coordination)
 

@@ -298,8 +298,8 @@ final class QuotaEnforcementTests {
 
     private func waitForNoPendingOperations(vmID: UUID, on db: any Database) async throws {
         for _ in 0..<100 {
-            let pending = try await VMOperation.query(on: db)
-                .filter(\.$vmID == vmID)
+            let pending = try await ResourceOperation.query(on: db)
+                .filter(\.$resourceID == vmID)
                 .filter(\.$status == .pending)
                 .count()
             if pending == 0 { return }

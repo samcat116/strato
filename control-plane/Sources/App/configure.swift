@@ -365,6 +365,11 @@ public func configure(_ app: Application) async throws {
     // endpoint enables RP-initiated logout at the IdP.
     app.migrations.add(AddEndSessionEndpointToOIDCProvider())
 
+    // Generalize the async-operation machinery beyond VMs (issue #412):
+    // vm_operations becomes resource_operations with a resource_kind
+    // discriminator, so new resource types reuse the 202/poll/sweep pattern.
+    app.migrations.add(GeneralizeVMOperations())
+
     try await app.autoMigrate()
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth
