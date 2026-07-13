@@ -339,6 +339,20 @@ final class SandboxTests {
         }
     }
 
+    @Test("DELETE /api/projects/:id is rejected (409) while sandboxes exist")
+    func projectDeleteBlockedBySandboxes() async throws {
+        try await withSandboxTestApp { app, _, project, _, token in
+            // The sandboxes table references projects, so without the
+            // dependent-resource check this would surface as a raw database
+            // constraint failure instead of a deterministic conflict.
+            try await app.test(.DELETE, "/api/projects/\(project.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
     // MARK: - Authorization
 
     @Test("GET /api/sandboxes/:id is denied (403) when SpiceDB withholds read")

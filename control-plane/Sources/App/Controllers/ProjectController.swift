@@ -244,6 +244,14 @@ struct ProjectController: RouteCollection {
             throw Abort(.conflict, reason: "Cannot delete project with VMs. Delete or move VMs first.")
         }
 
+        let sandboxCount = try await Sandbox.query(on: req.db)
+            .filter(\.$project.$id == projectID)
+            .count()
+
+        if sandboxCount > 0 {
+            throw Abort(.conflict, reason: "Cannot delete project with sandboxes. Delete sandboxes first.")
+        }
+
         try await project.delete(on: req.db)
         return .noContent
     }
