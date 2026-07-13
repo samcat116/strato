@@ -77,45 +77,78 @@ struct SandboxExecWebSocketController: RouteCollection {
                     "agentName": .string(session.agentName),
                 ])
 
-            // Inbound frames flow through a single serial pump: the frame
-            // handlers yield synchronously (preserving WebSocket arrival
-            // order) and one task relays them to the agent one at a time.
-            // Spawning a Task per frame would let the scheduler transpose
-            // rapid stdin frames (fast typing, paste), corrupting what runs
-            // in the sandbox. Errors are still handled per frame.
-            let (frames, frameContinuation) = AsyncStream.makeStream(of: InboundFrame.self)
+            // Everything sent to the agent for this session flows through a
+            // single serial pump: the frame handlers yield synchronously
+            // (preserving WebSocket arrival order) and one task relays events
+            // to the agent one at a time. Spawning a Task per frame would let
+            // the scheduler transpose rapid stdin frames (fast typing, paste),
+            // corrupting what runs in the sandbox. The exec start and the
+            // browser-disconnect close ride the same pump — enqueued first and
+            // last respectively — so a browser that disconnects while attach
+            // setup is still in flight cannot make the close overtake the
+            // start on the agent socket and orphan the exec process. Errors
+            // are still handled per event.
+            let (events, eventContinuation) = AsyncStream.makeStream(of: SessionEvent.self)
             Task {
-                for await frame in frames {
-                    do {
-                        switch frame {
-                        case .input(let data):
-                            try await manager.routeInput(sessionId: sessionId, data: data)
-                        case .resize(let rows, let cols):
-                            try await manager.routeResize(sessionId: sessionId, rows: rows, cols: cols)
+                // Whether the start message reached the agent: a close only
+                // needs sending for a session the agent may have spawned.
+                var started = false
+                for await event in events {
+                    switch event {
+                    case .start:
+                        do {
+                            try await manager.sendExecStart(for: session)
+                            started = true
+                        } catch {
+                            req.logger.error("Failed to start sandbox exec on agent: \(error)")
+                            manager.removeSession(sessionId: sessionId)
+                            try? await ws.send(
+                                #"{"type":"error","message":"Failed to start exec session on agent"}"#)
+                            try? await ws.close(code: .unexpectedServerError)
                         }
-                    } catch {
-                        req.logger.error("Failed to route exec frame to agent: \(error)")
+                    case .input(let data):
+                        do {
+                            try await manager.routeInput(sessionId: sessionId, data: data)
+                        } catch {
+                            req.logger.error("Failed to route exec input to agent: \(error)")
+                        }
+                    case .resize(let rows, let cols):
+                        do {
+                            try await manager.routeResize(sessionId: sessionId, rows: rows, cols: cols)
+                        } catch {
+                            req.logger.error("Failed to route exec resize to agent: \(error)")
+                        }
+                    case .browserClosed:
+                        // Tell the agent to tear the exec down before removing
+                        // the session. A no-op if the agent already reported
+                        // exit/closed (the session is gone by then); skipped
+                        // entirely when the start never reached the agent.
+                        if started {
+                            try? await manager.sendExecClose(sessionId: sessionId, reason: "browser disconnected")
+                        }
+                        manager.removeSession(sessionId: sessionId)
                     }
                 }
             }
 
+            // The start is the pump's first event — enqueued before the frame
+            // handlers exist, so no input/resize/close can precede it.
+            eventContinuation.yield(.start)
+
             // Binary frames are stdin bytes for the exec process.
             ws.onBinary { _, buffer in
                 let bytes = buffer.getBytes(at: 0, length: buffer.readableBytes) ?? []
-                frameContinuation.yield(.input(Data(bytes)))
+                eventContinuation.yield(.input(Data(bytes)))
             }
 
             // Text frames are JSON control messages; only resize is defined.
             // Unknown or malformed frames are ignored.
             ws.onText { _, text in
                 guard let resize = Self.decodeResizeFrame(text) else { return }
-                frameContinuation.yield(.resize(rows: resize.rows, cols: resize.cols))
+                eventContinuation.yield(.resize(rows: resize.rows, cols: resize.cols))
             }
 
             ws.onClose.whenComplete { result in
-                // No more inbound frames: let the pump drain what it has and
-                // exit.
-                frameContinuation.finish()
                 switch result {
                 case .success:
                     req.logger.info(
@@ -133,34 +166,21 @@ struct SandboxExecWebSocketController: RouteCollection {
                         ])
                 }
 
-                // Tell the agent to tear the exec down before removing the
-                // session. A no-op if the agent already reported exit/closed
-                // (the session is gone by then).
-                Task {
-                    defer {
-                        manager.removeSession(sessionId: sessionId)
-                    }
-                    try? await manager.sendExecClose(sessionId: sessionId, reason: "browser disconnected")
-                }
-            }
-
-            // Kick off the exec on the agent.
-            do {
-                try await manager.sendExecStart(for: session)
-            } catch {
-                req.logger.error("Failed to start sandbox exec on agent: \(error)")
-                manager.removeSession(sessionId: sessionId)
-                try? await ws.send(#"{"type":"error","message":"Failed to start exec session on agent"}"#)
-                try? await ws.close(code: .unexpectedServerError)
+                // The teardown is the pump's last event: everything already
+                // queued (including the start) reaches the agent first.
+                eventContinuation.yield(.browserClosed)
+                eventContinuation.finish()
             }
         }
     }
 
-    /// One browser → control-plane frame, queued for the per-connection
-    /// serial pump.
-    private enum InboundFrame: Sendable {
+    /// One event on the per-connection serial pump: the initial exec start,
+    /// browser frames, and the browser-disconnect teardown, in strict order.
+    private enum SessionEvent: Sendable {
+        case start
         case input(Data)
         case resize(rows: Int, cols: Int)
+        case browserClosed
     }
 
     private struct ResizeFrame: Decodable {
