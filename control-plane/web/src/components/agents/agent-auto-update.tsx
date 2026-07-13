@@ -16,8 +16,8 @@ interface AgentAutoUpdateCardProps {
  * Auto-update enrollment and rollout status (issue #434). Enrolled agents are
  * updated by the control plane one at a time: the fleet rollout assigns the
  * target version, the agent converges when its own preconditions allow (no
- * running Firecracker VMs, no in-flight work, not containerized), and the
- * next agent follows only once this one re-registers healthy.
+ * in-flight work, not containerized), and the next agent follows only once
+ * this one re-registers healthy.
  */
 export function AgentAutoUpdateCard({ agent }: AgentAutoUpdateCardProps) {
   const patchAgent = usePatchAgent();
@@ -66,9 +66,8 @@ export function AgentAutoUpdateCard({ agent }: AgentAutoUpdateCardProps) {
         <p className="text-muted-foreground">
           Enrolled agents are updated to the deployment&apos;s target version by the
           control plane, one agent at a time, each waiting for the previous one to
-          re-register healthy. The agent only restarts itself when nothing would be
-          lost: containerized installs, running Firecracker workloads, and in-flight
-          operations all defer the update.
+          re-register healthy. Running VMs survive the restart and are re-adopted;
+          containerized installs and in-flight operations defer the update.
         </p>
 
         {agent.autoUpdate && agent.updateDesiredVersion && (

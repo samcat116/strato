@@ -53,10 +53,11 @@ the update by re-registering with the new build's version.
 
 Any failure before the final rename leaves the running binary untouched.
 
-QEMU VMs survive the restart: each exposes a deterministic per-VM QMP socket
-that the new agent process re-adopts. Firecracker VMs (and therefore
-sandboxes) are **not** re-adopted yet (issue #433) — they keep running as
-orphans that can only be deleted, which is why both paths guard on them.
+Running VMs survive the restart: QEMU VMs expose a deterministic per-VM QMP
+socket and Firecracker VMs a deterministic API socket (issue #433), both of
+which the new agent process re-adopts. The imperative endpoint's `force`
+acknowledgement for Firecracker workloads predates re-adoption and remains
+as a conservative operator confirmation.
 
 ## Operator-triggered updates
 
@@ -119,10 +120,12 @@ On each sync carrying a `desiredAgentUpdate`, the agent evaluates
 
 1. **Not containerized** — permanent for the install; reported so the
    operator can un-enroll the agent.
-2. **No live Firecracker VMs** — they would be orphaned by the restart
-   (until issue #433 lands re-adoption).
-3. **No in-flight reconcile work** — the update runs as its own step once
+2. **No in-flight reconcile work** — the update runs as its own step once
    the per-VM lanes have drained; a busy agent waits for a later sync.
+
+Running VMs are deliberately not a precondition: QEMU and Firecracker VMs
+alike are re-adopted after the restart (issue #433), so hosting live
+workloads is exactly the situation auto-update must work in.
 
 A blocked agent reports the current reason on its observed-state reports
 (`agentUpdateStatus`) and re-evaluates every sync. A failed artifact is

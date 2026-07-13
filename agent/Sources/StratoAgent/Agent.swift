@@ -1707,7 +1707,6 @@ extension Agent {
 
         let conditions = AutoUpdateGate.Conditions(
             installMode: AgentInstallMode.detect(),
-            runningFirecrackerVMs: await liveFirecrackerVMCount(),
             inFlightReconcileItems: await reconciler?.inFlightVMs().count ?? 0
         )
         if let reason = AutoUpdateGate.blockedReason(conditions) {
@@ -1785,26 +1784,6 @@ extension Agent {
             try? await Task.sleep(for: .seconds(1))
             await self.stop()
         }
-    }
-
-    /// Managed Firecracker VMs whose process is (or may be) alive. Restarting
-    /// under them would orphan them (no re-adoption yet, issue #433), so the
-    /// auto-update gate blocks on any non-zero count. Statuses the backend
-    /// cannot vouch for count as live — only a VM known to be at rest is safe
-    /// to lose.
-    private func liveFirecrackerVMCount() async -> Int {
-        guard let service = hypervisorServices[.firecracker] else { return 0 }
-        var count = 0
-        for (vmId, entry) in managedVMs where entry.hypervisorType == .firecracker {
-            let status = (try? await service.getVMStatus(vmId: vmId)) ?? .unknown
-            switch status {
-            case .shutdown, .created:
-                continue
-            case .running, .paused, .starting, .stopping, .error, .unknown:
-                count += 1
-            }
-        }
-        return count
     }
 
     private func handleVMPause(_ message: VMOperationMessage) async {

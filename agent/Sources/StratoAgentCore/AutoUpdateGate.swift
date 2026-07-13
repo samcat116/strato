@@ -16,15 +16,15 @@ public enum AutoUpdateGate {
 
     /// The runtime facts the gate judges, gathered by the `Agent` actor at
     /// evaluation time.
+    ///
+    /// Running VMs are deliberately NOT a condition: both QEMU and
+    /// Firecracker VMs survive an agent restart and are re-adopted over
+    /// their deterministic control sockets (issues #260, #433), so hosting
+    /// live workloads is exactly the situation auto-update must work in.
     public struct Conditions: Sendable {
         /// How this process is installed. Containerized agents never
         /// self-converge — their binary is an immutable image layer.
         public let installMode: AgentInstallMode
-        /// Managed Firecracker VMs whose process is (or may be) alive. They
-        /// are not re-adopted after a restart (issue #433) and would be
-        /// orphaned, so any non-zero count blocks. Includes transitional and
-        /// unknown statuses: only a VM known to be at rest is safe to lose.
-        public let runningFirecrackerVMs: Int
         /// Reconcile work items currently in flight. The update runs as its
         /// own step only once the per-VM lanes have drained; a busy agent
         /// waits for a later sync.
@@ -32,11 +32,9 @@ public enum AutoUpdateGate {
 
         public init(
             installMode: AgentInstallMode,
-            runningFirecrackerVMs: Int,
             inFlightReconcileItems: Int
         ) {
             self.installMode = installMode
-            self.runningFirecrackerVMs = runningFirecrackerVMs
             self.inFlightReconcileItems = inFlightReconcileItems
         }
     }
@@ -44,15 +42,11 @@ public enum AutoUpdateGate {
     /// Why the update cannot proceed right now, or nil when every
     /// precondition holds. Checks are ordered permanent-first so the reported
     /// reason is the one an operator can act on: a containerized agent's
-    /// count of running VMs is irrelevant.
+    /// in-flight work is irrelevant.
     public static func blockedReason(_ conditions: Conditions) -> String? {
         if case .container(let marker) = conditions.installMode {
             return
                 "the agent runs in a container (detected via \(marker)); its binary is managed externally — updates ship as a new image"
-        }
-        if conditions.runningFirecrackerVMs > 0 {
-            return
-                "\(conditions.runningFirecrackerVMs) Firecracker VM(s) are running and would be orphaned by an agent restart (re-adoption is not supported yet)"
         }
         if conditions.inFlightReconcileItems > 0 {
             return

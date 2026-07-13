@@ -55,7 +55,7 @@ struct AgentAutoUpdateProtocolTests {
             agentUpdateStatus: ObservedAgentUpdateStatus(
                 targetVersion: "1.4.0",
                 disposition: ObservedAgentUpdateStatus.dispositionBlocked,
-                reason: "2 Firecracker VM(s) are running and would be orphaned by a restart"
+                reason: "3 reconcile work item(s) are in flight"
             )
         )
         let decoded = try throughEnvelope(report)
@@ -63,7 +63,7 @@ struct AgentAutoUpdateProtocolTests {
         let status = try #require(decoded.agentUpdateStatus)
         #expect(status.targetVersion == "1.4.0")
         #expect(status.disposition == ObservedAgentUpdateStatus.dispositionBlocked)
-        #expect(status.reason.contains("Firecracker"))
+        #expect(status.reason.contains("in flight"))
     }
 
     @Test("ObservedStateReport from an older agent decodes the update status to nil")

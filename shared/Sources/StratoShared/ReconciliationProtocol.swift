@@ -118,9 +118,9 @@ public struct DesiredSandboxState: Codable, Sendable {
 /// diffs this to nothing, and absence of the field means "no opinion" — never
 /// "downgrade". The agent converges through the same download/verify/swap/
 /// restart path as the imperative update, but only when its local
-/// preconditions hold (not containerized, no running Firecracker VMs, no
-/// in-flight reconcile work); otherwise it reports why via
-/// `ObservedStateReport.agentUpdateStatus` and retries on later syncs.
+/// preconditions hold (not containerized, no in-flight reconcile work);
+/// otherwise it reports why via `ObservedStateReport.agentUpdateStatus` and
+/// retries on later syncs.
 public struct DesiredAgentUpdate: Codable, Sendable {
     /// The version the agent should be running. Informational to the updater
     /// (the artifact decides what is installed) but the agent uses it to
@@ -434,8 +434,8 @@ public struct ObservedSandboxState: Codable, Sendable {
 /// update itself failed" instead of timing both out identically.
 public struct ObservedAgentUpdateStatus: Codable, Sendable {
     /// A precondition currently prevents the attempt (containerized install,
-    /// running Firecracker VMs, in-flight reconcile work). Transient from the
-    /// rollout's perspective: the agent re-evaluates on every sync.
+    /// in-flight reconcile work). Transient from the rollout's perspective:
+    /// the agent re-evaluates on every sync.
     public static let dispositionBlocked = "blocked"
     /// The update was attempted and did not take (download, checksum, probe,
     /// or swap failure — or the installed artifact did not change the

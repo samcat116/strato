@@ -190,7 +190,7 @@ final class AgentAutoUpdateTests {
             await self.sweep(app)
 
             let firstRow = try await self.reload(first, on: app)
-            firstRow.updateBlockedReason = "2 Firecracker VM(s) are running"
+            firstRow.updateBlockedReason = "2 reconcile work item(s) are in flight"
             firstRow.updateAttemptedAt = Date(
                 timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60))
             try await firstRow.save(on: app.db)
@@ -357,12 +357,12 @@ final class AgentAutoUpdateTests {
             let blocked = ObservedAgentUpdateStatus(
                 targetVersion: Self.target,
                 disposition: ObservedAgentUpdateStatus.dispositionBlocked,
-                reason: "1 Firecracker VM(s) are running"
+                reason: "1 reconcile work item(s) are in flight"
             )
             await app.agentService.applyObservedStateReport(
                 try self.report(from: agent, status: blocked), fromAgentNamed: agent.name)
             var row = try await self.reload(agent, on: app)
-            #expect(row.updateBlockedReason == "1 Firecracker VM(s) are running")
+            #expect(row.updateBlockedReason == "1 reconcile work item(s) are in flight")
             #expect(row.updateFailureReason == nil)
 
             await app.agentService.applyObservedStateReport(
