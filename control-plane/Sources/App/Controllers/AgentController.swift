@@ -651,6 +651,14 @@ struct AgentController: RouteCollection {
         var artifactUrl: String?
         /// Hex SHA-256 of the artifact at `artifactUrl`.
         var sha256: String?
+        /// Shape of the explicit artifact: "tarball" (default, extract
+        /// `tarballMember`) or "binary" (the download *is* the agent
+        /// executable). Ignored without `artifactUrl` — release-resolved
+        /// artifacts describe their own shape.
+        var artifactKind: AgentUpdateArtifactKind?
+        /// Member to extract from an explicit tarball artifact.
+        /// Defaults to `strato-agent`.
+        var tarballMember: String?
         /// Version label for an explicit artifact (informational; shown in
         /// logs and the response). Defaults to the configured target.
         var targetVersion: String?
@@ -737,7 +745,8 @@ struct AgentController: RouteCollection {
             artifact = ResolvedAgentArtifact(
                 url: explicitURL,
                 sha256: explicitDigest,
-                tarballMember: AgentUpdateArtifacts.defaultTarballMember
+                kind: request.artifactKind ?? .tarball,
+                tarballMember: request.tarballMember ?? AgentUpdateArtifacts.defaultTarballMember
             )
         } else {
             guard let target = AgentVersionTarget.version else {
@@ -793,8 +802,8 @@ struct AgentController: RouteCollection {
             targetVersion: targetVersion,
             artifactURL: artifact.url,
             sha256: artifact.sha256,
-            artifactKind: .tarball,
-            tarballMember: artifact.tarballMember
+            artifactKind: artifact.kind,
+            tarballMember: artifact.kind == .tarball ? artifact.tarballMember : nil
         )
 
         // Generous timeout: the reply comes only after the agent has

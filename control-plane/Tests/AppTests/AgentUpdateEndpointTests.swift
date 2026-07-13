@@ -190,4 +190,34 @@ final class AgentUpdateEndpointTests {
             }
         }
     }
+
+    @Test("an explicit bare-binary artifact passes every gate and reaches dispatch")
+    func explicitBinaryArtifactAccepted() async throws {
+        try await withUpdateTestApp { app, _, org, token in
+            // The operator hands a bare executable (artifactKind "binary"):
+            // the request must decode and clear all pre-dispatch gates — the
+            // 502 proves it reached the send (no agent socket is connected
+            // here), not a 400 from the body or a kind-related refusal.
+            let agent = try await self.makeAgent(app: app, org: org)
+
+            struct BinaryBody: Content {
+                let artifactUrl: String
+                let sha256: String
+                let artifactKind: String
+                let force: Bool
+            }
+            try await app.test(.POST, "/api/agents/\(agent.id!)/actions/update") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    BinaryBody(
+                        artifactUrl: "https://mirror.internal/strato-agent",
+                        sha256: Self.validDigest,
+                        artifactKind: "binary",
+                        force: true
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .badGateway)
+            }
+        }
+    }
 }

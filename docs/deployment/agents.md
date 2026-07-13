@@ -245,8 +245,11 @@ Caveats the UI confirms before dispatching:
 Request-body overrides for air-gapped deployments or unreleased builds:
 `{"artifactUrl": "...", "sha256": "<hex>"}` skips artifact resolution and
 hands the agent exactly that file (the URL must be reachable *from the agent
-host*). Main-branch builds have no release tarballs, so updating to them
-always requires this override.
+host*). The override defaults to the release tarball shape; add
+`"artifactKind": "binary"` when the URL points at a bare `strato-agent`
+executable, or `"tarballMember": "..."` for a tarball whose agent binary
+lives at a different member path. Main-branch builds have no release
+tarballs, so updating to them always requires this override.
 
 Remote updates need an agent new enough to understand the command (wire
 protocol v6+); older agents must be updated manually once — re-run install.sh

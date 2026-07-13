@@ -28,6 +28,8 @@ struct AgentReleaseManifest: Decodable {
 struct ResolvedAgentArtifact: Equatable {
     let url: String
     let sha256: String
+    let kind: AgentUpdateArtifactKind
+    /// Member to extract when `kind == .tarball`; ignored for bare binaries.
     let tarballMember: String
 }
 
@@ -113,6 +115,7 @@ enum AgentUpdateArtifacts {
         return ResolvedAgentArtifact(
             url: asset.url,
             sha256: digest,
+            kind: .tarball,
             tarballMember: asset.agentBinaryPath ?? defaultTarballMember
         )
     }
@@ -198,7 +201,8 @@ enum AgentUpdateArtifacts {
             throw Abort(.badRequest, reason: "Target version '\(targetVersion)' has no release assets")
         }
         let sha256 = try await fetchChecksum(forAssetAt: assetURL, client: client)
-        return ResolvedAgentArtifact(url: assetURL, sha256: sha256, tarballMember: defaultTarballMember)
+        return ResolvedAgentArtifact(
+            url: assetURL, sha256: sha256, kind: .tarball, tarballMember: defaultTarballMember)
     }
 
     /// Fetches and parses the `.sha256` sidecar for an asset URL.
