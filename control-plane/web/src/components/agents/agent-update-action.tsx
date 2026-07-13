@@ -28,7 +28,7 @@ interface AgentUpdateActionProps {
  * has installed the binary and started restarting.
  *
  * A 409 from the endpoint is a refusal the operator may override (hosted
- * Firecracker VMs, already at target): the dialog surfaces the reason and
+ * sandboxes, already at target): the dialog surfaces the reason and
  * offers a force retry instead of failing outright.
  */
 export function AgentUpdateAction({ agent, size = "default" }: AgentUpdateActionProps) {
@@ -90,11 +90,13 @@ export function AgentUpdateAction({ agent, size = "default" }: AgentUpdateAction
                 </p>
                 <ul className="list-disc pl-5 space-y-1">
                   <li>The agent briefly disconnects; it re-registers automatically.</li>
-                  <li>Running QEMU VMs keep running and are re-adopted afterwards.</li>
                   <li>
-                    Running Firecracker workloads (VMs and sandboxes) are{" "}
-                    <span className="font-medium">not</span> re-adopted — they keep
-                    running but can only be deleted afterwards.
+                    Running VMs (QEMU and Firecracker) keep running and are re-adopted
+                    afterwards.
+                  </li>
+                  <li>
+                    Running sandboxes are <span className="font-medium">not</span> yet
+                    re-adopted — they keep running but can only be deleted afterwards.
                   </li>
                 </ul>
                 <p>

@@ -236,12 +236,11 @@ error. A crash-looping update can be rolled back by hand:
 Caveats the UI confirms before dispatching:
 
 - The agent disconnects briefly and re-registers on restart.
-- Running QEMU VMs keep running and are re-adopted via their deterministic
-  QMP sockets.
-- Running **Firecracker workloads are not re-adopted** — VMs and sandboxes
-  (which place exclusively on Firecracker) keep running as orphans that can
-  only be deleted afterwards. The endpoint refuses in this case unless
-  `{"force": true}` is passed.
+- Running VMs keep running and are re-adopted via their deterministic control
+  sockets (QMP for QEMU, the Firecracker API socket for Firecracker).
+- Running **sandboxes are not yet re-adopted** — they keep running as orphans
+  that can only be deleted afterwards. The endpoint refuses in this case
+  unless `{"force": true}` is passed.
 
 Request-body overrides for air-gapped deployments or unreleased builds
 (**system admin only** — an explicit artifact is arbitrary code the host will
