@@ -23,6 +23,8 @@ func routes(_ app: Application) throws {
     try app.register(collection: OrganizationalUnitController())
     try app.register(collection: ProjectController())
     try app.register(collection: ProjectMemberController())
+    // Registry pull secrets for private sandbox images (issue #414)
+    try app.register(collection: RegistryPullSecretController())
     try app.register(collection: ResourceQuotaController())
     try app.register(collection: HierarchyController())
 

@@ -1350,26 +1350,169 @@ actor AgentService {
             }
 
         // The agent's authoritative sandbox set (issue #413). Specs are
-        // assembled fresh from the database like VM specs; registry
-        // credentials are minted here once pull-secret storage lands
-        // (issue #414) — until then only public images work.
+        // assembled fresh from the database like VM specs. This is also the
+        // slot where registry material is refreshed (issue #414), mirroring
+        // signed image URLs: unpinned tags resolve to digests exactly once,
+        // and a short-lived pull credential is minted for private images.
         let sandboxes = try await Sandbox.query(on: db)
             .filter(\.$hypervisorId == agentId)
             .all()
-        let sandboxEntries = sandboxes.compactMap { sandbox -> DesiredSandboxState? in
-            guard let sandboxId = sandbox.id else { return nil }
-            return DesiredSandboxState(
-                sandboxId: sandboxId,
-                spec: sandbox.buildSpec(),
-                desiredStatus: sandbox.desiredStatus,
-                generation: sandbox.generation,
-                registryCredential: nil
-            )
+
+        // One credential fetch for all the sandboxes' projects; matched per
+        // sandbox by the image's registry host.
+        let sandboxProjectIDs = Set(sandboxes.map { $0.$project.id })
+        let pullSecretsByProject: [UUID: [RegistryPullSecret]]
+        if sandboxProjectIDs.isEmpty {
+            pullSecretsByProject = [:]
+        } else {
+            let rows = try await RegistryPullSecret.query(on: db)
+                .filter(\.$project.$id ~~ sandboxProjectIDs)
+                .all()
+            pullSecretsByProject = Dictionary(grouping: rows) { $0.$project.id }
+        }
+
+        var sandboxEntries: [DesiredSandboxState] = []
+        for sandbox in sandboxes {
+            guard let sandboxId = sandbox.id else { continue }
+            // Registry material first: digest pinning mutates the in-memory
+            // model that buildSpec() reads.
+            let registryCredential = await sandboxRegistryMaterial(
+                sandbox,
+                secrets: pullSecretsByProject[sandbox.$project.id] ?? [],
+                on: db)
+            sandboxEntries.append(
+                DesiredSandboxState(
+                    sandboxId: sandboxId,
+                    spec: sandbox.buildSpec(),
+                    desiredStatus: sandbox.desiredStatus,
+                    generation: sandbox.generation,
+                    registryCredential: registryCredential
+                ))
         }
 
         return DesiredStateMessage(
             vms: entries, sandboxes: sandboxEntries, networks: networkStates,
             networksAuthoritative: scope.authoritative)
+    }
+
+    /// Per-sandbox registry work at sync assembly (issue #414): pins an
+    /// unpinned tag to its manifest digest and derives the short-lived pull
+    /// credential the sync carries. Best effort throughout — a registry that
+    /// is down must not block the sync, which also carries state changes for
+    /// already-materialized workloads.
+    ///
+    /// Digest pinning happens at most once per sandbox: the resolved digest is
+    /// persisted (a targeted column update, so concurrent observed-state
+    /// writes on the row are untouched) and never re-resolved, which is what
+    /// makes convergence immutable — a re-tagged image cannot change a sandbox
+    /// out from under its generation. Deliberately no generation bump: the pin
+    /// matters to agents that have not materialized the sandbox yet, and must
+    /// not re-converge ones that have.
+    private func sandboxRegistryMaterial(
+        _ sandbox: Sandbox, secrets: [RegistryPullSecret], on db: any Database
+    ) async -> RegistryCredential? {
+        // A sandbox on its way out pulls nothing: no digest pin, no
+        // credential material toward the agent tearing it down.
+        guard sandbox.desiredStatus != .absent else { return nil }
+
+        guard let ref = OCIImageReference.parse(sandbox.image) else {
+            app.logger.warning(
+                "Sandbox image reference is unparseable; syncing without digest or credential",
+                metadata: [
+                    "sandboxId": .string(sandbox.id?.uuidString ?? ""),
+                    "image": .string(sandbox.image),
+                ])
+            return nil
+        }
+
+        let secretRow = secrets.first { $0.registry == ref.registry }
+        var basic: RegistryBasicCredential?
+        if let secretRow {
+            do {
+                basic = RegistryBasicCredential(
+                    username: secretRow.username,
+                    password: try app.secretsEncryption.decrypt(secretRow.secret))
+            } catch {
+                app.logger.error(
+                    "Failed to decrypt registry pull secret; treating the image as public",
+                    metadata: [
+                        "registry": .string(secretRow.registry),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+        }
+
+        // Tag→digest pinning.
+        if sandbox.imageDigest == nil, let sandboxId = sandbox.id {
+            do {
+                if let digest = try await app.registryClient.resolveDigest(for: ref, credential: basic) {
+                    sandbox.imageDigest = digest
+                    try await Sandbox.query(on: db)
+                        .filter(\.$id == sandboxId)
+                        .set(\.$imageDigest, to: digest)
+                        .update()
+                    app.logger.info(
+                        "Pinned sandbox image tag to digest",
+                        metadata: [
+                            "sandboxId": .string(sandboxId.uuidString),
+                            "image": .string(sandbox.image),
+                            "digest": .string(digest),
+                        ])
+                }
+            } catch {
+                // The agent then resolves the tag itself (accepting the
+                // mutability) and the next sync retries the pin.
+                app.logger.warning(
+                    "Failed to resolve sandbox image tag to a digest; syncing unpinned",
+                    metadata: [
+                        "sandboxId": .string(sandboxId.uuidString),
+                        "image": .string(sandbox.image),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+        }
+
+        guard let secretRow, let basic else { return nil }
+
+        do {
+            if let token = try await app.registryClient.mintPullToken(for: ref, credential: basic) {
+                return RegistryCredential(
+                    registry: ref.registry,
+                    username: secretRow.username,
+                    password: token.token,
+                    expiresAt: token.expiresAt,
+                    bearer: true)
+            }
+        } catch let error as RegistryClientError {
+            // Policy refusal (e.g. plaintext token realm), not transience:
+            // a Basic fallback would hand the agent the stored secret to
+            // present to the very endpoint the client just refused. Send
+            // nothing; the pull fails loudly agent-side instead.
+            app.logger.warning(
+                "Refusing to send registry credential for sandbox image",
+                metadata: [
+                    "registry": .string(ref.registry),
+                    "error": .string(error.localizedDescription),
+                ])
+            return nil
+        } catch {
+            app.logger.warning(
+                "Failed to mint a registry pull token; falling back to the stored credential",
+                metadata: [
+                    "registry": .string(ref.registry),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+
+        // Basic-only registry, or its token service is unreachable from the
+        // control plane: the stored credential is the only material that can
+        // authorize the pull. Agents hold it in memory only (wire contract).
+        return RegistryCredential(
+            registry: ref.registry,
+            username: secretRow.username,
+            password: basic.password,
+            expiresAt: nil,
+            bearer: false)
     }
 
     /// Which networks an agent's sync should carry, and whether the agent is

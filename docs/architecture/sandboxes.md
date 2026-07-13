@@ -10,10 +10,10 @@ entrypoint/cmd/env/workdir.
 
 > **Status**: phase 1 in progress. The wire protocol (issue #411), the
 > generalized operation machinery (#412), the control-plane model/API (#413),
-> and scheduler gating + quota accounting (#415) are landed; registry
-> integration, IPAM, and the agent runtime are tracked in issues #414–#422.
-> Sections below describe the agreed design; anything not yet landed is
-> marked with its issue.
+> registry pull secrets + tag→digest resolution (#414), and scheduler gating
+> + quota accounting (#415) are landed; IPAM and the agent runtime are
+> tracked in issues #416–#422. Sections below describe the agreed design;
+> anything not yet landed is marked with its issue.
 
 ## Decision: native Swift Firecracker path
 
@@ -31,9 +31,11 @@ A sandbox is described by `SandboxSpec`
 *not* a `VMSpec`:
 
 - **Image**: an OCI reference (`registry/repo:tag`) plus the manifest digest
-  it resolved to. The control plane pins the digest so convergence is
-  immutable — a re-tagged image never changes a sandbox out from under its
-  generation (tag→digest resolution is #414).
+  it resolved to. The control plane resolves the tag at sync assembly, **at
+  most once per sandbox**, and persists the pin so convergence is immutable —
+  a re-tagged image never changes a sandbox out from under its generation.
+  Resolution is best effort: a registry that is down never blocks the sync
+  (the agent then resolves the tag itself until a later sync pins it).
 - **Sizing**: vCPUs and memory bytes only.
 - **Process**: optional entrypoint/cmd/workdir overrides and an env map,
   merged over the image config by the guest agent.
@@ -67,16 +69,29 @@ itself):
 - Sandbox mutations create the same 202-Accepted async operation rows as VM
   mutations, via the operation machinery generalized in #412.
 
-### Registry credentials on the wire
+### Registry pull secrets and credentials on the wire
 
-Private images need pull credentials agent-side. `DesiredSandboxState`
-carries an optional `RegistryCredential` (registry host, username,
-password/token, expiry) that the control plane mints **fresh at every sync
-assembly** — the same slot where signed image URLs are refreshed — so a
-long-lived desired entry never holds an expired secret. Agents use the
-credential for the pull and never persist it; durable storage (encrypted at
-rest, per-project CRUD) is control-plane-only (#414). Public images work with
-no credential and zero configuration.
+Private images need pull credentials agent-side (issue #414). Durable storage
+is control-plane-only: a project stores at most one credential per registry
+host under `/api/projects/:projectID/registry-credentials` (reads need
+`view_project`, mutations `manage_project`), with the secret **encrypted at
+rest** through the same `SecretsEncryptionService` machinery as OIDC client
+secrets and never echoed back by the API.
+
+`DesiredSandboxState` carries an optional `RegistryCredential` (registry host,
+username, password/token, expiry, bearer flag) that the control plane mints
+**fresh at every sync assembly** — the same slot where signed image URLs are
+refreshed — so a long-lived desired entry never holds an expired secret. The
+control plane speaks the distribution auth flow (`DistributionRegistryClient`:
+challenge probe → token endpoint → manifest; Docker Hub, GHCR, and any
+distribution-spec registry): when the registry has a token service it mints a
+short-lived pull-scoped **bearer token** (`bearer: true`; agents present it
+directly), and only for Basic-only registries — or when the token service is
+unreachable — does it fall back to sending the stored credential itself
+(`bearer: false`). Agents use the credential for the pull and never persist
+it. Public images work with no credential and zero configuration; sandboxes
+already pinned to a digest keep converging on it even if the credential is
+later deleted.
 
 ### Protocol versioning
 
