@@ -1,0 +1,27 @@
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_a6ee88101f2f1f::t_347ea188356b34 113-121
+  s_a6ee88101f2f1f::t_4fbd11ac359876 135-136,150
+docs/architecture/sandboxes.md
+  s_a6ee88101f2f1f::t_2bf14d55f10379 88-94
+shared/Sources/StratoShared/WireProtocol.swift
+  s_a6ee88101f2f1f::t_6eb847fbe63679 80-86
+  s_a6ee88101f2f1f::t_2ba7d750f62ec9 128,131-136
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_a6ee88101f2f1f::t_192ad6ed8a5849 35-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "6440b66fc7015545f587b35fb35152731d3e8dde",
+  "prompts": {},
+  "sessions": {
+    "s_a6ee88101f2f1f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0bc683fa-8727-45e9-87f5-af2b90b9f4be",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
