@@ -84,8 +84,8 @@ struct AgentController: RouteCollection {
     /// or new ones the still-unscoped placement paths make. A delegated org
     /// admin must not be able to take down another tenant's workloads or
     /// strand its detached volumes, so destructive agent actions
-    /// (force-offline, deregister) fall back to system-admin only while any
-    /// foreign-org VM or volume lives here.
+    /// (force-offline, deregister, update) fall back to system-admin only
+    /// while any foreign-org VM or volume lives here.
     private func requireNoForeignWorkloads(_ req: Request, agent: Agent) async throws {
         let user = try requireUser(req)
         if user.isSystemAdmin { return }
@@ -659,8 +659,8 @@ struct AgentController: RouteCollection {
 
     struct AgentUpdateRequest: Content {
         /// Proceed despite caveats the endpoint would otherwise refuse on:
-        /// hosted Firecracker VMs (not re-adopted after restart) and an agent
-        /// already at the target version.
+        /// hosted sandboxes (whose runtime does not yet re-adopt them after a
+        /// restart) and an agent already at the target version.
         var force: Bool?
         /// Explicit artifact override for deployments the URL-convention
         /// resolver can't serve (air-gapped without a mirror, main-branch
@@ -706,9 +706,9 @@ struct AgentController: RouteCollection {
         }
 
         try await requireAgentPermission(req, agent: agent, permission: "manage")
-        // Restarting the agent orphans any hosted Firecracker VMs, so this is
-        // destructive enough to fall under the same cross-tenant guard as
-        // force-offline/deregister.
+        // Restarting the agent briefly disconnects it and puts every hosted
+        // workload through re-adoption, so this is disruptive enough to fall
+        // under the same cross-tenant guard as force-offline/deregister.
         try await requireNoForeignWorkloads(req, agent: agent)
 
         let request: AgentUpdateRequest
@@ -736,28 +736,21 @@ struct AgentController: RouteCollection {
             )
         }
 
-        // QEMU VMs survive an agent restart (re-adopted via their deterministic
-        // QMP sockets), but Firecracker workloads are not re-adopted — they
-        // keep running as orphans that can only be deleted. That covers both
-        // Firecracker VMs and sandboxes (which place exclusively on
-        // Firecracker). Make the operator acknowledge that explicitly.
+        // VMs survive an agent restart regardless of hypervisor: QEMU and
+        // Firecracker VMs are both re-adopted via their deterministic control
+        // sockets (issue #433), so they need no acknowledgement. Sandboxes do:
+        // their runtime driver (issue #421) hasn't landed, so restart-survival
+        // is unproven — drop this guard only once it re-adopts them the same
+        // way. Make the operator acknowledge that explicitly.
         if !force {
-            let firecrackerVMs = try await VM.query(on: req.db)
-                .filter(\.$hypervisorId == agentId.uuidString)
-                .filter(\.$hypervisorType == .firecracker)
-                .count()
             let sandboxes = try await Sandbox.query(on: req.db)
                 .filter(\.$hypervisorId == agentId.uuidString)
                 .count()
-            guard firecrackerVMs == 0 && sandboxes == 0 else {
-                let workloads = [
-                    firecrackerVMs > 0 ? "\(firecrackerVMs) Firecracker VM(s)" : nil,
-                    sandboxes > 0 ? "\(sandboxes) sandbox(es)" : nil,
-                ].compactMap { $0 }.joined(separator: " and ")
+            guard sandboxes == 0 else {
                 throw Abort(
                     .conflict,
                     reason:
-                        "Agent hosts \(workloads), which are not re-adopted after an agent restart. Delete or migrate them, or pass force to proceed anyway."
+                        "Agent hosts \(sandboxes) sandbox(es), which the sandbox runtime does not yet re-adopt after an agent restart. Delete them, or pass force to proceed anyway."
                 )
             }
         }

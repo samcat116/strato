@@ -9,9 +9,9 @@ import VaporTesting
 /// Tests for `POST /api/agents/:agentId/actions/update` — the refusal paths
 /// that must trip *before* anything is dispatched to the agent: offline
 /// agents, pre-v6 wire protocols (which cannot decode the command and would
-/// only ever time out), unresolvable artifacts, and the Firecracker
-/// re-adoption caveat. The dispatch itself is exercised up to the socket
-/// lookup (no agent is connected, so a forced update reports the agent as
+/// only ever time out), unresolvable artifacts, and the sandbox re-adoption
+/// caveat. The dispatch itself is exercised up to the socket lookup (no agent
+/// is connected, so an update that clears every gate reports the agent as
 /// unreachable).
 @Suite("Agent Update Endpoint Tests", .serialized)
 final class AgentUpdateEndpointTests {
@@ -139,8 +139,8 @@ final class AgentUpdateEndpointTests {
         }
     }
 
-    @Test("hosted Firecracker VMs require force (they are not re-adopted)")
-    func firecrackerVMsRequireForce() async throws {
+    @Test("hosted Firecracker VMs do not require force (re-adopted since #433)")
+    func firecrackerVMsDoNotRequireForce() async throws {
         try await withUpdateTestApp { app, builder, org, token in
             let agent = try await self.makeAgent(app: app, org: org)
 
@@ -151,6 +151,9 @@ final class AgentUpdateEndpointTests {
             vm.hypervisorType = .firecracker
             try await vm.save(on: app.db)
 
+            // No force: the request must clear every pre-dispatch gate and
+            // fail only at the send itself (no agent socket in this harness),
+            // proving hosted Firecracker VMs no longer trip the guard.
             try await app.test(.POST, "/api/agents/\(agent.id!)/actions/update") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -158,8 +161,7 @@ final class AgentUpdateEndpointTests {
                     "sha256": Self.validDigest,
                 ])
             } afterResponse: { res in
-                #expect(res.status == .conflict)
-                #expect(res.body.string.contains("Firecracker"))
+                #expect(res.status == .badGateway)
             }
         }
     }
@@ -191,7 +193,7 @@ final class AgentUpdateEndpointTests {
         }
     }
 
-    @Test("hosted sandboxes require force (Firecracker-only, not re-adopted)")
+    @Test("hosted sandboxes require force (runtime does not yet re-adopt them)")
     func sandboxesRequireForce() async throws {
         try await withUpdateTestApp { app, builder, org, token in
             let agent = try await self.makeAgent(app: app, org: org)
