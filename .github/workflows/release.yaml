@@ -503,6 +503,10 @@ jobs:
   build-swift-binaries:
     runs-on: ${{ matrix.os }}
     needs: create-release
+    # linux-arm64 pins the Swift toolchain via the swift:6.3.2-noble container
+    # (the hosted arm runner's preinstalled Swift is newer); the other legs run
+    # container-less (empty string = no job container).
+    container: ${{ matrix.container || '' }}
     # Backstop for a hung cold build (default would be 360 minutes).
     timeout-minutes: 90
     strategy:
@@ -510,6 +514,16 @@ jobs:
         include:
           - os: self-hosted
             asset_name: strato-linux-x86_64
+          # linux-arm64 (issue #431): install.sh derives strato-linux-arm64
+          # from uname on aarch64 hosts, so this asset must exist. Built on
+          # the GitHub-hosted arm runner like the image-digest jobs, inside
+          # the 6.3.2 container for toolchain parity with the x86_64 leg.
+          # --static-swift-stdlib makes the container choice irrelevant at
+          # runtime, so parity here is about identical language/compiler
+          # behavior, not ABI lockstep.
+          - os: ubuntu-24.04-arm
+            asset_name: strato-linux-arm64
+            container: swift:6.3.2-noble
           # macos-latest runners are Apple Silicon (arm64) — this asset was
           # previously mislabeled strato-macos-x86_64. The macOS leg builds
           # with the runner's Xcode toolchain rather than the 6.3.2 pin used
@@ -529,6 +543,13 @@ jobs:
         uses: vapor/swiftly-action@v0.2
         with:
           toolchain: "6.3.2"
+
+      # The asset upload below is raw curl; make sure the container has it
+      # (the self-hosted and macOS legs always do).
+      - name: Install container dependencies
+        if: matrix.container
+        run: |
+          command -v curl >/dev/null || { apt-get update && apt-get install -y curl; }
 
       # The tarball binaries run outside any container image, so the image-env
       # STRATO_VERSION/STRATO_GIT_SHA injection can't reach them. Compile the
@@ -552,7 +573,9 @@ jobs:
           # them onto bare hypervisors). macOS links the OS-provided runtime,
           # where the flag does not apply.
           STATIC=""
-          if [ "${{ matrix.os }}" = "self-hosted" ]; then STATIC="--static-swift-stdlib"; fi
+          case "${{ matrix.asset_name }}" in
+            strato-linux-*) STATIC="--static-swift-stdlib" ;;
+          esac
 
           # Build control plane
           cd control-plane
@@ -598,6 +621,60 @@ jobs:
               "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${f}" >/dev/null
             echo "Uploaded $f"
           done
+
+  # Machine-readable pointer to this release's binaries: version, git SHA, and
+  # per-platform tarball URL/checksum/size (issue #431). The control plane
+  # consumes it — via the stable
+  # releases/latest/download/agent-manifest.json URL — to learn the newest
+  # agent version and hand each agent a download for its platform; the
+  # update flow verifies the sha256 before swapping binaries. Publishing
+  # happens only after EVERY tarball leg succeeded, so the manifest never
+  # references an asset that failed to upload. Checksums come from the
+  # .sha256 sidecars the build legs already computed — no need to re-download
+  # the tarballs themselves here.
+  publish-agent-manifest:
+    runs-on: ubuntu-latest
+    needs: build-swift-binaries
+    steps:
+      - name: Build and upload agent-manifest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No checkout in this job, so gh gets its repo context from the env.
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+
+          # Binary tarballs only (strato-<os>-<arch>.tar.gz) — the pattern
+          # deliberately excludes the strato-<version>-source.tar.gz archive.
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+            --jq '.assets[]
+                  | select(.name | test("^strato-(linux|macos)-[a-z0-9_]+\\.tar\\.gz$"))
+                  | [.name, .browser_download_url, (.size | tostring)] | @tsv' \
+            > assets.tsv
+          [ -s assets.tsv ] || { echo "no strato-<os>-<arch>.tar.gz assets on $TAG" >&2; exit 1; }
+
+          mkdir sidecars
+          gh release download "$TAG" --pattern 'strato-*.tar.gz.sha256' --dir sidecars
+
+          entries="[]"
+          while IFS=$'\t' read -r name url size; do
+            platform="${name#strato-}"; platform="${platform%.tar.gz}"
+            os="${platform%%-*}"; arch="${platform#*-}"
+            sha256="$(awk '{print $1}' "sidecars/${name}.sha256")"
+            [ -n "$sha256" ] || { echo "missing checksum sidecar for $name" >&2; exit 1; }
+            entries="$(jq --arg os "$os" --arg arch "$arch" --arg name "$name" \
+                          --arg url "$url" --arg sha "$sha256" --argjson size "$size" \
+              '. + [{os: $os, arch: $arch, asset: $name, url: $url, sha256: $sha,
+                     size: $size, agentBinaryPath: "strato-agent"}]' <<< "$entries")"
+          done < assets.tsv
+
+          jq -n --arg version "$TAG" --arg sha "$GITHUB_SHA" --argjson assets "$entries" \
+            '{schemaVersion: 1, version: $version, gitSHA: $sha, assets: $assets}' \
+            > agent-manifest.json
+          cat agent-manifest.json
+          # --clobber so a re-run of this job replaces the manifest instead of
+          # failing on the existing asset.
+          gh release upload "$TAG" agent-manifest.json --clobber
 
   # Lightweight (git archive + heredocs + uploads) — runs hosted so the static
   # self-hosted runner is free for the Linux tarball build. Everything is
