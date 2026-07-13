@@ -1021,9 +1021,10 @@ struct OIDCController: RouteCollection {
         // `aud` may be a single string or an array of strings (RFC 7519 §4.1.3;
         // Discord uses the array form), so match on membership, not equality.
         guard claims.aud.value.contains(provider.clientID) else {
+            let audiences = claims.aud.value.joined(separator: ", ")
             throw Abort(
                 .badRequest,
-                reason: "ID token audience '\(claims.aud.value.joined(separator: ", "))' does not match client ID '\(provider.clientID)'"
+                reason: "ID token audience '\(audiences)' does not match client ID '\(provider.clientID)'"
             )
         }
 
