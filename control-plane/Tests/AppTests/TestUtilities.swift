@@ -511,6 +511,24 @@ struct TestDataBuilder {
         return vm
     }
 
+    func createSandbox(
+        name: String,
+        project: Project,
+        environment: String = "development",
+        image: String = "ghcr.io/acme/worker:v1"
+    ) async throws -> Sandbox {
+        let sandbox = Sandbox(
+            name: name,
+            projectID: project.id!,
+            environment: environment,
+            image: image,
+            cpus: 1,
+            memory: 1024 * 1024 * 1024
+        )
+        try await sandbox.save(on: db)
+        return sandbox
+    }
+
     func createImage(
         name: String = "Test Image",
         description: String = "Test image description",

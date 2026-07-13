@@ -877,6 +877,8 @@ actor AgentService {
                 switch operation.resourceKind {
                 case .virtualMachine:
                     try await resolveVMForStuckOperation(operation, on: db)
+                case .sandbox:
+                    try await resolveSandboxForStuckOperation(operation, on: db)
                 }
 
                 app.logger.warning(
@@ -924,6 +926,37 @@ actor AgentService {
                         "timeoutSeconds": .string("\(Int(timeout))"),
                     ])
             }
+
+            // Same backstop for sandboxes: transitional with no pending
+            // operation means the confirming report never landed.
+            let transitionalSandboxes = try await Sandbox.query(on: db)
+                .filter(\.$status ~~ [.starting, .stopping])
+                .all()
+
+            for sandbox in transitionalSandboxes {
+                let changedAt = sandbox.statusChangedAt ?? sandbox.updatedAt ?? now
+                guard now.timeIntervalSince(changedAt) > timeout, let sandboxID = sandbox.id else { continue }
+
+                let hasPendingOperation =
+                    try await ResourceOperation.query(on: db)
+                    .filter(\.$resourceKind == .sandbox)
+                    .filter(\.$resourceID == sandboxID)
+                    .filter(\.$status == .pending)
+                    .count() > 0
+                guard !hasPendingOperation else { continue }
+
+                let previous = sandbox.status
+                sandbox.setStatus(.error)
+                try await sandbox.save(on: db)
+
+                app.logger.warning(
+                    "Sandbox stuck in transitional state past timeout; marking as error",
+                    metadata: [
+                        "sandboxId": .string(sandboxID.uuidString),
+                        "stuckStatus": .string(previous.rawValue),
+                        "timeoutSeconds": .string("\(Int(timeout))"),
+                    ])
+            }
         } catch {
             app.logger.error("Stuck-operation sweep failed: \(error)")
         }
@@ -950,6 +983,27 @@ actor AgentService {
         }
         if changed {
             try await vm.save(on: db)
+        }
+    }
+
+    /// Sandbox counterpart of `resolveVMForStuckOperation`. A stuck create is
+    /// recognized by the sandbox never having been confirmed by any agent
+    /// (`observedGeneration == 0`) — sandboxes have no `.created`-style
+    /// pre-placement status, so the fresh row's `.stopped` cannot carry that
+    /// signal the way a VM's `.created` does.
+    private func resolveSandboxForStuckOperation(_ operation: ResourceOperation, on db: Database) async throws {
+        guard let sandbox = try await Sandbox.find(operation.resourceID, on: db) else { return }
+
+        var changed = false
+        if sandbox.status.isTransitional || (operation.kind == .create && sandbox.observedGeneration == 0) {
+            sandbox.setStatus(.error)
+            changed = true
+        }
+        if sandbox.revertDesiredToObserved() {
+            changed = true
+        }
+        if changed {
+            try await sandbox.save(on: db)
         }
     }
 
@@ -1284,8 +1338,27 @@ actor AgentService {
                 )
             }
 
+        // The agent's authoritative sandbox set (issue #413). Specs are
+        // assembled fresh from the database like VM specs; registry
+        // credentials are minted here once pull-secret storage lands
+        // (issue #414) — until then only public images work.
+        let sandboxes = try await Sandbox.query(on: db)
+            .filter(\.$hypervisorId == agentId)
+            .all()
+        let sandboxEntries = sandboxes.compactMap { sandbox -> DesiredSandboxState? in
+            guard let sandboxId = sandbox.id else { return nil }
+            return DesiredSandboxState(
+                sandboxId: sandboxId,
+                spec: sandbox.buildSpec(),
+                desiredStatus: sandbox.desiredStatus,
+                generation: sandbox.generation,
+                registryCredential: nil
+            )
+        }
+
         return DesiredStateMessage(
-            vms: entries, networks: networkStates, networksAuthoritative: scope.authoritative)
+            vms: entries, sandboxes: sandboxEntries, networks: networkStates,
+            networksAuthoritative: scope.authoritative)
     }
 
     /// Which networks an agent's sync should carry, and whether the agent is
@@ -1445,10 +1518,13 @@ actor AgentService {
         await app.coordination.recordAgentPresence(agentName: agentName)
         await app.coordination.recordAgentRoute(agentName: agentName, replicaId: app.replicaID)
 
-        // Every reported VM is accounted for in the agent's resource figures,
-        // so any placement reservation still held for one would double-count.
+        // Every reported VM or sandbox is accounted for in the agent's
+        // resource figures, so any placement reservation still held for one
+        // would double-count. Reservations are keyed by resource id, so both
+        // kinds release through the same call.
         await app.coordination.releaseReservations(
-            agentId: report.agentId, vmIds: report.vms.map { $0.vmId.uuidString })
+            agentId: report.agentId,
+            vmIds: report.vms.map { $0.vmId.uuidString } + report.sandboxes.map { $0.sandboxId.uuidString })
 
         do {
             try await applyReportToDatabase(report)
@@ -1476,6 +1552,27 @@ actor AgentService {
                 try await applyObservedVMState(vm: vm, observed: observed, on: db)
             } else {
                 try await handleReportedAbsence(vm: vm, agentId: report.agentId, on: db)
+            }
+        }
+
+        // Sandboxes apply with the same shape as VMs: settled observations
+        // update the row and resolve pending operations; absence either
+        // confirms a deletion or escalates a lost sandbox.
+        let reportedSandboxes = Dictionary(
+            report.sandboxes.map { ($0.sandboxId, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        let dbSandboxes = try await Sandbox.query(on: db)
+            .filter(\.$hypervisorId == report.agentId)
+            .all()
+
+        for sandbox in dbSandboxes {
+            guard let sandboxID = sandbox.id else { continue }
+            if let observed = reportedSandboxes[sandboxID] {
+                try await applyObservedSandboxState(sandbox: sandbox, observed: observed, on: db)
+            } else {
+                try await handleReportedSandboxAbsence(sandbox: sandbox, agentId: report.agentId, on: db)
             }
         }
     }
@@ -1625,6 +1722,139 @@ actor AgentService {
             ])
     }
 
+    /// Sandbox counterpart of `applyObservedVMState`: apply one settled (or
+    /// failing) observation and resolve any pending operation it satisfies.
+    private func applyObservedSandboxState(
+        sandbox: Sandbox, observed: ObservedSandboxState, on db: Database
+    ) async throws {
+        let sandboxID = try sandbox.requireID()
+
+        // Still converging: progress only, never a settled status.
+        if observed.convergencePhase != nil {
+            app.logger.debug(
+                "Sandbox converging on agent",
+                metadata: [
+                    "sandboxId": .string(sandboxID.uuidString),
+                    "phase": .string(observed.convergencePhase ?? ""),
+                    "targetGeneration": .stringConvertible(sandbox.generation),
+                ])
+            return
+        }
+
+        let pendingOperation = try await ResourceOperation.query(on: db)
+            .filter(\.$resourceKind == .sandbox)
+            .filter(\.$resourceID == sandboxID)
+            .filter(\.$status == .pending)
+            .first()
+
+        var changed = false
+        if observed.observedGeneration > sandbox.observedGeneration {
+            sandbox.observedGeneration = observed.observedGeneration
+            changed = true
+        }
+
+        if sandbox.status != observed.status, observed.status != .unknown || sandbox.status.isTransitional {
+            let previous = sandbox.status
+            sandbox.setStatus(observed.status)
+            changed = true
+
+            // A workload finishing on its own (`.exited`) is the normal end
+            // of a one-shot sandbox, not drift — only flag other unprompted
+            // changes.
+            if pendingOperation == nil, !previous.isTransitional, observed.status != .exited {
+                app.logger.warning(
+                    "Sandbox state drifted without a pending operation",
+                    metadata: [
+                        "sandboxId": .string(sandboxID.uuidString),
+                        "previousStatus": .string(previous.rawValue),
+                        "observedStatus": .string(observed.status.rawValue),
+                    ])
+            }
+        }
+        if sandbox.exitCode != observed.exitCode {
+            sandbox.exitCode = observed.exitCode
+            changed = true
+        }
+        if changed {
+            try await sandbox.save(on: db)
+        }
+
+        guard let operation = pendingOperation else { return }
+
+        // Deletions complete by absence from the report, never by a status.
+        if operation.kind == .delete || sandbox.desiredStatus == .absent {
+            return
+        }
+
+        if observed.observedGeneration >= sandbox.generation,
+            sandbox.desiredStatus.isSatisfied(by: observed.status)
+        {
+            _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
+        } else if let lastError = observed.lastError, observed.failedGeneration == sandbox.generation {
+            // The agent tried to converge to *this* generation and failed —
+            // fail the operation with the real reason instead of waiting out
+            // its completion budget (same contract as VMs).
+            if try await operation.completeIfPending(as: .failed, error: lastError, on: db) {
+                var failedChanged = false
+                if observed.status == .unknown {
+                    sandbox.setStatus(.error)
+                    failedChanged = true
+                }
+                if sandbox.revertDesiredToObserved() {
+                    failedChanged = true
+                }
+                if failedChanged {
+                    try await sandbox.save(on: db)
+                }
+            }
+        }
+    }
+
+    /// A sandbox the database maps to this agent is absent from its full
+    /// report: either a confirmed deletion (desired absent) or genuine loss.
+    private func handleReportedSandboxAbsence(sandbox: Sandbox, agentId: String, on db: Database) async throws {
+        let sandboxID = try sandbox.requireID()
+
+        if sandbox.desiredStatus == .absent {
+            // Deletion confirmed. Complete the operation first, then remove
+            // the row (same crash-ordering rationale as VMs). Quota release
+            // joins once sandbox quota accounting lands (issue #415).
+            if let operation = try await ResourceOperation.query(on: db)
+                .filter(\.$resourceKind == .sandbox)
+                .filter(\.$resourceID == sandboxID)
+                .filter(\.$status == .pending)
+                .first()
+            {
+                _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
+            }
+
+            try await sandbox.delete(on: db)
+            await app.coordination.releaseReservation(agentId: agentId, vmId: sandboxID.uuidString)
+
+            app.logger.info(
+                "Sandbox deletion confirmed by agent report; record removed",
+                metadata: ["sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId)])
+            return
+        }
+
+        // Only escalate established sandboxes: a never-confirmed row
+        // (observedGeneration 0) may be mid-create on an agent that hasn't
+        // received the sync yet, and non-presence-asserting states are owned
+        // by the sweep.
+        guard sandbox.observedGeneration > 0, sandbox.status.assertsAgentPresence else { return }
+
+        let previous = sandbox.status
+        sandbox.setStatus(.error)
+        try await sandbox.save(on: db)
+        app.logger.warning(
+            "Sandbox missing from agent observed-state report; marking as error until re-converged",
+            metadata: [
+                "sandboxId": .string(sandboxID.uuidString),
+                "agentId": .string(agentId),
+                "previousStatus": .string(previous.rawValue),
+            ])
+    }
+
     // MARK: - VM Operations
 
     /// Places a VM on an agent selected by the scheduler, persists the
@@ -1693,6 +1923,66 @@ actor AgentService {
             // account for the reservation — release it rather than pinning
             // capacity until the TTL.
             await app.coordination.releaseReservation(agentId: agentId, vmId: vmId)
+            throw error
+        }
+    }
+
+    /// Places a sandbox on a Firecracker-capable agent, persists the
+    /// placement, and pushes (or nudges) a desired-state sync — the sandbox
+    /// half of `createVM`. The pending create operation completes from the
+    /// agent's observed-state reports, with the stuck-operation sweep as the
+    /// budget backstop.
+    ///
+    /// Placement is constrained to Firecracker only for now: gating on the
+    /// explicit sandbox-runtime capability (`AgentRegisterMessage.sandboxCapable`
+    /// plus guest-image presence) is issue #415, and there is no architecture
+    /// constraint until tag→digest resolution can read the image's platform
+    /// (issue #414). Sandboxes reserve no disk.
+    func createSandbox(sandbox: Sandbox, db: Database) async throws {
+        let schedulableAgents = await schedulableAgentsFromDatabase()
+        let sandboxId = sandbox.id?.uuidString ?? ""
+
+        let agentId: String
+        do {
+            agentId = try await app.scheduler.selectAndReserveAgent(
+                requirements: VMPlacementRequirements(
+                    cpu: sandbox.cpus,
+                    memory: sandbox.memory,
+                    disk: 0,
+                    hypervisorType: .firecracker,
+                    architecture: nil,
+                    siteID: nil
+                ),
+                vmId: sandboxId,
+                from: schedulableAgents,
+                coordination: app.coordination,
+                vmName: sandbox.name
+            )
+        } catch let error as SchedulerError {
+            app.logger.error("Scheduler failed to find suitable agent for sandbox: \(error)")
+            throw AgentServiceError.schedulingFailed(error.description)
+        }
+
+        do {
+            // Persist the placement, then sync: from here the sandbox is part
+            // of the agent's desired state and every path (nudge now, periodic
+            // timer later, reconnect sync) will carry it.
+            sandbox.hypervisorId = agentId
+            try await sandbox.save(on: db)
+
+            app.logger.info(
+                "Sandbox creation dispatched via desired-state sync",
+                metadata: [
+                    "sandboxId": .string(sandboxId),
+                    "agentId": .string(agentId),
+                ])
+
+            await syncDesiredState(agentId: agentId)
+        } catch {
+            // The placement never became desired state, so nothing will ever
+            // account for the reservation — release it rather than pinning
+            // capacity until the TTL.
+            await app.coordination.releaseReservation(agentId: agentId, vmId: sandboxId)
             throw error
         }
     }
@@ -2401,5 +2691,17 @@ extension VMStatus {
     /// are owned by the sweep — absence in those states is expected.
     var assertsAgentPresence: Bool {
         self == .running || self == .paused || self == .shutdown
+    }
+}
+
+extension SandboxStatus {
+    /// Sandbox counterpart of `VMStatus.assertsAgentPresence`: running,
+    /// stopped (rootfs materialized), and exited sandboxes live in the
+    /// agent's managed set. Sandboxes have no `.created`-style pre-placement
+    /// status, so callers must additionally skip never-confirmed rows
+    /// (`observedGeneration == 0`) — a fresh sandbox's `.stopped` predates
+    /// any agent involvement.
+    var assertsAgentPresence: Bool {
+        self == .running || self == .stopped || self == .exited
     }
 }

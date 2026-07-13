@@ -34,6 +34,11 @@ struct OperationController: RouteCollection {
                 _ = try await req.authorizedVM(operation.resourceID, permission: "read")
                 return OperationResponse(from: operation)
             }
+        case .sandbox:
+            if try await Sandbox.find(operation.resourceID, on: req.db) != nil {
+                _ = try await req.authorizedSandbox(operation.resourceID, permission: "read")
+                return OperationResponse(from: operation)
+            }
         }
 
         guard user.isSystemAdmin || operation.userID == user.id else {

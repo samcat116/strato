@@ -85,9 +85,9 @@ The control plane is declarative, not imperative:
 - The control plane periodically sends each agent a full, authoritative `DesiredStateMessage` (see `shared/Sources/StratoShared/ReconciliationProtocol.swift`). Each `DesiredVMState` carries a monotonic `generation` counter guarding against reordering; syncs are level-triggered and safe to drop/replay. Signed image URLs are refreshed at sync-assembly time.
 - The agent-side reconciler (`agent/Sources/StratoAgentCore/Reconciliation.swift`) diffs observed vs desired and converges via per-VM serial lanes, and reports observed state back.
 
-### Async VM operations
+### Async resource operations
 
-VM mutation endpoints (create/start/stop/delete/reboot/pause/resume) insert a `ResourceOperation` row (`resource_kind` discriminator, `virtual_machine` today; issue #412 generalized the machinery for future resource types) in the same transaction as the desired-state change and return **202 Accepted** with the operation object. The operation completes when the agent reports success/error, or a stuck-operation sweep fails it after a per-resource-kind budget. Operation rows deliberately have no FK to the resource so delete operations survive row removal; the frontend polls operations to terminal state.
+VM and sandbox mutation endpoints (create/start/stop/delete/reboot, plus pause/resume for VMs) insert a `ResourceOperation` row (`resource_kind` discriminator: `virtual_machine` or `sandbox`; issue #412 generalized the machinery) in the same transaction as the desired-state change and return **202 Accepted** with the operation object. The operation completes when the agent reports success/error, or a stuck-operation sweep fails it after a per-resource-kind budget. Operation rows deliberately have no FK to the resource so delete operations survive row removal; the frontend polls operations to terminal state.
 
 ### Multi-replica control plane (Valkey coordination)
 

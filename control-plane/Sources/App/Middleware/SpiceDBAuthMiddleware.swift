@@ -62,15 +62,42 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
             return try await next.respond(to: request)
         }
 
-        // For VM routes, check permissions
-        if request.url.path.hasPrefix("/api/vms") {
-            try await checkVMPermissions(request: request, user: user)
+        // Resource APIs guarded by route prefix: each maps to its SpiceDB
+        // resource type plus the POST action verbs that are permissions of
+        // their own (everything else shares the method → permission mapping).
+        if let resource = Self.guardedResources.first(where: { request.url.path.hasPrefix($0.prefix) }) {
+            try await checkResourcePermissions(request: request, user: user, resource: resource)
         }
 
         return try await next.respond(to: request)
     }
 
-    private func checkVMPermissions(request: Request, user: User) async throws {
+    /// A route-prefix-guarded resource API: `/api/vms` → `virtual_machine`,
+    /// `/api/sandboxes` → `sandbox`. `actionVerbs` are the POST subpaths that
+    /// map to a same-named SpiceDB permission (sandboxes have no
+    /// pause/resume, for example).
+    private struct GuardedResource {
+        let prefix: String
+        let resourceType: String
+        let actionVerbs: Set<String>
+    }
+
+    private static let guardedResources: [GuardedResource] = [
+        GuardedResource(
+            prefix: "/api/vms",
+            resourceType: "virtual_machine",
+            actionVerbs: ["start", "stop", "restart", "pause", "resume"]
+        ),
+        GuardedResource(
+            prefix: "/api/sandboxes",
+            resourceType: "sandbox",
+            actionVerbs: ["start", "stop", "restart"]
+        ),
+    ]
+
+    private func checkResourcePermissions(
+        request: Request, user: User, resource: GuardedResource
+    ) async throws {
         let method = request.method
         let pathComponents = request.url.path.split(separator: "/")
 
@@ -80,15 +107,10 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         case .GET:
             permission = "read"
         case .POST:
-            // Special handling for VM actions
+            // Special handling for lifecycle actions
             if pathComponents.count >= 4 {
                 let action = String(pathComponents[3])
-                switch action {
-                case "start", "stop", "restart", "pause", "resume":
-                    permission = action
-                default:
-                    permission = "update"
-                }
+                permission = resource.actionVerbs.contains(action) ? action : "update"
             } else {
                 permission = "create"
             }
@@ -100,7 +122,7 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
             throw Abort(.methodNotAllowed)
         }
 
-        // For specific VM operations, extract VM ID
+        // For object-level operations, extract the resource ID
         var resourceId = "*"  // Default for collection operations
         if pathComponents.count >= 3 {
             resourceId = String(pathComponents[2])
@@ -110,7 +132,7 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         if (permission == "read" && resourceId == "*")
             || (permission == "create" && resourceId == "*")
         {
-            // For VM collection read and VM creation, check organization membership
+            // For collection read and creation, check organization membership
             guard let currentOrgId = user.currentOrganizationId else {
                 throw Abort(.forbidden, reason: "No current organization set")
             }
@@ -134,7 +156,7 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
                 throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
             }
         } else {
-            // Check permission with SpiceDB for specific VM operations
+            // Check permission with SpiceDB for object-level operations
             guard let userId = user.id?.uuidString, !userId.isEmpty else {
                 throw Abort(.forbidden, reason: "Invalid user session")
             }
@@ -142,7 +164,7 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
             let hasPermission = try await request.spicedb.checkPermission(
                 subject: userId,
                 permission: permission,
-                resource: "virtual_machine",
+                resource: resource.resourceType,
                 resourceId: resourceId
             )
 
