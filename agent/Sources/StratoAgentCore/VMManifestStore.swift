@@ -2,22 +2,58 @@ import Foundation
 import Logging
 import StratoShared
 
-/// One VM's entry in the agent-wide manifest: which hypervisor backend owns the
-/// VM and the spec it was created from (the spec carries the resource
-/// reservations that must survive a restart).
+/// One workload's entry in the agent-wide manifest: which backend owns it and
+/// the spec it was created from (the spec carries the resource reservations
+/// that must survive a restart).
+///
+/// Issue #417 generalized the manifest over `WorkloadKind` so sandbox orphans
+/// are detected on restart, keep their resources reserved, and can be
+/// re-adopted, exactly like VMs. Entries written before sandboxes existed
+/// carry no `kind` key and decode as `.vm`.
 public struct VMManifestEntry: Codable, Sendable {
+    public let kind: WorkloadKind
     public let hypervisorType: HypervisorType
+    /// Creation spec and resource reservation. For sandbox entries this is a
+    /// reservation-only projection of `sandboxSpec` (cpus/memory), so
+    /// restart-survival capacity accounting reads one shape for both kinds.
     public let spec: VMSpec
+    /// The sandbox's own spec (present iff `kind == .sandbox`), kept so the
+    /// sandbox runtime can re-adopt the orphan after a restart.
+    public let sandboxSpec: SandboxSpec?
 
     public init(hypervisorType: HypervisorType, spec: VMSpec) {
+        self.kind = .vm
         self.hypervisorType = hypervisorType
         self.spec = spec
+        self.sandboxSpec = nil
+    }
+
+    /// A sandbox entry. Sandboxes boot through Firecracker only, so the
+    /// backend routing field is pinned.
+    public init(sandboxSpec: SandboxSpec) {
+        self.kind = .sandbox
+        self.hypervisorType = .firecracker
+        self.spec = VMSpec(
+            cpus: sandboxSpec.cpus, memoryBytes: sandboxSpec.memoryBytes, boot: .disk(firmware: nil))
+        self.sandboxSpec = sandboxSpec
+    }
+
+    // Custom decode so `kind` tolerates absence: entries persisted by a
+    // pre-sandbox agent decode as VMs rather than throwing. `encode(to:)`
+    // stays synthesized.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decodeIfPresent(WorkloadKind.self, forKey: .kind) ?? .vm
+        hypervisorType = try c.decode(HypervisorType.self, forKey: .hypervisorType)
+        spec = try c.decode(VMSpec.self, forKey: .spec)
+        sandboxSpec = try c.decodeIfPresent(SandboxSpec.self, forKey: .sandboxSpec)
     }
 }
 
-/// Persists the set of VMs an agent is managing — across all hypervisor backends —
-/// to disk so that, after an agent restart, the agent can route operations to the
-/// right backend and keep orphaned VMs' resources reserved.
+/// Persists the set of workloads (VMs and sandboxes) an agent is managing —
+/// across all backends — to disk so that, after an agent restart, the agent can
+/// route operations to the right backend and keep orphaned workloads' resources
+/// reserved.
 ///
 /// On restart, previously-managed VMs are loaded from this manifest as orphans,
 /// and the reconciler re-adopts them when the backend supports it (the `.adopt`

@@ -172,7 +172,12 @@ The agent-side pipeline, all native Swift:
    the existing Firecracker machinery, registered in the agent's driver
    registry and manifest like any other backend, including orphan adoption
    after agent restarts. The reconciler and manifest are generalized over
-   workload kinds first (#417).
+   workload kinds first (#417, landed): the diff engine, generation guard,
+   attempt cap, and per-workload serial lanes are shared across kinds — VM
+   items route to hypervisor drivers, sandbox items to the
+   `SandboxRuntimeService` seam (which stays nil, and the capability off,
+   until #421 ships the driver) — and manifest entries carry a workload kind
+   so sandbox orphans survive restarts with their resources reserved.
 
 ## Later phases
 
