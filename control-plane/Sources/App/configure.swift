@@ -3,7 +3,7 @@ import FluentPostgresDriver
 import NIOSSL
 import Vapor
 import OTel
-import Redis
+import Valkey
 
 public func configure(_ app: Application) async throws {
     // Capture this process's identity once, before anything else, so the boot log
@@ -82,10 +82,10 @@ public func configure(_ app: Application) async throws {
             app.logger.critical("\(error.description)")
             throw error
         }
-        try app.configureValkey(valkeyConfig)
-        app.sessions.use(.redis)
+        app.configureValkey(valkeyConfig)
+        app.sessions.use(.valkey)
         app.coordination = CoordinationService(store: ValkeyCoordinationStore(app: app), logger: app.logger)
-        // Fail fast at boot (after the Redis pools exist) if Valkey is unreachable.
+        // Fail fast at boot (after the Valkey run loop starts) if Valkey is unreachable.
         app.lifecycle.use(
             CoordinationLifecycleHandler(hostname: valkeyConfig.hostname, port: valkeyConfig.port))
         app.logger.info("Using Valkey for coordination and session storage")

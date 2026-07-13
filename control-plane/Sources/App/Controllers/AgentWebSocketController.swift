@@ -288,42 +288,42 @@ struct AgentWebSocketController: RouteCollection {
             }
         }
 
-        // Validate registration token using EventLoopFuture
-        validateRegistrationToken(req: req, ws: ws, token: token, agentName: agentName, state: state)
-            .flatMap { isValid -> EventLoopFuture<Void> in
-                guard isValid else {
-                    return ws.eventLoop.makeSucceededFuture(())
-                }
+        // Validate the registration token, then activate the connection.
+        Task {
+            guard
+                await self.validateRegistrationToken(
+                    req: req, ws: ws, token: token, agentName: agentName, state: state)
+            else {
+                return
+            }
 
-                req.logger.info(
-                    "Agent WebSocket connection established",
-                    metadata: [
-                        "agentName": .string(agentName)
-                    ])
+            req.logger.info(
+                "Agent WebSocket connection established",
+                metadata: [
+                    "agentName": .string(agentName)
+                ])
 
-                // Store WebSocket for this agent - we're already on the WebSocket's event loop
-                req.application.websocketManager.setConnection(agentName: agentName, websocket: ws)
+            // Store WebSocket for this agent (WebSocketManager is lock-protected)
+            req.application.websocketManager.setConnection(agentName: agentName, websocket: ws)
 
-                // Advertise which replica holds this agent's socket so other
-                // replicas can route sync nudges here (issue #261). Refreshed
-                // by every heartbeat; a crashed replica's claim expires by TTL.
-                Task {
-                    await req.application.coordination.recordAgentRoute(
-                        agentName: agentName, replicaId: req.application.replicaID)
-                }
+            // Advertise which replica holds this agent's socket so other
+            // replicas can route sync nudges here (issue #261). Refreshed
+            // by every heartbeat; a crashed replica's claim expires by TTL.
+            Task {
+                await req.application.coordination.recordAgentRoute(
+                    agentName: agentName, replicaId: req.application.replicaID)
+            }
 
-                // Mark as validated and process buffered messages. This is
-                // the only path where token auth actually validated the
-                // connection, so only here may registration rotate the token.
+            // Mark as validated and process buffered messages. This is
+            // the only path where token auth actually validated the
+            // connection, so only here may registration rotate the token.
+            // Both hops run on the WebSocket's event loop (where all `state`
+            // access lives) and stay ordered because the loop is FIFO.
+            ws.eventLoop.execute {
                 state.tokenAuthenticated = true
-                self.activateMessageRouting(req: req, ws: ws, state: state, agentName: agentName)
-
-                return ws.eventLoop.makeSucceededFuture(())
             }
-            .whenFailure { error in
-                req.logger.error("WebSocket handler error: \(error)")
-                _ = ws.close(code: .unexpectedServerError)
-            }
+            self.activateMessageRouting(req: req, ws: ws, state: state, agentName: agentName)
+        }
     }
 
     private func validateRegistrationToken(
@@ -332,80 +332,82 @@ struct AgentWebSocketController: RouteCollection {
         token: String,
         agentName: String,
         state: MessageState
-    ) -> EventLoopFuture<Bool> {
-        // Query database for token
-        let query = AgentRegistrationToken.query(on: req.db)
-            .filter(\.$token == token)
-            .filter(\.$agentName == agentName)
-            .first()
-
-        return query.flatMap { registrationToken -> EventLoopFuture<Bool> in
-            guard let registrationToken = registrationToken else {
-                Telemetry.agentRegistrationFailed(reason: "invalid_token")
-                // The explicit code lets the agent tell a hopeless credential apart
-                // from a transient server error, so only the former stops its
-                // reconnect loop.
-                self.sendErrorResponse(
-                    ws: ws, requestId: "", error: "Invalid registration token",
-                    code: ErrorMessage.ErrorCode.invalidToken, logger: req.logger)
-                _ = ws.close(code: .unacceptableData)
-                return req.eventLoop.makeSucceededFuture(false)
-            }
-
-            guard registrationToken.isValid else {
-                Telemetry.agentRegistrationFailed(reason: "expired_token")
-                self.sendErrorResponse(
-                    ws: ws, requestId: "", error: "Registration token is invalid or expired",
-                    code: ErrorMessage.ErrorCode.invalidToken, logger: req.logger)
-                _ = ws.close(code: .unacceptableData)
-                return req.eventLoop.makeSucceededFuture(false)
-            }
-
-            // Mark the single-use token consumed and persist it *before* accepting
-            // the connection. Persisting is part of validation, not fire-and-forget:
-            // if the save were swallowed and we proceeded anyway, the token would
-            // stay unused in the store and remain replayable. On save failure we
-            // reject instead — the token is untouched and the agent can retry.
-            registrationToken.markAsUsed()
-            let tokenSiteID = registrationToken.siteID
-            let tokenOrganizationScope = registrationToken.organizationScope
-            return registrationToken.save(on: req.db).map { _ -> Bool in
-                // Stash the token's site and org scope for the register message
-                // that follows; all `state` access happens on the WebSocket's
-                // event loop.
-                ws.eventLoop.execute {
-                    state.pendingSiteID = tokenSiteID
-                    state.pendingOrganizationScope = tokenOrganizationScope
-                }
-                // Never log the raw token value — logs are lower-trust than the token
-                // store and may be shipped off-host. The agent name is sufficient.
-                req.logger.info(
-                    "Agent registration token validated",
-                    metadata: [
-                        "agentName": .string(agentName)
-                    ])
-                return true
-            }.flatMapError { error in
-                Telemetry.agentRegistrationFailed(reason: "token_save_failed")
-                req.logger.error(
-                    "Failed to persist registration token as used; rejecting connection",
-                    metadata: [
-                        "agentName": .string(agentName),
-                        "error": .string("\(error)"),
-                    ])
-                self.sendErrorResponse(
-                    ws: ws, requestId: "", error: "Internal server error persisting registration token",
-                    logger: req.logger)
-                _ = ws.close(code: .unexpectedServerError)
-                return req.eventLoop.makeSucceededFuture(false)
-            }
-        }.flatMapErrorThrowing { error in
+    ) async -> Bool {
+        let registrationToken: AgentRegistrationToken?
+        do {
+            registrationToken = try await AgentRegistrationToken.query(on: req.db)
+                .filter(\.$token == token)
+                .filter(\.$agentName == agentName)
+                .first()
+        } catch {
             req.logger.error("Error validating registration token: \(error)")
             self.sendErrorResponse(
                 ws: ws, requestId: "", error: "Internal server error during token validation", logger: req.logger)
-            _ = ws.close(code: .unexpectedServerError)
+            try? await ws.close(code: .unexpectedServerError)
             return false
         }
+
+        guard let registrationToken else {
+            Telemetry.agentRegistrationFailed(reason: "invalid_token")
+            // The explicit code lets the agent tell a hopeless credential apart
+            // from a transient server error, so only the former stops its
+            // reconnect loop.
+            self.sendErrorResponse(
+                ws: ws, requestId: "", error: "Invalid registration token",
+                code: ErrorMessage.ErrorCode.invalidToken, logger: req.logger)
+            try? await ws.close(code: .unacceptableData)
+            return false
+        }
+
+        guard registrationToken.isValid else {
+            Telemetry.agentRegistrationFailed(reason: "expired_token")
+            self.sendErrorResponse(
+                ws: ws, requestId: "", error: "Registration token is invalid or expired",
+                code: ErrorMessage.ErrorCode.invalidToken, logger: req.logger)
+            try? await ws.close(code: .unacceptableData)
+            return false
+        }
+
+        // Mark the single-use token consumed and persist it *before* accepting
+        // the connection. Persisting is part of validation, not fire-and-forget:
+        // if the save were swallowed and we proceeded anyway, the token would
+        // stay unused in the store and remain replayable. On save failure we
+        // reject instead — the token is untouched and the agent can retry.
+        registrationToken.markAsUsed()
+        let tokenSiteID = registrationToken.siteID
+        let tokenOrganizationScope = registrationToken.organizationScope
+        do {
+            try await registrationToken.save(on: req.db)
+        } catch {
+            Telemetry.agentRegistrationFailed(reason: "token_save_failed")
+            req.logger.error(
+                "Failed to persist registration token as used; rejecting connection",
+                metadata: [
+                    "agentName": .string(agentName),
+                    "error": .string("\(error)"),
+                ])
+            self.sendErrorResponse(
+                ws: ws, requestId: "", error: "Internal server error persisting registration token",
+                logger: req.logger)
+            try? await ws.close(code: .unexpectedServerError)
+            return false
+        }
+
+        // Stash the token's site and org scope for the register message
+        // that follows; all `state` access happens on the WebSocket's
+        // event loop.
+        ws.eventLoop.execute {
+            state.pendingSiteID = tokenSiteID
+            state.pendingOrganizationScope = tokenOrganizationScope
+        }
+        // Never log the raw token value — logs are lower-trust than the token
+        // store and may be shipped off-host. The agent name is sufficient.
+        req.logger.info(
+            "Agent registration token validated",
+            metadata: [
+                "agentName": .string(agentName)
+            ])
+        return true
     }
 
     private func handleWebSocketMessage(

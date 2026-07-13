@@ -1,5 +1,5 @@
 {
-  "originHash" : "9225b6800cc4d3deebf4cff72132d2161f5eb79443f13b70fad1371fe3c82fed",
+  "originHash" : "49cc441d545683fd07d977d824432dec508258a10df3ad7eb28ebf55edf4fcf6",
   "pins" : [
     {
       "identity" : "grpc-swift-2",
@@ -239,8 +239,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/vapor/websocket-kit.git",
       "state" : {
-        "revision" : "8666c92dbbb3c8eefc8008c9c8dcf50bfd302167",
-        "version" : "2.16.1"
+        "revision" : "90bbbdab3ede12c803cfbe91646f291c092517a3",
+        "version" : "2.16.2"
       }
     }
   ],
