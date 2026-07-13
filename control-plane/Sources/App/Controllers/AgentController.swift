@@ -18,6 +18,7 @@ struct AgentController: RouteCollection {
         agents.delete(":agentId", use: deregisterAgent)
         agents.post(":agentId", "actions", "force-offline", use: forceAgentOffline)
         agents.post(":agentId", "actions", "update", use: updateAgent)
+        agents.patch(":agentId", use: patchAgent)
         // Scope reassignment corrects the migration backfill's oldest-org
         // guess on multi-org installs; deliberately system-admin only (it
         // moves dedicated capacity between tenants).
@@ -888,6 +889,59 @@ struct AgentController: RouteCollection {
                 .badGateway,
                 reason: details.map { "\(error): \($0)" } ?? error)
         }
+    }
+
+    // MARK: - Agent Properties
+
+    struct AgentPatchRequest: Content {
+        /// Enroll in (or withdraw from) declarative auto-update (issue #434).
+        var autoUpdate: Bool?
+    }
+
+    /// Updates mutable agent properties. Currently only `autoUpdate`; scoped
+    /// to `agent#manage` like the imperative update action, since enrollment
+    /// authorizes future restarts of this capacity.
+    func patchAgent(req: Request) async throws -> AgentResponse {
+        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid agent ID")
+        }
+        guard let agent = try await Agent.find(agentId, on: req.db) else {
+            throw Abort(.notFound, reason: "Agent not found")
+        }
+        try await requireAgentPermission(req, agent: agent, permission: "manage")
+
+        let patch = try req.content.decode(AgentPatchRequest.self)
+
+        if let autoUpdate = patch.autoUpdate, autoUpdate != agent.autoUpdate {
+            agent.autoUpdate = autoUpdate
+            if autoUpdate {
+                // Fresh enrollment gets a fresh chance: a failure recorded
+                // under a previous enrollment must not keep the fleet rollout
+                // halted at an agent the operator just re-opted in.
+                agent.updateFailureReason = nil
+            } else {
+                // Withdrawing clears any assignment: the next sync stops
+                // carrying the desired update and the agent clears its
+                // blocked status.
+                agent.updateDesiredVersion = nil
+                agent.updateAttemptedAt = nil
+                agent.updateBlockedReason = nil
+                agent.updateFailureReason = nil
+            }
+            try await agent.save(on: req.db)
+            req.logger.info(
+                "Agent auto-update toggled",
+                metadata: [
+                    "agentId": .string(agentId.uuidString),
+                    "agentName": .string(agent.name),
+                    "autoUpdate": .stringConvertible(autoUpdate),
+                ])
+            // Push a sync so a withdrawn agent stops seeing the desired
+            // update now rather than on the next periodic backstop.
+            await req.agentService.syncDesiredState(agentId: agentId.uuidString)
+        }
+
+        return try AgentResponse(from: agent)
     }
 
     // MARK: - Organization Reassignment

@@ -279,6 +279,16 @@ export interface Agent {
   // version, or its AGENT_TARGET_VERSION override); absent for dev builds.
   targetVersion?: string;
   updateAvailable: boolean;
+  // Declarative auto-update enrollment and rollout state (issue #434).
+  autoUpdate: boolean;
+  // The version the fleet rollout has assigned this agent, while it is
+  // converging; absent once converged (or never assigned).
+  updateDesiredVersion?: string;
+  updateAttemptedAt?: string;
+  // The agent's self-reported reason for not converging yet.
+  updateBlockedReason?: string;
+  // Terminal failure that halted the rollout at this agent, if any.
+  updateFailureReason?: string;
 }
 
 // Result of POST /api/agents/:id/actions/update — the agent has verified and

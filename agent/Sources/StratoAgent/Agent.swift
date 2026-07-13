@@ -168,6 +168,16 @@ actor Agent {
     // `AgentUpdater.restartExitCode` so the supervisor (Restart=on-failure)
     // starts the new binary. Read by launchAgent once start() returns.
     private(set) var updateRestartPending = false
+    // Declarative auto-update state (issue #434). `autoUpdateStatus` is the
+    // blocked/failed reason carried on observed-state reports so the control
+    // plane's rollout can tell "waiting on a precondition" from "the update
+    // itself failed". `attemptedAutoUpdateArtifacts` remembers artifacts
+    // already tried this process lifetime: retrying a failed artifact on
+    // every sync would loop downloads (or, for an artifact whose binary
+    // reports the wrong version, restart-loop the agent), and the control
+    // plane halts the rollout on the reported failure anyway.
+    private var autoUpdateStatus: ObservedAgentUpdateStatus?
+    private var attemptedAutoUpdateArtifacts: Set<String> = []
 
     init(
         agentID: String,
@@ -1291,6 +1301,11 @@ extension Agent {
                         message.networks, authoritative: message.networksAuthoritative)
                 }
                 await reconciler?.apply(message)
+                // Declarative agent self-update (issue #434), after the
+                // reconciler so freshly enqueued work items are visible to the
+                // precondition gate — the update only runs on a sync that
+                // arrives with the lanes already drained.
+                await handleDesiredAgentUpdate(message.desiredAgentUpdate)
             case .vmInfo:
                 let message = try envelope.decode(as: VMInfoRequestMessage.self)
                 await handleVMInfo(message)
@@ -1659,6 +1674,137 @@ extension Agent {
             try? await Task.sleep(for: .seconds(1))
             await self.stop()
         }
+    }
+
+    /// Declarative self-update (issue #434): converge on the desired agent
+    /// build carried by the sync, through the same download/verify/swap/
+    /// restart path as the operator-triggered update — but gated on local
+    /// preconditions instead of an operator's `force`. Level-triggered: a
+    /// blocked update is re-evaluated on every sync and the current reason is
+    /// reported back on observed-state reports; a failed artifact is not
+    /// retried within this process lifetime.
+    private func handleDesiredAgentUpdate(_ update: DesiredAgentUpdate?) async {
+        guard let update else {
+            // No opinion from the control plane (rollout not reached us,
+            // auto-update off, or an older control plane). Clear any stale
+            // status so a withdrawn rollout stops surfacing old reasons.
+            autoUpdateStatus = nil
+            return
+        }
+        guard !updateRestartPending else { return }
+        guard update.targetVersion != BuildInfo.version else {
+            // Already converged; the control plane's canonical comparison
+            // normally stops the field before this, so this is a cheap no-op
+            // guard against redundant syncs racing the restart.
+            autoUpdateStatus = nil
+            return
+        }
+        if attemptedAutoUpdateArtifacts.contains(update.sha256) {
+            // Keep the failure status recorded at attempt time; the control
+            // plane halts the rollout on it rather than waiting out silence.
+            return
+        }
+
+        let conditions = AutoUpdateGate.Conditions(
+            installMode: AgentInstallMode.detect(),
+            runningFirecrackerVMs: await liveFirecrackerVMCount(),
+            inFlightReconcileItems: await reconciler?.inFlightVMs().count ?? 0
+        )
+        if let reason = AutoUpdateGate.blockedReason(conditions) {
+            let changed = autoUpdateStatus?.reason != reason
+            autoUpdateStatus = ObservedAgentUpdateStatus(
+                targetVersion: update.targetVersion,
+                disposition: ObservedAgentUpdateStatus.dispositionBlocked,
+                reason: reason
+            )
+            if changed {
+                logger.notice(
+                    "Desired agent update is blocked",
+                    metadata: [
+                        "targetVersion": .string(update.targetVersion),
+                        "reason": .string(reason),
+                    ])
+                await sendObservedStateReport()
+            }
+            return
+        }
+
+        logger.notice(
+            "Converging on desired agent update",
+            metadata: [
+                "targetVersion": .string(update.targetVersion),
+                "currentVersion": .string(BuildInfo.version),
+                // Redacted: the URL's query string may be a presigned credential.
+                "artifactURL": .string(update.redactedArtifactURL),
+            ])
+        attemptedAutoUpdateArtifacts.insert(update.sha256)
+
+        let outcome: AgentUpdateOutcome
+        do {
+            let updater = AgentUpdater(logger: logger)
+            outcome = try await updater.applyUpdate(
+                artifactURL: update.artifactURL,
+                sha256: update.sha256,
+                artifactKind: update.artifactKind,
+                tarballMember: update.tarballMember
+            )
+        } catch {
+            let reason = (error as? AgentUpdateError)?.description ?? "\(error)"
+            logger.error(
+                "Desired agent update failed",
+                metadata: [
+                    "targetVersion": .string(update.targetVersion),
+                    "error": .string(reason),
+                ])
+            autoUpdateStatus = ObservedAgentUpdateStatus(
+                targetVersion: update.targetVersion,
+                disposition: ObservedAgentUpdateStatus.dispositionFailed,
+                reason: reason
+            )
+            // Push the failure immediately so the rollout halts on the real
+            // error instead of waiting out its health budget.
+            await sendObservedStateReport()
+            return
+        }
+
+        updateRestartPending = true
+        autoUpdateStatus = nil
+        // Same restart choreography as the operator-triggered path: stop()
+        // from a separate task (this handler runs on the inbound pipeline
+        // stop() tears down), then launchAgent exits with the restart code
+        // for the supervisor. The new binary proves the update by
+        // re-registering with its version.
+        logger.notice(
+            "Desired agent update applied; shutting down for supervisor restart",
+            metadata: [
+                "targetVersion": .string(update.targetVersion),
+                "binaryPath": .string(outcome.binaryPath),
+                "previousBinaryPath": .string(outcome.previousBinaryPath),
+            ])
+        Task {
+            try? await Task.sleep(for: .seconds(1))
+            await self.stop()
+        }
+    }
+
+    /// Managed Firecracker VMs whose process is (or may be) alive. Restarting
+    /// under them would orphan them (no re-adoption yet, issue #433), so the
+    /// auto-update gate blocks on any non-zero count. Statuses the backend
+    /// cannot vouch for count as live — only a VM known to be at rest is safe
+    /// to lose.
+    private func liveFirecrackerVMCount() async -> Int {
+        guard let service = hypervisorServices[.firecracker] else { return 0 }
+        var count = 0
+        for (vmId, entry) in managedVMs where entry.hypervisorType == .firecracker {
+            let status = (try? await service.getVMStatus(vmId: vmId)) ?? .unknown
+            switch status {
+            case .shutdown, .created:
+                continue
+            case .running, .paused, .starting, .stopping, .error, .unknown:
+                count += 1
+            }
+        }
+        return count
     }
 
     private func handleVMPause(_ message: VMOperationMessage) async {
@@ -2908,7 +3054,8 @@ extension Agent: ReconcileActuator {
         let report = ObservedStateReport(
             agentId: effectiveAgentID,
             vms: observed,
-            resources: await getAgentResources()
+            resources: await getAgentResources(),
+            agentUpdateStatus: autoUpdateStatus
         )
         do {
             try await websocketClient?.sendMessage(report)

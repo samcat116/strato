@@ -396,6 +396,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddSandboxCapableToAgent())
     app.migrations.add(AddSandboxCountToResourceQuota())
 
+    // Declarative agent auto-update (issue #434): per-agent opt-in and the
+    // fleet rollout's bookkeeping columns.
+    app.migrations.add(AddAgentAutoUpdate())
+
     try await app.autoMigrate()
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth

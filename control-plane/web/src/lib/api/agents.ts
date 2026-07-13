@@ -32,6 +32,10 @@ export const agentsApi = {
     return api.post<AgentUpdateResult>(`/api/agents/${id}/actions/update`, options ?? {});
   },
 
+  patch(id: string, data: { autoUpdate?: boolean }): Promise<Agent> {
+    return api.patch<Agent>(`/api/agents/${id}`, data);
+  },
+
   // Registration tokens
   listTokens(): Promise<AgentRegistrationTokenListItem[]> {
     return api.get<AgentRegistrationTokenListItem[]>("/api/agents/registration-tokens");

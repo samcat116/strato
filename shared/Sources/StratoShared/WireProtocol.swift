@@ -94,7 +94,19 @@ public enum WireProtocol {
     /// plane would see only a timeout. The update endpoint therefore refuses
     /// agents that registered with a pre-v6 version instead of sending and
     /// hoping (see `supportsAgentUpdate(_:)`).
-    public static let currentVersion = 6
+    ///
+    /// Version 7: declarative agent auto-update (issue #434).
+    /// `DesiredStateMessage` carries an optional `desiredAgentUpdate` and
+    /// `ObservedStateReport` carries an optional `agentUpdateStatus`. Both are
+    /// additive and backward-tolerant (absent decodes to nil, nil means "no
+    /// opinion"/"nothing to report"), and unlike the `networks` lists there is
+    /// no asymmetric-hazard reading of absence — nil can never mean
+    /// "downgrade" or "tear down". The gate matters on the control-plane side
+    /// instead: a pre-v7 agent silently ignores the field it cannot decode a
+    /// struct into, so the fleet rollout must never *assign* an update to one
+    /// — it would wait out its whole health budget against silence and halt
+    /// the rollout for no reason (see `supportsDesiredAgentUpdate(_:)`).
+    public static let currentVersion = 7
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -158,6 +170,20 @@ public enum WireProtocol {
     /// must refuse the update up front rather than time out against silence.
     public static func supportsAgentUpdate(_ version: Int) -> Bool {
         version >= agentUpdateMinimumVersion
+    }
+
+    /// The lowest protocol version that acts on
+    /// `DesiredStateMessage.desiredAgentUpdate` (see `currentVersion` version 7
+    /// notes).
+    public static let desiredAgentUpdateMinimumVersion = 7
+
+    /// Whether an agent registered with `version` converges on a
+    /// `desiredAgentUpdate` carried by the sync. An older agent decodes the
+    /// sync fine but never acts on the field, so the fleet rollout must not
+    /// select such an agent — its health budget would expire against silence
+    /// and halt the rollout.
+    public static func supportsDesiredAgentUpdate(_ version: Int) -> Bool {
+        version >= desiredAgentUpdateMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and
