@@ -1,4 +1,5 @@
 import Fluent
+import StratoShared
 import Vapor
 
 struct AgentController: RouteCollection {
@@ -16,6 +17,7 @@ struct AgentController: RouteCollection {
         agents.get(":agentId", use: getAgent)
         agents.delete(":agentId", use: deregisterAgent)
         agents.post(":agentId", "actions", "force-offline", use: forceAgentOffline)
+        agents.post(":agentId", "actions", "update", use: updateAgent)
         // Scope reassignment corrects the migration backfill's oldest-org
         // guess on multi-org installs; deliberately system-admin only (it
         // moves dedicated capacity between tenants).
@@ -649,6 +651,241 @@ struct AgentController: RouteCollection {
             ])
 
         return .noContent
+    }
+
+    // MARK: - Agent Update
+
+    struct AgentUpdateRequest: Content {
+        /// Proceed despite caveats the endpoint would otherwise refuse on:
+        /// hosted Firecracker VMs (not re-adopted after restart) and an agent
+        /// already at the target version.
+        var force: Bool?
+        /// Explicit artifact override for deployments the URL-convention
+        /// resolver can't serve (air-gapped without a mirror, main-branch
+        /// builds, one-off testing). Requires `sha256`.
+        var artifactUrl: String?
+        /// Hex SHA-256 of the artifact at `artifactUrl`.
+        var sha256: String?
+        /// Shape of the explicit artifact: "tarball" (default, extract
+        /// `tarballMember`) or "binary" (the download *is* the agent
+        /// executable). Ignored without `artifactUrl` — release-resolved
+        /// artifacts describe their own shape.
+        var artifactKind: AgentUpdateArtifactKind?
+        /// Member to extract from an explicit tarball artifact.
+        /// Defaults to `strato-agent`.
+        var tarballMember: String?
+        /// Version label for an explicit artifact (informational; shown in
+        /// logs and the response). Defaults to the configured target.
+        var targetVersion: String?
+    }
+
+    struct AgentUpdateResponse: Content {
+        let status: String
+        let targetVersion: String
+        /// Redacted form (query/userinfo stripped): a private mirror's
+        /// manifest may resolve to presigned URLs, and this response goes to
+        /// any delegated agent#manage holder, not just system admins.
+        let artifactUrl: String
+        let message: String?
+    }
+
+    /// Operator-triggered self-update of one agent (issue #432): resolves the
+    /// release artifact for the agent's OS/arch, dispatches an
+    /// `AgentUpdateMessage` over the agent socket (local or cross-replica via
+    /// the RPC bridge), and reports the agent's own outcome synchronously.
+    /// On success the agent restarts; the new binary proves itself by
+    /// re-registering with its new version, which `registerAgent` logs.
+    func updateAgent(req: Request) async throws -> AgentUpdateResponse {
+        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid agent ID")
+        }
+        guard let agent = try await Agent.find(agentId, on: req.db) else {
+            throw Abort(.notFound, reason: "Agent not found")
+        }
+
+        try await requireAgentPermission(req, agent: agent, permission: "manage")
+        // Restarting the agent orphans any hosted Firecracker VMs, so this is
+        // destructive enough to fall under the same cross-tenant guard as
+        // force-offline/deregister.
+        try await requireNoForeignWorkloads(req, agent: agent)
+
+        let request: AgentUpdateRequest
+        if req.headers.contentType != nil {
+            request = try req.content.decode(AgentUpdateRequest.self)
+        } else {
+            request = AgentUpdateRequest()
+        }
+        let force = request.force == true
+
+        agent.updateStatusBasedOnHeartbeat()
+        guard agent.isOnline else {
+            throw Abort(.conflict, reason: "Agent is offline; it must be connected to receive an update")
+        }
+
+        // A pre-v6 agent cannot even decode the update envelope — it would
+        // silently drop it and this request would only ever time out. Refuse
+        // with the real reason instead.
+        let wireVersion = agent.wireProtocolVersion ?? 0
+        guard WireProtocol.supportsAgentUpdate(wireVersion) else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent registered with wire protocol v\(wireVersion), which predates remote updates (v\(WireProtocol.agentUpdateMinimumVersion)). Update it manually once (re-run install.sh, or pull a new image); remote updates work from then on."
+            )
+        }
+
+        // QEMU VMs survive an agent restart (re-adopted via their deterministic
+        // QMP sockets), but Firecracker workloads are not re-adopted — they
+        // keep running as orphans that can only be deleted. That covers both
+        // Firecracker VMs and sandboxes (which place exclusively on
+        // Firecracker). Make the operator acknowledge that explicitly.
+        if !force {
+            let firecrackerVMs = try await VM.query(on: req.db)
+                .filter(\.$hypervisorId == agentId.uuidString)
+                .filter(\.$hypervisorType == .firecracker)
+                .count()
+            let sandboxes = try await Sandbox.query(on: req.db)
+                .filter(\.$hypervisorId == agentId.uuidString)
+                .count()
+            guard firecrackerVMs == 0 && sandboxes == 0 else {
+                let workloads = [
+                    firecrackerVMs > 0 ? "\(firecrackerVMs) Firecracker VM(s)" : nil,
+                    sandboxes > 0 ? "\(sandboxes) sandbox(es)" : nil,
+                ].compactMap { $0 }.joined(separator: " and ")
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Agent hosts \(workloads), which are not re-adopted after an agent restart. Delete or migrate them, or pass force to proceed anyway."
+                )
+            }
+        }
+
+        let targetVersion: String
+        let artifact: ResolvedAgentArtifact
+        if let explicitURL = request.artifactUrl {
+            // An explicit artifact is arbitrary code the agent will install
+            // and run as itself on the hypervisor host. Delegated org/OU
+            // admins with agent#manage may only update along the trusted
+            // release/manifest path; overriding the artifact is system-admin
+            // only.
+            guard try requireUser(req).isSystemAdmin else {
+                throw Abort(
+                    .forbidden,
+                    reason:
+                        "Explicit artifact overrides install an arbitrary binary on the host and require system admin. Omit artifactUrl to update along the release path."
+                )
+            }
+            guard let explicitDigest = request.sha256.flatMap({ AgentUpdateArtifacts.parseChecksum($0) })
+            else {
+                throw Abort(.badRequest, reason: "artifactUrl requires a hex SHA-256 digest in sha256")
+            }
+            targetVersion = request.targetVersion ?? AgentVersionTarget.version ?? "unspecified"
+            artifact = ResolvedAgentArtifact(
+                url: explicitURL,
+                sha256: explicitDigest,
+                kind: request.artifactKind ?? .tarball,
+                tarballMember: request.tarballMember ?? AgentUpdateArtifacts.defaultTarballMember
+            )
+        } else {
+            guard let target = AgentVersionTarget.version else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "No agent target version is configured (dev build). Set AGENT_TARGET_VERSION, or pass artifactUrl and sha256 explicitly."
+                )
+            }
+            if !force, !AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: target) {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Agent already runs the target version (\(agent.version)). Pass force to reinstall it anyway."
+                )
+            }
+            guard let os = agent.hostOperatingSystem else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Agent has not reported its operating system; it must re-register with a build that does before its artifact can be resolved. Pass artifactUrl and sha256 to override."
+                )
+            }
+            guard let architecture = agent.cpuArchitecture else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Agent has not reported its CPU architecture, so its artifact cannot be resolved. Pass artifactUrl and sha256 to override."
+                )
+            }
+            targetVersion = target
+            artifact = try await AgentUpdateArtifacts.resolveArtifact(
+                targetVersion: target,
+                operatingSystem: os,
+                architecture: architecture,
+                client: req.client,
+                logger: req.logger
+            )
+        }
+        let artifactURL = artifact.url
+
+        req.logger.info(
+            "Dispatching agent update",
+            metadata: [
+                "agentId": .string(agentId.uuidString),
+                "agentName": .string(agent.name),
+                "currentVersion": .string(agent.version),
+                "targetVersion": .string(targetVersion),
+                // Redacted: explicit overrides may be presigned URLs whose
+                // query string is a credential.
+                "artifactUrl": .string(AgentUpdateMessage.redactURL(artifactURL)),
+            ])
+
+        let message = AgentUpdateMessage(
+            targetVersion: targetVersion,
+            artifactURL: artifact.url,
+            sha256: artifact.sha256,
+            artifactKind: artifact.kind,
+            tarballMember: artifact.kind == .tarball ? artifact.tarballMember : nil
+        )
+
+        // Generous timeout: the reply comes only after the agent has
+        // downloaded and verified the artifact.
+        let response: AgentServiceResponse
+        do {
+            response = try await req.agentService.sendMessageToAgentWithResponse(
+                message, agentId: agentId.uuidString, timeout: .seconds(300))
+        } catch let error as AgentServiceError {
+            switch error {
+            case .requestTimeout:
+                throw Abort(
+                    .gatewayTimeout,
+                    reason:
+                        "The agent did not reply within the update window. The update may still complete — the agent re-registers with its new version if it does."
+                )
+            default:
+                throw Abort(.badGateway, reason: "Could not reach the agent: \(error)")
+            }
+        }
+
+        switch response {
+        case .success:
+            req.logger.notice(
+                "Agent accepted update and is restarting",
+                metadata: [
+                    "agentId": .string(agentId.uuidString),
+                    "agentName": .string(agent.name),
+                    "targetVersion": .string(targetVersion),
+                ])
+            return AgentUpdateResponse(
+                status: "updating",
+                targetVersion: targetVersion,
+                artifactUrl: AgentUpdateMessage.redactURL(artifactURL),
+                message:
+                    "Agent verified and installed the new binary and is restarting; it will re-register as \(targetVersion)."
+            )
+        case .error(let error, let details):
+            throw Abort(
+                .badGateway,
+                reason: details.map { "\(error): \($0)" } ?? error)
+        }
     }
 
     // MARK: - Organization Reassignment

@@ -387,6 +387,9 @@ public func configure(_ app: Application) async throws {
     // OCI registries, encrypted at rest.
     app.migrations.add(CreateRegistryPullSecret())
 
+    // Agent OS reporting for update artifact resolution (issue #432).
+    app.migrations.add(AddOperatingSystemToAgent())
+
     try await app.autoMigrate()
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth

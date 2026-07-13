@@ -44,6 +44,7 @@ let package = Package(
                 .product(name: "StratoShared", package: "shared"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Toml", package: "swift-toml"),
+                .product(name: "Crypto", package: "swift-crypto"),
             ],
             path: "Sources/StratoAgentCore",
             swiftSettings: swiftSettings

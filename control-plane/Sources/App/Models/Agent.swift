@@ -54,6 +54,12 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "architecture")
     var architecture: String?
 
+    /// Host operating system ("linux"/"macos"), nil for agents that registered
+    /// before it was reported. The update endpoint needs it to resolve the
+    /// per-OS/arch release artifact and refuses to guess when absent.
+    @OptionalField(key: "operating_system")
+    var operatingSystem: String?
+
     /// Every hypervisor on the host with probed availability and capabilities
     @Field(key: "hypervisors")
     var hypervisors: [HypervisorSupport]
@@ -150,7 +156,7 @@ enum AgentStatus: String, Codable, CaseIterable, Sendable {
 extension Agent {
     /// Create an agent from registration message
     static func from(registration: AgentRegisterMessage, name: String) -> Agent {
-        return Agent(
+        let agent = Agent(
             name: name,
             hostname: registration.hostname,
             version: registration.version,
@@ -162,6 +168,8 @@ extension Agent {
             networkCapability: registration.networkCapability,
             lastHeartbeat: Date()
         )
+        agent.operatingSystem = registration.operatingSystem?.rawValue
+        return agent
     }
 
     /// Check if agent is considered online based on heartbeat
@@ -174,6 +182,12 @@ extension Agent {
     /// before architecture reporting (or an unrecognized raw value).
     var cpuArchitecture: CPUArchitecture? {
         architecture.flatMap(CPUArchitecture.init(rawValue:))
+    }
+
+    /// Host operating system as a typed value; nil for agents that registered
+    /// before OS reporting (or an unrecognized raw value).
+    var hostOperatingSystem: OperatingSystem? {
+        operatingSystem.flatMap(OperatingSystem.init(rawValue:))
     }
 
     /// Hypervisor backends this agent can actually run. Agents probe each
@@ -236,6 +250,7 @@ struct AgentResponse: Content {
     let status: AgentStatus
     let resources: AgentResources
     let architecture: CPUArchitecture?
+    let operatingSystem: OperatingSystem?
     let hypervisors: [HypervisorSupport]
     let networkCapability: NetworkCapability?
     let siteId: UUID?
@@ -262,6 +277,7 @@ struct AgentResponse: Content {
         self.status = agent.status
         self.resources = agent.resources
         self.architecture = agent.architecture.flatMap(CPUArchitecture.init(rawValue:))
+        self.operatingSystem = agent.hostOperatingSystem
         self.hypervisors = agent.hypervisors
         self.networkCapability = agent.networkCapability.flatMap(NetworkCapability.init(rawValue:))
         self.siteId = agent.$site.id
