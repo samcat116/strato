@@ -69,7 +69,19 @@ public enum WireProtocol {
     /// older version: sync assembly keys on the registered version and keeps
     /// pre-v4 agents on the legacy per-node scoping (own networks,
     /// authoritative) even when they are assigned to a site.
-    public static let currentVersion = 4
+    ///
+    /// Version 5: sandbox workloads (issue #411). `DesiredStateMessage` carries
+    /// `sandboxes: [DesiredSandboxState]` and `ObservedStateReport` carries
+    /// `sandboxes: [ObservedSandboxState]`. Additive and backward-tolerant
+    /// (absent lists decode to `[]`), with the same asymmetric hazard as
+    /// networks in v3: an agent must not read the decoded-empty list from a
+    /// pre-v5 control plane as "tear down all sandboxes" — it gates sandbox
+    /// reconciliation on `supportsSandboxSync(envelope.senderVersion)`. In the
+    /// other direction the control plane must never place sandboxes on agents
+    /// that registered with a pre-v5 version (they would silently ignore the
+    /// entries and never converge them); the scheduler keys capability on the
+    /// registered version.
+    public static let currentVersion = 5
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -104,6 +116,19 @@ public enum WireProtocol {
     /// stay on the legacy per-node scoping even when assigned to a site.
     public static func supportsSiteAuthority(_ version: Int) -> Bool {
         version >= siteAuthorityMinimumVersion
+    }
+
+    /// The lowest protocol version that speaks sandbox workloads
+    /// (see `currentVersion` version 5 notes).
+    public static let sandboxSyncMinimumVersion = 5
+
+    /// Whether a peer at `version` participates in sandbox desired-state sync.
+    /// Agent-side: a pre-v5 control plane merely omits `sandboxes` (decoded to
+    /// []), which must NOT be treated as "tear down all sandboxes" — the agent
+    /// skips sandbox reconciliation entirely. Control-plane-side: agents that
+    /// registered with a pre-v5 version are not sandbox placement candidates.
+    public static func supportsSandboxSync(_ version: Int) -> Bool {
+        version >= sandboxSyncMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

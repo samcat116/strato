@@ -72,6 +72,40 @@ public struct DesiredVMState: Codable, Sendable {
     }
 }
 
+// MARK: - Desired Sandbox State
+
+/// One sandbox's authoritative desired state, as assembled by the control
+/// plane. Mirrors `DesiredVMState` semantics exactly: level-triggered,
+/// generation-guarded, safe to drop or replay.
+public struct DesiredSandboxState: Codable, Sendable {
+    public let sandboxId: UUID
+    public let spec: SandboxSpec
+    public let desiredStatus: DesiredSandboxStatus
+    /// Monotonic per-sandbox counter, bumped by the control plane on every
+    /// desired status or spec change. The agent records the generation it last
+    /// applied and rejects older ones, so replayed or reordered syncs cannot
+    /// roll a sandbox backward.
+    public let generation: Int64
+    /// Pull credential for the spec's image when it lives in a private
+    /// registry, minted fresh at sync assembly (see `RegistryCredential`).
+    /// Nil for public images — zero-configuration public pulls must work.
+    public let registryCredential: RegistryCredential?
+
+    public init(
+        sandboxId: UUID,
+        spec: SandboxSpec,
+        desiredStatus: DesiredSandboxStatus,
+        generation: Int64,
+        registryCredential: RegistryCredential? = nil
+    ) {
+        self.sandboxId = sandboxId
+        self.spec = spec
+        self.desiredStatus = desiredStatus
+        self.generation = generation
+        self.registryCredential = registryCredential
+    }
+}
+
 /// Control plane → agent: the full authoritative set of VMs that should exist
 /// on the receiving agent.
 ///
@@ -88,6 +122,14 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// Correlation id for logging/tracing a sync end to end. No semantics.
     public let syncId: String
     public let vms: [DesiredVMState]
+    /// The full authoritative set of sandboxes that should exist on the
+    /// receiving agent (full-list, same semantics as `vms`: a sandbox omitted
+    /// here should not exist). Decodes to `[]` from control planes older than
+    /// the sandbox protocol — which the agent must NOT read as "tear down all
+    /// sandboxes": sandbox reconciliation is gated on
+    /// `WireProtocol.supportsSandboxSync(envelope.senderVersion)`, exactly like
+    /// the `networks` list before it.
+    public let sandboxes: [DesiredSandboxState]
     /// The full authoritative set of logical networks that should exist on the
     /// receiving agent (full-list, same semantics as `vms`: a network omitted
     /// here should be torn down). Empty when the control plane is older than the
@@ -108,6 +150,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         timestamp: Date = Date(),
         syncId: String = UUID().uuidString,
         vms: [DesiredVMState],
+        sandboxes: [DesiredSandboxState] = [],
         networks: [DesiredNetworkState] = [],
         networksAuthoritative: Bool = true
     ) {
@@ -115,15 +158,17 @@ public struct DesiredStateMessage: WebSocketMessage {
         self.timestamp = timestamp
         self.syncId = syncId
         self.vms = vms
+        self.sandboxes = sandboxes
         self.networks = networks
         self.networksAuthoritative = networksAuthoritative
     }
 
-    // Custom decode so `networks` tolerates absence: a sync produced by an older
-    // control plane (before networks were first-class) decodes to [] rather than
-    // throwing, keeping agent↔control-plane compatible across version skew.
-    // `networksAuthoritative` likewise defaults to true, matching every control
-    // plane older than the site/shared-NB protocol (agents owned their local NB).
+    // Custom decode so `networks` and `sandboxes` tolerate absence: a sync
+    // produced by an older control plane (before each became first-class)
+    // decodes to [] rather than throwing, keeping agent↔control-plane
+    // compatible across version skew. `networksAuthoritative` likewise defaults
+    // to true, matching every control plane older than the site/shared-NB
+    // protocol (agents owned their local NB).
     // `encode(to:)` stays synthesized; all other keys remain required.
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -131,6 +176,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         timestamp = try c.decode(Date.self, forKey: .timestamp)
         syncId = try c.decode(String.self, forKey: .syncId)
         vms = try c.decode([DesiredVMState].self, forKey: .vms)
+        sandboxes = try c.decodeIfPresent([DesiredSandboxState].self, forKey: .sandboxes) ?? []
         networks = try c.decodeIfPresent([DesiredNetworkState].self, forKey: .networks) ?? []
         networksAuthoritative = try c.decodeIfPresent(Bool.self, forKey: .networksAuthoritative) ?? true
     }
@@ -277,6 +323,49 @@ public struct ObservedVMState: Codable, Sendable {
     }
 }
 
+// MARK: - Observed Sandbox State
+
+/// One sandbox's state as actually observed on an agent. Field semantics match
+/// `ObservedVMState` (see the doc comments there for the generation/error
+/// contract); `exitCode` is the sandbox-specific addition.
+public struct ObservedSandboxState: Codable, Sendable {
+    public let sandboxId: UUID
+    public let status: SandboxStatus
+    /// The desired-state generation this observation reflects (0 if none yet).
+    public let observedGeneration: Int64
+    /// Human-readable convergence stage (e.g. "pulling image") while the agent
+    /// is still working toward a newer generation. Progress only.
+    public let convergencePhase: String?
+    /// The most recent convergence failure, if the last attempt failed.
+    public let lastError: String?
+    /// The generation whose convergence produced `lastError` (see
+    /// `ObservedVMState.failedGeneration` for why the control plane needs it).
+    public let failedGeneration: Int64?
+    /// Exit code of the workload once it has ended (`status == .exited`), as
+    /// reported by the guest agent over vsock. Nil while running, when the
+    /// sandbox was stopped by request rather than by the workload ending, or
+    /// when the guest could not report one.
+    public let exitCode: Int?
+
+    public init(
+        sandboxId: UUID,
+        status: SandboxStatus,
+        observedGeneration: Int64,
+        convergencePhase: String? = nil,
+        lastError: String? = nil,
+        failedGeneration: Int64? = nil,
+        exitCode: Int? = nil
+    ) {
+        self.sandboxId = sandboxId
+        self.status = status
+        self.observedGeneration = observedGeneration
+        self.convergencePhase = convergencePhase
+        self.lastError = lastError
+        self.failedGeneration = failedGeneration
+        self.exitCode = exitCode
+    }
+}
+
 /// Agent → control plane: everything the agent actually has, with resources.
 ///
 /// Full-list semantics mirror `DesiredStateMessage`: a VM missing from `vms`
@@ -290,6 +379,12 @@ public struct ObservedStateReport: WebSocketMessage {
     public let timestamp: Date
     public let agentId: String
     public let vms: [ObservedVMState]
+    /// Sandboxes actually present on this agent. Full-list, like `vms`: a
+    /// sandbox missing from the list does not exist, which is how sandbox
+    /// deletions are confirmed. Decodes to `[]` from agents older than the
+    /// sandbox protocol — safe, because the control plane never places
+    /// sandboxes on such agents in the first place.
+    public let sandboxes: [ObservedSandboxState]
     public let resources: AgentResources
 
     public init(
@@ -297,12 +392,27 @@ public struct ObservedStateReport: WebSocketMessage {
         timestamp: Date = Date(),
         agentId: String,
         vms: [ObservedVMState],
+        sandboxes: [ObservedSandboxState] = [],
         resources: AgentResources
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.agentId = agentId
         self.vms = vms
+        self.sandboxes = sandboxes
         self.resources = resources
+    }
+
+    // Custom decode so `sandboxes` tolerates absence: a report produced by a
+    // pre-sandbox agent decodes to [] rather than throwing. `encode(to:)`
+    // stays synthesized; all other keys remain required.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        requestId = try c.decode(String.self, forKey: .requestId)
+        timestamp = try c.decode(Date.self, forKey: .timestamp)
+        agentId = try c.decode(String.self, forKey: .agentId)
+        vms = try c.decode([ObservedVMState].self, forKey: .vms)
+        sandboxes = try c.decodeIfPresent([ObservedSandboxState].self, forKey: .sandboxes) ?? []
+        resources = try c.decode(AgentResources.self, forKey: .resources)
     }
 }
