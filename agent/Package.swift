@@ -15,7 +15,7 @@ let package = Package(
         .package(url: "https://github.com/samcat116/swift-qemu", branch: "main"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.25.0"),
-        .package(url: "https://github.com/vapor/websocket-kit.git", from: "2.0.0"),
+        .package(url: "https://github.com/vapor/websocket-kit.git", from: "2.16.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
@@ -44,6 +44,7 @@ let package = Package(
                 .product(name: "StratoShared", package: "shared"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Toml", package: "swift-toml"),
+                .product(name: "Crypto", package: "swift-crypto"),
             ],
             path: "Sources/StratoAgentCore",
             swiftSettings: swiftSettings

@@ -1,6 +1,5 @@
 import Foundation
 import Vapor
-import Redis
 
 /// Tunable limits for the rate limiter. Two fixed-window policies are enforced:
 /// a strict one for authentication/registration traffic and a looser one for the
@@ -277,7 +276,7 @@ struct RateLimitMiddleware: AsyncMiddleware {
 
     private func store(for request: Request) -> RateLimitStore {
         if request.application.valkeyEnabled {
-            return RedisRateLimitStore(client: request.redis)
+            return ValkeyRateLimitStore(client: request.application.valkey)
         }
         return fallbackStore
     }

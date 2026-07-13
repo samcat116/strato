@@ -348,4 +348,13 @@ private func launchAgent(
         logger.error("Agent failed to start: \(error)")
         throw ExitCode.failure
     }
+
+    // A successful self-update ends with a deliberate non-zero exit so a
+    // supervisor with Restart=on-failure (what install.sh writes) starts the
+    // new binary; a plain `systemctl stop`/Ctrl-C shutdown still exits 0.
+    if await agent.updateRestartPending {
+        logger.notice(
+            "Exiting with code \(AgentUpdater.restartExitCode) so the supervisor restarts the updated binary")
+        throw ExitCode(AgentUpdater.restartExitCode)
+    }
 }

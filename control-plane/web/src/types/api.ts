@@ -264,6 +264,9 @@ export interface Agent {
   status: AgentStatus;
   resources: AgentResources;
   architecture?: CPUArchitecture;
+  // Host OS ("linux" | "macos"); absent for agents that haven't re-registered
+  // with a build that reports it.
+  operatingSystem?: string;
   hypervisors: HypervisorSupport[];
   networkCapability?: NetworkCapability;
   siteId?: string;
@@ -276,6 +279,15 @@ export interface Agent {
   // version, or its AGENT_TARGET_VERSION override); absent for dev builds.
   targetVersion?: string;
   updateAvailable: boolean;
+}
+
+// Result of POST /api/agents/:id/actions/update — the agent has verified and
+// installed the new binary and is restarting into it.
+export interface AgentUpdateResult {
+  status: string;
+  targetVersion: string;
+  artifactUrl: string;
+  message?: string;
 }
 
 // Returned only from the create endpoint — the plaintext `token` and the

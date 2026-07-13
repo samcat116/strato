@@ -8,6 +8,10 @@ public enum MessageType: String, Codable, Sendable {
     case agentRegisterResponse = "agent_register_response"
     case agentHeartbeat = "agent_heartbeat"
     case agentUnregister = "agent_unregister"
+    // Operator-triggered self-update of the agent binary (protocol version >= 6).
+    // Like `vmReboot`, an update is an action, not a state, so it cannot ride
+    // the level-triggered desired-state sync.
+    case agentUpdate = "agent_update"
 
     // VM lifecycle operations.
     //
@@ -119,6 +123,12 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// the version. Optional so registrations from older agents decode fine;
     /// absent means not capable.
     public let sandboxCapable: Bool?
+    /// Host operating system, reported so the control plane can resolve the
+    /// right release artifact for an agent self-update (assets are published
+    /// per OS/arch pair). Optional so registrations from agents that predate
+    /// this field decode fine; absent means unknown, and the update endpoint
+    /// refuses to guess.
+    public let operatingSystem: OperatingSystem?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -133,7 +143,8 @@ public struct AgentRegisterMessage: WebSocketMessage {
         hypervisors: [HypervisorSupport]? = nil,
         networkCapability: NetworkCapability? = nil,
         protocolVersion: Int? = WireProtocol.currentVersion,
-        sandboxCapable: Bool? = nil
+        sandboxCapable: Bool? = nil,
+        operatingSystem: OperatingSystem? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -148,6 +159,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.networkCapability = networkCapability
         self.protocolVersion = protocolVersion
         self.sandboxCapable = sandboxCapable
+        self.operatingSystem = operatingSystem
     }
 
     /// The hypervisor list to act on: the probed report when the agent sent
@@ -218,6 +230,83 @@ public struct AgentUnregisterMessage: WebSocketMessage {
         self.agentId = agentId
         self.reason = reason
     }
+}
+
+/// Shape of the artifact an `AgentUpdateMessage` points at.
+public enum AgentUpdateArtifactKind: String, Codable, Sendable {
+    /// A gzipped tarball containing the agent binary as a member
+    /// (`AgentUpdateMessage.tarballMember`) — the shape of the published
+    /// release assets, which bundle control plane and agent together.
+    case tarball = "tarball"
+    /// A bare executable: the downloaded file *is* the new agent binary.
+    case binary = "binary"
+}
+
+/// Control plane → agent command to replace the agent's own binary and restart
+/// into it (issue #432). An update is an action, not a reconcilable state, so
+/// it follows the `vmReboot` pattern: dispatched imperatively and answered with
+/// a correlated `SuccessMessage`/`ErrorMessage`.
+///
+/// The agent downloads the artifact, verifies `sha256`, stages the new binary
+/// next to the running one, atomically renames it over its own executable path,
+/// replies, and exits for its supervisor to restart. Agents that run inside a
+/// container refuse with an error (the image is the update mechanism there).
+public struct AgentUpdateMessage: WebSocketMessage {
+    public var type: MessageType { .agentUpdate }
+    public let requestId: String
+    public let timestamp: Date
+    /// The version the artifact is expected to contain. Informational: the
+    /// agent logs it and the control plane confirms the outcome when the
+    /// restarted binary re-registers with its new reported version.
+    public let targetVersion: String
+    /// Where to download the artifact from. Must be an HTTPS URL the agent
+    /// host can reach.
+    public let artifactURL: String
+    /// Hex SHA-256 digest of the artifact file (the tarball itself for
+    /// `.tarball`, the executable for `.binary`). Verified before anything is
+    /// swapped; a mismatch aborts with the old binary untouched.
+    public let sha256: String
+    public let artifactKind: AgentUpdateArtifactKind
+    /// Member path of the agent binary inside a `.tarball` artifact.
+    /// Ignored for `.binary`.
+    public let tarballMember: String?
+
+    public init(
+        requestId: String = UUID().uuidString,
+        timestamp: Date = Date(),
+        targetVersion: String,
+        artifactURL: String,
+        sha256: String,
+        artifactKind: AgentUpdateArtifactKind = .tarball,
+        tarballMember: String? = "strato-agent"
+    ) {
+        self.requestId = requestId
+        self.timestamp = timestamp
+        self.targetVersion = targetVersion
+        self.artifactURL = artifactURL
+        self.sha256 = sha256
+        self.artifactKind = artifactKind
+        self.tarballMember = tarballMember
+    }
+}
+
+extension AgentUpdateMessage {
+    /// Artifact URLs may carry credentials — presigned query tokens or
+    /// userinfo are often the only way to authenticate a private mirror
+    /// download. Log this form, never the raw value, on both sides of the
+    /// wire.
+    public static func redactURL(_ raw: String) -> String {
+        guard var components = URLComponents(string: raw) else { return "<unparseable-url>" }
+        let hadQuery = components.query != nil
+        components.query = nil
+        components.fragment = nil
+        components.user = nil
+        components.password = nil
+        guard let base = components.string else { return "<unparseable-url>" }
+        return hadQuery ? base + "?[redacted]" : base
+    }
+
+    public var redactedArtifactURL: String { Self.redactURL(artifactURL) }
 }
 
 public struct AgentRegisterResponseMessage: WebSocketMessage {

@@ -1,6 +1,6 @@
 import Foundation
+import JWT
 import Vapor
-@preconcurrency import JWT
 
 /// ID-token signature verification helpers for the OIDC login flow.
 ///
@@ -20,7 +20,7 @@ enum OIDCTokenVerification {
 
     /// Rejects tokens whose header names a missing or non-allow-listed
     /// algorithm before any signature work happens.
-    static func requireAllowedAlgorithm(_ header: JWTHeader) throws {
+    static func requireAllowedAlgorithm(_ header: IDTokenHeader) throws {
         guard let alg = header.alg, allowedAlgorithms.contains(alg) else {
             throw Abort(
                 .badRequest,
@@ -35,14 +35,14 @@ enum OIDCTokenVerification {
     /// JWTKit doesn't model (e.g. secp256k1), and a strict whole-document
     /// decode would turn one exotic key into a login outage for the provider.
     /// Throws only when the document is malformed or yields no usable key.
-    static func makeVerifiers(jwksJSON: Data, logger: Logger? = nil) throws -> OIDCTokenVerifiers {
+    static func makeVerifiers(jwksJSON: Data, logger: Logger? = nil) async throws -> OIDCTokenVerifiers {
         guard let root = try? JSONSerialization.jsonObject(with: jwksJSON) as? [String: Any],
             let rawKeys = root["keys"] as? [Any]
         else {
             throw Abort(.badGateway, reason: "Provider JWKS document is malformed")
         }
 
-        let signers = JWTSigners()
+        let keys = JWTKeyCollection()
         let decoder = JSONDecoder()
         var registered = 0
         var knownKeyIDs: Set<String> = []
@@ -65,7 +65,7 @@ enum OIDCTokenVerification {
                 jwk.keyIdentifier = JWKIdentifier(string: "strato-unnamed-key-\(registered)")
             }
             do {
-                try signers.use(jwk: jwk)
+                try await keys.add(jwk: jwk)
                 registered += 1
                 if let kid = jwk.keyIdentifier?.string {
                     knownKeyIDs.insert(kid)
@@ -80,7 +80,7 @@ enum OIDCTokenVerification {
         guard registered > 0 else {
             throw Abort(.badGateway, reason: "Provider JWKS contained no usable signing keys")
         }
-        return OIDCTokenVerifiers(signers: signers, knownKeyIDs: knownKeyIDs)
+        return OIDCTokenVerifiers(keys: keys, knownKeyIDs: knownKeyIDs)
     }
 }
 
@@ -90,19 +90,19 @@ enum OIDCTokenVerification {
 /// from the set, which would accept tokens pointing at unknown or rotated
 /// keys. Tokens naming an unknown `kid` are rejected outright instead.
 struct OIDCTokenVerifiers {
-    let signers: JWTSigners
+    let keys: JWTKeyCollection
     let knownKeyIDs: Set<String>
 
     /// Verifies the token's signature and decodes its claims. A token whose
     /// header names a `kid` absent from the JWKS is rejected before any
     /// signature work; a kid-less token uses the default (first) key, the
     /// standard behavior for single-key providers.
-    func verify(_ idToken: String, header: JWTHeader) throws -> OIDCIDTokenClaims {
+    func verify(_ idToken: String, header: IDTokenHeader) async throws -> OIDCIDTokenClaims {
         if let kid = header.kid, !knownKeyIDs.contains(kid) {
             throw Abort(
                 .badRequest,
                 reason: "ID token references a signing key ('\(kid)') not present in the provider's JWKS")
         }
-        return try signers.verify(idToken, as: OIDCIDTokenClaims.self)
+        return try await keys.verify(idToken, as: OIDCIDTokenClaims.self)
     }
 }

@@ -150,6 +150,11 @@ ARG STRATO_GIT_SHA="unknown"
 ENV STRATO_VERSION=${STRATO_VERSION}
 ENV STRATO_GIT_SHA=${STRATO_GIT_SHA}
 
+# Authoritative install-mode marker (see AgentInstallMode.detect): agents in
+# this image refuse self-update with a "managed externally" error — the image
+# is the update mechanism here.
+ENV STRATO_INSTALL_MODE=container
+
 # Ensure all further commands run as the strato user
 USER strato:strato
 

@@ -1,6 +1,6 @@
 import Foundation
+import Valkey
 import Vapor
-import Redis
 
 /// Result of incrementing a fixed-window counter: the new hit count within the
 /// current window and the seconds remaining until that window resets.
@@ -10,17 +10,11 @@ struct RateLimitCount: Sendable {
 }
 
 /// Backend-agnostic operations the rate limiter needs. Two implementations exist:
-/// a Valkey/Redis-backed store (`RedisRateLimitStore`) used when Valkey is
+/// a Valkey-backed store (`ValkeyRateLimitStore`) used when Valkey is
 /// configured so counters are shared across every control-plane instance, and an
 /// in-process actor (`InMemoryRateLimitStore`) used as a fallback for single-node
 /// or Valkey-less deployments.
-///
-/// The protocol is intentionally *not* `Sendable`: the Redis implementation wraps
-/// a per-request `RedisClient` and is only ever created and consumed as a local
-/// inside a single request's task, so it never crosses an isolation boundary.
-/// The in-memory implementation is an `actor`, which is `Sendable` on its own and
-/// is shared across requests via the middleware.
-protocol RateLimitStore {
+protocol RateLimitStore: Sendable {
     /// Atomically increment the fixed-window counter at `key`, creating it with a
     /// `window`-second TTL on the first hit, and return the new count plus the
     /// seconds left in the window.
@@ -36,14 +30,14 @@ protocol RateLimitStore {
     func reset(_ key: String) async throws
 }
 
-// MARK: - Redis / Valkey backend
+// MARK: - Valkey backend
 
-/// Valkey/Redis-backed store. Counters live in Valkey so that a rate limit is
+/// Valkey-backed store. Counters live in Valkey so that a rate limit is
 /// enforced consistently no matter which control-plane replica a request lands
 /// on. The increment+expire+TTL read is done in a single atomic `EVAL` so a
 /// crash between `INCR` and `EXPIRE` can't leave an immortal counter.
-struct RedisRateLimitStore: RateLimitStore {
-    let client: any RedisClient
+struct ValkeyRateLimitStore: RateLimitStore {
+    let client: ValkeyClient
 
     /// `INCR` the key, set its TTL on the first hit only, and return `{count, ttl}`.
     private static let hitScript = """
@@ -55,54 +49,32 @@ struct RedisRateLimitStore: RateLimitStore {
         """
 
     func hit(_ key: String, window: Int) async throws -> RateLimitCount {
-        let response = try await client.send(
-            command: "EVAL",
-            with: [
-                Self.hitScript.convertedToRESPValue(),
-                1.convertedToRESPValue(),
-                key.convertedToRESPValue(),
-                window.convertedToRESPValue(),
-            ]
-        ).get()
+        let response = try await client.eval(
+            script: Self.hitScript,
+            keys: [ValkeyKey(key)],
+            args: [String(window)]
+        )
 
-        guard let values = response.array,
-            values.count == 2,
-            let count = values[0].int,
-            let ttl = values[1].int
-        else {
+        guard let values = try? response.decode(as: [Int].self), values.count == 2 else {
             throw RateLimitError.unexpectedResponse
         }
 
         // A key with no expiry reports TTL -1; treat that as a full fresh window
         // rather than surfacing a negative reset to the client.
-        return RateLimitCount(count: count, ttl: ttl < 0 ? window : ttl)
+        return RateLimitCount(count: values[0], ttl: values[1] < 0 ? window : values[1])
     }
 
     func readInt(_ key: String) async throws -> Int? {
-        let response = try await client.send(
-            command: "GET",
-            with: [key.convertedToRESPValue()]
-        ).get()
-        return response.int
+        try await client.get(ValkeyKey(key)).map(String.init).flatMap(Int.init)
     }
 
     func writeInt(_ key: String, value: Int, ttl: Int) async throws {
-        _ = try await client.send(
-            command: "SET",
-            with: [
-                key.convertedToRESPValue(),
-                value.convertedToRESPValue(),
-                "EX".convertedToRESPValue(),
-                max(1, ttl).convertedToRESPValue(),
-            ]
-        ).get()
+        _ = try await client.set(
+            ValkeyKey(key), value: String(value), expiration: .seconds(max(1, ttl)))
     }
 
     func reset(_ key: String) async throws {
-        _ = try await client.send(
-            command: "DEL",
-            with: [key.convertedToRESPValue()]
-        ).get()
+        _ = try await client.del(keys: [ValkeyKey(key)])
     }
 }
 

@@ -163,6 +163,11 @@ actor Agent {
     // rejected); start() rethrows it so the process exits non-zero instead
     // of idling disconnected.
     private var terminalError: Error?
+    // Set after a successful self-update binary swap (issue #432): stop() is
+    // about to run and the process must exit with
+    // `AgentUpdater.restartExitCode` so the supervisor (Restart=on-failure)
+    // starts the new binary. Read by launchAgent once start() returns.
+    private(set) var updateRestartPending = false
 
     init(
         agentID: String,
@@ -448,11 +453,18 @@ actor Agent {
         messageConsumerTask?.cancel()
         messageConsumerTask = nil
 
-        // Unregister from control plane
-        do {
-            try await unregisterFromControlPlane()
-        } catch {
-            logger.error("Failed to unregister from control plane: \(error)")
+        // Unregister from control plane — but not when restarting into an
+        // updated binary: the agent re-registers seconds later, and the
+        // unregister both marks it offline and fails the control plane's
+        // in-flight requests for it, which races the just-sent update success
+        // reply (frames are handled in independent tasks over there) into a
+        // spurious connectionLost/502.
+        if !updateRestartPending {
+            do {
+                try await unregisterFromControlPlane()
+            } catch {
+                logger.error("Failed to unregister from control plane: \(error)")
+            }
         }
 
         if let client = websocketClient {
@@ -615,7 +627,8 @@ actor Agent {
             architecture: CPUArchitecture.current,
             hypervisors: hypervisors,
             networkCapability: networkCapability,
-            sandboxCapable: sandboxRuntime.capable
+            sandboxCapable: sandboxRuntime.capable,
+            operatingSystem: OperatingSystem.current
         )
 
         if let client = websocketClient {
@@ -1250,6 +1263,9 @@ extension Agent {
             case .vmReboot:
                 let message = try envelope.decode(as: VMOperationMessage.self)
                 await handleVMReboot(message)
+            case .agentUpdate:
+                let message = try envelope.decode(as: AgentUpdateMessage.self)
+                await handleAgentUpdate(message)
             case .vmPause:
                 let message = try envelope.decode(as: VMOperationMessage.self)
                 await handleVMPause(message)
@@ -1575,6 +1591,73 @@ extension Agent {
             logger.error(
                 "Failed to reboot VM",
                 metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
+        }
+    }
+
+    /// Operator-triggered self-update (issue #432): download, verify, and swap
+    /// this process's own binary, then shut down and exit for the supervisor
+    /// to restart the new build. The success reply is sent *after* the swap
+    /// (so it reports the real outcome) but *before* the shutdown that closes
+    /// the socket. Any failure leaves the running binary untouched and is
+    /// reported as a correlated error.
+    private func handleAgentUpdate(_ message: AgentUpdateMessage) async {
+        logger.notice(
+            "Received agent update command",
+            metadata: [
+                "targetVersion": .string(message.targetVersion),
+                // Redacted: the URL's query string may be a presigned credential.
+                "artifactURL": .string(message.redactedArtifactURL),
+                "currentVersion": .string(BuildInfo.version),
+            ])
+
+        guard !updateRestartPending else {
+            await sendError(
+                for: message.requestId,
+                error: "An update was already applied; the agent is restarting")
+            return
+        }
+
+        let outcome: AgentUpdateOutcome
+        do {
+            let updater = AgentUpdater(logger: logger)
+            outcome = try await updater.applyUpdate(
+                artifactURL: message.artifactURL,
+                sha256: message.sha256,
+                artifactKind: message.artifactKind,
+                tarballMember: message.tarballMember
+            )
+        } catch let error as AgentUpdateError {
+            logger.error("Agent update failed", metadata: ["error": .string(error.description)])
+            await sendError(for: message.requestId, error: "Agent update failed", details: error.description)
+            return
+        } catch {
+            logger.error("Agent update failed", metadata: ["error": .string("\(error)")])
+            await sendError(for: message.requestId, error: "Agent update failed", details: "\(error)")
+            return
+        }
+
+        updateRestartPending = true
+        await sendSuccess(
+            for: message.requestId,
+            message:
+                "Binary updated to \(message.targetVersion) (previous preserved at \(outcome.previousBinaryPath)); restarting"
+        )
+
+        // Shut down from a separate task: this handler runs on the inbound
+        // message pipeline, and stop() tears that pipeline down — stopping
+        // inline would cancel ourselves mid-teardown. start() returns once
+        // stop() completes and launchAgent exits with the restart code.
+        logger.notice(
+            "Agent update applied; shutting down for supervisor restart",
+            metadata: ["binaryPath": .string(outcome.binaryPath)])
+        Task {
+            // Grace period before dropping the socket: the control plane
+            // handles frames in independent tasks, so an immediate close can
+            // still fail the awaiting update request as connectionLost before
+            // the success reply's task resumes it. stop() also skips the
+            // unregister message on this path for the same reason.
+            try? await Task.sleep(for: .seconds(1))
+            await self.stop()
         }
     }
 

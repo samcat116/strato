@@ -11,6 +11,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { AgentStatusBadge } from "./agent-status-badge";
+import { AgentUpdateAction } from "./agent-update-action";
 import { useOrganization } from "@/providers/organization-provider";
 import type { Agent } from "@/types/api";
 
@@ -66,6 +67,9 @@ export function AgentTable({ agents, isLoading }: AgentTableProps) {
           <TableHead className="text-muted-foreground font-medium">
             Last Heartbeat
           </TableHead>
+          <TableHead className="w-0">
+            <span className="sr-only">Actions</span>
+          </TableHead>
         </TableRow>
       </TableHeader>
       <TableBody className="divide-y divide-border">
@@ -111,6 +115,9 @@ export function AgentTable({ agents, isLoading }: AgentTableProps) {
               {agent.lastHeartbeat
                 ? new Date(agent.lastHeartbeat).toLocaleString()
                 : "Never"}
+            </TableCell>
+            <TableCell className="text-right">
+              <AgentUpdateAction agent={agent} size="sm" />
             </TableCell>
           </TableRow>
         ))}

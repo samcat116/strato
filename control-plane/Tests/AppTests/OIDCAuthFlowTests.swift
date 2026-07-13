@@ -6,7 +6,7 @@ import Testing
 import Vapor
 import VaporTesting
 
-@preconcurrency import JWT
+import JWT
 
 @testable import App
 
@@ -104,7 +104,7 @@ private struct TestIDTokenClaims: JWTPayload {
     var emailVerified: Bool?
     var name: String?
 
-    func verify(using signer: JWTSigner) throws {}
+    func verify(using algorithm: some JWTAlgorithm) async throws {}
 
     private enum CodingKeys: String, CodingKey {
         case iss, sub, aud, exp, iat, nonce, email, name
@@ -122,7 +122,7 @@ private func signIDToken(
     emailVerified: Bool? = true,
     kid: String = TestRSAKeys.keyID,
     privateKeyPEM: String = TestRSAKeys.privateKeyPEM
-) throws -> String {
+) async throws -> String {
     let claims = TestIDTokenClaims(
         iss: iss,
         sub: sub,
@@ -134,10 +134,10 @@ private func signIDToken(
         emailVerified: emailVerified,
         name: "SSO User"
     )
-    let signers = JWTSigners()
-    let key = try RSAKey.private(pem: privateKeyPEM)
-    signers.use(.rs256(key: key), kid: JWKIdentifier(string: kid))
-    return try signers.sign(claims, kid: JWKIdentifier(string: kid))
+    let keys = JWTKeyCollection()
+    let key = try Insecure.RSA.PrivateKey(pem: privateKeyPEM)
+    await keys.add(rsa: key, digestAlgorithm: .sha256, kid: JWKIdentifier(string: kid))
+    return try await keys.sign(claims, kid: JWKIdentifier(string: kid))
 }
 
 private func jwksJSON(kid: String = TestRSAKeys.keyID, modulus: String = TestRSAKeys.modulus) -> String {
@@ -325,7 +325,7 @@ final class OIDCAuthFlowTests {
         try await withFlowApp { app, org, provider, idp in
             let login = try await startLogin(app: app, org: org, provider: provider)
 
-            let idToken = try signIDToken(nonce: login.nonce)
+            let idToken = try await signIDToken(nonce: login.nonce)
             idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
             idp.stub(urlContaining: jwksPath, json: jwksJSON())
 
@@ -374,7 +374,7 @@ final class OIDCAuthFlowTests {
 
             for _ in 0..<2 {
                 let login = try await startLogin(app: app, org: org, provider: provider)
-                let idToken = try signIDToken(nonce: login.nonce)
+                let idToken = try await signIDToken(nonce: login.nonce)
                 idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
                 try await callback(
                     app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
@@ -450,7 +450,7 @@ final class OIDCAuthFlowTests {
         try await withFlowApp { app, org, provider, idp in
             let login = try await startLogin(app: app, org: org, provider: provider)
 
-            let idToken = try signIDToken(nonce: login.nonce)
+            let idToken = try await signIDToken(nonce: login.nonce)
             idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
             idp.stub(urlContaining: jwksPath, json: jwksJSON())
 
@@ -517,7 +517,7 @@ final class OIDCAuthFlowTests {
 
             // Signed with the wrong private key but claiming the trusted kid,
             // so validation must fail on the signature itself.
-            let idToken = try signIDToken(nonce: login.nonce, privateKeyPEM: TestRSAKeys.otherPrivateKeyPEM)
+            let idToken = try await signIDToken(nonce: login.nonce, privateKeyPEM: TestRSAKeys.otherPrivateKeyPEM)
             idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
             idp.stub(urlContaining: jwksPath, json: jwksJSON())
 
@@ -536,7 +536,7 @@ final class OIDCAuthFlowTests {
         try await withFlowApp { app, org, provider, idp in
             let login = try await startLogin(app: app, org: org, provider: provider)
 
-            let idToken = try signIDToken(nonce: login.nonce)
+            let idToken = try await signIDToken(nonce: login.nonce)
             idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
             idp.stub(urlContaining: jwksPath, json: jwksJSON(kid: "some-other-key"))
 
@@ -553,7 +553,7 @@ final class OIDCAuthFlowTests {
         try await withFlowApp { app, org, provider, idp in
             let login = try await startLogin(app: app, org: org, provider: provider)
 
-            let idToken = try signIDToken(expiresIn: -60, nonce: login.nonce)
+            let idToken = try await signIDToken(expiresIn: -60, nonce: login.nonce)
             idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
             idp.stub(urlContaining: jwksPath, json: jwksJSON())
 
@@ -570,7 +570,7 @@ final class OIDCAuthFlowTests {
         try await withFlowApp { app, org, provider, idp in
             let login = try await startLogin(app: app, org: org, provider: provider)
 
-            let idToken = try signIDToken(aud: "someone-elses-client", nonce: login.nonce)
+            let idToken = try await signIDToken(aud: "someone-elses-client", nonce: login.nonce)
             idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
             idp.stub(urlContaining: jwksPath, json: jwksJSON())
 
@@ -587,7 +587,7 @@ final class OIDCAuthFlowTests {
         try await withFlowApp { app, org, provider, idp in
             let login = try await startLogin(app: app, org: org, provider: provider)
 
-            let idToken = try signIDToken(nonce: "replayed-nonce")
+            let idToken = try await signIDToken(nonce: "replayed-nonce")
             idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
             idp.stub(urlContaining: jwksPath, json: jwksJSON())
 
@@ -606,7 +606,7 @@ final class OIDCAuthFlowTests {
         try await withFlowApp { app, org, provider, idp in
             let login = try await startLogin(app: app, org: org, provider: provider)
 
-            let idToken = try signIDToken(iss: "https://evil.example.com", nonce: login.nonce)
+            let idToken = try await signIDToken(iss: "https://evil.example.com", nonce: login.nonce)
             idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
             idp.stub(urlContaining: jwksPath, json: jwksJSON())
 
@@ -629,7 +629,7 @@ final class OIDCAuthFlowTests {
             // Even a perfectly valid token must be refused: the provider was
             // configured via discovery but its issuer was never resolved, so
             // the iss claim cannot be verified.
-            let idToken = try signIDToken(nonce: login.nonce)
+            let idToken = try await signIDToken(nonce: login.nonce)
             idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
             idp.stub(urlContaining: jwksPath, json: jwksJSON())
 

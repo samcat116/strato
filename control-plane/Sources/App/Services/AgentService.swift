@@ -253,10 +253,23 @@ actor AgentService {
         {
             // Update existing agent
             agent = existingAgent
+            if existingAgent.version != message.version {
+                // The visible confirmation that a self-update (issue #432)
+                // landed: the restarted binary re-registers under its name
+                // with the new build version.
+                app.logger.notice(
+                    "Agent re-registered with a new version",
+                    metadata: [
+                        "agentName": .string(agentName),
+                        "previousVersion": .string(existingAgent.version),
+                        "version": .string(message.version),
+                    ])
+            }
             agent.hostname = message.hostname
             agent.version = message.version
             agent.capabilities = message.capabilities
             agent.architecture = message.architecture?.rawValue
+            agent.operatingSystem = message.operatingSystem?.rawValue ?? agent.operatingSystem
             agent.hypervisors = message.effectiveHypervisors
             agent.networkCapability = message.networkCapability?.rawValue
             agent.sandboxCapable = message.sandboxCapable ?? false

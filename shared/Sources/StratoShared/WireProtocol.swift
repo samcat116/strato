@@ -84,7 +84,17 @@ public enum WireProtocol {
     /// capability explicitly (`AgentRegisterMessage.sandboxCapable`, set only
     /// once the runtime exists), and the scheduler keys placement on that
     /// signal — never on the registered version alone.
-    public static let currentVersion = 5
+    ///
+    /// Version 6: operator-triggered agent self-update (issue #432). Adds the
+    /// `agentUpdate` action message and OS reporting at registration
+    /// (`AgentRegisterMessage.operatingSystem`, used to resolve per-OS/arch
+    /// release artifacts). The gate is load-bearing on the send side: an older
+    /// agent has no `agent_update` case in its `MessageType` enum, so the
+    /// envelope decode fails silently and no reply is ever sent — the control
+    /// plane would see only a timeout. The update endpoint therefore refuses
+    /// agents that registered with a pre-v6 version instead of sending and
+    /// hoping (see `supportsAgentUpdate(_:)`).
+    public static let currentVersion = 6
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -136,6 +146,18 @@ public enum WireProtocol {
     /// version 5 notes on `currentVersion`).
     public static func supportsSandboxSync(_ version: Int) -> Bool {
         version >= sandboxSyncMinimumVersion
+    }
+
+    /// The lowest protocol version that understands the `agentUpdate` command
+    /// (see `currentVersion` version 6 notes).
+    public static let agentUpdateMinimumVersion = 6
+
+    /// Whether an agent registered with `version` can be sent an
+    /// `AgentUpdateMessage`. A pre-v6 agent cannot even decode the envelope
+    /// (unknown `MessageType` case) and never replies, so the control plane
+    /// must refuse the update up front rather than time out against silence.
+    public static func supportsAgentUpdate(_ version: Int) -> Bool {
+        version >= agentUpdateMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and
