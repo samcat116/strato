@@ -1029,6 +1029,22 @@ final class OIDCControllerTests: BaseTestCase {
                 doc(issuer: "https://new-idp.example.com"), to: manual, discoveryChanged: true)
             #expect(manual.endSessionEndpoint == nil)
             #expect(manual.userinfoEndpoint == nil)
+
+            // But a value the same request explicitly set to something new
+            // (an admin supplying a fallback for metadata they know is
+            // incomplete) survives even a discovery change.
+            manual.endSessionEndpoint = "https://new-idp.example.com/custom-logout"
+            controller.applyDiscoveredConfiguration(
+                doc(issuer: "https://newer-idp.example.com"), to: manual,
+                discoveryChanged: true, explicitEndSessionEndpoint: true)
+            #expect(manual.endSessionEndpoint == "https://new-idp.example.com/custom-logout")
+
+            // Metadata that supplies the endpoint still wins over the
+            // explicit flag — the document is authoritative for its issuer.
+            controller.applyDiscoveredConfiguration(
+                doc(issuer: "https://final.example.com", endSession: "https://final.example.com/logout"),
+                to: manual, discoveryChanged: true, explicitEndSessionEndpoint: true)
+            #expect(manual.endSessionEndpoint == "https://final.example.com/logout")
         }
     }
 

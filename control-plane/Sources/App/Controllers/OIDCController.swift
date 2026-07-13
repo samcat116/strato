@@ -172,8 +172,11 @@ struct OIDCController: RouteCollection {
             provider[keyPath: keyPath] = trimmed.isEmpty ? nil : trimmed
         }
         // Captured before the update lands so the refresh below can tell a
-        // same-URL resubmit (edit form always sends it) from a real change.
+        // same-value resubmit (the edit form always sends every URL field)
+        // from a real change.
         let previousDiscoveryURL = provider.discoveryURL
+        let previousUserinfoEndpoint = provider.userinfoEndpoint
+        let previousEndSessionEndpoint = provider.endSessionEndpoint
         applyOptionalURL(updateRequest.discoveryURL, to: \.discoveryURL)
         applyOptionalURL(updateRequest.authorizationEndpoint, to: \.authorizationEndpoint)
         applyOptionalURL(updateRequest.tokenEndpoint, to: \.tokenEndpoint)
@@ -234,9 +237,18 @@ struct OIDCController: RouteCollection {
         // issuer saves fine but logins keep using the previous issuer's
         // endpoints. Fetch failures are logged, not fatal, same as on create.
         if let discoveryURL = provider.discoveryURL, updateRequest.discoveryURL != nil, !discoveryURL.isEmpty {
+            // A field this request set to a NEW non-empty value is an explicit
+            // manual fallback and survives metadata omission; an unchanged
+            // resubmitted form value is not explicit, so a discovery change
+            // still purges it (it may belong to the previous IdP).
             try await fetchAndUpdateProviderConfiguration(
                 provider: provider, discoveryURL: discoveryURL,
-                discoveryChanged: discoveryURL != previousDiscoveryURL, on: req)
+                discoveryChanged: discoveryURL != previousDiscoveryURL,
+                explicitUserinfoEndpoint: provider.userinfoEndpoint != nil
+                    && provider.userinfoEndpoint != previousUserinfoEndpoint,
+                explicitEndSessionEndpoint: provider.endSessionEndpoint != nil
+                    && provider.endSessionEndpoint != previousEndSessionEndpoint,
+                on: req)
         }
 
         return OIDCProviderResponse(from: provider)
@@ -679,7 +691,8 @@ struct OIDCController: RouteCollection {
     /// different IdP. `discoveryChanged` is the caller's knowledge of whether
     /// the discovery URL itself was newly added or changed.
     func applyDiscoveredConfiguration(
-        _ discovery: OIDCDiscoveryDocument, to provider: OIDCProvider, discoveryChanged: Bool
+        _ discovery: OIDCDiscoveryDocument, to provider: OIDCProvider, discoveryChanged: Bool,
+        explicitUserinfoEndpoint: Bool = false, explicitEndSessionEndpoint: Bool = false
     ) {
         // Optional endpoints the document omits are cleared when the provider
         // is pointing at a (possibly) different IdP — a stale userinfo or
@@ -687,25 +700,34 @@ struct OIDCController: RouteCollection {
         // users to the old provider. That's the case when the discovery URL
         // was newly added or changed (covers manual→discovery switches, where
         // no stored issuer exists to compare) or when the discovered issuer
-        // differs from the stored one. Only a same-URL, same-issuer refresh —
-        // the edit form resubmitting an unchanged config — preserves values
-        // the metadata omits, i.e. an admin's manual configuration.
+        // differs from the stored one. Exceptions that preserve a value the
+        // metadata omits: a same-URL, same-issuer refresh (the edit form
+        // resubmitting an unchanged config), and a field the same request
+        // explicitly set to a NEW value (`explicit*` — the admin deliberately
+        // supplied a fallback for metadata they know is incomplete; a
+        // resubmitted unchanged form value does not count as explicit).
         let issuerChanged = provider.issuer != nil && provider.issuer != discovery.issuer
         let clearOmittedOptionals = discoveryChanged || issuerChanged
         provider.issuer = discovery.issuer
         provider.authorizationEndpoint = discovery.authorizationEndpoint
         provider.tokenEndpoint = discovery.tokenEndpoint
         provider.jwksURI = discovery.jwksURI
-        if discovery.userinfoEndpoint != nil || clearOmittedOptionals {
+        if discovery.userinfoEndpoint != nil {
             provider.userinfoEndpoint = discovery.userinfoEndpoint
+        } else if clearOmittedOptionals && !explicitUserinfoEndpoint {
+            provider.userinfoEndpoint = nil
         }
-        if discovery.endSessionEndpoint != nil || clearOmittedOptionals {
+        if discovery.endSessionEndpoint != nil {
             provider.endSessionEndpoint = discovery.endSessionEndpoint
+        } else if clearOmittedOptionals && !explicitEndSessionEndpoint {
+            provider.endSessionEndpoint = nil
         }
     }
 
     private func fetchAndUpdateProviderConfiguration(
-        provider: OIDCProvider, discoveryURL: String, discoveryChanged: Bool, on req: Request
+        provider: OIDCProvider, discoveryURL: String, discoveryChanged: Bool,
+        explicitUserinfoEndpoint: Bool = false, explicitEndSessionEndpoint: Bool = false,
+        on req: Request
     )
         async throws
     {
@@ -716,7 +738,10 @@ struct OIDCController: RouteCollection {
             // assignment so a bad document leaves the provider untouched.
             try OIDCValidation.validateDiscoveredEndpoints(discovery)
 
-            applyDiscoveredConfiguration(discovery, to: provider, discoveryChanged: discoveryChanged)
+            applyDiscoveredConfiguration(
+                discovery, to: provider, discoveryChanged: discoveryChanged,
+                explicitUserinfoEndpoint: explicitUserinfoEndpoint,
+                explicitEndSessionEndpoint: explicitEndSessionEndpoint)
 
             try await provider.save(on: req.db)
         } catch {
