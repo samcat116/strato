@@ -505,10 +505,19 @@ final class RegistryPullSecretTests {
         }
     }
 
-    @Test("Sandboxes on their way out are not resolved")
+    @Test("Sandboxes on their way out get neither resolution nor credentials")
     func assemblySkipsAbsentSandboxes() async throws {
-        try await withPullSecretTestApp { app, _, _, sandbox, _ in
-            let scripted = ScriptedRegistryClient(digest: sampleDigest, token: nil)
+        try await withPullSecretTestApp { app, _, project, sandbox, _ in
+            // Even with a matching pull secret, an absent-desired sandbox
+            // must not receive credential material.
+            let row = RegistryPullSecret(
+                projectID: project.id!, registry: "ghcr.io", username: "acme-bot",
+                secret: "ghp_supersecret")
+            try await row.save(on: app.db)
+
+            let scripted = ScriptedRegistryClient(
+                digest: sampleDigest,
+                token: RegistryPullToken(token: "jwt", expiresAt: Date().addingTimeInterval(300)))
             app.registryClient = scripted
 
             sandbox.setDesiredStatus(.absent)
@@ -517,8 +526,37 @@ final class RegistryPullSecretTests {
             let agentId = try await registerAgent(app: app, sandbox: sandbox)
             let message = try await app.agentService.assembleDesiredState(agentId: agentId)
 
-            #expect(message.sandboxes.first?.spec.imageDigest == nil)
+            let entry = try #require(message.sandboxes.first)
+            #expect(entry.spec.imageDigest == nil)
+            #expect(entry.registryCredential == nil)
             #expect(scripted.resolveCallCount == 0)
+            #expect(scripted.mintCallCount == 0)
+        }
+    }
+
+    @Test("A policy refusal from token minting sends no credential at all")
+    func assemblyPolicyRefusalSendsNothing() async throws {
+        try await withPullSecretTestApp { app, _, project, sandbox, _ in
+            let row = RegistryPullSecret(
+                projectID: project.id!, registry: "ghcr.io", username: "acme-bot",
+                secret: "ghp_supersecret")
+            try await row.save(on: app.db)
+
+            // An insecure-realm refusal must NOT degrade into the Basic
+            // fallback — that would hand the agent the stored secret to
+            // present to the very endpoint the client refused.
+            app.registryClient = ScriptedRegistryClient(
+                digest: sampleDigest, token: nil,
+                mintError: RegistryClientError.insecureTokenRealm(
+                    registry: "ghcr.io", realm: "http://auth.example.com/token"))
+
+            let agentId = try await registerAgent(app: app, sandbox: sandbox)
+            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+
+            let entry = try #require(message.sandboxes.first)
+            #expect(entry.registryCredential == nil)
+            // The digest pin itself is unaffected.
+            #expect(entry.spec.imageDigest == sampleDigest)
         }
     }
 }
@@ -532,17 +570,27 @@ private final class ScriptedRegistryClient: RegistryClientProtocol, @unchecked S
     private let digest: String?
     private let token: RegistryPullToken?
     private let throwOnResolve: Bool
+    private let mintError: Error?
     private let lock = NIOLock()
     private var _resolveCredentials: [String?] = []
+    private var _mintCallCount = 0
 
-    init(digest: String?, token: RegistryPullToken?, throwOnResolve: Bool = false) {
+    init(
+        digest: String?, token: RegistryPullToken?, throwOnResolve: Bool = false,
+        mintError: Error? = nil
+    ) {
         self.digest = digest
         self.token = token
         self.throwOnResolve = throwOnResolve
+        self.mintError = mintError
     }
 
     var resolveCallCount: Int {
         lock.withLock { _resolveCredentials.count }
+    }
+
+    var mintCallCount: Int {
+        lock.withLock { _mintCallCount }
     }
 
     /// The secret (password) of each credential passed to `resolveDigest`.
@@ -563,7 +611,11 @@ private final class ScriptedRegistryClient: RegistryClientProtocol, @unchecked S
     func mintPullToken(
         for ref: OCIImageReference, credential: RegistryBasicCredential?
     ) async throws -> RegistryPullToken? {
-        token
+        lock.withLock { _mintCallCount += 1 }
+        if let mintError {
+            throw mintError
+        }
+        return token
     }
 }
 

@@ -42,6 +42,25 @@ protocol RegistryClientProtocol: Sendable {
     ) async throws -> RegistryPullToken?
 }
 
+/// Failures the sync-assembly caller must treat as *policy*, not transience:
+/// falling back to Basic credentials after one of these would defeat the
+/// protection that produced it.
+enum RegistryClientError: Error, LocalizedError {
+    /// The registry's Bearer realm is plaintext HTTP on a non-loopback host.
+    /// No credential material may travel toward it — not from the control
+    /// plane, and not from an agent handed the stored secret to run the
+    /// challenge flow itself.
+    case insecureTokenRealm(registry: String, realm: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .insecureTokenRealm(let registry, let realm):
+            return
+                "Registry \(registry) advertises a plaintext token realm (\(realm)); refusing to send credentials"
+        }
+    }
+}
+
 /// The no-network client installed under `.testing`: resolves nothing and
 /// mints nothing, so sync assembly in tests neither performs HTTP nor pins
 /// digests unless a test installs a scripted client of its own.
@@ -177,11 +196,7 @@ final class DistributionRegistryClient: RegistryClientProtocol {
                 scheme == "https"
                 || (scheme == "http" && OCIImageReference.isLoopbackHost(tokenURI.host ?? ""))
             guard realmIsSecure else {
-                throw Abort(
-                    .badGateway,
-                    reason:
-                        "Registry \(ref.registry) advertises a plaintext token realm (\(realm)); refusing to send credentials"
-                )
+                throw RegistryClientError.insecureTokenRealm(registry: ref.registry, realm: realm)
             }
         }
         var query: [String] = ["scope=repository:\(urlQueryEncode(ref.repository)):pull"]

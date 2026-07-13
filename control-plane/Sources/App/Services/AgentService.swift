@@ -1410,6 +1410,10 @@ actor AgentService {
     private func sandboxRegistryMaterial(
         _ sandbox: Sandbox, secrets: [RegistryPullSecret], on db: any Database
     ) async -> RegistryCredential? {
+        // A sandbox on its way out pulls nothing: no digest pin, no
+        // credential material toward the agent tearing it down.
+        guard sandbox.desiredStatus != .absent else { return nil }
+
         guard let ref = OCIImageReference.parse(sandbox.image) else {
             app.logger.warning(
                 "Sandbox image reference is unparseable; syncing without digest or credential",
@@ -1437,9 +1441,8 @@ actor AgentService {
             }
         }
 
-        // Tag→digest pinning. Skipped for sandboxes on their way out — there
-        // is nothing left to converge immutably.
-        if sandbox.imageDigest == nil, sandbox.desiredStatus != .absent, let sandboxId = sandbox.id {
+        // Tag→digest pinning.
+        if sandbox.imageDigest == nil, let sandboxId = sandbox.id {
             do {
                 if let digest = try await app.registryClient.resolveDigest(for: ref, credential: basic) {
                     sandbox.imageDigest = digest
@@ -1479,6 +1482,18 @@ actor AgentService {
                     expiresAt: token.expiresAt,
                     bearer: true)
             }
+        } catch let error as RegistryClientError {
+            // Policy refusal (e.g. plaintext token realm), not transience:
+            // a Basic fallback would hand the agent the stored secret to
+            // present to the very endpoint the client just refused. Send
+            // nothing; the pull fails loudly agent-side instead.
+            app.logger.warning(
+                "Refusing to send registry credential for sandbox image",
+                metadata: [
+                    "registry": .string(ref.registry),
+                    "error": .string(error.localizedDescription),
+                ])
+            return nil
         } catch {
             app.logger.warning(
                 "Failed to mint a registry pull token; falling back to the stored credential",
