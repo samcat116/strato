@@ -652,7 +652,8 @@ actor Agent {
             hypervisors: hypervisors,
             networkCapability: networkCapability,
             sandboxCapable: sandboxRuntime.capable,
-            operatingSystem: OperatingSystem.current
+            operatingSystem: OperatingSystem.current,
+            hostInfo: HostInfoProbe.gather()
         )
 
         if let client = websocketClient {

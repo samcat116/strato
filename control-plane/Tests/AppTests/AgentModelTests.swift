@@ -297,6 +297,42 @@ struct AgentModelTests {
         #expect(agent.hypervisors == hypervisors)
     }
 
+    @Test("Agent.from stores reported host info; nil when the agent doesn't report it")
+    func testFromRegistrationStoresHostInfo() {
+        let hostInfo = HostInfo(
+            osName: "Ubuntu 24.04.1 LTS",
+            kernelVersion: "6.8.0-45-generic",
+            cpuModel: "AMD EPYC 7763",
+            cpuVendor: "AuthenticAMD",
+            physicalCoreCount: 32,
+            logicalCoreCount: 64,
+            totalMemoryBytes: 137_438_953_472,
+            machineModel: "PowerEdge R6525",
+            bootTime: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let message = AgentRegisterMessage(
+            agentId: "host-info-agent",
+            hostname: "hi-host",
+            version: "1.0.0",
+            capabilities: ["qemu"],
+            resources: createTestAgentResources(),
+            hostInfo: hostInfo
+        )
+
+        let agent = Agent.from(registration: message, name: "host-info-agent")
+        #expect(agent.hostInfo == hostInfo)
+
+        let legacyMessage = AgentRegisterMessage(
+            agentId: "legacy-agent",
+            hostname: "legacy-host",
+            version: "1.0.0",
+            capabilities: ["qemu"],
+            resources: createTestAgentResources()
+        )
+        let legacyAgent = Agent.from(registration: legacyMessage, name: "legacy-agent")
+        #expect(legacyAgent.hostInfo == nil)
+    }
+
     @Test("Agent.from sets status to connecting by default")
     func testFromRegistrationSetsConnectingStatus() {
         let resources = createTestAgentResources()

@@ -129,6 +129,12 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// this field decode fine; absent means unknown, and the update endpoint
     /// refuses to guess.
     public let operatingSystem: OperatingSystem?
+    /// Descriptive hardware/platform/OS details for operators (CPU model,
+    /// kernel version, distribution, physical core count, boot time, ...).
+    /// Purely informational and entirely best-effort — optional so
+    /// registrations from agents that predate host-info reporting decode fine,
+    /// and any individual field the agent couldn't probe is absent.
+    public let hostInfo: HostInfo?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -144,7 +150,8 @@ public struct AgentRegisterMessage: WebSocketMessage {
         networkCapability: NetworkCapability? = nil,
         protocolVersion: Int? = WireProtocol.currentVersion,
         sandboxCapable: Bool? = nil,
-        operatingSystem: OperatingSystem? = nil
+        operatingSystem: OperatingSystem? = nil,
+        hostInfo: HostInfo? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -160,6 +167,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.protocolVersion = protocolVersion
         self.sandboxCapable = sandboxCapable
         self.operatingSystem = operatingSystem
+        self.hostInfo = hostInfo
     }
 
     /// The hypervisor list to act on: the probed report when the agent sent

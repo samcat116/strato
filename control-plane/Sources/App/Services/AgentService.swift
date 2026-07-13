@@ -316,6 +316,7 @@ actor AgentService {
             agent.operatingSystem = message.operatingSystem?.rawValue ?? agent.operatingSystem
             agent.hypervisors = message.effectiveHypervisors
             agent.networkCapability = message.networkCapability?.rawValue
+            agent.hostInfo = message.hostInfo ?? agent.hostInfo
             agent.sandboxCapable = message.sandboxCapable ?? false
             agent.updateResources(message.resources)
             agent.status = .online

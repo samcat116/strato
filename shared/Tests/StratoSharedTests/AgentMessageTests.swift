@@ -83,6 +83,45 @@ struct AgentMessageTests {
         #expect(decodedReporting.operatingSystem == .linux)
     }
 
+    @Test("Host info: absent for old builds, carried field-by-field when reported")
+    func agentRegisterHostInfo() throws {
+        let implicit = AgentRegisterMessage(
+            agentId: "agent-1",
+            hostname: "hv-01.example",
+            version: "1.2.3",
+            capabilities: ["kvm"],
+            resources: Fixtures.resources
+        )
+        let decodedImplicit = try throughEnvelope(implicit)
+        #expect(decodedImplicit.hostInfo == nil)
+
+        let bootTime = Date(timeIntervalSince1970: 1_700_000_000)
+        let hostInfo = HostInfo(
+            osName: "Ubuntu 24.04.1 LTS",
+            kernelVersion: "6.8.0-45-generic",
+            cpuModel: "Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz",
+            cpuVendor: "GenuineIntel",
+            physicalCoreCount: 8,
+            logicalCoreCount: 16,
+            totalMemoryBytes: 68_719_476_736,
+            machineModel: "PowerEdge R650",
+            bootTime: bootTime
+        )
+        let reporting = AgentRegisterMessage(
+            agentId: "agent-2",
+            hostname: "hv-02.example",
+            version: "1.2.3",
+            capabilities: ["kvm"],
+            resources: Fixtures.resources,
+            hostInfo: hostInfo
+        )
+        let decoded = try throughEnvelope(reporting)
+        #expect(decoded.hostInfo == hostInfo)
+        #expect(decoded.hostInfo?.cpuModel == "Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz")
+        #expect(decoded.hostInfo?.physicalCoreCount == 8)
+        #expect(decoded.hostInfo?.bootTime == bootTime)
+    }
+
     @Test func agentUpdateRoundTrip() throws {
         let message = AgentUpdateMessage(
             requestId: Fixtures.requestId,
