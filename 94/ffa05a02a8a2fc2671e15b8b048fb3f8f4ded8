@@ -1,0 +1,27 @@
+.github/workflows/release.yaml
+  s_94e70549212d92::t_deee0517857f2f 506-509,517-526,547-549,551-552
+  s_94e70549212d92::t_18e97eb91d9761 576-578
+  s_94e70549212d92::t_17e3fa702a9a51 625-641,644-674,678
+  s_94e70549212d92::t_954149ec039cfc 675-677
+  s_94e70549212d92::t_4250f4ed719510 642-643
+  s_94e70549212d92::t_052b3726c1af5b 550
+  s_94e70549212d92::t_605beb255ccfb2 553
+docs/deployment/agents.md
+  s_94e70549212d92::t_d5c460ef46def9 88-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "94ffa05a02a8a2fc2671e15b8b048fb3f8f4ded8",
+  "prompts": {},
+  "sessions": {
+    "s_94e70549212d92": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2589998c-ba0e-4d0c-9529-64a050b174a8",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
