@@ -1,0 +1,68 @@
+control-plane/web/src/components/layout/nav.ts
+  s_7cb24bebbad290::t_933643bfc018e6 3,19,42-47,50-55
+shared/Sources/StratoShared/WireProtocol.swift
+  s_7cb24bebbad290::t_933643bfc018e6 97-109,175-186
+  s_7cb24bebbad290::t_dc3bf54a7f4c1e 187-188
+docs/.vitepress/config.mts
+  s_7cb24bebbad290::t_933643bfc018e6 33-34
+control-plane/web/src/lib/api/agents.ts
+  s_7cb24bebbad290::t_933643bfc018e6 35-38
+control-plane/web/src/lib/hooks/index.ts
+  s_7cb24bebbad290::t_933643bfc018e6 9-17
+agent/Sources/StratoAgentCore/AutoUpdateGate.swift
+  s_7cb24bebbad290::t_933643bfc018e6 1-57
+control-plane/Sources/App/Services/AgentService.swift
+  s_7cb24bebbad290::t_933643bfc018e6 162-205,812-817,1084-1274,1661-1704,1981,2012-2059
+  s_7cb24bebbad290::t_e20a40a4246652 2060
+docs/architecture/agent-updates.md
+  s_7cb24bebbad290::t_933643bfc018e6 1-160
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_7cb24bebbad290::t_933643bfc018e6 109-158,197-203,212-213,222,241,429-462,483-488,496-497,505,519
+control-plane/web/src/app/(dashboard)/agents/detail/page.tsx
+  s_7cb24bebbad290::t_933643bfc018e6 18,225-226
+  s_7cb24bebbad290::t_2e80cd1289c7c1 227
+control-plane/Tests/AppTests/AgentAutoUpdateTests.swift
+  s_7cb24bebbad290::t_933643bfc018e6 1-485
+shared/Tests/StratoSharedTests/AgentAutoUpdateProtocolTests.swift
+  s_7cb24bebbad290::t_933643bfc018e6 1-104
+control-plane/web/src/components/agents/agent-auto-update.tsx
+  s_7cb24bebbad290::t_933643bfc018e6 1-104
+control-plane/web/src/types/api.ts
+  s_7cb24bebbad290::t_933643bfc018e6 282-291
+control-plane/web/src/components/layout/sidebar.tsx
+  s_7cb24bebbad290::t_933643bfc018e6 47-49,69-85
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_7cb24bebbad290::t_933643bfc018e6 21,894-945
+  s_7cb24bebbad290::t_5804f3f295b414 946
+agent/Tests/StratoAgentTests/AutoUpdateGateTests.swift
+  s_7cb24bebbad290::t_933643bfc018e6 1-50
+control-plane/Sources/App/Migrations/AddAgentAutoUpdate.swift
+  s_7cb24bebbad290::t_933643bfc018e6 1-50
+agent/Sources/StratoAgent/Agent.swift
+  s_7cb24bebbad290::t_933643bfc018e6 182-191,1335-1339,1715-1743,1751-1752,1754-1831,3225-3226
+  s_7cb24bebbad290::t_a2f01acb99ffd4 1744-1750,1753
+control-plane/Sources/App/configure.swift
+  s_7cb24bebbad290::t_933643bfc018e6 405-408
+control-plane/Sources/App/Models/Agent.swift
+  s_7cb24bebbad290::t_933643bfc018e6 104-137,170,314-323,353-357
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_7cb24bebbad290::t_933643bfc018e6 59-83
+control-plane/web/src/lib/hooks/use-agents.ts
+  s_7cb24bebbad290::t_933643bfc018e6 53-65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "0d80507d22088dfcbe3f7e5973b5adbce21ea8df",
+  "prompts": {},
+  "sessions": {
+    "s_7cb24bebbad290": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01ba2049-2ac0-457f-bbd2-f3e5b9f9dcab",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
