@@ -108,6 +108,21 @@ struct AgentController: RouteCollection {
             }
         }
 
+        let hostedSandboxes = try await Sandbox.query(on: req.db)
+            .filter(\.$hypervisorId == agentIDString)
+            .with(\.$project)
+            .all()
+        for sandbox in hostedSandboxes {
+            let sandboxOrg = try await sandbox.project.getRootOrganizationId(on: req.db)
+            guard sandboxOrg == agentOrg else {
+                throw Abort(
+                    .forbidden,
+                    reason:
+                        "Agent hosts sandboxes belonging to another organization; only a system administrator can perform this action until they are migrated"
+                )
+            }
+        }
+
         let storedVolumes = try await Volume.query(on: req.db)
             .filter(\.$hypervisorId == agentIDString)
             .with(\.$project)
@@ -907,6 +922,16 @@ struct AgentController: RouteCollection {
             throw Abort(
                 .conflict,
                 reason: "Agent hosts \(hostedVMs) VM(s); migrate or delete them before changing its organization")
+        }
+        let hostedSandboxes = try await Sandbox.query(on: req.db)
+            .filter(\.$hypervisorId == agentId.uuidString)
+            .count()
+        guard hostedSandboxes == 0 else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent hosts \(hostedSandboxes) sandbox(es); delete them before changing its organization"
+            )
         }
         // Detached volumes anchor the old org's data to this hardware the
         // same way VMs do: moving the agent would strand them on foreign

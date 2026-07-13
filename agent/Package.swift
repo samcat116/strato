@@ -27,7 +27,15 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
         // X.509 parsing (SVID expiry, DER -> PEM conversion)
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.5.0"),
-    ] + platformPackageDependencies,
+        // SwiftOVN: Linux only at build time (OVN/OVS not available on macOS), but the
+        // dependency is declared unconditionally so the package graph — and therefore
+        // Package.resolved — is identical on every host. Linking is gated per-target
+        // below with `.when(platforms:)`. Revision-pinned (not branch) so `swift package
+        // update` on macOS can't silently move the pin. Bump by editing this revision.
+        .package(
+            url: "https://github.com/samcat116/swift-ovn.git",
+            revision: "d474198c454b87b62d6af68fa15241e8d1ed9bd5"),
+    ],
     targets: [
         // Core library with testable code (no SwiftQEMU dependency)
         .target(
@@ -71,7 +79,18 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Crypto", package: "swift-crypto"),
-            ] + qemuAndNetworkDependencies,
+                // SwiftQEMU: both Linux (KVM) and macOS (HVF).
+                .product(name: "SwiftQEMU", package: "swift-qemu"),
+                // Linux-only backends. Declared here for every host so the package graph
+                // stays identical, but only linked and compiled on Linux. Source imports
+                // are guarded with `#if os(Linux)`.
+                .product(
+                    name: "SwiftOVN", package: "swift-ovn",
+                    condition: .when(platforms: [.linux])),
+                .product(
+                    name: "SwiftFirecracker", package: "SwiftFirecracker",
+                    condition: .when(platforms: [.linux])),
+            ],
             swiftSettings: swiftSettings
         ),
         .testTarget(
@@ -99,35 +118,3 @@ var swiftSettings: [SwiftSetting] {
         .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
     ]
 }
-
-// Conditional dependencies based on platform
-// SwiftQEMU: Available on both Linux (KVM) and macOS (HVF)
-// SwiftOVN: Linux only (OVN/OVS not available on macOS)
-#if os(Linux)
-var platformPackageDependencies: [Package.Dependency] {
-    // Revision-pinned (not branch) so `swift package update` on macOS can't
-    // silently move the pin. Bump by editing this revision.
-    [
-        .package(
-            url: "https://github.com/samcat116/swift-ovn.git",
-            revision: "d474198c454b87b62d6af68fa15241e8d1ed9bd5")
-    ]
-}
-var qemuAndNetworkDependencies: [Target.Dependency] {
-    [
-        .product(name: "SwiftQEMU", package: "swift-qemu"),
-        .product(name: "SwiftOVN", package: "swift-ovn"),
-        .product(name: "SwiftFirecracker", package: "SwiftFirecracker"),
-    ]
-}
-#else
-var platformPackageDependencies: [Package.Dependency] {
-    []
-}
-var qemuAndNetworkDependencies: [Target.Dependency] {
-    // macOS: SwiftQEMU with HVF support, user-mode networking (no OVN/OVS)
-    [
-        .product(name: "SwiftQEMU", package: "swift-qemu"),
-    ]
-}
-#endif

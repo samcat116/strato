@@ -8,9 +8,10 @@ a sandbox is a fast, disposable execution environment for a container-shaped
 workload — an image reference, resource sizing, and overrides for
 entrypoint/cmd/env/workdir.
 
-> **Status**: phase 1 in progress. The wire protocol (issue #411) is landed;
-> the control-plane model/API, registry integration, scheduler gating, and the
-> agent runtime are tracked in issues #412–#422. Sections below describe the
+> **Status**: phase 1 in progress. The wire protocol (issue #411), the
+> generalized operation machinery (#412), and the control-plane model/API
+> (#413) are landed; registry integration, scheduler gating, IPAM, and the
+> agent runtime are tracked in issues #414–#422. Sections below describe the
 > agreed design; anything not yet landed is marked with its issue.
 
 ## Decision: native Swift Firecracker path
@@ -95,10 +96,26 @@ same asymmetric hazard as the v3 networks list:
 
 ## Control plane (issues #412–#416)
 
-- `Sandbox` model with the same desired/observed generation split as VMs, a
-  `definition sandbox` in SpiceDB, and `/api/sandboxes` CRUD (#413).
-- Scheduler placement gated on agent capability (Linux/KVM + Firecracker +
-  protocol ≥ 5) and counted against the shared quota pools (#415).
+- `Sandbox` model (`control-plane/Sources/App/Models/Sandbox.swift`) with the
+  same desired/observed generation split as VMs, plus sandbox-only fields:
+  the OCI ref and resolved digest, entrypoint/cmd/env/workdir overrides, a
+  stored-but-unenforced `ttl_seconds` (enforcement is #424), and the reported
+  exit code (#413, landed).
+- `/api/sandboxes` (`SandboxController`): list/create/show/update/delete +
+  start/stop/restart + status + operations. Mutations insert a
+  `resource_operations` row (`resource_kind = sandbox`) and bump desired state
+  in one transaction, returning **202 Accepted** — the machinery generalized
+  in #412. Restart is expressed as a fresh desired-`running` generation (there
+  is no imperative sandbox reboot message); its agent-side interpretation
+  lands with the runtime (#421).
+- `definition sandbox` in SpiceDB: a near-copy of `virtual_machine` minus
+  console/pause/promote, plus `exec` for phase 2. `SpiceDBAuthMiddleware`
+  guards `/api/sandboxes` through the same route-prefix → resource-type
+  mapping as VMs.
+- Creation runs the quota admission check in the create transaction and places
+  onto a Firecracker-capable agent. Scheduler gating on the explicit
+  sandbox-runtime capability and full quota *accounting* (resync summing
+  sandboxes alongside VMs, release on delete) land with #415.
 - Sandboxes reference images by OCI ref only — they do not use the
   `Image`/`ImageArtifact` model at all.
 

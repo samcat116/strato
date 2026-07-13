@@ -1,7 +1,7 @@
 // SpiceDB schema for Strato authorization with hierarchical IAM
 // Based on Google Zanzibar model.
 //
-// Hierarchy: organization → organizational_unit → project → {virtual_machine, image, volume}.
+// Hierarchy: organization → organizational_unit → project → {virtual_machine, sandbox, image, volume}.
 // Projects attach to their parent via the `parent` relation (an organization or an
 // OU); resource permissions inherit from the project, which inherits from its parent.
 //
@@ -180,6 +180,36 @@ definition virtual_machine {
     permission resume = owner + editor + project->create_resources
     permission view_console = owner + editor + project->manage_project
     permission promote_environment = environment->approve_deployment
+}
+
+/** sandbox represents an OCI-image Firecracker microVM (issue #410) — a
+    near-copy of virtual_machine minus console/pause/promote permissions,
+    plus `exec` for phase-2 interactive access (issue #423) */
+definition sandbox {
+    /** owner is the user who created the sandbox */
+    relation owner: user
+
+    /** project that owns this sandbox */
+    relation project: project
+
+    /** environment this sandbox belongs to (e.g., dev, staging, prod) */
+    relation environment: environment
+
+    /** viewer can see sandbox details but not modify */
+    relation viewer: user
+
+    /** editor can modify sandbox settings and control state */
+    relation editor: user
+
+    // Permissions - combining direct relations and inherited from project/environment
+    permission create = project->create_resources
+    permission read = owner + viewer + editor + project->view_project + environment->view
+    permission update = owner + editor + project->manage_project + environment->manage_environment
+    permission delete = owner + project->manage_project
+    permission start = owner + editor + project->create_resources + environment->deploy
+    permission stop = owner + editor + project->create_resources + environment->deploy
+    permission restart = owner + editor + project->create_resources + environment->deploy
+    permission exec = owner + editor + project->create_resources + environment->deploy
 }
 
 /** image represents a VM disk image that can be used to create VMs */
