@@ -56,6 +56,31 @@ enum Telemetry {
         Gauge(label: "strato_agent_heartbeat_staleness_seconds", dimensions: [("agent", agentName)]).record(seconds)
     }
 
+    // MARK: - Agent auto-update (issue #434)
+
+    /// The rollout sweep assigned an agent its target version.
+    static func agentAutoUpdateAssigned() {
+        Counter(label: "strato_agent_auto_update_assignments_total").increment()
+    }
+
+    /// An assigned agent re-registered at its target version.
+    static func agentAutoUpdateConverged() {
+        Counter(label: "strato_agent_auto_update_converged_total").increment()
+    }
+
+    /// An assigned update failed terminally, halting the rollout. `reason`
+    /// distinguishes `agent_reported` (the agent pushed the real error) from
+    /// `health_budget` (the agent went silent past its budget).
+    static func agentAutoUpdateFailed(reason: String) {
+        Counter(label: "strato_agent_auto_update_failures_total", dimensions: [("reason", reason)]).increment()
+    }
+
+    /// An assigned agent stayed blocked past the health budget; the rollout
+    /// parked it (assignment kept, advancement no longer waits on it).
+    static func agentAutoUpdateParked() {
+        Counter(label: "strato_agent_auto_update_parked_total").increment()
+    }
+
     // MARK: - VM health
 
     /// A VM transitioned into the `.error` state. `reason` records which mechanism

@@ -106,6 +106,56 @@ public struct DesiredSandboxState: Codable, Sendable {
     }
 }
 
+// MARK: - Desired Agent Update
+
+/// The agent build the control plane wants this agent to be running, carried
+/// on the desired-state sync (issue #434) — the declarative complement to the
+/// imperative `AgentUpdateMessage`. Artifact URL and checksum are resolved
+/// fresh at sync assembly, like signed image URLs, so a long-desired update
+/// never carries a stale link.
+///
+/// Level-triggered and idempotent: an agent already running `targetVersion`
+/// diffs this to nothing, and absence of the field means "no opinion" — never
+/// "downgrade". The agent converges through the same download/verify/swap/
+/// restart path as the imperative update, but only when its local
+/// preconditions hold (not containerized, no in-flight reconcile work);
+/// otherwise it reports why via `ObservedStateReport.agentUpdateStatus` and
+/// retries on later syncs.
+public struct DesiredAgentUpdate: Codable, Sendable {
+    /// The version the agent should be running. Informational to the updater
+    /// (the artifact decides what is installed) but the agent uses it to
+    /// no-op when already converged and to label its status reports.
+    public let targetVersion: String
+    /// Where to download the artifact. May be presigned — treat the query
+    /// string as a credential (see `AgentUpdateMessage.redactURL`).
+    public let artifactURL: String
+    /// Hex SHA-256 the downloaded artifact must match.
+    public let sha256: String
+    /// Shape of the artifact (tarball to extract vs. bare binary).
+    public let artifactKind: AgentUpdateArtifactKind
+    /// Member to extract when `artifactKind == .tarball`.
+    public let tarballMember: String?
+
+    public init(
+        targetVersion: String,
+        artifactURL: String,
+        sha256: String,
+        artifactKind: AgentUpdateArtifactKind,
+        tarballMember: String? = nil
+    ) {
+        self.targetVersion = targetVersion
+        self.artifactURL = artifactURL
+        self.sha256 = sha256
+        self.artifactKind = artifactKind
+        self.tarballMember = tarballMember
+    }
+
+    /// `artifactURL` with query and userinfo stripped, safe for logs.
+    public var redactedArtifactURL: String {
+        AgentUpdateMessage.redactURL(artifactURL)
+    }
+}
+
 /// Control plane → agent: the full authoritative set of VMs that should exist
 /// on the receiving agent.
 ///
@@ -144,6 +194,13 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// shared NB has a single topology writer. Site-less agents own their local
     /// NB outright and are always authoritative.
     public let networksAuthoritative: Bool
+    /// The agent build this agent should be running (issue #434), with a
+    /// freshly resolved artifact. Nil means "no opinion" — from control planes
+    /// that predate the field, deployments without a meaningful target (dev
+    /// builds), agents with auto-update off, and agents the fleet rollout has
+    /// not reached yet. Never an instruction to downgrade or tear anything
+    /// down, so absence is always safe.
+    public let desiredAgentUpdate: DesiredAgentUpdate?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -152,7 +209,8 @@ public struct DesiredStateMessage: WebSocketMessage {
         vms: [DesiredVMState],
         sandboxes: [DesiredSandboxState] = [],
         networks: [DesiredNetworkState] = [],
-        networksAuthoritative: Bool = true
+        networksAuthoritative: Bool = true,
+        desiredAgentUpdate: DesiredAgentUpdate? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -161,6 +219,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         self.sandboxes = sandboxes
         self.networks = networks
         self.networksAuthoritative = networksAuthoritative
+        self.desiredAgentUpdate = desiredAgentUpdate
     }
 
     // Custom decode so `networks` and `sandboxes` tolerate absence: a sync
@@ -179,6 +238,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         sandboxes = try c.decodeIfPresent([DesiredSandboxState].self, forKey: .sandboxes) ?? []
         networks = try c.decodeIfPresent([DesiredNetworkState].self, forKey: .networks) ?? []
         networksAuthoritative = try c.decodeIfPresent(Bool.self, forKey: .networksAuthoritative) ?? true
+        desiredAgentUpdate = try c.decodeIfPresent(DesiredAgentUpdate.self, forKey: .desiredAgentUpdate)
     }
 }
 
@@ -366,6 +426,40 @@ public struct ObservedSandboxState: Codable, Sendable {
     }
 }
 
+// MARK: - Observed Agent Update Status
+
+/// Why an agent is not converging on the sync's `DesiredAgentUpdate`
+/// (issue #434), reported back on the observed-state report so the control
+/// plane's rollout can distinguish "waiting on a precondition" from "the
+/// update itself failed" instead of timing both out identically.
+public struct ObservedAgentUpdateStatus: Codable, Sendable {
+    /// A precondition currently prevents the attempt (containerized install,
+    /// in-flight reconcile work). Transient from the rollout's perspective:
+    /// the agent re-evaluates on every sync.
+    public static let dispositionBlocked = "blocked"
+    /// The update was attempted and did not take (download, checksum, probe,
+    /// or swap failure — or the installed artifact did not change the
+    /// version). The agent will not retry this artifact within the current
+    /// process lifetime, so the rollout should halt rather than wait.
+    public static let dispositionFailed = "failed"
+
+    /// The `DesiredAgentUpdate.targetVersion` this status is about, so a
+    /// stale report can never be attributed to a newer rollout target.
+    public let targetVersion: String
+    /// One of the `disposition*` constants. A string rather than an enum so
+    /// a disposition added later still decodes on older control planes
+    /// (unknown values are treated as `blocked`, the conservative reading).
+    public let disposition: String
+    /// Human-readable explanation, surfaced on the agent's API resource.
+    public let reason: String
+
+    public init(targetVersion: String, disposition: String, reason: String) {
+        self.targetVersion = targetVersion
+        self.disposition = disposition
+        self.reason = reason
+    }
+}
+
 /// Agent → control plane: everything the agent actually has, with resources.
 ///
 /// Full-list semantics mirror `DesiredStateMessage`: a VM missing from `vms`
@@ -386,6 +480,12 @@ public struct ObservedStateReport: WebSocketMessage {
     /// sandboxes on such agents in the first place.
     public let sandboxes: [ObservedSandboxState]
     public let resources: AgentResources
+    /// Why the agent is not converging on its `DesiredAgentUpdate`, when one
+    /// is desired and something is in the way (issue #434). Nil when no
+    /// update is desired, when convergence is proceeding (the agent restarts
+    /// into the new build rather than reporting progress), and from agents
+    /// older than the field.
+    public let agentUpdateStatus: ObservedAgentUpdateStatus?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -393,7 +493,8 @@ public struct ObservedStateReport: WebSocketMessage {
         agentId: String,
         vms: [ObservedVMState],
         sandboxes: [ObservedSandboxState] = [],
-        resources: AgentResources
+        resources: AgentResources,
+        agentUpdateStatus: ObservedAgentUpdateStatus? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -401,6 +502,7 @@ public struct ObservedStateReport: WebSocketMessage {
         self.vms = vms
         self.sandboxes = sandboxes
         self.resources = resources
+        self.agentUpdateStatus = agentUpdateStatus
     }
 
     // Custom decode so `sandboxes` tolerates absence: a report produced by a
@@ -414,5 +516,6 @@ public struct ObservedStateReport: WebSocketMessage {
         vms = try c.decode([ObservedVMState].self, forKey: .vms)
         sandboxes = try c.decodeIfPresent([ObservedSandboxState].self, forKey: .sandboxes) ?? []
         resources = try c.decode(AgentResources.self, forKey: .resources)
+        agentUpdateStatus = try c.decodeIfPresent(ObservedAgentUpdateStatus.self, forKey: .agentUpdateStatus)
     }
 }

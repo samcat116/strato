@@ -50,6 +50,19 @@ export function useUpdateAgent() {
   });
 }
 
+// Toggles declarative auto-update enrollment (issue #434).
+export function usePatchAgent() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, autoUpdate }: { id: string; autoUpdate: boolean }) =>
+      agentsApi.patch(id, { autoUpdate }),
+    onSuccess: (_result, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      queryClient.invalidateQueries({ queryKey: ["agents", id] });
+    },
+  });
+}
+
 export function useInvalidateAgents() {
   const queryClient = useQueryClient();
   return () => {
