@@ -300,8 +300,13 @@ actor AgentService {
                     let hostedVMs = try await VM.query(on: db)
                         .filter(\.$hypervisorId == agentID.uuidString)
                         .count()
+                    let hostedSandboxes = try await Sandbox.query(on: db)
+                        .filter(\.$hypervisorId == agentID.uuidString)
+                        .count()
                     if hostedVMs > 0 {
                         refusalReason = "agent hosts \(hostedVMs) VM(s); drain it first"
+                    } else if hostedSandboxes > 0 {
+                        refusalReason = "agent hosts \(hostedSandboxes) sandbox(es); drain it first"
                     }
                 }
             }
@@ -342,8 +347,13 @@ actor AgentService {
                     let hostedVMs = try await VM.query(on: db)
                         .filter(\.$hypervisorId == agentID.uuidString)
                         .count()
+                    let hostedSandboxes = try await Sandbox.query(on: db)
+                        .filter(\.$hypervisorId == agentID.uuidString)
+                        .count()
                     if hostedVMs > 0 {
                         refusalReason = "agent hosts \(hostedVMs) VM(s); drain it first"
+                    } else if hostedSandboxes > 0 {
+                        refusalReason = "agent hosts \(hostedSandboxes) sandbox(es); drain it first"
                     }
                 }
             }
