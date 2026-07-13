@@ -49,6 +49,15 @@ struct MessageTypeTests {
         case .error: return "error"
         case .statusUpdate: return "status_update"
         case .vmLog: return "vm_log"
+        case .sandboxExecStart: return "sandbox_exec_start"
+        case .sandboxExecStarted: return "sandbox_exec_started"
+        case .sandboxExecInput: return "sandbox_exec_input"
+        case .sandboxExecOutput: return "sandbox_exec_output"
+        case .sandboxExecResize: return "sandbox_exec_resize"
+        case .sandboxExecExit: return "sandbox_exec_exit"
+        case .sandboxExecClose: return "sandbox_exec_close"
+        case .sandboxExecClosed: return "sandbox_exec_closed"
+        case .sandboxLog: return "sandbox_log"
         }
     }
 
@@ -62,6 +71,9 @@ struct MessageTypeTests {
         .consoleConnect, .consoleDisconnect, .consoleData, .consoleConnected, .consoleDisconnected,
         .desiredState, .observedState,
         .success, .error, .statusUpdate, .vmLog,
+        .sandboxExecStart, .sandboxExecStarted, .sandboxExecInput, .sandboxExecOutput,
+        .sandboxExecResize, .sandboxExecExit, .sandboxExecClose, .sandboxExecClosed,
+        .sandboxLog,
     ]
 
     @Test("every case keeps its wire string", arguments: allTypes)
