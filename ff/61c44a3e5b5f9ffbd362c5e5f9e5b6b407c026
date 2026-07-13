@@ -1,0 +1,50 @@
+sandbox-guest/init/src/lib.rs
+  s_a36dd7ef4412d5::t_02ce82b0c3fa3f 12-13,16
+sandbox-guest/init/src/linux/exec.rs
+  s_a36dd7ef4412d5::t_f65b35538e4367 200
+  s_a36dd7ef4412d5::t_9d50a5ac2753ce 1-69,76-130,141-142,151-199,201-202,209-213,218,225-226,233-311,327,332-333,335-352,367-396
+  s_a36dd7ef4412d5::t_c336acb139a7a7 70-75,131-140,143-150,203-208,214-217,219-224,227-232,312-326,328-331,334,353-366
+sandbox-guest/init/src/protocol.rs
+  s_a36dd7ef4412d5::t_50743aa9c86864 10-11,13-33,35-38,46-52,63-102,134-158,162-171,206-304,348-407
+sandbox-guest/init/src/linux/reaper.rs
+  s_a36dd7ef4412d5::t_1b27ad89cd56cd 1-120,122-143,152-209
+  s_a36dd7ef4412d5::t_c336acb139a7a7 121,144-151
+sandbox-guest/init/src/linux/logs.rs
+  s_a36dd7ef4412d5::t_7c2881def74672 1-50,57-96,103-160
+  s_a36dd7ef4412d5::t_c336acb139a7a7 51-56,97-102
+sandbox-guest/init/src/logbuf.rs
+  s_a36dd7ef4412d5::t_c336acb139a7a7 123-125,182-185,221-225
+  s_a36dd7ef4412d5::t_084efcc0c0830d 1-122,126-181,186-220,226-261
+sandbox-guest/init/src/linux/vsock.rs
+  s_a36dd7ef4412d5::t_04274082d0c10e 3-6,8-19,27-28,33-36,49-65,83-93,135-136,140-185,187-210,218-221,231-248
+  s_a36dd7ef4412d5::t_c336acb139a7a7 186
+sandbox-guest/init/Cargo.toml
+  s_a36dd7ef4412d5::t_426dace91fb142 28
+  s_a36dd7ef4412d5::t_585e3ab9e5cac2 27,32-33,35-44
+sandbox-guest/init/src/linux/mod.rs
+  s_a36dd7ef4412d5::t_765ce012f17e4c 1,5-6,8-9,11,15,22,24-26,31-33,37-38,65-66,71-76,81,86-87,93-95,99-106,110-121,132,135-142,144-153
+sandbox-guest/init/src/config.rs
+  s_a36dd7ef4412d5::t_88b72bf0eb0956 270,273,276
+  s_a36dd7ef4412d5::t_1707ff0e2c6928 264-269
+sandbox-guest/README.md
+  s_a36dd7ef4412d5::t_6efa9850f5e37e 62-91
+  s_a36dd7ef4412d5::t_545ce13cb8b827 34-40
+sandbox-guest/init/Cargo.lock
+  s_a36dd7ef4412d5::t_34cf7824f6775b 5-10,124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "ff61c44a3e5b5f9ffbd362c5e5f9e5b6b407c026",
+  "prompts": {},
+  "sessions": {
+    "s_a36dd7ef4412d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c139a913-0184-4109-9812-bbb47da69e4c",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
