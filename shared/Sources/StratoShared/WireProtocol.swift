@@ -77,10 +77,13 @@ public enum WireProtocol {
     /// networks in v3: an agent must not read the decoded-empty list from a
     /// pre-v5 control plane as "tear down all sandboxes" — it gates sandbox
     /// reconciliation on `supportsSandboxSync(envelope.senderVersion)`. In the
-    /// other direction the control plane must never place sandboxes on agents
-    /// that registered with a pre-v5 version (they would silently ignore the
-    /// entries and never converge them); the scheduler keys capability on the
-    /// registered version.
+    /// other direction, speaking v5 is necessary but NOT sufficient for
+    /// sandbox placement: an agent built against v5 understands the fields but
+    /// may predate the sandbox runtime (issue #421), and would silently ignore
+    /// desired entries and report none back. Agents therefore advertise the
+    /// capability explicitly (`AgentRegisterMessage.sandboxCapable`, set only
+    /// once the runtime exists), and the scheduler keys placement on that
+    /// signal — never on the registered version alone.
     public static let currentVersion = 5
 
     /// The lowest protocol version that speaks reconciliation state sync
@@ -122,11 +125,15 @@ public enum WireProtocol {
     /// (see `currentVersion` version 5 notes).
     public static let sandboxSyncMinimumVersion = 5
 
-    /// Whether a peer at `version` participates in sandbox desired-state sync.
+    /// Whether a peer at `version` understands sandbox desired-state sync.
     /// Agent-side: a pre-v5 control plane merely omits `sandboxes` (decoded to
     /// []), which must NOT be treated as "tear down all sandboxes" — the agent
-    /// skips sandbox reconciliation entirely. Control-plane-side: agents that
-    /// registered with a pre-v5 version are not sandbox placement candidates.
+    /// skips sandbox reconciliation entirely. Control-plane-side this is a
+    /// necessary-but-insufficient placement precondition: eligibility
+    /// additionally requires the agent to have advertised
+    /// `AgentRegisterMessage.sandboxCapable`, because a v5 agent may
+    /// understand the fields without running the sandbox runtime (see the
+    /// version 5 notes on `currentVersion`).
     public static func supportsSandboxSync(_ version: Int) -> Bool {
         version >= sandboxSyncMinimumVersion
     }

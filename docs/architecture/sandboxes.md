@@ -85,9 +85,13 @@ same asymmetric hazard as the v3 networks list:
 - **Agent side**: a pre-v5 control plane omits the field entirely; the agent
   must not read the decoded-empty list as "tear down all sandboxes". Sandbox
   reconciliation is gated on `WireProtocol.supportsSandboxSync(senderVersion)`.
-- **Control-plane side**: agents that registered with a pre-v5 version would
-  silently ignore sandbox entries, so the scheduler never places sandboxes on
-  them (#415).
+- **Control-plane side**: the wire version is deliberately *not* the placement
+  signal. An agent built against v5 understands the fields but may predate the
+  sandbox runtime (#421), and would silently ignore desired entries and report
+  none back. Agents therefore advertise sandbox support explicitly at
+  registration (`AgentRegisterMessage.sandboxCapable`, absent/false until the
+  runtime sets it), and the scheduler keys eligibility on that flag plus the
+  version (#415) — never on the version alone.
 
 ## Control plane (issues #412–#416)
 

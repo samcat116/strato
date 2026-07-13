@@ -32,6 +32,33 @@ struct AgentMessageTests {
         #expect(decoded.resources.availableDisk == Fixtures.resources.availableDisk)
     }
 
+    @Test("Sandbox capability is opt-in: absent unless the runtime advertises it")
+    func agentRegisterSandboxCapability() throws {
+        // Default: a build that merely links protocol v5 does not claim the
+        // capability — placement eligibility requires the explicit flag, so
+        // agents without the sandbox runtime stay out of sandbox scheduling.
+        let implicit = AgentRegisterMessage(
+            agentId: "agent-1",
+            hostname: "hv-01.example",
+            version: "1.2.3",
+            capabilities: ["kvm"],
+            resources: Fixtures.resources
+        )
+        let decodedImplicit = try throughEnvelope(implicit)
+        #expect(decodedImplicit.sandboxCapable == nil)
+
+        let capable = AgentRegisterMessage(
+            agentId: "agent-2",
+            hostname: "hv-02.example",
+            version: "1.2.3",
+            capabilities: ["kvm"],
+            resources: Fixtures.resources,
+            sandboxCapable: true
+        )
+        let decodedCapable = try throughEnvelope(capable)
+        #expect(decodedCapable.sandboxCapable == true)
+    }
+
     @Test func agentHeartbeatRoundTrip() throws {
         let message = AgentHeartbeatMessage(
             requestId: Fixtures.requestId,
