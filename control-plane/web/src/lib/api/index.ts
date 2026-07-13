@@ -4,6 +4,7 @@ export { api, apiClient, ApiError } from "./client";
 export { authApi } from "./auth";
 export { usersApi } from "./users";
 export { vmsApi } from "./vms";
+export { sandboxesApi } from "./sandboxes";
 export { operationsApi } from "./operations";
 export { organizationsApi } from "./organizations";
 export { authorizationApi } from "./authorization";

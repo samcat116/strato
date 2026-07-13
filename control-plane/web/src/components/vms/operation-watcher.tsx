@@ -5,7 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { operationsApi } from "@/lib/api/operations";
 import { useOperationsStore } from "@/lib/stores/operations-store";
-import type { OperationKind } from "@/types/api";
+import type { Operation, OperationKind } from "@/types/api";
 
 const verbs: Record<OperationKind, { succeeded: string; infinitive: string }> = {
   create: { succeeded: "Created", infinitive: "create" },
@@ -17,11 +17,18 @@ const verbs: Record<OperationKind, { succeeded: string; infinitive: string }> = 
   delete: { succeeded: "Deleted", infinitive: "delete" },
 };
 
+// The list query key to refresh when an operation of a given resource kind
+// completes, so a create/delete/lifecycle change is reflected immediately.
+const listQueryKey: Record<Operation["resourceKind"], string> = {
+  virtual_machine: "vms",
+  sandbox: "sandboxes",
+};
+
 /**
  * Polls every watched operation until it reaches a terminal state, then toasts
- * the outcome and refreshes the VM queries. Mounted once in the dashboard
- * layout so polling survives navigation away from the page that started the
- * operation.
+ * the outcome and refreshes the relevant resource queries (VMs or sandboxes).
+ * Mounted once in the dashboard layout so polling survives navigation away from
+ * the page that started the operation.
  */
 export function OperationWatcher() {
   const watched = useOperationsStore((state) => state.watched);
@@ -48,14 +55,16 @@ export function OperationWatcher() {
           if (cancelled || operation.status === "pending") continue;
 
           unwatch(id);
-          queryClient.invalidateQueries({ queryKey: ["vms"] });
+          queryClient.invalidateQueries({
+            queryKey: [listQueryKey[operation.resourceKind]],
+          });
 
           const verb = verbs[operation.kind];
           if (operation.status === "succeeded") {
-            toast.success(`${verb.succeeded} ${entry.vmName}`);
+            toast.success(`${verb.succeeded} ${entry.resourceName}`);
           } else {
             toast.error(
-              `Failed to ${verb.infinitive} ${entry.vmName}: ${
+              `Failed to ${verb.infinitive} ${entry.resourceName}: ${
                 operation.error ?? "unknown error"
               }`
             );
