@@ -613,14 +613,85 @@ export type OperationKind =
 
 export type OperationStatus = "pending" | "succeeded" | "failed";
 
+// The resource an operation targets. Operations are shared machinery across VMs
+// and sandboxes (backend issue #412), discriminated by `resourceKind`.
+export type OperationResourceKind = "virtual_machine" | "sandbox";
+
 export interface Operation {
   id: string;
+  /** Legacy alias for `resourceId`, kept by the backend; equals the VM or sandbox id. */
   vmId: string;
+  /** Discriminates whether the operation targets a VM or a sandbox. */
+  resourceKind: OperationResourceKind;
+  /** The targeted resource's id (VM or sandbox); prefer this over `vmId`. */
+  resourceId: string;
   kind: OperationKind;
   status: OperationStatus;
   error?: string | null;
   createdAt?: string | null;
   completedAt?: string | null;
+}
+
+// Sandboxes: OCI-image Firecracker microVMs (backend issue #413). A resource
+// surface parallel to VMs, not a VM variant — own table, own API, own status.
+export type SandboxStatus =
+  | "Stopped"
+  | "Running"
+  // The workload ran and ended on its own; `exitCode` carries the result.
+  | "Exited"
+  | "Starting"
+  | "Stopping"
+  | "Error"
+  | "Unknown";
+
+export interface Sandbox {
+  id: string;
+  name: string;
+  projectId?: string;
+  environment: string;
+  /** OCI image reference as provided, e.g. `ghcr.io/acme/worker:v3`. */
+  image: string;
+  /** Manifest digest (`sha256:...`) the reference resolved to; null until resolved. */
+  imageDigest?: string | null;
+  cpus: number;
+  /** Guest memory in bytes. */
+  memory: number;
+  /** Entrypoint override; null means use the image config's entrypoint. */
+  entrypoint?: string[] | null;
+  /** Command (args) override; null means use the image config's cmd. */
+  cmd?: string[] | null;
+  /** Environment variable overrides, merged over the image config's env. */
+  env: Record<string, string>;
+  workingDir?: string | null;
+  /** Lifetime budget in seconds (stored only; enforcement is a later phase). */
+  ttlSeconds?: number | null;
+  hypervisorId?: string | null;
+  status: SandboxStatus;
+  /** Exit code of a workload that ran to completion (`status === "Exited"`). */
+  exitCode?: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateSandboxRequest {
+  name: string;
+  /** OCI image reference (required). */
+  image: string;
+  projectId?: string;
+  environment?: string;
+  cpus?: number;
+  /** Guest memory in bytes. */
+  memory?: number;
+  entrypoint?: string[];
+  cmd?: string[];
+  env?: Record<string, string>;
+  workingDir?: string;
+  ttlSeconds?: number;
+}
+
+export interface UpdateSandboxRequest {
+  name?: string;
+  ttlSeconds?: number;
 }
 
 export interface CreateOrganizationRequest {

@@ -3,6 +3,7 @@ import {
   Boxes,
   Building2,
   Camera,
+  Container,
   Cpu,
   Database,
   FolderKanban,
@@ -43,6 +44,7 @@ export const navTree: NavItem[] = [
     icon: Server,
     children: [
       { label: "Instances", href: "/vms", icon: Rows3 },
+      { label: "Sandboxes", href: "/sandboxes", icon: Container },
       { label: "Images", href: "/images", icon: Layers },
     ],
   },

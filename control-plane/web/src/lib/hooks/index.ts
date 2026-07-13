@@ -1,5 +1,10 @@
 export { useVMs, useVM, useInvalidateVMs } from "./use-vms";
 export {
+  useSandboxes,
+  useSandbox,
+  useInvalidateSandboxes,
+} from "./use-sandboxes";
+export {
   useVolumes,
   useVolume,
   useVolumeSnapshots,
