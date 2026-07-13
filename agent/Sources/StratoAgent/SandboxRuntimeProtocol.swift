@@ -55,12 +55,16 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
     /// (pause/resume have no sandbox meaning in v1). Permanent: replanning
     /// the same generation yields the same step.
     case unsupportedStep(String)
+    /// An orphaned sandbox's Firecracker process is gone, so there is nothing
+    /// to re-attach. The Agent catches this during adoption and re-creates the
+    /// sandbox from its desired entry (mirroring the VM path).
+    case adoptionTargetGone(String)
 
     var failureClassification: FailureClassification {
         switch self {
         case .runtimeUnavailable, .unsupportedStep:
             return .permanent
-        case .sandboxNotFound:
+        case .sandboxNotFound, .adoptionTargetGone:
             return .transient
         }
     }
@@ -73,6 +77,8 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
             return "sandbox not found: \(id)"
         case .unsupportedStep(let step):
             return "step '\(step)' is not supported for sandbox workloads"
+        case .adoptionTargetGone(let reason):
+            return "sandbox adoption target gone: \(reason)"
         }
     }
 }

@@ -22,13 +22,12 @@ public enum SandboxRuntimeProbe {
     public static let capabilityName = "sandbox_runtime"
 
     /// Whether this agent build actually contains the sandbox runtime driver
-    /// (`SandboxRuntimeService`, issue #421). Until it lands, the reconciler
-    /// neither plans desired sandboxes nor reports them back, so advertising
-    /// the capability from host prerequisites alone would attract placements
-    /// that sit pending until the sweep fails them. This constant is the hard
-    /// gate — issue #421 flips it when the runtime registers in the driver
-    /// registry.
-    public static let runtimeBuilt = false
+    /// (`SandboxRuntimeService`, issue #421). Now that the runtime ships
+    /// (`FirecrackerSandboxRuntime`, registered by the Agent on Linux), the
+    /// hard build gate is open; the remaining host prerequisites below — a
+    /// usable Firecracker and the guest base image on disk — decide whether a
+    /// given host actually advertises the capability.
+    public static let runtimeBuilt = true
 
     /// Result of probing the sandbox runtime's host prerequisites.
     public struct Report: Equatable, Sendable {
