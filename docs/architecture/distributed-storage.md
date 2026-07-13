@@ -191,7 +191,7 @@ desired topology; convergence is the loop we already have.
 ### Async operation tracking
 
 Region provisioning and resync are slow, so they ride the existing
-`VMOperation` → 202-Accepted pattern (a `VolumeOperation` sibling). The
+`ResourceOperation` → 202-Accepted pattern (a new `resource_kind`). The
 frontend polls to terminal state exactly as for VM operations.
 
 ## Live migration falls out

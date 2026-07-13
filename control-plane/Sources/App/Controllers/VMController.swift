@@ -62,9 +62,10 @@ struct VMController: RouteCollection {
 
     // MARK: - Async operation plumbing (issue #259)
 
-    /// Creates the pending operation record and applies the VM's in-flight status
-    /// change in one transaction, rejecting with `409 Conflict` when any operation
-    /// is already pending for the VM — the double-submit guard from issue #259.
+    /// VM-flavored front of `ResourceOperation.begin`: creates the pending
+    /// operation record and applies the VM's in-flight status change in one
+    /// transaction, rejecting with `409 Conflict` when any operation is
+    /// already pending for the VM — the double-submit guard from issue #259.
     private func beginOperation(
         _ kind: VMOperationKind,
         vm: VM,
@@ -72,31 +73,14 @@ struct VMController: RouteCollection {
         settingVMStatus transitionalStatus: VMStatus? = nil,
         settingDesiredStatus desiredStatus: DesiredVMStatus? = nil,
         on db: Database
-    ) async throws -> VMOperation {
-        let vmID = try vm.requireID()
-        let userID = try user.requireID()
-
-        return try await db.transaction { db in
-            // Read first for a friendly reason naming the conflicting kind; the
-            // partial unique index on pending operations (CreateVMOperation) is
-            // what actually closes the race when two mutations arrive at once.
-            if let pending = try await VMOperation.query(on: db)
-                .filter(\.$vmID == vmID)
-                .filter(\.$status == .pending)
-                .first()
-            {
-                throw Abort(
-                    .conflict,
-                    reason: "A \(pending.kind.rawValue) operation is already pending for this VM")
-            }
-
-            let operation = VMOperation(vmID: vmID, userID: userID, kind: kind)
-            do {
-                try await operation.save(on: db)
-            } catch let error as any DatabaseError where error.isConstraintFailure {
-                throw Abort(.conflict, reason: "An operation is already pending for this VM")
-            }
-
+    ) async throws -> ResourceOperation {
+        try await ResourceOperation.begin(
+            kind,
+            resourceKind: .virtualMachine,
+            resourceID: vm.requireID(),
+            userID: user.requireID(),
+            on: db
+        ) { db in
             // Desired state and its generation bump commit atomically with the
             // operation record (issue #260); the sync to the agent is a
             // fire-and-forget nudge, with the periodic timer as the backstop.
@@ -109,8 +93,6 @@ struct VMController: RouteCollection {
             if desiredStatus != nil || transitionalStatus != nil {
                 try await vm.save(on: db)
             }
-
-            return operation
         }
     }
 
@@ -133,9 +115,9 @@ struct VMController: RouteCollection {
     /// also realigns desired state) instead of letting it sit pending for the
     /// stuck-operation sweep's multi-minute budget. This mirrors both the old
     /// imperative path's dispatch failure and `delete`'s offline handling.
-    private static func dispatchStateSync(_ operation: VMOperation, vm: VM, app: Application) {
+    private static func dispatchStateSync(_ operation: ResourceOperation, vm: VM, app: Application) {
         guard let operationId = operation.id else { return }
-        let vmID = operation.vmID
+        let vmID = operation.resourceID
 
         guard let agentId = vm.hypervisorId else {
             app.backgroundTasks.spawn {
@@ -159,7 +141,7 @@ struct VMController: RouteCollection {
     }
 
     /// `202 Accepted` carrying the operation record for the client to poll.
-    private static func accepted(_ operation: VMOperation) throws -> Response {
+    private static func accepted(_ operation: ResourceOperation) throws -> Response {
         let response = Response(status: .accepted)
         try response.content.encode(OperationResponse(from: operation))
         return response
@@ -178,7 +160,7 @@ struct VMController: RouteCollection {
         app: Application
     ) async {
         do {
-            guard let operation = try await VMOperation.find(operationId, on: app.db),
+            guard let operation = try await ResourceOperation.find(operationId, on: app.db),
                 try await operation.completeIfPending(as: status, error: error, on: app.db)
             else { return }
 
@@ -229,7 +211,7 @@ struct VMController: RouteCollection {
     /// (no mapping, agent gone) — the VM is restored rather than escalated,
     /// mirroring the old synchronous handling.
     private static func runVMOperation(
-        _ operation: VMOperation,
+        _ operation: ResourceOperation,
         sending messageType: MessageType,
         statusOnSuccess: VMStatus?,
         statusOnFailure: VMStatus?,
@@ -237,8 +219,8 @@ struct VMController: RouteCollection {
         app: Application
     ) {
         guard let operationId = operation.id else { return }
-        let vmID = operation.vmID
-        let budget = operation.kind.completionBudget
+        let vmID = operation.resourceID
+        let budget = operation.completionBudget
 
         app.backgroundTasks.spawn {
             do {
@@ -281,8 +263,9 @@ struct VMController: RouteCollection {
         let requestedLimit: Int = req.query["limit"] ?? 20
         let limit = min(max(requestedLimit, 1), 100)
 
-        let operations = try await VMOperation.query(on: req.db)
-            .filter(\.$vmID == vmID)
+        let operations = try await ResourceOperation.query(on: req.db)
+            .filter(\.$resourceKind == .virtualMachine)
+            .filter(\.$resourceID == vmID)
             .sort(\.$createdAt, .descending)
             .limit(limit)
             .all()
@@ -564,7 +547,7 @@ struct VMController: RouteCollection {
         // transaction: enforcement checks, the reservation bump, the initial insert,
         // the path update, and the operation record all commit together or roll back
         // together, so a quota rejection leaves nothing behind.
-        let operation: VMOperation
+        let operation: ResourceOperation
         do {
             // IPAM's unique (network, address) index is the backstop against
             // concurrent creates racing to the same address. A violation
@@ -672,7 +655,7 @@ struct VMController: RouteCollection {
 
                     // The pending create operation is the client's handle on the
                     // asynchronous agent work that follows (issue #259).
-                    let operation = VMOperation(vmID: vmID, userID: userID, kind: .create)
+                    let operation = ResourceOperation(vmID: vmID, userID: userID, kind: .create)
                     try await operation.save(on: db)
 
                     return operation
@@ -735,13 +718,13 @@ struct VMController: RouteCollection {
     /// lands on the operation record and marks the VM `.error` so it never
     /// poses as a healthy `.created` VM that has no backing.
     private static func runVMCreation(
-        _ operation: VMOperation,
+        _ operation: ResourceOperation,
         vm: VM,
         image: Image?,
         app: Application
     ) {
         guard let operationId = operation.id else { return }
-        let vmID = operation.vmID
+        let vmID = operation.resourceID
 
         app.backgroundTasks.spawn {
             do {
@@ -808,9 +791,9 @@ struct VMController: RouteCollection {
     /// agent teardown. If the agent ever comes back still carrying the VM,
     /// its observed-state report surfaces it as an orphan for operator
     /// attention — the same posture the imperative path took for dead agents.
-    private static func runDirectVMDeletion(_ operation: VMOperation, vm: VM, app: Application) {
+    private static func runDirectVMDeletion(_ operation: ResourceOperation, vm: VM, app: Application) {
         guard let operationId = operation.id else { return }
-        let vmID = operation.vmID
+        let vmID = operation.resourceID
 
         app.backgroundTasks.spawn {
             if vm.hypervisorId != nil {
@@ -823,7 +806,7 @@ struct VMController: RouteCollection {
                 // If the sweep already failed this operation, stop here: the
                 // user will retry, and removing the row under a failed
                 // operation would contradict it.
-                guard let current = try await VMOperation.find(operationId, on: app.db),
+                guard let current = try await ResourceOperation.find(operationId, on: app.db),
                     current.status == .pending
                 else { return }
 

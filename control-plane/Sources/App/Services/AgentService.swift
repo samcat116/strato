@@ -852,7 +852,7 @@ actor AgentService {
         let now = Date()
 
         do {
-            let pending = try await VMOperation.query(on: db)
+            let pending = try await ResourceOperation.query(on: db)
                 .filter(\.$status == .pending)
                 .all()
 
@@ -860,7 +860,7 @@ actor AgentService {
                 // A missing creation timestamp yields age 0 and is left for a
                 // later sweep (it is set on insert, so this is a safety net).
                 let age = now.timeIntervalSince(operation.createdAt ?? now)
-                let budget = operation.kind.completionBudgetSeconds
+                let budget = operation.completionBudgetSeconds
                 guard age > budget else { continue }
 
                 guard
@@ -871,33 +871,20 @@ actor AgentService {
                     )
                 else { continue }
 
-                // Resolve the VM state the operation left in flight. `.created`
-                // only counts as stuck for a create — for every other kind it is
-                // a legitimate resting state.
-                if let vm = try await VM.find(operation.vmID, on: db) {
-                    var changed = false
-                    if vm.status.isTransitional || (operation.kind == .create && vm.status == .created) {
-                        vm.setStatus(.error)
-                        changed = true
-                        Telemetry.vmEnteredError(reason: "stuck_operation")
-                    }
-                    // The operation failed: realign desired state with observed
-                    // reality so the unachieved intent (e.g. a delete's
-                    // `.absent`) doesn't linger and replay destructively on a
-                    // later sync or protocol upgrade (issue #260).
-                    if vm.revertDesiredToObserved() {
-                        changed = true
-                    }
-                    if changed {
-                        try await vm.save(on: db)
-                    }
+                // Resolve whatever in-flight state the failed operation left
+                // on its resource — each resource kind has its own notion of
+                // "stuck" and its own way back to a resting state.
+                switch operation.resourceKind {
+                case .virtualMachine:
+                    try await resolveVMForStuckOperation(operation, on: db)
                 }
 
                 app.logger.warning(
                     "Operation stuck pending past budget; marking as failed",
                     metadata: [
                         "operationId": .string(operation.id?.uuidString ?? ""),
-                        "vmId": .string(operation.vmID.uuidString),
+                        "resourceKind": .string(operation.resourceKind.rawValue),
+                        "resourceId": .string(operation.resourceID.uuidString),
                         "kind": .string(operation.kind.rawValue),
                         "budgetSeconds": .string("\(Int(budget))"),
                     ])
@@ -916,8 +903,9 @@ actor AgentService {
                 guard now.timeIntervalSince(changedAt) > timeout, let vmID = vm.id else { continue }
 
                 let hasPendingOperation =
-                    try await VMOperation.query(on: db)
-                    .filter(\.$vmID == vmID)
+                    try await ResourceOperation.query(on: db)
+                    .filter(\.$resourceKind == .virtualMachine)
+                    .filter(\.$resourceID == vmID)
                     .filter(\.$status == .pending)
                     .count() > 0
                 // A pending operation owns this VM's resolution via its own budget.
@@ -938,6 +926,30 @@ actor AgentService {
             }
         } catch {
             app.logger.error("Stuck-operation sweep failed: \(error)")
+        }
+    }
+
+    /// Resolves the VM state a swept (timed-out) operation left in flight.
+    /// `.created` only counts as stuck for a create — for every other kind it
+    /// is a legitimate resting state.
+    private func resolveVMForStuckOperation(_ operation: ResourceOperation, on db: Database) async throws {
+        guard let vm = try await VM.find(operation.resourceID, on: db) else { return }
+
+        var changed = false
+        if vm.status.isTransitional || (operation.kind == .create && vm.status == .created) {
+            vm.setStatus(.error)
+            changed = true
+            Telemetry.vmEnteredError(reason: "stuck_operation")
+        }
+        // The operation failed: realign desired state with observed reality
+        // so the unachieved intent (e.g. a delete's `.absent`) doesn't linger
+        // and replay destructively on a later sync or protocol upgrade
+        // (issue #260).
+        if vm.revertDesiredToObserved() {
+            changed = true
+        }
+        if changed {
+            try await vm.save(on: db)
         }
     }
 
@@ -1486,8 +1498,9 @@ actor AgentService {
             return
         }
 
-        let pendingOperation = try await VMOperation.query(on: db)
-            .filter(\.$vmID == vmID)
+        let pendingOperation = try await ResourceOperation.query(on: db)
+            .filter(\.$resourceKind == .virtualMachine)
+            .filter(\.$resourceID == vmID)
             .filter(\.$status == .pending)
             .first()
 
@@ -1571,8 +1584,9 @@ actor AgentService {
             // the row: if we crash in between, the next report retries the
             // (idempotent) removal, whereas removing first would leave a
             // pending operation with nothing to resolve it but the sweep.
-            if let operation = try await VMOperation.query(on: db)
-                .filter(\.$vmID == vmID)
+            if let operation = try await ResourceOperation.query(on: db)
+                .filter(\.$resourceKind == .virtualMachine)
+                .filter(\.$resourceID == vmID)
                 .filter(\.$status == .pending)
                 .first()
             {
