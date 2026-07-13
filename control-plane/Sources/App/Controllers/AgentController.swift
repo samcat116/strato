@@ -727,16 +727,18 @@ struct AgentController: RouteCollection {
         }
 
         let targetVersion: String
-        let artifactURL: String
-        let sha256: String
+        let artifact: ResolvedAgentArtifact
         if let explicitURL = request.artifactUrl {
             guard let explicitDigest = request.sha256.flatMap({ AgentUpdateArtifacts.parseChecksum($0) })
             else {
                 throw Abort(.badRequest, reason: "artifactUrl requires a hex SHA-256 digest in sha256")
             }
             targetVersion = request.targetVersion ?? AgentVersionTarget.version ?? "unspecified"
-            artifactURL = explicitURL
-            sha256 = explicitDigest
+            artifact = ResolvedAgentArtifact(
+                url: explicitURL,
+                sha256: explicitDigest,
+                tarballMember: AgentUpdateArtifacts.defaultTarballMember
+            )
         } else {
             guard let target = AgentVersionTarget.version else {
                 throw Abort(
@@ -766,20 +768,16 @@ struct AgentController: RouteCollection {
                         "Agent has not reported its CPU architecture, so its artifact cannot be resolved. Pass artifactUrl and sha256 to override."
                 )
             }
-            guard
-                let resolvedURL = AgentUpdateArtifacts.assetURL(
-                    targetVersion: target, operatingSystem: os, architecture: architecture)
-            else {
-                throw Abort(
-                    .badRequest,
-                    reason:
-                        "Target version '\(target)' has no published release assets (main-branch builds ship as container images). Pass artifactUrl and sha256 explicitly."
-                )
-            }
             targetVersion = target
-            artifactURL = resolvedURL
-            sha256 = try await AgentUpdateArtifacts.fetchChecksum(forAssetAt: resolvedURL, client: req.client)
+            artifact = try await AgentUpdateArtifacts.resolveArtifact(
+                targetVersion: target,
+                operatingSystem: os,
+                architecture: architecture,
+                client: req.client,
+                logger: req.logger
+            )
         }
+        let artifactURL = artifact.url
 
         req.logger.info(
             "Dispatching agent update",
@@ -792,7 +790,12 @@ struct AgentController: RouteCollection {
             ])
 
         let message = AgentUpdateMessage(
-            targetVersion: targetVersion, artifactURL: artifactURL, sha256: sha256)
+            targetVersion: targetVersion,
+            artifactURL: artifact.url,
+            sha256: artifact.sha256,
+            artifactKind: .tarball,
+            tarballMember: artifact.tarballMember
+        )
 
         // Generous timeout: the reply comes only after the agent has
         // downloaded and verified the artifact.

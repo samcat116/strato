@@ -212,10 +212,11 @@ curl -X POST https://strato.example.com/api/agents/<agent-id>/actions/update \
   -H 'Authorization: Bearer <api-key>' -H 'Content-Type: application/json' -d '{}'
 ```
 
-The control plane resolves the release tarball for the agent's OS/arch
-(`strato-<os>-<arch>.tar.gz` from GitHub releases, or a mirror via
-`AGENT_UPDATE_ARTIFACT_BASE_URL`), fetches its `.sha256` sidecar, and sends
-the agent an update command. The agent then:
+The control plane resolves the artifact for the agent's OS/arch from the
+release's [`agent-manifest.json`](#agent-manifestjson) (falling back to the
+`strato-<os>-<arch>.tar.gz` naming convention plus `.sha256` sidecar for
+releases that predate the manifest; `AGENT_UPDATE_ARTIFACT_BASE_URL` points
+both at a mirror) and sends the agent an update command. The agent then:
 
 1. downloads the artifact into a staging workspace next to its own binary,
 2. verifies the SHA-256 checksum and extracts the `strato-agent` member,
