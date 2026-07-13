@@ -33,6 +33,11 @@ const FOLLOW_IDLE_PROBE: Duration = Duration::from_millis(500);
 /// Spawn a pump thread mirroring one workload output pipe to the console and
 /// the log ring buffer. A thread-spawn failure is logged and swallowed — the
 /// workload keeps running, just without capture on that stream.
+///
+/// The caller registered this pump as a buffer writer (see `register_writer`);
+/// the pump marks it done when the pipe hits EOF — or right here when the
+/// thread never starts — so the buffer can close and followers can signal
+/// end-of-stream.
 pub fn spawn_workload_pump(
     name: &'static str,
     src: impl Read + Send + 'static,
@@ -40,15 +45,20 @@ pub fn spawn_workload_pump(
     stream: &'static str,
     logs: Arc<LogBuffer>,
 ) {
+    let pump_logs = logs.clone();
     let spawned = std::thread::Builder::new()
         .name(name.to_string())
-        .spawn(move || pump_workload_stream(src, console_fd, stream, &logs));
+        .spawn(move || {
+            pump_workload_stream(src, console_fd, stream, &pump_logs);
+            pump_logs.writer_done();
+        });
     if let Err(e) = spawned {
         // Accepted tradeoff: the pipe read end drops here, so the workload can
         // die of SIGPIPE (exit 141) on its next write to this stream — which
         // v1's console inheritance could not. A visible exit beats a silent
         // stall, and thread-spawn failure in this init is close to unreachable.
         eprintln!("[sandbox-init] spawn {name} pump: {e}");
+        logs.writer_done();
     }
 }
 
@@ -109,6 +119,13 @@ pub fn run_follow_stream(
     loop {
         let records = logs.wait_since(next, FOLLOW_IDLE_PROBE);
         if records.is_empty() {
+            if logs.is_closed() {
+                // Every pipe hit EOF and everything retained was delivered:
+                // tell the host the stream is complete so it can flush a
+                // partial final line, then end the connection.
+                let _ = writer.write_all(encode_line(&Response::LogEof).as_bytes());
+                return;
+            }
             if peer_hung_up(probe_fd) {
                 return;
             }

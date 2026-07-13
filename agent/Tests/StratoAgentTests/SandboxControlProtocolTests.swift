@@ -195,6 +195,12 @@ struct SandboxControlProtocolTests {
         }
     }
 
+    @Test("log_eof decodes as the log stream's terminal marker")
+    func logEofDecodes() throws {
+        let response = try SandboxControlProtocol.Response.decode(line: #"{"type":"log_eof"}"#)
+        #expect(response == .logEof)
+    }
+
     @Test("a trailing newline on a response line is tolerated")
     func trailingNewlineTolerated() throws {
         let response = try SandboxControlProtocol.Response.decode(line: "{\"type\":\"exec_started\"}\n")

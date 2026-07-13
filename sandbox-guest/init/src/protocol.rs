@@ -154,6 +154,12 @@ pub enum Response {
         /// base64-encoded chunk bytes.
         data: String,
     },
+    /// Terminal log-follow message: the workload's stdio pipes have all hit
+    /// EOF and every retained record was delivered — no log record will ever
+    /// follow. Lets the host flush a partial final line (output that ended
+    /// without a trailing newline) instead of holding it until teardown. The
+    /// guest closes the connection after sending it.
+    LogEof,
     /// The request could not be decoded, is not valid for the connection's
     /// role, or the exec spawn failed.
     Error { message: String },
@@ -392,6 +398,14 @@ mod tests {
         );
         let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
         assert_eq!(decoded, resp);
+    }
+
+    #[test]
+    fn log_eof_encodes_as_bare_tag() {
+        let line = encode_line(&Response::LogEof);
+        assert_eq!(line.trim(), r#"{"type":"log_eof"}"#);
+        let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
+        assert_eq!(decoded, Response::LogEof);
     }
 
     #[test]

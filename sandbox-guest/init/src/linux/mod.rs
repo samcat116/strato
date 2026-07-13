@@ -131,23 +131,31 @@ fn spawn_workload(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("exec workload {program}: {e}"))?;
-    if let Some(stdout) = child.stdout.take() {
-        logs::spawn_workload_pump(
+    // Register BOTH stdio writers before the first pump can possibly finish,
+    // so a fast-EOFing stream cannot transiently close the buffer while the
+    // other pump is still being set up. The buffer closing (both pumps done)
+    // is what lets a log follower send `log_eof` to the host.
+    logs.register_writer();
+    logs.register_writer();
+    match child.stdout.take() {
+        Some(stdout) => logs::spawn_workload_pump(
             "workload-stdout",
             stdout,
             libc::STDOUT_FILENO,
             "stdout",
             logs.clone(),
-        );
+        ),
+        None => logs.writer_done(),
     }
-    if let Some(stderr) = child.stderr.take() {
-        logs::spawn_workload_pump(
+    match child.stderr.take() {
+        Some(stderr) => logs::spawn_workload_pump(
             "workload-stderr",
             stderr,
             libc::STDERR_FILENO,
             "stderr",
             logs.clone(),
-        );
+        ),
+        None => logs.writer_done(),
     }
     Ok(Pid::from_raw(child.id() as i32))
 }

@@ -167,6 +167,10 @@ public enum SandboxControlProtocol {
         /// One record of the workload's stdout/stderr ring buffer. `seq` is
         /// monotonic across both streams, starting at 1.
         case log(seq: UInt64, stream: String, data: Data)
+        /// Terminal for a log follow stream: every workload stdio pipe hit
+        /// EOF and all retained records were delivered — no record will ever
+        /// follow, so a partial final line can be flushed now.
+        case logEof
 
         /// Decode one response line (the trailing newline is optional).
         public static func decode(line: String) throws -> Response {
@@ -202,6 +206,8 @@ public enum SandboxControlProtocol {
                     throw SandboxControlError.malformedResponse(line)
                 }
                 return .log(seq: seq, stream: stream, data: payload)
+            case "log_eof":
+                return .logEof
             default:
                 throw SandboxControlError.malformedResponse(line)
             }

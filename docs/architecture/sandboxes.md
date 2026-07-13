@@ -285,8 +285,11 @@ determines a connection's role:
   pipes, mirrors every chunk to the console (serial debuggability is
   preserved), and appends them to a **256 KiB ring buffer** with a monotonic
   per-chunk sequence number. A follow connection replays retained records from
-  `since_seq` (evicted records are silently skipped) and then streams new ones
-  forever. Workload stdin is `/dev/null`.
+  `since_seq` (evicted records are silently skipped) and then streams new
+  ones. Once every stdio pipe hits EOF and all retained records are delivered,
+  the guest sends a terminal `log_eof` so the host can flush a partial final
+  line (output that ended without a trailing newline) instead of holding it
+  until teardown. Workload stdin is `/dev/null`.
 
 PID 1's reaper is restructured to run forever with a child registry (exec
 waiters + a bounded unclaimed-exit map), so exec exit codes are routed to

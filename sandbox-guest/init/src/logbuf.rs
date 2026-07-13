@@ -40,6 +40,11 @@ struct Inner {
     next_seq: u64,
     /// Sum of `data.len()` over `records`.
     total_payload: usize,
+    /// Registered writers (the stdio pumps) that have not finished yet.
+    open_writers: usize,
+    /// True once at least one writer registered and all of them finished —
+    /// no record will ever be appended again.
+    closed: bool,
 }
 
 /// Bounded, condvar-notified ring buffer of workload output records.
@@ -62,6 +67,8 @@ impl LogBuffer {
                 records: VecDeque::new(),
                 next_seq: 1,
                 total_payload: 0,
+                open_writers: 0,
+                closed: false,
             }),
             appended: Condvar::new(),
             capacity,
@@ -88,6 +95,34 @@ impl LogBuffer {
         }
         self.appended.notify_all();
         seq
+    }
+
+    /// Announce a writer (a stdio pump) that will append records. Register
+    /// EVERY writer before any of them can finish — otherwise the first one
+    /// completing would transiently drop the count to zero and close the
+    /// buffer early.
+    pub fn register_writer(&self) {
+        let mut inner = self.inner.lock().expect("log buffer poisoned");
+        inner.open_writers += 1;
+    }
+
+    /// A registered writer finished (its pipe hit EOF, or its pump never
+    /// started). When the last one finishes the buffer closes: no record will
+    /// ever be appended again, and blocked followers are woken so they can
+    /// signal end-of-stream.
+    pub fn writer_done(&self) {
+        let mut inner = self.inner.lock().expect("log buffer poisoned");
+        inner.open_writers = inner.open_writers.saturating_sub(1);
+        if inner.open_writers == 0 {
+            inner.closed = true;
+            self.appended.notify_all();
+        }
+    }
+
+    /// True once every registered writer has finished — the record stream is
+    /// complete and a follower that has drained it can stop following.
+    pub fn is_closed(&self) -> bool {
+        self.inner.lock().expect("log buffer poisoned").closed
     }
 
     /// All retained records with `seq >= since`. Evicted records are silently
@@ -118,6 +153,11 @@ impl LogBuffer {
                 .collect();
             if !matching.is_empty() {
                 return matching;
+            }
+            if inner.closed {
+                // Nothing pending and nothing will ever arrive: don't sit out
+                // the timeout, let the follower notice closure immediately.
+                return Vec::new();
             }
             let now = std::time::Instant::now();
             let Some(remaining) = deadline
@@ -240,6 +280,57 @@ mod tests {
         let buf = LogBuffer::new();
         let got = buf.wait_since(1, Duration::from_millis(10));
         assert!(got.is_empty());
+    }
+
+    #[test]
+    fn closes_only_after_every_registered_writer_finishes() {
+        let buf = LogBuffer::new();
+        buf.register_writer();
+        buf.register_writer();
+        assert!(!buf.is_closed());
+        buf.writer_done();
+        assert!(!buf.is_closed(), "one writer still open");
+        buf.writer_done();
+        assert!(buf.is_closed());
+    }
+
+    #[test]
+    fn wait_since_returns_promptly_once_closed() {
+        let buf = LogBuffer::new();
+        buf.register_writer();
+        buf.writer_done();
+        let start = std::time::Instant::now();
+        let got = buf.wait_since(1, Duration::from_secs(10));
+        assert!(got.is_empty());
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "closed buffer must not sit out the timeout"
+        );
+    }
+
+    #[test]
+    fn close_wakes_a_blocked_waiter() {
+        use std::sync::Arc;
+        let buf = Arc::new(LogBuffer::new());
+        buf.register_writer();
+        let waiter = {
+            let buf = buf.clone();
+            std::thread::spawn(move || buf.wait_since(1, Duration::from_secs(10)))
+        };
+        std::thread::sleep(Duration::from_millis(50));
+        buf.writer_done();
+        let got = waiter.join().expect("waiter thread");
+        assert!(got.is_empty(), "woken by closure, not by a record");
+    }
+
+    #[test]
+    fn retained_records_still_deliver_after_close() {
+        let buf = LogBuffer::new();
+        buf.register_writer();
+        buf.append("stdout", b"tail without newline");
+        buf.writer_done();
+        let got = buf.wait_since(1, Duration::from_millis(10));
+        assert_eq!(got.len(), 1, "closure must not swallow retained records");
     }
 
     #[test]

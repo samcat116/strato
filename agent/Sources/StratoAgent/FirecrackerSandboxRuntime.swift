@@ -697,6 +697,23 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         }
     }
 
+    /// The guest reported log end-of-stream (`log_eof`): every workload stdio
+    /// pipe hit EOF and every retained record was delivered. Flush a partial
+    /// final line now (output that ended without a trailing newline would
+    /// otherwise be held until delete), but keep the seq checkpoint — a later
+    /// boot's follow reconnects, is told EOF again, and ends just as quietly,
+    /// without replaying records as duplicates.
+    private func finishLogFollow(sandboxId: String, generation: UInt64) {
+        guard var follow = logFollows[sandboxId], follow.generation == generation else { return }
+        follow.task = nil
+        follow.connection = nil
+        let lines = follow.assembler.flush()
+        logFollows[sandboxId] = follow
+        for line in lines {
+            logHandler?(sandboxId, line.stream, line.text)
+        }
+    }
+
     /// The long-lived follow loop for one sandbox: connect, send
     /// `stream_logs` resuming after the last recorded seq, and feed records to
     /// the actor until the connection dies; then reconnect with 1s..30s
@@ -730,10 +747,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                     return
                 }
 
+                var streamComplete = false
                 do {
                     try await connection.write(
                         SandboxControlProtocol.Request.streamLogs(sinceSeq: sinceSeq).encodedLine())
-                    try await Self.followLogStream(
+                    streamComplete = try await Self.followLogStream(
                         sandboxId: sandboxId, generation: generation, connection: connection,
                         runtime: runtime, backoff: &backoff)
                 } catch {
@@ -746,6 +764,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 }
                 await runtime.unregisterLogConnection(sandboxId: sandboxId, generation: generation)
                 await connection.close()
+                if streamComplete {
+                    // The guest declared end-of-stream: nothing will ever
+                    // arrive again, so the loop ends instead of reconnecting.
+                    return
+                }
             } catch {
                 logger.debug(
                     "Sandbox log follow connect failed",
@@ -767,26 +790,32 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     /// Read one follow connection to exhaustion, decoding `log` records and
     /// recording each with the actor. Any delivered record resets the caller's
-    /// reconnect backoff (the guest is demonstrably healthy).
+    /// reconnect backoff (the guest is demonstrably healthy). Returns true when
+    /// the guest sent `log_eof` — the stream is complete and the caller must
+    /// stop reconnecting — and false when the connection merely closed.
     private static func followLogStream(
         sandboxId: String,
         generation: UInt64,
         connection: VsockConnection,
         runtime: FirecrackerSandboxRuntime,
         backoff: inout TimeInterval
-    ) async throws {
+    ) async throws -> Bool {
         var reader = VsockLineReader(readSize: 65536)
         while true {
             guard let line = try await reader.nextLine(on: connection) else {
-                return  // guest closed; the loop reconnects
+                return false  // guest closed; the loop reconnects
             }
-            guard case .log(let seq, let stream, let data) = try SandboxControlProtocol.Response.decode(line: line)
-            else {
+            switch try SandboxControlProtocol.Response.decode(line: line) {
+            case .log(let seq, let stream, let data):
+                await runtime.recordLog(
+                    sandboxId: sandboxId, generation: generation, seq: seq, stream: stream, data: data)
+                backoff = 1
+            case .logEof:
+                await runtime.finishLogFollow(sandboxId: sandboxId, generation: generation)
+                return true
+            default:
                 throw SandboxControlError.malformedResponse(line)
             }
-            await runtime.recordLog(
-                sandboxId: sandboxId, generation: generation, seq: seq, stream: stream, data: data)
-            backoff = 1
         }
     }
 
