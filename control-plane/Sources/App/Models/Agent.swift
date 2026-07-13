@@ -101,6 +101,40 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalParent(key: "organizational_unit_id")
     var organizationalUnit: OrganizationalUnit?
 
+    /// Whether this agent is enrolled in declarative auto-update (issue
+    /// #434): the fleet rollout may assign it the deployment's target version
+    /// and the agent converges on its own. Default off — an update restarts
+    /// the agent, so enrollment is an explicit operator decision.
+    @Field(key: "auto_update")
+    var autoUpdate: Bool
+
+    /// The version the auto-update rollout has assigned this agent, carried
+    /// on its desired-state syncs as `desiredAgentUpdate` until the agent
+    /// re-registers at it. Nil when the rollout has no opinion (not enrolled,
+    /// not reached, or already converged). Owned by the rollout sweep.
+    @OptionalField(key: "update_desired_version")
+    var updateDesiredVersion: String?
+
+    /// When `updateDesiredVersion` was assigned — the rollout's health-budget
+    /// clock: an assigned agent that neither converges nor reports a blocker
+    /// within the budget halts the rollout.
+    @Timestamp(key: "update_attempted_at", on: .none)
+    var updateAttemptedAt: Date?
+
+    /// The agent's most recent self-reported reason for not converging on
+    /// its assigned update (running Firecracker VMs, containerized install,
+    /// reconcile work in flight). Cleared when the agent reports clean.
+    @OptionalField(key: "update_blocked_reason")
+    var updateBlockedReason: String?
+
+    /// A terminal update failure for the assigned version — either reported
+    /// by the agent (download/checksum/swap failure) or recorded by the sweep
+    /// when the agent went silent past its health budget. Any non-nil value
+    /// for the current target halts the fleet rollout until an operator
+    /// intervenes (or the target moves on).
+    @OptionalField(key: "update_failure_reason")
+    var updateFailureReason: String?
+
     init() {}
 
     init(
@@ -133,6 +167,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.hypervisors = hypervisors
         self.networkCapability = networkCapability?.rawValue
         self.sandboxCapable = sandboxCapable
+        self.autoUpdate = false
         self.lastHeartbeat = lastHeartbeat
     }
 
@@ -276,6 +311,16 @@ struct AgentResponse: Content {
     /// nil when the deployment has no meaningful target (dev builds).
     let targetVersion: String?
     let updateAvailable: Bool
+    /// Declarative auto-update enrollment and rollout state (issue #434).
+    let autoUpdate: Bool
+    /// The version the fleet rollout has assigned this agent, while it is
+    /// converging; nil once converged (or never assigned).
+    let updateDesiredVersion: String?
+    let updateAttemptedAt: Date?
+    /// The agent's self-reported reason for not converging yet.
+    let updateBlockedReason: String?
+    /// Terminal failure that halted the rollout at this agent, if any.
+    let updateFailureReason: String?
 
     init(from agent: Agent) throws {
         guard let id = agent.id else {
@@ -305,5 +350,10 @@ struct AgentResponse: Content {
             agentVersion: agent.version,
             target: AgentVersionTarget.version
         )
+        self.autoUpdate = agent.autoUpdate
+        self.updateDesiredVersion = agent.updateDesiredVersion
+        self.updateAttemptedAt = agent.updateAttemptedAt
+        self.updateBlockedReason = agent.updateBlockedReason
+        self.updateFailureReason = agent.updateFailureReason
     }
 }

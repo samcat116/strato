@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  Boxes,
   Building2,
   Camera,
   Cpu,
@@ -15,6 +16,7 @@ import {
   MapPin,
   Rows3,
   ScrollText,
+  Server,
   Settings,
   Shield,
   Users,
@@ -37,16 +39,20 @@ export interface NavItem {
 export const navTree: NavItem[] = [
   { label: "Overview", href: "/dashboard", icon: LayoutGrid },
   {
-    label: "Instances",
-    href: "/vms",
-    icon: Rows3,
-    children: [{ label: "Images", href: "/images", icon: Layers }],
+    label: "Compute",
+    icon: Server,
+    children: [
+      { label: "Instances", href: "/vms", icon: Rows3 },
+      { label: "Images", href: "/images", icon: Layers },
+    ],
   },
   {
-    label: "Agents",
-    href: "/agents",
-    icon: Cpu,
-    children: [{ label: "Sites", href: "/sites", icon: MapPin }],
+    label: "Infrastructure",
+    icon: Boxes,
+    children: [
+      { label: "Agents", href: "/agents", icon: Cpu },
+      { label: "Sites", href: "/sites", icon: MapPin },
+    ],
   },
   { label: "Networking", href: "/networks", icon: Globe },
   {

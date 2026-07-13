@@ -402,6 +402,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateSandboxNetworkInterface())
     app.migrations.add(CreateSandboxInterfaceAddresses())
 
+    // Declarative agent auto-update (issue #434): per-agent opt-in and the
+    // fleet rollout's bookkeeping columns.
+    app.migrations.add(AddAgentAutoUpdate())
+
     try await app.autoMigrate()
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth

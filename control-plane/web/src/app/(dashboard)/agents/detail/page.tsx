@@ -15,6 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { AgentUpdateAction } from "@/components/agents/agent-update-action";
+import { AgentAutoUpdateCard } from "@/components/agents/agent-auto-update";
 import { useAgent } from "@/lib/hooks";
 
 export default function AgentDetailPage() {
@@ -220,6 +221,9 @@ export default function AgentDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Auto-update (issue #434) */}
+      <AgentAutoUpdateCard agent={agent} />
 
       {/* Capabilities */}
       {agent.capabilities && agent.capabilities.length > 0 && (
