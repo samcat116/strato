@@ -70,4 +70,39 @@ struct AgentSchedulableTransformTests {
         let result = AgentService.schedulableAgents(from: [agent], runningVMCounts: [:])
         #expect(result.isEmpty)
     }
+
+    @Test("sandbox workload support requires both the advertised runtime and a v5+ protocol")
+    func testSandboxWorkloadSupport() throws {
+        // Capability alone (pre-v5 protocol): desired sandbox entries could
+        // never reach the agent, so it must not be sandbox-schedulable.
+        let capableOldProtocol = makeAgent(id: UUID(), name: "capable-old")
+        capableOldProtocol.sandboxCapable = true
+        capableOldProtocol.wireProtocolVersion = WireProtocol.sandboxSyncMinimumVersion - 1
+
+        // Version alone: a v5 build may predate the sandbox runtime.
+        let versionOnly = makeAgent(id: UUID(), name: "version-only")
+        versionOnly.sandboxCapable = false
+        versionOnly.wireProtocolVersion = WireProtocol.currentVersion
+
+        // Both signals present.
+        let capable = makeAgent(id: UUID(), name: "capable")
+        capable.sandboxCapable = true
+        capable.wireProtocolVersion = WireProtocol.currentVersion
+
+        // Rows predating protocol recording read as legacy version 0.
+        let unknownVersion = makeAgent(id: UUID(), name: "unknown-version")
+        unknownVersion.sandboxCapable = true
+        unknownVersion.wireProtocolVersion = nil
+
+        let result = AgentService.schedulableAgents(
+            from: [capableOldProtocol, versionOnly, capable, unknownVersion],
+            runningVMCounts: [:]
+        )
+        let byName = Dictionary(uniqueKeysWithValues: result.map { ($0.name, $0) })
+
+        #expect(byName["capable-old"]?.supportsSandboxWorkloads == false)
+        #expect(byName["version-only"]?.supportsSandboxWorkloads == false)
+        #expect(byName["capable"]?.supportsSandboxWorkloads == true)
+        #expect(byName["unknown-version"]?.supportsSandboxWorkloads == false)
+    }
 }

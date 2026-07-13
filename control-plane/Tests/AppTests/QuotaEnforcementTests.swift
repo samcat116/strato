@@ -1,6 +1,7 @@
 import Testing
 import Vapor
 import Fluent
+import SQLKit
 import VaporTesting
 @testable import App
 
@@ -210,6 +211,201 @@ final class QuotaEnforcementTests {
             let afterDelete = try await ResourceQuota.find(quota.id, on: app.db)!
             #expect(afterDelete.reservedVCPUs == 2)  // vmB preserved
             #expect(afterDelete.vmCount == 1)
+        }
+    }
+
+    // MARK: - Sandbox accounting (issue #415)
+
+    @Test("reserveSandbox draws from the shared vCPU/memory pools and its own count")
+    func reserveSandboxSharesPools() async throws {
+        try await withApp { app, _, _, project, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let quota = try await builder.createResourceQuota(
+                name: "shared", maxVCPUs: 10, project: project)
+
+            try await QuotaEnforcementService.reserveSandbox(
+                for: project, environment: "development",
+                vcpus: 3, memory: gb(4), on: app.db)
+
+            let refreshed = try await ResourceQuota.find(quota.id, on: app.db)!
+            #expect(refreshed.reservedVCPUs == 3)
+            #expect(refreshed.reservedMemory == gb(4))
+            // Sandboxes reserve no storage and must not consume a VM slot.
+            #expect(refreshed.reservedStorage == 0)
+            #expect(refreshed.vmCount == 0)
+            #expect(refreshed.sandboxCount == 1)
+        }
+    }
+
+    @Test("VMs and sandboxes exhaust the same vCPU pool")
+    func vmAndSandboxShareVCPUPool() async throws {
+        try await withApp { app, _, _, project, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+            // An existing VM occupies 2 of the pool's 4 vCPUs; the admission
+            // resync picks it up from its row.
+            _ = try await builder.createVM(name: "pool-vm", project: project)  // cpu 2
+            _ = try await builder.createResourceQuota(
+                name: "pool", maxVCPUs: 4, project: project)
+
+            // 2 (VM) + 3 (sandbox) exceeds the shared pool of 4.
+            await #expect(throws: Abort.self) {
+                try await QuotaEnforcementService.reserveSandbox(
+                    for: project, environment: "development",
+                    vcpus: 3, memory: gb(1), on: app.db)
+            }
+
+            // A sandbox that fits the remaining 2 vCPUs is admitted.
+            try await QuotaEnforcementService.reserveSandbox(
+                for: project, environment: "development",
+                vcpus: 2, memory: gb(1), on: app.db)
+        }
+    }
+
+    @Test("reserveSandbox is rejected by the sandbox count limit, not max_vms")
+    func sandboxCountLimitEnforced() async throws {
+        try await withApp { app, _, _, project, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let quota = try await builder.createResourceQuota(
+                name: "counted", maxVCPUs: 100, maxVMs: 5, project: project)
+            quota.maxSandboxes = 1
+            try await quota.save(on: app.db)
+
+            try await QuotaEnforcementService.reserveSandbox(
+                for: project, environment: "development",
+                vcpus: 1, memory: gb(1), on: app.db)
+            _ = try await builder.createSandbox(name: "first", project: project)
+
+            await #expect(throws: Abort.self) {
+                try await QuotaEnforcementService.reserveSandbox(
+                    for: project, environment: "development",
+                    vcpus: 1, memory: gb(1), on: app.db)
+            }
+
+            // The sandbox limit must not affect VM admission.
+            try await QuotaEnforcementService.reserve(
+                for: project, environment: "development",
+                vcpus: 1, memory: gb(1), storage: gb(1), on: app.db)
+        }
+    }
+
+    @Test("resync counts pre-existing sandboxes into the baseline")
+    func resyncIncludesSandboxes() async throws {
+        try await withApp { app, _, _, project, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+
+            // The sandbox predates the quota, so the quota never accounted for
+            // it at creation — the next reserve's resync must pick it up.
+            _ = try await builder.createSandbox(name: "early", project: project)  // 1 cpu, 1 GiB
+            let quota = try await builder.createResourceQuota(
+                name: "late", maxVCPUs: 100, project: project)
+
+            try await QuotaEnforcementService.reserve(
+                for: project, environment: "development",
+                vcpus: 2, memory: gb(2), storage: gb(10), on: app.db)
+
+            let refreshed = try await ResourceQuota.find(quota.id, on: app.db)!
+            #expect(refreshed.reservedVCPUs == 3)  // sandbox 1 + VM 2
+            #expect(refreshed.reservedMemory == gb(3))
+            #expect(refreshed.vmCount == 1)
+            #expect(refreshed.sandboxCount == 1)
+        }
+    }
+
+    @Test("release(for sandbox:) recomputes without erasing other reservations")
+    func sandboxReleaseRecomputes() async throws {
+        try await withApp { app, _, _, project, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let quota = try await builder.createResourceQuota(
+                name: "mixed", maxVCPUs: 100, project: project)
+
+            let vm = try await builder.createVM(name: "stays", project: project)  // cpu 2
+            let sandbox = try await builder.createSandbox(name: "goes", project: project)  // 1 cpu
+
+            // Bring the counters up to date with both workloads.
+            try await QuotaEnforcementService.release(for: vm, on: app.db)
+            let before = try await ResourceQuota.find(quota.id, on: app.db)!
+            #expect(before.reservedVCPUs == 3)
+            #expect(before.vmCount == 1)
+            #expect(before.sandboxCount == 1)
+
+            try await sandbox.delete(on: app.db)
+            try await QuotaEnforcementService.release(for: sandbox, on: app.db)
+
+            let after = try await ResourceQuota.find(quota.id, on: app.db)!
+            #expect(after.reservedVCPUs == 2)  // the VM's reservation survives
+            #expect(after.vmCount == 1)
+            #expect(after.sandboxCount == 0)
+        }
+    }
+
+    @Test("the migration recount corrects counters left by the interim VM-shaped path")
+    func migrationRecountCorrectsCounters() async throws {
+        try await withApp { app, _, org, project, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+
+            // Simulate a pre-upgrade state: a sandbox that was reserved through
+            // the VM-shaped path (so it sits in vm_count) plus a real VM, on an
+            // org-scoped quota so the recount exercises scope resolution.
+            _ = try await builder.createVM(name: "real-vm", project: project)
+            _ = try await builder.createSandbox(name: "old-sandbox", project: project)
+            let quota = try await builder.createResourceQuota(name: "upgraded", organization: org)
+            quota.vmCount = 2  // interim path counted the sandbox as a VM
+            quota.sandboxCount = 0
+            try await quota.save(on: app.db)
+
+            guard let sql = app.db as? SQLDatabase else {
+                Issue.record("test database is not SQL-backed")
+                return
+            }
+            try await sql.raw(
+                SQLQueryString(
+                    AddSandboxCountToResourceQuota.recountSQL(
+                        workloadTable: "sandboxes", countColumn: "sandbox_count"))
+            ).run()
+            try await sql.raw(
+                SQLQueryString(
+                    AddSandboxCountToResourceQuota.recountSQL(workloadTable: "vms", countColumn: "vm_count"))
+            ).run()
+
+            let recounted = try await ResourceQuota.find(quota.id, on: app.db)!
+            #expect(recounted.vmCount == 1)
+            #expect(recounted.sandboxCount == 1)
+        }
+    }
+
+    @Test("POST /api/sandboxes is rejected (403) when a quota is exceeded")
+    func sandboxCreateRejectedWhenQuotaExceeded() async throws {
+        try await withApp { app, _, _, project, _, token in
+            struct CreateSandboxBody: Content {
+                let name: String
+                let image: String
+                let projectId: UUID?
+                let cpus: Int?
+                let memory: Int64?
+            }
+
+            let builder = TestDataBuilder(db: app.db)
+            let quota = try await builder.createResourceQuota(
+                name: "cpu-limited", maxVCPUs: 2, project: project)
+
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateSandboxBody(
+                        name: "too-big", image: "ghcr.io/acme/worker:v1",
+                        projectId: project.id, cpus: 8, memory: gb(1)))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+                // Same frontend contract as VMs: the reason must contain "quota".
+                #expect(res.body.string.range(of: "quota", options: .caseInsensitive) != nil)
+            }
+
+            // Nothing reserved and no row: the rejection rolled the transaction back.
+            let refreshed = try await ResourceQuota.find(quota.id, on: app.db)!
+            #expect(refreshed.reservedVCPUs == 0)
+            #expect(refreshed.sandboxCount == 0)
+            let sandboxCount = try await Sandbox.query(on: app.db).count()
+            #expect(sandboxCount == 0)
         }
     }
 

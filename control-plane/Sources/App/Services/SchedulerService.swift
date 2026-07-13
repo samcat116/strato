@@ -45,6 +45,13 @@ struct SchedulableAgent: Sendable {
     /// network scoping, so a pinned-network VM placed there would get its
     /// switch in the agent's local NB instead of the site's shared one.
     let wireProtocolVersion: Int?
+    /// Whether this agent can run sandbox workloads (issue #415): it
+    /// advertised the sandbox runtime at registration AND speaks a wire
+    /// protocol that carries sandbox desired state. Callers fold both in —
+    /// either alone is insufficient (a v5 build may lack the runtime, and a
+    /// capable runtime behind a pre-v5 protocol could never receive the
+    /// desired entries).
+    let supportsSandboxWorkloads: Bool
 
     init(
         id: String,
@@ -61,7 +68,8 @@ struct SchedulableAgent: Sendable {
         architecture: CPUArchitecture? = nil,
         supportsInterVMNetworking: Bool = false,
         siteID: UUID? = nil,
-        wireProtocolVersion: Int? = nil
+        wireProtocolVersion: Int? = nil,
+        supportsSandboxWorkloads: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -78,6 +86,7 @@ struct SchedulableAgent: Sendable {
         self.supportsInterVMNetworking = supportsInterVMNetworking
         self.siteID = siteID
         self.wireProtocolVersion = wireProtocolVersion
+        self.supportsSandboxWorkloads = supportsSandboxWorkloads
     }
 
     /// Calculate resource utilization percentage (0.0 to 1.0)
@@ -130,7 +139,8 @@ struct SchedulableAgent: Sendable {
             architecture: architecture,
             supportsInterVMNetworking: supportsInterVMNetworking,
             siteID: siteID,
-            wireProtocolVersion: wireProtocolVersion
+            wireProtocolVersion: wireProtocolVersion,
+            supportsSandboxWorkloads: supportsSandboxWorkloads
         )
     }
 }
@@ -156,6 +166,11 @@ struct VMPlacementRequirements: Sendable {
     /// site (a pinned network only exists in that site's OVN deployment).
     /// Hard constraint; nil means unconstrained.
     let siteID: UUID?
+    /// Whether the workload is a sandbox, which only agents advertising the
+    /// sandbox runtime can run (issue #415). Hard constraint — hypervisor
+    /// support alone is not enough, since a Firecracker-capable agent may
+    /// lack the runtime or the guest base image.
+    let requiresSandboxRuntime: Bool
 
     init(
         cpu: Int,
@@ -164,7 +179,8 @@ struct VMPlacementRequirements: Sendable {
         hypervisorType: HypervisorType = .qemu,
         architecture: CPUArchitecture? = nil,
         requiresInterVMNetworking: Bool = false,
-        siteID: UUID? = nil
+        siteID: UUID? = nil,
+        requiresSandboxRuntime: Bool = false
     ) {
         self.cpu = cpu
         self.memory = memory
@@ -173,6 +189,7 @@ struct VMPlacementRequirements: Sendable {
         self.architecture = architecture
         self.requiresInterVMNetworking = requiresInterVMNetworking
         self.siteID = siteID
+        self.requiresSandboxRuntime = requiresSandboxRuntime
     }
 }
 
@@ -183,6 +200,7 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case noUsableHypervisors(onlineAgents: Int)
     case architectureMismatch(required: CPUArchitecture)
     case networkCapabilityUnsatisfied
+    case sandboxRuntimeUnsatisfied(eligibleAgents: Int)
     case siteUnsatisfied(requiredSiteID: UUID)
     case insufficientResources(required: VMPlacementRequirements, available: [SchedulableAgent])
     case invalidStrategy(String)
@@ -208,6 +226,9 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
                 "No eligible agent has a \(required.displayName) host architecture (required for hardware-accelerated guests)"
         case .networkCapabilityUnsatisfied:
             return "No eligible agent supports VM-to-VM networking required by this VM"
+        case .sandboxRuntimeUnsatisfied(let eligibleAgents):
+            return
+                "No eligible agent advertises the sandbox runtime (\(eligibleAgents) Firecracker-capable agent(s) checked) — each needs a working Firecracker/KVM setup and the sandbox guest base image installed"
         case .siteUnsatisfied(let requiredSiteID):
             return
                 "No online agent belongs to site \(requiredSiteID) required by the VM's network pinning"
@@ -439,16 +460,30 @@ final class SchedulerService: @unchecked Sendable {
             )
         }
 
+        // Sandboxes additionally need the sandbox runtime, which is advertised
+        // explicitly at registration (Firecracker/KVM usable plus the guest
+        // base image on disk) — hypervisor support alone doesn't prove it,
+        // and neither does the wire protocol version (issue #415).
+        let runtimeCapable: [SchedulableAgent]
+        if requirements.requiresSandboxRuntime {
+            runtimeCapable = hypervisorCapable.filter { $0.supportsSandboxWorkloads }
+            guard !runtimeCapable.isEmpty else {
+                throw SchedulerError.sandboxRuntimeUnsatisfied(eligibleAgents: hypervisorCapable.count)
+            }
+        } else {
+            runtimeCapable = hypervisorCapable
+        }
+
         // An agent with unknown architecture cannot prove it satisfies an
         // explicit architecture requirement, so it is excluded.
         let architectureMatched: [SchedulableAgent]
         if let requiredArchitecture = requirements.architecture {
-            architectureMatched = hypervisorCapable.filter { $0.architecture == requiredArchitecture }
+            architectureMatched = runtimeCapable.filter { $0.architecture == requiredArchitecture }
             guard !architectureMatched.isEmpty else {
                 throw SchedulerError.architectureMismatch(required: requiredArchitecture)
             }
         } else {
-            architectureMatched = hypervisorCapable
+            architectureMatched = runtimeCapable
         }
 
         let networkCapable =

@@ -333,17 +333,15 @@ struct SandboxController: RouteCollection {
 
         // Quota admission check, the sandbox insert, the initial desired-state
         // bump, and the pending create operation commit (or roll back) as one
-        // transaction, mirroring VM creation. Sandboxes reserve no storage.
-        // Note: quota *accounting* (resync summing sandboxes alongside VMs,
-        // release on delete) is generalized in issue #415 — until then a
-        // sandbox's reservation holds only until the next quota resync.
+        // transaction, mirroring VM creation. Sandboxes draw from the same
+        // vCPU/memory pools as VMs, count against the sandbox count limit,
+        // and reserve no storage (issue #415).
         let operation = try await req.db.transaction { db -> ResourceOperation in
-            try await QuotaEnforcementService.reserve(
+            try await QuotaEnforcementService.reserveSandbox(
                 for: project,
                 environment: environment,
                 vcpus: sandbox.cpus,
                 memory: sandbox.memory,
-                storage: 0,
                 on: db
             )
 
@@ -563,7 +561,10 @@ struct SandboxController: RouteCollection {
                     current.status == .pending
                 else { return }
 
-                try await sandbox.delete(on: app.db)
+                try await app.db.transaction { db in
+                    try await sandbox.delete(on: db)
+                    try await QuotaEnforcementService.release(for: sandbox, on: db)
+                }
                 await completeOperation(
                     operationId, sandboxID: sandboxID, as: .succeeded, error: nil,
                     settingSandboxStatus: nil, app: app)

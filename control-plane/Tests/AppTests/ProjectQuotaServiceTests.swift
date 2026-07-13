@@ -96,7 +96,7 @@ struct QuotaUsageServiceTests {
             maxVCPUs: 10, maxMemory: gib(8), maxStorage: gib(100), maxVMs: 5,
             environment: "prod"
         )
-        let actual = QuotaUsage(vcpus: 3, memoryGB: 2.0, storageGB: 20.0, vms: 3, networks: 0)
+        let actual = QuotaUsage(vcpus: 3, memoryGB: 2.0, storageGB: 20.0, vms: 3, sandboxes: 0, networks: 0)
         let vms = [
             makeVM(env: "dev", status: .running),
             makeVM(env: "dev", status: .running),

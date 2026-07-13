@@ -57,7 +57,7 @@ struct QuotaComplianceService {
     static func complianceInfos(for quotas: [ResourceQuota], on db: Database) async throws -> [QuotaComplianceInfo] {
         var result: [QuotaComplianceInfo] = []
         for quota in quotas {
-            let (actualUsage, _) = try await quota.calculateActualUsage(on: db)
+            let (actualUsage, _, _) = try await quota.calculateActualUsage(on: db)
             result.append(complianceInfo(for: quota, actualUsage: actualUsage))
         }
         return result

@@ -3,22 +3,26 @@ import Vapor
 import Fluent
 import SQLKit
 
-/// Enforces resource quotas across the VM lifecycle. Resolves the project/OU/org
-/// quotas that govern a VM (matching its environment), rejects creations that would
-/// exceed an enabled quota, and keeps each quota's reservation counters in step as
-/// VMs are created and deleted.
+/// Enforces resource quotas across the VM and sandbox lifecycle. Resolves the
+/// project/OU/org quotas that govern a workload (matching its environment),
+/// rejects creations that would exceed an enabled quota, and keeps each quota's
+/// reservation counters in step as workloads are created and deleted. Both
+/// workload kinds draw vCPUs and memory from the same pools (issue #415); only
+/// VMs consume storage, and each kind has its own count limit.
 ///
-/// Scoping mirrors `ResourceQuota.calculateActualUsage` exactly — a VM is reserved
-/// against precisely the quotas that measured usage would later count it against
-/// (its project, its *direct* organizational unit, and its root organization) — so
-/// reserved and actual figures cannot drift apart by construction.
+/// Scoping mirrors `ResourceQuota.calculateActualUsage` exactly — a workload is
+/// reserved against precisely the quotas that measured usage would later count
+/// it against (its project, its *direct* organizational unit, and its root
+/// organization) — so reserved and actual figures cannot drift apart by
+/// construction.
 struct QuotaEnforcementService {
 
-    /// All quotas that govern a VM created in `project` under `environment`.
+    /// All quotas that govern a workload created in `project` under `environment`.
     ///
-    /// A quota applies when it is scoped to the VM's project, the project's direct
-    /// organizational unit, or the project's root organization, AND its environment
-    /// is unset (applies to every environment) or equal to the VM's environment.
+    /// A quota applies when it is scoped to the workload's project, the project's
+    /// direct organizational unit, or the project's root organization, AND its
+    /// environment is unset (applies to every environment) or equal to the
+    /// workload's environment.
     static func applicableQuotas(
         for project: Project,
         environment: String,
@@ -71,6 +75,42 @@ struct QuotaEnforcementService {
         storage: Int64,
         on db: Database
     ) async throws {
+        try await reserveWorkload(for: project, environment: environment, on: db) { quota in
+            let check = quota.canAccommodateVM(vcpus: vcpus, memory: memory, storage: storage)
+            guard check.allowed else { return check }
+            try quota.reserveResources(vcpus: vcpus, memory: memory, storage: storage)
+            return check
+        }
+    }
+
+    /// Sandbox counterpart of `reserve`: same shared vCPU/memory pools, the
+    /// sandbox count limit instead of the VM one, no storage (issue #415).
+    static func reserveSandbox(
+        for project: Project,
+        environment: String,
+        vcpus: Int,
+        memory: Int64,
+        on db: Database
+    ) async throws {
+        try await reserveWorkload(for: project, environment: environment, on: db) { quota in
+            let check = quota.canAccommodateSandbox(vcpus: vcpus, memory: memory)
+            guard check.allowed else { return check }
+            try quota.reserveSandboxResources(vcpus: vcpus, memory: memory)
+            return check
+        }
+    }
+
+    /// Shared check-then-reserve sequence over every applicable quota:
+    /// advisory-lock, resync each quota to real usage, dry-run `apply` on all
+    /// of them (mutating nothing on rejection), then apply and save. `apply`
+    /// returns the admission verdict and, when allowed, records the
+    /// reservation on the quota.
+    private static func reserveWorkload(
+        for project: Project,
+        environment: String,
+        on db: Database,
+        apply: (ResourceQuota) throws -> (allowed: Bool, reason: String?)
+    ) async throws {
         let quotas = try await applicableQuotas(for: project, environment: environment, on: db)
 
         // Serialize concurrent reservations that touch any of these quotas before
@@ -79,42 +119,57 @@ struct QuotaEnforcementService {
 
         // Resync every quota to real usage, then validate all of them before mutating
         // any, so a rejection never leaves a partial reservation even within the
-        // enclosing transaction.
+        // enclosing transaction. `apply` only mutates when the check passes, and a
+        // thrown Abort unwinds the enclosing transaction, so the two-phase loop
+        // below never commits a partial application.
         for quota in quotas {
             try await resyncReservations(quota, on: db)
         }
 
         for quota in quotas {
-            let check = quota.canAccommodateVM(vcpus: vcpus, memory: memory, storage: storage)
+            let check = try apply(quota)
             guard check.allowed else {
                 // Prefix with the quota name so the reason always contains "quota"
                 // (the frontend links to /quotas on any /quota/i match, and the
-                // VM-count message otherwise omits the word) and the operator can see
+                // count messages otherwise omit the word) and the operator can see
                 // exactly which limit was hit.
                 throw Abort(.forbidden, reason: "Quota '\(quota.name)' exceeded: \(check.reason ?? "limit reached")")
             }
         }
 
-        // Adds the incoming VM to the resynced baseline; after the VM row is inserted
-        // this equals the quota's true in-scope usage.
+        // Persists the resynced baselines plus the incoming workload; after its row
+        // is inserted this equals each quota's true in-scope usage.
         for quota in quotas {
-            try quota.reserveResources(vcpus: vcpus, memory: memory, storage: storage)
             try await quota.save(on: db)
         }
     }
 
-    /// Recomputes every quota governing `vm` from the VMs still in its scope.
+    /// Recomputes every quota governing `vm` from the workloads still in its scope.
     ///
     /// Call *after* the VM row is deleted so the deleted VM drops out of the recount.
     /// Recomputing (rather than decrementing the VM's own numbers) keeps a delete from
-    /// erasing reservations that belong to other VMs — e.g. when the quota was created
-    /// after some VMs already existed and so never counted them in the first place.
+    /// erasing reservations that belong to other workloads — e.g. when the quota was
+    /// created after some VMs already existed and so never counted them in the first
+    /// place.
     static func release(
         for vm: VM,
         on db: Database
     ) async throws {
-        let project = try await vm.$project.get(on: db)
-        let quotas = try await applicableQuotas(for: project, environment: vm.environment, on: db)
+        try await releaseWorkload(projectID: vm.$project.id, environment: vm.environment, on: db)
+    }
+
+    /// Sandbox counterpart of `release(for vm:)`: call *after* the sandbox row
+    /// is deleted.
+    static func release(
+        for sandbox: Sandbox,
+        on db: Database
+    ) async throws {
+        try await releaseWorkload(projectID: sandbox.$project.id, environment: sandbox.environment, on: db)
+    }
+
+    private static func releaseWorkload(projectID: UUID, environment: String, on db: Database) async throws {
+        guard let project = try await Project.find(projectID, on: db) else { return }
+        let quotas = try await applicableQuotas(for: project, environment: environment, on: db)
 
         for quota in quotas {
             try await resyncReservations(quota, on: db)
@@ -140,15 +195,16 @@ struct QuotaEnforcementService {
         }
     }
 
-    /// Sets a quota's reservation counters to the exact usage of the VMs currently in
-    /// its scope. Sums the raw `Int64` byte fields (not the lossy GB figures in
-    /// `QuotaUsage`) so memory/storage stay byte-accurate. Does not persist — the
-    /// caller saves.
+    /// Sets a quota's reservation counters to the exact usage of the VMs and
+    /// sandboxes currently in its scope. Sums the raw `Int64` byte fields (not the
+    /// lossy GB figures in `QuotaUsage`) so memory/storage stay byte-accurate. Does
+    /// not persist — the caller saves.
     private static func resyncReservations(_ quota: ResourceQuota, on db: Database) async throws {
-        let (_, vms) = try await quota.calculateActualUsage(on: db)
-        quota.reservedVCPUs = vms.reduce(0) { $0 + $1.cpu }
-        quota.reservedMemory = vms.reduce(0) { $0 + $1.memory }
-        quota.reservedStorage = vms.reduce(0) { $0 + $1.disk }
+        let (_, vms, sandboxes) = try await quota.calculateActualUsage(on: db)
+        quota.reservedVCPUs = vms.reduce(0) { $0 + $1.cpu } + sandboxes.reduce(0) { $0 + $1.cpus }
+        quota.reservedMemory = vms.reduce(Int64(0)) { $0 + $1.memory } + sandboxes.reduce(Int64(0)) { $0 + $1.memory }
+        quota.reservedStorage = vms.reduce(Int64(0)) { $0 + $1.disk }
         quota.vmCount = vms.count
+        quota.sandboxCount = sandboxes.count
     }
 }

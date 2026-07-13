@@ -124,6 +124,7 @@ struct VMPlacementRequirements {
     let hypervisorType: HypervisorType    // Required hypervisor backend
     let architecture: CPUArchitecture?    // Guest CPU architecture, when known
     let requiresInterVMNetworking: Bool   // Needs VM-to-VM networking (OVN)
+    let requiresSandboxRuntime: Bool      // Sandbox workload (issue #415)
 }
 ```
 
@@ -146,6 +147,13 @@ differently than requested:
   architecture metadata.)
 - **Network capability**: VMs requiring VM-to-VM networking are only placed on
   OVN-backed agents, never on user-mode (SLIRP) agents.
+- **Sandbox runtime**: Sandboxes (OCI-image Firecracker microVMs, issue #415)
+  only place on agents that explicitly advertised the sandbox runtime at
+  registration (`AgentRegisterMessage.sandboxCapable` — a build carrying the
+  runtime driver, Firecracker + KVM usable, and the sandbox guest base image
+  on disk) **and** registered with a wire protocol that carries sandbox
+  desired state (v5+). Firecracker support alone never qualifies an agent,
+  and neither does the protocol version alone.
 
 ## Agent Selection Process
 
@@ -154,6 +162,7 @@ differently than requested:
    eliminates all candidates):
    - Agent status must be `online`
    - Agent must support the VM's hypervisor type
+   - Agent must advertise the sandbox runtime (sandbox placements only)
    - Agent host architecture must match the guest architecture (when specified)
    - Agent must satisfy the VM's network capability requirements
    - Available CPU ≥ VM CPU requirement

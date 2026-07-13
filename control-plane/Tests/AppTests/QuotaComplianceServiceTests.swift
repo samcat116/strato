@@ -51,7 +51,7 @@ struct QuotaComplianceServiceTests {
             environment: "prod"
         )
 
-        let usage = QuotaUsage(vcpus: 5, memoryGB: 4.0, storageGB: 25.0, vms: 2, networks: 0)
+        let usage = QuotaUsage(vcpus: 5, memoryGB: 4.0, storageGB: 25.0, vms: 2, sandboxes: 0, networks: 0)
         let info = QuotaComplianceService.complianceInfo(for: quota, actualUsage: usage)
 
         #expect(info.scope == "organization")
@@ -80,7 +80,7 @@ struct QuotaComplianceServiceTests {
             id: UUID(), name: "quota", projectID: UUID(),
             maxVCPUs: 4, maxMemory: gib(16), maxStorage: gib(50), maxVMs: 3
         )
-        let usage = QuotaUsage(vcpus: 0, memoryGB: 0, storageGB: 0, vms: 0, networks: 0)
+        let usage = QuotaUsage(vcpus: 0, memoryGB: 0, storageGB: 0, vms: 0, sandboxes: 0, networks: 0)
         let info = QuotaComplianceService.complianceInfo(for: quota, actualUsage: usage)
 
         #expect(info.scope == "project")

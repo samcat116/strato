@@ -390,6 +390,12 @@ public func configure(_ app: Application) async throws {
     // Agent OS reporting for update artifact resolution (issue #432).
     app.migrations.add(AddOperatingSystemToAgent())
 
+    // Sandbox scheduler gating + quota accounting (issue #415): agents record
+    // whether they advertised the sandbox runtime, and quotas grow a sandbox
+    // count limit beside the VM one.
+    app.migrations.add(AddSandboxCapableToAgent())
+    app.migrations.add(AddSandboxCountToResourceQuota())
+
     try await app.autoMigrate()
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth

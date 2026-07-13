@@ -82,6 +82,15 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "wire_protocol_version")
     var wireProtocolVersion: Int?
 
+    /// Whether the agent advertised the sandbox runtime at its last
+    /// registration (issue #415): Firecracker + KVM usable and the sandbox
+    /// guest base image present on its disk. The scheduler gates sandbox
+    /// placement on this explicit signal (combined with a v5+ wire protocol) —
+    /// never on the protocol version alone, which a runtime-less build also
+    /// speaks.
+    @Field(key: "sandbox_capable")
+    var sandboxCapable: Bool
+
     /// Owning organization (exactly one of organization / organizational unit;
     /// see `organizationScope`). Agents are dedicated capacity: the scheduler
     /// only places a VM on an agent whose root organization matches the VM's.
@@ -105,6 +114,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         architecture: CPUArchitecture? = nil,
         hypervisors: [HypervisorSupport] = [],
         networkCapability: NetworkCapability? = nil,
+        sandboxCapable: Bool = false,
         lastHeartbeat: Date? = nil
     ) {
         self.id = id
@@ -122,6 +132,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.architecture = architecture?.rawValue
         self.hypervisors = hypervisors
         self.networkCapability = networkCapability?.rawValue
+        self.sandboxCapable = sandboxCapable
         self.lastHeartbeat = lastHeartbeat
     }
 
@@ -166,6 +177,7 @@ extension Agent {
             architecture: registration.architecture,
             hypervisors: registration.effectiveHypervisors,
             networkCapability: registration.networkCapability,
+            sandboxCapable: registration.sandboxCapable ?? false,
             lastHeartbeat: Date()
         )
         agent.operatingSystem = registration.operatingSystem?.rawValue
@@ -253,6 +265,7 @@ struct AgentResponse: Content {
     let operatingSystem: OperatingSystem?
     let hypervisors: [HypervisorSupport]
     let networkCapability: NetworkCapability?
+    let sandboxCapable: Bool
     let siteId: UUID?
     let organizationId: UUID?
     let organizationalUnitId: UUID?
@@ -280,6 +293,7 @@ struct AgentResponse: Content {
         self.operatingSystem = agent.hostOperatingSystem
         self.hypervisors = agent.hypervisors
         self.networkCapability = agent.networkCapability.flatMap(NetworkCapability.init(rawValue:))
+        self.sandboxCapable = agent.sandboxCapable
         self.siteId = agent.$site.id
         self.organizationId = agent.$organization.id
         self.organizationalUnitId = agent.$organizationalUnit.id

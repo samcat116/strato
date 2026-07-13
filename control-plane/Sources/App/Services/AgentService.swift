@@ -272,6 +272,7 @@ actor AgentService {
             agent.operatingSystem = message.operatingSystem?.rawValue ?? agent.operatingSystem
             agent.hypervisors = message.effectiveHypervisors
             agent.networkCapability = message.networkCapability?.rawValue
+            agent.sandboxCapable = message.sandboxCapable ?? false
             agent.updateResources(message.resources)
             agent.status = .online
         } else {
@@ -1983,8 +1984,7 @@ actor AgentService {
 
         if sandbox.desiredStatus == .absent {
             // Deletion confirmed. Complete the operation first, then remove
-            // the row (same crash-ordering rationale as VMs). Quota release
-            // joins once sandbox quota accounting lands (issue #415).
+            // the row (same crash-ordering rationale as VMs).
             if let operation = try await ResourceOperation.query(on: db)
                 .filter(\.$resourceKind == .sandbox)
                 .filter(\.$resourceID == sandboxID)
@@ -1994,7 +1994,10 @@ actor AgentService {
                 _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: db)
             }
 
-            try await sandbox.delete(on: db)
+            try await db.transaction { db in
+                try await sandbox.delete(on: db)
+                try await QuotaEnforcementService.release(for: sandbox, on: db)
+            }
             await app.coordination.releaseReservation(agentId: agentId, vmId: sandboxID.uuidString)
 
             app.logger.info(
@@ -2099,11 +2102,11 @@ actor AgentService {
     /// agent's observed-state reports, with the stuck-operation sweep as the
     /// budget backstop.
     ///
-    /// Placement is constrained to Firecracker only for now: gating on the
-    /// explicit sandbox-runtime capability (`AgentRegisterMessage.sandboxCapable`
-    /// plus guest-image presence) is issue #415, and there is no architecture
-    /// constraint until tag→digest resolution can read the image's platform
-    /// (issue #414). Sandboxes reserve no disk.
+    /// Placement requires Firecracker support and the explicit sandbox-runtime
+    /// capability (`AgentRegisterMessage.sandboxCapable` folded with a v5+
+    /// wire protocol into `supportsSandboxWorkloads`, issue #415). There is no
+    /// architecture constraint until tag→digest resolution can read the
+    /// image's platform (issue #414). Sandboxes reserve no disk.
     func createSandbox(sandbox: Sandbox, db: Database) async throws {
         let schedulableAgents = await schedulableAgentsFromDatabase()
         let sandboxId = sandbox.id?.uuidString ?? ""
@@ -2117,7 +2120,8 @@ actor AgentService {
                     disk: 0,
                     hypervisorType: .firecracker,
                     architecture: nil,
-                    siteID: nil
+                    siteID: nil,
+                    requiresSandboxRuntime: true
                 ),
                 vmId: sandboxId,
                 from: schedulableAgents,
@@ -2270,7 +2274,12 @@ actor AgentService {
                 architecture: agent.cpuArchitecture,
                 supportsInterVMNetworking: agent.supportsInterVMNetworking,
                 siteID: agent.$site.id,
-                wireProtocolVersion: agent.wireProtocolVersion
+                wireProtocolVersion: agent.wireProtocolVersion,
+                // Both signals are required (issue #415): the advertised
+                // runtime proves the agent can boot sandboxes, and a v5+
+                // protocol proves desired sandbox entries actually reach it.
+                supportsSandboxWorkloads: agent.sandboxCapable
+                    && WireProtocol.supportsSandboxSync(agent.wireProtocolVersion ?? 0)
             )
         }
     }
