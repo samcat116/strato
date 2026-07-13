@@ -99,9 +99,12 @@ struct OIDCController: RouteCollection {
 
         try await provider.save(on: req.db)
 
-        // If discovery URL is provided, attempt to fetch configuration
+        // If discovery URL is provided, attempt to fetch configuration. The
+        // document is authoritative for a newly configured discovery URL, so
+        // optional endpoints it omits are cleared rather than kept.
         if let discoveryURL = createRequest.discoveryURL, !discoveryURL.isEmpty {
-            try await fetchAndUpdateProviderConfiguration(provider: provider, discoveryURL: discoveryURL, on: req)
+            try await fetchAndUpdateProviderConfiguration(
+                provider: provider, discoveryURL: discoveryURL, discoveryChanged: true, on: req)
         }
 
         return OIDCProviderResponse(from: provider)
@@ -164,6 +167,9 @@ struct OIDCController: RouteCollection {
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             provider[keyPath: keyPath] = trimmed.isEmpty ? nil : trimmed
         }
+        // Captured before the update lands so the refresh below can tell a
+        // same-URL resubmit (edit form always sends it) from a real change.
+        let previousDiscoveryURL = provider.discoveryURL
         applyOptionalURL(updateRequest.discoveryURL, to: \.discoveryURL)
         applyOptionalURL(updateRequest.authorizationEndpoint, to: \.authorizationEndpoint)
         applyOptionalURL(updateRequest.tokenEndpoint, to: \.tokenEndpoint)
@@ -224,7 +230,9 @@ struct OIDCController: RouteCollection {
         // issuer saves fine but logins keep using the previous issuer's
         // endpoints. Fetch failures are logged, not fatal, same as on create.
         if let discoveryURL = provider.discoveryURL, updateRequest.discoveryURL != nil, !discoveryURL.isEmpty {
-            try await fetchAndUpdateProviderConfiguration(provider: provider, discoveryURL: discoveryURL, on: req)
+            try await fetchAndUpdateProviderConfiguration(
+                provider: provider, discoveryURL: discoveryURL,
+                discoveryChanged: discoveryURL != previousDiscoveryURL, on: req)
         }
 
         return OIDCProviderResponse(from: provider)
@@ -294,7 +302,7 @@ struct OIDCController: RouteCollection {
                 // redirect from the STORED fields, so a passing test must
                 // leave them usable. This also heals providers whose create-
                 // time discovery fetch failed non-fatally and stored nothing.
-                applyDiscoveredConfiguration(discovery, to: provider)
+                applyDiscoveredConfiguration(discovery, to: provider, discoveryChanged: false)
                 try await provider.save(on: req.db)
                 return OIDCProviderTestResponse(valid: true, message: "Provider configuration is valid")
             } catch let abort as AbortError {
@@ -662,32 +670,39 @@ struct OIDCController: RouteCollection {
 
     /// Copies a validated discovery document onto the provider. The required
     /// metadata fields always overwrite; the OPTIONAL ones (userinfo and
-    /// end-session endpoints) only overwrite when the document supplies them —
-    /// otherwise a discovery refresh would wipe an admin's manually configured
-    /// value every time the provider is edited (the edit form resubmits the
-    /// discovery URL on every save).
-    func applyDiscoveredConfiguration(_ discovery: OIDCDiscoveryDocument, to provider: OIDCProvider) {
-        // Rotating to a different issuer means any stored optional endpoints
-        // belong to the *previous* IdP: keeping them would send access tokens
-        // to the old userinfo URL or logout redirects to the old provider. A
-        // same-issuer refresh instead preserves values the metadata omits
-        // (typically an admin's manual configuration). A nil stored issuer
-        // (first discovery fetch, or a manual→discovery switch that cleared
-        // it) counts as unchanged so manual values survive that transition.
+    /// end-session endpoints) follow the rules in the body: preserved across a
+    /// same-config refresh, cleared when the provider is repointed at a
+    /// different IdP. `discoveryChanged` is the caller's knowledge of whether
+    /// the discovery URL itself was newly added or changed.
+    func applyDiscoveredConfiguration(
+        _ discovery: OIDCDiscoveryDocument, to provider: OIDCProvider, discoveryChanged: Bool
+    ) {
+        // Optional endpoints the document omits are cleared when the provider
+        // is pointing at a (possibly) different IdP — a stale userinfo or
+        // logout URL would receive the new IdP's access token or redirect
+        // users to the old provider. That's the case when the discovery URL
+        // was newly added or changed (covers manual→discovery switches, where
+        // no stored issuer exists to compare) or when the discovered issuer
+        // differs from the stored one. Only a same-URL, same-issuer refresh —
+        // the edit form resubmitting an unchanged config — preserves values
+        // the metadata omits, i.e. an admin's manual configuration.
         let issuerChanged = provider.issuer != nil && provider.issuer != discovery.issuer
+        let clearOmittedOptionals = discoveryChanged || issuerChanged
         provider.issuer = discovery.issuer
         provider.authorizationEndpoint = discovery.authorizationEndpoint
         provider.tokenEndpoint = discovery.tokenEndpoint
         provider.jwksURI = discovery.jwksURI
-        if discovery.userinfoEndpoint != nil || issuerChanged {
+        if discovery.userinfoEndpoint != nil || clearOmittedOptionals {
             provider.userinfoEndpoint = discovery.userinfoEndpoint
         }
-        if discovery.endSessionEndpoint != nil || issuerChanged {
+        if discovery.endSessionEndpoint != nil || clearOmittedOptionals {
             provider.endSessionEndpoint = discovery.endSessionEndpoint
         }
     }
 
-    private func fetchAndUpdateProviderConfiguration(provider: OIDCProvider, discoveryURL: String, on req: Request)
+    private func fetchAndUpdateProviderConfiguration(
+        provider: OIDCProvider, discoveryURL: String, discoveryChanged: Bool, on req: Request
+    )
         async throws
     {
         do {
@@ -697,7 +712,7 @@ struct OIDCController: RouteCollection {
             // assignment so a bad document leaves the provider untouched.
             try OIDCValidation.validateDiscoveredEndpoints(discovery)
 
-            applyDiscoveredConfiguration(discovery, to: provider)
+            applyDiscoveredConfiguration(discovery, to: provider, discoveryChanged: discoveryChanged)
 
             try await provider.save(on: req.db)
         } catch {

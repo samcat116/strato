@@ -995,16 +995,17 @@ final class OIDCControllerTests: BaseTestCase {
                 on: app.db, organizationID: testOrganization.id!, name: "Okta",
                 endSessionEndpoint: "https://manual.example.com/logout")
 
-            // Same-issuer refresh (issuer previously unset counts as
-            // unchanged) with metadata omitting the optional endpoints: the
-            // manual logout URL must survive.
-            controller.applyDiscoveredConfiguration(doc(issuer: "https://idp.example.com"), to: provider)
+            // Same-URL, same-issuer refresh with metadata omitting the
+            // optional endpoints: the manual logout URL must survive.
+            controller.applyDiscoveredConfiguration(
+                doc(issuer: "https://idp.example.com"), to: provider, discoveryChanged: false)
             #expect(provider.endSessionEndpoint == "https://manual.example.com/logout")
 
             // Rotating the discovery document to a different issuer clears
             // the previous IdP's optional endpoints — a stale logout URL
             // would redirect users to the old provider.
-            controller.applyDiscoveredConfiguration(doc(issuer: "https://other.example.com"), to: provider)
+            controller.applyDiscoveredConfiguration(
+                doc(issuer: "https://other.example.com"), to: provider, discoveryChanged: false)
             #expect(provider.endSessionEndpoint == nil)
             #expect(provider.issuer == "https://other.example.com")
 
@@ -1014,9 +1015,20 @@ final class OIDCControllerTests: BaseTestCase {
                     issuer: "https://third.example.com",
                     userinfo: "https://third.example.com/userinfo",
                     endSession: "https://third.example.com/logout"),
-                to: provider)
+                to: provider, discoveryChanged: false)
             #expect(provider.userinfoEndpoint == "https://third.example.com/userinfo")
             #expect(provider.endSessionEndpoint == "https://third.example.com/logout")
+
+            // A manual→discovery switch has no stored issuer to compare, so
+            // a newly added/changed discovery URL alone must clear manual
+            // optional endpoints the document omits.
+            let manual = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Manual",
+                endSessionEndpoint: "https://manual.example.com/logout")
+            controller.applyDiscoveredConfiguration(
+                doc(issuer: "https://new-idp.example.com"), to: manual, discoveryChanged: true)
+            #expect(manual.endSessionEndpoint == nil)
+            #expect(manual.userinfoEndpoint == nil)
         }
     }
 
