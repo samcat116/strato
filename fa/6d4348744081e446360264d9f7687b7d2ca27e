@@ -1,0 +1,49 @@
+shared/Sources/StratoShared/HostInfo.swift
+  s_5048fe5df34c98::t_80da446b6dba75 1-70
+control-plane/Tests/AppTests/AgentModelTests.swift
+  s_5048fe5df34c98::t_40f869b62d53d3 300-335
+control-plane/Sources/App/Services/AgentService.swift
+  s_5048fe5df34c98::t_e1e8e97f26080f 319
+control-plane/Sources/App/Migrations/AddHostInfoToAgent.swift
+  s_5048fe5df34c98::t_a756c034db2f11 1-24
+control-plane/web/src/types/api.ts
+  s_5048fe5df34c98::t_6d8124a180a50a 296-298
+  s_5048fe5df34c98::t_f2ba98facf38c4 258-281
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_5048fe5df34c98::t_02acb2e5ab0124 86-124
+control-plane/Sources/App/configure.swift
+  s_5048fe5df34c98::t_f4b12bcf8f1c40 409-411
+agent/Sources/StratoAgent/Agent.swift
+  s_5048fe5df34c98::t_10bab0a3cfd3a9 655-656
+control-plane/web/src/components/agents/agent-host-info-card.tsx
+  s_5048fe5df34c98::t_1bf8703533f89a 1-103
+control-plane/web/src/app/(dashboard)/agents/detail/page.tsx
+  s_5048fe5df34c98::t_08fc563073c869 226-228
+  s_5048fe5df34c98::t_315ec90560b375 19
+agent/Sources/StratoAgent/HostInfoProbe.swift
+  s_5048fe5df34c98::t_181dd3457bce37 1-231
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_5048fe5df34c98::t_333516f1c67320 132-137
+  s_5048fe5df34c98::t_c06391ac5d3dff 153-154,170
+control-plane/Sources/App/Models/Agent.swift
+  s_5048fe5df34c98::t_87cbca9f712ff3 313-315
+  s_5048fe5df34c98::t_5ce9e6226d8b0c 227
+  s_5048fe5df34c98::t_fcb026095d16c4 71-78
+  s_5048fe5df34c98::t_31f5aa55910d70 354
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "fa6d4348744081e446360264d9f7687b7d2ca27e",
+  "prompts": {},
+  "sessions": {
+    "s_5048fe5df34c98": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da600de8-4f01-4471-ba11-090be729bbcc",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
