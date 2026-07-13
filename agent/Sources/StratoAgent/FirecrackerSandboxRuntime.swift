@@ -345,37 +345,62 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// single newline-delimited JSON response. Stateless per call: the guest
     /// serve loop accepts many short-lived connections, and re-opening avoids
     /// stale file descriptors across polls.
+    ///
+    /// The read phase is bounded by racing it against a timeout: `VsockConnection.read`
+    /// wraps a blocking `read(2)`, so a guest that accepts the connection but
+    /// then wedges before sending a full line would otherwise block forever.
+    /// When the deadline wins, closing the socket aborts the in-flight blocking
+    /// read, so the poll actually returns.
     private func sendControl(
         _ request: SandboxControlProtocol.Request, udsPath: String, timeout: TimeInterval
     ) async throws -> SandboxControlProtocol.Response {
         let connection = try await VsockConnection.connect(
             udsPath: udsPath, port: SandboxConfigDrive.defaultVsockPort, timeout: timeout, logger: logger)
-        do {
-            try await connection.write(request.encodedLine())
 
-            var buffer = Data()
-            let deadline = Date().addingTimeInterval(timeout)
-            while Date() < deadline {
-                if let newline = buffer.firstIndex(of: 0x0A) {
-                    let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
-                    await connection.close()
-                    let response = try SandboxControlProtocol.Response.decode(line: line)
-                    if case .error(let message) = response {
-                        throw SandboxControlError.guestError(message)
-                    }
-                    return response
-                }
-                let chunk = try await connection.read(maxLength: 4096)
-                if chunk.isEmpty {
-                    break  // guest closed without a full line
-                }
-                buffer.append(chunk)
+        return try await withThrowingTaskGroup(of: SandboxControlProtocol.Response.self) { group in
+            group.addTask { try await Self.exchange(request, on: connection) }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                // Deadline hit: close the socket so any blocking read the other
+                // task is parked in returns instead of hanging.
+                await connection.close()
+                throw SandboxControlError.timeout
             }
-            await connection.close()
-            throw SandboxControlError.timeout
-        } catch {
-            await connection.close()
-            throw error
+            defer { group.cancelAll() }
+            do {
+                let response = try await group.next()!
+                await connection.close()
+                return response
+            } catch {
+                await connection.close()
+                throw error
+            }
+        }
+    }
+
+    /// Write one request and read the single newline-delimited response. A
+    /// `static` (non-isolated) helper so it runs off the actor and its blocking
+    /// read can be raced against a timeout (see `sendControl`).
+    private static func exchange(
+        _ request: SandboxControlProtocol.Request, on connection: VsockConnection
+    ) async throws -> SandboxControlProtocol.Response {
+        try await connection.write(request.encodedLine())
+
+        var buffer = Data()
+        while true {
+            if let newline = buffer.firstIndex(of: 0x0A) {
+                let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
+                let response = try SandboxControlProtocol.Response.decode(line: line)
+                if case .error(let message) = response {
+                    throw SandboxControlError.guestError(message)
+                }
+                return response
+            }
+            let chunk = try await connection.read(maxLength: 4096)
+            if chunk.isEmpty {
+                throw SandboxControlError.malformedResponse("guest closed before sending a full response line")
+            }
+            buffer.append(chunk)
         }
     }
 

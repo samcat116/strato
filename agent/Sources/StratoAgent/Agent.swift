@@ -7,6 +7,11 @@ import StratoShared
 import StratoAgentCore
 import StratoAgentSPIFFE
 
+#if os(Linux)
+// One shared Firecracker client backs both VMs and sandboxes (issue #421).
+import SwiftFirecracker
+#endif
+
 enum AgentError: Error, LocalizedError {
     case registrationTimeout
     /// The control plane explicitly rejected our credentials (`invalid_token`
