@@ -1,0 +1,127 @@
+control-plane/Sources/App/configure.swift
+  s_322c2d216f0cf7::t_5d427697c90416 377-382
+CLAUDE.md
+  s_322c2d216f0cf7::t_0b99e2c42acd32 133
+control-plane/Sources/App/Migrations/AddSandboxCountToResourceQuota.swift
+  s_322c2d216f0cf7::t_945233903cb22f 1-35
+docs/architecture/sandboxes.md
+  s_322c2d216f0cf7::t_09748c124b359e 94-100
+  s_322c2d216f0cf7::t_6a360f2afedbcf 121-133
+  s_322c2d216f0cf7::t_81a7fbdaae15f1 12-16
+config.toml.example
+  s_322c2d216f0cf7::t_dc5a6bc71495ef 92-98
+control-plane/Tests/AppTests/AgentSchedulableTransformTests.swift
+  s_322c2d216f0cf7::t_f19c96d316f619 73-107
+control-plane/Sources/App/Models/Agent.swift
+  s_322c2d216f0cf7::t_531ace8d4c1f55 111
+  s_322c2d216f0cf7::t_6742f9cfd6a577 253
+  s_322c2d216f0cf7::t_df1cdd3a621356 280
+  s_322c2d216f0cf7::t_24ce876f1a12d2 174
+  s_322c2d216f0cf7::t_64339dfe45574c 79-87
+  s_322c2d216f0cf7::t_31d4429f09fdca 129
+control-plane/Tests/AppTests/SchedulerServiceTests.swift
+  s_322c2d216f0cf7::t_27cccbc636a85b 567-656
+  s_322c2d216f0cf7::t_d4a203e9601962 43-44,59-72
+control-plane/Tests/AppTests/QuotaEnforcementTests.swift
+  s_322c2d216f0cf7::t_233f5a010c2963 216-242,246-248,250-255,257-375
+  s_322c2d216f0cf7::t_561afbbccaf253 243-245,249,256
+control-plane/Tests/AppTests/QuotaComplianceServiceTests.swift
+  s_322c2d216f0cf7::t_21026bb26f0438 54,83
+control-plane/Sources/App/Services/QuotaComplianceService.swift
+  s_322c2d216f0cf7::t_43665e41c9aed3 60
+control-plane/Tests/AppTests/ResourceQuotaTests.swift
+  s_322c2d216f0cf7::t_3ff11248149ade 225-271
+  s_322c2d216f0cf7::t_d11f08b368342a 78,110,138,350,392
+agent/Sources/StratoAgentCore/SandboxRuntimeProbe.swift
+  s_322c2d216f0cf7::t_451f91a153b107 1-66
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_322c2d216f0cf7::t_610255c2591c5d 336-338,340
+  s_322c2d216f0cf7::t_b2931761d9392b 564-567
+control-plane/Sources/App/Migrations/AddSandboxCapableToAgent.swift
+  s_322c2d216f0cf7::t_eac3357c0dc196 1-22
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_322c2d216f0cf7::t_f80c8bc5266e7c 463-476,481
+  s_322c2d216f0cf7::t_5ee749e8bbcc57 89
+  s_322c2d216f0cf7::t_8fd34feb6405fc 486
+  s_322c2d216f0cf7::t_c9423027ea5962 71-72
+  s_322c2d216f0cf7::t_819e8fb3426312 48-54
+  s_322c2d216f0cf7::t_318c4500d097d1 169-173,182-183,192
+  s_322c2d216f0cf7::t_18fd6277a9b564 229-231
+  s_322c2d216f0cf7::t_80bce3dcf9d31c 203
+  s_322c2d216f0cf7::t_0ba5504fb94bf4 142-143
+control-plane/Sources/App/Services/QuotaUsageService.swift
+  s_322c2d216f0cf7::t_10279c0d22010e 27,35,43-44
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_322c2d216f0cf7::t_ddecf6f7687615 279
+  s_322c2d216f0cf7::t_3f2939f5e6c2c7 314
+  s_322c2d216f0cf7::t_a3a07e276e6042 248-249
+control-plane/Tests/AppTests/ProjectQuotaServiceTests.swift
+  s_322c2d216f0cf7::t_21026bb26f0438 99
+docs/architecture/scheduler.md
+  s_322c2d216f0cf7::t_d5b40412796100 150-155
+  s_322c2d216f0cf7::t_999c07fd29e267 164
+  s_322c2d216f0cf7::t_a0d2250109bb99 127
+control-plane/Sources/App/Services/AgentService.swift
+  s_322c2d216f0cf7::t_a030500338f515 2121-2126
+  s_322c2d216f0cf7::t_f50d95b3a64d2c 1967-1968
+  s_322c2d216f0cf7::t_9e99cd20374056 1831,1841-1844
+  s_322c2d216f0cf7::t_2a311c12cbfd83 1949-1953
+  s_322c2d216f0cf7::t_5874a8d2c52a7d 262
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_322c2d216f0cf7::t_7d1ccd7997fd1d 197-206
+  s_322c2d216f0cf7::t_cd4b128c8e9758 480
+  s_322c2d216f0cf7::t_3c661fef756b3f 575
+  s_322c2d216f0cf7::t_5e9b6d0ab6b003 238-240
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_322c2d216f0cf7::t_01bc48645ac321 229
+  s_322c2d216f0cf7::t_60ac5698126d90 205
+  s_322c2d216f0cf7::t_0345e5ba7777d3 148-152
+  s_322c2d216f0cf7::t_578856acc8f6b7 421
+  s_322c2d216f0cf7::t_e2a5e65a146712 179
+  s_322c2d216f0cf7::t_fe23b67406728a 314
+  s_322c2d216f0cf7::t_735ddefd32b879 621-628
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_322c2d216f0cf7::t_07e1647d2b6ffc 442,451,460
+  s_322c2d216f0cf7::t_dc3254658ada93 94
+  s_322c2d216f0cf7::t_9c52f88a997f23 206-209
+  s_322c2d216f0cf7::t_fad2b5d8a12483 112-115
+  s_322c2d216f0cf7::t_fb05b156bdcf9f 491,500,508-509
+  s_322c2d216f0cf7::t_9fd8927a21546d 530,539,548
+  s_322c2d216f0cf7::t_4817e893055543 278-305,319-330
+  s_322c2d216f0cf7::t_9be6a417aeaf0a 52-60
+  s_322c2d216f0cf7::t_b85dead3427c44 128-131,133-135,139-142,144-147,149-163,165-166,169-172,179,183
+  s_322c2d216f0cf7::t_da38085125417c 233-237
+  s_322c2d216f0cf7::t_a13447a29c09c3 386,391-393
+  s_322c2d216f0cf7::t_932df183d7caa2 407-408,420
+  s_322c2d216f0cf7::t_06439517c1fd04 331
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_322c2d216f0cf7::t_d7ca3759c4d5f6 6-11,13-17,20,22-25
+  s_322c2d216f0cf7::t_9528b29992444e 77-112,122-124,130,134,140-141,147,151-153,158-172
+  s_322c2d216f0cf7::t_771614f3a23196 198-201,203-206,208
+control-plane/Tests/AppTests/SandboxTests.swift
+  s_322c2d216f0cf7::t_ce7b3c38a68dec 58-59,62-64,76-77,83-86
+  s_322c2d216f0cf7::t_02d1d9548823da 169-220
+agent/Sources/StratoAgent/Agent.swift
+  s_322c2d216f0cf7::t_458f75afa474f3 149-152
+  s_322c2d216f0cf7::t_6b5e2685951955 185
+  s_322c2d216f0cf7::t_33e467e6d33061 209
+  s_322c2d216f0cf7::t_a676fb38ffdf54 585-606,617-618
+agent/Tests/StratoAgentTests/SandboxRuntimeProbeTests.swift
+  s_322c2d216f0cf7::t_ce7e92b3a4e357 1-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "718da37a61061767ef6c305b130f0e1e12c0d556",
+  "prompts": {},
+  "sessions": {
+    "s_322c2d216f0cf7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0c9de6f-7cb8-444e-a2e3-f4db6ccd7604",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
