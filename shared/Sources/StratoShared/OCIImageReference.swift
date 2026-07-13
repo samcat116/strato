@@ -32,9 +32,21 @@ public struct OCIImageReference: Sendable, Equatable {
     /// localhost); everything else is HTTPS.
     public var apiBaseURL: String {
         let host = registry == "docker.io" ? "registry-1.docker.io" : registry
-        let bareHost = host.split(separator: ":").first.map(String.init) ?? host
-        let scheme = (bareHost == "localhost" || bareHost.hasPrefix("127.")) ? "http" : "https"
+        let scheme = Self.isLoopbackHost(host) ? "http" : "https"
         return "\(scheme)://\(host)"
+    }
+
+    /// True when the host (with or without a port) is `localhost` or an IPv4
+    /// loopback *literal* (`127.0.0.0/8`). Hostnames that merely start with
+    /// `127.` — `127.evil.com`, `127.0.0.1.example` — do not count: only real
+    /// loopback addresses get the plain-HTTP allowance, because credentials
+    /// ride on these connections.
+    public static func isLoopbackHost(_ host: String) -> Bool {
+        let bare = host.split(separator: ":").first.map(String.init) ?? host
+        if bare.lowercased() == "localhost" { return true }
+        let octets = bare.split(separator: ".", omittingEmptySubsequences: false)
+        guard octets.count == 4, octets.allSatisfy({ UInt8($0) != nil }) else { return false }
+        return octets.first == "127"
     }
 
     public init(registry: String, repository: String, tag: String, digest: String? = nil) {

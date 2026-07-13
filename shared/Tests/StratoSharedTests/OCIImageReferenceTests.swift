@@ -81,7 +81,20 @@ struct OCIImageReferenceTests {
     func apiSchemes() {
         #expect(OCIImageReference.parse("localhost:5000/app")?.apiBaseURL == "http://localhost:5000")
         #expect(OCIImageReference.parse("127.0.0.1:5000/app")?.apiBaseURL == "http://127.0.0.1:5000")
+        #expect(OCIImageReference.parse("127.0.0.2:5000/app")?.apiBaseURL == "http://127.0.0.2:5000")
         #expect(OCIImageReference.parse("ghcr.io/acme/worker")?.apiBaseURL == "https://ghcr.io")
+    }
+
+    @Test("Loopback-lookalike hostnames never get the plain-HTTP allowance")
+    func loopbackLookalikes() {
+        #expect(OCIImageReference.parse("127.evil.com/app")?.apiBaseURL == "https://127.evil.com")
+        let dottedLookalike = OCIImageReference.parse("127.0.0.1.example/app")
+        #expect(dottedLookalike?.apiBaseURL == "https://127.0.0.1.example")
+        #expect(!OCIImageReference.isLoopbackHost("127.evil.com"))
+        #expect(!OCIImageReference.isLoopbackHost("127.0.0.1.example:5000"))
+        #expect(!OCIImageReference.isLoopbackHost("128.0.0.1"))
+        #expect(OCIImageReference.isLoopbackHost("127.1.2.3:8443"))
+        #expect(OCIImageReference.isLoopbackHost("LOCALHOST"))
     }
 
     @Test("Digest validation accepts only sha256 with 64 lowercase hex chars")

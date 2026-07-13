@@ -392,6 +392,33 @@ final class RegistryPullSecretTests {
         }
     }
 
+    @Test("Plaintext token realms never receive the stored credential")
+    func plaintextRealmRefused() async throws {
+        try await withRegistryClient { client, fake in
+            fake.stub(
+                urlContaining: "registry.example.com/v2/",
+                status: .unauthorized,
+                headers: [
+                    "WWW-Authenticate":
+                        #"Bearer realm="http://auth.example.com/token",service="registry.example.com""#
+                ],
+                body: "")
+            fake.stub(urlContaining: "auth.example.com/token", status: .ok, body: #"{"token":"t"}"#)
+
+            let ref = try #require(OCIImageReference.parse("registry.example.com/team/app"))
+            let credential = RegistryBasicCredential(username: "u", password: "p")
+            await #expect(throws: (any Error).self) {
+                _ = try await client.mintPullToken(for: ref, credential: credential)
+            }
+            // The plaintext endpoint was never contacted while holding the secret.
+            #expect(fake.requests(urlContaining: "auth.example.com").isEmpty)
+
+            // Anonymous minting over the same realm is fine — nothing at risk.
+            let anonymous = try await client.mintPullToken(for: ref, credential: nil)
+            #expect(anonymous?.token == "t")
+        }
+    }
+
     @Test("Digest-pinned references resolve without any registry traffic")
     func pinnedReferenceSkipsNetwork() async throws {
         try await withRegistryClient { client, fake in

@@ -166,6 +166,24 @@ final class DistributionRegistryClient: RegistryClientProtocol {
         }
 
         var tokenURI = URI(string: realm)
+
+        // The stored secret travels to the realm as Basic auth, so the realm
+        // must be trustworthy: HTTPS anywhere, or plain HTTP only on a real
+        // loopback host (dev registries). A plaintext non-loopback realm —
+        // misconfigured or malicious challenge — must never see credentials.
+        if credential != nil {
+            let scheme = tokenURI.scheme?.lowercased()
+            let realmIsSecure =
+                scheme == "https"
+                || (scheme == "http" && OCIImageReference.isLoopbackHost(tokenURI.host ?? ""))
+            guard realmIsSecure else {
+                throw Abort(
+                    .badGateway,
+                    reason:
+                        "Registry \(ref.registry) advertises a plaintext token realm (\(realm)); refusing to send credentials"
+                )
+            }
+        }
         var query: [String] = ["scope=repository:\(urlQueryEncode(ref.repository)):pull"]
         if let service {
             query.append("service=\(urlQueryEncode(service))")
