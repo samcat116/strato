@@ -20,10 +20,19 @@ final class WebSocketManager: @unchecked Sendable {
     private let lock = NIOLock()
     private var connections: [String: Connection] = [:]  // Agent name -> connection
 
-    /// Must be called from the WebSocket's event loop
-    func setConnection(agentName: String, websocket: WebSocket) {
+    /// Store the connection for an agent, returning the socket it replaced (a
+    /// different instance under the same name) or nil. A non-nil result means
+    /// the agent reconnected while its previous socket's close was still
+    /// pending: that delayed close will take the `removeConnection(ifCurrent:)`
+    /// no-match path and skip its cleanup, so the caller must tear down state
+    /// tied to the superseded connection (e.g. console sessions) here instead.
+    /// Must be called from the WebSocket's event loop.
+    @discardableResult
+    func setConnection(agentName: String, websocket: WebSocket) -> WebSocket? {
         lock.withLock {
+            let previous = connections[agentName]?.websocket
             connections[agentName] = Connection(websocket: websocket, agentId: nil)
+            return previous === websocket ? nil : previous
         }
     }
 
