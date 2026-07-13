@@ -353,6 +353,33 @@ final class SandboxTests {
         }
     }
 
+    @Test("Environment removal is rejected (409) while sandboxes use it")
+    func environmentRemovalBlockedBySandboxes() async throws {
+        try await withSandboxTestApp { app, _, project, sandbox, token in
+            // Move the sandbox off the default environment so the requests
+            // below reach the sandbox guard (the default is unremovable, and
+            // no VMs exist to trip the VM guard first).
+            sandbox.environment = "staging"
+            try await sandbox.save(on: app.db)
+
+            try await app.test(.DELETE, "/api/projects/\(project.id!)/environments/staging") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            struct UpdateProjectRequest: Content {
+                let environments: [String]
+            }
+            try await app.test(.PUT, "/api/projects/\(project.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateProjectRequest(environments: ["development", "production"]))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
     // MARK: - Authorization
 
     @Test("GET /api/sandboxes/:id is denied (403) when SpiceDB withholds read")

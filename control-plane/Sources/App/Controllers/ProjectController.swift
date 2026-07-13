@@ -188,6 +188,19 @@ struct ProjectController: RouteCollection {
                             "Cannot remove environments that are in use by VMs: \(removedEnvironments.joined(separator: ", "))"
                     )
                 }
+
+                let sandboxesUsingRemovedEnvs = try await Sandbox.query(on: req.db)
+                    .filter(\.$project.$id == projectID)
+                    .filter(\.$environment ~~ Array(removedEnvironments))
+                    .count()
+
+                if sandboxesUsingRemovedEnvs > 0 {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "Cannot remove environments that are in use by sandboxes: \(removedEnvironments.joined(separator: ", "))"
+                    )
+                }
             }
 
             project.environments = environments
@@ -489,6 +502,15 @@ struct ProjectController: RouteCollection {
 
         if vmsUsingEnv > 0 {
             throw Abort(.conflict, reason: "Cannot remove environment that is in use by VMs")
+        }
+
+        let sandboxesUsingEnv = try await Sandbox.query(on: req.db)
+            .filter(\.$project.$id == projectID)
+            .filter(\.$environment == environment)
+            .count()
+
+        if sandboxesUsingEnv > 0 {
+            throw Abort(.conflict, reason: "Cannot remove environment that is in use by sandboxes")
         }
 
         // Remove environment
