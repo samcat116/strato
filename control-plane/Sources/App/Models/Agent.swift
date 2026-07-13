@@ -68,6 +68,14 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "network_capability")
     var networkCapability: String?
 
+    /// Descriptive hardware/platform/OS details (CPU model, kernel version,
+    /// distribution, physical core count, boot time, ...) the agent reports at
+    /// registration, for operator display. Purely informational — nothing in
+    /// scheduling or reconciliation reads it. Nil for agents that registered
+    /// before host-info reporting.
+    @OptionalField(key: "host_info")
+    var hostInfo: HostInfo?
+
     /// The site (availability zone) this agent belongs to. Nil means the
     /// legacy single-node model: the agent owns a private local OVN NB and is
     /// always its topology authority. Assigned via the registration token.
@@ -216,6 +224,7 @@ extension Agent {
             lastHeartbeat: Date()
         )
         agent.operatingSystem = registration.operatingSystem?.rawValue
+        agent.hostInfo = registration.hostInfo
         return agent
     }
 
@@ -301,6 +310,9 @@ struct AgentResponse: Content {
     let hypervisors: [HypervisorSupport]
     let networkCapability: NetworkCapability?
     let sandboxCapable: Bool
+    /// Descriptive hardware/platform/OS details for operator display; nil for
+    /// agents that registered before host-info reporting.
+    let hostInfo: HostInfo?
     let siteId: UUID?
     let organizationId: UUID?
     let organizationalUnitId: UUID?
@@ -339,6 +351,7 @@ struct AgentResponse: Content {
         self.hypervisors = agent.hypervisors
         self.networkCapability = agent.networkCapability.flatMap(NetworkCapability.init(rawValue:))
         self.sandboxCapable = agent.sandboxCapable
+        self.hostInfo = agent.hostInfo
         self.siteId = agent.$site.id
         self.organizationId = agent.$organization.id
         self.organizationalUnitId = agent.$organizationalUnit.id

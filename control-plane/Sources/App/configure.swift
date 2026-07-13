@@ -406,6 +406,9 @@ public func configure(_ app: Application) async throws {
     // fleet rollout's bookkeeping columns.
     app.migrations.add(AddAgentAutoUpdate())
 
+    // Descriptive host hardware/platform/OS details for operator display.
+    app.migrations.add(AddHostInfoToAgent())
+
     try await app.autoMigrate()
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth

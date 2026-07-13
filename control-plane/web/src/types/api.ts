@@ -255,6 +255,30 @@ export interface HypervisorSupport {
   capabilities: HypervisorCapabilities;
 }
 
+// Descriptive hardware/platform/OS details the agent reports at registration,
+// for operator display. Purely informational; every field is best-effort, so
+// any of them may be absent.
+export interface HostInfo {
+  // OS product/distribution name including version, e.g. "Ubuntu 24.04.1 LTS".
+  osName?: string;
+  // Kernel release (`uname -r`), e.g. "6.8.0-45-generic".
+  kernelVersion?: string;
+  // CPU brand/model string, e.g. "Apple M2 Pro".
+  cpuModel?: string;
+  // CPU vendor, e.g. "GenuineIntel", "AuthenticAMD", "Apple".
+  cpuVendor?: string;
+  // Physical CPU cores (distinct from logical/hyperthreaded cores).
+  physicalCoreCount?: number;
+  // Logical CPU cores (hardware threads).
+  logicalCoreCount?: number;
+  // Total physical memory in bytes.
+  totalMemoryBytes?: number;
+  // Machine/hardware model, e.g. "MacBookPro18,3" or "PowerEdge R650".
+  machineModel?: string;
+  // ISO timestamp of the host's last boot.
+  bootTime?: string;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -269,6 +293,9 @@ export interface Agent {
   operatingSystem?: string;
   hypervisors: HypervisorSupport[];
   networkCapability?: NetworkCapability;
+  // Descriptive hardware/platform/OS details for display; absent for agents
+  // that haven't re-registered with a build that reports it.
+  hostInfo?: HostInfo;
   siteId?: string;
   organizationId?: string;
   organizationalUnitId?: string;

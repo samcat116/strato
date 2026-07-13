@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { AgentUpdateAction } from "@/components/agents/agent-update-action";
 import { AgentAutoUpdateCard } from "@/components/agents/agent-auto-update";
+import { AgentHostInfoCard } from "@/components/agents/agent-host-info-card";
 import { useAgent } from "@/lib/hooks";
 
 export default function AgentDetailPage() {
@@ -221,6 +222,9 @@ export default function AgentDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Host hardware / platform / OS details */}
+      <AgentHostInfoCard agent={agent} />
 
       {/* Auto-update (issue #434) */}
       <AgentAutoUpdateCard agent={agent} />
