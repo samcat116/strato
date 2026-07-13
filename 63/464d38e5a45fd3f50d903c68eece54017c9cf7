@@ -1,0 +1,19 @@
+control-plane/web/src/components/ssf-streams/ssf-streams-section.tsx
+  s_5e07396a61914c::t_dfe4777e782785 345
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "63464d38e5a45fd3f50d903c68eece54017c9cf7",
+  "prompts": {},
+  "sessions": {
+    "s_5e07396a61914c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1697d47d-d1b7-4d21-b559-3e981d0d73dc",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
