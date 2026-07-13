@@ -676,6 +676,27 @@ final class OIDCAuthFlowTests {
         }
     }
 
+    @Test("An ID token with an empty aud array is rejected, not crashed on")
+    func testEmptyAudienceRejected() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            // `aud: []` must fail the login cleanly. It must NOT trap the
+            // process during claim decode (JWTKit's AudienceClaim would).
+            let idToken = try await signIDTokenArrayAud(aud: [], nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                self.expectLoginFailedRedirect(res)
+            }
+            let count = try await userCount(on: app.db)
+            #expect(count == 0)
+        }
+    }
+
     @Test("An ID token with the wrong nonce is rejected")
     func testNonceMismatchRejected() async throws {
         try await withFlowApp { app, org, provider, idp in

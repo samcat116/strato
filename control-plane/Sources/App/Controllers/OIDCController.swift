@@ -1020,8 +1020,8 @@ struct OIDCController: RouteCollection {
         // Validate audience (aud) - our client ID must be among the audiences.
         // `aud` may be a single string or an array of strings (RFC 7519 §4.1.3;
         // Discord uses the array form), so match on membership, not equality.
-        guard claims.aud.value.contains(provider.clientID) else {
-            let audiences = claims.aud.value.joined(separator: ", ")
+        guard claims.aud.values.contains(provider.clientID) else {
+            let audiences = claims.aud.values.joined(separator: ", ")
             throw Abort(
                 .badRequest,
                 reason: "ID token audience '\(audiences)' does not match client ID '\(provider.clientID)'"
