@@ -396,13 +396,21 @@ struct AgentUpdaterTests {
             installMode: .supervisedBinary,
             binaryPath: "/irrelevant/strato-agent"
         )
-        await #expect(throws: AgentUpdateError.invalidArtifactURL("not a url")) {
+        do {
             _ = try await updater.applyUpdate(
                 artifactURL: "not a url",
                 sha256: String(repeating: "00", count: 32),
                 artifactKind: .binary,
                 tarballMember: nil
             )
+            Issue.record("expected invalidArtifactURL")
+        } catch let error as AgentUpdateError {
+            // The echoed URL is redacted (and percent-encoded by Foundation),
+            // so match the case, not the exact payload.
+            guard case .invalidArtifactURL = error else {
+                Issue.record("expected invalidArtifactURL, got \(error)")
+                return
+            }
         }
     }
 }

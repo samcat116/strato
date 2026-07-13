@@ -130,7 +130,10 @@ struct AgentMessageTests {
         // Plain URLs pass through unchanged.
         let plain = "https://github.com/samcat116/strato/releases/download/v1.2.3/strato-linux-x86_64.tar.gz"
         #expect(AgentUpdateMessage.redactURL(plain) == plain)
-        #expect(AgentUpdateMessage.redactURL("://not a url") == "<unparseable-url>")
+        // Modern Foundation percent-encodes rather than failing to parse, so
+        // garbage comes back encoded — the guarantee is only that credentials
+        // (query/userinfo) never survive, not that garbage is flagged.
+        #expect(!AgentUpdateMessage.redactURL("://tok en@x?secret=1").contains("secret"))
     }
 
     @Test func agentHeartbeatRoundTrip() throws {
