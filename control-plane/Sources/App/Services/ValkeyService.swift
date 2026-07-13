@@ -1,6 +1,7 @@
 import Foundation
+import NIOConcurrencyHelpers
+import Valkey
 import Vapor
-import Redis
 
 /// Configuration for Valkey/Redis connection
 struct ValkeyConfiguration: Sendable {
@@ -44,6 +45,25 @@ enum ValkeyServiceStatus: String, Sendable, Codable {
     case unavailable
 }
 
+/// Holds the long-lived tasks that drive the Valkey client: the client's
+/// `run()` loop (which owns the connection pool) and every pub/sub
+/// subscription loop. All are cancelled together at shutdown so no loop
+/// retries against a torn-down client.
+final class ValkeyBackgroundTasks: Sendable {
+    private let tasks = NIOLockedValueBox<[Task<Void, Never>]>([])
+
+    func spawn(_ operation: @escaping @Sendable () async -> Void) {
+        tasks.withLockedValue { $0.append(Task { await operation() }) }
+    }
+
+    func cancelAll() {
+        tasks.withLockedValue { list in
+            for task in list { task.cancel() }
+            list.removeAll()
+        }
+    }
+}
+
 // MARK: - Application Extension
 
 extension Application {
@@ -59,30 +79,44 @@ extension Application {
         set { storage[ValkeyConfigKey.self] = newValue }
     }
 
-    /// Configure Valkey connection
+    /// The shared Valkey client. Only available after `configureValkey` ran
+    /// (i.e. never in the `.testing` environment, which uses in-memory stores).
+    var valkey: ValkeyClient {
+        guard let client = storage[ValkeyClientKey.self] else {
+            fatalError("Valkey not configured. Call configureValkey() in configure() first.")
+        }
+        return client
+    }
+
+    /// Tracker for the Valkey run loop and subscription loops.
+    var valkeyTasks: ValkeyBackgroundTasks {
+        guard let tasks = storage[ValkeyTasksKey.self] else {
+            fatalError("Valkey not configured. Call configureValkey() in configure() first.")
+        }
+        return tasks
+    }
+
+    /// Configure the Valkey client and start its connection-pool run loop at
+    /// boot (commands issued before the loop starts simply wait on the pool).
     /// - Parameter config: Valkey configuration
-    /// - Throws: If configuration fails
-    func configureValkey(_ config: ValkeyConfiguration) throws {
-        // Build Redis configuration
-        var redisConfig = try RedisConfiguration(
-            hostname: config.hostname,
-            port: config.port,
-            password: config.password,
-            database: config.database,
-            pool: .init(
-                maximumConnectionCount: .maximumActiveConnections(8),
-                minimumConnectionCount: 1,
-                connectionBackoffFactor: 2,
-                initialConnectionBackoffDelay: .milliseconds(100)
-            )
+    func configureValkey(_ config: ValkeyConfiguration) {
+        let clientConfig = ValkeyClientConfiguration(
+            authentication: config.password.map {
+                .init(username: "default", password: $0)
+            },
+            databaseNumber: config.database
+        )
+        let client = ValkeyClient(
+            .hostname(config.hostname, port: config.port),
+            configuration: clientConfig,
+            logger: logger
         )
 
-        // Apply configuration to Vapor's Redis
-        redis.configuration = redisConfig
-
-        // Store our config
+        storage[ValkeyClientKey.self] = client
+        storage[ValkeyTasksKey.self] = ValkeyBackgroundTasks()
         valkeyConfiguration = config
         valkeyEnabled = true
+        lifecycle.use(ValkeyLifecycleHandler())
 
         logger.info(
             "Valkey configured",
@@ -101,8 +135,8 @@ extension Application {
         }
 
         do {
-            let pong = try await redis.ping().get()
-            return pong == "PONG" ? .connected : .disconnected
+            _ = try await valkey.ping()
+            return .connected
         } catch {
             logger.warning("Valkey health check failed: \(error)")
             return .disconnected
@@ -117,6 +151,31 @@ extension Application {
 
     private struct ValkeyConfigKey: StorageKey {
         typealias Value = ValkeyConfiguration
+    }
+
+    private struct ValkeyClientKey: StorageKey {
+        typealias Value = ValkeyClient
+    }
+
+    private struct ValkeyTasksKey: StorageKey {
+        typealias Value = ValkeyBackgroundTasks
+    }
+}
+
+/// Starts the Valkey client's `run()` loop at boot (it drives the connection
+/// pool and never returns until cancelled) and cancels it — together with all
+/// subscription loops — at shutdown. Registered by `configureValkey`, so it
+/// runs before `CoordinationLifecycleHandler`'s boot-time ping.
+struct ValkeyLifecycleHandler: LifecycleHandler {
+    func didBootAsync(_ application: Application) async throws {
+        let client = application.valkey
+        application.valkeyTasks.spawn {
+            await client.run()
+        }
+    }
+
+    func shutdownAsync(_ application: Application) async {
+        application.valkeyTasks.cancelAll()
     }
 }
 

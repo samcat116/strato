@@ -1,7 +1,7 @@
 import Fluent
 import SQLKit
 import Vapor
-@preconcurrency import JWT
+import JWT
 import Crypto
 import Foundation
 
@@ -927,7 +927,7 @@ struct OIDCController: RouteCollection {
         // Decode the JWT header and pin the algorithm to the asymmetric
         // allow-list before any signature work.
         let headerData = try OIDCValidation.decodeBase64URLSafe(String(tokenParts[0]))
-        let header = try JSONDecoder().decode(JWTHeader.self, from: headerData)
+        let header = try JSONDecoder().decode(IDTokenHeader.self, from: headerData)
         try OIDCTokenVerification.requireAllowedAlgorithm(header)
 
         // Get JWKS from provider
@@ -941,8 +941,8 @@ struct OIDCController: RouteCollection {
         // header `alg` against the key's type (RSA/EC/OKP), so a token can't
         // steer verification onto a mismatched algorithm. Unknown `kid`s are
         // rejected rather than falling back to the first key.
-        let verifiers = try OIDCTokenVerification.makeVerifiers(jwksJSON: jwksJSON, logger: req.logger)
-        let claims = try verifiers.verify(idToken, header: header)
+        let verifiers = try await OIDCTokenVerification.makeVerifiers(jwksJSON: jwksJSON, logger: req.logger)
+        let claims = try await verifiers.verify(idToken, header: header)
 
         // Additional claim validation
         try validateIDTokenClaims(claims, provider: provider, expectedNonce: expectedNonce)

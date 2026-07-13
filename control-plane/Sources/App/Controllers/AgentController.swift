@@ -507,7 +507,9 @@ struct AgentController: RouteCollection {
             agent.updateStatusBasedOnHeartbeat()
         }
 
-        try await visible.map { $0.save(on: req.db) }.flatten(on: req.eventLoop).get()
+        for agent in visible {
+            try await agent.save(on: req.db)
+        }
 
         return try visible.map { try AgentResponse(from: $0) }
     }

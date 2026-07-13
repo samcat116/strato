@@ -300,10 +300,10 @@ public actor SPIREService {
         }
 
         var verifier = Verifier(rootCertificates: CertificateStore(roots)) {
-            RFC5280Policy(validationTime: Date())
+            RFC5280Policy()
         }
         let result = await verifier.validate(
-            leafCertificate: leaf, intermediates: CertificateStore(intermediates))
+            leaf: leaf, intermediates: CertificateStore(intermediates))
 
         guard case .validCertificate = result else {
             throw SPIREServiceError.certificateValidationFailed(

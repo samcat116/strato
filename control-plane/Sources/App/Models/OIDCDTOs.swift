@@ -1,8 +1,8 @@
-import Fluent
-import Vapor
-@preconcurrency import JWT
 import Crypto
+import Fluent
 import Foundation
+import JWT
+import Vapor
 
 // OIDC data-transfer objects and JWT/JWKS crypto types, relocated out of
 // OIDCController to keep the controller focused on request handling.
@@ -53,7 +53,7 @@ struct OIDCTokenResponse: Content {
     }
 }
 
-struct OIDCIDTokenClaims: Content, JWTPayload, @unchecked Sendable {
+struct OIDCIDTokenClaims: Content, JWTPayload {
     let iss: String  // Issuer
     let sub: String  // Subject
     let aud: String  // Audience
@@ -65,9 +65,8 @@ struct OIDCIDTokenClaims: Content, JWTPayload, @unchecked Sendable {
     let name: String?
     let preferredUsername: String?
 
-    func verify(using signer: JWTSigner) throws {
+    func verify(using algorithm: some JWTAlgorithm) async throws {
         try self.exp.verifyNotExpired()
-        // iat verification happens automatically
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -113,15 +112,16 @@ struct OIDCUserInfo {
     var groupValues: [String] = []
 }
 
-// MARK: - JWT Header
+// MARK: - ID Token Header
 
 /// The decoded JOSE header of an ID token, parsed to pin the signature
 /// algorithm (see `OIDCTokenVerification.requireAllowedAlgorithm`) before
 /// JWTKit verifies the signature. All fields optional: `typ` is commonly
 /// omitted by IdPs, and a missing `alg` is rejected by the allow-list check
 /// rather than as a decode failure. Key material itself is handled by JWTKit's
-/// JWK/JWKS types.
-struct JWTHeader: Codable {
+/// JWK/JWKS types. (Named `IDTokenHeader` rather than `JWTHeader` because
+/// JWTKit 5 exports a `JWTHeader` type of its own.)
+struct IDTokenHeader: Codable {
     let alg: String?
     let typ: String?
     let kid: String?

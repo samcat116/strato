@@ -12,28 +12,28 @@ let package = Package(
         // StratoShared for common models and protocols
         .package(path: "../shared"),
         // 💧 A server-side Swift web framework.
-    .package(url: "https://github.com/vapor/vapor.git", from: "4.113.0"),
+    .package(url: "https://github.com/vapor/vapor.git", from: "4.122.0"),
         // 🗄 An ORM for SQL and NoSQL databases.
-        .package(url: "https://github.com/vapor/fluent.git", from: "4.9.0"),
+        .package(url: "https://github.com/vapor/fluent.git", from: "4.13.0"),
         // 🐘 Fluent driver for Postgres.
-        .package(url: "https://github.com/vapor/fluent-postgres-driver.git", from: "2.8.0"),
+        .package(url: "https://github.com/vapor/fluent-postgres-driver.git", from: "2.12.0"),
         // 🪶 Fluent driver for SQLite (for testing).
-        .package(url: "https://github.com/vapor/fluent-sqlite-driver.git", from: "4.6.0"),
+        .package(url: "https://github.com/vapor/fluent-sqlite-driver.git", from: "4.9.0"),
         // 🔵 Non-blocking, event-driven networking for Swift. Used for custom executors
-    .package(url: "https://github.com/apple/swift-nio.git", from: "2.71.0"),
+    .package(url: "https://github.com/apple/swift-nio.git", from: "2.101.0"),
         // 🔐 WebAuthn/Passkey authentication
         .package(url: "https://github.com/swift-server/webauthn-swift.git", branch: "main"),
         .package(url: "https://github.com/samcat116/swift-scim.git", branch: "main"),
         // 🔐 JWT token handling and HTTP client functionality
-        .package(url: "https://github.com/vapor/jwt.git", from: "4.0.0"),
+        .package(url: "https://github.com/vapor/jwt.git", from: "5.1.0"),
         // 📡 Shared Signals Framework receiver (SSF/CAEP/RISC security events,
         // issue #38). No tagged releases yet, so pin by revision.
         .package(
             url: "https://github.com/samcat116/swift-ssf.git",
             revision: "42159e7aaa133a0c7269ca808687a22d8cbca354"),
-        .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.9.0"),
+        .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
         // 🔐 Swift Crypto for cryptographic operations
-        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
         // X.509 parsing and chain verification (SPIFFE SVID validation)
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.5.0"),
         // OpenAPI generator and Vapor bindings (spec-first)
@@ -44,8 +44,8 @@ let package = Package(
         .package(url: "https://github.com/swift-otel/swift-otel.git", from: "1.0.0"),
         // 📈 swift-metrics facade (backed by swift-otel when OTEL_METRICS_ENABLED)
         .package(url: "https://github.com/apple/swift-metrics.git", from: "2.0.0"),
-        // 🔴 Valkey/Redis support for caching and sessions
-        .package(url: "https://github.com/vapor/redis.git", from: "4.0.0"),
+        // 🔴 Valkey client (coordination, rate limiting, sessions)
+        .package(url: "https://github.com/valkey-io/valkey-swift.git", from: "1.4.0"),
         // SPIRE Server registration API (gRPC over Unix socket / loopback TCP)
         .package(url: "https://github.com/grpc/grpc-swift-2.git", from: "2.0.0"),
         .package(url: "https://github.com/grpc/grpc-swift-nio-transport.git", from: "2.0.0"),
@@ -93,7 +93,7 @@ let package = Package(
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
                 .product(name: "OTel", package: "swift-otel"),
                 .product(name: "Metrics", package: "swift-metrics"),
-                .product(name: "Redis", package: "redis")
+                .product(name: "Valkey", package: "valkey-swift")
             ],
             swiftSettings: swiftSettings,
             plugins: [

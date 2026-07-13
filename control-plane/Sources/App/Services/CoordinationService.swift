@@ -1,8 +1,6 @@
 import Foundation
+import Valkey
 import Vapor
-// RediStack's RESPValue predates Sendable; the futures we await here resolve
-// on the calling task and never escape, so its diagnostics are noise.
-@preconcurrency import Redis
 
 /// Errors thrown at startup when the coordination layer cannot be configured.
 /// Valkey is required for control-plane coordination (issue #258): without a
@@ -177,38 +175,19 @@ struct ValkeyCoordinationStore: CoordinationStore {
         """
 
     func setKey(_ key: String, ttlSeconds: Int) async throws {
-        _ = try await app.redis.send(
-            command: "SET",
-            with: [
-                key.convertedToRESPValue(),
-                "1".convertedToRESPValue(),
-                "EX".convertedToRESPValue(),
-                max(1, ttlSeconds).convertedToRESPValue(),
-            ]
-        ).get()
+        _ = try await app.valkey.set(
+            ValkeyKey(key), value: "1", expiration: .seconds(max(1, ttlSeconds)))
     }
 
     func keyExists(_ key: String) async throws -> Bool {
-        let response = try await app.redis.send(
-            command: "EXISTS",
-            with: [key.convertedToRESPValue()]
-        ).get()
-        return response.int == 1
+        try await app.valkey.exists(keys: [ValkeyKey(key)]) == 1
     }
 
     func acquireLock(_ key: String, ttlSeconds: Int) async throws -> Bool {
-        let response = try await app.redis.send(
-            command: "SET",
-            with: [
-                key.convertedToRESPValue(),
-                "1".convertedToRESPValue(),
-                "NX".convertedToRESPValue(),
-                "EX".convertedToRESPValue(),
-                max(1, ttlSeconds).convertedToRESPValue(),
-            ]
-        ).get()
         // SET ... NX replies +OK when the key was set and Null when it existed.
-        return !response.isNull
+        let response = try await app.valkey.set(
+            ValkeyKey(key), value: "1", condition: .nx, expiration: .seconds(max(1, ttlSeconds)))
+        return response != nil
     }
 
     func tryReserve(
@@ -218,90 +197,55 @@ struct ValkeyCoordinationStore: CoordinationStore {
         capacity: ReservationAmounts,
         ttlSeconds: Int
     ) async throws -> Bool {
-        let response = try await app.redis.send(
-            command: "EVAL",
-            with: [
-                Self.reserveScript.convertedToRESPValue(),
-                1.convertedToRESPValue(),
-                Self.indexKey(agentKey).convertedToRESPValue(),
-                Self.vmKeyPrefix(agentKey).convertedToRESPValue(),
-                vmId.convertedToRESPValue(),
-                String(amounts.cpu).convertedToRESPValue(),
-                String(amounts.memory).convertedToRESPValue(),
-                String(amounts.disk).convertedToRESPValue(),
-                String(capacity.cpu).convertedToRESPValue(),
-                String(capacity.memory).convertedToRESPValue(),
-                String(capacity.disk).convertedToRESPValue(),
-                String(max(1, ttlSeconds)).convertedToRESPValue(),
+        let response = try await app.valkey.eval(
+            script: Self.reserveScript,
+            keys: [ValkeyKey(Self.indexKey(agentKey))],
+            args: [
+                Self.vmKeyPrefix(agentKey),
+                vmId,
+                String(amounts.cpu),
+                String(amounts.memory),
+                String(amounts.disk),
+                String(capacity.cpu),
+                String(capacity.memory),
+                String(capacity.disk),
+                String(max(1, ttlSeconds)),
             ]
-        ).get()
-        return response.int == 1
+        )
+        return try response.decode(as: Int.self) == 1
     }
 
     func releaseReservation(agentKey: String, vmId: String) async throws {
-        _ = try await app.redis.send(
-            command: "DEL",
-            with: [(Self.vmKeyPrefix(agentKey) + vmId).convertedToRESPValue()]
-        ).get()
-        _ = try await app.redis.send(
-            command: "SREM",
-            with: [
-                Self.indexKey(agentKey).convertedToRESPValue(),
-                vmId.convertedToRESPValue(),
-            ]
-        ).get()
+        _ = try await app.valkey.del(keys: [ValkeyKey(Self.vmKeyPrefix(agentKey) + vmId)])
+        _ = try await app.valkey.srem(ValkeyKey(Self.indexKey(agentKey)), members: [vmId])
     }
 
     func reservedVMIds(agentKey: String) async throws -> [String] {
-        let response = try await app.redis.send(
-            command: "SMEMBERS",
-            with: [Self.indexKey(agentKey).convertedToRESPValue()]
-        ).get()
-        guard let values = response.array else { return [] }
-        return values.compactMap { $0.string }
+        let response = try await app.valkey.smembers(ValkeyKey(Self.indexKey(agentKey)))
+        return response.compactMap { try? $0.decode(as: String.self) }
     }
 
     func reservedTotal(agentKey: String) async throws -> ReservationAmounts {
-        let response = try await app.redis.send(
-            command: "EVAL",
-            with: [
-                Self.reservedTotalScript.convertedToRESPValue(),
-                1.convertedToRESPValue(),
-                Self.indexKey(agentKey).convertedToRESPValue(),
-                Self.vmKeyPrefix(agentKey).convertedToRESPValue(),
-            ]
-        ).get()
+        let response = try await app.valkey.eval(
+            script: Self.reservedTotalScript,
+            keys: [ValkeyKey(Self.indexKey(agentKey))],
+            args: [Self.vmKeyPrefix(agentKey)]
+        )
 
-        guard let values = response.array,
-            values.count == 3,
-            let cpu = values[0].int,
-            let memory = values[1].int,
-            let disk = values[2].int
-        else {
+        guard let values = try? response.decode(as: [Int].self), values.count == 3 else {
             throw CoordinationStoreError.unexpectedResponse
         }
 
-        return ReservationAmounts(cpu: cpu, memory: Int64(memory), disk: Int64(disk))
+        return ReservationAmounts(cpu: values[0], memory: Int64(values[1]), disk: Int64(values[2]))
     }
 
     func setValue(_ key: String, value: String, ttlSeconds: Int) async throws {
-        _ = try await app.redis.send(
-            command: "SET",
-            with: [
-                key.convertedToRESPValue(),
-                value.convertedToRESPValue(),
-                "EX".convertedToRESPValue(),
-                max(1, ttlSeconds).convertedToRESPValue(),
-            ]
-        ).get()
+        _ = try await app.valkey.set(
+            ValkeyKey(key), value: value, expiration: .seconds(max(1, ttlSeconds)))
     }
 
     func getValue(_ key: String) async throws -> String? {
-        let response = try await app.redis.send(
-            command: "GET",
-            with: [key.convertedToRESPValue()]
-        ).get()
-        return response.isNull ? nil : response.string
+        try await app.valkey.get(ValkeyKey(key)).map(String.init)
     }
 
     /// GET-compare-DEL as a Lua script so the check and the delete are atomic:
@@ -315,37 +259,44 @@ struct ValkeyCoordinationStore: CoordinationStore {
         """
 
     func deleteValue(_ key: String, ifEquals value: String) async throws {
-        _ = try await app.redis.send(
-            command: "EVAL",
-            with: [
-                Self.deleteIfEqualsScript.convertedToRESPValue(),
-                1.convertedToRESPValue(),
-                key.convertedToRESPValue(),
-                value.convertedToRESPValue(),
-            ]
-        ).get()
+        _ = try await app.valkey.eval(
+            script: Self.deleteIfEqualsScript,
+            keys: [ValkeyKey(key)],
+            args: [value]
+        )
     }
 
     func publish(channel: String, message: String) async throws {
-        _ = try await app.redis.send(
-            command: "PUBLISH",
-            with: [
-                channel.convertedToRESPValue(),
-                message.convertedToRESPValue(),
-            ]
-        ).get()
+        _ = try await app.valkey.publish(channel: channel, message: message)
     }
 
+    /// valkey-swift subscriptions are scoped (`subscribe(to:)` runs a closure
+    /// over an AsyncSequence and unsubscribes when it returns), so the
+    /// process-lifetime semantics this protocol promises are built here: a
+    /// tracked background task re-subscribes whenever the subscription ends —
+    /// with backoff on errors — until shutdown cancels it. Messages published
+    /// while re-subscribing are lost, which is fine: pub/sub here is a latency
+    /// optimization and the periodic sync is the correctness backstop.
     func subscribe(channel: String, handler: @escaping @Sendable (String) -> Void) async throws {
-        try await app.redis.subscribe(
-            to: [RedisChannelName(channel)],
-            messageReceiver: { _, message in
-                guard let text = message.string else { return }
-                handler(text)
-            },
-            onSubscribe: nil,
-            onUnsubscribe: nil
-        ).get()
+        let client = app.valkey
+        let logger = app.logger
+        app.valkeyTasks.spawn {
+            while !Task.isCancelled {
+                do {
+                    try await client.subscribe(to: [channel]) { subscription in
+                        for try await item in subscription {
+                            handler(String(item.message))
+                        }
+                    }
+                } catch {
+                    if Task.isCancelled { break }
+                    logger.warning(
+                        "Valkey subscription dropped; resubscribing",
+                        metadata: ["channel": .string(channel), "error": .string("\(error)")])
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
+        }
     }
 
     private static func indexKey(_ agentKey: String) -> String { agentKey + ":index" }
@@ -813,15 +764,16 @@ extension Application {
 /// Verifies at boot that Valkey — required for coordination — is actually
 /// reachable, so a misconfigured deployment fails fast with a clear error
 /// instead of limping along and failing on the first coordinated operation.
-/// Runs in `didBootAsync` because the Redis connection pools are created
-/// during boot, after `configure` returns.
+/// Runs in `didBootAsync` because the Valkey client's run loop is started
+/// during boot (by `ValkeyLifecycleHandler`, registered first), after
+/// `configure` returns.
 struct CoordinationLifecycleHandler: LifecycleHandler {
     let hostname: String
     let port: Int
 
     func didBootAsync(_ application: Application) async throws {
         do {
-            _ = try await application.redis.ping().get()
+            _ = try await application.valkey.ping()
             application.logger.info(
                 "Valkey coordination layer ready",
                 metadata: ["hostname": .string(hostname), "port": .stringConvertible(port)])
