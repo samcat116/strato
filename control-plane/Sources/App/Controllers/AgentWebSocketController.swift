@@ -646,6 +646,57 @@ struct AgentWebSocketController: RouteCollection {
                 // Clean up the session
                 req.consoleSessionManager.removeSession(sessionId: message.sessionId)
 
+            case .sandboxExecStarted:
+                let message = try envelope.decode(as: SandboxExecStartedMessage.self)
+                req.sandboxExecSessionManager.handleStarted(
+                    sessionId: message.sessionId, fromAgentNamed: agentName)
+
+            case .sandboxExecOutput:
+                let message = try envelope.decode(as: SandboxExecOutputMessage.self)
+                if let data = message.rawData {
+                    req.sandboxExecSessionManager.handleOutput(
+                        sessionId: message.sessionId, fromAgentNamed: agentName, data: data)
+                }
+
+            case .sandboxExecExit:
+                let message = try envelope.decode(as: SandboxExecExitMessage.self)
+                req.sandboxExecSessionManager.handleExit(
+                    sessionId: message.sessionId, fromAgentNamed: agentName, exitCode: message.exitCode)
+
+            case .sandboxExecClosed:
+                let message = try envelope.decode(as: SandboxExecClosedMessage.self)
+                req.sandboxExecSessionManager.handleClosed(
+                    sessionId: message.sessionId, fromAgentNamed: agentName, reason: message.reason)
+
+            case .sandboxLog:
+                // Sandbox workload stdout/stderr line from the agent — push to
+                // Loki. Skip entirely when Loki isn't deployed rather than
+                // dropping the message downstream.
+                guard req.application.lokiEnabled else {
+                    break
+                }
+                let message = try envelope.decode(as: SandboxLogMessage.self)
+                Task {
+                    // Only accept logs for a sandbox actually assigned to the
+                    // reporting agent — anti-spoofing parity with `.vmLog`.
+                    let owned = await req.agentService.sandboxIsOwnedByAgent(
+                        sandboxId: message.sandboxId, agentName: agentName)
+                    guard owned else {
+                        req.logger.warning(
+                            "Dropping sandbox log for a sandbox not owned by the reporting agent",
+                            metadata: [
+                                "sandboxId": .string(message.sandboxId),
+                                "agentName": .string(agentName),
+                            ])
+                        return
+                    }
+                    do {
+                        try await req.lokiService.pushSandboxLog(message)
+                    } catch {
+                        req.logger.error("Failed to push sandbox log to Loki: \(error)")
+                    }
+                }
+
             case .vmLog:
                 // Handle VM log messages from agent - push to Loki.
                 // Skip entirely when Loki isn't deployed rather than dropping the message downstream.
