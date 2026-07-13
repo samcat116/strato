@@ -12,10 +12,11 @@ entrypoint/cmd/env/workdir.
 > generalized operation machinery (#412), the control-plane model/API (#413),
 > registry pull secrets + tag→digest resolution (#414), scheduler gating
 > + quota accounting (#415), the NIC/address model + IPAM integration
-> (#416), and the guest base image — kernel + init/guest-agent (#419) — are
-> landed; the remaining agent runtime is tracked in issues #417–#422.
-> Sections below describe the agreed design; anything not yet landed is marked
-> with its issue.
+> (#416), the agent's OCI client + rootfs materialization (#418), and the
+> guest base image — kernel + init/guest-agent (#419) — are landed; the rest
+> of the agent runtime is tracked in issues #417 and #420–#422. Sections
+> below describe the agreed design; anything not yet landed is marked with
+> its issue.
 
 ## Decision: native Swift Firecracker path
 
@@ -216,9 +217,26 @@ same asymmetric hazard as the v3 networks list:
 
 The agent-side pipeline, all native Swift:
 
-1. **OCI client** (#418): pull the manifest + layers for the pinned digest,
-   flatten to an ext4 root filesystem, and cache it **by manifest digest** —
-   v1 caches flattened images only (no layer-level dedup/snapshotter).
+1. **OCI client + rootfs materialization** (#418, landed): `SandboxImageService`
+   in `agent/Sources/StratoAgentCore/OCI/` turns a `SandboxSpec` image
+   reference into a bootable ext4 rootfs. The distribution client mirrors the
+   control plane's auth flow (anonymous/Basic/Bearer challenges, plus
+   presenting control-plane-minted bearer tokens directly), narrows
+   multi-platform indexes to the host's `CPUArchitecture`, verifies every
+   manifest and blob against its digest, and retries transient failures the
+   way `ImageCacheService` does. Layers (tar, tar+gzip, tar+zstd) are
+   flattened with OCI whiteout handling and traversal-safe unpacking, then
+   `mkfs.ext4 -d` builds the image sized to content plus configurable
+   headroom, staged and published atomically. The cache is
+   **content-addressed by platform manifest digest** (with index→platform
+   alias files so digest-pinned sandboxes hit it offline), TTL-evicted — v1
+   caches flattened images only (no layer-level dedup/snapshotter). The image
+   config's execution parameters (entrypoint/cmd/env/workdir/user) are staged
+   as `config.json` beside `rootfs.ext4` — the rootfs stays a pristine
+   container filesystem; how the config travels into the guest is the
+   runtime's call (#421). Host prerequisites: gzip (and zstd for zstd layers)
+   and e2fsprogs; sync-delivered registry credentials are used per pull and
+   never persisted.
 2. **Guest base image** (#419, landed): a maintained kernel plus a minimal
    static init/guest-agent. The init applies the OCI config
    (entrypoint/cmd/env/workdir), runs the workload, reaps zombies, and reports

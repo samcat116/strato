@@ -78,6 +78,47 @@ public enum ProcessRunner {
         )
     }
 
+    /// Launches `executableURL` with stdin wired to `inputFile` and stdout to
+    /// `outputFile` (created/truncated), so arbitrarily large streams never
+    /// pass through this process's memory — used for filter-style tools like
+    /// gzip/zstd. stderr is drained into the result for error messages;
+    /// `standardOutput` in the result is always empty.
+    public static func runStreaming(
+        executableURL: URL,
+        arguments: [String],
+        inputFile: URL,
+        outputFile: URL
+    ) async throws -> ProcessResult {
+        let inputHandle = try FileHandle(forReadingFrom: inputFile)
+        defer { try? inputHandle.close() }
+        FileManager.default.createFile(atPath: outputFile.path, contents: nil)
+        let outputHandle = try FileHandle(forWritingTo: outputFile)
+        defer { try? outputHandle.close() }
+
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        process.standardInput = inputHandle
+        process.standardOutput = outputHandle
+
+        let stderrPipe = Pipe()
+        process.standardError = stderrPipe
+
+        try process.run()
+
+        let stderrFD = stderrPipe.fileHandleForReading.fileDescriptor
+        async let stderrData = drain(fd: stderrFD)
+
+        let err = await stderrData
+        await waitForExit(process)
+
+        return ProcessResult(
+            terminationStatus: process.terminationStatus,
+            standardOutput: Data(),
+            standardError: err
+        )
+    }
+
     /// Reads a file descriptor to EOF on a background queue.
     private static func drain(fd: Int32) async -> Data {
         await withCheckedContinuation { continuation in

@@ -74,6 +74,61 @@ struct SwiftFirecrackerTests {
         #expect(bootSource.bootArgs?.contains("panic=1") == true)
     }
 
+    @Test("VsockConfig encodes correctly")
+    func testVsockConfigEncoding() throws {
+        let vsock = VsockConfig(guestCid: 3, udsPath: "/run/fc/vm.vsock")
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(vsock)
+        let json = String(data: data, encoding: .utf8)!
+
+        #expect(json.contains("\"guest_cid\":3"))
+        #expect(json.contains("uds_path"))
+        #expect(json.contains("vm.vsock"))
+        // vsock_id is omitted when nil rather than encoded as null.
+        #expect(!json.contains("vsock_id"))
+    }
+
+    @Test("VsockConfig includes vsock_id when provided")
+    func testVsockConfigWithId() throws {
+        let vsock = VsockConfig(guestCid: 42, udsPath: "/run/fc/vm.vsock", vsockId: "vsock0")
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(vsock)
+        let json = String(data: data, encoding: .utf8)!
+
+        #expect(json.contains("\"vsock_id\":\"vsock0\""))
+        #expect(json.contains("\"guest_cid\":42"))
+    }
+
+    @Test("MMDSConfig encodes version, interfaces and address")
+    func testMMDSConfigEncoding() throws {
+        let config = MMDSConfig(
+            version: .v2,
+            networkInterfaces: ["eth0", "eth1"],
+            ipv4Address: "169.254.169.254"
+        )
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(config)
+        let json = String(data: data, encoding: .utf8)!
+
+        #expect(json.contains("\"version\":\"V2\""))
+        #expect(json.contains("network_interfaces"))
+        #expect(json.contains("eth0"))
+        #expect(json.contains("eth1"))
+        #expect(json.contains("\"ipv4_address\":\"169.254.169.254\""))
+    }
+
+    @Test("MMDSConfig omits optional fields when nil")
+    func testMMDSConfigMinimalEncoding() throws {
+        let config = MMDSConfig(networkInterfaces: ["eth0"])
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(config)
+        let json = String(data: data, encoding: .utf8)!
+
+        #expect(json.contains("network_interfaces"))
+        #expect(!json.contains("version"))
+        #expect(!json.contains("ipv4_address"))
+    }
+
     @Test("VMAction encodes correctly")
     func testVMActionEncoding() throws {
         let action = VMAction(actionType: .instanceStart)
