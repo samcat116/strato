@@ -110,6 +110,15 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// echoes its own version in `AgentRegisterResponseMessage` so each side can
     /// detect and log skew.
     public let protocolVersion: Int?
+    /// Whether this agent runs sandbox workloads (OCI-image Firecracker
+    /// microVMs, issue #410): it reconciles `DesiredStateMessage.sandboxes`
+    /// and reports them back in `ObservedStateReport.sandboxes`. Speaking
+    /// protocol v5 is deliberately NOT sufficient — a v5 build understands the
+    /// fields on the wire, but the sandbox runtime lands separately (issue
+    /// #421), so the scheduler keys placement on this explicit signal, not on
+    /// the version. Optional so registrations from older agents decode fine;
+    /// absent means not capable.
+    public let sandboxCapable: Bool?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -123,7 +132,8 @@ public struct AgentRegisterMessage: WebSocketMessage {
         architecture: CPUArchitecture? = nil,
         hypervisors: [HypervisorSupport]? = nil,
         networkCapability: NetworkCapability? = nil,
-        protocolVersion: Int? = WireProtocol.currentVersion
+        protocolVersion: Int? = WireProtocol.currentVersion,
+        sandboxCapable: Bool? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -137,6 +147,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.hypervisors = hypervisors
         self.networkCapability = networkCapability
         self.protocolVersion = protocolVersion
+        self.sandboxCapable = sandboxCapable
     }
 
     /// The hypervisor list to act on: the probed report when the agent sent
