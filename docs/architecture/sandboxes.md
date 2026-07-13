@@ -257,10 +257,88 @@ The agent-side pipeline, all native Swift:
    until #421 ships the driver) — and manifest entries carry a workload kind
    so sandbox orphans survive restarts with their resources reserved.
 
+## Phase 2: exec/attach and workload logs (issue #423)
+
+What makes sandboxes feel like sandboxes: getting into them and seeing their
+output. Wire protocol **v8**.
+
+### Guest control protocol v2
+
+The guest agent's vsock surface (port 1024, newline-delimited JSON both ways)
+grows beyond `ping`/`get_status`. The accept loop is now thread-per-connection
+so health polls keep working while streams are active; the first request line
+determines a connection's role:
+
+- **Control** (`ping`, `get_status`): request/response, as v1.
+- **Exec** (`exec {argv, env?, cwd?, tty?, rows?, cols?}`): the connection
+  becomes a dedicated exec session. The guest spawns the process in the
+  container context — the workload's resolved env (request env merged over
+  it), cwd, and uid/gid — either on a PTY (`tty: true`; output arrives as one
+  `stdout` stream, `resize` drives `TIOCSWINSZ`) or on pipes (stdout/stderr
+  reported separately). Guest→host: `exec_started`, then `output` lines
+  (base64), then a terminal `exec_exit {exit_code}` (killed-by-signal-N
+  reported as 128+N, matching the workload convention). Host→guest:
+  `stdin`/`stdin_eof`/`resize`. The host closing the connection early kills
+  the exec process group.
+- **Log follow** (`stream_logs {since_seq}`): the workload's stdout/stderr are
+  no longer inherited from the serial console — the init captures them via
+  pipes, mirrors every chunk to the console (serial debuggability is
+  preserved), and appends them to a **256 KiB ring buffer** with a monotonic
+  per-chunk sequence number. A follow connection replays retained records from
+  `since_seq` (evicted records are silently skipped) and then streams new ones
+  forever. Workload stdin is `/dev/null`.
+
+PID 1's reaper is restructured to run forever with a child registry (exec
+waiters + a bounded unclaimed-exit map), so exec exit codes are routed to
+their sessions while the workload's exit still lands in the shared status the
+control connections report.
+
+### Host bridging and the wire
+
+The agent bridges vsock streams to new **v8 stream messages** — correlated by
+`sessionId`, ordered by the WebSocket, never answered with `success`/`error`:
+`sandbox_exec_start/started/input/output/resize/exit/close/closed`. A
+`sandbox_exec_start` is answered by `started` on success or `closed` (with a
+reason) on failure. Like `agent_update` in v6 the gate is load-bearing on the
+send side — a pre-v8 agent cannot decode the envelope and never replies — so
+the control plane refuses exec for agents that registered with an older
+version (`WireProtocol.supportsSandboxExec`).
+
+Per running sandbox the agent also keeps a long-lived log-follow task
+(reconnecting with backoff, resuming from the last seen sequence number),
+assembles chunks into lines, and ships each as `sandbox_log {sandboxId,
+stream, message}`. The control plane verifies the reporting agent owns the
+sandbox (the `vm_log` anti-spoofing rule) and pushes to Loki with labels
+`sandbox_id`, `stream`, `source: workload` — the same Loki path VM logs use.
+`GET /api/sandboxes/:id/logs` queries them back, mirroring the VM logs
+endpoint.
+
+### Control plane surface
+
+- `POST /api/sandboxes/:id/exec` — guarded by the `exec` permission (an
+  `actionVerbs` entry in `SpiceDBAuthMiddleware`, plus the in-handler check).
+  Requires the sandbox running, placed, its agent socketed to **this replica**,
+  and the agent at protocol ≥ 8. Returns `201 {sessionId, websocketPath,
+  expiresAt}`; pending sessions expire unattached after 60s.
+- `GET /api/sandboxes/:id/exec/:sessionId/attach` — WebSocket upgrade,
+  modeled on the VM console tunnel (in-handler SpiceDB `exec` re-check,
+  same-user binding to the pending session). Browser→CP: binary frames are
+  stdin, text frames carry JSON `resize`. CP→browser: binary frames are
+  output; text frames carry JSON `ready`/`exit`/`error` controls.
+
+Like the VM console, exec is **single-replica**: the browser WebSocket must
+land on the replica holding the agent socket (`SandboxExecSessionManager`
+mirrors `ConsoleSessionManager` and does not forward over the coordination
+RPC channels). Cross-replica stream forwarding is future work for both
+tunnels; the POST fails fast with 503 when the agent is socketed elsewhere.
+
+The frontend's sandbox detail page grows Terminal and Logs tabs mirroring the
+VM page — the terminal drives exec sessions (default `/bin/sh`, PTY, resize
+wired to xterm's fit addon), and the logs tab tails the Loki-backed endpoint.
+
 ## Later phases
 
-- **Phase 2**: exec/attach and stdio logs over vsock (#423); TTL/auto-expiry
-  (#424).
+- **Phase 2 (remaining)**: TTL/auto-expiry (#424).
 - **Phase 3**: jailer hardening (#425).
 - **Phase 4**: snapshot/checkpoint primitives and resume (#426), fork into new
   sandboxes (#427), and snapshot mobility — off-node export, cross-agent

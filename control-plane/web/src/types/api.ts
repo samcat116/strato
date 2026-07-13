@@ -694,6 +694,49 @@ export interface UpdateSandboxRequest {
   ttlSeconds?: number;
 }
 
+// Sandbox exec (backend issue #423): POST /api/sandboxes/:id/exec creates a
+// short-lived pending session, then the browser attaches over a WebSocket at
+// `websocketPath` (binary frames = stdin/stdout bytes, text frames = JSON
+// control messages).
+export interface SandboxExecRequest {
+  command: string[];
+  env?: Record<string, string>;
+  workingDir?: string;
+  tty?: boolean;
+  rows?: number;
+  cols?: number;
+}
+
+export interface SandboxExecSession {
+  sessionId: string;
+  /** Same-origin WebSocket path, e.g. `/api/sandboxes/<id>/exec/<sessionId>/attach`. */
+  websocketPath: string;
+  /** When the pending (unattached) session expires. */
+  expiresAt: string;
+}
+
+// Sandbox workload logs (stdout/stderr shipped to Loki). Same envelope as VM
+// logs, but labeled with `stream` instead of level/event_type.
+export type SandboxLogStream = "stdout" | "stderr";
+
+export interface SandboxLogEntry {
+  timestamp: string;
+  message: string;
+  labels: {
+    sandbox_id?: string;
+    stream?: SandboxLogStream;
+    source?: string;
+    [key: string]: string | undefined;
+  };
+}
+
+export interface SandboxLogsQueryParams {
+  limit?: number;
+  direction?: "forward" | "backward";
+  start?: number; // Unix timestamp
+  end?: number; // Unix timestamp
+}
+
 export interface CreateOrganizationRequest {
   name: string;
   description?: string;
