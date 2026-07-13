@@ -11,8 +11,9 @@ entrypoint/cmd/env/workdir.
 > **Status**: phase 1 in progress. The wire protocol (issue #411), the
 > generalized operation machinery (#412), the control-plane model/API (#413),
 > registry pull secrets + tag→digest resolution (#414), scheduler gating
-> + quota accounting (#415), and the NIC/address model + IPAM integration
-> (#416) are landed; the agent runtime is tracked in issues #417–#422.
+> + quota accounting (#415), the NIC/address model + IPAM integration
+> (#416), and the guest base image — kernel + init/guest-agent (#419) — are
+> landed; the remaining agent runtime is tracked in issues #417–#422.
 > Sections below describe the agreed design; anything not yet landed is marked
 > with its issue.
 
@@ -24,6 +25,63 @@ considered and rejected**: it brings a Go daemon and a devmapper thin-pool
 host dependency, and fits poorly with the Swift agent's driver registry,
 manifest, and reconciler. OCI pull/unpack, image caching, and vsock guest
 control are built natively in the agent instead.
+
+## Decision: guest rootfs & boot strategy
+
+The guest base image (issue #419, landed) is what turns a booted microVM into a
+running container workload. It lives in [`sandbox-guest/`](../../sandbox-guest/)
+and ships two artifacts per architecture — an uncompressed Firecracker kernel
+(`vmlinux-<arch>`) and a gzipped-cpio initramfs (`initramfs-<arch>.cpio.gz`)
+holding a single static PID-1 init, `strato-sandbox-init`.
+
+**Rootfs: initramfs + pivot onto a pristine drive.** The init boots from the
+initramfs and `switch_root`s (the initramfs-correct form of `pivot_root`) onto
+the flattened container rootfs (issue #418), which the runtime attaches as a
+**separate block device** (default `/dev/vda`). The container image is never
+mutated by init injection — issue #418's output stays a pristine container
+filesystem, which was the deciding constraint. `SwiftFirecracker`'s `BootSource`
+already carries an `initrd_path`, and `Drive` already supports the extra drive,
+so no host-side model change is needed.
+
+**Init language: Rust, static musl.** The init is a small fully-static binary
+(no runtime deps inside the guest, fast boot) — the standard choice for a
+microVM PID 1. It is isolated to the guest artifact and never linked into the
+Swift agent, so it does not reintroduce the cross-language host dependency the
+firecracker-containerd rejection avoided. Its portable logic (config merge,
+vsock protocol) is unit-tested on any host; the Linux syscall paths are
+exercised by the boot smoke test.
+
+**Config delivery: a config drive, not vsock.** Because the v1 vsock surface is
+deliberately health + exit only, the workload's launch configuration is handed
+to the guest out-of-band on a tiny **read-only config block device** (default
+`/dev/vdb`, named on the kernel cmdline as `strato.config=<dev>`). It carries a
+single versioned JSON document (`GuestConfig`) with the rootfs mount spec, the
+sandbox identity + vsock port, and the OCI **image config plus the sandbox
+overrides** — the guest performs the OCI merge (entrypoint/cmd/env/workdir/user,
+Docker-compatible rules), so those runtime semantics live in exactly one place.
+This keeps the container image pristine and lets the workload launch without
+waiting on the host to connect vsock (which #420 provides).
+
+**vsock control surface (v1).** The init serves newline-delimited JSON on a
+guest vsock port: `ping` → `pong`, and `get_status` → the workload's lifecycle
+state and, once it ends, its exit code. Every response echoes `sandbox_id` +
+boot `nonce` so the host can re-identify a guest after a phase-4
+snapshot/resume. Exec/stdio streaming is out of scope for v1 (phase 2, #423).
+
+**On-disk layout & capability gating.** The two artifacts install as a directory
+at `sandbox_guest_image_path` (default `/var/lib/strato/sandbox/guest`)
+alongside a `guest.json` manifest (schema version, image version, per-arch
+checksums + default boot args). `StratoAgentCore/SandboxGuestImage` is the
+resolver that reads that layout into concrete kernel/initramfs paths for the
+host arch — the shared contract the sandbox runtime (#421) consumes so filenames
+are not hard-coded at the call site. `SandboxRuntimeProbe` still only asserts the
+path's presence (it must stay cheap and never fail a capability check on a parse
+error); presence + a usable Firecracker is what lights up the `sandbox_runtime`
+capability. The build/publish pipeline (`.github/workflows/sandbox-guest.yaml`)
+builds both arches on a release tag and uploads the tarballs + `.sha256`
+sidecars + a `sandbox-guest-manifest.json`, mirroring the agent release flow;
+`task install-sandbox-guest` / `deploy/agent/install.sh --sandbox-guest` install
+onto a host.
 
 ## Workload shape
 
@@ -161,11 +219,13 @@ The agent-side pipeline, all native Swift:
 1. **OCI client** (#418): pull the manifest + layers for the pinned digest,
    flatten to an ext4 root filesystem, and cache it **by manifest digest** —
    v1 caches flattened images only (no layer-level dedup/snapshotter).
-2. **Guest base image** (#419): a maintained kernel plus a minimal init/guest
-   agent. The guest agent applies the OCI config (entrypoint/cmd/env/workdir),
-   runs the workload, and reports its exit over vsock. It is written with the
-   phase-4 snapshot lifecycle (drain, re-listen, re-identify) in mind from the
-   start.
+2. **Guest base image** (#419, landed): a maintained kernel plus a minimal
+   static init/guest-agent. The init applies the OCI config
+   (entrypoint/cmd/env/workdir), runs the workload, reaps zombies, and reports
+   its exit over vsock — written with the phase-4 snapshot lifecycle (drain,
+   re-listen, re-identify) in mind from the start. See the *guest rootfs & boot
+   strategy* decision above for the rootfs/config-drive/vsock design and
+   `sandbox-guest/` for the artifacts and build pipeline.
 3. **vsock** (#420): SwiftFirecracker grows vsock device support for
    host↔guest control.
 4. **`SandboxRuntimeService`** (#421): the driver that wires it together on
