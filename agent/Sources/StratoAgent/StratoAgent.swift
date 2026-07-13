@@ -245,6 +245,8 @@ private func launchAgent(
         options.firecrackerBinaryPath ?? config.firecrackerBinaryPath ?? AgentConfig.defaultFirecrackerBinaryPath
     let finalFirecrackerSocketDir =
         options.firecrackerSocketDir ?? config.firecrackerSocketDir ?? AgentConfig.defaultFirecrackerSocketDir
+    let finalSandboxGuestImagePath =
+        config.sandboxGuestImagePath ?? AgentConfig.defaultSandboxGuestImagePath
 
     // Resolve hypervisor type
     let finalHypervisorType = config.hypervisorType ?? AgentConfig.defaultHypervisorType
@@ -274,6 +276,7 @@ private func launchAgent(
             "firmwarePath": .string(finalFirmwarePath ?? "(platform default)"),
             "firecrackerBinaryPath": .string(finalFirecrackerBinaryPath),
             "firecrackerSocketDir": .string(finalFirecrackerSocketDir),
+            "sandboxGuestImagePath": .string(finalSandboxGuestImagePath),
             "hypervisorType": .string(finalHypervisorType.rawValue),
             "hardwareAcceleration": .string(finalHardwareAcceleration ? "enabled" : "disabled"),
             "logLevel": .string(finalLogLevel),
@@ -308,6 +311,7 @@ private func launchAgent(
         firmwarePath: finalFirmwarePath,
         firecrackerBinaryPath: finalFirecrackerBinaryPath,
         firecrackerSocketDir: finalFirecrackerSocketDir,
+        sandboxGuestImagePath: finalSandboxGuestImagePath,
         hypervisorType: finalHypervisorType,
         hardwareAccelerationEnabled: finalHardwareAcceleration,
         spiffeConfig: config.spiffe,

@@ -130,7 +130,7 @@ A persisted VM manifest tracks which backend owns each VM (survives restarts, en
 
 - **SpiceDB** (schema in `spicedb/schema.zed`) enforces relationship-based access control; `SpiceDBAuthMiddleware` intercepts requests, `SpiceDBService` wraps the HTTP API. Ownership relationships are written automatically on resource creation.
 - **Authentication** is WebAuthn/Passkeys (swift-server/webauthn-swift) with Vapor sessions, plus API keys for programmatic access and optional OIDC providers. WebAuthn env vars: `WEBAUTHN_RELYING_PARTY_ID`, `WEBAUTHN_RELYING_PARTY_NAME`, `WEBAUTHN_RELYING_PARTY_ORIGIN` (origin must exactly match the browser URL).
-- Hierarchy: Organization → optional nested **Organizational Units** (materialized `path`/`depth`) → Projects (with environments). **Groups** (optionally SCIM-provisioned, see `SCIMToken`/`SCIMExternalID`) grant access; **ResourceQuotas** (vCPU/memory/storage/VM count, optionally per-environment) attach at org, OU, or project level and are enforced on VM create/delete.
+- Hierarchy: Organization → optional nested **Organizational Units** (materialized `path`/`depth`) → Projects (with environments). **Groups** (optionally SCIM-provisioned, see `SCIMToken`/`SCIMExternalID`) grant access; **ResourceQuotas** (vCPU/memory/storage/VM count/sandbox count, optionally per-environment) attach at org, OU, or project level and are enforced on VM and sandbox create/delete; sandboxes draw from the same vCPU/memory pools as VMs.
 - Agent transport security (optional): SPIFFE/SPIRE-issued mTLS terminated by Envoy in front of the control plane (`envoy/standalone/`, `task dev-spiffe`).
 
 ### Observability

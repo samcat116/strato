@@ -55,12 +55,13 @@ final class SandboxTests {
         try await app.shutdownForTesting()
     }
 
-    /// Registers an in-memory Firecracker-capable agent and maps the sandbox
-    /// to it. Returns the agent's UUID string.
+    /// Registers an in-memory Firecracker-capable agent and (optionally) maps
+    /// the sandbox to it. Returns the agent's UUID string.
     private func registerAgent(
         app: Application,
-        sandbox: Sandbox,
-        named agentName: String = "sandbox-agent"
+        sandbox: Sandbox? = nil,
+        named agentName: String = "sandbox-agent",
+        sandboxCapable: Bool? = nil
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: agentName,
@@ -72,14 +73,17 @@ final class SandboxTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
-            protocolVersion: WireProtocol.currentVersion
+            protocolVersion: WireProtocol.currentVersion,
+            sandboxCapable: sandboxCapable
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: agentName,
             organizationScope: orgID.map { .organization($0) })
-        sandbox.hypervisorId = agentUUID.uuidString
-        try await sandbox.save(on: app.db)
+        if let sandbox {
+            sandbox.hypervisorId = agentUUID.uuidString
+            try await sandbox.save(on: app.db)
+        }
         return agentUUID.uuidString
     }
 
@@ -159,6 +163,58 @@ final class SandboxTests {
             sandbox.setDesiredStatus(.absent)
             #expect(sandbox.revertDesiredToObserved() == true)
             #expect(sandbox.desiredStatus == .stopped)
+        }
+    }
+
+    // MARK: - Scheduler gating (issue #415)
+
+    @Test("Registration persists the advertised sandbox capability and its absence clears it")
+    func registrationPersistsSandboxCapability() async throws {
+        try await withSandboxTestApp { app, _, _, _, _ in
+            let agentId = try await registerAgent(app: app, named: "capable-agent", sandboxCapable: true)
+            let registered = try await Agent.find(UUID(uuidString: agentId), on: app.db)
+            #expect(registered?.sandboxCapable == true)
+
+            // Re-registration without the flag (e.g. the guest image was
+            // removed, or the agent was downgraded) must clear it.
+            _ = try await registerAgent(app: app, named: "capable-agent", sandboxCapable: nil)
+            let reRegistered = try await Agent.find(UUID(uuidString: agentId), on: app.db)
+            #expect(reRegistered?.sandboxCapable == false)
+        }
+    }
+
+    @Test("createSandbox places onto a sandbox-capable agent")
+    func createSandboxPlacesOnCapableAgent() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, _ in
+            let agentId = try await registerAgent(app: app, named: "runtime-agent", sandboxCapable: true)
+
+            try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+
+            let placed = try await Sandbox.find(sandbox.id, on: app.db)
+            #expect(placed?.hypervisorId == agentId)
+        }
+    }
+
+    @Test("createSandbox refuses a Firecracker fleet that never advertised the runtime")
+    func createSandboxRefusesRuntimelessFleet() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, _ in
+            // Firecracker-capable and current protocol, but no sandboxCapable —
+            // e.g. a v5 build without the runtime, or no guest image on disk.
+            _ = try await registerAgent(app: app, named: "runtimeless-agent", sandboxCapable: nil)
+
+            do {
+                try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+                Issue.record("Expected schedulingFailed error")
+            } catch let error as AgentServiceError {
+                guard case .schedulingFailed(let reason) = error else {
+                    Issue.record("Expected schedulingFailed, got \(error)")
+                    return
+                }
+                #expect(reason.contains("sandbox runtime"))
+            }
+
+            let unplaced = try await Sandbox.find(sandbox.id, on: app.db)
+            #expect(unplaced?.hypervisorId == nil)
         }
     }
 

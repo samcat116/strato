@@ -146,6 +146,10 @@ actor Agent {
     private let firmwarePath: String?
     private let firecrackerBinaryPath: String
     private let firecrackerSocketDir: String
+    // Where the sandbox guest base image (issue #419) is installed; its
+    // presence gates the sandbox-runtime capability advertised at
+    // registration (issue #415).
+    private let sandboxGuestImagePath: String?
     private let hypervisorType: HypervisorType
     private let hardwareAccelerationEnabled: Bool
 
@@ -178,6 +182,7 @@ actor Agent {
         firmwarePath: String? = nil,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
         firecrackerSocketDir: String = "/tmp/firecracker",
+        sandboxGuestImagePath: String? = nil,
         hypervisorType: HypervisorType = .qemu,
         hardwareAccelerationEnabled: Bool = true,
         spiffeConfig: SPIFFEConfig? = nil,
@@ -201,6 +206,7 @@ actor Agent {
         self.firmwarePath = firmwarePath
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.firecrackerSocketDir = firecrackerSocketDir
+        self.sandboxGuestImagePath = sandboxGuestImagePath
         self.hypervisorType = hypervisorType
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         self.spiffeConfig = spiffeConfig
@@ -576,7 +582,28 @@ actor Agent {
                 firecrackerBinaryPath: firecrackerBinaryPath
             ))
         let networkCapability = currentNetworkCapability()
-        let capabilities = getAgentCapabilities(hypervisors: hypervisors, networkCapability: networkCapability)
+        var capabilities = getAgentCapabilities(hypervisors: hypervisors, networkCapability: networkCapability)
+
+        // Sandbox runtime: probed on the same cadence, gated on Firecracker
+        // (binary + KVM, folded into its probe) plus the guest base image
+        // present on disk. The typed flag is what the scheduler keys sandbox
+        // placement on (issue #415); the capability string is display-only.
+        let sandboxRuntime = SandboxRuntimeProbe.probe(
+            firecracker: hypervisors.first { $0.type == .firecracker },
+            guestImagePath: sandboxGuestImagePath
+        )
+        if sandboxRuntime.capable {
+            capabilities.append(SandboxRuntimeProbe.capabilityName)
+        } else {
+            #if os(Linux)
+            // Only worth a log where the runtime could ever exist.
+            logger.info(
+                "Sandbox runtime unavailable; not advertising sandbox capability",
+                metadata: [
+                    "reason": .string(sandboxRuntime.unavailabilityReason ?? "unknown")
+                ])
+            #endif
+        }
 
         let message = AgentRegisterMessage(
             agentId: initialAgentID,
@@ -587,7 +614,8 @@ actor Agent {
             hypervisorType: hypervisorType,
             architecture: CPUArchitecture.current,
             hypervisors: hypervisors,
-            networkCapability: networkCapability
+            networkCapability: networkCapability,
+            sandboxCapable: sandboxRuntime.capable
         )
 
         if let client = websocketClient {

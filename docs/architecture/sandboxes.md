@@ -9,10 +9,11 @@ workload — an image reference, resource sizing, and overrides for
 entrypoint/cmd/env/workdir.
 
 > **Status**: phase 1 in progress. The wire protocol (issue #411), the
-> generalized operation machinery (#412), and the control-plane model/API
-> (#413) are landed; registry integration, scheduler gating, IPAM, and the
-> agent runtime are tracked in issues #414–#422. Sections below describe the
-> agreed design; anything not yet landed is marked with its issue.
+> generalized operation machinery (#412), the control-plane model/API (#413),
+> and scheduler gating + quota accounting (#415) are landed; registry
+> integration, IPAM, and the agent runtime are tracked in issues #414–#422.
+> Sections below describe the agreed design; anything not yet landed is
+> marked with its issue.
 
 ## Decision: native Swift Firecracker path
 
@@ -90,9 +91,13 @@ same asymmetric hazard as the v3 networks list:
   signal. An agent built against v5 understands the fields but may predate the
   sandbox runtime (#421), and would silently ignore desired entries and report
   none back. Agents therefore advertise sandbox support explicitly at
-  registration (`AgentRegisterMessage.sandboxCapable`, absent/false until the
-  runtime sets it), and the scheduler keys eligibility on that flag plus the
-  version (#415) — never on the version alone.
+  registration (`AgentRegisterMessage.sandboxCapable`), and the scheduler keys
+  eligibility on that flag plus the version (#415) — never on the version
+  alone. Agent-side, the flag comes from `SandboxRuntimeProbe`: Firecracker
+  usable (binary + KVM, from the hypervisor probe) **and** the sandbox guest
+  base image (#419) present at `sandbox_guest_image_path` (default
+  `/var/lib/strato/sandbox/guest`) — so the capability lights up exactly when
+  the runtime's artifacts are installed on a capable host.
 
 ## Control plane (issues #412–#416)
 
@@ -113,9 +118,19 @@ same asymmetric hazard as the v3 networks list:
   guards `/api/sandboxes` through the same route-prefix → resource-type
   mapping as VMs.
 - Creation runs the quota admission check in the create transaction and places
-  onto a Firecracker-capable agent. Scheduler gating on the explicit
-  sandbox-runtime capability and full quota *accounting* (resync summing
-  sandboxes alongside VMs, release on delete) land with #415.
+  onto an agent that advertised the sandbox runtime (#415, see the versioning
+  section above). Placement rides the same `filterEligibleAgents` pipeline and
+  Valkey placement reservations as VMs; the reservation releases on the same
+  triggers (send failure, the agent's observed-state reports accounting for
+  the sandbox, deletion confirmation, TTL backstop).
+- **Quota accounting (#415)**: sandbox vCPUs and memory draw from the *same*
+  `ResourceQuota` pools as VMs — `calculateActualUsage` and the reservation
+  resync sum both workload kinds — while the count limit is a separate
+  `max_sandboxes`/`sandbox_count` pair (backfilled from `max_vms`), so
+  sandboxes never silently consume VM slots. Reservation happens in the create
+  transaction (`QuotaEnforcementService.reserveSandbox`) and releases when the
+  row is removed (deletion confirmed by agent report, or direct deletion for
+  unplaced/agent-offline sandboxes). Sandboxes reserve no storage.
 - Sandboxes reference images by OCI ref only — they do not use the
   `Image`/`ImageArtifact` model at all.
 

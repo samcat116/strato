@@ -24,6 +24,7 @@ struct QuotaUsageService {
                 maxMemoryGB: quota.maxMemory.bytesToGB,
                 maxStorageGB: quota.maxStorage.bytesToGB,
                 maxVMs: quota.maxVMs,
+                maxSandboxes: quota.maxSandboxes,
                 maxNetworks: quota.maxNetworks
             ),
             reserved: QuotaUsage(
@@ -31,6 +32,7 @@ struct QuotaUsageService {
                 memoryGB: quota.reservedMemory.bytesToGB,
                 storageGB: quota.reservedStorage.bytesToGB,
                 vms: quota.vmCount,
+                sandboxes: quota.sandboxCount,
                 networks: quota.networkCount
             ),
             actual: actualUsage,
@@ -38,7 +40,8 @@ struct QuotaUsageService {
                 cpuPercent: quota.cpuUtilizationPercent,
                 memoryPercent: quota.memoryUtilizationPercent,
                 storagePercent: quota.storageUtilizationPercent,
-                vmPercent: quota.vmUtilizationPercent
+                vmPercent: quota.vmUtilizationPercent,
+                sandboxPercent: quota.sandboxUtilizationPercent
             ),
             vmsByEnvironment: vmsByEnvironment,
             vmsByStatus: vmsByStatus,

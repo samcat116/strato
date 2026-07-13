@@ -145,6 +145,11 @@ public struct AgentConfig: Codable {
     public let spiffe: SPIFFEConfig?
     public let firecrackerBinaryPath: String?
     public let firecrackerSocketDir: String?
+    /// Where the sandbox guest base image (kernel + init/guest agent, issue
+    /// #419) is installed. Its presence — together with a passing Firecracker
+    /// probe — is what makes the agent advertise the sandbox-runtime
+    /// capability at registration (issue #415).
+    public let sandboxGuestImagePath: String?
     public let hypervisorType: HypervisorType?
     public let stateFilePath: String?
     /// Site uplink for OVN SNAT egress (issue #342). When nil, routers +
@@ -171,6 +176,7 @@ public struct AgentConfig: Codable {
         case spiffe
         case firecrackerBinaryPath = "firecracker_binary_path"
         case firecrackerSocketDir = "firecracker_socket_dir"
+        case sandboxGuestImagePath = "sandbox_guest_image_path"
         case hypervisorType = "hypervisor_type"
         case stateFilePath = "state_file"
         case ovnUplink = "ovn_uplink"
@@ -196,6 +202,7 @@ public struct AgentConfig: Codable {
         spiffe: SPIFFEConfig? = nil,
         firecrackerBinaryPath: String? = nil,
         firecrackerSocketDir: String? = nil,
+        sandboxGuestImagePath: String? = nil,
         hypervisorType: HypervisorType? = nil,
         stateFilePath: String? = nil,
         ovnUplink: OVNUplinkConfig? = nil
@@ -219,6 +226,7 @@ public struct AgentConfig: Codable {
         self.spiffe = spiffe
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.firecrackerSocketDir = firecrackerSocketDir
+        self.sandboxGuestImagePath = sandboxGuestImagePath
         self.hypervisorType = hypervisorType
         self.stateFilePath = stateFilePath
         self.ovnUplink = ovnUplink
@@ -303,6 +311,7 @@ public struct AgentConfig: Codable {
         let firmwarePathX86_64 = tomlData.string("firmware_path_x86_64")
         let firecrackerBinaryPath = tomlData.string("firecracker_binary_path")
         let firecrackerSocketDir = tomlData.string("firecracker_socket_dir")
+        let sandboxGuestImagePath = tomlData.string("sandbox_guest_image_path")
         let hypervisorTypeString = tomlData.string("hypervisor_type")
         let stateFilePath = tomlData.string("state_file")
 
@@ -409,6 +418,7 @@ public struct AgentConfig: Codable {
             spiffe: spiffeConfig,
             firecrackerBinaryPath: firecrackerBinaryPath,
             firecrackerSocketDir: firecrackerSocketDir,
+            sandboxGuestImagePath: sandboxGuestImagePath,
             hypervisorType: hypervisorType,
             stateFilePath: stateFilePath,
             ovnUplink: ovnUplink
@@ -606,6 +616,14 @@ public struct AgentConfig: Codable {
     /// Default Firecracker socket directory (Linux only)
     public static var defaultFirecrackerSocketDir: String {
         return "/tmp/firecracker"
+    }
+
+    /// Default sandbox guest base image location (Linux only — sandboxes are
+    /// Firecracker/KVM workloads). The guest-image work (issue #419) installs
+    /// its artifacts here; until something exists at this path the agent does
+    /// not advertise the sandbox-runtime capability.
+    public static var defaultSandboxGuestImagePath: String {
+        return "/var/lib/strato/sandbox/guest"
     }
 
     /// Default hypervisor type (platform-specific)

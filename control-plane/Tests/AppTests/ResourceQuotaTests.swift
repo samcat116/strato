@@ -75,6 +75,7 @@ final class ResourceQuotaTests {
                         maxMemoryGB: 200,
                         maxStorageGB: 1000,
                         maxVMs: 50,
+                        maxSandboxes: nil,
                         maxNetworks: nil,
                         environment: nil,
                         isEnabled: nil
@@ -106,6 +107,7 @@ final class ResourceQuotaTests {
                         maxMemoryGB: 40,
                         maxStorageGB: 200,
                         maxVMs: 10,
+                        maxSandboxes: nil,
                         maxNetworks: nil,
                         environment: nil,
                         isEnabled: nil
@@ -133,6 +135,7 @@ final class ResourceQuotaTests {
                         maxMemoryGB: 100,
                         maxStorageGB: 500,
                         maxVMs: 25,
+                        maxSandboxes: nil,
                         maxNetworks: nil,
                         environment: "production",
                         isEnabled: nil
@@ -219,6 +222,53 @@ final class ResourceQuotaTests {
         }
     }
 
+    @Test("Sandboxes share the vCPU/memory pools but have their own count limit")
+    func testSandboxAccommodation() async throws {
+        try await withQuotaTestApp { app, _, _, testProject, _ in
+            let quota = ResourceQuota(
+                name: "Sandbox Quota",
+                organizationID: nil,
+                organizationalUnitID: nil,
+                projectID: testProject.id,
+                maxVCPUs: 4,
+                maxMemory: Int64(8.0 * 1024 * 1024 * 1024),
+                maxStorage: Int64(10.0 * 1024 * 1024 * 1024),
+                maxVMs: 10,
+                maxSandboxes: 1
+            )
+            try await quota.save(on: app.db)
+
+            // A VM reservation consumes the shared vCPU pool...
+            try quota.reserveResources(
+                vcpus: 3, memory: Int64(1024 * 1024 * 1024), storage: Int64(1024 * 1024 * 1024))
+
+            // ...so a 2-vCPU sandbox no longer fits (3 + 2 > 4).
+            let tooBig = quota.canAccommodateSandbox(vcpus: 2, memory: Int64(1024 * 1024 * 1024))
+            #expect(!tooBig.allowed)
+
+            // A 1-vCPU sandbox fits and takes the only sandbox slot.
+            try quota.reserveSandboxResources(vcpus: 1, memory: Int64(1024 * 1024 * 1024))
+            #expect(quota.sandboxCount == 1)
+            #expect(quota.vmCount == 1)
+
+            // The count limit rejects a second sandbox even with pool room left.
+            let overCount = quota.canAccommodateSandbox(vcpus: 0, memory: 0)
+            #expect(!overCount.allowed)
+            #expect(overCount.reason?.contains("Sandbox limit") == true)
+
+            // Unspecified maxSandboxes follows maxVMs at construction.
+            let defaulted = ResourceQuota(
+                name: "Defaulted",
+                projectID: testProject.id,
+                maxVCPUs: 4,
+                maxMemory: 1,
+                maxStorage: 1,
+                maxVMs: 7
+            )
+            #expect(defaulted.maxSandboxes == 7)
+        }
+    }
+
     // MARK: - Hierarchy Tests
 
     @Test("List quotas by level")
@@ -297,6 +347,7 @@ final class ResourceQuotaTests {
                         maxMemoryGB: 40.0,
                         maxStorageGB: 200.0,
                         maxVMs: 10,
+                        maxSandboxes: nil,
                         maxNetworks: nil,
                         isEnabled: nil
                     ))
@@ -338,6 +389,7 @@ final class ResourceQuotaTests {
                         maxMemoryGB: nil,
                         maxStorageGB: nil,
                         maxVMs: nil,
+                        maxSandboxes: nil,
                         maxNetworks: nil,
                         isEnabled: nil
                     ))

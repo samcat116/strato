@@ -40,7 +40,8 @@ struct SchedulerServiceTests {
         runningVMCount: Int = 0,
         supportedHypervisors: [HypervisorType] = [.qemu],
         architecture: CPUArchitecture? = nil,
-        supportsInterVMNetworking: Bool = false
+        supportsInterVMNetworking: Bool = false,
+        supportsSandboxWorkloads: Bool = false
     ) -> SchedulableAgent {
         return SchedulableAgent(
             id: id,
@@ -55,7 +56,20 @@ struct SchedulerServiceTests {
             runningVMCount: runningVMCount,
             supportedHypervisors: supportedHypervisors,
             architecture: architecture,
-            supportsInterVMNetworking: supportsInterVMNetworking
+            supportsInterVMNetworking: supportsInterVMNetworking,
+            supportsSandboxWorkloads: supportsSandboxWorkloads
+        )
+    }
+
+    /// Placement requirements for a sandbox workload: Firecracker plus the
+    /// explicit sandbox-runtime capability, no disk.
+    func sandboxRequirements(cpu: Int = 1, memory: Int64 = 1000) -> VMPlacementRequirements {
+        VMPlacementRequirements(
+            cpu: cpu,
+            memory: memory,
+            disk: 0,
+            hypervisorType: .firecracker,
+            requiresSandboxRuntime: true
         )
     }
 
@@ -545,6 +559,96 @@ struct SchedulerServiceTests {
         } catch let error as SchedulerError {
             guard case .networkCapabilityUnsatisfied = error else {
                 Issue.record("Expected networkCapabilityUnsatisfied, got \(error)")
+                return
+            }
+        }
+    }
+
+    @Test("Sandbox placement only lands on agents advertising the sandbox runtime")
+    func testSandboxRuntimeConstraintSelectsCapableAgent() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            // Firecracker-capable and more attractive by utilization, but the
+            // runtime was never advertised (no guest image, or a pre-runtime
+            // build) — hypervisor support alone must not qualify it.
+            createTestAgent(
+                id: "fc-only", name: "fc-only", availableCPU: 8,
+                supportedHypervisors: [.qemu, .firecracker]),
+            createTestAgent(
+                id: "sandbox-ready", name: "sandbox-ready", availableCPU: 2,
+                supportedHypervisors: [.qemu, .firecracker], supportsSandboxWorkloads: true),
+        ]
+
+        let selectedId = try scheduler.selectAgent(requirements: sandboxRequirements(), from: agents)
+
+        #expect(selectedId == "sandbox-ready")
+    }
+
+    @Test("Sandbox placement fails with its own error when no agent advertises the runtime")
+    func testSandboxRuntimeConstraintFails() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(id: "fc1", name: "fc1", supportedHypervisors: [.firecracker]),
+            createTestAgent(id: "fc2", name: "fc2", supportedHypervisors: [.firecracker]),
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: sandboxRequirements(), from: agents)
+            Issue.record("Expected sandboxRuntimeUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .sandboxRuntimeUnsatisfied(let eligibleAgents) = error else {
+                Issue.record("Expected sandboxRuntimeUnsatisfied, got \(error)")
+                return
+            }
+            #expect(eligibleAgents == 2)
+            #expect(error.description.contains("sandbox runtime"))
+        }
+    }
+
+    @Test("Sandbox placement without Firecracker support fails as unsupported hypervisor")
+    func testSandboxRuntimeReportsHypervisorGapFirst() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        // A QEMU-only fleet fails at the more fundamental hypervisor stage,
+        // pointing at the actual gap rather than the runtime capability.
+        let agents = [
+            createTestAgent(id: "qemu", name: "qemu", supportedHypervisors: [.qemu])
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: sandboxRequirements(), from: agents)
+            Issue.record("Expected unsupportedHypervisor error")
+        } catch let error as SchedulerError {
+            guard case .unsupportedHypervisor(let required, _, _) = error else {
+                Issue.record("Expected unsupportedHypervisor, got \(error)")
+                return
+            }
+            #expect(required == .firecracker)
+        }
+    }
+
+    @Test("Sandbox-capable but resource-starved fleet fails on resources")
+    func testSandboxRuntimeConstraintThenResources() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(
+                id: "starved", name: "starved", availableCPU: 0,
+                supportedHypervisors: [.firecracker], supportsSandboxWorkloads: true)
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: sandboxRequirements(cpu: 2), from: agents)
+            Issue.record("Expected insufficientResources error")
+        } catch let error as SchedulerError {
+            guard case .insufficientResources = error else {
+                Issue.record("Expected insufficientResources, got \(error)")
                 return
             }
         }

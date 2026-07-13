@@ -194,6 +194,16 @@ struct ResourceQuotaController: RouteCollection {
             quota.maxVMs = maxVMs
         }
 
+        if let maxSandboxes = updateRequest.maxSandboxes {
+            if maxSandboxes < quota.sandboxCount {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "New sandbox limit (\(maxSandboxes)) cannot be below current count (\(quota.sandboxCount))")
+            }
+            quota.maxSandboxes = maxSandboxes
+        }
+
         if let maxNetworks = updateRequest.maxNetworks {
             quota.maxNetworks = maxNetworks
         }
@@ -225,7 +235,9 @@ struct ResourceQuotaController: RouteCollection {
         try await verifyQuotaAdminAccess(quota: quota, on: req)
 
         // Check if quota has any reservations
-        if quota.reservedVCPUs > 0 || quota.reservedMemory > 0 || quota.reservedStorage > 0 || quota.vmCount > 0 {
+        if quota.reservedVCPUs > 0 || quota.reservedMemory > 0 || quota.reservedStorage > 0 || quota.vmCount > 0
+            || quota.sandboxCount > 0
+        {
             throw Abort(.conflict, reason: "Cannot delete quota with active resource reservations")
         }
 
@@ -465,7 +477,7 @@ struct ResourceQuotaController: RouteCollection {
         try await verifyQuotaAccess(quota: quota, on: req)
 
         // Get actual usage based on quota scope
-        let (actualUsage, vms) = try await quota.calculateActualUsage(on: req.db)
+        let (actualUsage, vms, _) = try await quota.calculateActualUsage(on: req.db)
 
         return QuotaUsageService.usageResponse(for: quota, actualUsage: actualUsage, vms: vms)
     }
@@ -560,6 +572,7 @@ struct ResourceQuotaController: RouteCollection {
             maxMemory: maxMemoryBytes,
             maxStorage: maxStorageBytes,
             maxVMs: createRequest.maxVMs,
+            maxSandboxes: createRequest.maxSandboxes,
             maxNetworks: createRequest.maxNetworks ?? 10,
             environment: createRequest.environment,
             isEnabled: createRequest.isEnabled ?? true

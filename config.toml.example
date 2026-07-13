@@ -89,6 +89,13 @@ log_level = "info"
 # Directory where Firecracker creates VM sockets
 # Optional - defaults to /tmp/firecracker
 # firecracker_socket_dir = "/tmp/firecracker"
+#
+# Where the sandbox guest base image (kernel + init/guest agent) is installed.
+# The agent only advertises the sandbox-runtime capability — making it
+# eligible for sandbox (OCI-image microVM) placement — when Firecracker and
+# KVM are usable AND something exists at this path.
+# Optional - defaults to /var/lib/strato/sandbox/guest
+# sandbox_guest_image_path = "/var/lib/strato/sandbox/guest"
 
 # OVN chassis bootstrap (Linux, network_mode = "ovn" only)
 #
