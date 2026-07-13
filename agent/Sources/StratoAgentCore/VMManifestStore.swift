@@ -19,13 +19,15 @@ public struct VMManifestEntry: Codable, Sendable {
 /// to disk so that, after an agent restart, the agent can route operations to the
 /// right backend and keep orphaned VMs' resources reserved.
 ///
-/// Option A (reconcile-only): the agent does NOT re-adopt the running hypervisor
-/// processes on restart — their control sockets use non-deterministic paths and
-/// SwiftQEMU has no attach API. Instead, previously-managed VMs are loaded as
-/// orphans at startup, and because they are not placed back under management they
-/// are absent from the agent's heartbeat — which the control plane's reconciliation
-/// surfaces as `.error` for operator attention. Full re-adoption is the Option B
-/// follow-up (reconciliation phase 2, #260) and builds on this same manifest.
+/// On restart, previously-managed VMs are loaded from this manifest as orphans,
+/// and the reconciler re-adopts them when the backend supports it (the `.adopt`
+/// step in `Reconciliation.swift`): QEMU reconnects to the still-running process
+/// via its deterministic per-VM QMP socket path. Backends without adoption
+/// support — Firecracker uses the throwing `adoptVM` default in
+/// `HypervisorProtocol.swift` — and VMs created before deterministic socket
+/// paths remain orphaned; they keep their resources reserved but are absent
+/// from the agent's heartbeat, which the control plane's reconciliation
+/// surfaces as `.error` for operator attention.
 public struct VMManifestStore {
     public let path: String
     /// Path of the manifest written by pre-unified agents, which only QEMUService
