@@ -191,6 +191,37 @@ final class AgentUpdateEndpointTests {
         }
     }
 
+    @Test("hosted sandboxes require force (Firecracker-only, not re-adopted)")
+    func sandboxesRequireForce() async throws {
+        try await withUpdateTestApp { app, builder, org, token in
+            let agent = try await self.makeAgent(app: app, org: org)
+
+            let project = try await builder.createProject(
+                name: "Sandbox Project", description: "project with a sandbox", organization: org)
+            let sandbox = Sandbox(
+                name: "sb-1",
+                projectID: try project.requireID(),
+                environment: "development",
+                image: "docker.io/library/alpine:3",
+                cpus: 1,
+                memory: 512_000_000
+            )
+            sandbox.hypervisorId = agent.id!.uuidString
+            try await sandbox.save(on: app.db)
+
+            try await app.test(.POST, "/api/agents/\(agent.id!)/actions/update") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "artifactUrl": "https://mirror.internal/strato-linux-x86_64.tar.gz",
+                    "sha256": Self.validDigest,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("sandbox"))
+            }
+        }
+    }
+
     @Test("explicit artifact overrides are system-admin only")
     func explicitArtifactRequiresSystemAdmin() async throws {
         try await withUpdateTestApp { app, builder, org, _ in

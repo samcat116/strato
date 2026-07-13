@@ -92,8 +92,9 @@ export function AgentUpdateAction({ agent, size = "default" }: AgentUpdateAction
                   <li>The agent briefly disconnects; it re-registers automatically.</li>
                   <li>Running QEMU VMs keep running and are re-adopted afterwards.</li>
                   <li>
-                    Running Firecracker VMs are <span className="font-medium">not</span>{" "}
-                    re-adopted — they keep running but can only be deleted afterwards.
+                    Running Firecracker workloads (VMs and sandboxes) are{" "}
+                    <span className="font-medium">not</span> re-adopted — they keep
+                    running but can only be deleted afterwards.
                   </li>
                 </ul>
                 <p>

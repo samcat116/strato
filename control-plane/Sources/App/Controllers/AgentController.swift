@@ -732,19 +732,27 @@ struct AgentController: RouteCollection {
         }
 
         // QEMU VMs survive an agent restart (re-adopted via their deterministic
-        // QMP sockets), but Firecracker VMs are not re-adopted — they keep
-        // running as orphans that can only be deleted. Make the operator
-        // acknowledge that explicitly.
+        // QMP sockets), but Firecracker workloads are not re-adopted — they
+        // keep running as orphans that can only be deleted. That covers both
+        // Firecracker VMs and sandboxes (which place exclusively on
+        // Firecracker). Make the operator acknowledge that explicitly.
         if !force {
             let firecrackerVMs = try await VM.query(on: req.db)
                 .filter(\.$hypervisorId == agentId.uuidString)
                 .filter(\.$hypervisorType == .firecracker)
                 .count()
-            guard firecrackerVMs == 0 else {
+            let sandboxes = try await Sandbox.query(on: req.db)
+                .filter(\.$hypervisorId == agentId.uuidString)
+                .count()
+            guard firecrackerVMs == 0 && sandboxes == 0 else {
+                let workloads = [
+                    firecrackerVMs > 0 ? "\(firecrackerVMs) Firecracker VM(s)" : nil,
+                    sandboxes > 0 ? "\(sandboxes) sandbox(es)" : nil,
+                ].compactMap { $0 }.joined(separator: " and ")
                 throw Abort(
                     .conflict,
                     reason:
-                        "Agent hosts \(firecrackerVMs) Firecracker VM(s), which are not re-adopted after an agent restart. Delete or migrate them, or pass force to proceed anyway."
+                        "Agent hosts \(workloads), which are not re-adopted after an agent restart. Delete or migrate them, or pass force to proceed anyway."
                 )
             }
         }
