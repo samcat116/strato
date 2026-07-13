@@ -15,7 +15,9 @@ use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 
-use strato_sandbox_init::protocol::{decode_request, encode_line, Request, Response, WorkloadState};
+use strato_sandbox_init::protocol::{
+    decode_request, encode_line, Request, Response, WorkloadState,
+};
 
 /// Workload lifecycle state shared between the reaper (writer) and the vsock
 /// agent (reader).

@@ -91,10 +91,12 @@ fn spawn_workload(process: &ResolvedProcess) -> Result<Pid, Box<dyn std::error::
     let (program, args) = process.argv.split_first().ok_or("empty argv")?;
 
     let mut cmd = Command::new(program);
-    cmd.args(args)
-        .current_dir(&process.cwd)
-        .env_clear()
-        .envs(process.env.iter().filter_map(|kv: &String| kv.split_once('=')));
+    cmd.args(args).current_dir(&process.cwd).env_clear().envs(
+        process
+            .env
+            .iter()
+            .filter_map(|kv: &String| kv.split_once('=')),
+    );
 
     let uid = process.uid;
     let gid = process.gid;
