@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use nix::sys::reboot::{reboot, RebootMode};
 use nix::sys::wait::{waitpid, WaitStatus};
-use nix::unistd::{setgroups, Gid, Pid};
+use nix::unistd::{setgid, setgroups, setuid, Gid, Pid, Uid};
 
 use strato_sandbox_init::config::{GuestConfig, ResolvedProcess};
 use strato_sandbox_init::protocol::WorkloadState;
@@ -88,6 +88,23 @@ fn bringup() -> Result<(), Box<dyn std::error::Error>> {
 /// Launch the container workload as a child process with the resolved
 /// environment, working directory, and credentials. Returns its pid.
 fn spawn_workload(process: &ResolvedProcess) -> Result<Pid, Box<dyn std::error::Error>> {
+    let program = process.argv.first().cloned().unwrap_or_default();
+    let child = workload_command(process)?
+        .spawn()
+        .map_err(|e| format!("exec workload {program}: {e}"))?;
+    Ok(Pid::from_raw(child.id() as i32))
+}
+
+/// Build the workload `Command` with the resolved argv, environment, working
+/// directory, and credentials.
+///
+/// The entire credential drop (setgroups → setgid → setuid) happens inside one
+/// `pre_exec` closure, while the child still has full privileges. It must NOT
+/// be mixed with `Command::uid`/`Command::gid`: std applies those before
+/// running `pre_exec` closures, so a `setgroups` in `pre_exec` would run after
+/// privileges are dropped and fail with EPERM for any non-root workload user.
+/// (`Command::groups`, which std would order correctly, is not yet stable.)
+fn workload_command(process: &ResolvedProcess) -> Result<Command, Box<dyn std::error::Error>> {
     let (program, args) = process.argv.split_first().ok_or("empty argv")?;
 
     let mut cmd = Command::new(program);
@@ -98,19 +115,17 @@ fn spawn_workload(process: &ResolvedProcess) -> Result<Pid, Box<dyn std::error::
             .filter_map(|kv: &String| kv.split_once('=')),
     );
 
-    let uid = process.uid;
-    let gid = process.gid;
-    // Drop supplementary groups to just the primary gid before the runtime
-    // applies uid/gid. Runs in the child, still privileged, pre-exec.
+    let uid = Uid::from_raw(process.uid);
+    let gid = Gid::from_raw(process.gid);
     unsafe {
-        cmd.pre_exec(move || setgroups(&[Gid::from_raw(gid)]).map_err(std::io::Error::from));
+        cmd.pre_exec(move || {
+            setgroups(&[gid])?;
+            setgid(gid)?;
+            setuid(uid)?;
+            Ok(())
+        });
     }
-    cmd.gid(gid).uid(uid);
-
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("exec workload {program}: {e}"))?;
-    Ok(Pid::from_raw(child.id() as i32))
+    Ok(cmd)
 }
 
 /// Reap children until the workload process is reaped, recording its exit code.
@@ -172,5 +187,45 @@ fn fatal(message: &str) -> ! {
     let _ = reboot(RebootMode::RB_POWER_OFF);
     loop {
         std::thread::park();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test for the credential drop in `workload_command`: a
+    /// non-root workload user must spawn successfully, with uid, gid, and the
+    /// supplementary group set all reduced to the configured ids. The previous
+    /// implementation (setgroups in `pre_exec` combined with
+    /// `Command::uid`/`Command::gid`) failed this with EPERM because std runs
+    /// `pre_exec` closures after dropping uid/gid. Switching credentials needs
+    /// root, so the test skips when run unprivileged (as in CI).
+    #[test]
+    fn workload_spawns_as_nonroot_with_primary_gid_only() {
+        if !nix::unistd::geteuid().is_root() {
+            eprintln!("skipping: switching credentials requires root");
+            return;
+        }
+        let process = ResolvedProcess {
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "echo \"$(id -u) $(id -g) $(id -G)\"".into(),
+            ],
+            env: vec!["PATH=/usr/bin:/bin".into()],
+            cwd: "/".into(),
+            uid: 65534,
+            gid: 65534,
+        };
+        let output = workload_command(&process)
+            .expect("build workload command")
+            .output()
+            .expect("spawn workload as uid 65534");
+        assert!(output.status.success(), "workload failed: {output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "65534 65534 65534"
+        );
     }
 }
