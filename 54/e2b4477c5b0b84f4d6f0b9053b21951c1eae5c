@@ -1,0 +1,38 @@
+control-plane/Sources/App/Services/AgentUpdateArtifacts.swift
+  s_b1fd57a7028f8c::t_dcdf278b539e17 1,5-33,36-40,43-45,53-54,59-60,68-88,95,97-117,121-122,135-202
+  s_b1fd57a7028f8c::t_b420d11d35a2d1 203
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_b1fd57a7028f8c::t_c582ec324ca8e0 730,737-741,772-778,780
+  s_b1fd57a7028f8c::t_0baf30613bc6e2 793-798
+docs/deployment/agents.md
+  s_b1fd57a7028f8c::t_686b31f537a06c 215-219
+control-plane/Tests/AppTests/AgentUpdateArtifactsTests.swift
+  s_b1fd57a7028f8c::t_9de94a8694398d 62-154
+  s_b1fd57a7028f8c::t_97282fa085d66c 1
+agent/Package.resolved
+  s_a920201f7c1034::t_a7b3b434e6748b 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "54e2b4477c5b0b84f4d6f0b9053b21951c1eae5c",
+  "prompts": {},
+  "sessions": {
+    "s_a920201f7c1034": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e474b736-80eb-41cc-aeb3-ac5e04e1363a",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b1fd57a7028f8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "24d3be9f-19d3-48c9-8583-12204042473f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
