@@ -331,33 +331,62 @@ struct SandboxController: RouteCollection {
 
         let userID = try user.requireID()
 
-        // Quota admission check, the sandbox insert, the initial desired-state
-        // bump, and the pending create operation commit (or roll back) as one
-        // transaction, mirroring VM creation. Sandboxes draw from the same
-        // vCPU/memory pools as VMs, count against the sandbox count limit,
-        // and reserve no storage (issue #415).
-        let operation = try await req.db.transaction { db -> ResourceOperation in
-            try await QuotaEnforcementService.reserveSandbox(
-                for: project,
-                environment: environment,
-                vcpus: sandbox.cpus,
-                memory: sandbox.memory,
-                on: db
-            )
+        // Quota admission check, the sandbox insert, its NIC + address rows, the
+        // initial desired-state bump, and the pending create operation commit
+        // (or roll back) as one transaction, mirroring VM creation. Sandboxes
+        // draw from the same vCPU/memory pools as VMs, count against the sandbox
+        // count limit, and reserve no storage (issue #415).
+        //
+        // IPAM's unique (network, address) index is the backstop against
+        // concurrent creates racing to the same address (across VMs and
+        // sandboxes, issue #416). A violation poisons the whole Postgres
+        // transaction, so the retry wraps the transaction: the loser re-reads
+        // the used set and allocates the next free address.
+        let operation: ResourceOperation
+        do {
+            let initialGeneration = sandbox.generation
+            operation = try await VMController.retryingOnConstraintFailure {
+                // A retried attempt reuses this model after its insert was
+                // rolled back: reset the id/exists/generation so every attempt
+                // starts as a fresh insert (see the VM create path).
+                sandbox.id = nil
+                sandbox.$id.exists = false
+                sandbox.generation = initialGeneration
+                return try await req.db.transaction { db -> ResourceOperation in
+                    try await QuotaEnforcementService.reserveSandbox(
+                        for: project,
+                        environment: environment,
+                        vcpus: sandbox.cpus,
+                        memory: sandbox.memory,
+                        on: db
+                    )
 
-            try await sandbox.save(on: db)
+                    try await sandbox.save(on: db)
+                    let sandboxID = try sandbox.requireID()
 
-            // Desired state for a fresh sandbox: exists but not running. The
-            // bump to generation 1 distinguishes "never confirmed by any
-            // agent" (observed_generation 0) from "confirmed".
-            sandbox.setDesiredStatus(.stopped)
-            try await sandbox.update(on: db)
+                    // Desired state for a fresh sandbox: exists but not running.
+                    // The bump to generation 1 distinguishes "never confirmed by
+                    // any agent" (observed_generation 0) from "confirmed".
+                    sandbox.setDesiredStatus(.stopped)
+                    try await sandbox.update(on: db)
 
-            let operation = ResourceOperation(
-                sandboxID: try sandbox.requireID(), userID: userID, kind: .create)
-            try await operation.save(on: db)
+                    // One NIC on the default logical network, IPAM-allocated by
+                    // the control plane (issue #416). A missing default-network
+                    // row (pre-migration data) degrades to an address-less NIC,
+                    // matching the VM implicit-default path.
+                    try await Self.attachDefaultNIC(to: sandboxID, on: db)
 
-            return operation
+                    let operation = ResourceOperation(
+                        sandboxID: sandboxID, userID: userID, kind: .create)
+                    try await operation.save(on: db)
+
+                    return operation
+                }
+            }
+        } catch let error as IPAMService.IPAMError {
+            // The default network's subnet is full; the whole transaction rolled
+            // back, so no sandbox was created.
+            throw Abort(.conflict, reason: error.errorDescription ?? "No free IP addresses in the network")
         }
 
         let sandboxID = try sandbox.requireID()
@@ -395,6 +424,63 @@ struct SandboxController: RouteCollection {
             ])
 
         return try Self.accepted(operation)
+    }
+
+    /// Allocates and persists the sandbox's single NIC on the default logical
+    /// network (issue #416), reusing the VM NIC's MAC generation and IPAM. Must
+    /// run inside the create transaction so the address is reserved before the
+    /// `202` returns and before placement. A missing default-network row
+    /// degrades to an address-less NIC (matching the VM implicit-default
+    /// behavior on pre-migration data); the NIC row itself is always created so
+    /// the sandbox has a stable device name to attach.
+    private static func attachDefaultNIC(to sandboxID: UUID, on db: Database) async throws {
+        let networkName = LogicalNetwork.defaultNetworkName
+
+        var allocation: IPAMService.Allocation?
+        var allocation6: IPAMService.Allocation6?
+        var networkGateway: String?
+        var networkGateway6: String?
+        if let logicalNetwork = try await LogicalNetwork.query(on: db)
+            .filter(\.$name == networkName)
+            .first()
+        {
+            allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
+            networkGateway = logicalNetwork.gateway
+            // Dual-stack network: the NIC gets one address per family.
+            allocation6 = try await IPAMService.allocateIPv6(for: logicalNetwork, on: db)
+            networkGateway6 = logicalNetwork.gateway6
+        }
+
+        let networkInterface = SandboxNetworkInterface(
+            sandboxID: sandboxID,
+            network: networkName,
+            macAddress: VMNetworkInterface.generateMACAddress()
+        )
+        try await networkInterface.save(on: db)
+        let interfaceID = try networkInterface.requireID()
+
+        if let allocation {
+            let address = SandboxInterfaceAddress(
+                interfaceID: interfaceID,
+                network: networkName,
+                family: .ipv4,
+                address: allocation.ipAddress,
+                prefixLength: allocation.prefixLength,
+                gateway: networkGateway
+            )
+            try await address.save(on: db)
+        }
+        if let allocation6 {
+            let address6 = SandboxInterfaceAddress(
+                interfaceID: interfaceID,
+                network: networkName,
+                family: .ipv6,
+                address: allocation6.ipAddress,
+                prefixLength: allocation6.prefixLength,
+                gateway: networkGateway6
+            )
+            try await address6.save(on: db)
+        }
     }
 
     /// Background half of `create`: scheduling and the placement write happen

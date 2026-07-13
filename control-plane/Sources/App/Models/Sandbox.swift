@@ -65,6 +65,12 @@ final class Sandbox: Model, @unchecked Sendable {
     @OptionalField(key: "hypervisor_id")
     var hypervisorId: String?
 
+    /// The sandbox's NICs (single-NIC in v1), allocated at create time by the
+    /// same IPAM as VMs (issue #416). Requires eager loading with
+    /// `.with(\.$networkInterfaces)`.
+    @Children(for: \.$sandbox)
+    var networkInterfaces: [SandboxNetworkInterface]
+
     // Observed state, written only from agent reports (plus the diagnostic
     // escalations in the sweeps).
     @Enum(key: "status")
@@ -203,9 +209,11 @@ extension Sandbox {
         return true
     }
 
-    /// The wire spec for this sandbox, assembled fresh at every sync.
-    /// Networking is nil until sandbox NIC/IPAM integration (issue #416).
-    func buildSpec() -> SandboxSpec {
+    /// The wire spec for this sandbox, assembled fresh at every sync. `network`
+    /// is the sandbox's single NIC spec (issue #416), built by the caller from
+    /// the eager-loaded interface + its logical network, or nil for a sandbox
+    /// with no NIC.
+    func buildSpec(network: NetworkSpec? = nil) -> SandboxSpec {
         SandboxSpec(
             image: image,
             imageDigest: imageDigest,
@@ -215,7 +223,7 @@ extension Sandbox {
             cmd: cmd,
             env: env,
             workingDir: workingDir,
-            network: nil
+            network: network
         )
     }
 }

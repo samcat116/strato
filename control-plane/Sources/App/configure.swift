@@ -396,6 +396,12 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddSandboxCapableToAgent())
     app.migrations.add(AddSandboxCountToResourceQuota())
 
+    // Sandbox NIC + IPAM integration (issue #416): a per-sandbox NIC on a
+    // logical network with per-family address rows, allocated by the same IPAM
+    // as VMs.
+    app.migrations.add(CreateSandboxNetworkInterface())
+    app.migrations.add(CreateSandboxInterfaceAddresses())
+
     // Declarative agent auto-update (issue #434): per-agent opt-in and the
     // fleet rollout's bookkeeping columns.
     app.migrations.add(AddAgentAutoUpdate())

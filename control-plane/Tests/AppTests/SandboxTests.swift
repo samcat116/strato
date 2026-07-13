@@ -500,6 +500,180 @@ final class SandboxTests {
         }
     }
 
+    // MARK: - NIC + IPAM integration (issue #416)
+
+    /// The default logical network the app seeds at migration time
+    /// (`192.168.1.0/24`, gateway `.1`, v4-only) — the network the sandbox
+    /// create path attaches to.
+    private func defaultNetwork(on db: any Database) async throws -> LogicalNetwork {
+        try #require(
+            await LogicalNetwork.query(on: db)
+                .filter(\.$name == LogicalNetwork.defaultNetworkName)
+                .first())
+    }
+
+    @Test("Creating a sandbox allocates one NIC with an IPv4 address on the default network")
+    func createAllocatesNIC() async throws {
+        try await withSandboxTestApp { app, _, project, _, token in
+            var operation: OperationResponse?
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "netbox",
+                    "image": "ghcr.io/acme/worker:v3",
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                operation = try res.content.decode(OperationResponse.self)
+            }
+
+            let sandboxID = try #require(operation).resourceId
+            let interfaces = try await SandboxNetworkInterface.query(on: app.db)
+                .filter(\.$sandbox.$id == sandboxID)
+                .with(\.$addresses)
+                .all()
+            #expect(interfaces.count == 1)
+            let nic = try #require(interfaces.first)
+            #expect(nic.network == LogicalNetwork.defaultNetworkName)
+            #expect(nic.deviceName == "net0")
+            #expect(nic.macAddress.hasPrefix("00:0c:29:"))
+
+            let v4 = try #require(nic.ipv4Address)
+            #expect(v4.address == "192.168.1.2")  // .1 is the gateway
+            #expect(v4.gateway == "192.168.1.1")
+            #expect(v4.prefixLength == 24)
+        }
+    }
+
+    @Test("A missing default network degrades to an address-less NIC")
+    func createDegradesWithoutNetwork() async throws {
+        try await withSandboxTestApp { app, _, project, _, token in
+            // Remove the seeded default network so the create path has no subnet
+            // to allocate from and must degrade to an address-less NIC.
+            try await LogicalNetwork.query(on: app.db)
+                .filter(\.$name == LogicalNetwork.defaultNetworkName)
+                .delete()
+
+            var operation: OperationResponse?
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "netless",
+                    "image": "ghcr.io/acme/worker:v3",
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                operation = try res.content.decode(OperationResponse.self)
+            }
+
+            let sandboxID = try #require(operation).resourceId
+            let interfaces = try await SandboxNetworkInterface.query(on: app.db)
+                .filter(\.$sandbox.$id == sandboxID)
+                .with(\.$addresses)
+                .all()
+            #expect(interfaces.count == 1)
+            #expect(try #require(interfaces.first).addresses.isEmpty)
+        }
+    }
+
+    @Test("IPAM's used set unions VM and sandbox addresses on the same network")
+    func ipamUnionsVMAndSandboxAddresses() async throws {
+        try await withSandboxTestApp { app, _, project, sandbox, _ in
+            let network = try await self.defaultNetwork(on: app.db)
+
+            // A VM holds .2 and a sandbox holds .3 on the same network. The next
+            // allocation must skip both — proving the used set unions the two
+            // address tables.
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "peer-vm", project: project)
+            let vmNIC = VMNetworkInterface(
+                vmID: try vm.requireID(), network: network.name,
+                macAddress: VMNetworkInterface.generateMACAddress())
+            try await vmNIC.save(on: app.db)
+            try await VMInterfaceAddress(
+                interfaceID: try vmNIC.requireID(), network: network.name, family: .ipv4,
+                address: "192.168.1.2", prefixLength: 24, gateway: network.gateway
+            ).save(on: app.db)
+
+            let sbNIC = SandboxNetworkInterface(
+                sandboxID: try sandbox.requireID(), network: network.name,
+                macAddress: VMNetworkInterface.generateMACAddress())
+            try await sbNIC.save(on: app.db)
+            try await SandboxInterfaceAddress(
+                interfaceID: try sbNIC.requireID(), network: network.name, family: .ipv4,
+                address: "192.168.1.3", prefixLength: 24, gateway: network.gateway
+            ).save(on: app.db)
+
+            let allocation = try await IPAMService.allocateIP(for: network, on: app.db)
+            #expect(allocation.ipAddress == "192.168.1.4")
+        }
+    }
+
+    @Test("assembleDesiredState carries the sandbox NIC spec")
+    func assemblyCarriesNICSpec() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, _ in
+            let network = try await self.defaultNetwork(on: app.db)
+            let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
+
+            // Attach a NIC with an allocated address directly.
+            let nic = SandboxNetworkInterface(
+                sandboxID: try sandbox.requireID(), network: network.name,
+                macAddress: "00:0c:29:ab:cd:ef")
+            try await nic.save(on: app.db)
+            try await SandboxInterfaceAddress(
+                interfaceID: try nic.requireID(), network: network.name, family: .ipv4,
+                address: "192.168.1.7", prefixLength: 24, gateway: network.gateway
+            ).save(on: app.db)
+
+            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let entry = try #require(message.sandboxes.first)
+            let netSpec = try #require(entry.spec.network)
+            #expect(netSpec.network == network.name)
+            #expect(netSpec.macAddress == "00:0c:29:ab:cd:ef")
+            #expect(netSpec.ipAddress == "192.168.1.7")
+            #expect(netSpec.netmask == "255.255.255.0")
+            #expect(netSpec.gateway == "192.168.1.1")
+
+            // The sandbox's network is realized on its host even though no VM
+            // references it.
+            #expect(message.networks.contains { $0.name == network.name })
+        }
+    }
+
+    @Test("Deleting a sandbox cascades its NIC and address rows")
+    func deleteCascadesNIC() async throws {
+        try await withSandboxTestApp { app, _, project, _, token in
+            var operation: OperationResponse?
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "doomed",
+                    "image": "ghcr.io/acme/worker:v3",
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                operation = try res.content.decode(OperationResponse.self)
+            }
+            let sandboxID = try #require(operation).resourceId
+
+            // Sanity: rows exist before deletion.
+            let nicIDs = try await SandboxNetworkInterface.query(on: app.db)
+                .filter(\.$sandbox.$id == sandboxID).all().map { try $0.requireID() }
+            #expect(nicIDs.count == 1)
+
+            let sandbox = try #require(await Sandbox.find(sandboxID, on: app.db))
+            try await sandbox.delete(on: app.db)
+
+            let remainingNICs = try await SandboxNetworkInterface.query(on: app.db)
+                .filter(\.$sandbox.$id == sandboxID).count()
+            #expect(remainingNICs == 0)
+            let remainingAddresses = try await SandboxInterfaceAddress.query(on: app.db)
+                .filter(\.$interface.$id ~~ nicIDs).count()
+            #expect(remainingAddresses == 0)
+        }
+    }
+
     // MARK: - Observed-state reports
 
     @Test("A converged observation completes the pending boot operation")

@@ -296,8 +296,13 @@ actor FirecrackerService: HypervisorService {
         }
 
         let instanceInfo = try await manager.getInstanceInfo()
+        return Self.vmStatus(from: instanceInfo.state)
+    }
 
-        switch instanceInfo.state {
+    /// The single Firecracker `InstanceState` → `VMStatus` mapping, shared by
+    /// status queries and re-adoption so the two can never drift apart.
+    static func vmStatus(from state: InstanceState) -> VMStatus {
+        switch state {
         case .running:
             return .running
         case .paused:
@@ -321,6 +326,71 @@ actor FirecrackerService: HypervisorService {
             memoryBytes += spec.memoryBytes
         }
         return (vcpus, memoryBytes)
+    }
+
+    // MARK: - Orphan Re-adoption (issue #433)
+
+    /// The deterministic Firecracker API socket every VM exposes for
+    /// re-adoption, matching the path `FirecrackerClient` binds at spawn time.
+    static func adoptionSocketPath(socketDirectory: String, vmId: String) -> String {
+        FirecrackerClient.socketPath(socketDirectory: socketDirectory, vmId: vmId)
+    }
+
+    /// Re-adopts a VM whose Firecracker process survived an agent restart by
+    /// reconnecting to its deterministic API socket, and returns the observed
+    /// status. Fails (leaving the VM orphaned) when the socket is missing — e.g.
+    /// the VM predates deterministic sockets — or cannot be connected because
+    /// the process is gone.
+    func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus {
+        if vmManagers[vmId] != nil {
+            // Already managed (e.g. a replayed sync raced re-adoption): adoption
+            // is satisfied, just report the current status.
+            return try await getVMStatus(vmId: vmId)
+        }
+
+        let socketPath = Self.adoptionSocketPath(socketDirectory: socketDirectory, vmId: vmId)
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            throw HypervisorServiceError.adoptionTargetGone(
+                "VM \(vmId) has no re-adoption API socket at \(socketPath) (created before deterministic sockets, or its process is gone)"
+            )
+        }
+
+        // The client may not have been created yet if re-adoption is the first
+        // operation after a restart; mirror createVM's lazy initialization.
+        if firecrackerClient == nil {
+            firecrackerClient = FirecrackerClient(
+                firecrackerBinaryPath: firecrackerBinaryPath,
+                socketDirectory: socketDirectory,
+                logger: logger
+            )
+        }
+        guard let client = firecrackerClient else {
+            throw HypervisorServiceError.hypervisorNotInstalled(firecrackerBinaryPath)
+        }
+
+        logger.info(
+            "Re-adopting orphaned Firecracker VM",
+            metadata: [
+                "vmId": .string(vmId),
+                "socket": .string(socketPath),
+            ])
+
+        let manager: FirecrackerManager
+        let info: InstanceInfo
+        do {
+            (manager, info) = try await client.adoptVM(vmId: vmId)
+        } catch {
+            // A live Firecracker always accepts connections on its API socket,
+            // so a refused/failed connect means the process is gone and the
+            // socket file merely outlived it.
+            throw HypervisorServiceError.adoptionTargetGone(
+                "VM \(vmId) Firecracker API socket at \(socketPath) is dead: \(error.localizedDescription)")
+        }
+
+        vmManagers[vmId] = manager
+        vmSpecs[vmId] = spec
+
+        return Self.vmStatus(from: info.state)
     }
 
     /// Firecracker exposes the guest serial console on the firecracker process's

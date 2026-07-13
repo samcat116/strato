@@ -22,11 +22,12 @@ public struct VMManifestEntry: Codable, Sendable {
 /// On restart, previously-managed VMs are loaded from this manifest as orphans,
 /// and the reconciler re-adopts them when the backend supports it (the `.adopt`
 /// step in `Reconciliation.swift`): QEMU reconnects to the still-running process
-/// via its deterministic per-VM QMP socket path. Backends without adoption
-/// support — Firecracker uses the throwing `adoptVM` default in
-/// `HypervisorProtocol.swift` — and VMs created before deterministic socket
-/// paths remain orphaned; they keep their resources reserved but are absent
-/// from the agent's heartbeat, which the control plane's reconciliation
+/// via its deterministic per-VM QMP socket path, and Firecracker reconnects to
+/// its deterministic per-VM API socket (issue #433). Backends without adoption
+/// support — e.g. the Mock hypervisor, which keeps the throwing `adoptVM`
+/// default in `HypervisorProtocol.swift` — and VMs created before deterministic
+/// socket paths remain orphaned; they keep their resources reserved but are
+/// absent from the agent's heartbeat, which the control plane's reconciliation
 /// surfaces as `.error` for operator attention.
 public struct VMManifestStore {
     public let path: String
