@@ -1,0 +1,85 @@
+SwiftFirecracker/Tests/SwiftFirecrackerTests/VsockConnectionTests.swift
+  s_a36dd7ef4412d5::t_d7ae504db0272e 85-129
+agent/Sources/StratoAgentCore/SandboxControlProtocol.swift
+  s_a36dd7ef4412d5::t_ac356848ca740d 80-84
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_a36dd7ef4412d5::t_e8d8126903bc79 857-860
+  s_a36dd7ef4412d5::t_85063e22a0c653 346-350
+  s_a36dd7ef4412d5::t_79e13129ebf8f1 550,557,559,566-589
+  s_a36dd7ef4412d5::t_63b19863335340 523-525,527-534
+  s_a36dd7ef4412d5::t_f35895ec35b63e 438,590,911-954
+  s_a36dd7ef4412d5::t_8c9783cf09b886 63-68
+  s_a36dd7ef4412d5::t_016caed1ac5691 771,773,776-778,780-782
+  s_a36dd7ef4412d5::t_a7fb194d5c222a 403-407,428-437
+  s_a36dd7ef4412d5::t_e135417386f5c7 487-488,490
+  s_a36dd7ef4412d5::t_2d2b599ef88f8e 885-891,893
+  s_a36dd7ef4412d5::t_7d0c8cc8a1ec66 439
+control-plane/Sources/App/Services/SandboxExecSessionManager.swift
+  s_a36dd7ef4412d5::t_0730f0ab2aa136 227-262
+  s_a36dd7ef4412d5::t_9a7e3303fce0a4 399-416
+  s_a36dd7ef4412d5::t_ec1defc2ef79fd 324-338
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_a36dd7ef4412d5::t_f8538f7d0f1774 835-840
+  s_a36dd7ef4412d5::t_15e71e163403b0 285-290
+  s_a36dd7ef4412d5::t_841cf5b486c817 685-689
+control-plane/Sources/App/Services/AgentService.swift
+  s_a36dd7ef4412d5::t_095ab831e15150 592-595
+  s_a36dd7ef4412d5::t_f6cb3d62df30a3 614-616
+SwiftFirecracker/Sources/SwiftFirecracker/VsockConnection.swift
+  s_a36dd7ef4412d5::t_d19662245cc6f2 20-31
+  s_a36dd7ef4412d5::t_d3db85f7897562 118-124,127
+control-plane/Tests/AppTests/SandboxLogIngestorTests.swift
+  s_a36dd7ef4412d5::t_0451ee9b8cb11f 1-129
+agent/Sources/StratoAgent/Agent.swift
+  s_a36dd7ef4412d5::t_941dd3ddabdb87 2635-2647
+  s_a36dd7ef4412d5::t_a6b58c06797399 2651,2654,2657,2660
+  s_a36dd7ef4412d5::t_20670430c77052 2674-2681,2683
+  s_a36dd7ef4412d5::t_819d27071666b0 2575-2578,2580,2582-2585
+control-plane/web/src/lib/hooks/use-sandbox-exec.ts
+  s_a36dd7ef4412d5::t_0813371ec0dff8 126-130
+  s_a36dd7ef4412d5::t_fef02409a79915 79
+  s_a36dd7ef4412d5::t_3cc6e28f7b9118 99
+  s_a36dd7ef4412d5::t_8281351e02d4f6 231-234
+  s_a36dd7ef4412d5::t_f8b42cfb8a5c53 55-58
+sandbox-guest/init/src/linux/logs.rs
+  s_a36dd7ef4412d5::t_248c72616b09ae 47-50
+control-plane/Sources/App/Services/SandboxLogIngestor.swift
+  s_a36dd7ef4412d5::t_501431ff11d5c1 1-159
+sandbox-guest/init/src/linux/exec.rs
+  s_a36dd7ef4412d5::t_a2ac7b4fa8b32b 202
+  s_a36dd7ef4412d5::t_bb4acf716add57 267-271,278-279,281
+  s_a36dd7ef4412d5::t_882441b6fa4f06 241-247
+  s_a36dd7ef4412d5::t_e3114e2de2c8a1 314-339
+  s_a36dd7ef4412d5::t_ba5ffc7de5e40d 19-25
+  s_a36dd7ef4412d5::t_1a40918643b7aa 39
+  s_a36dd7ef4412d5::t_4966fa3a983964 45
+  s_a36dd7ef4412d5::t_32b2df63b03926 157-159,167,178
+control-plane/Tests/AppTests/SandboxExecTests.swift
+  s_a36dd7ef4412d5::t_420ddc6c58003e 394-444
+sandbox-guest/init/src/linux/mod.rs
+  s_a36dd7ef4412d5::t_22ba6f411b8583 125-126,128
+  s_a36dd7ef4412d5::t_c945db0c5253b0 19
+  s_a36dd7ef4412d5::t_0ee74a3d312b2e 155-172
+control-plane/Sources/App/Controllers/LogsController.swift
+  s_a36dd7ef4412d5::t_29a958789f12c5 85,93-96
+control-plane/Sources/App/Controllers/SandboxExecWebSocketController.swift
+  s_a36dd7ef4412d5::t_1dc04a6f35008b 161
+  s_a36dd7ef4412d5::t_175469339e7c6c 80-88,90-95,97,102-107,112,116-118
+  s_a36dd7ef4412d5::t_59d10e2541c612 159-160,162-165
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "b2c933f168f05203b0ff234497cb168defcdd027",
+  "prompts": {},
+  "sessions": {
+    "s_a36dd7ef4412d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c139a913-0184-4109-9812-bbb47da69e4c",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
