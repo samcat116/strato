@@ -1,0 +1,74 @@
+# Strato sandbox guest kernel — aarch64 config fragment (issue #419).
+#
+# Fragment merged over `make ARCH=arm64 defconfig`, then `make olddefconfig`.
+# Mirrors the x86_64 fragment; the difference is the console (Firecracker
+# aarch64 exposes a PL011 UART → ttyAMA0) and that arm64 has no PCI/paravirt
+# knobs to set here. Boot aarch64 sandboxes with `console=ttyAMA0`.
+
+# No loadable modules — the guest ships a single kernel Image, nothing to insmod.
+# CONFIG_MODULES is not set
+
+# virtio transported over MMIO
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_MENU=y
+CONFIG_VIRTIO_MMIO=y
+CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_VIRTIO_NET=y
+CONFIG_HW_RANDOM=y
+CONFIG_HW_RANDOM_VIRTIO=y
+
+# vsock guest transport for the control agent
+CONFIG_VSOCKETS=y
+CONFIG_VIRTIO_VSOCKETS=y
+
+# Networking core
+CONFIG_NET=y
+CONFIG_INET=y
+CONFIG_UNIX=y
+CONFIG_PACKET=y
+CONFIG_NETDEVICES=y
+
+# Block layer + ext4 rootfs
+CONFIG_BLOCK=y
+CONFIG_EXT4_FS=y
+CONFIG_EXT4_USE_FOR_EXT2=y
+
+# Pseudo / in-memory filesystems
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+CONFIG_TMPFS=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_UNIX98_PTYS=y
+
+# initramfs (this init) loaded via the Firecracker initrd
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_RD_GZIP=y
+
+# Serial console on ttyAMA0 (PL011) — plus 8250 as a harmless fallback
+CONFIG_TTY=y
+CONFIG_SERIAL_AMBA_PL011=y
+CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+CONFIG_PRINTK=y
+CONFIG_BINFMT_ELF=y
+CONFIG_BINFMT_SCRIPT=y
+
+# Namespaces / cgroups
+CONFIG_NAMESPACES=y
+CONFIG_UTS_NS=y
+CONFIG_IPC_NS=y
+CONFIG_PID_NS=y
+CONFIG_NET_NS=y
+CONFIG_USER_NS=y
+CONFIG_CGROUPS=y
+CONFIG_MEMCG=y
+
+# Common syscalls container runtimes assume
+CONFIG_EPOLL=y
+CONFIG_FUTEX=y
+CONFIG_SIGNALFD=y
+CONFIG_EVENTFD=y

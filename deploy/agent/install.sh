@@ -31,6 +31,8 @@
 #   --no-deps                Do not install host packages (still checks them)
 #   --no-systemd             Do not install/enable systemd units
 #   --skip-preflight         Skip the host dependency summary
+#   --sandbox-guest          Also install the sandbox guest base image (kernel +
+#                            init) so this host can run sandboxes (Linux only)
 #   -h, --help               Show this help
 #
 # SPIRE / telemetry flags (Linux + systemd only):
@@ -65,6 +67,7 @@ STRATO_AGENT_BIN=""
 INSTALL_DEPS=1
 USE_SYSTEMD=1
 RUN_PREFLIGHT=1
+INSTALL_SANDBOX_GUEST=0
 
 # SPIRE / telemetry. Versions are pinned for reproducible installs: SPIRE
 # matches the compose spire-server image (deploy/compose/spiffe/Dockerfile);
@@ -109,6 +112,7 @@ while [ $# -gt 0 ]; do
     --no-deps)          INSTALL_DEPS=0; shift ;;
     --no-systemd)       USE_SYSTEMD=0; shift ;;
     --skip-preflight)   RUN_PREFLIGHT=0; shift ;;
+    --sandbox-guest)    INSTALL_SANDBOX_GUEST=1; shift ;;
     --spire-join-token)      JOIN_TOKEN="$2"; shift 2 ;;
     --spire-server-address)  SPIRE_SERVER_ADDRESS="$2"; shift 2 ;;
     --trust-domain)          TRUST_DOMAIN="$2"; shift 2 ;;
@@ -248,6 +252,53 @@ install_binary() {
 }
 
 install_binary
+
+# --- sandbox guest base image (optional, Linux only) -------------------------
+# The kernel + init/guest-agent (issue #419) a host needs to boot sandboxes.
+# Off by default: without it the agent simply never advertises the
+# sandbox_runtime capability (SandboxRuntimeProbe), so the control plane won't
+# place sandboxes here. The tarball is the on-disk layout the agent expects at
+# sandbox_guest_image_path (default /var/lib/strato/sandbox/guest).
+SANDBOX_GUEST_DIR="${STRATO_STATE_DIR}/sandbox/guest"
+
+install_sandbox_guest() {
+  if [ "$OS" != "linux" ]; then
+    warn "sandboxes are Linux/Firecracker only; skipping --sandbox-guest on ${OS}"
+    return 0
+  fi
+  command -v curl >/dev/null 2>&1 || die "curl is required to download the sandbox guest image"
+  # The guest artifacts use the toolchain arch name (aarch64), not uname's arm64.
+  local garch; garch=$([ "$ARCH" = "arm64" ] && echo aarch64 || echo "$ARCH")
+  local asset="sandbox-guest-${garch}.tar.gz"
+
+  local base
+  if [ "$VERSION" = "latest" ]; then
+    base="https://github.com/${REPO}/releases/latest/download"
+  else
+    base="https://github.com/${REPO}/releases/download/${VERSION}"
+  fi
+
+  local tmp; tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" RETURN
+  log "Downloading sandbox guest image (${asset})"
+  curl -fSL "${base}/${asset}" -o "${tmp}/${asset}" \
+    || die "download failed: ${base}/${asset} — no published sandbox guest image for ${garch}? Build it with sandbox-guest/build.sh."
+  if curl -fsSL "${base}/${asset}.sha256" -o "${tmp}/${asset}.sha256" 2>/dev/null; then
+    (cd "$tmp" && sha256sum -c "${asset}.sha256") || die "checksum verification failed for ${asset}"
+  else
+    warn "no checksum sidecar for ${asset}; skipping verification"
+  fi
+
+  install -d "$SANDBOX_GUEST_DIR"
+  tar xzf "${tmp}/${asset}" -C "$SANDBOX_GUEST_DIR" \
+    || die "failed to extract ${asset} into ${SANDBOX_GUEST_DIR}"
+  log "Installed sandbox guest image to ${SANDBOX_GUEST_DIR}"
+}
+
+if [ "$INSTALL_SANDBOX_GUEST" -eq 1 ]; then
+  install_sandbox_guest
+fi
 
 # --- SPIRE / telemetry binaries ------------------------------------------------
 # Official GitHub release artifacts, pinned versions. Each install is skipped

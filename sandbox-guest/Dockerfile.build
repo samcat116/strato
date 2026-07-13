@@ -1,0 +1,31 @@
+# Reproducible build environment for the Strato sandbox guest image
+# (issue #419): the toolchain to compile the pinned Linux kernel and the
+# static musl init. Used by .github/workflows/sandbox-guest.yaml and usable
+# locally:
+#
+#   docker build -f sandbox-guest/Dockerfile.build -t strato-sandbox-guest-build sandbox-guest
+#   docker run --rm -v "$PWD/sandbox-guest:/src" -w /src strato-sandbox-guest-build \
+#     ./build.sh --arch x86_64 --out /src/build/out
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Kernel build deps + cpio/xz for the initramfs + cross toolchains for both
+# target arches so a single image can build x86_64 and aarch64.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      bc bison flex \
+      libssl-dev libelf-dev \
+      cpio xz-utils gzip \
+      curl ca-certificates git \
+      gcc-aarch64-linux-gnu \
+      gcc-x86-64-linux-gnu \
+    && rm -rf /var/lib/apt/lists/*
+
+# Rust toolchain with both musl targets for the static init.
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --default-toolchain 1.83.0 \
+    && rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+
+WORKDIR /src

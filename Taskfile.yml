@@ -1268,6 +1268,42 @@ tasks:
       - echo "✅ Images downloaded to /tmp/firecracker-images/"
       - ls -lh /tmp/firecracker-images/
 
+  build-sandbox-guest:
+    desc: Build the sandbox guest image (kernel + init initramfs) for the host arch (Linux only)
+    cmds:
+      - echo "🔧 Building sandbox guest image..."
+      - "{{.PROJECT_ROOT}}/sandbox-guest/build.sh --out {{.PROJECT_ROOT}}/sandbox-guest/build/out"
+      - echo "✅ Guest image built at {{.PROJECT_ROOT}}/sandbox-guest/build/out"
+      - 'echo "   Install with sudo cp -a {{.PROJECT_ROOT}}/sandbox-guest/build/out/. /var/lib/strato/sandbox/guest/"'
+
+  install-sandbox-guest:
+    desc: "Download and install the sandbox guest image from the latest release (Linux only). Override dir with SANDBOX_GUEST_DIR."
+    vars:
+      GUEST_DIR: '{{.SANDBOX_GUEST_DIR | default "/var/lib/strato/sandbox/guest"}}'
+    cmds:
+      - echo "📥 Installing sandbox guest image to {{.GUEST_DIR}}..."
+      - |
+        set -euo pipefail
+        ARCH=$(uname -m)
+        REPO="samcat116/strato"
+        MANIFEST_URL="https://github.com/${REPO}/releases/latest/download/sandbox-guest-manifest.json"
+        echo "Fetching manifest for ${ARCH}..."
+        MANIFEST=$(curl -fsSL "${MANIFEST_URL}")
+        URL=$(echo "${MANIFEST}" | jq -r --arg a "${ARCH}" '.assets[] | select(.arch == $a) | .url')
+        SHA=$(echo "${MANIFEST}" | jq -r --arg a "${ARCH}" '.assets[] | select(.arch == $a) | .sha256')
+        if [ -z "${URL}" ] || [ "${URL}" = "null" ]; then
+          echo "no sandbox guest image for arch ${ARCH} in the latest release" >&2; exit 1
+        fi
+        TMP=$(mktemp -d)
+        trap 'rm -rf "${TMP}"' EXIT
+        echo "Downloading ${URL}..."
+        curl -fsSL -o "${TMP}/guest.tar.gz" "${URL}"
+        echo "${SHA}  ${TMP}/guest.tar.gz" | sha256sum -c -
+        sudo mkdir -p "{{.GUEST_DIR}}"
+        sudo tar xzf "${TMP}/guest.tar.gz" -C "{{.GUEST_DIR}}"
+      - echo "✅ Sandbox guest image installed at {{.GUEST_DIR}}"
+      - ls -lh "{{.GUEST_DIR}}"
+
   create-agent-config-linux:
     desc: Create agent configuration for Linux with OVN networking and Firecracker
     cmds:

@@ -42,3 +42,7 @@ docs/.vitepress/cache
 # Editor/tool working directories
 /.entire/
 /.codex/
+
+# Sandbox guest build outputs
+/sandbox-guest/init/target/
+/sandbox-guest/build/

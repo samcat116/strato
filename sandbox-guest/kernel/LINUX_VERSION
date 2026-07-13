@@ -1,0 +1,8 @@
+# Pinned upstream kernel for the Strato sandbox guest (issue #419).
+#
+# Update both fields together. The checksum is the one published at
+# https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc for the
+# matching linux-<version>.tar.xz. 6.1 is an LTS series (supported into 2027),
+# which is what the Firecracker CI guest configs also track.
+LINUX_VERSION=6.1.177
+LINUX_SHA256=f6529bfe1a457adab69156fb7fa2232cc203eb63f5e46210f9953d6fc9f70a30

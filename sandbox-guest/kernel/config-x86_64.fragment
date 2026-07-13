@@ -1,0 +1,79 @@
+# Strato sandbox guest kernel — x86_64 config fragment (issue #419).
+#
+# This is a *fragment*, not a full .config: build-kernel.sh runs
+# `make defconfig`, merges this on top with scripts/kconfig/merge_config.sh,
+# then `make olddefconfig`. It turns on exactly what a Firecracker microVM
+# needs to boot our initramfs and an OCI ext4 rootfs; everything else stays at
+# the upstream default. Derived from the Firecracker CI guest config, trimmed.
+
+# No loadable modules — the guest ships a single vmlinux, nothing to insmod.
+# CONFIG_MODULES is not set
+
+# KVM guest paravirt niceties
+CONFIG_HYPERVISOR_GUEST=y
+CONFIG_PARAVIRT=y
+CONFIG_KVM_GUEST=y
+
+# virtio transported over MMIO (Firecracker exposes no PCI bus; boot with pci=off)
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_MENU=y
+CONFIG_VIRTIO_MMIO=y
+CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_VIRTIO_NET=y
+CONFIG_HW_RANDOM=y
+CONFIG_HW_RANDOM_VIRTIO=y
+
+# vsock guest transport for the control agent
+CONFIG_VSOCKETS=y
+CONFIG_VIRTIO_VSOCKETS=y
+
+# Networking core (a sandbox may have one NIC on a LogicalNetwork)
+CONFIG_NET=y
+CONFIG_INET=y
+CONFIG_UNIX=y
+CONFIG_PACKET=y
+CONFIG_NETDEVICES=y
+
+# Block layer + ext4 rootfs (issue #418 flattens the OCI image to ext4)
+CONFIG_BLOCK=y
+CONFIG_EXT4_FS=y
+CONFIG_EXT4_USE_FOR_EXT2=y
+
+# Pseudo / in-memory filesystems the init and workloads rely on
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+CONFIG_TMPFS=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_UNIX98_PTYS=y
+
+# initramfs (this init) loaded via the Firecracker initrd
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_RD_GZIP=y
+
+# Serial console on ttyS0
+CONFIG_TTY=y
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+CONFIG_PRINTK=y
+CONFIG_BINFMT_ELF=y
+CONFIG_BINFMT_SCRIPT=y
+
+# Namespaces / cgroups: many container workloads expect them, and phase-3
+# jailer hardening (issue #425) will lean on them.
+CONFIG_NAMESPACES=y
+CONFIG_UTS_NS=y
+CONFIG_IPC_NS=y
+CONFIG_PID_NS=y
+CONFIG_NET_NS=y
+CONFIG_USER_NS=y
+CONFIG_CGROUPS=y
+CONFIG_MEMCG=y
+
+# Common syscalls container runtimes assume
+CONFIG_EPOLL=y
+CONFIG_FUTEX=y
+CONFIG_SIGNALFD=y
+CONFIG_EVENTFD=y
