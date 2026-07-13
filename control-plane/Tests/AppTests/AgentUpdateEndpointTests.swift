@@ -191,6 +191,38 @@ final class AgentUpdateEndpointTests {
         }
     }
 
+    @Test("explicit artifact overrides are system-admin only")
+    func explicitArtifactRequiresSystemAdmin() async throws {
+        try await withUpdateTestApp { app, builder, org, _ in
+            // A delegated org admin: SpiceDB grants agent#manage (mocked
+            // all-allow), but explicit artifacts are arbitrary host code and
+            // must stay system-admin only. The same request without the
+            // override (exercised elsewhere) is allowed for this user.
+            let delegated = try await builder.createUser(
+                username: "orgadmin",
+                email: "orgadmin@example.com",
+                displayName: "Org Admin",
+                isSystemAdmin: false
+            )
+            try await builder.addUserToOrganization(user: delegated, organization: org, role: "admin")
+            let delegatedToken = try await delegated.generateAPIKey(on: app.db)
+            app.spicedbMockAllows = true
+
+            let agent = try await self.makeAgent(app: app, org: org)
+
+            try await app.test(.POST, "/api/agents/\(agent.id!)/actions/update") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: delegatedToken)
+                try req.content.encode([
+                    "artifactUrl": "https://attacker.example/strato-agent",
+                    "sha256": Self.validDigest,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+                #expect(res.body.string.contains("system admin"))
+            }
+        }
+    }
+
     @Test("an explicit bare-binary artifact passes every gate and reaches dispatch")
     func explicitBinaryArtifactAccepted() async throws {
         try await withUpdateTestApp { app, _, org, token in

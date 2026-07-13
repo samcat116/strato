@@ -752,6 +752,18 @@ struct AgentController: RouteCollection {
         let targetVersion: String
         let artifact: ResolvedAgentArtifact
         if let explicitURL = request.artifactUrl {
+            // An explicit artifact is arbitrary code the agent will install
+            // and run as itself on the hypervisor host. Delegated org/OU
+            // admins with agent#manage may only update along the trusted
+            // release/manifest path; overriding the artifact is system-admin
+            // only.
+            guard try requireUser(req).isSystemAdmin else {
+                throw Abort(
+                    .forbidden,
+                    reason:
+                        "Explicit artifact overrides install an arbitrary binary on the host and require system admin. Omit artifactUrl to update along the release path."
+                )
+            }
             guard let explicitDigest = request.sha256.flatMap({ AgentUpdateArtifacts.parseChecksum($0) })
             else {
                 throw Abort(.badRequest, reason: "artifactUrl requires a hex SHA-256 digest in sha256")

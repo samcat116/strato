@@ -242,7 +242,9 @@ Caveats the UI confirms before dispatching:
   orphans that can only be deleted afterwards. The endpoint refuses in this
   case unless `{"force": true}` is passed.
 
-Request-body overrides for air-gapped deployments or unreleased builds:
+Request-body overrides for air-gapped deployments or unreleased builds
+(**system admin only** — an explicit artifact is arbitrary code the host will
+run as the agent, so delegated org admins are limited to the release path):
 `{"artifactUrl": "...", "sha256": "<hex>"}` skips artifact resolution and
 hands the agent exactly that file (the URL must be reachable *from the agent
 host*). The override defaults to the release tarball shape; add
