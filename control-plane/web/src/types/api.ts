@@ -459,6 +459,73 @@ export interface SSOLookupResponse {
   providers: PublicOIDCProvider[];
 }
 
+// Shared Signals Framework receiver streams (org-scoped; managed by org admins)
+export interface SSFStream {
+  id: string;
+  organizationId: string;
+  name: string;
+  description?: string | null;
+  transmitterURL: string;
+  expectedIssuer?: string | null;
+  expectedAudience: string[];
+  deliveryMethod: "push" | "poll";
+  eventsRequested: string[];
+  remoteStreamID?: string | null;
+  pollEndpoint?: string | null;
+  pushEndpoint?: string | null;
+  pushTokenPrefix?: string | null;
+  enabled: boolean;
+  registered: boolean;
+  verifiedAt?: string | null;
+  lastEventAt?: string | null;
+  lastError?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CreateSSFStreamRequest {
+  name: string;
+  description?: string;
+  transmitterURL: string;
+  authToken?: string;
+  expectedIssuer?: string;
+  expectedAudience?: string[];
+  deliveryMethod: "push" | "poll";
+  eventsRequested?: string[];
+}
+
+export interface UpdateSSFStreamRequest {
+  name?: string;
+  description?: string;
+  authToken?: string;
+  expectedIssuer?: string;
+  expectedAudience?: string[];
+  eventsRequested?: string[];
+  enabled?: boolean;
+}
+
+/**
+ * Response returned when registering a stream at its transmitter. For push
+ * streams, `pushToken` is only ever returned here — it is stored hashed and
+ * never retrievable again.
+ */
+export interface RegisterSSFStreamResponse {
+  stream: SSFStream;
+  pushToken?: string | null;
+}
+
+export interface SSFStreamStatus {
+  remoteStreamID: string;
+  status: string;
+  reason?: string | null;
+}
+
+export interface SSFPollResult {
+  processed: number;
+  failed: number;
+  moreAvailable: boolean;
+}
+
 // Request types
 export interface CreateVMRequest {
   name: string;

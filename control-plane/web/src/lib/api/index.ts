@@ -14,6 +14,7 @@ export { projectsApi } from "./projects";
 export { apiKeysApi } from "./api-keys";
 export { scimTokensApi } from "./scim-tokens";
 export { oidcProvidersApi } from "./oidc-providers";
+export { ssfStreamsApi } from "./ssf-streams";
 export { groupsApi } from "./groups";
 export { organizationalUnitsApi } from "./organizational-units";
 export { quotasApi } from "./quotas";
