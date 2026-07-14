@@ -459,6 +459,8 @@ export interface OIDCProvider {
   endSessionEndpoint?: string | null;
   scopes: string[];
   enabled: boolean;
+  /** Send + require the OIDC nonce. Disable for IdPs (e.g. Discord) that don't echo it. */
+  useNonce: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -475,6 +477,7 @@ export interface CreateOIDCProviderRequest {
   endSessionEndpoint?: string;
   scopes?: string[];
   enabled?: boolean;
+  useNonce?: boolean;
 }
 
 export interface UpdateOIDCProviderRequest {
@@ -489,6 +492,7 @@ export interface UpdateOIDCProviderRequest {
   endSessionEndpoint?: string;
   scopes?: string[];
   enabled?: boolean;
+  useNonce?: boolean;
 }
 
 export interface OIDCProviderTestResult {
