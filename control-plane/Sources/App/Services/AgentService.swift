@@ -20,10 +20,19 @@ final class WebSocketManager: @unchecked Sendable {
     private let lock = NIOLock()
     private var connections: [String: Connection] = [:]  // Agent name -> connection
 
-    /// Must be called from the WebSocket's event loop
-    func setConnection(agentName: String, websocket: WebSocket) {
+    /// Store the connection for an agent, returning the socket it replaced (a
+    /// different instance under the same name) or nil. A non-nil result means
+    /// the agent reconnected while its previous socket's close was still
+    /// pending: that delayed close will take the `removeConnection(ifCurrent:)`
+    /// no-match path and skip its cleanup, so the caller must tear down state
+    /// tied to the superseded connection (e.g. console sessions) here instead.
+    /// Must be called from the WebSocket's event loop.
+    @discardableResult
+    func setConnection(agentName: String, websocket: WebSocket) -> WebSocket? {
         lock.withLock {
+            let previous = connections[agentName]?.websocket
             connections[agentName] = Connection(websocket: websocket, agentId: nil)
+            return previous === websocket ? nil : previous
         }
     }
 
@@ -590,8 +599,10 @@ actor AgentService {
 
         app.websocketManager.removeConnection(agentName: agentName)
         // The eventual socket close skips its cleanup once the connection is
-        // gone (`removeConnection(ifCurrent:)` no longer matches), so exec
-        // sessions must be torn down here for the graceful-unregister path.
+        // gone (`removeConnection(ifCurrent:)` no longer matches), so console
+        // and exec sessions must be torn down here for the graceful-unregister
+        // path.
+        app.consoleSessionManager.closeAllSessions(forAgent: agentName, reason: "agent unregistered")
         app.sandboxExecSessionManager.closeAllSessions(forAgent: agentName, reason: "agent unregistered")
         await app.coordination.clearAgentRoute(agentName: agentName, replicaId: app.replicaID)
 
@@ -613,6 +624,7 @@ actor AgentService {
         app.websocketManager.removeConnection(agentName: agentName)
         // Same reasoning as `unregisterAgent`: the socket-close handler will
         // not run its cleanup once the connection entry is gone.
+        app.consoleSessionManager.closeAllSessions(forAgent: agentName, reason: "agent unregistered")
         app.sandboxExecSessionManager.closeAllSessions(forAgent: agentName, reason: "agent unregistered")
         await app.coordination.clearAgentRoute(agentName: agentName, replicaId: app.replicaID)
 
