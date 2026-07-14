@@ -310,7 +310,12 @@ version (`WireProtocol.supportsSandboxExec`).
 Per running sandbox the agent also keeps a long-lived log-follow task
 (reconnecting with backoff, resuming from the last seen sequence number),
 assembles chunks into lines, and ships each as `sandbox_log {sandboxId,
-stream, message}`. The control plane verifies the reporting agent owns the
+stream, message}`. Both stream kinds react to control-plane connectivity:
+when the agent's WebSocket drops, exec sessions are closed guest-side (the
+control plane cannot close them over a dead socket, and a quiet process
+would otherwise outlive its frontend) and log follows are suspended — output
+waits in the guest ring buffer and ships after re-registration, rather than
+being consumed toward a socket that cannot deliver it. The control plane verifies the reporting agent owns the
 sandbox (the `vm_log` anti-spoofing rule) and pushes to Loki with labels
 `sandbox_id`, `stream`, `source: workload` — the same Loki path VM logs use.
 `GET /api/sandboxes/:id/logs` queries them back, mirroring the VM logs

@@ -75,6 +75,19 @@ protocol SandboxRuntimeService: Sendable {
     /// sandbox are delivered in order. Set once, at agent startup, before any
     /// sandbox runs.
     func setSandboxLogHandler(_ handler: @escaping @Sendable (String, String, String) -> Void) async
+
+    /// The control-plane WebSocket dropped. Ends every live exec session (the
+    /// control plane tears down its side but cannot send `sandboxExecClose`
+    /// over a dead socket — closing guest-side kills the exec process groups,
+    /// so quiet processes don't outlive their frontends) and suspends log
+    /// follows so workload output stays in the guest ring buffer instead of
+    /// being consumed toward a socket that cannot deliver it.
+    func controlPlaneDisconnected() async
+
+    /// The control-plane WebSocket is (re)established: resume log follows for
+    /// live sandboxes, picking up from each sandbox's seq checkpoint.
+    /// Idempotent — a follow that is already running is left alone.
+    func controlPlaneConnected() async
 }
 
 /// Sandbox actuation failures raised by the Agent's reconcile routing (the

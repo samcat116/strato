@@ -598,6 +598,37 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         }
     }
 
+    // MARK: - Control-plane connectivity (issue #423)
+
+    func controlPlaneDisconnected() async {
+        // Exec sessions: their frontends are unreachable and the control plane
+        // cannot send sandboxExecClose over the dead socket. Closing the guest
+        // connections kills the exec process groups; the .closed events this
+        // emits are dropped by the (dead) send path, which is fine — the
+        // control plane tears its side down in its own agent-close handler.
+        let sandboxIds = Set(execSessions.values.map(\.sandboxId))
+        for sandboxId in sandboxIds {
+            await closeExecSessions(sandboxId: sandboxId, reason: "control plane disconnected")
+        }
+
+        // Log follows: suspend, keeping seq/partial-line state. Output the
+        // workload produces during the gap stays in the guest ring buffer for
+        // the resumed follow; only records consumed in the instant before the
+        // drop was noticed can be lost (the delivery path has no acks).
+        for sandboxId in Array(logFollows.keys) {
+            await stopLogFollow(sandboxId: sandboxId, retire: false)
+        }
+    }
+
+    func controlPlaneConnected() async {
+        for (sandboxId, managed) in sandboxes {
+            guard let info = try? await managed.manager.getInstanceInfo(), info.state == .running else {
+                continue
+            }
+            startLogFollow(sandboxId: sandboxId)
+        }
+    }
+
     // MARK: - Workload log shipping (issue #423)
 
     func setSandboxLogHandler(_ handler: @escaping @Sendable (String, String, String) -> Void) async {
@@ -1103,6 +1134,14 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     func setSandboxLogHandler(_ handler: @escaping @Sendable (String, String, String) -> Void) async {
         // No sandboxes can run on non-Linux hosts, so no logs will flow.
+    }
+
+    func controlPlaneDisconnected() async {
+        // No sessions or follows can exist on non-Linux hosts.
+    }
+
+    func controlPlaneConnected() async {
+        // No sessions or follows can exist on non-Linux hosts.
     }
 }
 #endif

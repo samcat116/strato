@@ -746,6 +746,12 @@ actor Agent {
         if controlPlaneSupportsStateSync {
             await sendObservedStateReport()
         }
+
+        // Resume sandbox log shipping suspended while disconnected (issue
+        // #423): follows pick up from their seq checkpoints, so output the
+        // workloads produced during the gap ships from the guest ring buffers
+        // now. Idempotent on the initial registration.
+        await self.sandboxRuntime?.controlPlaneConnected()
     }
 
     /// Parks the given continuation as the pending registration wait and arms a
@@ -1148,6 +1154,15 @@ actor Agent {
         }
 
         logger.warning("Lost connection to control plane; beginning reconnection with backoff")
+
+        // Quiesce sandbox streams for the gap (issue #423): live exec sessions
+        // end (their frontends are unreachable and the control plane cannot
+        // close them over a dead socket), and log follows suspend so workload
+        // output waits in the guest ring buffers instead of being consumed
+        // toward a socket that cannot deliver it. Registration restarts the
+        // follows.
+        await sandboxRuntime?.controlPlaneDisconnected()
+
         reconnectTask = Task { [weak self] in
             await self?.runReconnectLoop()
         }
