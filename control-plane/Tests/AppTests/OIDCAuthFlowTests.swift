@@ -315,9 +315,11 @@ final class OIDCAuthFlowTests {
 
     /// Hits the authorize endpoint and captures the state/nonce the server
     /// generated plus the session cookie that binds them to this "browser".
-    private func startLogin(app: Application, org: Organization, provider: OIDCProvider) async throws
-        -> AuthorizeRedirect
-    {
+    /// `expectNonce` asserts whether a `nonce` is present on the redirect —
+    /// providers with `useNonce == false` must omit it.
+    private func startLogin(
+        app: Application, org: Organization, provider: OIDCProvider, expectNonce: Bool = true
+    ) async throws -> AuthorizeRedirect {
         var redirect: AuthorizeRedirect?
         try await app.test(.GET, "/auth/oidc/\(org.id!)/\(provider.id!)/authorize") { res in
             #expect(res.status == .seeOther)
@@ -331,14 +333,15 @@ final class OIDCAuthFlowTests {
             #expect(value("client_id") == "client-abc")
             #expect(value("response_type") == "code")
             #expect(value("redirect_uri")?.contains("/auth/oidc/\(org.id!)/\(provider.id!)/callback") == true)
+            #expect((value("nonce") != nil) == expectNonce)
 
-            guard let state = value("state"), let nonce = value("nonce"),
+            guard let state = value("state"),
                 let cookie = res.headers.setCookie?["vapor-session"]?.string
             else {
-                Issue.record("Authorize redirect missing state/nonce/session cookie: \(location)")
+                Issue.record("Authorize redirect missing state/session cookie: \(location)")
                 return
             }
-            redirect = AuthorizeRedirect(state: state, nonce: nonce, sessionCookie: cookie)
+            redirect = AuthorizeRedirect(state: state, nonce: value("nonce") ?? "", sessionCookie: cookie)
         }
         return try #require(redirect)
     }
@@ -766,6 +769,53 @@ final class OIDCAuthFlowTests {
             }
             let count = try await userCount(on: app.db)
             #expect(count == 0)
+        }
+    }
+
+    @Test("A nonce-requiring provider rejects an ID token that omits the nonce")
+    func testMissingNonceRejectedWhenRequired() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            // Provider defaults to useNonce == true, so a token with no nonce
+            // (Discord's behavior) must be rejected — the compliant path.
+            let idToken = try await signIDToken(nonce: nil)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                self.expectLoginFailedRedirect(res)
+            }
+            let count = try await userCount(on: app.db)
+            #expect(count == 0)
+        }
+    }
+
+    @Test("A provider with useNonce disabled logs in even when the id_token omits nonce")
+    func testNonceDisabledAllowsMissingNonce() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            // Discord accepts but never echoes the nonce; disabling it makes
+            // strato neither send nor require one.
+            provider.useNonce = false
+            try await provider.save(on: app.db)
+
+            let login = try await startLogin(
+                app: app, org: org, provider: provider, expectNonce: false)
+
+            let idToken = try await signIDToken(nonce: nil)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                #expect(res.status == .seeOther)
+                #expect(res.headers.first(name: .location) == "/")
+            }
+            let count = try await userCount(on: app.db)
+            #expect(count == 1)
         }
     }
 
