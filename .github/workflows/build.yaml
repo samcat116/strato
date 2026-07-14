@@ -284,6 +284,11 @@ jobs:
         working-directory: control-plane
         env:
           STRATO_TEST_DATABASE: postgres
+          # This Postgres is the ephemeral Actions service defined below and is
+          # torn down with the job, so the harness may disable durability
+          # (fsync/synchronous_commit/full_page_writes) for faster clones. Never
+          # set this against a persistent cluster — the tuning is cluster-wide.
+          STRATO_TEST_DISPOSABLE_POSTGRES: "1"
           # The service publishes 5432 to the runner pod (see the `ports`
           # mapping above). 127.0.0.1 rather than localhost: docker publishes
           # on IPv4, and localhost can resolve to ::1 first.

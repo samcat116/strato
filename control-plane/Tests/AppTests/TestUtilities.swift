@@ -152,14 +152,21 @@ actor PostgresTestDatabases {
     }
 
     private func buildTemplate() async throws {
-        // CI databases are disposable — trade durability for speed. Each test mints a
+        // On a disposable CI Postgres, trade durability for speed. Each test mints a
         // clone via CREATE DATABASE ... TEMPLATE, which is checkpoint/fsync-bound;
         // these settings remove the syncs. Safe because a crashed CI Postgres is just
         // a rerun. (All three are SIGHUP-reloadable; strato is a superuser.)
-        try await run("ALTER SYSTEM SET fsync = off")
-        try await run("ALTER SYSTEM SET synchronous_commit = off")
-        try await run("ALTER SYSTEM SET full_page_writes = off")
-        try await run("SELECT pg_reload_conf()")
+        //
+        // ALTER SYSTEM is cluster-wide and persists in postgresql.auto.conf, so it is
+        // gated behind an explicit opt-in that only the ephemeral CI service sets — a
+        // developer pointing STRATO_TEST_DATABASE=postgres at a local/shared cluster
+        // must never silently disable durability for unrelated databases.
+        if Environment.get("STRATO_TEST_DISPOSABLE_POSTGRES") == "1" {
+            try await run("ALTER SYSTEM SET fsync = off")
+            try await run("ALTER SYSTEM SET synchronous_commit = off")
+            try await run("ALTER SYSTEM SET full_page_writes = off")
+            try await run("SELECT pg_reload_conf()")
+        }
 
         // Sweep templates and clones left by dead runs (crashed teardowns,
         // killed processes); skip names whose embedded pid is still alive —
