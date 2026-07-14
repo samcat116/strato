@@ -1,0 +1,151 @@
+agent/Tests/StratoAgentTests/MessageOrderingTests.swift
+  s_36283ca539a55d::t_112152999a7b2b 326-364
+control-plane/Tests/AppTests/SandboxLogIngestorTests.swift
+  s_36283ca539a55d::t_112152999a7b2b 1-129
+agent/Sources/StratoAgent/Agent.swift
+  s_36283ca539a55d::t_112152999a7b2b 132-143,266-273,408-418,540-547,749-754,1166-1173,1467-1479,2526-2725
+  s_36283ca539a55d::t_c6b908cf7cdef6 2726
+control-plane/web/src/components/sandboxes/sandbox-log-viewer.tsx
+  s_36283ca539a55d::t_112152999a7b2b 1-224
+control-plane/web/src/lib/api/sandboxes.ts
+  s_36283ca539a55d::t_112152999a7b2b 8-11,18,61-82
+control-plane/Sources/App/Migrations/AddUseNonceToOIDCProvider.swift
+  s_36283ca539a55d::t_112152999a7b2b 1-22
+control-plane/Sources/App/Controllers/SandboxExecWebSocketController.swift
+  s_36283ca539a55d::t_112152999a7b2b 1-280
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_36283ca539a55d::t_112152999a7b2b 75-88
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_36283ca539a55d::t_112152999a7b2b 143-148,176
+control-plane/Sources/App/Services/SandboxLogIngestor.swift
+  s_36283ca539a55d::t_112152999a7b2b 1-159
+SwiftFirecracker/Sources/SwiftFirecracker/VsockConnection.swift
+  s_36283ca539a55d::t_112152999a7b2b 20-31,118-124,127
+agent/Sources/StratoAgent/SandboxRuntimeProtocol.swift
+  s_36283ca539a55d::t_112152999a7b2b 7-10,14-16,43-90,109-112,124,139-140
+sandbox-guest/init/src/config.rs
+  s_36283ca539a55d::t_112152999a7b2b 264-270,273,276
+control-plane/web/src/app/(dashboard)/sandboxes/detail/page.tsx
+  s_36283ca539a55d::t_112152999a7b2b 5-14,18,22,27-42,95,129-155,157-211,213-214,217-264,266-272,274-363
+docs/architecture/overview.md
+  s_36283ca539a55d::t_112152999a7b2b 93
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_36283ca539a55d::t_112152999a7b2b 52-59,99,119,215,234-239,289,307,324,344,362,379,400,426
+control-plane/Sources/App/Services/SandboxExecSessionManager.swift
+  s_36283ca539a55d::t_112152999a7b2b 1-520
+control-plane/Sources/App/configure.swift
+  s_36283ca539a55d::t_112152999a7b2b 377-380
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_36283ca539a55d::t_112152999a7b2b 155-170
+sandbox-guest/init/src/linux/logs.rs
+  s_36283ca539a55d::t_112152999a7b2b 1-181
+sandbox-guest/init/src/linux/reaper.rs
+  s_36283ca539a55d::t_112152999a7b2b 1-209
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_36283ca539a55d::t_112152999a7b2b 94,200,442-445,448-452
+control-plane/web/src/components/sandboxes/index.ts
+  s_36283ca539a55d::t_112152999a7b2b 5
+sandbox-guest/init/Cargo.toml
+  s_36283ca539a55d::t_112152999a7b2b 27-28,32-33,35-44
+control-plane/web/src/components/oidc-providers/oidc-provider-dialog.tsx
+  s_36283ca539a55d::t_112152999a7b2b 90,134,154,343-365
+  s_36283ca539a55d::t_6b2456a3f4eea6 366
+control-plane/Sources/App/Controllers/LogsController.swift
+  s_36283ca539a55d::t_112152999a7b2b 10-15,79-119,128
+  s_36283ca539a55d::t_4d2d1d3f296852 120-127,129
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_36283ca539a55d::t_112152999a7b2b 25,605-696
+  s_36283ca539a55d::t_433aefdcbe8f37 697-698
+control-plane/web/src/lib/hooks/index.ts
+  s_36283ca539a55d::t_112152999a7b2b 43,45
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_36283ca539a55d::t_112152999a7b2b 94
+agent/Sources/StratoAgentCore/SandboxControlProtocol.swift
+  s_36283ca539a55d::t_112152999a7b2b 3,6-10,12-23,27-61,67-107,111,113-136,138-143,159-173,192-210,225-233,242-244,251
+sandbox-guest/README.md
+  s_36283ca539a55d::t_112152999a7b2b 34-40,62-91
+docs/architecture/sandboxes.md
+  s_36283ca539a55d::t_112152999a7b2b 260-346,349
+sandbox-guest/init/src/lib.rs
+  s_36283ca539a55d::t_112152999a7b2b 12-13,16
+control-plane/web/src/components/terminal/index.ts
+  s_36283ca539a55d::t_112152999a7b2b 2
+control-plane/web/src/types/api.ts
+  s_36283ca539a55d::t_112152999a7b2b 462-463,480,495,701-742
+  s_36283ca539a55d::t_b048bfe37f96a1 743
+control-plane/Tests/AppTests/SandboxExecTests.swift
+  s_36283ca539a55d::t_112152999a7b2b 1-521
+shared/Sources/StratoShared/WireProtocol.swift
+  s_36283ca539a55d::t_112152999a7b2b 109-119,199-209
+  s_36283ca539a55d::t_ccaeec09e0d965 210-211
+control-plane/Sources/App/Services/LokiService.swift
+  s_36283ca539a55d::t_112152999a7b2b 38-75,82-83,105,133-141,148-149
+  s_36283ca539a55d::t_32609fd53c5c1f 142-147,150
+sandbox-guest/init/src/protocol.rs
+  s_36283ca539a55d::t_112152999a7b2b 10-11,13-33,35-38,46-52,63-102,134-164,168-177,212-310,354-421
+control-plane/web/src/lib/hooks/use-sandbox-logs.ts
+  s_36283ca539a55d::t_112152999a7b2b 1-29
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_36283ca539a55d::t_112152999a7b2b 63-68,73-114,268-272,279-285,298-303,353-361,385-852,920-943,950,962-968,970,973-974,990,1026-1069,1115-1145
+control-plane/Sources/App/Services/AgentService.swift
+  s_36283ca539a55d::t_112152999a7b2b 542-555,606,628
+  s_36283ca539a55d::t_4fcb03f6aa9e22 603-604
+agent/Tests/StratoAgentTests/SandboxControlProtocolTests.swift
+  s_36283ca539a55d::t_112152999a7b2b 1-216
+shared/Tests/StratoSharedTests/SandboxExecMessageTests.swift
+  s_36283ca539a55d::t_112152999a7b2b 1-96
+control-plane/Tests/AppTests/OIDCAuthFlowTests.swift
+  s_36283ca539a55d::t_112152999a7b2b 318-322,336,338,341,344,775-865
+  s_36283ca539a55d::t_af68ac1ac6a2e2 866
+agent/Sources/StratoAgentCore/SandboxExecTypes.swift
+  s_36283ca539a55d::t_112152999a7b2b 1-53
+sandbox-guest/init/src/linux/vsock.rs
+  s_36283ca539a55d::t_112152999a7b2b 3-6,8-19,27-28,33-36,49-65,83-93,135-136,140-210,218-221,231-248
+control-plane/web/src/lib/hooks/use-sandbox-exec.ts
+  s_36283ca539a55d::t_112152999a7b2b 1-237
+shared/Sources/StratoShared/SandboxExecMessages.swift
+  s_36283ca539a55d::t_112152999a7b2b 1-284
+agent/Sources/StratoAgentCore/SandboxLogLineAssembler.swift
+  s_36283ca539a55d::t_112152999a7b2b 1-78
+.github/workflows/build.yaml
+  s_36283ca539a55d::t_112152999a7b2b 238-240,246,287-291
+agent/Tests/StratoAgentTests/SandboxLogLineAssemblerTests.swift
+  s_36283ca539a55d::t_112152999a7b2b 1-120
+control-plane/web/src/components/terminal/sandbox-terminal.tsx
+  s_36283ca539a55d::t_112152999a7b2b 1-208
+sandbox-guest/init/src/logbuf.rs
+  s_36283ca539a55d::t_112152999a7b2b 1-352
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_36283ca539a55d::t_112152999a7b2b 290-291,664-699,849
+  s_36283ca539a55d::t_074d3c1242008c 844-846
+  s_36283ca539a55d::t_b6ae7afbbd88d3 285-287
+  s_36283ca539a55d::t_1123a1e5c25f82 850
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_36283ca539a55d::t_112152999a7b2b 52-60,74-76
+sandbox-guest/init/src/linux/exec.rs
+  s_36283ca539a55d::t_112152999a7b2b 1-433
+control-plane/Sources/App/routes.swift
+  s_36283ca539a55d::t_112152999a7b2b 60-62
+SwiftFirecracker/Tests/SwiftFirecrackerTests/VsockConnectionTests.swift
+  s_36283ca539a55d::t_112152999a7b2b 85-129
+sandbox-guest/init/src/linux/mod.rs
+  s_36283ca539a55d::t_112152999a7b2b 1,5-6,8-9,11,15,22,24-26,31-33,37-38,65-66,71-76,81,86-87,93-95,99-106,110-126,128,131-158,160,163-178
+sandbox-guest/init/Cargo.lock
+  s_36283ca539a55d::t_4263089588f084 5-10,124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "f0983cdfa7728f849f5ca9c4bbbe0291bd0956ec",
+  "prompts": {},
+  "sessions": {
+    "s_36283ca539a55d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "165f71ac-d0ed-4e41-9448-050584661ac3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
