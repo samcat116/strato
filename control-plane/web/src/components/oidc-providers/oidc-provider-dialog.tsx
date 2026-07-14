@@ -87,6 +87,7 @@ function ProviderForm({
   const [scopes, setScopes] = useState(
     provider ? provider.scopes.join(" ") : DEFAULT_SCOPES
   );
+  const [useNonce, setUseNonce] = useState(provider?.useNonce ?? true);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -130,6 +131,7 @@ function ProviderForm({
           jwksURI: jwksURI.trim(),
           endSessionEndpoint: endSessionEndpoint.trim(),
           scopes: scopeList.length > 0 ? scopeList : undefined,
+          useNonce,
         };
         // Blank secret means "keep the current one"
         if (clientSecret.trim()) {
@@ -149,6 +151,7 @@ function ProviderForm({
           jwksURI: jwksURI.trim() || undefined,
           endSessionEndpoint: endSessionEndpoint.trim() || undefined,
           scopes: scopeList.length > 0 ? scopeList : undefined,
+          useNonce,
         });
         toast.success(`Provider "${name.trim()}" created`);
       }
@@ -336,6 +339,30 @@ function ProviderForm({
             <p className="text-xs text-muted-foreground">
               Space-separated. Defaults to {DEFAULT_SCOPES}.
             </p>
+          </div>
+
+          <div className="space-y-2">
+            <label
+              htmlFor="oidcUseNonce"
+              className="flex items-start gap-2 text-foreground"
+            >
+              <input
+                id="oidcUseNonce"
+                type="checkbox"
+                checked={useNonce}
+                onChange={(e) => setUseNonce(e.target.checked)}
+                disabled={isPending}
+                className="mt-0.5"
+              />
+              <span>
+                Require nonce
+                <span className="block text-xs text-muted-foreground font-normal">
+                  Recommended. Uncheck only for providers that accept but never
+                  return the OIDC nonce (e.g. Discord); leaving it checked would
+                  fail every login for those.
+                </span>
+              </span>
+            </label>
           </div>
         </div>
 
