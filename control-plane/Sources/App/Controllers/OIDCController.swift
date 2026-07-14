@@ -445,11 +445,13 @@ struct OIDCController: RouteCollection {
         let nonce = provider.useNonce ? UUID().uuidString : nil
         let codeVerifier = OIDCValidation.generateCodeVerifier()
 
-        // Store state, nonce, and PKCE verifier in session for the callback
+        // Store state, nonce, and PKCE verifier in session for the callback.
+        // Assign the nonce unconditionally: a nil nonce (useNonce == false) must
+        // CLEAR any stale nonce a prior abandoned nonce-requiring login left in
+        // this same session, otherwise the callback would validate this
+        // nonce-less flow against it and reject a valid token.
         req.session.data["oidc_state"] = state
-        if let nonce {
-            req.session.data["oidc_nonce"] = nonce
-        }
+        req.session.data["oidc_nonce"] = nonce
         req.session.data["oidc_code_verifier"] = codeVerifier
         req.session.data["oidc_provider_id"] = providerID.uuidString
         req.session.data["oidc_organization_id"] = organizationID.uuidString

@@ -819,6 +819,51 @@ final class OIDCAuthFlowTests {
         }
     }
 
+    @Test("Disabling nonce clears a stale nonce left in the session by a prior flow")
+    func testDisablingNonceClearsStaleSessionNonce() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            // 1) A nonce-requiring login seeds oidc_nonce in the session, then
+            //    is abandoned (no callback).
+            let first = try await startLogin(app: app, org: org, provider: provider)
+
+            // 2) Disable nonce, then start a fresh login reusing the SAME
+            //    browser session (same cookie).
+            provider.useNonce = false
+            try await provider.save(on: app.db)
+
+            var second: AuthorizeRedirect?
+            try await app.test(.GET, "/auth/oidc/\(org.id!)/\(provider.id!)/authorize") { req in
+                var cookies = HTTPCookies()
+                cookies["vapor-session"] = HTTPCookies.Value(string: first.sessionCookie)
+                req.headers.cookie = cookies
+            } afterResponse: { res in
+                #expect(res.status == .seeOther)
+                let location = res.headers.first(name: .location) ?? ""
+                let query = URLComponents(string: location)?.queryItems ?? []
+                func value(_ name: String) -> String? { query.first { $0.name == name }?.value }
+                #expect(value("nonce") == nil)  // the new flow requests no nonce
+                let cookie = res.headers.setCookie?["vapor-session"]?.string ?? first.sessionCookie
+                second = AuthorizeRedirect(state: value("state") ?? "", nonce: "", sessionCookie: cookie)
+            }
+            let login = try #require(second)
+
+            // 3) A nonce-less token must log in — the stale nonce from step 1
+            //    must have been cleared, not validated against.
+            let idToken = try await signIDToken(nonce: nil)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                #expect(res.status == .seeOther)
+                #expect(res.headers.first(name: .location) == "/")
+            }
+            let count = try await userCount(on: app.db)
+            #expect(count == 1)
+        }
+    }
+
     @Test("An ID token with the wrong nonce is rejected")
     func testNonceMismatchRejected() async throws {
         try await withFlowApp { app, org, provider, idp in
