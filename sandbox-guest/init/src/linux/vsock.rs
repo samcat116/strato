@@ -1,13 +1,22 @@
 //! The vsock control agent (Linux only).
 //!
-//! Listens on `AF_VSOCK` for the host (issue #421) and answers the v1 control
-//! surface: `Ping` and `GetStatus`. It reads the workload's live state from a
-//! shared [`SharedStatus`] the reaper updates, so a `GetStatus` after the
-//! workload has ended returns its exit code.
+//! Listens on `AF_VSOCK` for the host (issue #421) and serves the v2 control
+//! surface (issue #423) with one thread per connection, so control polls keep
+//! working while exec sessions and log streams are active. The connection's
+//! **first decoded request determines its role**:
 //!
-//! The listener is intentionally simple and idempotent — it can be re-created
-//! after a snapshot/resume (phase 4) and every response carries the sandbox
-//! identity + boot nonce so the host can confirm which generation it reached.
+//! * `ping` / `get_status` — a request/response control connection that may
+//!   serve many requests, exactly as v1 did;
+//! * `exec` — a dedicated exec session (see [`super::exec`]);
+//! * `stream_logs` — a dedicated workload-log follow stream (see
+//!   [`super::logs`]).
+//!
+//! Status is read from a shared [`SharedStatus`] the reaper updates, so a
+//! `get_status` after the workload has ended returns its exit code. The
+//! listener is intentionally simple and idempotent — it can be re-created
+//! after a snapshot/resume (phase 4) and every control response carries the
+//! sandbox identity + boot nonce so the host can confirm which generation it
+//! reached.
 
 use std::io::{BufRead, BufReader, Write};
 use std::mem;
@@ -15,9 +24,15 @@ use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 
+use strato_sandbox_init::config::ResolvedProcess;
+use strato_sandbox_init::logbuf::LogBuffer;
 use strato_sandbox_init::protocol::{
     decode_request, encode_line, Request, Response, WorkloadState,
 };
+
+use super::exec::{self, ExecRequest};
+use super::logs;
+use super::reaper::ChildRegistry;
 
 /// Workload lifecycle state shared between the reaper (writer) and the vsock
 /// agent (reader).
@@ -31,10 +46,23 @@ pub struct Status {
 
 pub type SharedStatus = Arc<Mutex<Status>>;
 
-/// Bind the guest vsock port and serve control connections forever. Returns
-/// only on a fatal bind/listen error; per-connection errors are logged and
-/// swallowed so a misbehaving client cannot take the agent down.
-pub fn serve(port: u32, status: SharedStatus) -> Result<(), String> {
+/// Everything a vsock connection may need, shared across connection threads.
+pub struct GuestState {
+    /// Live workload status, updated by the reaper.
+    pub status: SharedStatus,
+    /// The workload's resolved process — exec sessions inherit its env, cwd,
+    /// and uid/gid as their defaults.
+    pub process: ResolvedProcess,
+    /// Ring buffer of captured workload stdout/stderr.
+    pub logs: Arc<LogBuffer>,
+    /// Exit-code routing between PID 1's reaper and exec sessions.
+    pub children: Arc<ChildRegistry>,
+}
+
+/// Bind the guest vsock port and serve connections forever, one thread each.
+/// Returns only on a fatal bind/listen error; per-connection errors are
+/// logged and swallowed so a misbehaving client cannot take the agent down.
+pub fn serve(port: u32, state: Arc<GuestState>) -> Result<(), String> {
     let listener = bind_listener(port)?;
     loop {
         // SAFETY: accept(2) returns a fresh, owned connected socket fd.
@@ -52,8 +80,17 @@ pub fn serve(port: u32, status: SharedStatus) -> Result<(), String> {
             continue;
         }
         let conn = unsafe { OwnedFd::from_raw_fd(raw) };
-        if let Err(e) = handle_connection(conn, &status) {
-            eprintln!("[sandbox-init] vsock connection error: {e}");
+        let state = Arc::clone(&state);
+        let spawned = std::thread::Builder::new()
+            .name("vsock-conn".to_string())
+            .spawn(move || {
+                if let Err(e) = handle_connection(conn, &state) {
+                    eprintln!("[sandbox-init] vsock connection error: {e}");
+                }
+            });
+        if let Err(e) = spawned {
+            // Drop the connection; the host will retry.
+            eprintln!("[sandbox-init] vsock: spawn connection thread: {e}");
         }
     }
 }
@@ -95,11 +132,82 @@ fn bind_listener(port: u32) -> Result<OwnedFd, String> {
     }
 }
 
-fn handle_connection(conn: OwnedFd, status: &SharedStatus) -> std::io::Result<()> {
+/// Read the connection's first request and dispatch by role.
+fn handle_connection(conn: OwnedFd, state: &GuestState) -> std::io::Result<()> {
     // One fd, read and write halves; clone for buffered reading.
     let write_fd = conn.try_clone()?;
     let mut writer = std::fs::File::from(write_fd);
-    let reader = BufReader::new(std::fs::File::from(conn));
+    let mut reader = BufReader::new(std::fs::File::from(conn));
+
+    let mut first = String::new();
+    loop {
+        first.clear();
+        if reader.read_line(&mut first)? == 0 {
+            return Ok(()); // closed without ever sending a request
+        }
+        if !first.trim().is_empty() {
+            break;
+        }
+    }
+
+    match decode_request(&first) {
+        Ok(req @ (Request::Ping | Request::GetStatus)) => {
+            serve_control(req, reader, writer, &state.status)
+        }
+        Ok(Request::Exec {
+            argv,
+            env,
+            cwd,
+            tty,
+            rows,
+            cols,
+        }) => {
+            exec::run_exec_session(
+                reader,
+                writer,
+                ExecRequest {
+                    argv,
+                    env,
+                    cwd,
+                    tty,
+                    rows,
+                    cols,
+                },
+                state,
+            );
+            Ok(())
+        }
+        Ok(Request::StreamLogs { since_seq }) => {
+            logs::run_follow_stream(reader, writer, since_seq, &state.logs);
+            Ok(())
+        }
+        Ok(_) => {
+            let resp = Response::Error {
+                message: "stdin/stdin_eof/resize are only valid within an exec session".to_string(),
+            };
+            writer.write_all(encode_line(&resp).as_bytes())?;
+            writer.flush()
+        }
+        Err(e) => {
+            let resp = Response::Error {
+                message: format!("undecodable request: {e}"),
+            };
+            writer.write_all(encode_line(&resp).as_bytes())?;
+            writer.flush()
+        }
+    }
+}
+
+/// v1-style request/response loop for control connections.
+fn serve_control(
+    first: Request,
+    reader: BufReader<std::fs::File>,
+    mut writer: std::fs::File,
+    status: &SharedStatus,
+) -> std::io::Result<()> {
+    let response = control_response(&first, status);
+    writer.write_all(encode_line(&response).as_bytes())?;
+    writer.flush()?;
 
     for line in reader.lines() {
         let line = line?;
@@ -107,22 +215,10 @@ fn handle_connection(conn: OwnedFd, status: &SharedStatus) -> std::io::Result<()
             continue;
         }
         let response = match decode_request(&line) {
-            Ok(Request::Ping) => {
-                let s = status.lock().expect("status poisoned");
-                Response::Pong {
-                    sandbox_id: s.sandbox_id.clone(),
-                    nonce: s.nonce.clone(),
-                }
-            }
-            Ok(Request::GetStatus) => {
-                let s = status.lock().expect("status poisoned");
-                Response::Status {
-                    sandbox_id: s.sandbox_id.clone(),
-                    nonce: s.nonce.clone(),
-                    state: s.state,
-                    exit_code: s.exit_code,
-                }
-            }
+            Ok(req @ (Request::Ping | Request::GetStatus)) => control_response(&req, status),
+            Ok(_) => Response::Error {
+                message: "only ping/get_status are valid on a control connection".to_string(),
+            },
             Err(e) => Response::Error {
                 message: format!("undecodable request: {e}"),
             },
@@ -131,4 +227,22 @@ fn handle_connection(conn: OwnedFd, status: &SharedStatus) -> std::io::Result<()
         writer.flush()?;
     }
     Ok(())
+}
+
+fn control_response(request: &Request, status: &SharedStatus) -> Response {
+    let s = status.lock().expect("status poisoned");
+    match request {
+        Request::GetStatus => Response::Status {
+            sandbox_id: s.sandbox_id.clone(),
+            nonce: s.nonce.clone(),
+            state: s.state,
+            exit_code: s.exit_code,
+        },
+        // serve_control is only ever called with Ping or GetStatus; answer
+        // Pong for anything that is not GetStatus rather than panicking.
+        _ => Response::Pong {
+            sandbox_id: s.sandbox_id.clone(),
+            nonce: s.nonce.clone(),
+        },
+    }
 }

@@ -9,7 +9,9 @@
 //!   * kernel + initramfs (this init) via Firecracker `boot-source`;
 //!   * `/dev/vda` — the flattened container rootfs (issue #418), left pristine;
 //!   * `/dev/vdb` — a read-only config drive carrying [`config::GuestConfig`];
-//!   * a vsock device the host connects to for [`protocol`] control ops.
+//!   * a vsock device the host connects to for [`protocol`] control ops,
+//!     exec sessions, and workload-log follow streams (backed by [`logbuf`]).
 
 pub mod config;
+pub mod logbuf;
 pub mod protocol;

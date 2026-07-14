@@ -26,11 +26,6 @@ actor LokiService {
 
     /// Push a VM log message to Loki. No-ops when Loki is not configured.
     func pushLog(_ logMessage: VMLogMessage) async throws {
-        guard let lokiEndpoint else {
-            // Loki not deployed — silently drop rather than spamming DNS errors.
-            return
-        }
-
         let labels = [
             "service_name": "strato-agent",
             "vm_id": logMessage.vmId,
@@ -40,14 +35,52 @@ actor LokiService {
             "operation": logMessage.operation ?? "",
         ].filter { !$0.value.isEmpty }
 
+        try await push(
+            labels: labels,
+            timestamp: logMessage.timestamp,
+            message: logMessage.message,
+            resourceId: logMessage.vmId
+        )
+    }
+
+    /// Push one sandbox workload stdout/stderr line to Loki (issue #423).
+    /// No-ops when Loki is not configured.
+    func pushSandboxLog(_ logMessage: SandboxLogMessage) async throws {
+        let labels = [
+            "service_name": "strato-agent",
+            "sandbox_id": logMessage.sandboxId,
+            "stream": logMessage.stream,
+            "source": "workload",
+        ].filter { !$0.value.isEmpty }
+
+        try await push(
+            labels: labels,
+            timestamp: logMessage.timestamp,
+            message: logMessage.message,
+            resourceId: logMessage.sandboxId
+        )
+    }
+
+    /// Shared push body for VM and sandbox log lines.
+    private func push(
+        labels: [String: String],
+        timestamp: Date,
+        message: String,
+        resourceId: String
+    ) async throws {
+        guard let lokiEndpoint else {
+            // Loki not deployed — silently drop rather than spamming DNS errors.
+            return
+        }
+
         let lokiStream = LokiPushRequest(
             streams: [
                 LokiStream(
                     stream: labels,
                     values: [
                         [
-                            String(Int(logMessage.timestamp.timeIntervalSince1970 * 1_000_000_000)),
-                            logMessage.message,
+                            String(Int(timestamp.timeIntervalSince1970 * 1_000_000_000)),
+                            message,
                         ]
                     ]
                 )
@@ -69,7 +102,7 @@ actor LokiService {
                     "Failed to push log to Loki",
                     metadata: [
                         "status": .stringConvertible(response.status.code),
-                        "vmId": .string(logMessage.vmId),
+                        "resourceId": .string(resourceId),
                     ])
             }
         } catch {
@@ -88,6 +121,24 @@ actor LokiService {
         direction: QueryDirection = .backward
     ) async throws -> [LogEntry] {
         let query = buildLogQLQuery(vmId: vmId)
+        return try await executeQuery(
+            query: query,
+            start: start,
+            end: end,
+            limit: limit,
+            direction: direction
+        )
+    }
+
+    /// Query workload logs for a specific sandbox (issue #423).
+    func querySandboxLogs(
+        sandboxId: String,
+        start: Date? = nil,
+        end: Date? = nil,
+        limit: Int = 100,
+        direction: QueryDirection = .backward
+    ) async throws -> [LogEntry] {
+        let query = "{sandbox_id=\"\(sandboxId)\"}"
         return try await executeQuery(
             query: query,
             start: start,

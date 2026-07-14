@@ -82,6 +82,51 @@ struct VsockConnectionTests {
         }
     }
 
+    @Test("close() unblocks a read parked on the connection")
+    func closeUnblocksParkedRead() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let udsPath = "\(dir)/vm.vsock"
+
+        // .echo keeps the connection open after the handshake (the server
+        // blocks reading the client's next payload), so a client read with no
+        // inbound data parks in the blocking read(2).
+        let server = try FakeVsockUDSServer(socketPath: udsPath, behavior: .echo(hostPort: 4096))
+        server.start()
+        defer { server.stop() }
+
+        let conn = try await VsockConnection.connect(
+            udsPath: udsPath, port: 77, timeout: 5.0, logger: Logger(label: "test"))
+
+        let readTask = Task { try await conn.read(maxLength: 16) }
+        // Give the read time to actually park in read(2) before closing.
+        try await Task.sleep(nanoseconds: 200_000_000)
+        await conn.close()
+
+        // close() must wake the parked read (shutdown ⇒ EOF ⇒ empty Data). A
+        // bare close(2) would leave it parked forever, so race a generous
+        // deadline and fail rather than hang if the wakeup regresses.
+        enum Outcome: Sendable { case read(Data?), timedOut }
+        let outcome = await withTaskGroup(of: Outcome.self) { group in
+            group.addTask { .read(try? await readTask.value) }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                return .timedOut
+            }
+            let first = await group.next()!
+            group.cancelAll()
+            return first
+        }
+        guard case .read(let data) = outcome else {
+            Issue.record("read stayed parked after close(); shutdown-before-close regressed")
+            return
+        }
+        // EOF (empty Data) is the expected wakeup; an error is also an
+        // acceptable unblock if the close raced the read's entry.
+        let unblockedWithEOF = data?.isEmpty ?? true
+        #expect(unblockedWithEOF)
+    }
+
     @Test("connect retries a missing UDS until it appears, then times out")
     func connectMissingUDSTimesOut() async throws {
         let dir = try makeSocketDir()

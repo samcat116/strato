@@ -140,6 +140,12 @@ extension MessageEnvelope {
             // is never serialized behind (or stuck waiting on) a slow VM operation, while
             // still ordering console frames for the same VM among themselves.
             raws = [fields?.vmId.map { "console:\($0)" }]
+        case .sandboxExecStart, .sandboxExecInput, .sandboxExecResize, .sandboxExecClose:
+            // Interactive exec I/O gets a per-session lane for the same reason as console
+            // frames: input/resize/close for a session are applied strictly after its start
+            // (which blocks on the guest spawning the process), while unrelated sessions —
+            // and the sandbox's own lifecycle work — proceed concurrently.
+            raws = [fields?.sessionId.map { "exec:\($0)" }]
         default:
             // VM lifecycle, network detach, and info/status queries all carry vmId.
             raws = [fields?.vmId]
@@ -167,5 +173,6 @@ extension MessageEnvelope {
         let sourceVolumeId: String?
         let targetVolumeId: String?
         let networkName: String?
+        let sessionId: String?
     }
 }

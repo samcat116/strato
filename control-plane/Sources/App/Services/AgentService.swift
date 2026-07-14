@@ -530,6 +530,20 @@ actor AgentService {
         return vm.hypervisorId == senderAgentId
     }
 
+    /// Whether `sandboxId` is currently assigned to the agent authenticated as
+    /// `agentName` — the sandbox counterpart of `vmIsOwnedByAgent`, guarding
+    /// agent-reported sandbox data (workload logs, exec frames) against a
+    /// compromised agent forging entries for another tenant's sandbox.
+    func sandboxIsOwnedByAgent(sandboxId: String, agentName: String) async -> Bool {
+        guard let sandboxUUID = UUID(uuidString: sandboxId),
+            let senderAgentId = await agentId(forName: agentName),
+            let sandbox = try? await Sandbox.find(sandboxUUID, on: app.db)
+        else {
+            return false
+        }
+        return sandbox.hypervisorId == senderAgentId
+    }
+
     /// Resolve an agent's name from its database UUID: the local socket's
     /// registration first (no I/O), the database otherwise.
     private func agentName(forId agentId: String) async -> String? {
@@ -575,6 +589,10 @@ actor AgentService {
         failPendingRequests(for: agentId)
 
         app.websocketManager.removeConnection(agentName: agentName)
+        // The eventual socket close skips its cleanup once the connection is
+        // gone (`removeConnection(ifCurrent:)` no longer matches), so exec
+        // sessions must be torn down here for the graceful-unregister path.
+        app.sandboxExecSessionManager.closeAllSessions(forAgent: agentName, reason: "agent unregistered")
         await app.coordination.clearAgentRoute(agentName: agentName, replicaId: app.replicaID)
 
         Telemetry.agentDisconnected(reason: "unregister")
@@ -593,6 +611,9 @@ actor AgentService {
         failPendingRequests(for: agentId)
 
         app.websocketManager.removeConnection(agentName: agentName)
+        // Same reasoning as `unregisterAgent`: the socket-close handler will
+        // not run its cleanup once the connection entry is gone.
+        app.sandboxExecSessionManager.closeAllSessions(forAgent: agentName, reason: "agent unregistered")
         await app.coordination.clearAgentRoute(agentName: agentName, replicaId: app.replicaID)
 
         app.logger.info(

@@ -129,6 +129,18 @@ actor Agent {
     private var sandboxRuntime: (any SandboxRuntimeService)?
     private var managedSandboxes: [String: VMManifestEntry] = [:]
     private var orphanedSandboxes: [String: VMManifestEntry] = [:]
+
+    // Sandbox exec/attach bridging and workload log shipping (issue #423).
+    // The runtime's callbacks yield into these streams *synchronously*, so
+    // per-session event order and per-sandbox line order survive the hop out
+    // of the runtime; two pump tasks drain them into outbound WebSocket
+    // messages one at a time (mirroring the ordered inbound pipeline above).
+    private nonisolated let sandboxExecEvents: AsyncStream<(String, String, SandboxExecEvent)>
+    private nonisolated let sandboxExecEventsContinuation: AsyncStream<(String, String, SandboxExecEvent)>.Continuation
+    private nonisolated let sandboxLogLines: AsyncStream<(String, String, String)>
+    private nonisolated let sandboxLogLinesContinuation: AsyncStream<(String, String, String)>.Continuation
+    private var sandboxExecPumpTask: Task<Void, Never>?
+    private var sandboxLogPumpTask: Task<Void, Never>?
     // Set when a manifest write failed (disk full, permissions); the write is
     // retried on every heartbeat until it succeeds, so a transient failure only
     // leaves the on-disk manifest stale for a bounded window.
@@ -251,6 +263,14 @@ actor Agent {
         let (stream, continuation) = AsyncStream.makeStream(of: MessageEnvelope.self)
         self.inboundMessages = stream
         self.inboundContinuation = continuation
+
+        let (execEvents, execContinuation) = AsyncStream.makeStream(of: (String, String, SandboxExecEvent).self)
+        self.sandboxExecEvents = execEvents
+        self.sandboxExecEventsContinuation = execContinuation
+
+        let (logLines, logContinuation) = AsyncStream.makeStream(of: (String, String, String).self)
+        self.sandboxLogLines = logLines
+        self.sandboxLogLinesContinuation = logContinuation
     }
 
     /// Returns the effective agent ID (assigned UUID if registered, initial ID otherwise)
@@ -385,6 +405,17 @@ actor Agent {
         }
         #endif
 
+        // Bridge the sandbox runtime's exec events and workload log lines onto
+        // the agent WebSocket (issue #423). The handlers yield synchronously so
+        // ordering survives; the pump tasks below serialize the sends.
+        if let sandboxRuntime {
+            await sandboxRuntime.setSandboxLogHandler {
+                [continuation = sandboxLogLinesContinuation] sandboxId, streamName, line in
+                continuation.yield((sandboxId, streamName, line))
+            }
+            startSandboxPumps()
+        }
+
         // The reconciler drives desired-state syncs onto the shared per-VM
         // lanes; all hypervisor side effects go through this agent (the
         // actuator), so it must exist before the message consumer starts.
@@ -505,6 +536,14 @@ actor Agent {
         inboundContinuation.finish()
         messageConsumerTask?.cancel()
         messageConsumerTask = nil
+
+        // Stop the sandbox exec/log pumps the same way.
+        sandboxExecEventsContinuation.finish()
+        sandboxLogLinesContinuation.finish()
+        sandboxExecPumpTask?.cancel()
+        sandboxExecPumpTask = nil
+        sandboxLogPumpTask?.cancel()
+        sandboxLogPumpTask = nil
 
         // Unregister from control plane — but not when restarting into an
         // updated binary: the agent re-registers seconds later, and the
@@ -707,6 +746,12 @@ actor Agent {
         if controlPlaneSupportsStateSync {
             await sendObservedStateReport()
         }
+
+        // Resume sandbox log shipping suspended while disconnected (issue
+        // #423): follows pick up from their seq checkpoints, so output the
+        // workloads produced during the gap ships from the guest ring buffers
+        // now. Idempotent on the initial registration.
+        await self.sandboxRuntime?.controlPlaneConnected()
     }
 
     /// Parks the given continuation as the pending registration wait and arms a
@@ -1109,6 +1154,15 @@ actor Agent {
         }
 
         logger.warning("Lost connection to control plane; beginning reconnection with backoff")
+
+        // Quiesce sandbox streams for the gap (issue #423): live exec sessions
+        // end (their frontends are unreachable and the control plane cannot
+        // close them over a dead socket), and log follows suspend so workload
+        // output waits in the guest ring buffers instead of being consumed
+        // toward a socket that cannot deliver it. Registration restarts the
+        // follows.
+        await sandboxRuntime?.controlPlaneDisconnected()
+
         reconnectTask = Task { [weak self] in
             await self?.runReconnectLoop()
         }
@@ -1402,6 +1456,19 @@ extension Agent {
             case .consoleData:
                 let message = try envelope.decode(as: ConsoleDataMessage.self)
                 await handleConsoleData(message)
+            // Sandbox exec sessions (issue #423)
+            case .sandboxExecStart:
+                let message = try envelope.decode(as: SandboxExecStartMessage.self)
+                await handleSandboxExecStart(message)
+            case .sandboxExecInput:
+                let message = try envelope.decode(as: SandboxExecInputMessage.self)
+                await handleSandboxExecInput(message)
+            case .sandboxExecResize:
+                let message = try envelope.decode(as: SandboxExecResizeMessage.self)
+                await handleSandboxExecResize(message)
+            case .sandboxExecClose:
+                let message = try envelope.decode(as: SandboxExecCloseMessage.self)
+                await handleSandboxExecClose(message)
             // Volume operations
             case .volumeCreate:
                 let message = try envelope.decode(as: VolumeCreateMessage.self)
@@ -2445,6 +2512,207 @@ extension Agent {
             try await websocketClient?.sendMessage(message)
         } catch {
             logger.error("Failed to send console data: \(error)")
+        }
+    }
+
+    // MARK: - Sandbox Exec Message Handlers (issue #423)
+
+    /// Start the pumps that drain the runtime's exec events and workload log
+    /// lines into outbound WebSocket messages. Idempotent.
+    private func startSandboxPumps() {
+        if sandboxExecPumpTask == nil {
+            let events = sandboxExecEvents
+            sandboxExecPumpTask = Task { [weak self] in
+                for await (sandboxId, sessionId, event) in events {
+                    await self?.sendSandboxExecEvent(sandboxId: sandboxId, sessionId: sessionId, event: event)
+                }
+            }
+        }
+        if sandboxLogPumpTask == nil {
+            let lines = sandboxLogLines
+            sandboxLogPumpTask = Task { [weak self] in
+                for await (sandboxId, stream, line) in lines {
+                    await self?.sendSandboxLogLine(sandboxId: sandboxId, stream: stream, line: line)
+                }
+            }
+        }
+    }
+
+    private func handleSandboxExecStart(_ message: SandboxExecStartMessage) async {
+        logger.info(
+            "Sandbox exec start request received",
+            metadata: [
+                "sandboxId": .string(message.sandboxId),
+                "sessionId": .string(message.sessionId),
+                "tty": .stringConvertible(message.tty),
+            ])
+
+        guard let runtime = sandboxRuntime else {
+            logger.error(
+                "Sandbox runtime not available for exec", metadata: ["sandboxId": .string(message.sandboxId)])
+            await sendSandboxExecClosed(
+                sessionId: message.sessionId, reason: "this agent has no sandbox runtime")
+            return
+        }
+
+        let request = SandboxExecRequest(
+            command: message.command, env: message.env, workingDir: message.workingDir,
+            tty: message.tty, rows: message.rows, cols: message.cols)
+
+        // Events yield into the ordered pump stream (never send directly from
+        // the runtime's callback, which must stay non-blocking).
+        let continuation = sandboxExecEventsContinuation
+        let sandboxId = message.sandboxId
+        let sessionId = message.sessionId
+        do {
+            try await runtime.startExec(sandboxId: sandboxId, sessionId: sessionId, request: request) { event in
+                continuation.yield((sandboxId, sessionId, event))
+            }
+        } catch {
+            logger.error(
+                "Failed to start sandbox exec session",
+                metadata: [
+                    "sandboxId": .string(sandboxId),
+                    "sessionId": .string(sessionId),
+                    "error": .string(error.localizedDescription),
+                ])
+            await sendSandboxExecClosed(sessionId: sessionId, reason: error.localizedDescription)
+        }
+    }
+
+    private func handleSandboxExecInput(_ message: SandboxExecInputMessage) async {
+        guard let runtime = sandboxRuntime else {
+            await sendSandboxExecClosed(
+                sessionId: message.sessionId, reason: "this agent has no sandbox runtime")
+            return
+        }
+        if message.data != nil && message.rawData == nil {
+            // The payload is present but not decodable base64: the stream is
+            // corrupt, and forwarding nothing would silently swallow
+            // keystrokes. Treat it as session-fatal, like the handler's other
+            // failure paths: tear the session down and tell the control plane.
+            logger.warning(
+                "Invalid sandbox exec input received (failed to decode base64); closing session",
+                metadata: ["sessionId": .string(message.sessionId)])
+            await runtime.closeExec(sessionId: message.sessionId)
+            await sendSandboxExecClosed(
+                sessionId: message.sessionId, reason: "undecodable exec input (invalid base64)")
+            return
+        }
+        do {
+            try await runtime.sendExecInput(sessionId: message.sessionId, data: message.rawData, eof: message.eof)
+        } catch {
+            logger.warning(
+                "Failed to write sandbox exec input",
+                metadata: [
+                    "sessionId": .string(message.sessionId),
+                    "error": .string(error.localizedDescription),
+                ])
+            await sendSandboxExecClosed(sessionId: message.sessionId, reason: error.localizedDescription)
+        }
+    }
+
+    private func handleSandboxExecResize(_ message: SandboxExecResizeMessage) async {
+        guard let runtime = sandboxRuntime else {
+            await sendSandboxExecClosed(
+                sessionId: message.sessionId, reason: "this agent has no sandbox runtime")
+            return
+        }
+        do {
+            try await runtime.resizeExec(sessionId: message.sessionId, rows: message.rows, cols: message.cols)
+        } catch {
+            logger.warning(
+                "Failed to resize sandbox exec session",
+                metadata: [
+                    "sessionId": .string(message.sessionId),
+                    "error": .string(error.localizedDescription),
+                ])
+            await sendSandboxExecClosed(sessionId: message.sessionId, reason: error.localizedDescription)
+        }
+    }
+
+    private func handleSandboxExecClose(_ message: SandboxExecCloseMessage) async {
+        logger.info(
+            "Sandbox exec close request received",
+            metadata: [
+                "sessionId": .string(message.sessionId),
+                "reason": .string(message.reason ?? ""),
+            ])
+        // The control plane already tore its side down; closing is terminal
+        // and needs no reply (and with no runtime there is nothing to close).
+        await sandboxRuntime?.closeExec(sessionId: message.sessionId)
+    }
+
+    /// Translate one runtime exec event into its outbound message. Runs on the
+    /// exec pump, so events are sent strictly in the order the runtime
+    /// delivered them.
+    private func sendSandboxExecEvent(sandboxId: String, sessionId: String, event: SandboxExecEvent) async {
+        guard let websocketClient else {
+            // No control-plane socket: the event (possibly the session's
+            // terminal one) is dropped. The control plane's agent-disconnect
+            // cleanup handles the user-facing side; just make the drop
+            // observable.
+            logger.warning(
+                "Dropping sandbox exec event: no control plane connection",
+                metadata: [
+                    "sessionId": .string(sessionId),
+                    "event": .string(String(describing: event)),
+                ])
+            return
+        }
+        do {
+            switch event {
+            case .started:
+                try await websocketClient.sendMessage(
+                    SandboxExecStartedMessage(sandboxId: sandboxId, sessionId: sessionId))
+            case .output(let stream, let data):
+                try await websocketClient.sendMessage(
+                    SandboxExecOutputMessage(sessionId: sessionId, stream: stream, rawData: data))
+            case .exited(let code):
+                try await websocketClient.sendMessage(
+                    SandboxExecExitMessage(sessionId: sessionId, exitCode: code))
+            case .closed(let reason):
+                try await websocketClient.sendMessage(
+                    SandboxExecClosedMessage(sessionId: sessionId, reason: reason))
+            }
+        } catch {
+            logger.error(
+                "Failed to send sandbox exec message",
+                metadata: [
+                    "sessionId": .string(sessionId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    private func sendSandboxExecClosed(sessionId: String, reason: String?) async {
+        guard let websocketClient else {
+            // Terminal for the session but undeliverable; see
+            // `sendSandboxExecEvent` for why a warning is enough.
+            logger.warning(
+                "Dropping sandbox exec closed message: no control plane connection",
+                metadata: ["sessionId": .string(sessionId), "reason": .string(reason ?? "")])
+            return
+        }
+        do {
+            try await websocketClient.sendMessage(SandboxExecClosedMessage(sessionId: sessionId, reason: reason))
+        } catch {
+            logger.error(
+                "Failed to send sandbox exec closed message",
+                metadata: ["sessionId": .string(sessionId), "error": .string(error.localizedDescription)])
+        }
+    }
+
+    /// Ship one assembled workload log line. Runs on the log pump, so lines
+    /// arrive at the control plane in the order the guest emitted them.
+    private func sendSandboxLogLine(sandboxId: String, stream: String, line: String) async {
+        let message = SandboxLogMessage(sandboxId: sandboxId, stream: stream, message: line)
+        do {
+            try await websocketClient?.sendMessage(message)
+        } catch {
+            logger.error(
+                "Failed to send sandbox log line",
+                metadata: ["sandboxId": .string(sandboxId), "error": .string(error.localizedDescription)])
         }
     }
 

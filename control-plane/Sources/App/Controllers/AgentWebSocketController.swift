@@ -282,6 +282,12 @@ struct AgentWebSocketController: RouteCollection {
                 return
             }
 
+            // Attached exec sessions cannot outlive the agent socket: close
+            // their browser sockets with an error frame instead of leaving
+            // frozen terminals behind.
+            req.application.sandboxExecSessionManager.closeAllSessions(
+                forAgent: agentName, reason: "agent disconnected")
+
             // Mark agent as offline asynchronously
             Task {
                 await req.agentService.removeAgent(agentName)
@@ -646,6 +652,42 @@ struct AgentWebSocketController: RouteCollection {
                 // Clean up the session
                 req.consoleSessionManager.removeSession(sessionId: message.sessionId)
 
+            case .sandboxExecStarted:
+                let message = try envelope.decode(as: SandboxExecStartedMessage.self)
+                req.sandboxExecSessionManager.handleStarted(
+                    sessionId: message.sessionId, fromAgentNamed: agentName)
+
+            case .sandboxExecOutput:
+                let message = try envelope.decode(as: SandboxExecOutputMessage.self)
+                if let data = message.rawData {
+                    req.sandboxExecSessionManager.handleOutput(
+                        sessionId: message.sessionId, fromAgentNamed: agentName, data: data)
+                }
+
+            case .sandboxExecExit:
+                let message = try envelope.decode(as: SandboxExecExitMessage.self)
+                req.sandboxExecSessionManager.handleExit(
+                    sessionId: message.sessionId, fromAgentNamed: agentName, exitCode: message.exitCode)
+
+            case .sandboxExecClosed:
+                let message = try envelope.decode(as: SandboxExecClosedMessage.self)
+                req.sandboxExecSessionManager.handleClosed(
+                    sessionId: message.sessionId, fromAgentNamed: agentName, reason: message.reason)
+
+            case .sandboxLog:
+                // Sandbox workload stdout/stderr line from the agent — push to
+                // Loki. Skip entirely when Loki isn't deployed rather than
+                // dropping the message downstream.
+                guard req.application.lokiEnabled else {
+                    break
+                }
+                let message = try envelope.decode(as: SandboxLogMessage.self)
+                // Enqueue only: the ingestor's single serial consumer keeps
+                // the agent's line order (Loki rejects out-of-order entries
+                // per stream) and caches the per-line ownership check instead
+                // of issuing a DB point query per line.
+                req.application.sandboxLogIngestor.enqueue(message, fromAgentNamed: agentName)
+
             case .vmLog:
                 // Handle VM log messages from agent - push to Loki.
                 // Skip entirely when Loki isn't deployed rather than dropping the message downstream.
@@ -789,6 +831,12 @@ struct AgentWebSocketController: RouteCollection {
                         ])
                     return
                 }
+
+                // Attached exec sessions cannot outlive the agent socket:
+                // close their browser sockets with an error frame instead of
+                // leaving frozen terminals behind.
+                req.application.sandboxExecSessionManager.closeAllSessions(
+                    forAgent: agentName, reason: "agent disconnected")
 
                 // Mark agent as offline asynchronously
                 Task {

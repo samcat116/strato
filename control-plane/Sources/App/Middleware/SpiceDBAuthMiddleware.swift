@@ -91,7 +91,7 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         GuardedResource(
             prefix: "/api/sandboxes",
             resourceType: "sandbox",
-            actionVerbs: ["start", "stop", "restart"]
+            actionVerbs: ["start", "stop", "restart", "exec"]
         ),
     ]
 
