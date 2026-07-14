@@ -1109,6 +1109,15 @@ actor Agent {
         }
 
         logger.warning("Lost connection to control plane; beginning reconnection with backoff")
+
+        // The control plane tears down this agent's console sessions when our
+        // socket drops (otherwise browser terminals freeze), and browsers must
+        // re-establish once we reconnect. Close our side's console pty channels
+        // now so they don't leak — the eventual browser-socket close on the
+        // control plane no-ops on the already-deleted session and never sends
+        // us a disconnect for them.
+        await consoleSocketManager?.disconnectAll()
+
         reconnectTask = Task { [weak self] in
             await self?.runReconnectLoop()
         }
