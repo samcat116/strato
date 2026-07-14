@@ -374,6 +374,10 @@ public func configure(_ app: Application) async throws {
     // endpoint enables RP-initiated logout at the IdP.
     app.migrations.add(AddEndSessionEndpointToOIDCProvider())
 
+    // Per-provider nonce toggle: some IdPs (e.g. Discord) accept but never
+    // echo the OIDC nonce, so allow disabling it to avoid failing every login.
+    app.migrations.add(AddUseNonceToOIDCProvider())
+
     // Generalize the async-operation machinery beyond VMs (issue #412):
     // vm_operations becomes resource_operations with a resource_kind
     // discriminator, so new resource types reuse the 202/poll/sweep pattern.

@@ -72,6 +72,20 @@ public enum MessageType: String, Codable, Sendable {
 
     // VM Logs
     case vmLog = "vm_log"
+
+    // Sandbox exec/attach and workload logs (protocol version >= 8, issue
+    // #423). Exec messages are a stream, not request/response: they are
+    // correlated by `sessionId`, ordered by the WebSocket, and never answered
+    // with `success`/`error`.
+    case sandboxExecStart = "sandbox_exec_start"
+    case sandboxExecStarted = "sandbox_exec_started"
+    case sandboxExecInput = "sandbox_exec_input"
+    case sandboxExecOutput = "sandbox_exec_output"
+    case sandboxExecResize = "sandbox_exec_resize"
+    case sandboxExecExit = "sandbox_exec_exit"
+    case sandboxExecClose = "sandbox_exec_close"
+    case sandboxExecClosed = "sandbox_exec_closed"
+    case sandboxLog = "sandbox_log"
 }
 
 // MARK: - Base Message Protocol

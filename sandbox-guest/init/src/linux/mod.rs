@@ -1,35 +1,41 @@
-//! Linux PID-1 orchestration for the sandbox guest init (issue #419).
+//! Linux PID-1 orchestration for the sandbox guest init (issues #419, #423).
 //!
 //! Sequence: bring up pseudo-filesystems → read the config drive → resolve the
 //! process to run → mount and switch onto the container rootfs → start the
-//! vsock agent → launch the workload → reap zombies while serving status.
+//! vsock agent → launch the workload (stdio captured via pipes) → reap every
+//! child forever, routing exec exit codes and serving status over vsock.
 
+mod exec;
+mod logs;
 mod mounts;
+mod reaper;
 mod vsock;
 
 use std::os::unix::process::CommandExt;
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 use std::sync::{Arc, Mutex};
 
 use nix::sys::reboot::{reboot, RebootMode};
-use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::{setgid, setgroups, setuid, Gid, Pid, Uid};
 
 use strato_sandbox_init::config::{GuestConfig, ResolvedProcess};
+use strato_sandbox_init::logbuf::LogBuffer;
 use strato_sandbox_init::protocol::WorkloadState;
-use vsock::{SharedStatus, Status};
+
+use reaper::ChildRegistry;
+use vsock::{GuestState, SharedStatus, Status};
 
 /// Default config-drive device when the kernel command line does not name one.
 const DEFAULT_CONFIG_DEVICE: &str = "/dev/vdb";
 
-/// Entry point. Never returns on the happy path — once the workload has run,
-/// the init parks so the vsock agent keeps serving the exit status until the
-/// host tears the microVM down.
+/// Entry point. Never returns on the happy path — PID 1 reaps children
+/// forever while the vsock agent keeps serving status, exec sessions, and log
+/// streams until the host tears the microVM down.
 pub fn run() -> ExitCode {
     match bringup() {
         Ok(()) => {
-            // Unreachable: bringup parks forever after reaping. Kept so the
-            // signature is honest if that ever changes.
+            // Unreachable: bringup ends in the forever-running reaper. Kept
+            // so the signature is honest if that ever changes.
             ExitCode::SUCCESS
         }
         Err(e) => fatal(&format!("sandbox init failed: {e}")),
@@ -56,118 +62,120 @@ fn bringup() -> Result<(), Box<dyn std::error::Error>> {
         state: WorkloadState::Starting,
         exit_code: None,
     }));
+    let logs = Arc::new(LogBuffer::new());
+    let children = Arc::new(ChildRegistry::new());
 
     // The vsock agent runs for the life of the microVM. A bind failure is
     // logged and non-fatal — the workload still runs, just without a control
     // channel — so we do not propagate the error.
-    let agent_status = status.clone();
+    let state = Arc::new(GuestState {
+        status: status.clone(),
+        process: process.clone(),
+        logs: logs.clone(),
+        children: children.clone(),
+    });
     let vsock_port = cfg.vsock_port;
     std::thread::Builder::new()
         .name("vsock-agent".into())
         .spawn(move || {
-            if let Err(e) = vsock::serve(vsock_port, agent_status) {
+            if let Err(e) = vsock::serve(vsock_port, state) {
                 eprintln!("[sandbox-init] vsock agent stopped: {e}");
             }
         })?;
 
-    let workload_pid = spawn_workload(&process)?;
+    let workload_pid = spawn_workload(&process, &logs)?;
+    children.notify_spawned();
     {
         let mut s = status.lock().expect("status poisoned");
         s.state = WorkloadState::Running;
     }
 
-    reap_until_workload_exits(workload_pid, &status);
-
-    // Keep PID 1 alive so the vsock agent can continue reporting the exit
-    // status; the host stops the microVM when it observes `exited`.
-    loop {
-        std::thread::park();
-    }
+    // PID 1's forever duty: reap every child, route exec exit codes, and keep
+    // the workload's exit status available until the host powers us off.
+    reaper::reap_forever(workload_pid, &status, &children)
 }
 
 /// Launch the container workload as a child process with the resolved
-/// environment, working directory, and credentials. Returns its pid.
-fn spawn_workload(process: &ResolvedProcess) -> Result<Pid, Box<dyn std::error::Error>> {
-    let program = process.argv.first().cloned().unwrap_or_default();
-    let child = workload_command(process)?
-        .spawn()
-        .map_err(|e| format!("exec workload {program}: {e}"))?;
-    Ok(Pid::from_raw(child.id() as i32))
-}
-
-/// Build the workload `Command` with the resolved argv, environment, working
-/// directory, and credentials.
-///
-/// The entire credential drop (setgroups → setgid → setuid) happens inside one
-/// `pre_exec` closure, while the child still has full privileges. It must NOT
-/// be mixed with `Command::uid`/`Command::gid`: std applies those before
-/// running `pre_exec` closures, so a `setgroups` in `pre_exec` would run after
-/// privileges are dropped and fail with EPERM for any non-root workload user.
-/// (`Command::groups`, which std would order correctly, is not yet stable.)
-fn workload_command(process: &ResolvedProcess) -> Result<Command, Box<dyn std::error::Error>> {
+/// environment, working directory, and credentials. stdin is `/dev/null`;
+/// stdout/stderr are pipes whose pump threads mirror every chunk to the
+/// console (preserving serial-log debuggability, partial lines included) and
+/// append it to the log ring buffer (issue #423). Returns its pid.
+fn spawn_workload(
+    process: &ResolvedProcess,
+    logs: &Arc<LogBuffer>,
+) -> Result<Pid, Box<dyn std::error::Error>> {
     let (program, args) = process.argv.split_first().ok_or("empty argv")?;
 
     let mut cmd = Command::new(program);
-    cmd.args(args).current_dir(&process.cwd).env_clear().envs(
-        process
-            .env
-            .iter()
-            .filter_map(|kv: &String| kv.split_once('=')),
-    );
+    cmd.args(args)
+        .current_dir(&process.cwd)
+        .env_clear()
+        .envs(
+            process
+                .env
+                .iter()
+                .filter_map(|kv: &String| kv.split_once('=')),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
-    let uid = Uid::from_raw(process.uid);
-    let gid = Gid::from_raw(process.gid);
+    let uid = process.uid;
+    let gid = process.gid;
+    // Full credential drop inside pre_exec; see [`drop_credentials`] for why
+    // Command::uid/gid must not be used here.
     unsafe {
-        cmd.pre_exec(move || {
-            setgroups(&[gid])?;
-            setgid(gid)?;
-            setuid(uid)?;
-            Ok(())
-        });
+        cmd.pre_exec(move || drop_credentials(uid, gid));
     }
-    Ok(cmd)
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("exec workload {program}: {e}"))?;
+    // Register BOTH stdio writers before the first pump can possibly finish,
+    // so a fast-EOFing stream cannot transiently close the buffer while the
+    // other pump is still being set up. The buffer closing (both pumps done)
+    // is what lets a log follower send `log_eof` to the host.
+    logs.register_writer();
+    logs.register_writer();
+    match child.stdout.take() {
+        Some(stdout) => logs::spawn_workload_pump(
+            "workload-stdout",
+            stdout,
+            libc::STDOUT_FILENO,
+            "stdout",
+            logs.clone(),
+        ),
+        None => logs.writer_done(),
+    }
+    match child.stderr.take() {
+        Some(stderr) => logs::spawn_workload_pump(
+            "workload-stderr",
+            stderr,
+            libc::STDERR_FILENO,
+            "stderr",
+            logs.clone(),
+        ),
+        None => logs.writer_done(),
+    }
+    Ok(Pid::from_raw(child.id() as i32))
 }
 
-/// Reap children until the workload process is reaped, recording its exit code.
-/// Continues reaping any other reparented zombies encountered along the way.
-fn reap_until_workload_exits(workload: Pid, status: &SharedStatus) {
-    loop {
-        match waitpid(Pid::from_raw(-1), None) {
-            Ok(WaitStatus::Exited(pid, code)) => {
-                if pid == workload {
-                    record_exit(status, code);
-                    return;
-                }
-            }
-            Ok(WaitStatus::Signaled(pid, sig, _)) => {
-                if pid == workload {
-                    // Shell convention: a process killed by signal N exits 128+N.
-                    record_exit(status, 128 + sig as i32);
-                    return;
-                }
-            }
-            Ok(_) => {} // stopped/continued/etc — keep waiting
-            Err(nix::errno::Errno::ECHILD) => {
-                // No children left but the workload was never seen exiting;
-                // treat as an unknown exit so the host is not left hanging.
-                record_exit(status, -1);
-                return;
-            }
-            Err(nix::errno::Errno::EINTR) => continue,
-            Err(e) => {
-                eprintln!("[sandbox-init] waitpid failed: {e}");
-                record_exit(status, -1);
-                return;
-            }
-        }
-    }
-}
-
-fn record_exit(status: &SharedStatus, code: i32) {
-    let mut s = status.lock().expect("status poisoned");
-    s.state = WorkloadState::Exited;
-    s.exit_code = Some(code);
-    eprintln!("[sandbox-init] workload exited with code {code}");
+/// Drop to the workload's credentials: supplementary groups reduce to just
+/// the primary gid, then setgid, then setuid — the classic order, run inside
+/// a pre_exec closure while the child is still privileged.
+///
+/// `Command::uid`/`gid` are deliberately NOT used: std applies them BEFORE
+/// pre_exec closures run, so a setgroups in pre_exec would fail EPERM for any
+/// non-root uid — and `CommandExt::groups`, which would let std order the
+/// calls correctly, is still unstable (rust-lang/rust#90747).
+///
+/// Async-signal-safe: three raw syscalls, no allocation.
+pub(crate) fn drop_credentials(uid: u32, gid: u32) -> std::io::Result<()> {
+    let gid = Gid::from_raw(gid);
+    setgroups(&[gid]).map_err(std::io::Error::from)?;
+    setgid(gid).map_err(std::io::Error::from)?;
+    setuid(Uid::from_raw(uid)).map_err(std::io::Error::from)?;
+    Ok(())
 }
 
 /// Parse `strato.config=<device>` from the kernel command line, if present.
@@ -187,45 +195,5 @@ fn fatal(message: &str) -> ! {
     let _ = reboot(RebootMode::RB_POWER_OFF);
     loop {
         std::thread::park();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Regression test for the credential drop in `workload_command`: a
-    /// non-root workload user must spawn successfully, with uid, gid, and the
-    /// supplementary group set all reduced to the configured ids. The previous
-    /// implementation (setgroups in `pre_exec` combined with
-    /// `Command::uid`/`Command::gid`) failed this with EPERM because std runs
-    /// `pre_exec` closures after dropping uid/gid. Switching credentials needs
-    /// root, so the test skips when run unprivileged (as in CI).
-    #[test]
-    fn workload_spawns_as_nonroot_with_primary_gid_only() {
-        if !nix::unistd::geteuid().is_root() {
-            eprintln!("skipping: switching credentials requires root");
-            return;
-        }
-        let process = ResolvedProcess {
-            argv: vec![
-                "/bin/sh".into(),
-                "-c".into(),
-                "echo \"$(id -u) $(id -g) $(id -G)\"".into(),
-            ],
-            env: vec!["PATH=/usr/bin:/bin".into()],
-            cwd: "/".into(),
-            uid: 65534,
-            gid: 65534,
-        };
-        let output = workload_command(&process)
-            .expect("build workload command")
-            .output()
-            .expect("spawn workload as uid 65534");
-        assert!(output.status.success(), "workload failed: {output:?}");
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            "65534 65534 65534"
-        );
     }
 }

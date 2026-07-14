@@ -91,6 +91,7 @@ struct OIDCController: RouteCollection {
             endSessionEndpoint: createRequest.endSessionEndpoint,
             scopes: createRequest.scopes ?? ["openid", "profile", "email"],
             enabled: createRequest.enabled ?? true,
+            useNonce: createRequest.useNonce ?? true,
             groupsClaim: normalizedGroupsClaim(createRequest.groupsClaim),
             groupMappings: createRequest.groupMappings ?? [],
             adminClaimValues: createRequest.adminClaimValues ?? [],
@@ -196,6 +197,7 @@ struct OIDCController: RouteCollection {
         }
         if let scopes = updateRequest.scopes { provider.setScopesArray(scopes) }
         if let enabled = updateRequest.enabled { provider.enabled = enabled }
+        if let useNonce = updateRequest.useNonce { provider.useNonce = useNonce }
 
         try await validateClaimMappingConfig(
             defaultRole: updateRequest.defaultRole,
@@ -437,10 +439,17 @@ struct OIDCController: RouteCollection {
         // so providers without PKCE support are unaffected, and those with it
         // get code-interception protection.
         let state = UUID().uuidString
-        let nonce = UUID().uuidString
+        // Only mint a nonce for providers that echo it back. When disabled we
+        // send none and store none, so the callback's nonce check is skipped
+        // (see `OIDCProvider.useNonce`; e.g. Discord never returns the nonce).
+        let nonce = provider.useNonce ? UUID().uuidString : nil
         let codeVerifier = OIDCValidation.generateCodeVerifier()
 
-        // Store state, nonce, and PKCE verifier in session for the callback
+        // Store state, nonce, and PKCE verifier in session for the callback.
+        // Assign the nonce unconditionally: a nil nonce (useNonce == false) must
+        // CLEAR any stale nonce a prior abandoned nonce-requiring login left in
+        // this same session, otherwise the callback would validate this
+        // nonce-less flow against it and reject a valid token.
         req.session.data["oidc_state"] = state
         req.session.data["oidc_nonce"] = nonce
         req.session.data["oidc_code_verifier"] = codeVerifier

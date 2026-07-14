@@ -17,6 +17,18 @@ private func closeFD(_ fd: Int32) {
     #endif
 }
 
+/// Shuts down both directions of a connected socket via the platform C
+/// library. Unlike `close(2)`, `shutdown(2)` wakes any thread parked in a
+/// blocking `read(2)` on the same fd (the read returns 0/EOF), which is what
+/// lets ``VsockConnection/close()`` unblock an in-flight read.
+private func shutdownFD(_ fd: Int32) {
+    #if os(Linux)
+    _ = Glibc.shutdown(fd, Int32(SHUT_RDWR))
+    #else
+    _ = Darwin.shutdown(fd, SHUT_RDWR)
+    #endif
+}
+
 /// A host-initiated connection to a guest vsock port, established through a
 /// Firecracker vsock device's Unix-domain socket.
 ///
@@ -103,8 +115,16 @@ public actor VsockConnection {
     }
 
     /// Closes the underlying socket. Idempotent.
+    ///
+    /// The socket is shut down (`SHUT_RDWR`) before it is closed: a bare
+    /// `close(2)` does not wake a thread already parked in a blocking
+    /// `read(2)` on the same fd (the in-flight syscall holds its own file
+    /// reference), whereas `shutdown(2)` forces that read to return EOF.
+    /// Callers therefore may rely on `close()` to unblock a concurrent
+    /// ``read(maxLength:)``.
     public func close() {
         if let fd {
+            shutdownFD(fd)
             closeFD(fd)
             self.fd = nil
         }

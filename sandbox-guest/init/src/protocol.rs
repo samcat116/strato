@@ -7,22 +7,48 @@
 //! ([`DEFAULT_VSOCK_PORT`], overridable via the config drive) and the host
 //! connects to it.
 //!
-//! **v1 surface is deliberately tiny** (issue #419): a health `Ping` and a
-//! `GetStatus` that returns the workload's lifecycle state and — once it has
-//! ended — its exit code. Interactive exec / stdio streaming is phase 2
-//! (issue #423) and intentionally absent here.
+//! **v1 surface** (issue #419): a health `Ping` and a `GetStatus` that returns
+//! the workload's lifecycle state and — once it has ended — its exit code.
 //!
-//! Every response echoes the sandbox identity (`sandbox_id` + `nonce`). This
-//! is what lets a host re-identify a guest after a phase-4 snapshot/resume
-//! (issue #426): the listener is re-established on resume and the host
-//! confirms it is talking to the sandbox it expects, not a stale generation.
+//! **v2 surface** (issue #423) adds interactive exec and workload stdio
+//! streaming. The first request on a connection determines its role:
+//!
+//! * `ping` / `get_status` — a request/response **control** connection that
+//!   may serve many requests, exactly as in v1.
+//! * `exec` — the connection becomes a dedicated **exec session**: the guest
+//!   answers `exec_started` (or `error`), streams `output` lines, accepts
+//!   interleaved `stdin` / `stdin_eof` / `resize` requests, and terminates
+//!   with a single `exec_exit` before closing.
+//! * `stream_logs` — the connection becomes a dedicated **log follow
+//!   stream**: the guest replays retained workload stdio records from
+//!   `since_seq` and then follows new output forever as `log` lines.
+//!
+//! All stdio payloads (`data` fields) are standard base64 so arbitrary bytes
+//! survive the JSON framing.
+//!
+//! Every v1 response echoes the sandbox identity (`sandbox_id` + `nonce`).
+//! This is what lets a host re-identify a guest after a phase-4
+//! snapshot/resume (issue #426): the listener is re-established on resume and
+//! the host confirms it is talking to the sandbox it expects, not a stale
+//! generation.
 
+use std::collections::BTreeMap;
+
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 /// Well-known guest vsock port the agent listens on when the config drive does
 /// not override it. Ports below 1024 are conventionally reserved; 1024 is the
 /// first freely usable port and keeps us clear of them.
 pub const DEFAULT_VSOCK_PORT: u32 = 1024;
+
+/// Default for [`Request::Exec`]'s `tty` when the host omits it.
+pub const DEFAULT_EXEC_TTY: bool = false;
+/// Default PTY rows for [`Request::Exec`] when the host omits `rows`.
+pub const DEFAULT_EXEC_ROWS: u16 = 24;
+/// Default PTY columns for [`Request::Exec`] when the host omits `cols`.
+pub const DEFAULT_EXEC_COLS: u16 = 80;
 
 /// A control request sent host → guest. `type`-tagged for forward-compatible
 /// decoding: an older guest rejects an unknown request rather than
@@ -34,6 +60,46 @@ pub enum Request {
     Ping,
     /// Ask for the workload's current lifecycle state and exit code.
     GetStatus,
+    /// Start an exec session on this connection (v2). Must be the first
+    /// request on the connection.
+    Exec {
+        /// The command to run; must be non-empty.
+        argv: Vec<String>,
+        /// Extra environment merged **over** the workload's resolved env
+        /// (replace on same key). `BTreeMap` for deterministic ordering.
+        #[serde(default)]
+        env: Option<BTreeMap<String, String>>,
+        /// Working directory; defaults to the workload's resolved cwd.
+        #[serde(default)]
+        cwd: Option<String>,
+        /// Allocate a PTY. Defaults to [`DEFAULT_EXEC_TTY`].
+        #[serde(default)]
+        tty: Option<bool>,
+        /// Initial PTY rows (tty only). Defaults to [`DEFAULT_EXEC_ROWS`].
+        #[serde(default)]
+        rows: Option<u16>,
+        /// Initial PTY columns (tty only). Defaults to [`DEFAULT_EXEC_COLS`].
+        #[serde(default)]
+        cols: Option<u16>,
+    },
+    /// Write bytes (base64) to the exec child's stdin. Exec sessions only.
+    Stdin {
+        /// base64-encoded bytes for the child's stdin.
+        data: String,
+    },
+    /// Close the exec child's stdin (no more `stdin` will follow). For tty
+    /// sessions this only stops writes. Exec sessions only.
+    StdinEof,
+    /// Resize the exec session's PTY. Ignored for non-tty sessions.
+    Resize { rows: u16, cols: u16 },
+    /// Start a log follow stream on this connection (v2). Must be the first
+    /// request on the connection; the host sends nothing afterwards.
+    StreamLogs {
+        /// First workload-log sequence number the host wants. Records already
+        /// evicted from the ring buffer are silently skipped (delivery starts
+        /// at the oldest retained).
+        since_seq: u64,
+    },
 }
 
 /// The workload's lifecycle state as observed by the guest agent.
@@ -65,8 +131,48 @@ pub enum Response {
         #[serde(skip_serializing_if = "Option::is_none")]
         exit_code: Option<i32>,
     },
-    /// The request could not be decoded or is not part of the v1 surface.
+    /// Sent once on an exec session after the child spawned successfully.
+    ExecStarted,
+    /// A chunk of exec child output. For tty sessions everything is reported
+    /// as stream `"stdout"`; non-tty sessions report `"stdout"` and
+    /// `"stderr"` separately.
+    Output {
+        stream: String,
+        /// base64-encoded output bytes.
+        data: String,
+    },
+    /// Terminal exec-session message: the child was reaped (signal N reported
+    /// as `128 + N`) and all buffered output has been flushed. The guest
+    /// closes the connection after sending it.
+    ExecExit { exit_code: i32 },
+    /// One retained/live workload stdio record on a log follow stream.
+    Log {
+        /// Monotonic sequence number, starting at 1, shared across streams.
+        seq: u64,
+        /// `"stdout"` or `"stderr"`.
+        stream: String,
+        /// base64-encoded chunk bytes.
+        data: String,
+    },
+    /// Terminal log-follow message: the workload's stdio pipes have all hit
+    /// EOF and every retained record was delivered — no log record will ever
+    /// follow. Lets the host flush a partial final line (output that ended
+    /// without a trailing newline) instead of holding it until teardown. The
+    /// guest closes the connection after sending it.
+    LogEof,
+    /// The request could not be decoded, is not valid for the connection's
+    /// role, or the exec spawn failed.
     Error { message: String },
+}
+
+/// Encode bytes as standard base64 for a protocol `data` field.
+pub fn encode_base64(bytes: &[u8]) -> String {
+    BASE64.encode(bytes)
+}
+
+/// Decode a protocol `data` field (standard base64) back into bytes.
+pub fn decode_base64(data: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    BASE64.decode(data)
 }
 
 /// Encode a response as a single newline-terminated JSON line.
@@ -103,7 +209,105 @@ mod tests {
 
     #[test]
     fn unknown_request_is_rejected() {
-        assert!(decode_request("{\"type\":\"exec\"}").is_err());
+        assert!(decode_request("{\"type\":\"reboot\"}").is_err());
+    }
+
+    #[test]
+    fn exec_decodes_full_form() {
+        let req = decode_request(
+            r#"{"type":"exec","argv":["/bin/sh"],"env":{"FOO":"bar"},"cwd":"/app","tty":true,"rows":24,"cols":80}"#,
+        )
+        .expect("decode");
+        let mut env = BTreeMap::new();
+        env.insert("FOO".to_string(), "bar".to_string());
+        assert_eq!(
+            req,
+            Request::Exec {
+                argv: vec!["/bin/sh".into()],
+                env: Some(env),
+                cwd: Some("/app".into()),
+                tty: Some(true),
+                rows: Some(24),
+                cols: Some(80),
+            }
+        );
+    }
+
+    #[test]
+    fn exec_optional_fields_default_to_none() {
+        let req =
+            decode_request(r#"{"type":"exec","argv":["/bin/true"]}"#).expect("decode minimal");
+        assert_eq!(
+            req,
+            Request::Exec {
+                argv: vec!["/bin/true".into()],
+                env: None,
+                cwd: None,
+                tty: None,
+                rows: None,
+                cols: None,
+            }
+        );
+    }
+
+    #[test]
+    fn exec_round_trips() {
+        let req = Request::Exec {
+            argv: vec!["/bin/sh".into(), "-c".into(), "id".into()],
+            env: None,
+            cwd: None,
+            tty: Some(false),
+            rows: None,
+            cols: None,
+        };
+        let line = encode_line(&req);
+        let decoded: Request = serde_json::from_str(line.trim()).expect("decode");
+        assert_eq!(decoded, req);
+    }
+
+    #[test]
+    fn stdin_round_trips() {
+        let req = decode_request(r#"{"type":"stdin","data":"aGVsbG8="}"#).expect("decode");
+        assert_eq!(
+            req,
+            Request::Stdin {
+                data: "aGVsbG8=".into()
+            }
+        );
+        let line = encode_line(&req);
+        let decoded: Request = serde_json::from_str(line.trim()).expect("re-decode");
+        assert_eq!(decoded, req);
+    }
+
+    #[test]
+    fn stdin_eof_round_trips() {
+        let req = decode_request(r#"{"type":"stdin_eof"}"#).expect("decode");
+        assert_eq!(req, Request::StdinEof);
+        assert_eq!(encode_line(&req).trim(), r#"{"type":"stdin_eof"}"#);
+    }
+
+    #[test]
+    fn resize_round_trips() {
+        let req = decode_request(r#"{"type":"resize","rows":30,"cols":100}"#).expect("decode");
+        assert_eq!(
+            req,
+            Request::Resize {
+                rows: 30,
+                cols: 100
+            }
+        );
+        let line = encode_line(&req);
+        let decoded: Request = serde_json::from_str(line.trim()).expect("re-decode");
+        assert_eq!(decoded, req);
+    }
+
+    #[test]
+    fn stream_logs_round_trips() {
+        let req = decode_request(r#"{"type":"stream_logs","since_seq":17}"#).expect("decode");
+        assert_eq!(req, Request::StreamLogs { since_seq: 17 });
+        let line = encode_line(&req);
+        let decoded: Request = serde_json::from_str(line.trim()).expect("re-decode");
+        assert_eq!(decoded, req);
     }
 
     #[test]
@@ -146,5 +350,73 @@ mod tests {
         let line = encode_line(&resp);
         let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
         assert_eq!(decoded, resp);
+    }
+
+    #[test]
+    fn exec_started_encodes_as_spec() {
+        let line = encode_line(&Response::ExecStarted);
+        assert_eq!(line.trim(), r#"{"type":"exec_started"}"#);
+        let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
+        assert_eq!(decoded, Response::ExecStarted);
+    }
+
+    #[test]
+    fn output_round_trips() {
+        let resp = Response::Output {
+            stream: "stderr".into(),
+            data: encode_base64(b"oops\n"),
+        };
+        let line = encode_line(&resp);
+        assert_eq!(
+            line.trim(),
+            r#"{"type":"output","stream":"stderr","data":"b29wcwo="}"#
+        );
+        let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
+        assert_eq!(decoded, resp);
+    }
+
+    #[test]
+    fn exec_exit_round_trips() {
+        let resp = Response::ExecExit { exit_code: 137 };
+        let line = encode_line(&resp);
+        assert_eq!(line.trim(), r#"{"type":"exec_exit","exit_code":137}"#);
+        let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
+        assert_eq!(decoded, resp);
+    }
+
+    #[test]
+    fn log_round_trips() {
+        let resp = Response::Log {
+            seq: 18,
+            stream: "stdout".into(),
+            data: encode_base64(b"line\n"),
+        };
+        let line = encode_line(&resp);
+        assert_eq!(
+            line.trim(),
+            r#"{"type":"log","seq":18,"stream":"stdout","data":"bGluZQo="}"#
+        );
+        let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
+        assert_eq!(decoded, resp);
+    }
+
+    #[test]
+    fn log_eof_encodes_as_bare_tag() {
+        let line = encode_line(&Response::LogEof);
+        assert_eq!(line.trim(), r#"{"type":"log_eof"}"#);
+        let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
+        assert_eq!(decoded, Response::LogEof);
+    }
+
+    #[test]
+    fn base64_round_trips_arbitrary_bytes() {
+        let bytes: Vec<u8> = (0..=255).collect();
+        let encoded = encode_base64(&bytes);
+        assert_eq!(decode_base64(&encoded).expect("decode"), bytes);
+    }
+
+    #[test]
+    fn base64_rejects_garbage() {
+        assert!(decode_base64("not base64!!").is_err());
     }
 }

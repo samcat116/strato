@@ -22,6 +22,7 @@ struct SandboxController: RouteCollection {
             sandbox.post("restart", use: restart)
             sandbox.get("status", use: status)
             sandbox.get("operations", use: listOperations)
+            sandbox.post("exec", use: exec)
         }
     }
 
@@ -599,6 +600,100 @@ struct SandboxController: RouteCollection {
         Self.dispatchStateSync(operation, sandbox: sandbox, app: req.application)
 
         return try Self.accepted(operation)
+    }
+
+    // MARK: - Exec (issue #423)
+
+    /// `POST /api/sandboxes/:id/exec`: mint an exec session inside a running
+    /// sandbox. Returns `201 Created` with the session id and the WebSocket
+    /// attach path; the actual exec starts when the browser attaches.
+    ///
+    /// Exec is relayed over the agent's WebSocket, so it requires the
+    /// control-plane replica that holds the agent socket (console parity;
+    /// the single-replica limitation is documented in
+    /// `docs/architecture/sandboxes.md`).
+    func exec(req: Request) async throws -> Response {
+        let user = try req.auth.require(User.self)
+
+        struct ExecRequest: Content {
+            let command: [String]
+            let env: [String: String]?
+            let workingDir: String?
+            let tty: Bool?
+            let rows: Int?
+            let cols: Int?
+        }
+
+        let execRequest = try req.content.decode(ExecRequest.self)
+        guard !execRequest.command.isEmpty else {
+            throw Abort(.badRequest, reason: "'command' must be a non-empty array of strings")
+        }
+
+        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "exec")
+        let sandboxID = try sandbox.requireID()
+
+        guard sandbox.isRunning else {
+            throw Abort(
+                .badRequest,
+                reason: "Sandbox must be running to exec. Current state: \(sandbox.status.rawValue)")
+        }
+
+        guard let agentIdString = sandbox.hypervisorId,
+            let agentId = UUID(uuidString: agentIdString)
+        else {
+            throw Abort(.conflict, reason: "Sandbox is not placed on any agent")
+        }
+
+        guard let agent = try await Agent.find(agentId, on: req.db) else {
+            throw Abort(.internalServerError, reason: "Agent not found for sandbox")
+        }
+
+        let agentWireVersion = agent.wireProtocolVersion ?? 0
+        guard WireProtocol.supportsSandboxExec(agentWireVersion) else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent '\(agent.name)' is too old for sandbox exec (wire protocol \(agentWireVersion), need >= \(WireProtocol.sandboxExecMinimumVersion)). Upgrade the agent."
+            )
+        }
+
+        // Exec frames flow over the agent's WebSocket, which only this
+        // process can write to. If another replica holds the socket the
+        // client must retry against that replica (console parity).
+        guard req.application.websocketManager.getConnection(agentName: agent.name) != nil else {
+            throw Abort(
+                .serviceUnavailable,
+                reason:
+                    "Agent '\(agent.name)' is not connected to this control-plane replica; exec requires the replica holding the agent socket"
+            )
+        }
+
+        let session = req.sandboxExecSessionManager.createPendingSession(
+            sandboxId: sandboxID.uuidString,
+            agentName: agent.name,
+            userId: try user.requireID().uuidString,
+            command: execRequest.command,
+            env: execRequest.env,
+            workingDir: execRequest.workingDir,
+            tty: execRequest.tty ?? false,
+            rows: execRequest.rows,
+            cols: execRequest.cols
+        )
+
+        struct ExecSessionResponse: Content {
+            let sessionId: String
+            let websocketPath: String
+            let expiresAt: Date
+        }
+
+        let response = Response(status: .created)
+        try response.content.encode(
+            ExecSessionResponse(
+                sessionId: session.sessionId,
+                websocketPath: "/api/sandboxes/\(sandboxID.uuidString)/exec/\(session.sessionId)/attach",
+                expiresAt: session.expiresAt
+            ))
+        return response
     }
 
     // MARK: - Delete

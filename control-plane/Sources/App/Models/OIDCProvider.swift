@@ -49,6 +49,14 @@ final class OIDCProvider: Model, @unchecked Sendable {
     @Field(key: "enabled")
     var enabled: Bool
 
+    // When true (default, OIDC-compliant), Strato sends a `nonce` on the
+    // authorization request and requires the ID token to echo it. Some IdPs —
+    // notably Discord — accept the nonce but never return it, failing every
+    // login; disable this per provider to skip sending and validating it.
+    // PKCE (S256) + `state` still protect the authorization-code flow.
+    @Field(key: "use_nonce")
+    var useNonce: Bool
+
     @OptionalField(key: "groups_claim")
     var groupsClaim: String?  // ID-token claim holding group/role values (e.g. "groups", "roles")
 
@@ -88,6 +96,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
         endSessionEndpoint: String? = nil,
         scopes: [String] = ["openid", "profile", "email"],
         enabled: Bool = true,
+        useNonce: Bool = true,
         groupsClaim: String? = nil,
         groupMappings: [OIDCGroupMapping] = [],
         adminClaimValues: [String] = [],
@@ -107,6 +116,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
         self.endSessionEndpoint = endSessionEndpoint
         self.scopes = Self.encodeScopesArray(scopes)
         self.enabled = enabled
+        self.useNonce = useNonce
         self.groupsClaim = groupsClaim
         self.groupMappings = Self.encodeJSON(groupMappings, fallback: "[]")
         self.adminClaimValues = Self.encodeJSON(adminClaimValues, fallback: "[]")
@@ -202,7 +212,7 @@ extension OIDCProvider {
     func getAuthorizationURL(
         redirectURI: String,
         state: String,
-        nonce: String,
+        nonce: String?,
         codeChallenge: String? = nil,
         codeChallengeMethod: String? = nil
     ) -> String? {
@@ -219,8 +229,13 @@ extension OIDCProvider {
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "scope", value: scopesArray.joined(separator: " ")),
             URLQueryItem(name: "state", value: state),
-            URLQueryItem(name: "nonce", value: nonce),
         ]
+
+        // Only request a nonce when the provider supports echoing it back
+        // (see `useNonce`); omit it entirely otherwise.
+        if let nonce {
+            queryItems.append(URLQueryItem(name: "nonce", value: nonce))
+        }
 
         // Add PKCE parameters if provided
         if let codeChallenge = codeChallenge,
@@ -271,6 +286,7 @@ struct CreateOIDCProviderRequest: Content {
     let endSessionEndpoint: String?
     let scopes: [String]?
     let enabled: Bool?
+    let useNonce: Bool?
     let groupsClaim: String?
     let groupMappings: [OIDCGroupMapping]?
     let adminClaimValues: [String]?
@@ -288,6 +304,7 @@ struct CreateOIDCProviderRequest: Content {
         endSessionEndpoint: String? = nil,
         scopes: [String]? = nil,
         enabled: Bool? = nil,
+        useNonce: Bool? = nil,
         groupsClaim: String? = nil,
         groupMappings: [OIDCGroupMapping]? = nil,
         adminClaimValues: [String]? = nil,
@@ -304,6 +321,7 @@ struct CreateOIDCProviderRequest: Content {
         self.endSessionEndpoint = endSessionEndpoint
         self.scopes = scopes
         self.enabled = enabled
+        self.useNonce = useNonce
         self.groupsClaim = groupsClaim
         self.groupMappings = groupMappings
         self.adminClaimValues = adminClaimValues
@@ -323,6 +341,7 @@ struct UpdateOIDCProviderRequest: Content {
     let endSessionEndpoint: String?
     let scopes: [String]?
     let enabled: Bool?
+    let useNonce: Bool?
     let groupsClaim: String?
     let groupMappings: [OIDCGroupMapping]?
     let adminClaimValues: [String]?
@@ -340,6 +359,7 @@ struct UpdateOIDCProviderRequest: Content {
         endSessionEndpoint: String? = nil,
         scopes: [String]? = nil,
         enabled: Bool? = nil,
+        useNonce: Bool? = nil,
         groupsClaim: String? = nil,
         groupMappings: [OIDCGroupMapping]? = nil,
         adminClaimValues: [String]? = nil,
@@ -356,6 +376,7 @@ struct UpdateOIDCProviderRequest: Content {
         self.endSessionEndpoint = endSessionEndpoint
         self.scopes = scopes
         self.enabled = enabled
+        self.useNonce = useNonce
         self.groupsClaim = groupsClaim
         self.groupMappings = groupMappings
         self.adminClaimValues = adminClaimValues
@@ -376,6 +397,7 @@ struct OIDCProviderResponse: Content {
     let endSessionEndpoint: String?
     let scopes: [String]
     let enabled: Bool
+    let useNonce: Bool
     let groupsClaim: String?
     let groupMappings: [OIDCGroupMapping]?
     let adminClaimValues: [String]?
@@ -401,6 +423,7 @@ struct OIDCProviderResponse: Content {
         self.endSessionEndpoint = provider.endSessionEndpoint
         self.scopes = provider.scopesArray
         self.enabled = provider.enabled
+        self.useNonce = provider.useNonce
         self.groupsClaim = includeClaimMappings ? provider.groupsClaim : nil
         self.groupMappings = includeClaimMappings ? provider.groupMappingsArray : nil
         self.adminClaimValues = includeClaimMappings ? provider.adminClaimValuesArray : nil

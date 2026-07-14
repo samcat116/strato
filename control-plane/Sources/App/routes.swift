@@ -57,6 +57,9 @@ func routes(_ app: Application) throws {
     // Console WebSocket controller for VM console streaming
     try app.register(collection: ConsoleWebSocketController())
 
+    // Sandbox exec attach WebSocket (issue #423)
+    try app.register(collection: SandboxExecWebSocketController())
+
     // VM Logs controller for querying logs from Loki
     try app.register(collection: LogsController())
 

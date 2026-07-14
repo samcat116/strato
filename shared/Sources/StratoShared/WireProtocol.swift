@@ -106,7 +106,17 @@ public enum WireProtocol {
     /// struct into, so the fleet rollout must never *assign* an update to one
     /// — it would wait out its whole health budget against silence and halt
     /// the rollout for no reason (see `supportsDesiredAgentUpdate(_:)`).
-    public static let currentVersion = 7
+    ///
+    /// Version 8: sandbox exec/attach and workload logs (issue #423). Adds the
+    /// `sandboxExec*` stream messages and `sandboxLog`. Like `agentUpdate` in
+    /// v6, the gate is load-bearing on the send side: a pre-v8 agent has no
+    /// `sandbox_exec_start` case in its `MessageType` enum, so the envelope
+    /// decode fails silently and the exec session would hang against silence —
+    /// the control plane must refuse exec requests for agents that registered
+    /// with an older version (see `supportsSandboxExec(_:)`). `sandboxLog` is
+    /// agent→control-plane only and harmless across skew: a pre-v8 control
+    /// plane never receives one because a pre-v8 agent never sends one.
+    public static let currentVersion = 8
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -184,6 +194,19 @@ public enum WireProtocol {
     /// and halt the rollout.
     public static func supportsDesiredAgentUpdate(_ version: Int) -> Bool {
         version >= desiredAgentUpdateMinimumVersion
+    }
+
+    /// The lowest protocol version that speaks sandbox exec/attach and
+    /// workload logs (see `currentVersion` version 8 notes).
+    public static let sandboxExecMinimumVersion = 8
+
+    /// Whether an agent registered with `version` can be sent
+    /// `sandboxExec*` messages. A pre-v8 agent cannot decode the envelope
+    /// (unknown `MessageType` case) and never replies, so the control plane
+    /// must refuse the exec request up front rather than let the session hang
+    /// against silence.
+    public static func supportsSandboxExec(_ version: Int) -> Bool {
+        version >= sandboxExecMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

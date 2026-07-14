@@ -40,7 +40,9 @@ export {
   useTransferProject,
 } from "./use-projects";
 export { useConsole } from "./use-console";
+export { useSandboxExec } from "./use-sandbox-exec";
 export { useVMLogs, useInvalidateVMLogs } from "./use-vm-logs";
+export { useSandboxLogs, useInvalidateSandboxLogs } from "./use-sandbox-logs";
 export { useAPIKeys, useCreateAPIKey, useRevokeAPIKey } from "./use-api-keys";
 export {
   useUsers,
