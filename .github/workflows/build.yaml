@@ -235,11 +235,15 @@ jobs:
         # the pod's loopback.
         ports:
           - 5432:5432
+        # The test databases are schema-only (no seed data), so the in-RAM data
+        # dir costs negligible memory against the 8Gi pod while removing the
+        # overlay-FS copy cost of each CREATE DATABASE ... TEMPLATE clone.
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+          --tmpfs /var/lib/postgresql/data:rw
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4

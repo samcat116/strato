@@ -152,6 +152,15 @@ actor PostgresTestDatabases {
     }
 
     private func buildTemplate() async throws {
+        // CI databases are disposable — trade durability for speed. Each test mints a
+        // clone via CREATE DATABASE ... TEMPLATE, which is checkpoint/fsync-bound;
+        // these settings remove the syncs. Safe because a crashed CI Postgres is just
+        // a rerun. (All three are SIGHUP-reloadable; strato is a superuser.)
+        try await run("ALTER SYSTEM SET fsync = off")
+        try await run("ALTER SYSTEM SET synchronous_commit = off")
+        try await run("ALTER SYSTEM SET full_page_writes = off")
+        try await run("SELECT pg_reload_conf()")
+
         // Sweep templates and clones left by dead runs (crashed teardowns,
         // killed processes); skip names whose embedded pid is still alive —
         // that's a parallel run in another worktree sharing this server.
