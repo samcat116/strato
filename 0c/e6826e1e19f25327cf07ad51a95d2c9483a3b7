@@ -1,0 +1,38 @@
+control-plane/Sources/App/Migrations/AddUseNonceToOIDCProvider.swift
+  s_5b300dc4e2e5e1::t_24d15a1eeddae2 1-22
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_5b300dc4e2e5e1::t_005529f1e5c19b 426
+  s_5b300dc4e2e5e1::t_316996a4f4aa66 52-59
+  s_5b300dc4e2e5e1::t_94999556c688c7 344,362,379
+  s_5b300dc4e2e5e1::t_22b8ea8a7a1d41 119
+  s_5b300dc4e2e5e1::t_7013001fa9248a 215,234-238
+  s_5b300dc4e2e5e1::t_272aa6917e5fa0 99
+  s_5b300dc4e2e5e1::t_23c04a92267a89 289,307,324
+  s_5b300dc4e2e5e1::t_82453884846e35 400
+  s_5b300dc4e2e5e1::t_1851f09d758824 239
+control-plane/Sources/App/configure.swift
+  s_5b300dc4e2e5e1::t_b3aa4de9ca4085 377-380
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_5b300dc4e2e5e1::t_a6eea81c34b8ec 94
+  s_5b300dc4e2e5e1::t_f701d7ecd6c1c7 200
+  s_5b300dc4e2e5e1::t_5ad0b62421b4e6 442-445,450-452
+control-plane/Tests/AppTests/OIDCAuthFlowTests.swift
+  s_5b300dc4e2e5e1::t_ca2299e81033fb 318-322,336,338,341,344
+  s_5b300dc4e2e5e1::t_728cf865ca39b1 775-821
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "0ce6826e1e19f25327cf07ad51a95d2c9483a3b7",
+  "prompts": {},
+  "sessions": {
+    "s_5b300dc4e2e5e1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01d2145c-30d5-4f69-b3bd-e6132e9b7ade",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
