@@ -273,16 +273,26 @@ struct VMController: RouteCollection {
         return operations.map { OperationResponse(from: $0) }
     }
 
+    /// GET /api/vms
+    /// Query params: organization_id (optional) — narrows to one org's hierarchy.
     func index(req: Request) async throws -> [VMDetailResponse] {
         // Get user from middleware
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
 
+        // A VM reaches its organization through its project, so narrowing by org means
+        // narrowing to that org's projects. An org with no projects matches no VMs —
+        // return early rather than let an empty `~~ []` stand in for "unfiltered".
+        var query = VM.query(on: req.db).with(\.$networkInterfaces) { $0.with(\.$addresses) }
+        if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
+            let projectIDs = try await orgFilter.projectIDs(on: req.db)
+            if projectIDs.isEmpty { return [] }
+            query = query.filter(\.$project.$id ~~ projectIDs)
+        }
+
         // Filter VMs based on user permissions
-        let allVMs = try await VM.query(on: req.db)
-            .with(\.$networkInterfaces) { $0.with(\.$addresses) }
-            .all()
+        let allVMs = try await query.all()
         var authorizedVMs: [VMDetailResponse] = []
 
         for vm in allVMs {

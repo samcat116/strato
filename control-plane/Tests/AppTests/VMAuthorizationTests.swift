@@ -56,6 +56,28 @@ final class VMAuthorizationTests {
         try await app.shutdownForTesting()
     }
 
+    @Test("GET /api/vms?organization_id= narrows the list to that org's projects")
+    func indexFilteredByOrganization() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            // A VM in another organization's project. A VM has no org scope of its
+            // own, so the filter has to reach it through the project.
+            let builder = TestDataBuilder(db: app.db)
+            let otherOrg = try await builder.createOrganization(name: "Other VM Org")
+            let otherProject = try await builder.createProject(
+                name: "Other VM Project", description: "elsewhere", organization: otherOrg)
+            _ = try await builder.createVM(name: "other-vm", project: otherProject)
+
+            let orgID = try #require(user.currentOrganizationId)
+            try await app.test(.GET, "/api/vms?organization_id=\(orgID.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let vms = try res.content.decode([VMDetailResponse].self)
+                #expect(vms.map(\.name) == [vm.name])
+            }
+        }
+    }
+
     @Test("GET /api/vms/:id is denied (403) when SpiceDB withholds read")
     func showDeniedWhenNoPermission() async throws {
         try await withVMTestApp { app, _, vm, token in
