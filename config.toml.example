@@ -190,3 +190,25 @@ log_level = "info"
 # # certificate_path = "/var/run/spire/certs/svid.pem"
 # # private_key_path = "/var/run/spire/certs/svid_key.pem"
 # # trust_bundle_path = "/var/run/spire/certs/bundle.pem"
+
+# ---------------------------------------------------------------------------
+# Simulation ("dummy agent") mode — for scale-testing a control plane.
+#
+# When enabled, the agent registers and speaks the full agent protocol
+# (register, heartbeat, desired-state reconciliation) but drives a no-op mock
+# hypervisor with no real networking or storage, and reports the configurable
+# fake host capacity below instead of probing the machine. This lets a fleet of
+# dummy agents run on one host and load-test a control plane far larger than the
+# compute available to run real VMs.
+#
+# The `--simulate` / `--sim-cpus` / `--sim-memory-mb` / `--sim-disk-gb` CLI
+# flags override these. See agent/scripts/spawn-sim-fleet.sh to launch a whole
+# fleet with a spread of host sizes.
+# [simulation]
+# enabled = true
+#
+# # Fake capacity advertised to the scheduler. Unset fields use built-in
+# # defaults (8 cores / 16384 MB / 512 GB).
+# cpu_cores = 16
+# memory_mb = 65536
+# disk_gb = 1024

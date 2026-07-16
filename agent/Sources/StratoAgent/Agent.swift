@@ -181,6 +181,15 @@ actor Agent {
     private let hypervisorType: HypervisorType
     private let hardwareAccelerationEnabled: Bool
 
+    // Simulation ("dummy agent") mode: the agent speaks the full control-plane
+    // protocol but drives a no-op mock hypervisor with no real
+    // networking/storage, and reports the configured fake host capacity instead
+    // of probing the machine. Lets a fleet of dummies scale-test a control plane
+    // far larger than the compute available to run real VMs. Nil/disabled means
+    // a normal agent.
+    private let simulation: SimulationConfig?
+    private var isSimulationMode: Bool { simulation?.enabled ?? false }
+
     // SPIFFE/SPIRE support
     private let spiffeConfig: SPIFFEConfig?
     private var svidManager: SVIDManager?
@@ -228,6 +237,7 @@ actor Agent {
         sandboxGuestImagePath: String? = nil,
         hypervisorType: HypervisorType = .qemu,
         hardwareAccelerationEnabled: Bool = true,
+        simulation: SimulationConfig? = nil,
         spiffeConfig: SPIFFEConfig? = nil,
         stateStore: (any AgentStateStore)? = nil
     ) {
@@ -252,6 +262,7 @@ actor Agent {
         self.sandboxGuestImagePath = sandboxGuestImagePath
         self.hypervisorType = hypervisorType
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
+        self.simulation = simulation
         self.spiffeConfig = spiffeConfig
         self.stateStore = stateStore
         self.manifestStore = VMManifestStore(
@@ -299,45 +310,56 @@ actor Agent {
                 ])
         }
 
-        logger.info("Initializing network service")
-
-        // Initialize network service based on config, falling back to platform defaults
-        let selectedMode =
-            networkMode
-            ?? {
-                #if os(Linux)
-                return .ovn
-                #else
-                return .user
-                #endif
-            }()
-
-        switch selectedMode {
-        case .ovn:
-            #if os(Linux)
-            logger.info("Network service initialized with SwiftOVN support")
-            networkService = NetworkServiceLinux(
-                nbConnection: ovnNorthbound, nbTLS: ovnNorthboundTLS, chassisConfig: ovnChassisConfig,
-                uplink: ovnUplink, logger: logger)
+        // Simulation mode drives no real network backend. `NetworkOrchestrator`
+        // already degrades to a no-op when `networkService` is nil, so
+        // VM-create networking becomes a clean pass-through. Pretend networking
+        // is connected in OVN mode so the agent advertises OVN networking and
+        // looks like a full Linux host to the scheduler.
+        if isSimulationMode {
+            logger.info("Simulation mode: skipping real network service; advertising OVN networking")
             effectiveNetworkMode = .ovn
-            #else
-            logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
-            networkService = NetworkServiceMacOS(logger: logger)
-            effectiveNetworkMode = .user
-            #endif
-        case .user:
-            logger.info("Network service initialized with user-mode networking")
-            networkService = NetworkServiceMacOS(logger: logger)
-            effectiveNetworkMode = .user
-        }
+            networkServiceConnected = true
+        } else {
+            logger.info("Initializing network service")
 
-        networkServiceConnected = await connectNetworkService()
-        if !networkServiceConnected {
-            logger.warning("VM networking will be limited until the network service connects")
-            // Keep retrying in the background: OVN/OVS coming up after the
-            // agent (boot ordering, or an operator installing it) restores
-            // networking without an agent restart.
-            startNetworkReconnectLoop()
+            // Initialize network service based on config, falling back to platform defaults
+            let selectedMode =
+                networkMode
+                ?? {
+                    #if os(Linux)
+                    return .ovn
+                    #else
+                    return .user
+                    #endif
+                }()
+
+            switch selectedMode {
+            case .ovn:
+                #if os(Linux)
+                logger.info("Network service initialized with SwiftOVN support")
+                networkService = NetworkServiceLinux(
+                    nbConnection: ovnNorthbound, nbTLS: ovnNorthboundTLS, chassisConfig: ovnChassisConfig,
+                    uplink: ovnUplink, logger: logger)
+                effectiveNetworkMode = .ovn
+                #else
+                logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
+                networkService = NetworkServiceMacOS(logger: logger)
+                effectiveNetworkMode = .user
+                #endif
+            case .user:
+                logger.info("Network service initialized with user-mode networking")
+                networkService = NetworkServiceMacOS(logger: logger)
+                effectiveNetworkMode = .user
+            }
+
+            networkServiceConnected = await connectNetworkService()
+            if !networkServiceConnected {
+                logger.warning("VM networking will be limited until the network service connects")
+                // Keep retrying in the background: OVN/OVS coming up after the
+                // agent (boot ordering, or an operator installing it) restores
+                // networking without an agent restart.
+                startNetworkReconnectLoop()
+            }
         }
 
         // Initialize image cache service
@@ -357,53 +379,65 @@ actor Agent {
         )
         self.storageBackend = storageBackend
 
-        logger.info("Initializing QEMU service")
-        #if canImport(SwiftQEMU)
-        hypervisorServices[.qemu] = QEMUService(
-            logger: logger, storage: storageBackend,
-            vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath,
-            hardwareAccelerationEnabled: hardwareAccelerationEnabled)
-        #else
-        hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
-        #endif
-
-        #if os(Linux)
-        logger.info("Initializing Firecracker service (Linux only)")
-        // One Firecracker client backs both VMs and sandboxes so they share the
-        // process registry, socket directory, and re-adoption machinery.
-        let firecrackerClient = FirecrackerClient(
-            firecrackerBinaryPath: firecrackerBinaryPath,
-            socketDirectory: firecrackerSocketDir,
-            logger: logger
-        )
-        hypervisorServices[.firecracker] = FirecrackerService(
-            logger: logger,
-            storage: storageBackend,
-            imageSource: imageCacheService,
-            vmStoragePath: vmStoragePath,
-            firecrackerBinaryPath: firecrackerBinaryPath,
-            socketDirectory: firecrackerSocketDir,
-            firecrackerClient: firecrackerClient
-        )
-
-        // The sandbox runtime (issue #421) shares that client. It lights up only
-        // when a guest base image (issue #419) is configured — the same
-        // prerequisite the capability probe gates on — so a build without one
-        // leaves `sandboxRuntime` nil and never attracts sandbox placements.
-        if let sandboxGuestImagePath {
-            logger.info("Initializing sandbox runtime (Linux only)")
-            sandboxRuntime = FirecrackerSandboxRuntime(
-                logger: logger,
-                client: firecrackerClient,
-                imageService: SandboxImageService(logger: logger),
-                socketDirectory: firecrackerSocketDir,
-                sandboxStoragePath: vmStoragePath,
-                guestImagePath: sandboxGuestImagePath
-            )
+        if isSimulationMode {
+            // One mock backend per hypervisor type so the agent is eligible for
+            // both QEMU and (on Linux) Firecracker placements. The mock tracks
+            // specs and reports real reservations, so placements deplete the
+            // agent's advertised capacity like a real host.
+            logger.info("Simulation mode: registering mock hypervisor backend(s)")
+            hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
+            #if os(Linux)
+            hypervisorServices[.firecracker] = MockHypervisorService(logger: logger, hypervisorType: .firecracker)
+            #endif
         } else {
-            logger.info("Sandbox guest image path not configured; sandbox runtime disabled")
+            logger.info("Initializing QEMU service")
+            #if canImport(SwiftQEMU)
+            hypervisorServices[.qemu] = QEMUService(
+                logger: logger, storage: storageBackend,
+                vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath,
+                hardwareAccelerationEnabled: hardwareAccelerationEnabled)
+            #else
+            hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
+            #endif
+
+            #if os(Linux)
+            logger.info("Initializing Firecracker service (Linux only)")
+            // One Firecracker client backs both VMs and sandboxes so they share the
+            // process registry, socket directory, and re-adoption machinery.
+            let firecrackerClient = FirecrackerClient(
+                firecrackerBinaryPath: firecrackerBinaryPath,
+                socketDirectory: firecrackerSocketDir,
+                logger: logger
+            )
+            hypervisorServices[.firecracker] = FirecrackerService(
+                logger: logger,
+                storage: storageBackend,
+                imageSource: imageCacheService,
+                vmStoragePath: vmStoragePath,
+                firecrackerBinaryPath: firecrackerBinaryPath,
+                socketDirectory: firecrackerSocketDir,
+                firecrackerClient: firecrackerClient
+            )
+
+            // The sandbox runtime (issue #421) shares that client. It lights up only
+            // when a guest base image (issue #419) is configured — the same
+            // prerequisite the capability probe gates on — so a build without one
+            // leaves `sandboxRuntime` nil and never attracts sandbox placements.
+            if let sandboxGuestImagePath {
+                logger.info("Initializing sandbox runtime (Linux only)")
+                sandboxRuntime = FirecrackerSandboxRuntime(
+                    logger: logger,
+                    client: firecrackerClient,
+                    imageService: SandboxImageService(logger: logger),
+                    socketDirectory: firecrackerSocketDir,
+                    sandboxStoragePath: vmStoragePath,
+                    guestImagePath: sandboxGuestImagePath
+                )
+            } else {
+                logger.info("Sandbox guest image path not configured; sandbox runtime disabled")
+            }
+            #endif
         }
-        #endif
 
         // Bridge the sandbox runtime's exec events and workload log lines onto
         // the agent WebSocket (issue #423). The handlers yield synchronously so
@@ -680,13 +714,22 @@ actor Agent {
         // OVN/OVS dependencies) runs on the same cadence and gates the
         // per-hypervisor probes: a host that cannot store VM disks must not
         // advertise any hypervisor, whatever the binary probes say.
-        let preflight = runHostPreflight()
-        logHostPreflight(preflight)
-        let hypervisors = preflight.gate(
-            HypervisorProbe.probeAll(
-                qemuBinaryPath: qemuBinaryPath,
-                firecrackerBinaryPath: firecrackerBinaryPath
-            ))
+        //
+        // Simulation mode bypasses the probes and preflight entirely: there is
+        // no real hypervisor to detect, so it advertises the mock backends as
+        // available+accelerated to make the agent placement-eligible.
+        let hypervisors: [HypervisorSupport]
+        if isSimulationMode {
+            hypervisors = simulatedHypervisorSupport()
+        } else {
+            let preflight = runHostPreflight()
+            logHostPreflight(preflight)
+            hypervisors = preflight.gate(
+                HypervisorProbe.probeAll(
+                    qemuBinaryPath: qemuBinaryPath,
+                    firecrackerBinaryPath: firecrackerBinaryPath
+                ))
+        }
         let networkCapability = currentNetworkCapability()
         var capabilities = getAgentCapabilities(hypervisors: hypervisors, networkCapability: networkCapability)
 
@@ -1003,6 +1046,23 @@ actor Agent {
         logger.info("Unregistration message sent to control plane")
     }
 
+    /// The hypervisor support to advertise in simulation mode: the mock
+    /// backends this agent actually registered, reported as available and
+    /// hardware-accelerated so the scheduler treats the dummy as a fully capable
+    /// host. Mirrors the `hypervisorServices` registered in `start()`.
+    private func simulatedHypervisorSupport() -> [HypervisorSupport] {
+        var support = [
+            HypervisorSupport(
+                type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+        ]
+        #if os(Linux)
+        support.append(
+            HypervisorSupport(
+                type: .firecracker, available: true, accelerated: true, capabilities: .firecracker))
+        #endif
+        return support
+    }
+
     // MARK: - Host preflight
 
     /// Runs the host-readiness checks against this agent's resolved
@@ -1266,9 +1326,19 @@ actor Agent {
     }
 
     private func getAgentResources() async -> AgentResources {
-        // Host capacity, probed live from the machine the agent runs on.
-        let totalCPU = HostResources.logicalCoreCount
-        let totalMemory = HostResources.physicalMemoryBytes
+        // Host capacity. In simulation mode this is the configured fake capacity
+        // — many dummies share one physical machine, so a spawner varies these
+        // to give the scheduler a realistic spread of host sizes. Otherwise it
+        // is probed live from the machine the agent runs on.
+        let totalCPU: Int
+        let totalMemory: Int64
+        if let simulation, simulation.enabled {
+            totalCPU = simulation.resolvedCPUCores
+            totalMemory = simulation.resolvedMemoryBytes
+        } else {
+            totalCPU = HostResources.logicalCoreCount
+            totalMemory = HostResources.physicalMemoryBytes
+        }
 
         // Resources committed to VMs currently managed on this host. We report
         // available = total - reserved (1:1, no overcommit) so the scheduler treats
@@ -1305,15 +1375,27 @@ actor Agent {
         let availableCPU = max(0, totalCPU - reservedCPU)
         let availableMemory = max(0, totalMemory - reservedMemory)
 
-        // VM disks are created directly on the storage filesystem, so query it live
-        // rather than tracking reservations — this naturally accounts for existing disks.
-        let disk = HostResources.diskCapacity(forPath: vmStoragePath)
-        if disk == nil {
-            logger.warning(
-                "Unable to determine disk capacity for VM storage path",
-                metadata: [
-                    "path": .string(vmStoragePath)
-                ])
+        // Disk. In simulation mode report the configured fake capacity (the real
+        // filesystem is shared by every dummy and has nothing to do with the
+        // sizes we're modeling). Otherwise query the storage filesystem live —
+        // VM disks are created directly on it, so this naturally accounts for
+        // existing disks without tracking reservations.
+        let totalDisk: Int64
+        let availableDisk: Int64
+        if let simulation, simulation.enabled {
+            totalDisk = simulation.resolvedDiskBytes
+            availableDisk = simulation.resolvedDiskBytes
+        } else {
+            let disk = HostResources.diskCapacity(forPath: vmStoragePath)
+            if disk == nil {
+                logger.warning(
+                    "Unable to determine disk capacity for VM storage path",
+                    metadata: [
+                        "path": .string(vmStoragePath)
+                    ])
+            }
+            totalDisk = disk?.total ?? 0
+            availableDisk = disk?.free ?? 0
         }
 
         return AgentResources(
@@ -1321,8 +1403,8 @@ actor Agent {
             availableCPU: availableCPU,
             totalMemory: totalMemory,
             availableMemory: availableMemory,
-            totalDisk: disk?.total ?? 0,
-            availableDisk: disk?.free ?? 0
+            totalDisk: totalDisk,
+            availableDisk: availableDisk
         )
     }
 
