@@ -38,7 +38,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
         vmId: String,
         agentName: String,
         userId: String?,
-        websocket: WebSocket
+        websocket: WebSocket?
     ) {
         lock.withLock {
             let sessionInfo = ConsoleSessionInfo(
@@ -50,7 +50,9 @@ final class ConsoleSessionManager: @unchecked Sendable {
             )
 
             sessions[sessionId] = sessionInfo
-            frontendConnections[sessionId] = websocket
+            if let websocket {
+                frontendConnections[sessionId] = websocket
+            }
 
             if vmSessions[vmId] == nil {
                 vmSessions[vmId] = []
@@ -107,6 +109,38 @@ final class ConsoleSessionManager: @unchecked Sendable {
     func hasSession(sessionId: String) -> Bool {
         lock.withLock {
             sessions[sessionId] != nil
+        }
+    }
+
+    /// Tear down every console session targeting `agentName` because its
+    /// socket is gone (crash, network drop, or graceful unregister). Each
+    /// attached browser gets a terminal error frame and a close — instead of
+    /// a silently frozen terminal whose keystrokes go nowhere.
+    func closeAllSessions(forAgent agentName: String, reason: String) {
+        let closed: [(sessionId: String, websocket: WebSocket?)] = lock.withLock {
+            var closed: [(String, WebSocket?)] = []
+            for (sessionId, session) in sessions where session.agentName == agentName {
+                sessions.removeValue(forKey: sessionId)
+                let websocket = frontendConnections.removeValue(forKey: sessionId)
+                vmSessions[session.vmId]?.remove(sessionId)
+                if vmSessions[session.vmId]?.isEmpty == true {
+                    vmSessions.removeValue(forKey: session.vmId)
+                }
+                closed.append((sessionId, websocket))
+            }
+            return closed
+        }
+
+        for (sessionId, websocket) in closed {
+            app.logger.info(
+                "Closed console session: agent disconnected",
+                metadata: [
+                    "sessionId": .string(sessionId),
+                    "agentName": .string(agentName),
+                ])
+            guard let websocket else { continue }
+            websocket.send("error: \(reason)")
+            _ = websocket.close(code: .normalClosure)
         }
     }
 

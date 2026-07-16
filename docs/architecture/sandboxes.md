@@ -30,7 +30,7 @@ control are built natively in the agent instead.
 ## Decision: guest rootfs & boot strategy
 
 The guest base image (issue #419, landed) is what turns a booted microVM into a
-running container workload. It lives in [`sandbox-guest/`](../../sandbox-guest/)
+running container workload. It lives in [`sandbox-guest/`](https://github.com/samcat116/strato/tree/main/sandbox-guest)
 and ships two artifacts per architecture — an uncompressed Firecracker kernel
 (`vmlinux-<arch>`) and a gzipped-cpio initramfs (`initramfs-<arch>.cpio.gz`)
 holding a single static PID-1 init, `strato-sandbox-init`.
