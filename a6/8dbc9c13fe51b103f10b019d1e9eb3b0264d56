@@ -1,0 +1,73 @@
+control-plane/web/src/lib/api/agents.ts
+  s_ee337dfdb9addc::t_84d0424f40c19e 43-47
+  s_ee337dfdb9addc::t_5bfd57a862e58d 13-17
+control-plane/web/src/providers/organization-provider.tsx
+  s_ee337dfdb9addc::t_cd97c6521ce35c 11
+  s_ee337dfdb9addc::t_a433009231ca71 57-63
+control-plane/Sources/App/Services/OrganizationAccessService.swift
+  s_ee337dfdb9addc::t_edaf3d13769524 51-118
+control-plane/web/src/lib/hooks/use-agents.ts
+  s_ee337dfdb9addc::t_23d8140d52416a 4,12-14,16-23
+  s_ee337dfdb9addc::t_bbb6bdd6ddac6d 42-44,46-48
+control-plane/web/src/lib/hooks/use-sites.ts
+  s_ee337dfdb9addc::t_e5f15e37206b16 1-19
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_ee337dfdb9addc::t_99df1b2dc12b73 493-494,497-508,511-512
+  s_ee337dfdb9addc::t_8735899440fd32 356-357,360,364-366,368,370-373
+  s_ee337dfdb9addc::t_7a9818da628d8e 362-363,367,369
+  s_ee337dfdb9addc::t_f12432893af65b 361
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_ee337dfdb9addc::t_fff9d050791850 153-154,160-168
+control-plane/web/src/lib/hooks/index.ts
+  s_ee337dfdb9addc::t_7a80fa2c6f0ef2 2
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_ee337dfdb9addc::t_b9a4a3f5dba259 32-34
+  s_ee337dfdb9addc::t_7c399b867a2872 17
+  s_ee337dfdb9addc::t_f041a2dcbb6fde 51-52,61
+  s_ee337dfdb9addc::t_275e4f37cd0063 132-134
+control-plane/web/src/lib/api/vms.ts
+  s_ee337dfdb9addc::t_7d1850fa534101 17-21
+control-plane/Sources/App/Controllers/VMController.swift
+  s_ee337dfdb9addc::t_5569140ccd48f2 276-277,284-293,295
+control-plane/web/src/lib/api/sites.ts
+  s_ee337dfdb9addc::t_d38ad7f02c7805 7-11
+control-plane/Tests/AppTests/SiteTests.swift
+  s_ee337dfdb9addc::t_f79b41f036fb24 350-445
+control-plane/web/src/lib/api/sandboxes.ts
+  s_ee337dfdb9addc::t_8071c030663213 20-24
+control-plane/web/src/lib/hooks/use-vms.ts
+  s_ee337dfdb9addc::t_a0896a682fd506 3,6-8,10-12
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_ee337dfdb9addc::t_ae08b5cc61bb1a 79-80,86
+  s_ee337dfdb9addc::t_0813ddab8a864c 34-35,37
+  s_ee337dfdb9addc::t_5985b300e6d719 28-29
+  s_ee337dfdb9addc::t_3704e335f50194 4
+  s_ee337dfdb9addc::t_83d4cd7e9472e9 179-181
+control-plane/web/src/components/layout/command-palette.tsx
+  s_ee337dfdb9addc::t_522763631318f6 10
+  s_ee337dfdb9addc::t_0b4edb13e7ce28 40-44,46-48,51-53
+control-plane/web/src/lib/hooks/use-sandboxes.ts
+  s_ee337dfdb9addc::t_17928dcf4f4d4f 3,6-8,10-12
+control-plane/Tests/AppTests/VMAuthorizationTests.swift
+  s_ee337dfdb9addc::t_120e65bf8097af 59-80
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_ee337dfdb9addc::t_da845f511319aa 94-95,98,100-109
+  s_ee337dfdb9addc::t_9edd0a38a7be07 111-113
+  s_ee337dfdb9addc::t_789dc365fc4229 110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "a68dbc9c13fe51b103f10b019d1e9eb3b0264d56",
+  "prompts": {},
+  "sessions": {
+    "s_ee337dfdb9addc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8f8d9a3e-c64d-46eb-9575-1841d4ee4387",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
