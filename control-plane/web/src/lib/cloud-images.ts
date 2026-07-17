@@ -4,12 +4,16 @@ import type { CPUArchitecture } from "@/types/api";
  * Curated cloud images from well-known upstream sources, so the common case —
  * "give me a current Ubuntu" — doesn't require hunting down a URL.
  *
- * Every URL here was verified to resolve against the live mirror. Where a
- * distribution publishes a stable `current`/`latest` path (Ubuntu, Debian,
- * Rocky, openSUSE) we use it and the image tracks point releases on its own.
- * Fedora and Alpine only publish version-stamped filenames, so those pin an
- * exact build and need bumping when a new one lands — see `docs` note in the
- * repo README if a link 404s.
+ * Every URL here was verified to serve a real image: a 200 whose first bytes
+ * are the format's magic, not just a 200. Ubuntu, Debian and Rocky publish a
+ * real `current`/`latest` path, so those track point releases on their own.
+ * Fedora, Alpine and openSUSE are pinned to an exact build and need bumping
+ * when a new one lands.
+ *
+ * A pinned URL going stale 404s, which fails the image loudly with an error
+ * message. That is the *good* failure mode here, and worth preferring over a
+ * convenience alias that might quietly resolve to something that isn't a disk
+ * image — see the openSUSE entry for a symlink that does exactly that.
  *
  * FreeBSD is deliberately absent: it ships only `.xz`-compressed VM images and
  * the control plane has no decompression, so a download would land as an
@@ -200,6 +204,14 @@ export const CLOUD_IMAGE_DISTROS: CloudImageDistro[] = [
     logo: "S",
     color: "#73BA25",
     description: "Community enterprise distro",
+    // Pinned to the versioned build rather than the shorter
+    // `openSUSE-Leap-15.6.x86_64-NoCloud.qcow2` name, which is a *symlink* to
+    // it. Whether that alias works depends on the mirror the redirector happens
+    // to pick: mirrors that follow symlinks serve the real image, while
+    // rsync.opensuse.org 404s it and a mirror that materialised the link would
+    // serve its ~57-byte target path as a 200 — which downloadFile would store
+    // as a perfectly "ready" image. These names go stale when a new build lands
+    // (like Fedora and Alpine below), but a stale URL 404s loudly instead.
     versions: [
       // Leap 16.0 is intentionally not offered: its Cloud:Images repo publishes
       // only Azure builds and metadata — no NoCloud qcow2 exists to point at.
@@ -208,9 +220,9 @@ export const CLOUD_IMAGE_DISTROS: CloudImageDistro[] = [
         size: "689 MB",
         urls: {
           x86_64:
-            "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.6/images/openSUSE-Leap-15.6.x86_64-NoCloud.qcow2",
+            "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.6/images/openSUSE-Leap-15.6.x86_64-1.0.2-NoCloud-Build2.109.qcow2",
           arm64:
-            "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.6/images/openSUSE-Leap-15.6.aarch64-NoCloud.qcow2",
+            "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.6/images/openSUSE-Leap-15.6.aarch64-1.0.2-NoCloud-Build2.109.qcow2",
         },
       },
       {
@@ -218,9 +230,9 @@ export const CLOUD_IMAGE_DISTROS: CloudImageDistro[] = [
         size: "643 MB",
         urls: {
           x86_64:
-            "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.5/images/openSUSE-Leap-15.5.x86_64-NoCloud.qcow2",
+            "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.5/images/openSUSE-Leap-15.5.x86_64-1.0.1-NoCloud-Build6.180.qcow2",
           arm64:
-            "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.5/images/openSUSE-Leap-15.5.aarch64-NoCloud.qcow2",
+            "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.5/images/openSUSE-Leap-15.5.aarch64-1.0.1-NoCloud-Build6.180.qcow2",
         },
       },
     ],
