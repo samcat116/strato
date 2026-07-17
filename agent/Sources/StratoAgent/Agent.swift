@@ -476,16 +476,18 @@ actor Agent {
                 // agent needs it to re-adopt and tear down jailed orphans from a
                 // previous life; the resolution only decides whether *new*
                 // sandboxes get the barrier.
+                let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
                 let jailerConfig = SandboxJailerConfig(
                     jailerBinaryPath: sandboxJailerBinaryPath,
                     chrootBaseDir: sandboxJailerChrootDir,
-                    uidBase: sandboxJailerUidBase)
+                    uidBase: sandboxJailerUidBase,
+                    ipBinaryPath: SandboxJailerResolver.resolveIPBinaryPath(isExecutable: isExecutable))
                 var jailNewSandboxes = false
                 switch SandboxJailerResolver.resolve(
                     mode: sandboxJailerMode,
                     jailerBinaryPath: sandboxJailerBinaryPath,
                     isRoot: geteuid() == 0,
-                    isExecutable: { FileManager.default.isExecutableFile(atPath: $0) }
+                    isExecutable: isExecutable
                 ) {
                 case .jailed:
                     jailNewSandboxes = true

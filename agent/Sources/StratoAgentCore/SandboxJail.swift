@@ -30,15 +30,23 @@ public struct SandboxJailerConfig: Sendable, Equatable {
     /// First uid/gid of the per-sandbox range (see `SandboxJailPlan` for the
     /// derivation).
     public let uidBase: UInt32
+    /// Absolute path of the iproute2 `ip` binary, resolved once at start
+    /// (`SandboxJailerResolver.resolveIPBinaryPath`). Invoked directly — a
+    /// service manager's stripped `PATH` must not turn a host the resolver
+    /// declared usable into one whose netns calls fail at create time. Nil
+    /// when the host has no `ip`, in which case the resolver never returns
+    /// `.jailed` and only best-effort netns teardown is skipped.
+    public let ipBinaryPath: String?
 
     /// Size of the per-sandbox uid/gid range. Fixed: 2^16 ids starting at
     /// `uidBase`.
     public static let uidCount: UInt32 = 65536
 
-    public init(jailerBinaryPath: String, chrootBaseDir: String, uidBase: UInt32) {
+    public init(jailerBinaryPath: String, chrootBaseDir: String, uidBase: UInt32, ipBinaryPath: String? = nil) {
         self.jailerBinaryPath = jailerBinaryPath
         self.chrootBaseDir = chrootBaseDir
         self.uidBase = uidBase
+        self.ipBinaryPath = ipBinaryPath
     }
 }
 
@@ -60,6 +68,14 @@ public enum SandboxJailerResolver {
     /// fail at.
     public static let ipBinaryCandidates = ["/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"]
 
+    /// The `ip` binary the runtime will actually invoke (first executable
+    /// candidate), or nil when the host has none. Resolved once and carried in
+    /// `SandboxJailerConfig.ipBinaryPath` so the spawn never depends on the
+    /// service manager's `PATH` agreeing with this probe.
+    public static func resolveIPBinaryPath(isExecutable: (String) -> Bool) -> String? {
+        ipBinaryCandidates.first(where: isExecutable)
+    }
+
     public static func resolve(
         mode: SandboxJailerMode,
         jailerBinaryPath: String,
@@ -77,7 +93,7 @@ public enum SandboxJailerResolver {
             if !isRoot {
                 missing.append("the agent is not running as root (the jailer needs root to chroot and drop privileges)")
             }
-            if !ipBinaryCandidates.contains(where: isExecutable) {
+            if resolveIPBinaryPath(isExecutable: isExecutable) == nil {
                 missing.append(
                     "the `ip` tool (iproute2) was not found — jailed sandboxes need it to create network namespaces")
             }

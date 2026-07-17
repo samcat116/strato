@@ -1242,16 +1242,24 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     }
 
     /// Create the sandbox's dedicated network namespace. A namespace left by
-    /// a crashed previous life is reused — it is empty either way.
+    /// a crashed previous life is reused — it is empty either way. Invokes
+    /// the `ip` binary the resolver located, never a `PATH` lookup: the
+    /// resolution that declared this host jail-capable and the spawn must
+    /// agree on the same binary.
     private func createNetns(_ name: String) async throws {
+        guard let ipBinaryPath = jailerConfig.ipBinaryPath else {
+            // Unreachable when the resolver gated jailing: it requires `ip`.
+            throw SandboxRuntimeError.jailSetupFailed(
+                "the `ip` tool (iproute2) was not found on this host")
+        }
         let result: ProcessResult
         do {
             result = try await ProcessRunner.run(
-                executableURL: URL(fileURLWithPath: "/usr/bin/env"),
-                arguments: ["ip", "netns", "add", name])
+                executableURL: URL(fileURLWithPath: ipBinaryPath),
+                arguments: ["netns", "add", name])
         } catch {
             throw SandboxRuntimeError.jailSetupFailed(
-                "spawning `ip netns add \(name)` failed: \(error.localizedDescription)")
+                "spawning `\(ipBinaryPath) netns add \(name)` failed: \(error.localizedDescription)")
         }
         if result.terminationStatus != 0 {
             let output = result.combinedOutput.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1263,15 +1271,18 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     /// Best-effort teardown of a jailed sandbox's host-side leftovers: the
     /// chroot subtree and per-VM cgroup directory (normally the client's job,
-    /// but a crash can orphan both) and the network namespace.
+    /// but a crash can orphan both) and the network namespace (skipped on a
+    /// host with no `ip` — such a host cannot have created one).
     private func removeJailArtifacts(_ plan: SandboxJailPlan) async {
         try? FileManager.default.removeItem(atPath: plan.jailDirectory)
         _ = rmdir(
             JailerOptions.cgroupDirectory(
                 firecrackerBinaryPath: firecrackerBinaryPath, vmId: plan.sandboxId))
-        _ = try? await ProcessRunner.run(
-            executableURL: URL(fileURLWithPath: "/usr/bin/env"),
-            arguments: ["ip", "netns", "delete", plan.netnsName])
+        if let ipBinaryPath = jailerConfig.ipBinaryPath {
+            _ = try? await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: ipBinaryPath),
+                arguments: ["netns", "delete", plan.netnsName])
+        }
     }
 
     // MARK: - Paths

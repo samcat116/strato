@@ -127,6 +127,13 @@ struct SandboxJailerResolverTests {
         }
     }
 
+    @Test("the resolved ip path is the first executable candidate")
+    func ipBinaryResolution() {
+        #expect(
+            SandboxJailerResolver.resolveIPBinaryPath(isExecutable: { $0 == "/sbin/ip" }) == "/sbin/ip")
+        #expect(SandboxJailerResolver.resolveIPBinaryPath(isExecutable: { _ in false }) == nil)
+    }
+
     @Test("a host without iproute2 cannot jail — netns creation would fail every create")
     func missingIPRouteBlocksJailing() {
         // Everything but `ip` present: only the jailer binary path resolves.
