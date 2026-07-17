@@ -127,6 +127,32 @@ struct SandboxJailerResolverTests {
         }
     }
 
+    @Test("a host without iproute2 cannot jail — netns creation would fail every create")
+    func missingIPRouteBlocksJailing() {
+        // Everything but `ip` present: only the jailer binary path resolves.
+        let onlyJailer: (String) -> Bool = { $0 == "/usr/local/bin/jailer" }
+
+        guard
+            case .unjailed(let reason) = SandboxJailerResolver.resolve(
+                mode: .auto, jailerBinaryPath: "/usr/local/bin/jailer",
+                isRoot: true, isExecutable: onlyJailer)
+        else {
+            Issue.record("expected unjailed without iproute2")
+            return
+        }
+        #expect(reason?.contains("iproute2") == true)
+
+        guard
+            case .blocked(let blockedReason) = SandboxJailerResolver.resolve(
+                mode: .required, jailerBinaryPath: "/usr/local/bin/jailer",
+                isRoot: true, isExecutable: onlyJailer)
+        else {
+            Issue.record("expected blocked without iproute2 in required mode")
+            return
+        }
+        #expect(blockedReason.contains("iproute2"))
+    }
+
     @Test("required jails when the host can, blocks when it can't")
     func requiredBlocks() {
         #expect(resolve(mode: .required, root: true, binary: true) == .jailed)

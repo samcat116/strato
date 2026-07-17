@@ -54,6 +54,12 @@ public enum SandboxJailerResolver {
         case blocked(reason: String)
     }
 
+    /// Where the iproute2 `ip` binary is looked for. Jailed creates shell out
+    /// to `ip netns add`, so a host without it must resolve unjailed/blocked
+    /// up front rather than advertise a capability every placement would then
+    /// fail at.
+    public static let ipBinaryCandidates = ["/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"]
+
     public static func resolve(
         mode: SandboxJailerMode,
         jailerBinaryPath: String,
@@ -70,6 +76,10 @@ public enum SandboxJailerResolver {
             }
             if !isRoot {
                 missing.append("the agent is not running as root (the jailer needs root to chroot and drop privileges)")
+            }
+            if !ipBinaryCandidates.contains(where: isExecutable) {
+                missing.append(
+                    "the `ip` tool (iproute2) was not found — jailed sandboxes need it to create network namespaces")
             }
             guard !missing.isEmpty else { return .jailed }
             let reason = missing.joined(separator: "; ")
