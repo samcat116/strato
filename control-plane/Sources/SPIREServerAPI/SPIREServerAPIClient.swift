@@ -43,6 +43,14 @@ public protocol SPIREServerAPI: Sendable {
     /// nodes, requires a fresh join token). Returns false when no agent with
     /// that ID is currently attested — eviction is idempotent.
     func evictAgent(spiffeID: String) async throws -> Bool
+
+    /// List every workload registration entry known to the SPIRE server.
+    /// Read-only; used to surface the trust domain's identities in the UI.
+    func listEntries() async throws -> [SPIREEntry]
+
+    /// List every agent node that has attested to the SPIRE server. Read-only;
+    /// used to surface node attestation state in the UI.
+    func listAgents() async throws -> [SPIREAgent]
 }
 
 // MARK: - Data types
@@ -86,6 +94,91 @@ public enum SPIREEntryCreationResult: Sendable, Equatable {
         case .created(let id), .alreadyExists(let id):
             return id
         }
+    }
+}
+
+/// A workload registration entry as reported by the SPIRE server's read API.
+/// A read-only projection of `spire.api.types.Entry` carrying the fields the
+/// control plane surfaces (the write path uses the proto types directly).
+public struct SPIREEntry: Sendable, Equatable {
+    public let id: String
+    public let spiffeID: String
+    /// Parent identity: the SPIRE server (for node entries) or a node ID.
+    public let parentID: String
+    public let selectors: [SPIRESelector]
+    public let x509SVIDTTLSeconds: Int32
+    /// TTL for JWT-SVIDs; `0` when the entry issues no JWT-SVIDs.
+    public let jwtSVIDTTLSeconds: Int32
+    /// Trust domains this identity federates with.
+    public let federatesWith: [String]
+    public let admin: Bool
+    public let downstream: Bool
+    public let hint: String
+    /// When the entry's issued identity expires, if the server set an expiry.
+    public let expiresAt: Date?
+    /// When the entry was created, if reported.
+    public let createdAt: Date?
+
+    public init(
+        id: String,
+        spiffeID: String,
+        parentID: String,
+        selectors: [SPIRESelector],
+        x509SVIDTTLSeconds: Int32,
+        jwtSVIDTTLSeconds: Int32,
+        federatesWith: [String],
+        admin: Bool,
+        downstream: Bool,
+        hint: String,
+        expiresAt: Date?,
+        createdAt: Date?
+    ) {
+        self.id = id
+        self.spiffeID = spiffeID
+        self.parentID = parentID
+        self.selectors = selectors
+        self.x509SVIDTTLSeconds = x509SVIDTTLSeconds
+        self.jwtSVIDTTLSeconds = jwtSVIDTTLSeconds
+        self.federatesWith = federatesWith
+        self.admin = admin
+        self.downstream = downstream
+        self.hint = hint
+        self.expiresAt = expiresAt
+        self.createdAt = createdAt
+    }
+}
+
+/// An attested agent node as reported by the SPIRE server's read API.
+/// A read-only projection of `spire.api.types.Agent`.
+public struct SPIREAgent: Sendable, Equatable {
+    public let spiffeID: String
+    public let attestationType: String
+    public let x509SVIDSerialNumber: String
+    /// When the node's current agent SVID expires, if reported.
+    public let x509SVIDExpiresAt: Date?
+    public let selectors: [SPIRESelector]
+    public let banned: Bool
+    public let canReattest: Bool
+    public let agentVersion: String
+
+    public init(
+        spiffeID: String,
+        attestationType: String,
+        x509SVIDSerialNumber: String,
+        x509SVIDExpiresAt: Date?,
+        selectors: [SPIRESelector],
+        banned: Bool,
+        canReattest: Bool,
+        agentVersion: String
+    ) {
+        self.spiffeID = spiffeID
+        self.attestationType = attestationType
+        self.x509SVIDSerialNumber = x509SVIDSerialNumber
+        self.x509SVIDExpiresAt = x509SVIDExpiresAt
+        self.selectors = selectors
+        self.banned = banned
+        self.canReattest = canReattest
+        self.agentVersion = agentVersion
     }
 }
 
@@ -191,6 +284,11 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
     private static let deleteAgentDescriptor = MethodDescriptor(
         service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.agent.v1.Agent"),
         method: "DeleteAgent"
+    )
+
+    private static let listAgentsDescriptor = MethodDescriptor(
+        service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.agent.v1.Agent"),
+        method: "ListAgents"
     )
 
     /// google.rpc.Code values SPIRE reports in per-entry batch results.
@@ -311,6 +409,81 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
             // The node never attested (or was already evicted): nothing to do.
             return false
         }
+    }
+
+    public func listEntries() async throws -> [SPIREEntry] {
+        // Page through the full result set: the server may impose its own page
+        // size even when none is requested (see deleteEntries).
+        var entries: [SPIREEntry] = []
+        var pageToken = ""
+        repeat {
+            var request = Spire_Api_Server_Entry_V1_ListEntriesRequest()
+            request.pageToken = pageToken
+
+            let response: Spire_Api_Server_Entry_V1_ListEntriesResponse = try await unary(
+                request, descriptor: Self.listEntriesDescriptor)
+
+            entries.append(contentsOf: response.entries.map(Self.entry(from:)))
+            pageToken = response.nextPageToken
+        } while !pageToken.isEmpty
+        return entries
+    }
+
+    public func listAgents() async throws -> [SPIREAgent] {
+        var agents: [SPIREAgent] = []
+        var pageToken = ""
+        repeat {
+            var request = Spire_Api_Server_Agent_V1_ListAgentsRequest()
+            request.pageToken = pageToken
+
+            let response: Spire_Api_Server_Agent_V1_ListAgentsResponse = try await unary(
+                request, descriptor: Self.listAgentsDescriptor)
+
+            agents.append(contentsOf: response.agents.map(Self.agent(from:)))
+            pageToken = response.nextPageToken
+        } while !pageToken.isEmpty
+        return agents
+    }
+
+    // MARK: Read-model mapping
+
+    private static func date(fromEpochSeconds seconds: Int64) -> Date? {
+        seconds > 0 ? Date(timeIntervalSince1970: TimeInterval(seconds)) : nil
+    }
+
+    /// Reassemble `spiffe://<trust-domain>/<path>` from the API's structured form.
+    static func spiffeIDString(from payload: Spire_Api_Types_SPIFFEID) -> String {
+        "spiffe://\(payload.trustDomain)\(payload.path)"
+    }
+
+    private static func entry(from proto: Spire_Api_Types_Entry) -> SPIREEntry {
+        SPIREEntry(
+            id: proto.id,
+            spiffeID: spiffeIDString(from: proto.spiffeID),
+            parentID: spiffeIDString(from: proto.parentID),
+            selectors: proto.selectors.map { SPIRESelector(type: $0.type, value: $0.value) },
+            x509SVIDTTLSeconds: proto.x509SvidTtl,
+            jwtSVIDTTLSeconds: proto.jwtSvidTtl,
+            federatesWith: proto.federatesWith,
+            admin: proto.admin,
+            downstream: proto.downstream,
+            hint: proto.hint,
+            expiresAt: date(fromEpochSeconds: proto.expiresAt),
+            createdAt: date(fromEpochSeconds: proto.createdAt)
+        )
+    }
+
+    private static func agent(from proto: Spire_Api_Types_Agent) -> SPIREAgent {
+        SPIREAgent(
+            spiffeID: spiffeIDString(from: proto.id),
+            attestationType: proto.attestationType,
+            x509SVIDSerialNumber: proto.x509SvidSerialNumber,
+            x509SVIDExpiresAt: date(fromEpochSeconds: proto.x509SvidExpiresAt),
+            selectors: proto.selectors.map { SPIRESelector(type: $0.type, value: $0.value) },
+            banned: proto.banned,
+            canReattest: proto.canReattest,
+            agentVersion: proto.agentVersion
+        )
     }
 
     // MARK: Transport

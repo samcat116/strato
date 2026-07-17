@@ -246,6 +246,11 @@ public actor SPIREService {
         config.enabled
     }
 
+    /// The trust domain agents are expected to present identities from.
+    public var trustDomain: String {
+        config.trustDomain
+    }
+
     /// Whether client certificates are mandatory for agent connections.
     /// When true, the WebSocket handler must not fall back to token authentication.
     public var requireClientCert: Bool {

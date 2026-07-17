@@ -23,3 +23,4 @@ export { hierarchyApi } from "./hierarchy";
 export { networksApi } from "./networks";
 export { auditEventsApi } from "./audit-events";
 export type { AuditEventFilters } from "./audit-events";
+export { workloadIdentityApi } from "./workload-identity";

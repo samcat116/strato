@@ -66,6 +66,9 @@ func routes(_ app: Application) throws {
     // Audit trail query API (issue #39)
     try app.register(collection: AuditEventController())
 
+    // Workload Identity (SPIFFE / SPIRE) read API
+    try app.register(collection: WorkloadIdentityController())
+
     // OpenAPI Vapor transport (spec-first). Once the generator produces APIProtocol
     // from Sources/App/openapi.yaml, register handlers here.
     // let transport = VaporTransport(routesBuilder: app)

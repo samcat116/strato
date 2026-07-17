@@ -1210,3 +1210,82 @@ export interface AuditEventListResponse {
   limit: number;
   offset: number;
 }
+
+// Workload Identity (SPIFFE / SPIRE) — matches WorkloadIdentityController DTOs.
+
+/** SVID kinds an entry issues. */
+export type SVIDType = "x509" | "jwt";
+
+export interface WorkloadRegistrationEntry {
+  id: string;
+  /** Full identity, e.g. `spiffe://strato.prod/db/primary`. */
+  spiffeID: string;
+  /** Path portion after the trust domain, e.g. `/db/primary`. */
+  path: string;
+  /** Parent identity (SPIRE server for node entries, or a node ID). */
+  parentID: string;
+  /** Short node name derived from `parentID` (e.g. `agent-1`), best-effort. */
+  node?: string;
+  /** Selectors formatted as `type:value`. */
+  selectors: string[];
+  svidTypes: SVIDType[];
+  x509TTLSeconds: number;
+  jwtTTLSeconds: number;
+  federatesWith: string[];
+  admin: boolean;
+  downstream: boolean;
+  hint?: string;
+  expiresAt?: string;
+  createdAt?: string;
+}
+
+/** Attested nodes summarized by attestation method. */
+export interface NodeAttestationGroup {
+  attestationType: string;
+  count: number;
+  banned: number;
+}
+
+export interface TrustBundleInfo {
+  trustDomain: string;
+  x509AuthorityCount: number;
+  refreshedAt: string;
+  sequenceNumber: number;
+}
+
+export interface FederatedDomain {
+  trustDomain: string;
+  /** `synced` | `refresh_failed` | `unknown`. */
+  state: "synced" | "refresh_failed" | "unknown";
+}
+
+/**
+ * Federation relationships. `available` is false until the control plane wires
+ * SPIRE's federation-relationship API; `domains` is still populated from the
+ * trust domains entries federate with, with `state: unknown`.
+ */
+export interface FederationInfo {
+  available: boolean;
+  domains: FederatedDomain[];
+}
+
+/** SVID issuance metrics. Placeholder until issuance telemetry is collected. */
+export interface IssuanceInfo {
+  available: boolean;
+  windowHours: number;
+  x509SVIDs?: number;
+  jwtSVIDs?: number;
+}
+
+export interface WorkloadIdentityOverview {
+  /** Whether SPIRE is configured on this control plane. */
+  enabled: boolean;
+  trustDomain?: string;
+  entries: WorkloadRegistrationEntry[];
+  nodeAttestation: NodeAttestationGroup[];
+  trustBundle?: TrustBundleInfo;
+  federation: FederationInfo;
+  issuance: IssuanceInfo;
+  /** Non-fatal problem reaching the SPIRE server, if any. */
+  warning?: string;
+}
