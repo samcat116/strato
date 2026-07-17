@@ -10,8 +10,11 @@ import type {
 } from "@/types/api";
 
 export const agentsApi = {
-  list(): Promise<Agent[]> {
-    return api.get<Agent[]>("/api/agents");
+  list(organizationId?: string): Promise<Agent[]> {
+    return api.get<Agent[]>(
+      "/api/agents",
+      organizationId ? { organization_id: organizationId } : undefined
+    );
   },
 
   get(id: string): Promise<Agent> {
@@ -37,8 +40,11 @@ export const agentsApi = {
   },
 
   // Registration tokens
-  listTokens(): Promise<AgentRegistrationTokenListItem[]> {
-    return api.get<AgentRegistrationTokenListItem[]>("/api/agents/registration-tokens");
+  listTokens(organizationId?: string): Promise<AgentRegistrationTokenListItem[]> {
+    return api.get<AgentRegistrationTokenListItem[]>(
+      "/api/agents/registration-tokens",
+      organizationId ? { organization_id: organizationId } : undefined
+    );
   },
 
   createToken(data: CreateAgentRegistrationTokenRequest): Promise<AgentRegistrationToken> {

@@ -4,8 +4,11 @@ import { api } from "./client";
 import type { Site, CreateSiteRequest } from "@/types/api";
 
 export const sitesApi = {
-  list(): Promise<Site[]> {
-    return api.get<Site[]>("/api/sites");
+  list(organizationId?: string): Promise<Site[]> {
+    return api.get<Site[]>(
+      "/api/sites",
+      organizationId ? { organization_id: organizationId } : undefined
+    );
   },
 
   get(id: string): Promise<Site> {

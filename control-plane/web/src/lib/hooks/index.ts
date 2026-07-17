@@ -1,4 +1,5 @@
 export { useVMs, useVM, useInvalidateVMs } from "./use-vms";
+export { useSites, useInvalidateSites } from "./use-sites";
 export {
   useSandboxes,
   useSandbox,
