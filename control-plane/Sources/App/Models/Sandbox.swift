@@ -56,8 +56,9 @@ final class Sandbox: Model, @unchecked Sendable {
     @OptionalField(key: "working_dir")
     var workingDir: String?
 
-    /// Lifetime budget in seconds. Stored only — enforcement (auto-expiry)
-    /// is issue #424.
+    /// Lifetime budget in seconds, counted from `createdAt` (see `expiresAt`).
+    /// The expiry sweep deletes the sandbox once the budget runs out; nil
+    /// means the sandbox lives until something else removes it.
     @OptionalField(key: "ttl_seconds")
     var ttlSeconds: Int?
 
@@ -163,6 +164,22 @@ extension Sandbox {
         status == .running
     }
 
+    /// When the lifetime budget runs out, or nil for a sandbox with no TTL.
+    /// Anchored at `createdAt` rather than at a start time: the budget covers
+    /// the record's whole life, so a sandbox that is created and never started
+    /// still expires instead of holding its quota forever.
+    var expiresAt: Date? {
+        guard let ttlSeconds, let createdAt else { return nil }
+        return createdAt.addingTimeInterval(TimeInterval(ttlSeconds))
+    }
+
+    /// Whether the lifetime budget has run out. Always false for a sandbox
+    /// with no TTL.
+    func isExpired(at date: Date = Date()) -> Bool {
+        guard let expiresAt else { return false }
+        return expiresAt <= date
+    }
+
     /// Updates the observed status and stamps the change time for the
     /// reconciliation sweep. Does not persist — call `save(on:)` afterwards.
     func setStatus(_ newStatus: SandboxStatus, at date: Date = Date()) {
@@ -244,6 +261,9 @@ struct SandboxDetailResponse: Content {
     let env: [String: String]
     let workingDir: String?
     let ttlSeconds: Int?
+    /// Derived from `ttlSeconds` + `createdAt` so clients can show a countdown
+    /// without re-deriving the anchor. Nil when the sandbox has no TTL.
+    let expiresAt: Date?
     let hypervisorId: String?
     let status: SandboxStatus
     let exitCode: Int?
@@ -264,6 +284,7 @@ struct SandboxDetailResponse: Content {
         self.env = sandbox.env
         self.workingDir = sandbox.workingDir
         self.ttlSeconds = sandbox.ttlSeconds
+        self.expiresAt = sandbox.expiresAt
         self.hypervisorId = sandbox.hypervisorId
         self.status = sandbox.status
         self.exitCode = sandbox.exitCode

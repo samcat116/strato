@@ -732,7 +732,11 @@ struct SandboxController: RouteCollection {
     /// placed, or offline cluster-wide): remove the record directly without
     /// agent teardown. If the agent ever comes back still carrying the
     /// sandbox, its observed-state report surfaces it for operator attention.
-    private static func runDirectSandboxDeletion(
+    ///
+    /// Internal rather than private because the expiry sweep (issue #424)
+    /// deletes down this same path, so a TTL-driven deletion releases quota
+    /// exactly like a user-initiated one.
+    static func runDirectSandboxDeletion(
         _ operation: ResourceOperation, sandbox: Sandbox, app: Application
     ) {
         guard let operationId = operation.id else { return }

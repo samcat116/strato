@@ -667,8 +667,10 @@ export interface Sandbox {
   /** Environment variable overrides, merged over the image config's env. */
   env: Record<string, string>;
   workingDir?: string | null;
-  /** Lifetime budget in seconds (stored only; enforcement is a later phase). */
+  /** Lifetime budget in seconds, counted from `createdAt`. */
   ttlSeconds?: number | null;
+  /** When the TTL runs out and the sandbox is auto-deleted; null without a TTL. */
+  expiresAt?: string | null;
   hypervisorId?: string | null;
   status: SandboxStatus;
   /** Exit code of a workload that ran to completion (`status === "Exited"`). */
