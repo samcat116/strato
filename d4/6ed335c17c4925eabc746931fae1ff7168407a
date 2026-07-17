@@ -1,0 +1,25 @@
+agent/Sources/StratoAgentCore/MockStorageBackend.swift
+  s_53168cace5d67d::t_5b185c54974ffb 126,141,163,174,188,197,213
+  s_53168cace5d67d::t_bda5ad36345f56 24-32,36-43,47,52-57,61,64,66-74,79-80,82-105
+  s_53168cace5d67d::t_253ba6e3de3501 75-78,81
+agent/Sources/StratoAgent/Agent.swift
+  s_53168cace5d67d::t_7a51dd6db33540 376-384
+agent/Tests/StratoAgentTests/MockStorageBackendTests.swift
+  s_53168cace5d67d::t_72a158cb2af0ce 119-218
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "d46ed335c17c4925eabc746931fae1ff7168407a",
+  "prompts": {},
+  "sessions": {
+    "s_53168cace5d67d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "17217173-2f91-45c2-9999-559543ac6261",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
