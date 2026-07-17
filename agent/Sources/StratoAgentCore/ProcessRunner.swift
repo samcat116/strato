@@ -152,18 +152,55 @@ public enum ProcessRunner {
         }
     }
 
-    /// Returns a stream that finishes (yielding nothing) when `process` exits.
-    /// Must be called before `process.run()` — a fast-exiting child could
-    /// otherwise terminate before the handler is installed and never signal it.
-    private static func exitSignal(for process: Process) -> AsyncStream<Void> {
-        let (stream, continuation) = AsyncStream.makeStream(of: Void.self)
-        process.terminationHandler = { _ in continuation.finish() }
-        return stream
+    /// Installs a termination handler on `process` and returns a latch that
+    /// opens when it fires. Must be called before `process.run()` — a
+    /// fast-exiting child could otherwise terminate before the handler is
+    /// installed and never signal it.
+    private static func exitSignal(for process: Process) -> ExitLatch {
+        let latch = ExitLatch()
+        process.terminationHandler = { _ in latch.signal() }
+        return latch
     }
 
-    /// Suspends until an `exitSignal(for:)` stream finishes. Once this returns,
-    /// the process's `terminationStatus` is valid.
-    private static func waitForExit(_ exited: AsyncStream<Void>) async {
-        for await _ in exited {}
+    /// Suspends until the process's termination handler has fired. Once this
+    /// returns, the process's `terminationStatus` is valid.
+    ///
+    /// Deliberately NOT cancellation-aware: callers run under cancelling
+    /// timeouts (e.g. `StageBudget`), and returning early would let them read
+    /// `terminationStatus` while the child is still alive — a trap on Linux.
+    private static func waitForExit(_ exited: ExitLatch) async {
+        await exited.wait()
+    }
+
+    /// A one-shot latch bridging `Process.terminationHandler` to async. Safe
+    /// against every ordering: the handler may fire before, during, or after
+    /// `wait()` suspends. `wait()` uses a bare continuation with no
+    /// cancellation handler, so a cancelled caller still waits for the signal.
+    private final class ExitLatch: @unchecked Sendable {
+        private let lock = NSLock()
+        private var signaled = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func signal() {
+            lock.lock()
+            signaled = true
+            let waiter = continuation
+            continuation = nil
+            lock.unlock()
+            waiter?.resume()
+        }
+
+        func wait() async {
+            await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
+                lock.lock()
+                if signaled {
+                    lock.unlock()
+                    waiter.resume()
+                } else {
+                    continuation = waiter
+                    lock.unlock()
+                }
+            }
+        }
     }
 }
