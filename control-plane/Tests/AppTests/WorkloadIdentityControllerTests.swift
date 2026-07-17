@@ -94,6 +94,32 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
         }
     }
 
+    @Test("Warns when SPIRE is enabled but the registration API is unconfigured")
+    func warnsWhenRegistrationAPIMissing() async throws {
+        try await withApp { app in
+            let token = try await makeAdmin(on: app.db)
+            // SPIRE is enabled, but no registration service (no
+            // SPIRE_SERVER_API_ADDRESS), so entries/nodes can't be read.
+            app.spireService = SPIREService(
+                config: SPIREServiceConfig(enabled: true, trustDomain: "strato.test"),
+                logger: app.logger,
+                httpClient: app.client
+            )
+
+            try await app.test(.GET, "/api/workload-identity") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let body = try res.content.decode(WorkloadIdentityResponse.self)
+                #expect(body.enabled == true)
+                #expect(body.trustDomain == "strato.test")
+                #expect(body.entries.isEmpty)
+                #expect(body.nodeAttestation.isEmpty)
+                #expect(body.warning != nil)
+            }
+        }
+    }
+
     // MARK: - Populated state
 
     @Test("Projects SPIRE entries, node attestation, and federated domains")
@@ -168,7 +194,9 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
                 #expect(primary.path == "/db/primary")
                 #expect(primary.node == "agent-1")
                 #expect(primary.selectors == ["unix:uid:1000"])
-                #expect(primary.svidTypes == ["x509"])
+                // Every entry issues both X.509 and JWT SVIDs, regardless of a
+                // custom JWT TTL override (e1 has none, e2 does).
+                #expect(primary.svidTypes == ["x509", "jwt"])
 
                 let frontend = try #require(body.entries.first { $0.id == "e2" })
                 #expect(frontend.svidTypes == ["x509", "jwt"])

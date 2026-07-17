@@ -70,6 +70,14 @@ struct WorkloadIdentityController: RouteCollection {
                 warning = warning.map { "\($0); \(message)" } ?? message
                 req.logger.warning("Workload Identity: listing nodes failed: \(error)")
             }
+        } else {
+            // SPIRE is enabled (else `enabled` would be false above) but the
+            // server registration API isn't configured, so entries and nodes
+            // can't be read. Say so, rather than presenting an empty list as if
+            // the trust domain had no registrations.
+            warning =
+                "SPIRE is enabled but the server registration API is not configured "
+                + "(set SPIRE_SERVER_API_ADDRESS); registration entries and attested nodes are unavailable."
         }
 
         // Federation domains are surfaced from what the entries themselves
@@ -171,9 +179,11 @@ struct RegistrationEntryResponse: Content {
         self.parentID = entry.parentID
         self.node = Self.shortNode(from: entry.parentID)
         self.selectors = entry.selectors.map { "\($0.type):\($0.value)" }
-        var svids = ["x509"]
-        if entry.jwtSVIDTTLSeconds > 0 { svids.append("jwt") }
-        self.svidTypes = svids
+        // SPIRE issues both X.509-SVIDs and JWT-SVIDs for every registration
+        // entry; the TTL fields only tune lifetimes. A `jwtSVIDTTLSeconds` of 0
+        // means "use the server's default JWT-SVID TTL", not "no JWT-SVID", so
+        // JWT capability must not be gated on a non-zero override.
+        self.svidTypes = ["x509", "jwt"]
         self.x509TTLSeconds = Int(entry.x509SVIDTTLSeconds)
         self.jwtTTLSeconds = Int(entry.jwtSVIDTTLSeconds)
         self.federatesWith = entry.federatesWith

@@ -13,20 +13,21 @@ import {
   TrustBundleCard,
 } from "./rail-cards";
 
-type Filter = "all" | "x509" | "jwt" | "admin" | "federated";
+// SPIRE issues both X.509 and JWT SVIDs for every entry, so filtering by SVID
+// kind isn't meaningful — these filters partition entries by attributes that
+// actually differ between them.
+type Filter = "all" | "admin" | "federated" | "downstream";
 
 const matchesFilter = (entry: WorkloadRegistrationEntry, filter: Filter): boolean => {
   switch (filter) {
     case "all":
       return true;
-    case "x509":
-      return entry.svidTypes.includes("x509");
-    case "jwt":
-      return entry.svidTypes.includes("jwt");
     case "admin":
       return entry.admin;
     case "federated":
       return entry.federatesWith.length > 0;
+    case "downstream":
+      return entry.downstream;
   }
 };
 
@@ -53,10 +54,9 @@ export function WorkloadIdentityView({
   const counts = useMemo(
     () => ({
       all: entries.length,
-      x509: entries.filter((e) => e.svidTypes.includes("x509")).length,
-      jwt: entries.filter((e) => e.svidTypes.includes("jwt")).length,
       admin: entries.filter((e) => e.admin).length,
       federated: entries.filter((e) => e.federatesWith.length > 0).length,
+      downstream: entries.filter((e) => e.downstream).length,
     }),
     [entries]
   );
@@ -121,10 +121,9 @@ export function WorkloadIdentityView({
             <div className="min-w-0 flex-1 space-y-4">
               <div className="flex flex-wrap gap-2">
                 <FilterChip label="All" count={counts.all} active={filter === "all"} onClick={() => setFilter("all")} />
-                <FilterChip label="X.509" count={counts.x509} dot="bg-blue-500" active={filter === "x509"} onClick={() => setFilter("x509")} />
-                <FilterChip label="JWT" count={counts.jwt} dot="bg-purple-500" active={filter === "jwt"} onClick={() => setFilter("jwt")} />
                 <FilterChip label="Admin" count={counts.admin} dot="bg-amber-500" active={filter === "admin"} onClick={() => setFilter("admin")} />
                 <FilterChip label="Federated" count={counts.federated} dot="bg-emerald-500" active={filter === "federated"} onClick={() => setFilter("federated")} />
+                <FilterChip label="Downstream" count={counts.downstream} dot="bg-blue-500" active={filter === "downstream"} onClick={() => setFilter("downstream")} />
               </div>
 
               <Card className="bg-card border-border overflow-hidden py-0">
