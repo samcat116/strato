@@ -337,6 +337,13 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         request.headers.add(name: "User-Agent", value: "Strato/1.0")
         request.headers.add(name: "Accept", value: "*/*")
 
+        // `status` here is the FINAL response: `httpClient` is built with the
+        // default configuration, whose `RedirectConfiguration()` follows up to
+        // 5 redirects, so a mirror redirector's 3xx is resolved before this
+        // returns and never reaches the guard below. Every distro in the image
+        // catalog that isn't a direct CDN link (Fedora, openSUSE, Rocky) is
+        // reached this way, so disabling redirects would break them all —
+        // `ImageFetchRedirectTests` pins the behaviour.
         let response = try await httpClient.execute(request, timeout: .minutes(30))
 
         guard response.status == .ok else {
