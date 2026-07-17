@@ -21,24 +21,88 @@ import StratoShared
 /// authority on layout; the control plane stores whatever it is told), and keeps
 /// the same "unknown volume throws" behavior so callers exercise the same code
 /// paths they would against a real backend.
+///
+/// That metadata is persisted, because the real backend's is. `qemu-img` reads a
+/// volume's format and size back off the disk, so `FileSystemStorageBackend`
+/// holds no volume registry at all and a restart costs it nothing. A purely
+/// in-memory mock would instead come back empty while the control plane still
+/// has the volume placed here, and every later resize/snapshot/clone/info would
+/// fail `volumeNotFound` — a failure mode no real agent has. The metadata file
+/// is this backend's equivalent of the bytes on disk; it holds tens of bytes per
+/// volume, not gigabytes.
 public actor MockStorageBackend: StorageBackend {
     private let logger: Logger
     private let volumeStoragePath: String
+    /// Where the volume metadata is persisted across restarts. Nil disables
+    /// persistence (tests, and any caller that does not need restart parity).
+    ///
+    /// Must be per-agent: `volumeStoragePath` defaults to one host-wide
+    /// directory, so a fleet of simulated agents sharing this machine would
+    /// otherwise write over each other's metadata. The agent points it at its
+    /// own storage dir, alongside the VM manifest.
+    private let metadataPath: String?
 
     /// Recorded volumes, keyed by id. `path` is the reported location — nothing
     /// exists there.
-    private struct MockVolume {
+    private struct MockVolume: Codable {
         var path: String
         var format: DiskFormat
         var sizeBytes: Int64
     }
+
+    private struct Metadata: Codable {
+        var volumes: [String: MockVolume]
+        var snapshots: [String]
+    }
+
     private var volumes: [String: MockVolume] = [:]
     private var snapshots: Set<String> = []
 
-    public init(logger: Logger, volumeStoragePath: String? = nil) {
+    public init(logger: Logger, volumeStoragePath: String? = nil, metadataPath: String? = nil) {
         self.logger = logger
         self.volumeStoragePath = volumeStoragePath ?? FileSystemStorageBackend.defaultStoragePath
+        self.metadataPath = metadataPath
         logger.warning("Storage running in mock mode - no volumes will be written to disk")
+
+        // Recover volumes recorded by a previous incarnation, so the control
+        // plane's existing placements still resolve after a restart.
+        guard let metadataPath, FileManager.default.fileExists(atPath: metadataPath) else { return }
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: metadataPath))
+            let loaded = try JSONDecoder().decode(Metadata.self, from: data)
+            volumes = loaded.volumes
+            snapshots = Set(loaded.snapshots)
+            // Bind the count first: the logger's metadata is an autoclosure, and
+            // actor-isolated state cannot be read from one during init.
+            let recovered = loaded.volumes.count
+            if recovered > 0 {
+                logger.info(
+                    "Recovered mock volume metadata from a previous run",
+                    metadata: ["volumes": .stringConvertible(recovered)])
+            }
+        } catch {
+            // Same posture as the VM manifest: a corrupt file is not fatal, it
+            // just costs the volumes it recorded.
+            logger.error("Failed to read mock volume metadata at \(metadataPath): \(error)")
+        }
+    }
+
+    /// Persists the current metadata. Best effort: a failure here costs restart
+    /// parity for these volumes, but must not fail the operation that triggered
+    /// it — the operation itself succeeded.
+    private func persist() {
+        guard let metadataPath else { return }
+        do {
+            let directory = (metadataPath as NSString).deletingLastPathComponent
+            if !directory.isEmpty {
+                try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+            }
+            let data = try JSONEncoder().encode(Metadata(volumes: volumes, snapshots: Array(snapshots)))
+            // Atomic, so a crash mid-write cannot leave a truncated file.
+            try data.write(to: URL(fileURLWithPath: metadataPath), options: .atomic)
+        } catch {
+            logger.error("Failed to write mock volume metadata at \(metadataPath): \(error)")
+        }
     }
 
     // MARK: - Path layout (mirrors FileSystemStorageBackend)
@@ -59,6 +123,7 @@ public actor MockStorageBackend: StorageBackend {
             "Creating mock volume (mock mode)",
             metadata: ["volumeId": .string(volumeId), "sizeBytes": .stringConvertible(sizeBytes)])
         volumes[volumeId] = MockVolume(path: path, format: format, sizeBytes: sizeBytes)
+        persist()
         return DiskAttachment(path: path, format: format)
     }
 
@@ -73,6 +138,7 @@ public actor MockStorageBackend: StorageBackend {
             "Creating mock volume from image (mock mode; image not downloaded)",
             metadata: ["volumeId": .string(volumeId), "imageId": .string(imageInfo.imageId.uuidString)])
         volumes[volumeId] = MockVolume(path: path, format: format, sizeBytes: imageInfo.size)
+        persist()
         return DiskAttachment(path: path, format: format)
     }
 
@@ -94,6 +160,7 @@ public actor MockStorageBackend: StorageBackend {
     public func deleteVolume(volumeId: String) async throws {
         logger.info("Deleting mock volume (mock mode)", metadata: ["volumeId": .string(volumeId)])
         volumes.removeValue(forKey: volumeId)  // idempotent, like the real backend
+        persist()
     }
 
     public func resizeVolume(volumePath: String, newSizeBytes: Int64) async throws {
@@ -104,6 +171,7 @@ public actor MockStorageBackend: StorageBackend {
             "Resizing mock volume (mock mode)",
             metadata: ["volumePath": .string(volumePath), "newSizeBytes": .stringConvertible(newSizeBytes)])
         volumes[id]?.sizeBytes = newSizeBytes
+        persist()
     }
 
     // MARK: - Snapshots
@@ -117,6 +185,7 @@ public actor MockStorageBackend: StorageBackend {
             "Creating mock snapshot (mock mode)",
             metadata: ["volumeId": .string(volumeId), "snapshotId": .string(snapshotId)])
         snapshots.insert(path)
+        persist()
         return path
     }
 
@@ -125,6 +194,7 @@ public actor MockStorageBackend: StorageBackend {
             "Deleting mock snapshot (mock mode)",
             metadata: ["volumeId": .string(volumeId), "snapshotId": .string(snapshotId)])
         snapshots.remove(snapshotPath(volumeId: volumeId, snapshotId: snapshotId))  // idempotent
+        persist()
     }
 
     // MARK: - Clone / info
@@ -140,6 +210,7 @@ public actor MockStorageBackend: StorageBackend {
             "Cloning mock volume (mock mode)",
             metadata: ["sourceVolumeId": .string(sourceVolumeId), "targetVolumeId": .string(targetVolumeId)])
         volumes[targetVolumeId] = MockVolume(path: path, format: source.format, sizeBytes: source.sizeBytes)
+        persist()
         return DiskAttachment(path: path, format: source.format)
     }
 

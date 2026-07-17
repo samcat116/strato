@@ -373,7 +373,15 @@ actor Agent {
         let storageBackend: any StorageBackend
         if isSimulationMode {
             logger.info("Simulation mode: registering mock storage backend (no image cache)")
-            storageBackend = MockStorageBackend(logger: logger)
+            // Metadata goes in this agent's own storage dir, next to the VM
+            // manifest — never the shared default volume root, which every
+            // simulated agent on the host would otherwise write over. It is what
+            // lets volumes the control plane still has placed here survive a
+            // restart, exactly as the real backend's bytes on disk do.
+            storageBackend = MockStorageBackend(
+                logger: logger,
+                metadataPath: (vmStoragePath as NSString).appendingPathComponent("mock-volumes.json")
+            )
         } else {
             logger.info("Initializing image cache service")
             imageCacheService = ImageCacheService(
