@@ -357,6 +357,42 @@ final class ImageValidationServiceTests {
         #expect(result == "myimage.\(ext)")
     }
 
+    /// A disk-image/rootfs artifact is still a disk image, so the artifact path
+    /// must not reject a format the upload path accepts.
+    @Test(
+        "Validate artifact filename with hypervisor-native extensions",
+        arguments: ["vmdk", "vhd", "vhdx"])
+    func testValidateArtifactFilenameHypervisorFormats(ext: String) throws {
+        let result = try ImageValidationService.validateArtifactFilename("rootfs.\(ext)")
+        #expect(result == "rootfs.\(ext)")
+    }
+
+    /// Pins the relationship rather than the contents: the two whitelists drifted
+    /// once already when `ImageFormat` grew vmdk/vhd/vhdx and only the disk-image
+    /// list was widened.
+    @Test("Every disk-image extension is accepted on the artifact path")
+    func testArtifactExtensionsSupersetOfDiskImage() throws {
+        #expect(
+            ImageValidationService.diskImageExtensions.isSubset(
+                of: ImageValidationService.artifactExtensions))
+
+        for ext in ImageValidationService.diskImageExtensions {
+            let result = try ImageValidationService.validateArtifactFilename("disk.\(ext)")
+            #expect(result == "disk.\(ext)")
+        }
+    }
+
+    /// The disk whitelist is derived from `ImageFormat`, so a new case can't be
+    /// added without the filename check learning about it.
+    @Test("Every ImageFormat raw value is an accepted disk extension")
+    func testDiskImageExtensionsCoverEveryFormat() throws {
+        for format in ImageFormat.allCases {
+            #expect(ImageValidationService.diskImageExtensions.contains(format.rawValue))
+            let result = try ImageValidationService.validateFilename("disk.\(format.rawValue)")
+            #expect(result == "disk.\(format.rawValue)")
+        }
+    }
+
     @Test("Validate filename strips directory path")
     func testValidateFilenameStripsPath() throws {
         let result = try ImageValidationService.validateFilename("path/to/myimage.qcow2")

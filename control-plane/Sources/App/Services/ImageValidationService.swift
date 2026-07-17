@@ -122,6 +122,29 @@ struct ImageValidationService {
         return actualChecksum.lowercased() == expectedChecksum.lowercased()
     }
 
+    /// Extensions a disk image may carry: every `ImageFormat` plus the
+    /// format-agnostic container names (`.img`, `.iso`) whose contents are only
+    /// settled by reading the header.
+    ///
+    /// `validateArtifactFilename` builds on this rather than repeating it — a
+    /// disk-image artifact is still a disk image, so a format accepted on the
+    /// upload path must not be rejected on the artifact path.
+    static let diskImageExtensions: Set<String> =
+        Set(ImageFormat.allCases.map(\.rawValue)).union(["img", "iso"])
+
+    /// Extensions only meaningful for the opaque artifact kinds: kernels are
+    /// commonly extensionless (`vmlinux`) or `.bin`/`.elf`, root filesystems can
+    /// be `.ext4`/`.squashfs`, and initramfs images are often `.cpio.gz`.
+    private static let nonDiskArtifactExtensions: Set<String> = [
+        "bin", "elf",  // kernels
+        "ext2", "ext3", "ext4", "squashfs",  // root filesystems
+        "cpio", "gz", "xz", "lz4", "zst",  // initramfs archives / compression
+    ]
+
+    /// Everything `validateArtifactFilename` accepts.
+    static let artifactExtensions: Set<String> =
+        diskImageExtensions.union(nonDiskArtifactExtensions)
+
     /// Validates that a filename is safe (no path traversal, etc.)
     static func validateFilename(_ filename: String) throws -> String {
         // Remove any path components
@@ -138,9 +161,8 @@ struct ImageValidationService {
         }
 
         // Check for valid extension
-        let validExtensions = ["qcow2", "img", "raw", "iso", "vmdk", "vhd", "vhdx"]
         let ext = (sanitized as NSString).pathExtension.lowercased()
-        guard validExtensions.contains(ext) || ext.isEmpty else {
+        guard diskImageExtensions.contains(ext) || ext.isEmpty else {
             throw ImageError.invalidFormat("Invalid file extension: \(ext)")
         }
 
@@ -155,11 +177,11 @@ struct ImageValidationService {
 
     /// Validates a filename for a typed artifact (kernel/rootfs/initramfs/disk-image).
     ///
-    /// Firecracker artifacts don't fit the disk-image extension whitelist: kernels
-    /// are commonly extensionless (`vmlinux`) or `.bin`/`.elf`, root filesystems can
-    /// be `.ext4`/`.squashfs`, and initramfs images are often `.cpio.gz`. This keeps
-    /// the path-traversal and safe-character guarantees of `validateFilename` while
-    /// accepting the broader set of artifact extensions.
+    /// Accepts everything `validateFilename` does — a disk-image or rootfs
+    /// artifact is a disk image, so any format the upload path takes must be
+    /// accepted here too — plus the opaque-blob extensions Firecracker artifacts
+    /// use. Extensionless names (e.g. `vmlinux`) are allowed. Keeps the same
+    /// path-traversal and safe-character guarantees as `validateFilename`.
     static func validateArtifactFilename(_ filename: String) throws -> String {
         // Remove any path components
         let sanitized = (filename as NSString).lastPathComponent
@@ -172,16 +194,8 @@ struct ImageValidationService {
             throw ImageError.invalidFormat("Hidden files not allowed")
         }
 
-        // Broad whitelist covering disk images, kernels, root filesystems, and
-        // initramfs archives. Extensionless names (e.g. `vmlinux`) are allowed.
-        let validExtensions: Set<String> = [
-            "qcow2", "img", "raw", "iso",  // disk / rootfs images
-            "bin", "elf",  // kernels
-            "ext2", "ext3", "ext4", "squashfs",  // root filesystems
-            "cpio", "gz", "xz", "lz4", "zst",  // initramfs archives / compression
-        ]
         let ext = (sanitized as NSString).pathExtension.lowercased()
-        guard validExtensions.contains(ext) || ext.isEmpty else {
+        guard artifactExtensions.contains(ext) || ext.isEmpty else {
             throw ImageError.invalidFormat("Invalid file extension: \(ext)")
         }
 

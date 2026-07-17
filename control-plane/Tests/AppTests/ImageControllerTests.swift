@@ -259,6 +259,52 @@ final class ImageControllerTests {
         Self.cleanupTempStorageDirectory(tempStoragePath)
     }
 
+    // MARK: - Artifact Disk Format Tests
+
+    /// The artifact path validates filenames through a separate whitelist to the
+    /// upload path. When `ImageFormat` grew vmdk/vhd/vhdx, only the upload one
+    /// was widened, so replacing a disk-image artifact with a format the API
+    /// advertised was refused before detection ever ran.
+    @Test(
+        "Disk-image artifacts accept every advertised disk format",
+        arguments: ["vmdk", "vhd", "vhdx"])
+    func testUploadDiskImageArtifactWithHypervisorFormat(ext: String) async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageID = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken, name: "artifact-\(ext)")
+
+            let image = try await Self.uploadArtifact(
+                app: app,
+                project: project,
+                imageID: imageID,
+                authToken: authToken,
+                kind: "disk-image",
+                filename: "disk.\(ext)",
+                fileContent: Self.createQCOW2Buffer())
+
+            #expect(image.artifacts.contains { $0.kind == .diskImage })
+        }
+    }
+
+    @Test("Rootfs artifacts accept a vmdk filename")
+    func testUploadRootfsArtifactWithVMDK() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageID = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken, name: "rootfs-vmdk")
+
+            let image = try await Self.uploadArtifact(
+                app: app,
+                project: project,
+                imageID: imageID,
+                authToken: authToken,
+                kind: "rootfs",
+                filename: "rootfs.vmdk",
+                fileContent: Self.createRawBuffer())
+
+            #expect(image.artifacts.contains { $0.kind == .rootfs })
+        }
+    }
+
     // MARK: - Explicit Disk Format Tests
 
     /// The regression behind the "raw .img stored as qcow2" report: an upload
