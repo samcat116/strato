@@ -37,8 +37,23 @@
 #   --status             Show running/stopped state for this base-dir
 #   -h, --help           Show this help
 #
-# The fleet's PIDs are tracked in <base-dir>/fleet.pids so --stop/--status work
-# across invocations. Re-running --start appends to an existing fleet.
+# Lifecycle
+#   The fleet's PIDs are tracked in <base-dir>/fleet.pids so --stop/--status
+#   work across invocations. Starting is additive: agents already running are
+#   skipped, so raising --count grows an existing fleet.
+#
+#   Registration happens once per agent, not once per start. The control plane
+#   rejects a registration token for a name that already exists (409), and an
+#   agent's unregister-on-shutdown only marks its row offline rather than
+#   removing it. So each agent keeps a state file holding the rotated reconnect
+#   token it persisted at first registration, and --stop leaves those files in
+#   place: starting again resumes the same agents from their own state, exactly
+#   as a real agent reconnects after a reboot. Only agents with no state file
+#   mint a token.
+#
+#   For a genuinely fresh fleet, deregister the agents in the UI (or via
+#   DELETE /api/agents/:id) and remove the base dir, or just pick a new
+#   --name-prefix.
 
 set -euo pipefail
 
@@ -69,7 +84,9 @@ while [[ $# -gt 0 ]]; do
     --profiles) PROFILES="$2"; shift 2 ;;
     --stop) ACTION="stop"; shift ;;
     --status) ACTION="status"; shift ;;
-    -h|--help) sed -n '2,48p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    # Print the header comment block (everything after the shebang up to the
+    # first non-comment line), so help can never drift from a line range.
+    -h|--help) awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -92,6 +109,8 @@ stop_fleet() {
   done < "$PID_FILE"
   echo "Sent SIGTERM to $stopped agent(s). They unregister on shutdown."
   rm -f "$PID_FILE"
+  echo "State files kept in $BASE_DIR — starting again resumes these same agents."
+  echo "For a clean slate, deregister the agents in the UI and: rm -rf $BASE_DIR"
 }
 
 status_fleet() {
@@ -146,10 +165,24 @@ if [[ "$NUM_PROFILES" -eq 0 ]]; then
   echo "error: no profiles parsed from --profiles" >&2; exit 1
 fi
 
+# NOTE: macOS ships bash 3.2, where `set -u` makes "${arr[@]}" on an EMPTY
+# array abort with "unbound variable". Every optional-array expansion below
+# therefore uses the ${arr[@]+"${arr[@]}"} idiom.
 AUTH_ARGS=()
 if [[ -n "$API_KEY" ]]; then
   AUTH_ARGS=(-H "Authorization: Bearer $API_KEY")
 fi
+
+# Whether a live process for this agent name is already recorded.
+agent_running() {
+  local want="$1" pid name _rest
+  [[ -f "$PID_FILE" ]] || return 1
+  while IFS=$'\t' read -r pid name _rest; do
+    [[ "$name" == "$want" ]] || continue
+    kill -0 "$pid" 2>/dev/null && return 0
+  done < "$PID_FILE"
+  return 1
+}
 
 echo "Launching $COUNT simulated agents against $CONTROL_PLANE (org $ORG_ID)"
 echo "Profiles (cpus:memMB:diskGB): $PROFILES"
@@ -157,38 +190,60 @@ echo "Binary: $AGENT_BIN"
 echo "Base dir: $BASE_DIR"
 echo
 
-# Derive the WebSocket-side base once for logging; the registration URL itself
-# comes back from the API per token.
-launched=0
+launched=0 resumed=0
 for i in $(seq 1 "$COUNT"); do
   name="${NAME_PREFIX}-$(printf '%03d' "$i")"
   profile="${PROFILE_ARR[$(( (i - 1) % NUM_PROFILES ))]}"
   IFS=':' read -r cpus mem_mb disk_gb <<< "$profile"
 
-  # 1) Mint a single-use registration token for this agent.
-  resp="$(curl -sS -X POST "$CONTROL_PLANE/api/agents/registration-tokens" \
-    -H "Content-Type: application/json" \
-    "${AUTH_ARGS[@]}" \
-    -d "{\"agentName\":\"$name\",\"organizationId\":\"$ORG_ID\"}")" || {
-      echo "  [$name] token request failed" >&2; continue; }
+  agent_dir="$BASE_DIR/$name"
+  state_file="$agent_dir/state.json"
+  mkdir -p "$agent_dir"
+  log_file="$agent_dir/agent.log"
 
-  reg_url="$(echo "$resp" | jq -r '.registrationURL // empty')"
-  if [[ -z "$reg_url" ]]; then
-    echo "  [$name] could not get registrationURL. Response:" >&2
-    echo "    $resp" >&2
+  # Starting is additive, so never double-launch a name that's already up:
+  # two processes sharing one agent identity fight over the same socket.
+  if agent_running "$name"; then
+    echo "  [$name] already running; skipping"
     continue
   fi
 
-  # 2) Launch the simulated agent with a private state file + storage dir.
-  agent_dir="$BASE_DIR/$name"
-  mkdir -p "$agent_dir"
-  log_file="$agent_dir/agent.log"
+  # Registration happens once per agent, not once per start. The control plane
+  # rejects a token for an existing agent name with 409, and unregistering on
+  # shutdown only marks the row offline — it does not remove it. So a restart
+  # must resume from the reconnect token the agent persisted at its first
+  # registration, exactly as a real agent does across a reboot. A state file is
+  # the record that this agent already joined; only mint a token without one.
+  REG_ARGS=()
+  if [[ -s "$state_file" ]]; then
+    mode="resumed"
+    resumed=$((resumed + 1))
+  else
+    mode="joined"
+    resp="$(curl -sS -X POST "$CONTROL_PLANE/api/agents/registration-tokens" \
+      -H "Content-Type: application/json" \
+      ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} \
+      -d "{\"agentName\":\"$name\",\"organizationId\":\"$ORG_ID\"}")" || {
+        echo "  [$name] token request failed" >&2; continue; }
+
+    reg_url="$(echo "$resp" | jq -r '.registrationURL // empty')"
+    if [[ -z "$reg_url" ]]; then
+      echo "  [$name] could not get registrationURL. Response:" >&2
+      echo "    $resp" >&2
+      if echo "$resp" | grep -q 'already registered'; then
+        echo "    Hint: this name exists in the control plane but has no local state file." >&2
+        echo "    Deregister it in the UI, use --name-prefix, or restore the state file." >&2
+      fi
+      continue
+    fi
+    REG_ARGS=(--registration-url "$reg_url")
+  fi
 
   "$AGENT_BIN" run \
     --simulate \
     --agent-id "$name" \
-    --registration-url "$reg_url" \
-    --state-file "$agent_dir/state.json" \
+    ${REG_ARGS[@]+"${REG_ARGS[@]}"} \
+    --state-file "$state_file" \
     --vm-storage-dir "$agent_dir/vms" \
     --sim-cpus "$cpus" \
     --sim-memory-mb "$mem_mb" \
@@ -197,11 +252,11 @@ for i in $(seq 1 "$COUNT"); do
 
   pid=$!
   printf '%s\t%s\t%s\n' "$pid" "$name" "$profile" >> "$PID_FILE"
-  echo "  [$name] pid $pid — ${cpus} vCPU / ${mem_mb} MB / ${disk_gb} GB — log: $log_file"
+  echo "  [$name] pid $pid ($mode) — ${cpus} vCPU / ${mem_mb} MB / ${disk_gb} GB — log: $log_file"
   launched=$((launched + 1))
 done
 
 echo
-echo "Launched $launched/$COUNT agents. Tracked in $PID_FILE"
+echo "Launched $launched/$COUNT agents ($resumed resumed from state). Tracked in $PID_FILE"
 echo "  Status: $0 --status --base-dir $BASE_DIR"
 echo "  Stop:   $0 --stop   --base-dir $BASE_DIR"
