@@ -380,15 +380,20 @@ actor Agent {
         self.storageBackend = storageBackend
 
         if isSimulationMode {
-            // One mock backend per hypervisor type so the agent is eligible for
-            // both QEMU and (on Linux) Firecracker placements. The mock tracks
-            // specs and reports real reservations, so placements deplete the
-            // agent's advertised capacity like a real host.
+            // One mock backend per hypervisor type, so the agent is eligible for
+            // both QEMU and Firecracker placements. The mock tracks specs and
+            // reports real reservations, so placements deplete the agent's
+            // advertised capacity like a real host.
+            //
+            // Deliberately not gated on Linux, unlike the real drivers: a
+            // simulated agent models a Linux fleet whatever host it runs on —
+            // it already advertises ovn_networking on macOS for the same reason
+            // — so a macOS dev box can scale-test Firecracker placement too.
+            // Nothing here touches Firecracker itself.
             logger.info("Simulation mode: registering mock hypervisor backend(s)")
-            hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
-            #if os(Linux)
-            hypervisorServices[.firecracker] = MockHypervisorService(logger: logger, hypervisorType: .firecracker)
-            #endif
+            for type in HypervisorType.allCases {
+                hypervisorServices[type] = MockHypervisorService(logger: logger, hypervisorType: type)
+            }
         } else {
             logger.info("Initializing QEMU service")
             #if canImport(SwiftQEMU)
@@ -1063,18 +1068,18 @@ actor Agent {
     /// The hypervisor support to advertise in simulation mode: the mock
     /// backends this agent actually registered, reported as available and
     /// hardware-accelerated so the scheduler treats the dummy as a fully capable
-    /// host. Mirrors the `hypervisorServices` registered in `start()`.
+    /// host. Derived from `HypervisorType.allCases`, exactly like the mock
+    /// registration in `start()`, so the two cannot drift apart and a new
+    /// backend is simulated the moment it has an enum case.
     private func simulatedHypervisorSupport() -> [HypervisorSupport] {
-        var support = [
+        HypervisorType.allCases.map { type in
             HypervisorSupport(
-                type: .qemu, available: true, accelerated: true, capabilities: .qemu)
-        ]
-        #if os(Linux)
-        support.append(
-            HypervisorSupport(
-                type: .firecracker, available: true, accelerated: true, capabilities: .firecracker))
-        #endif
-        return support
+                type: type,
+                available: true,
+                accelerated: true,
+                capabilities: HypervisorCapabilities.capabilities(for: type)
+            )
+        }
     }
 
     // MARK: - Host preflight
