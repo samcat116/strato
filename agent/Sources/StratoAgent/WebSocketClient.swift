@@ -148,6 +148,14 @@ actor WebSocketClient {
             wsConfig.tlsConfiguration = tlsConfig
         }
 
+        // The control plane's desired-state sync is a single frame carrying every
+        // VM placed on this agent, so it grows with placement count; the 16 KiB
+        // websocket-kit default is crossed at roughly 7 VMs, and an oversized
+        // frame kills the connection — permanently, since the full sync is
+        // re-pushed on every reconnect. Must match the control plane's limit on
+        // /agent/ws.
+        wsConfig.maxFrameSize = 1 << 24
+
         // Present the registration token in an Authorization header rather than the
         // URL query string, so it never appears in proxy/ingress/load-balancer logs.
         var headers = HTTPHeaders()

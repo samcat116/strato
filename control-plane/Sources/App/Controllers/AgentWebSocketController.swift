@@ -7,7 +7,12 @@ import Fluent
 struct AgentWebSocketController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let agentRoutes = routes.grouped("agent")
-        agentRoutes.webSocket("ws", onUpgrade: websocketHandler)
+        // Observed-state reports carry an entry per VM on the agent, so frames
+        // grow with placement count and the 16 KiB default would reject reports
+        // from an agent hosting a few hundred VMs. Must match the agent
+        // client's limit, which needs the same headroom for desired-state syncs.
+        agentRoutes.webSocket(
+            "ws", maxFrameSize: .init(integerLiteral: 1 << 24), onUpgrade: websocketHandler)
     }
 
     /// Frames received before authentication completes are buffered here and
