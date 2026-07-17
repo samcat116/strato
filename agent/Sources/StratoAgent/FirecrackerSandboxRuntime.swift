@@ -1235,10 +1235,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     }
 
     /// Best-effort teardown of a jailed sandbox's host-side leftovers: the
-    /// chroot subtree (normally the client's job, but a crash can orphan it)
-    /// and the network namespace.
+    /// chroot subtree and per-VM cgroup directory (normally the client's job,
+    /// but a crash can orphan both) and the network namespace.
     private func removeJailArtifacts(_ plan: SandboxJailPlan) async {
         try? FileManager.default.removeItem(atPath: plan.jailDirectory)
+        _ = rmdir(
+            JailerOptions.cgroupDirectory(
+                firecrackerBinaryPath: firecrackerBinaryPath, vmId: plan.sandboxId))
         _ = try? await ProcessRunner.run(
             executableURL: URL(fileURLWithPath: "/usr/bin/env"),
             arguments: ["ip", "netns", "delete", plan.netnsName])

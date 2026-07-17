@@ -29,6 +29,10 @@ public actor FirecrackerClient {
         /// The per-VM jail directory (`<chroot base>/<exec name>/<id>`) for a
         /// jailed VM (issue #425), removed on destroy. `nil` for unjailed VMs.
         let jailDirectory: String?
+        /// The per-VM cgroup directory the jailer may have created for a
+        /// jailed VM, removed (best effort) on destroy — the jailer never
+        /// cleans it up itself. `nil` for unjailed VMs.
+        let cgroupDirectory: String?
         let manager: FirecrackerManager
     }
 
@@ -186,6 +190,12 @@ public actor FirecrackerClient {
                     firecrackerBinaryPath: firecrackerBinaryPath,
                     vmId: vmId)
             },
+            cgroupDirectory: jail.flatMap {
+                $0.cgroups.isEmpty
+                    ? nil
+                    : JailerOptions.cgroupDirectory(
+                        firecrackerBinaryPath: firecrackerBinaryPath, vmId: vmId)
+            },
             manager: manager
         )
 
@@ -246,6 +256,12 @@ public actor FirecrackerClient {
                     firecrackerBinaryPath: firecrackerBinaryPath,
                     vmId: vmId)
             },
+            // Whether this adopted VM's creator passed cgroup limits is
+            // unknowable here, so record the path unconditionally for jailed
+            // VMs — removing a directory that was never created is a no-op.
+            cgroupDirectory: jail.map { _ in
+                JailerOptions.cgroupDirectory(firecrackerBinaryPath: firecrackerBinaryPath, vmId: vmId)
+            },
             manager: manager
         )
 
@@ -281,7 +297,10 @@ public actor FirecrackerClient {
 
         // Terminate the Firecracker process. Spawned VMs have a child Process
         // handle; re-adopted VMs (issue #433) do not, so signal the PID we
-        // discovered at adoption time — Firecracker exits on SIGTERM.
+        // discovered at adoption time — Firecracker exits on SIGTERM. The
+        // adopted path additionally waits (bounded) for the process to die:
+        // the cgroup directory below cannot be removed while the process is
+        // still inside it.
         if let process = vm.process {
             if process.isRunning {
                 process.terminate()
@@ -289,6 +308,9 @@ public actor FirecrackerClient {
             }
         } else if let pid = vm.adoptedPID {
             Self.terminate(pid: pid)
+            for _ in 0..<50 where Self.processAlive(pid) {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
         }
 
         // Remove socket
@@ -301,6 +323,18 @@ public actor FirecrackerClient {
         // per-sandbox uids never inherit a predecessor's files.
         if let jailDirectory = vm.jailDirectory {
             try? FileManager.default.removeItem(atPath: jailDirectory)
+        }
+
+        // The jailer creates the per-VM cgroup but never removes it (cleanup
+        // is the caller's responsibility), so churned sandboxes would pile up
+        // stale cgroup directories. A populated cgroup dir can only be
+        // rmdir(2)'d — never recursively deleted — and only once the process
+        // has left it, so retry briefly to ride out the exit.
+        if let cgroupDirectory = vm.cgroupDirectory {
+            for _ in 0..<10 {
+                if rmdir(cgroupDirectory) == 0 || errno == ENOENT { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
         }
 
         // Remove from tracking
@@ -356,11 +390,11 @@ public actor FirecrackerClient {
     }
 
     /// Finds the PID of the Firecracker process spawned for `vmId` by scanning
-    /// `/proc` for its `--id <vmId>` argument pair. This is the jailed variant
-    /// of `discoverPID(socketPath:)`: every jailed Firecracker sees the same
-    /// in-chroot `--api-sock` path, but the jailer passes each one its unique
-    /// `--id`. Skips `jailer` processes themselves (a jailer that has not yet
-    /// exec'd carries the same `--id`).
+    /// `/proc` for its `--id` argument. This is the jailed variant of
+    /// `discoverPID(socketPath:)`: every jailed Firecracker sees the same
+    /// in-chroot `--api-sock` path, but each carries its unique `--id`. Skips
+    /// `jailer` processes themselves (a jailer that has not yet exec'd carries
+    /// the same `--id`).
     static func discoverPID(vmId: String) -> Int32? {
         #if os(Linux)
         guard let entries = try? FileManager.default.contentsOfDirectory(atPath: "/proc") else {
@@ -375,7 +409,7 @@ public actor FirecrackerClient {
             guard let argv0 = args.first,
                 !URL(fileURLWithPath: argv0).lastPathComponent.contains("jailer")
             else { continue }
-            if let i = args.firstIndex(of: "--id"), i + 1 < args.count, args[i + 1] == vmId {
+            if Self.argvCarriesVMId(args, vmId: vmId) {
                 return pid
             }
         }
@@ -383,6 +417,17 @@ public actor FirecrackerClient {
         #else
         return nil
         #endif
+    }
+
+    /// Whether an argv carries `--id` naming `vmId`. Matches both spellings —
+    /// the two-token `--id <id>` this client uses when spawning directly, and
+    /// the single-token `--id=<id>` form the jailer passes to the exec'd
+    /// Firecracker — so re-adopted jailed VMs stay killable on destroy.
+    static func argvCarriesVMId(_ args: [String], vmId: String) -> Bool {
+        if let i = args.firstIndex(of: "--id"), i + 1 < args.count, args[i + 1] == vmId {
+            return true
+        }
+        return args.contains("--id=\(vmId)")
     }
 
     /// Sends SIGTERM to a re-adopted Firecracker process.

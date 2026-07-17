@@ -410,7 +410,10 @@ Firecracker machine config remains the enforcement point for guest sizing
 (vCPUs, guest RAM). The jailer cgroup adds exactly one thing on cgroup-v2
 hosts: `memory.max = guest memory + 128 MiB`, a *host-protection backstop*
 against a compromised VMM ballooning its host process — it feeds nothing back
-into scheduling and is deliberately not a second accounting system. No CPU
+into scheduling and is deliberately not a second accounting system. The
+jailer never removes the per-VM cgroup directory it creates, so destroy
+rmdir's it (after the process exits) and the crash-leftover sweep does the
+same. No CPU
 cgroup is set (vCPU count already bounds compute; host fairness is the kernel
 scheduler's job). Cgroup-v1 hosts get the rest of the barrier and one warning.
 

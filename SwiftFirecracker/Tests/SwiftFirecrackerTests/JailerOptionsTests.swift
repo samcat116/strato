@@ -77,6 +77,27 @@ struct JailerOptionsTests {
         #expect(!args.contains("--cgroup"))
     }
 
+    @Test("the per-VM cgroup directory derives from the exec file basename")
+    func cgroupDirectoryDerivation() {
+        #expect(
+            JailerOptions.cgroupDirectory(
+                firecrackerBinaryPath: "/usr/local/bin/firecracker", vmId: "abc")
+                == "/sys/fs/cgroup/firecracker/abc")
+    }
+
+    @Test("PID discovery matches both --id spellings")
+    func argvIdMatching() {
+        // The two-token form this client uses when spawning directly.
+        #expect(FirecrackerClient.argvCarriesVMId(["/usr/bin/firecracker", "--id", "vm-1"], vmId: "vm-1"))
+        // The single-token form the jailer passes to the exec'd Firecracker.
+        #expect(FirecrackerClient.argvCarriesVMId(["/firecracker", "--id=vm-1"], vmId: "vm-1"))
+        // Wrong id, either spelling: no match — and no prefix confusion.
+        #expect(!FirecrackerClient.argvCarriesVMId(["/firecracker", "--id", "vm-10"], vmId: "vm-1"))
+        #expect(!FirecrackerClient.argvCarriesVMId(["/firecracker", "--id=vm-10"], vmId: "vm-1"))
+        // A trailing bare --id must not crash or match.
+        #expect(!FirecrackerClient.argvCarriesVMId(["/firecracker", "--id"], vmId: "vm-1"))
+    }
+
     @Test("the client derives jailed and unjailed socket paths from one place")
     func clientSocketPathSelection() async {
         let client = FirecrackerClient(

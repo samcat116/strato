@@ -85,6 +85,16 @@ public struct JailerOptions: Sendable {
             + apiSocketPathInJail
     }
 
+    /// The per-VM cgroup directory the jailer creates on a cgroup-v2 host when
+    /// cgroup limits are passed: `/sys/fs/cgroup/<parent>/<id>`, where the
+    /// default parent cgroup is the exec file's basename. The jailer never
+    /// removes it — cleanup is the caller's responsibility, which `destroyVM`
+    /// discharges after the process exits.
+    public static func cgroupDirectory(firecrackerBinaryPath: String, vmId: String) -> String {
+        let execName = URL(fileURLWithPath: firecrackerBinaryPath).lastPathComponent
+        return "/sys/fs/cgroup/\(execName)/\(vmId)"
+    }
+
     /// The full jailer argv (excluding argv[0]) for spawning one VM.
     ///
     /// The jailer itself appends `--id <vmId>` to the Firecracker arguments,
