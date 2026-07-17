@@ -250,6 +250,88 @@ final class ImageControllerTests {
         Self.cleanupTempStorageDirectory(tempStoragePath)
     }
 
+    // MARK: - Expected Checksum Tests
+
+    /// A digest that could never match is a client error, not a download that
+    /// runs to completion and then fails verification.
+    @Test(
+        "Create from URL rejects a malformed checksum",
+        arguments: [
+            "deadbeef",  // too short
+            String(repeating: "a", count: 63),  // off by one
+            String(repeating: "a", count: 65),  // off by one the other way
+            String(repeating: "z", count: 64),  // right length, not hex
+        ])
+    func testCreateFromURLRejectsMalformedChecksum(checksum: String) async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .json
+                try req.content.encode(
+                    CreateImageRequest(
+                        name: "bad-checksum",
+                        sourceURL: "https://example.com/disk.qcow2",
+                        checksum: checksum))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("Create from URL stores a valid checksum as the expected digest")
+    func testCreateFromURLStoresExpectedChecksum() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            // Uppercase on the way in: it should be normalised so the
+            // post-download compare can be a plain equality check.
+            let supplied = String(repeating: "AB", count: 32)
+            var imageID: UUID?
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .json
+                try req.content.encode(
+                    CreateImageRequest(
+                        name: "with-checksum",
+                        sourceURL: "https://example.com/disk.qcow2",
+                        checksum: supplied))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                imageID = try res.content.decode(ImageResponse.self).id
+            }
+
+            let id = try #require(imageID)
+            let saved = try await Image.find(id, on: app.db)
+            let image = try #require(saved)
+            #expect(image.expectedChecksum == supplied.lowercased())
+            // The observed digest stays empty until the download actually runs;
+            // the caller's claim must never be mistaken for it.
+            #expect(image.checksum == nil)
+        }
+    }
+
+    @Test("Create from URL leaves the expected digest unset when omitted")
+    func testCreateFromURLWithoutChecksum() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            var imageID: UUID?
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .json
+                try req.content.encode(
+                    CreateImageRequest(
+                        name: "no-checksum",
+                        sourceURL: "https://example.com/disk.qcow2"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                imageID = try res.content.decode(ImageResponse.self).id
+            }
+
+            let id = try #require(imageID)
+            let saved = try await Image.find(id, on: app.db)
+            let image = try #require(saved)
+            #expect(image.expectedChecksum == nil)
+        }
+    }
+
     // MARK: - List Images Tests
 
     @Test("List images returns empty array for new project")

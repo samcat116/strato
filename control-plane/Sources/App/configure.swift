@@ -271,6 +271,9 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(BackfillImageArtifacts())
     app.migrations.add(AddFetchStateToImageArtifact())
 
+    // Caller-supplied checksum for URL imports
+    app.migrations.add(AddExpectedChecksumToImage())
+
     // Hypervisor type migration
     app.migrations.add(AddHypervisorTypeToVM())
     app.migrations.add(AddHypervisorTypeToAgent())

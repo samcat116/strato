@@ -183,6 +183,12 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid source URL")
         }
 
+        // Reject a malformed checksum now rather than after downloading gigabytes
+        // only to fail a comparison it could never have passed. Normalised to
+        // lowercase so the post-download compare is a plain equality check.
+        let expectedChecksum = try createRequest.checksum
+            .map(normalizedExpectedChecksum(_:))
+
         // Extract filename from URL
         let filename = try ImageValidationService.validateFilename(
             url.lastPathComponent.isEmpty ? "image.qcow2" : url.lastPathComponent)
@@ -202,6 +208,7 @@ struct ImageController: RouteCollection {
             defaultDisk: createRequest.defaultDisk,
             defaultCmdline: createRequest.defaultCmdline
         )
+        image.expectedChecksum = expectedChecksum
 
         try await image.save(on: req.db)
 
@@ -252,6 +259,20 @@ struct ImageController: RouteCollection {
     /// Creates a metadata-only image with no artifacts yet (status `.pending`).
     /// Artifacts are attached afterwards via `uploadArtifact`; the image becomes
     /// `.ready` once its artifact set is bootable by some hypervisor.
+    /// Validates a caller-supplied SHA-256 and returns it lowercased.
+    ///
+    /// Anything that isn't exactly 64 hex characters could never match a real
+    /// digest, so it's a client error rather than a download that's doomed to
+    /// fail verification later.
+    private func normalizedExpectedChecksum(_ raw: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let isHex = trimmed.count == 64 && trimmed.allSatisfy(\.isHexDigit)
+        guard isHex else {
+            throw Abort(.badRequest, reason: "Checksum must be a 64-character hex SHA-256 digest")
+        }
+        return trimmed
+    }
+
     private func createEmpty(
         req: Request,
         projectID: UUID,
@@ -384,8 +405,28 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "No file uploaded")
         }
 
-        // Detect format from file header
-        let format = ImageValidationService.detectFormat(from: data)
+        // Detect format from file header, letting an explicit claim override it.
+        // `.raw` is the detector's "no signature matched" answer rather than a
+        // positive identification, so it can't contradict anything — only a
+        // recognised header does, and then the upload is refused rather than
+        // stored under a format the file plainly isn't.
+        let detectedFormat = ImageValidationService.detectFormat(from: data)
+        var format = detectedFormat
+        if let formatString = formData.format {
+            guard let claimed = ImageFormat(rawValue: formatString) else {
+                try await tempImage.delete(on: req.db)
+                throw Abort(.badRequest, reason: "Unknown disk format '\(formatString)'")
+            }
+            if detectedFormat != .raw && detectedFormat != claimed {
+                try await tempImage.delete(on: req.db)
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "Disk format mismatch: file header is \(detectedFormat.rawValue), but '\(claimed.rawValue)' was specified"
+                )
+            }
+            format = claimed
+        }
 
         // Save file to storage
         let relativePath = try await ImageStorageService.saveFile(
@@ -1066,6 +1107,9 @@ struct ImageUploadForm: Content {
     var description: String?
     var file: File?
     var architecture: String?
+    /// Raw value of `ImageFormat`. Optional: omitted means "detect from the
+    /// file header", which is all callers could do before this field existed.
+    var format: String?
     var defaultCpu: Int?
     var defaultMemory: Int?
     var defaultDisk: Int?

@@ -117,8 +117,32 @@ actor ImageFetchService: ImageFetchServiceProtocol {
                 try await self?.updateProgress(imageId: imageId, progress: progress, db: db)
             }
 
-            // Update image with results
             let relativePath = "\(projectId)/\(imageId)/\(image.filename)"
+
+            // Verify against the caller's expected digest before publishing. The
+            // download already hashed every byte in-stream, so this costs nothing
+            // beyond the comparison. A mismatch means the bytes aren't what was
+            // asked for: bin them rather than leave an unreferenced file behind,
+            // and fail the image instead of serving it to an agent.
+            if let expected = image.expectedChecksum, expected != checksum {
+                image.status = .validating
+                try await image.save(on: db)
+
+                try? ImageStorageService.deleteFileAt(
+                    storagePath: storagePath, relativePath: relativePath)
+
+                app.logger.warning(
+                    "Image checksum mismatch",
+                    metadata: [
+                        "image_id": .string(imageId.uuidString),
+                        "expected": .string(expected),
+                        "actual": .string(checksum),
+                    ])
+                throw ImageError.downloadFailed(
+                    "Checksum verification failed: expected \(expected), got \(checksum)")
+            }
+
+            // Update image with results
             image.size = size
             image.checksum = checksum
             image.format = format

@@ -774,7 +774,7 @@ export type ImageStatus =
   | "ready"
   | "error";
 
-export type ImageFormat = "qcow2" | "raw";
+export type ImageFormat = "qcow2" | "raw" | "vmdk" | "vhd" | "vhdx";
 
 export type ArtifactKind = "disk-image" | "kernel" | "initramfs" | "rootfs";
 
@@ -825,6 +825,12 @@ export interface CreateImageRequest {
   description?: string;
   sourceURL?: string;
   architecture?: CPUArchitecture;
+  /** Optional SHA-256 (64 hex chars) the download must match, for URL imports.
+   *  A mismatch fails the image rather than publishing it. */
+  checksum?: string;
+  /** Explicit disk format for uploads. Omit to let the server detect it from
+   *  the file header; only meaningful on the multipart upload path. */
+  format?: ImageFormat;
   defaultCpu?: number;
   defaultMemory?: number;
   defaultDisk?: number;

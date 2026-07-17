@@ -7,6 +7,24 @@ struct ImageValidationService {
     /// QCOW2 magic bytes: 0x514649FB (QFI\xFB)
     static let qcow2Magic: [UInt8] = [0x51, 0x46, 0x49, 0xFB]
 
+    /// Header signatures we can recognise, longest first so a longer signature
+    /// is never shadowed by a shorter prefix.
+    ///
+    /// VHD's `conectix` lives in a 512-byte *footer*; dynamic/differencing VHDs
+    /// repeat it at offset 0, so a header probe catches those but not fixed VHDs.
+    /// A fixed VHD is byte-identical to raw plus a trailing footer, which is why
+    /// it falls through to `.raw` and why the upload form lets callers say so
+    /// explicitly.
+    private static let headerSignatures: [(magic: [UInt8], format: ImageFormat)] = [
+        (Array("vhdxfile".utf8), .vhdx),
+        (Array("conectix".utf8), .vhd),
+        (qcow2Magic, .qcow2),
+        (Array("KDMV".utf8), .vmdk),
+    ]
+
+    /// Number of leading bytes `detectFormat` needs to recognise every signature.
+    static let headerProbeLength = 8
+
     /// Detects the format of an image file by checking magic bytes
     static func detectFormat(filePath: String) throws -> ImageFormat {
         guard FileManager.default.fileExists(atPath: filePath) else {
@@ -18,44 +36,27 @@ struct ImageValidationService {
         }
         defer { try? fileHandle.close() }
 
-        // Read first 4 bytes for magic number detection
-        let headerData = fileHandle.readData(ofLength: 4)
-        guard headerData.count >= 4 else {
-            // If file is too small to have a proper header, assume raw
-            return .raw
-        }
-
-        let bytes = [UInt8](headerData)
-
-        // Check for QCOW2 magic bytes
-        if bytes[0] == qcow2Magic[0] && bytes[1] == qcow2Magic[1] && bytes[2] == qcow2Magic[2]
-            && bytes[3] == qcow2Magic[3]
-        {
-            return .qcow2
-        }
-
-        // If no recognized format, treat as raw
-        return .raw
+        let headerData = fileHandle.readData(ofLength: headerProbeLength)
+        return detectFormat(fromHeader: [UInt8](headerData))
     }
 
     /// Detects format from a ByteBuffer (for in-memory data)
     static func detectFormat(from buffer: ByteBuffer) -> ImageFormat {
-        guard buffer.readableBytes >= 4 else {
-            return .raw
-        }
-
         var tempBuffer = buffer
-        guard let bytes = tempBuffer.readBytes(length: 4) else {
-            return .raw
-        }
+        let available = min(tempBuffer.readableBytes, headerProbeLength)
+        let bytes = tempBuffer.readBytes(length: available) ?? []
+        return detectFormat(fromHeader: bytes)
+    }
 
-        // Check for QCOW2 magic bytes
-        if bytes[0] == qcow2Magic[0] && bytes[1] == qcow2Magic[1] && bytes[2] == qcow2Magic[2]
-            && bytes[3] == qcow2Magic[3]
-        {
-            return .qcow2
+    /// Matches a file header against the known signatures.
+    ///
+    /// Anything unrecognised is reported as `.raw`: raw images have no magic to
+    /// match on, so "no signature" and "raw" are indistinguishable here. Callers
+    /// that know better can override the result with an explicit format.
+    static func detectFormat(fromHeader bytes: [UInt8]) -> ImageFormat {
+        for (magic, format) in headerSignatures where bytes.starts(with: magic) {
+            return format
         }
-
         return .raw
     }
 
@@ -123,7 +124,7 @@ struct ImageValidationService {
         }
 
         // Check for valid extension
-        let validExtensions = ["qcow2", "img", "raw", "iso"]
+        let validExtensions = ["qcow2", "img", "raw", "iso", "vmdk", "vhd", "vhdx"]
         let ext = (sanitized as NSString).pathExtension.lowercased()
         guard validExtensions.contains(ext) || ext.isEmpty else {
             throw ImageError.invalidFormat("Invalid file extension: \(ext)")
