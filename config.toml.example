@@ -204,6 +204,14 @@ log_level = "info"
 # The `--simulate` / `--sim-cpus` / `--sim-memory-mb` / `--sim-disk-gb` CLI
 # flags override these. See agent/scripts/spawn-sim-fleet.sh to launch a whole
 # fleet with a spread of host sizes.
+#
+# IMPORTANT: never register simulated agents in a control plane / org that also
+# has real agents. A simulated agent advertises QEMU and full capacity, so the
+# scheduler and volume selector treat it as a real host — a real VM could be
+# placed on a dummy (and "run" on the mock while nothing executes), or a real
+# volume created on one with a path that does not exist. The control plane
+# cannot yet distinguish simulated agents from real ones; use a dedicated
+# control plane or org for simulation. Tracked in issue #487.
 # [simulation]
 # enabled = true
 #

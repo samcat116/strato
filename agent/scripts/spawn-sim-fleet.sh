@@ -33,9 +33,26 @@
 #   --profiles LIST      Comma-separated host profiles "cpus:memMB:diskGB"
 #                        cycled across the fleet
 #                        (default: 8:16384:256,16:65536:512,32:131072:1024)
+#   --allow-existing-agents
+#                        Skip the pre-launch check that refuses to start when
+#                        the target org already has agents outside this fleet
+#                        (see "Never mix" below). Use only when those are also
+#                        simulated agents.
 #   --stop               Stop all agents recorded for this base-dir
 #   --status             Show running/stopped state for this base-dir
 #   -h, --help           Show this help
+#
+# Never mix simulated and real agents in one control plane / org
+#   A simulated agent advertises QEMU and full capacity, so the scheduler and
+#   the volume selector treat it as a real host. In a control plane that also
+#   has real agents, a real VM can be scheduled onto a dummy (and "run" on the
+#   mock hypervisor while nothing actually runs), and a real volume can be
+#   created on a dummy with a path that does not exist and then fail when a real
+#   workload attaches it. The control plane cannot currently tell simulated
+#   agents from real ones, so the only safe arrangement is a dedicated control
+#   plane or a dedicated org for simulation. As a safeguard the script refuses
+#   to launch into an org that already holds agents outside this fleet; override
+#   with --allow-existing-agents when those are also simulated.
 #
 # Lifecycle
 #   The fleet's PIDs are tracked in <base-dir>/fleet.pids so --stop/--status
@@ -83,6 +100,10 @@ BASE_DIR="/tmp/strato-sim-fleet"
 API_KEY="${STRATO_API_KEY:-}"
 PROFILES="8:16384:256,16:65536:512,32:131072:1024"
 ACTION="start"
+# Refuse to launch into an org that already has agents which are not part of
+# this fleet, since a simulated agent must never share a placement pool with a
+# real one (see the "Never mix" note in the header). Override with the flag.
+ALLOW_EXISTING_AGENTS=0
 # How long --stop waits for agents to exit before SIGKILLing. Names stay
 # reserved (PID records kept) until then, so a late unregister from a
 # straggler can never hit a freshly started agent of the same name.
@@ -102,6 +123,7 @@ while [[ $# -gt 0 ]]; do
     --base-dir) BASE_DIR="$2"; shift 2 ;;
     --api-key) API_KEY="$2"; shift 2 ;;
     --profiles) PROFILES="$2"; shift 2 ;;
+    --allow-existing-agents) ALLOW_EXISTING_AGENTS=1; shift ;;
     --stop) ACTION="stop"; shift ;;
     --status) ACTION="status"; shift ;;
     # Print the header comment block (everything after the shebang up to the
@@ -296,6 +318,41 @@ fi
 AUTH_ARGS=()
 if [[ -n "$API_KEY" ]]; then
   AUTH_ARGS=(-H "Authorization: Bearer $API_KEY")
+fi
+
+# Safety guard: never let a simulated fleet share a control plane with real
+# agents. A simulated agent advertises QEMU and full capacity, so the scheduler
+# and the volume selector treat it as a real host — a real VM can be placed on
+# one (and "run" on the mock), or a real volume can be created on one with a
+# path that does not exist. The control plane has no way to tell simulated from
+# real (that fix is tracked separately), so the only protection is not to mix
+# them. Refuse if the target org already has agents that are not part of THIS
+# fleet (name not prefixed with "$NAME_PREFIX-"); --allow-existing-agents
+# overrides (e.g. two simulated fleets sharing an org on purpose).
+#
+# Best effort: if the list cannot be read (auth, older control plane), warn and
+# proceed rather than block, since the guard is a convenience, not a gate.
+if [[ "$ALLOW_EXISTING_AGENTS" -eq 0 ]]; then
+  agents_json="$(curl -sS "$CONTROL_PLANE/api/agents" \
+    ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} 2>/dev/null || true)"
+  if echo "$agents_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    foreign="$(echo "$agents_json" | jq -r --arg org "$ORG_ID" --arg pre "$NAME_PREFIX-" \
+      '[.[] | select(.organizationId == $org) | select(.name | startswith($pre) | not) | .name] | .[]' \
+      2>/dev/null || true)"
+    if [[ -n "$foreign" ]]; then
+      echo "error: the target org already has agent(s) that are not part of this fleet:" >&2
+      while IFS= read -r a; do [[ -n "$a" ]] && echo "    $a" >&2; done <<< "$foreign"
+      echo "  A simulated fleet must not share a control plane/org with real agents:" >&2
+      echo "  real workloads could be scheduled onto a dummy, or get volumes with" >&2
+      echo "  paths that do not exist. Use a dedicated org or control plane for" >&2
+      echo "  simulation. If these are also simulated agents, re-run with" >&2
+      echo "  --allow-existing-agents." >&2
+      exit 3
+    fi
+  else
+    echo "warning: could not list existing agents to check for a mixed fleet; proceeding." >&2
+    echo "  Make sure this org has no real agents (see --allow-existing-agents)." >&2
+  fi
 fi
 
 # Registration tokens currently known to the control plane, fetched once so a
