@@ -125,3 +125,8 @@ export {
 } from "./use-project-members";
 export { useNetworks, useNetwork, useInvalidateNetworks } from "./use-networks";
 export { useAuditEvents, auditErrorMessage } from "./use-audit-events";
+export {
+  useWorkloadIdentity,
+  isWorkloadIdentityForbidden,
+  workloadIdentityErrorMessage,
+} from "./use-workload-identity";

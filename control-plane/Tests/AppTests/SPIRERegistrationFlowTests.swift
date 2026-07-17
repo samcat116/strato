@@ -646,10 +646,14 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     private var deleteInvalidArgument = false
     private var evictInvalidArgument = false
     private var entryResult: SPIREEntryCreationResult = .created(entryID: "entry-1")
+    private var entries: [SPIREEntry] = []
+    private var agents: [SPIREAgent] = []
 
     func setFailJoinToken(_ fail: Bool) { failJoinToken = fail }
     func setFailCreateEntry(_ fail: Bool) { failCreateEntry = fail }
     func setFailDelete(_ fail: Bool) { failDelete = fail }
+    func setEntries(_ entries: [SPIREEntry]) { self.entries = entries }
+    func setAgents(_ agents: [SPIREAgent]) { self.agents = agents }
     /// deleteEntries throws invalidArgument, as SPIRE does for a malformed
     /// SPIFFE ID filter (legacy agent names with illegal characters).
     func setDeleteInvalidArgument(_ fail: Bool) { deleteInvalidArgument = fail }
@@ -709,4 +713,8 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
         evictedAgentIDs.append(spiffeID)
         return true
     }
+
+    func listEntries() async throws -> [SPIREEntry] { entries }
+
+    func listAgents() async throws -> [SPIREAgent] { agents }
 }

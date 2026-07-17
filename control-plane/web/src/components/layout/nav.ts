@@ -6,6 +6,7 @@ import {
   Container,
   Cpu,
   Database,
+  Fingerprint,
   FolderKanban,
   FolderTree,
   Gauge,
@@ -74,6 +75,12 @@ export const navTree: NavItem[] = [
       { label: "Quotas", href: "/quotas", icon: Gauge },
       { label: "Users", href: "/admin/users", icon: Users, adminOnly: true },
       { label: "API Keys", href: "/settings/api-keys", icon: Key },
+      {
+        label: "Workload Identity",
+        href: "/workload-identity",
+        icon: Fingerprint,
+        adminOnly: true,
+      },
     ],
   },
   {

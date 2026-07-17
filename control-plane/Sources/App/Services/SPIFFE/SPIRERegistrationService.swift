@@ -39,6 +39,20 @@ public struct SPIRERegistrationService: Sendable {
         "spiffe://\(config.trustDomain)/node/\(agentName)"
     }
 
+    /// The trust domain SPIFFE IDs are issued under.
+    public var trustDomain: String { config.trustDomain }
+
+    /// List every workload registration entry known to the SPIRE server.
+    /// Read-only; backs the Workload Identity view.
+    public func listRegistrationEntries() async throws -> [SPIREEntry] {
+        try await api.listEntries()
+    }
+
+    /// List every agent node that has attested to the SPIRE server. Read-only.
+    public func listAttestedNodes() async throws -> [SPIREAgent] {
+        try await api.listAgents()
+    }
+
     /// Provision a node in SPIRE: mint a join token and create the workload
     /// entry. An entry identical to an existing one is reused (idempotent
     /// re-issue after a token expired unredeemed).
