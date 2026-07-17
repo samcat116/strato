@@ -1,10 +1,15 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { sandboxesApi } from "@/lib/api/sandboxes";
+import { useOrganization } from "@/providers";
 
 export function useSandboxes() {
+  const { currentOrg, isLoading: orgLoading } = useOrganization();
+  const organizationId = currentOrg?.id;
+
   return useQuery({
-    queryKey: ["sandboxes"],
-    queryFn: sandboxesApi.list,
+    queryKey: ["sandboxes", { orgId: organizationId ?? null }],
+    queryFn: () => sandboxesApi.list(organizationId),
+    enabled: !orgLoading,
     refetchInterval: 5000, // Poll every 5 seconds
   });
 }
