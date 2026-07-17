@@ -66,11 +66,13 @@ jobs:
       # for a restore that always missed".
       #
       # arm64 runs on an ephemeral GitHub-hosted runner with no persistent
-      # volume, so it builds cold. It used to keep a 1.6GB .build in
-      # actions/cache; that is gone because this repo is private and Actions
-      # storage is now billed against a 500MB account quota that a single
-      # release .build exceeds three times over. Restoring warm arm64 builds
-      # means an arm64 runner with a persistent volume, not actions/cache.
+      # volume, so it stays on actions/cache + the default .build path. That
+      # cache is affordable again for two reasons: the repo is public (Actions
+      # storage is free, with a 10GB cache budget rather than the 500MB quota a
+      # private repo bills against), and #472 moved the Docker layer cache to
+      # GHCR — those type=gha blobs were ~3.8GB of the ~11GB that used to evict
+      # this 1.6GB .build between runs. There is far more headroom now than
+      # before that change.
       - name: Configure release build cache
         run: |
           if [ "${{ matrix.arch }}" = "x64" ]; then
@@ -99,6 +101,21 @@ jobs:
               fi
             fi
           done
+
+      # Cache key salt (`v2`): #386 moved the x64 leg out of the swift job
+      # container, poisoning the pre-#386 .build ModuleCache; the salt bump
+      # sidestepped it. x64 no longer uses this step (see above); arm64 does.
+      - name: Cache Swift packages
+        if: matrix.arch == 'arm64'
+        uses: actions/cache@v4
+        with:
+          path: |
+            control-plane/.build
+            agent/.build
+            shared/.build
+          key: ${{ runner.os }}-${{ matrix.arch }}-swift-release-v2-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-swift-release-v2-
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2

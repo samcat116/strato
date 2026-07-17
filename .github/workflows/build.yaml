@@ -338,11 +338,20 @@ jobs:
         # pkg-config; both are needed to compile the StratoAgent executable.
         run: brew install glib pkg-config
 
-      # No actions/cache for .build: Actions storage is billed against a 500MB
-      # account quota now that this repo is private, and this cache is scoped
-      # per branch — the same 0.51GB key was resident 7 times over (3.6GB) with
-      # one copy per active branch. This job is gated on agent/shared/firecracker
-      # changes, so it is rare enough to eat a cold build.
+      # This cache is branch-scoped, so it lands once per active branch — the
+      # same 0.51GB key was resident 7 times over (3.6GB) at one point. That is
+      # fine against the public repo's 10GB budget, but it is the first thing to
+      # drop if the budget ever gets tight again (this job is gated on
+      # agent/shared/firecracker changes, so cold builds here are rare).
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            agent/.build
+            shared/.build
+          key: macos-agent-swift-${{ hashFiles('agent/Package.resolved', 'shared/Package.resolved') }}
+          restore-keys: |
+            macos-agent-swift-
 
       # Install the toolchain by dropping the swift.org release .pkg directly.
       # vapor/swiftly-action's macOS path runs a Linux-only (apt/dnf/yum)
