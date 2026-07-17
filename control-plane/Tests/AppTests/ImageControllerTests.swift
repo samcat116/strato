@@ -69,6 +69,7 @@ final class ImageControllerTests {
         description: String?,
         filename: String,
         fileContent: ByteBuffer,
+        format: String? = nil,
         boundary: String = "----TestBoundary\(UUID().uuidString)"
     ) -> (Data, String) {
         var body = Data()
@@ -83,6 +84,14 @@ final class ImageControllerTests {
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
             body.append("Content-Disposition: form-data; name=\"description\"\r\n\r\n".data(using: .utf8)!)
             body.append("\(desc)\r\n".data(using: .utf8)!)
+        }
+
+        // Explicit disk format (if provided). Omitting it is the client's
+        // "auto" case: the server detects from the file header instead.
+        if let format {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"format\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(format)\r\n".data(using: .utf8)!)
         }
 
         // File field
@@ -248,6 +257,128 @@ final class ImageControllerTests {
 
         try await app.shutdownForTesting()
         Self.cleanupTempStorageDirectory(tempStoragePath)
+    }
+
+    // MARK: - Explicit Disk Format Tests
+
+    /// The regression behind the "raw .img stored as qcow2" report: an upload
+    /// with no explicit format must be detected, never assumed. `.img` names no
+    /// format, so the bytes are the only evidence.
+    @Test("Upload without an explicit format detects raw from the file header")
+    func testUploadWithoutFormatDetectsRaw() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "raw-img",
+                description: nil,
+                filename: "disk.img",
+                fileContent: Self.createRawBuffer())
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .init(
+                    type: "multipart", subType: "form-data",
+                    parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let image = try res.content.decode(ImageResponse.self)
+                #expect(image.format == .raw)
+            }
+        }
+    }
+
+    /// A headerless file could be raw, a fixed VHD, or a flat VMDK — detection
+    /// can't tell, so an explicit claim of those is taken on trust.
+    @Test("Explicit format is honoured when the header can't contradict it")
+    func testUploadExplicitFormatOnHeaderlessFile() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "flat-vmdk",
+                description: nil,
+                filename: "disk.vmdk",
+                fileContent: Self.createRawBuffer(),
+                format: "vmdk")
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .init(
+                    type: "multipart", subType: "form-data",
+                    parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let image = try res.content.decode(ImageResponse.self)
+                #expect(image.format == .vmdk)
+            }
+        }
+    }
+
+    /// qcow2 always carries its magic, so claiming it for a headerless file is
+    /// refused rather than stored as a format the bytes plainly aren't.
+    @Test("Claiming qcow2 for a file with no qcow2 magic is refused")
+    func testUploadRejectsUndetectableQcow2Claim() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "lying-qcow2",
+                description: nil,
+                filename: "disk.img",
+                fileContent: Self.createRawBuffer(),
+                format: "qcow2")
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .init(
+                    type: "multipart", subType: "form-data",
+                    parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("Claiming raw for a qcow2 file is refused")
+    func testUploadRejectsContradictedClaim() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "lying-raw",
+                description: nil,
+                filename: "disk.qcow2",
+                fileContent: Self.createQCOW2Buffer(),
+                format: "raw")
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .init(
+                    type: "multipart", subType: "form-data",
+                    parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("An unknown disk format is refused")
+    func testUploadRejectsUnknownFormat() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "bogus-format",
+                description: nil,
+                filename: "disk.qcow2",
+                fileContent: Self.createQCOW2Buffer(),
+                format: "wat")
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .init(
+                    type: "multipart", subType: "form-data",
+                    parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
     }
 
     // MARK: - Expected Checksum Tests

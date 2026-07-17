@@ -405,11 +405,12 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "No file uploaded")
         }
 
-        // Detect format from file header, letting an explicit claim override it.
-        // `.raw` is the detector's "no signature matched" answer rather than a
-        // positive identification, so it can't contradict anything — only a
-        // recognised header does, and then the upload is refused rather than
-        // stored under a format the file plainly isn't.
+        // Detect the format from the file header; an explicit claim overrides it,
+        // but only where detection can't contradict it. Two ways it can:
+        // another format's signature is present, or the claimed format is one
+        // that must carry a signature and doesn't. `.raw` on its own means "no
+        // signature matched", which disproves nothing by itself — a raw image
+        // and a flat VMDK are equally headerless.
         let detectedFormat = ImageValidationService.detectFormat(from: data)
         var format = detectedFormat
         if let formatString = formData.format {
@@ -417,13 +418,18 @@ struct ImageController: RouteCollection {
                 try await tempImage.delete(on: req.db)
                 throw Abort(.badRequest, reason: "Unknown disk format '\(formatString)'")
             }
-            if detectedFormat != .raw && detectedFormat != claimed {
-                try await tempImage.delete(on: req.db)
-                throw Abort(
-                    .badRequest,
-                    reason:
-                        "Disk format mismatch: file header is \(detectedFormat.rawValue), but '\(claimed.rawValue)' was specified"
-                )
+            if detectedFormat != claimed {
+                let contradicted =
+                    detectedFormat != .raw
+                    || ImageValidationService.mustHaveHeaderSignature(claimed)
+                if contradicted {
+                    try await tempImage.delete(on: req.db)
+                    throw Abort(
+                        .badRequest,
+                        reason:
+                            "Disk format mismatch: file header is \(detectedFormat.rawValue), but '\(claimed.rawValue)' was specified"
+                    )
+                }
             }
             format = claimed
         }

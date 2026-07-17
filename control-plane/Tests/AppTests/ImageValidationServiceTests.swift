@@ -142,6 +142,22 @@ final class ImageValidationServiceTests {
         #expect(format == .vhdx)
     }
 
+    /// qcow2/vhdx always carry a header signature, so its absence disproves a
+    /// claim of them. A headerless file could genuinely be raw, a fixed VHD, or
+    /// a flat VMDK, so those claims can't be contradicted.
+    @Test(
+        "Formats whose signature is mandatory are identified as such",
+        arguments: [
+            (ImageFormat.qcow2, true),
+            (ImageFormat.vhdx, true),
+            (ImageFormat.raw, false),
+            (ImageFormat.vhd, false),
+            (ImageFormat.vmdk, false),
+        ])
+    func testMustHaveHeaderSignature(format: ImageFormat, expected: Bool) {
+        #expect(ImageValidationService.mustHaveHeaderSignature(format) == expected)
+    }
+
     // MARK: - Format Detection (File Path) Tests
 
     @Test("Detect QCOW2 format from file")

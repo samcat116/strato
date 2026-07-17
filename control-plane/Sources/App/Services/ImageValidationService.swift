@@ -25,6 +25,20 @@ struct ImageValidationService {
     /// Number of leading bytes `detectFormat` needs to recognise every signature.
     static let headerProbeLength = 8
 
+    /// Formats that *always* carry their signature at offset 0, so a header
+    /// probe finding nothing positively disproves a claim of that format.
+    ///
+    /// The others can legitimately look like raw data at the head: a fixed VHD
+    /// is raw sectors plus a footer at EOF, and a monolithic-flat VMDK's header
+    /// is a plain-text descriptor. Claims of those must be taken on trust —
+    /// which is much of the point of letting a caller state the format at all.
+    static func mustHaveHeaderSignature(_ format: ImageFormat) -> Bool {
+        switch format {
+        case .qcow2, .vhdx: return true
+        case .raw, .vhd, .vmdk: return false
+        }
+    }
+
     /// Detects the format of an image file by checking magic bytes
     static func detectFormat(filePath: String) throws -> ImageFormat {
         guard FileManager.default.fileExists(atPath: filePath) else {

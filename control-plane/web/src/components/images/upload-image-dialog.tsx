@@ -33,6 +33,16 @@ import type { CPUArchitecture, ImageFormat } from "@/types/api";
 const ARCHITECTURES: CPUArchitecture[] = ["x86_64", "arm64"];
 const DISK_FORMATS: ImageFormat[] = ["qcow2", "raw", "vmdk", "vhd", "vhdx"];
 
+/**
+ * What the Disk format control can hold. "auto" means "say nothing and let the
+ * server read the file", which is the only honest default: the extension often
+ * doesn't name a format (`.img`, `.iso`, none at all), and defaulting to a
+ * concrete value would post a claim the user never made — the server trusts an
+ * explicit format whenever its own header probe finds no signature, so a raw
+ * `disk.img` would be stored and displayed as qcow2.
+ */
+type FormatChoice = ImageFormat | "auto";
+
 /** The blue accent from the design system. A literal, matching how the rest of
  *  the ported design references it (see organization-switcher, overview chart). */
 const ACCENT = "#3c87dd";
@@ -79,7 +89,7 @@ export function UploadImageDialog({
 
   // Upload-disk tab
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [format, setFormat] = useState<ImageFormat>("qcow2");
+  const [format, setFormat] = useState<FormatChoice>("auto");
   const [dragging, setDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
@@ -102,7 +112,7 @@ export function UploadImageDialog({
     setName("");
     setArchitecture("x86_64");
     setSelectedFile(null);
-    setFormat("qcow2");
+    setFormat("auto");
     setDragging(false);
     setUploadProgress(0);
     setSourceURL("");
@@ -124,10 +134,13 @@ export function UploadImageDialog({
     if (!name) {
       setName(file.name.replace(/\.[^.]+$/, ""));
     }
+    // Prefill only when the extension actually names a format. Anything else
+    // (`.img`, `.iso`, no extension) resets to auto rather than keeping the
+    // previous file's value, which would otherwise be posted as a claim about
+    // this one.
     const ext = file.name.split(".").pop()?.toLowerCase();
-    if (ext && (DISK_FORMATS as string[]).includes(ext)) {
-      setFormat(ext as ImageFormat);
-    }
+    const named = DISK_FORMATS.find((f) => f === ext);
+    setFormat(named ?? "auto");
   };
 
   // --- Derived per-tab state -------------------------------------------------
@@ -155,9 +168,11 @@ export function UploadImageDialog({
   if (tab === "upload") {
     disabled = !selectedFile;
     submitLabel = "Upload image";
-    hint = selectedFile
-      ? `${format} · ${architecture}`
-      : "Select a disk image to continue";
+    hint = !selectedFile
+      ? "Select a disk image to continue"
+      : format === "auto"
+        ? `Format detected on upload · ${architecture}`
+        : `${format} · ${architecture}`;
   } else if (tab === "url") {
     disabled = !urlValid || !name || !checksumValid;
     submitLabel = "Import from URL";
@@ -204,7 +219,13 @@ export function UploadImageDialog({
       void runSubmit(() =>
         uploadImage.mutateAsync({
           file: selectedFile,
-          metadata: { name: name || selectedFile.name, architecture, format },
+          metadata: {
+            name: name || selectedFile.name,
+            architecture,
+            // Omitted on auto so the server detects rather than being handed a
+            // claim; it only overrides detection when told a format explicitly.
+            format: format === "auto" ? undefined : format,
+          },
           onProgress: setUploadProgress,
         }),
       );
@@ -450,9 +471,10 @@ export function UploadImageDialog({
                   <select
                     id="upload-format"
                     value={format}
-                    onChange={(e) => setFormat(e.target.value as ImageFormat)}
+                    onChange={(e) => setFormat(e.target.value as FormatChoice)}
                     className={cn(FIELD_CLASS, "cursor-pointer")}
                   >
+                    <option value="auto">auto (detect)</option>
                     {DISK_FORMATS.map((f) => (
                       <option key={f} value={f}>
                         {f}
