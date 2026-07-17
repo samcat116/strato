@@ -353,12 +353,24 @@ struct AgentController: RouteCollection {
         return try AgentRegistrationTokenResponse(from: token, baseURL: baseURL, spire: spireProvisioning)
     }
 
+    /// GET /api/agents/registration-tokens
+    /// Query params: organization_id (optional) — narrows to one org's hierarchy.
     func listRegistrationTokens(req: Request) async throws -> [AgentRegistrationTokenListItem] {
         let user = try requireUser(req)
+        let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
 
-        let tokens = try await AgentRegistrationToken.query(on: req.db)
-            .sort(\.$createdAt, .descending)
-            .all()
+        // Unlike Site and Agent, a token stores its scope as plain columns rather
+        // than parent relations.
+        var query = AgentRegistrationToken.query(on: req.db).sort(\.$createdAt, .descending)
+        if let orgFilter {
+            query = query.group(.or) { group in
+                group.filter(\.$organizationID == orgFilter.organizationID)
+                if !orgFilter.organizationalUnitIDs.isEmpty {
+                    group.filter(\.$organizationalUnitID ~~ orgFilter.organizationalUnitIDs)
+                }
+            }
+        }
+        let tokens = try await query.all()
 
         // System admins see everything; org admins see the tokens scoped to
         // orgs/OUs they hold manage_agents on. Scopeless tokens (rotated
@@ -478,15 +490,26 @@ struct AgentController: RouteCollection {
 
     // MARK: - Agent Management
 
+    /// GET /api/agents
+    /// Query params: organization_id (optional) — narrows to one org's hierarchy.
     func listAgents(req: Request) async throws -> [AgentResponse] {
         let user = try requireUser(req)
+        let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
 
-        let agents = try await Agent.query(on: req.db)
-            .sort(\.$createdAt, .descending)
-            .all()
+        var query = Agent.query(on: req.db).sort(\.$createdAt, .descending)
+        if let orgFilter {
+            query = query.group(.or) { group in
+                group.filter(\.$organization.$id == orgFilter.organizationID)
+                if !orgFilter.organizationalUnitIDs.isEmpty {
+                    group.filter(\.$organizationalUnit.$id ~~ orgFilter.organizationalUnitIDs)
+                }
+            }
+        }
+        let agents = try await query.all()
 
         // System admins see the whole fleet; everyone else sees the agents
-        // they can view through agent#parent (their orgs'/OUs' capacity).
+        // they can view through agent#parent (their orgs'/OUs' capacity). An
+        // organization_id filter narrows both branches — see listSites.
         let visible: [Agent]
         if user.isSystemAdmin {
             visible = agents

@@ -321,11 +321,10 @@ jobs:
           if-no-files-found: error
 
   # Frontend digests — independent of the Swift binaries; starts immediately.
-  # cache-from maps to the keys main-build actually saves (frontend-x64 /
-  # frontend-arm64 — main-build names the amd64 arch "x64"); tag-scoped runs
-  # can read default-branch caches. No cache-to: a cache saved from a tag ref
-  # is only restorable by that same tag, so writing one is pure churn against
-  # the 10GB budget that evicts the caches main builds depend on.
+  # cache-from maps to the registry cache main-build writes (frontend-x64 /
+  # frontend-arm64 — main-build names the amd64 arch "x64"). No cache-to: a
+  # release builds the same source main already cached, so writing would only
+  # overwrite a warm cache with an identical one.
   build-frontend-digest:
     name: Build Digest (frontend, ${{ matrix.arch }})
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
@@ -370,7 +369,7 @@ jobs:
           outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository }}-frontend,push-by-digest=true,name-canonical=true,push=true
           provenance: false
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,key=frontend-${{ matrix.arch == 'amd64' && 'x64' || matrix.arch }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}-frontend:buildcache-${{ matrix.arch == 'amd64' && 'x64' || matrix.arch }}
           build-args: |
             STRATO_VERSION=${{ github.ref_name }}
             STRATO_GIT_SHA=${{ github.sha }}

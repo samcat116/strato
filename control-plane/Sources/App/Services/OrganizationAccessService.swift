@@ -48,4 +48,72 @@ struct OrganizationAccessService {
             throw Abort(.forbidden, reason: "Admin access required")
         }
     }
+
+    /// The `organization_id` narrowing filter for a list endpoint, resolved from the
+    /// request's query string. Returns nil when the param is absent (list everything
+    /// the caller can see).
+    ///
+    /// Narrowing is not authorization: the caller still gets only the rows their
+    /// per-row permission check allows. This exists so a client that has picked an
+    /// organization — the frontend's sidebar switcher — can ask for that org's rows
+    /// instead of the whole fleet, and so system admins (who bypass the per-row check
+    /// entirely) can scope a list at all.
+    static func organizationListFilter(on req: Request) async throws -> OrganizationListFilter? {
+        guard let raw = req.query[String.self, at: "organization_id"] else { return nil }
+        guard let organizationID = UUID(uuidString: raw) else {
+            // Unlike the older `project_id` filters, a malformed id is rejected rather
+            // than ignored: silently returning the unfiltered fleet is the failure mode
+            // this filter exists to prevent.
+            throw Abort(.badRequest, reason: "Invalid organization_id")
+        }
+        try await requireMember(organizationID: organizationID, on: req)
+        return OrganizationListFilter(
+            organizationID: organizationID,
+            organizationalUnitIDs: try await OrganizationalUnit.query(on: req.db)
+                .filter(\.$organization.$id == organizationID)
+                .all()
+                .compactMap { $0.id }
+        )
+    }
+}
+
+/// An organization to narrow a list endpoint's results to, together with the OUs
+/// rooted in it.
+///
+/// An organization contains every scope rooted in it, so filtering by one must match
+/// OU-scoped rows as well as org-scoped ones (`OrganizationScope.contains`). Every OU
+/// carries a direct `organization_id` regardless of nesting depth, so one query
+/// collects the whole hierarchy — no path walk needed.
+struct OrganizationListFilter: Sendable {
+    let organizationID: UUID
+    let organizationalUnitIDs: [UUID]
+
+    /// Whether a resource with this scope belongs to the filtered organization.
+    ///
+    /// A nil scope is a row the org backfill never reached, not a shared resource, so
+    /// it belongs to no organization and matches nothing.
+    func contains(_ scope: OrganizationScope?) -> Bool {
+        switch scope {
+        case .organization(let id):
+            return id == organizationID
+        case .organizationalUnit(let id):
+            return organizationalUnitIDs.contains(id)
+        case nil:
+            return false
+        }
+    }
+
+    /// The projects in this organization's hierarchy — the bridge for resources that
+    /// reach their org through a project (VMs, sandboxes) rather than owning a scope.
+    func projectIDs(on db: any Database) async throws -> [UUID] {
+        var projects = try await Project.query(on: db)
+            .filter(\.$organization.$id == organizationID)
+            .all()
+        if !organizationalUnitIDs.isEmpty {
+            projects += try await Project.query(on: db)
+                .filter(\.$organizationalUnit.$id ~~ organizationalUnitIDs)
+                .all()
+        }
+        return projects.compactMap { $0.id }
+    }
 }

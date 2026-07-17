@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentsApi } from "@/lib/api/agents";
 import { ApiError } from "@/lib/api/client";
+import { useOrganization } from "@/providers";
 
 /** Listing agents is system-admin-only; regular users get a 403. */
 export function isAgentsForbidden(error: unknown): boolean {
@@ -8,9 +9,18 @@ export function isAgentsForbidden(error: unknown): boolean {
 }
 
 export function useAgents() {
+  const { currentOrg, isLoading: orgLoading } = useOrganization();
+  const organizationId = currentOrg?.id;
+
   return useQuery({
-    queryKey: ["agents"],
-    queryFn: agentsApi.list,
+    // The org id belongs in the key, not just the request: it makes an org
+    // switch refetch on its own, rather than relying on switchOrg remembering
+    // to invalidate this query.
+    queryKey: ["agents", { orgId: organizationId ?? null }],
+    queryFn: () => agentsApi.list(organizationId),
+    // Wait for org resolution so the first fetch is already scoped — an
+    // unscoped fetch would flash the whole fleet before narrowing.
+    enabled: !orgLoading,
     // Poll every 10 seconds — but a 403 is permanent for this session, so
     // don't keep hitting a forbidden endpoint.
     refetchInterval: (query) =>
@@ -29,9 +39,13 @@ export function useAgent(id: string) {
 }
 
 export function useAgentTokens() {
+  const { currentOrg, isLoading: orgLoading } = useOrganization();
+  const organizationId = currentOrg?.id;
+
   return useQuery({
-    queryKey: ["agent-tokens"],
-    queryFn: agentsApi.listTokens,
+    queryKey: ["agent-tokens", { orgId: organizationId ?? null }],
+    queryFn: () => agentsApi.listTokens(organizationId),
+    enabled: !orgLoading,
   });
 }
 
