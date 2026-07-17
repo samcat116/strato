@@ -51,6 +51,12 @@ public protocol SPIREServerAPI: Sendable {
     /// List every agent node that has attested to the SPIRE server. Read-only;
     /// used to surface node attestation state in the UI.
     func listAgents() async throws -> [SPIREAgent]
+
+    /// List the trust domain's federation relationships — the peer trust
+    /// domains this server federates with — including the peer bundle SPIRE
+    /// currently holds for each. Read-only; backs the Federation panel of the
+    /// Workload Identity view.
+    func listFederationRelationships() async throws -> [SPIREFederationRelationship]
 }
 
 // MARK: - Data types
@@ -182,6 +188,47 @@ public struct SPIREAgent: Sendable, Equatable {
     }
 }
 
+/// A federation relationship as reported by the SPIRE server's trustdomain
+/// read API: a peer trust domain this server federates with, plus a summary of
+/// the peer bundle SPIRE currently holds for it. A read-only projection of
+/// `spire.api.types.FederationRelationship`.
+///
+/// SPIRE does not expose an explicit per-relationship health field, so callers
+/// infer sync state from `bundleX509AuthorityCount`: SPIRE only holds a peer
+/// bundle once it has successfully fetched (or been bootstrapped with) one, so
+/// a populated bundle means the relationship has synced at least once.
+public struct SPIREFederationRelationship: Sendable, Equatable {
+    /// The peer trust domain name (e.g. `partner.example`), without scheme.
+    public let trustDomain: String
+    /// URL of the peer's SPIFFE bundle endpoint.
+    public let bundleEndpointURL: String
+    /// Endpoint profile: `https_spiffe`, `https_web`, or `unknown`.
+    public let bundleEndpointProfile: String
+    /// Expected SPIFFE ID of the bundle endpoint (`https_spiffe` profile only).
+    public let endpointSPIFFEID: String?
+    /// X.509 authorities in the peer bundle SPIRE currently holds; `0` when no
+    /// bundle has been fetched or bootstrapped yet.
+    public let bundleX509AuthorityCount: Int
+    /// Sequence number of the held peer bundle; `0` when absent.
+    public let bundleSequenceNumber: UInt64
+
+    public init(
+        trustDomain: String,
+        bundleEndpointURL: String,
+        bundleEndpointProfile: String,
+        endpointSPIFFEID: String?,
+        bundleX509AuthorityCount: Int,
+        bundleSequenceNumber: UInt64
+    ) {
+        self.trustDomain = trustDomain
+        self.bundleEndpointURL = bundleEndpointURL
+        self.bundleEndpointProfile = bundleEndpointProfile
+        self.endpointSPIFFEID = endpointSPIFFEID
+        self.bundleX509AuthorityCount = bundleX509AuthorityCount
+        self.bundleSequenceNumber = bundleSequenceNumber
+    }
+}
+
 public enum SPIREServerAPIError: Error, LocalizedError {
     case invalidAddress(String)
     case unreachable(String)
@@ -289,6 +336,11 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
     private static let listAgentsDescriptor = MethodDescriptor(
         service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.agent.v1.Agent"),
         method: "ListAgents"
+    )
+
+    private static let listFederationRelationshipsDescriptor = MethodDescriptor(
+        service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.trustdomain.v1.TrustDomain"),
+        method: "ListFederationRelationships"
     )
 
     /// google.rpc.Code values SPIRE reports in per-entry batch results.
@@ -452,6 +504,32 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
         return agents
     }
 
+    public func listFederationRelationships() async throws -> [SPIREFederationRelationship] {
+        var relationships: [SPIREFederationRelationship] = []
+        var pageToken = ""
+        repeat {
+            var request = Spire_Api_Server_Trustdomain_V1_ListFederationRelationshipsRequest()
+            request.pageSize = Self.listPageSize
+            request.pageToken = pageToken
+            // Ask for the stored peer bundle (and the other maskable fields) so
+            // the read model can report sync state; an unset mask would let the
+            // server omit the bundle.
+            var mask = Spire_Api_Types_FederationRelationshipMask()
+            mask.bundleEndpointURL = true
+            mask.bundleEndpointProfile = true
+            mask.trustDomainBundle = true
+            request.outputMask = mask
+
+            let response: Spire_Api_Server_Trustdomain_V1_ListFederationRelationshipsResponse =
+                try await unary(request, descriptor: Self.listFederationRelationshipsDescriptor)
+
+            relationships.append(
+                contentsOf: response.federationRelationships.map(Self.federationRelationship(from:)))
+            pageToken = response.nextPageToken
+        } while !pageToken.isEmpty
+        return relationships
+    }
+
     // MARK: Read-model mapping
 
     private static func date(fromEpochSeconds seconds: Int64) -> Date? {
@@ -477,6 +555,37 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
             hint: proto.hint,
             expiresAt: date(fromEpochSeconds: proto.expiresAt),
             createdAt: date(fromEpochSeconds: proto.createdAt)
+        )
+    }
+
+    private static func federationRelationship(
+        from proto: Spire_Api_Types_FederationRelationship
+    ) -> SPIREFederationRelationship {
+        let profile: String
+        var endpointSPIFFEID: String?
+        switch proto.bundleEndpointProfile {
+        case .httpsSpiffe(let spiffe):
+            profile = "https_spiffe"
+            endpointSPIFFEID = spiffe.endpointSpiffeID.isEmpty ? nil : spiffe.endpointSpiffeID
+        case .httpsWeb:
+            profile = "https_web"
+        case nil:
+            profile = "unknown"
+        }
+
+        // `trust_domain_bundle` is only populated once SPIRE holds a bundle for
+        // the peer; treat its absence as "no authorities" so callers read it as
+        // not-yet-synced rather than crashing on the default-empty message.
+        let x509Count = proto.hasTrustDomainBundle ? proto.trustDomainBundle.x509Authorities.count : 0
+        let sequence = proto.hasTrustDomainBundle ? proto.trustDomainBundle.sequenceNumber : 0
+
+        return SPIREFederationRelationship(
+            trustDomain: proto.trustDomain,
+            bundleEndpointURL: proto.bundleEndpointURL,
+            bundleEndpointProfile: profile,
+            endpointSPIFFEID: endpointSPIFFEID,
+            bundleX509AuthorityCount: x509Count,
+            bundleSequenceNumber: sequence
         )
     }
 

@@ -17,6 +17,12 @@ spec:
       port: {{ .Values.spire.service.federationPort }}
       targetPort: federation
       protocol: TCP
+    {{- if and .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
+    - name: metrics
+      port: 9988
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
   selector:
     {{- include "strato-control-plane.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: spire-server

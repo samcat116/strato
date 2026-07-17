@@ -34,6 +34,15 @@ data:
           - targets: ['{{ include "strato-control-plane.fullname" . }}-otel-collector:{{ .Values.opentelemetry.collector.service.prometheusPort }}']
       {{- end }}
 
+      {{- if .Values.spire.enabled }}
+      # Scrape SPIRE server telemetry (SVID-signing counters) for the control
+      # plane's Workload Identity "Issuance" panel. See the SPIRE server
+      # ConfigMap telemetry block.
+      - job_name: 'spire-server'
+        static_configs:
+          - targets: ['{{ include "strato-control-plane.fullname" . }}-spire-server:9988']
+      {{- end }}
+
       # NOTE: the control plane is deliberately not scraped directly — it has
       # no /metrics endpoint; its metrics arrive via OTLP through the
       # collector's prometheusremotewrite exporter.

@@ -2,13 +2,15 @@
 
 The `*.pb.swift` files are generated from the protos under `proto/`, vendored
 unmodified from [spiffe/spire-api-sdk](https://github.com/spiffe/spire-api-sdk)
-(commit `b47aae818391451b49e329e05a8888276b493150`): the `Agent` and `Entry`
-server services plus the `spire/api/types` messages they reference.
+(commit `b47aae818391451b49e329e05a8888276b493150`): the `Agent`, `Entry`, and
+`TrustDomain` server services plus the `spire/api/types` messages they
+reference (including `federationrelationship` and `bundle`).
 
 Only the protobuf *messages* are generated; `SPIREServerAPIClient` invokes the
 RPCs it needs (`CreateJoinToken`, `BatchCreateEntry`, `ListEntries`,
-`BatchDeleteEntry`) with manual `MethodDescriptor`s, so no gRPC codegen plugin
-is required and CI needs no protoc.
+`BatchDeleteEntry`, `ListAgents`, `ListFederationRelationships`) with manual
+`MethodDescriptor`s, so no gRPC codegen plugin is required and CI needs no
+protoc.
 
 To regenerate after updating the vendored protos:
 

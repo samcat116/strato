@@ -1260,16 +1260,18 @@ export interface FederatedDomain {
 }
 
 /**
- * Federation relationships. `available` is false until the control plane wires
- * SPIRE's federation-relationship API; `domains` is still populated from the
- * trust domains entries federate with, with `state: unknown`.
+ * Federation relationships. When `available` is true, `domains` are the trust
+ * domain's configured relationships with real sync state from SPIRE; when
+ * false (unconfigured, or the trustdomain API was unreachable) `domains`
+ * degrades to the trust domains entries federate with, with `state: unknown`.
  */
 export interface FederationInfo {
   available: boolean;
   domains: FederatedDomain[];
 }
 
-/** SVID issuance metrics. Placeholder until issuance telemetry is collected. */
+/** SVID issuance metrics read from the configured metrics store; `available`
+ * is false when no source is wired or the query failed. */
 export interface IssuanceInfo {
   available: boolean;
   windowHours: number;

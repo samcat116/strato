@@ -233,6 +233,15 @@ spec:
             # server Service.
             - name: SPIRE_SERVER_API_ADDRESS
               value: "{{ .Values.spire.controlPlane.serverApiAddress | default (printf "%s-spire-server.%s.svc.cluster.local:%v" (include "strato-control-plane.fullname" .) .Release.Namespace .Values.spire.service.grpcPort) }}"
+            {{- if and .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
+            # Workload Identity "Issuance" panel: read SPIRE's SVID-signing
+            # counters from this chart's Prometheus over a rolling 24h window.
+            # Metric names default to SPIRE's server CA counters; override with
+            # SPIRE_METRICS_X509_SVID_METRIC / SPIRE_METRICS_JWT_SVID_METRIC if a
+            # SPIRE version renames them.
+            - name: SPIRE_METRICS_PROMETHEUS_URL
+              value: "http://{{ include "strato-control-plane.fullname" . }}-prometheus:{{ .Values.opentelemetry.prometheus.service.port }}"
+            {{- end }}
             {{- if .Values.spire.notifier.k8sbundle.enabled }}
             # Trust bundle published to a ConfigMap by SPIRE's k8sbundle
             # notifier and mounted below. With it the control plane re-verifies

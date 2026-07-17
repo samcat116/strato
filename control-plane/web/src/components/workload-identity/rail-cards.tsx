@@ -94,9 +94,11 @@ export function NodeAttestationCard({ groups }: { groups: NodeAttestationGroup[]
 }
 
 /**
- * Federation relationships. Placeholder: `available` is false until the
- * federation-relationship API is wired, so sync-state is shown as "unknown".
- * Domains are still surfaced from what entries federate with.
+ * Federation relationships. When `available` is true these are the trust
+ * domain's configured relationships with real sync state from SPIRE; when
+ * false (unconfigured, or the trustdomain API was unreachable) the card
+ * degrades to the domains entries federate with, shows a "Preview" badge, and
+ * renders sync state as "unknown".
  */
 export function FederationCard({ federation }: { federation: FederationInfo }) {
   const stateClass: Record<string, string> = {
@@ -147,8 +149,9 @@ export function FederationCard({ federation }: { federation: FederationInfo }) {
 }
 
 /**
- * SVID issuance over a rolling window. Placeholder: issuance telemetry is not
- * yet collected, so this shows an unavailable state until metrics land.
+ * SVID issuance over a rolling window, read from the configured metrics store
+ * (Prometheus). Shows a "Preview" badge and an unavailable state when no
+ * metrics source is wired or a query failed.
  */
 export function IssuanceCard({ issuance }: { issuance: IssuanceInfo }) {
   return (

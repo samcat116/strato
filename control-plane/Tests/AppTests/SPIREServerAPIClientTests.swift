@@ -212,6 +212,61 @@ struct SPIREServerAPIClientTests {
         }
     }
 
+    @Test("listFederationRelationships maps profiles and bundle state across pages", .timeLimit(.minutes(1)))
+    func listFederationRelationshipsMapsAndPaginates() async throws {
+        let state = FakeSPIREServerState()
+
+        var withBundle = Spire_Api_Types_FederationRelationship()
+        withBundle.trustDomain = "partner.example"
+        withBundle.bundleEndpointURL = "https://partner.example/bundle"
+        var spiffeProfile = Spire_Api_Types_HTTPSSPIFFEProfile()
+        spiffeProfile.endpointSpiffeID = "spiffe://partner.example/spire/server"
+        withBundle.httpsSpiffe = spiffeProfile
+        var bundle = Spire_Api_Types_Bundle()
+        bundle.trustDomain = "partner.example"
+        var authority = Spire_Api_Types_X509Certificate()
+        authority.asn1 = Data([0x30, 0x01])
+        bundle.x509Authorities = [authority, authority]
+        bundle.sequenceNumber = 7
+        withBundle.trustDomainBundle = bundle
+
+        var pending = Spire_Api_Types_FederationRelationship()
+        pending.trustDomain = "pending.example"
+        pending.bundleEndpointURL = "https://pending.example/bundle"
+        pending.httpsWeb = Spire_Api_Types_HTTPSWebProfile()
+
+        // Two pages, so the client must follow the nextPageToken.
+        await state.setFederationPages([[withBundle], [pending]])
+
+        try await withFakeSPIREServer(state: state) { client in
+            let relationships = try await client.listFederationRelationships()
+            #expect(relationships.count == 2)
+
+            let partner = try #require(relationships.first { $0.trustDomain == "partner.example" })
+            #expect(partner.bundleEndpointProfile == "https_spiffe")
+            #expect(partner.endpointSPIFFEID == "spiffe://partner.example/spire/server")
+            #expect(partner.bundleX509AuthorityCount == 2)
+            #expect(partner.bundleSequenceNumber == 7)
+
+            let notFetched = try #require(relationships.first { $0.trustDomain == "pending.example" })
+            #expect(notFetched.bundleEndpointProfile == "https_web")
+            #expect(notFetched.endpointSPIFFEID == nil)
+            #expect(notFetched.bundleX509AuthorityCount == 0)
+
+            // The output mask must request the bundle so sync state is knowable,
+            // and pagination must carry the server's page token on the 2nd call.
+            // Pagination: the first call sends no token and the client follows
+            // the server's nextPageToken on the second page; the request must
+            // also ask for the bundle via the output mask so sync state is
+            // knowable. (Asserted by content, not exact count, to stay robust.)
+            let requests = await state.listFederationRequests
+            let tokens = requests.map(\.pageToken)
+            #expect(requests.first?.outputMask.trustDomainBundle == true)
+            #expect(tokens.first == "", "tokens=\(tokens)")
+            #expect(tokens.contains("fed-page-1"), "tokens=\(tokens)")
+        }
+    }
+
     @Test("A missing Unix socket is reported as unreachable")
     func missingSocketUnreachable() async throws {
         let client = SPIREServerAPIClient(
@@ -264,6 +319,30 @@ private actor FakeSPIREServerState {
     private(set) var deleteRequests: [Spire_Api_Server_Entry_V1_BatchDeleteEntryRequest] = []
     private(set) var deleteAgentRequests: [Spire_Api_Server_Agent_V1_DeleteAgentRequest] = []
     private(set) var deleteAgentNotFound = false
+    private(set) var listFederationRequests: [Spire_Api_Server_Trustdomain_V1_ListFederationRelationshipsRequest] =
+        []
+    private var federationPages: [[Spire_Api_Types_FederationRelationship]] = []
+
+    /// Serve ListFederationRelationships results one page at a time. Paging is
+    /// idempotent — keyed on the request's page token rather than a destructive
+    /// queue — so a transparently retried request returns the same page instead
+    /// of advancing, keeping the pagination test deterministic.
+    func setFederationPages(_ pages: [[Spire_Api_Types_FederationRelationship]]) {
+        self.federationPages = pages
+    }
+
+    func federationPage(for pageToken: String) -> (
+        relationships: [Spire_Api_Types_FederationRelationship], nextPageToken: String
+    ) {
+        let index = pageToken.isEmpty ? 0 : (Int(pageToken.split(separator: "-").last ?? "") ?? 0)
+        guard index < federationPages.count else { return ([], "") }
+        let nextToken = index + 1 < federationPages.count ? "fed-page-\(index + 1)" : ""
+        return (federationPages[index], nextToken)
+    }
+
+    func recordListFederation(_ request: Spire_Api_Server_Trustdomain_V1_ListFederationRelationshipsRequest) {
+        listFederationRequests.append(request)
+    }
 
     func setDeleteAgentNotFound(_ notFound: Bool) {
         self.deleteAgentNotFound = notFound
@@ -420,6 +499,25 @@ private struct FakeSPIREServerService: RegistrableRPCService {
                 result.status.code = 0
                 return result
             }
+            return Self.singleResponse(response)
+        }
+
+        router.registerHandler(
+            forMethod: MethodDescriptor(
+                service: ServiceDescriptor(
+                    fullyQualifiedService: "spire.api.server.trustdomain.v1.TrustDomain"),
+                method: "ListFederationRelationships"
+            ),
+            deserializer: ProtobufDeserializer<Spire_Api_Server_Trustdomain_V1_ListFederationRelationshipsRequest>(),
+            serializer: ProtobufSerializer<Spire_Api_Server_Trustdomain_V1_ListFederationRelationshipsResponse>()
+        ) { request, _ in
+            let message = try await Self.singleMessage(request)
+            await self.state.recordListFederation(message)
+
+            let page = await self.state.federationPage(for: message.pageToken)
+            var response = Spire_Api_Server_Trustdomain_V1_ListFederationRelationshipsResponse()
+            response.federationRelationships = page.relationships
+            response.nextPageToken = page.nextPageToken
             return Self.singleResponse(response)
         }
     }
