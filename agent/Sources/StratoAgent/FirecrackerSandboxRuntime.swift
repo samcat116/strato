@@ -51,6 +51,12 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// Whether newly created sandboxes get the jailer barrier
     /// (`sandbox_jailer_mode` resolution — see `SandboxJailerMode`).
     private let jailNewSandboxes: Bool
+    /// Non-nil when `sandbox_jailer_mode = "required"` is unmet on this host:
+    /// creating a sandbox is refused (running one unjailed is not an option),
+    /// while everything an *existing* sandbox needs — adoption, status, stop,
+    /// delete — keeps working, since none of it spawns a new jailer. Without
+    /// this, jailed orphans would outlive their deletion unmanaged.
+    private let jailerBlockedReason: String?
     /// Logged once: cgroup-v1 hosts get no jailer memory ceiling.
     private var warnedCgroupV1 = false
 
@@ -140,7 +146,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         guestImagePath: String,
         firecrackerBinaryPath: String,
         jailer: SandboxJailerConfig,
-        jailNewSandboxes: Bool
+        jailNewSandboxes: Bool,
+        jailerBlockedReason: String? = nil
     ) {
         self.logger = logger
         self.client = client
@@ -151,6 +158,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.jailerConfig = jailer
         self.jailNewSandboxes = jailNewSandboxes
+        self.jailerBlockedReason = jailerBlockedReason
 
         logger.info(
             "Sandbox runtime initialized",
@@ -173,6 +181,14 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // no-op (the Firecracker process is already configured).
         if sandboxes[sandboxId] != nil {
             return
+        }
+
+        // The jailer is required but unusable: creating this sandbox would
+        // mean running an untrusted workload unjailed, which `required`
+        // forbids. (Normally unreachable — the capability is dark — but a
+        // stray desired entry must fail here, not fall through.)
+        if let jailerBlockedReason {
+            throw SandboxRuntimeError.jailerRequiredUnavailable(jailerBlockedReason)
         }
 
         // v1 has no in-guest networking: the guest init mounts the rootfs and
@@ -444,14 +460,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         }
 
         // A jailed orphan's socket lives inside its chroot, an unjailed one's
-        // in the flat socket directory. Both layouts are always probed — a
-        // running process keeps whatever barrier it was born with, so orphans
-        // survive an operator flipping `sandbox_jailer_mode` between agent
-        // lives in either direction.
-        let jailPlan: SandboxJailPlan?
-        let jailOptions: JailerOptions?
-        let socketPath: String
-        let flatSocketPath = FirecrackerClient.socketPath(socketDirectory: socketDirectory, vmId: sandboxId)
+        // in the flat socket directory — and both files can exist at once (a
+        // stale chroot left by a crashed jailed life beside a live unjailed
+        // recreation, or vice versa). A running process keeps whatever barrier
+        // it was born with, so every layout whose socket exists is *attempted*,
+        // jail first; only a candidate whose socket is dead falls through to
+        // the next, and existence alone never rules the live one out.
+        var candidates: [(jailPlan: SandboxJailPlan?, jailOptions: JailerOptions?, socketPath: String)] = []
         let jailedSocketPath = JailerOptions.socketPath(
             chrootBaseDir: jailerConfig.chrootBaseDir,
             firecrackerBinaryPath: firecrackerBinaryPath,
@@ -459,39 +474,51 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         if FileManager.default.fileExists(atPath: jailedSocketPath) {
             let plan = SandboxJailPlan(
                 sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
-            jailPlan = plan
-            jailOptions = JailerOptions(
-                jailerBinaryPath: jailerConfig.jailerBinaryPath,
-                chrootBaseDir: jailerConfig.chrootBaseDir,
-                uid: plan.uid, gid: plan.gid)
-            socketPath = jailedSocketPath
-        } else if FileManager.default.fileExists(atPath: flatSocketPath) {
-            jailPlan = nil
-            jailOptions = nil
-            socketPath = flatSocketPath
-        } else {
+            candidates.append(
+                (
+                    plan,
+                    JailerOptions(
+                        jailerBinaryPath: jailerConfig.jailerBinaryPath,
+                        chrootBaseDir: jailerConfig.chrootBaseDir,
+                        uid: plan.uid, gid: plan.gid),
+                    jailedSocketPath
+                ))
+        }
+        let flatSocketPath = FirecrackerClient.socketPath(socketDirectory: socketDirectory, vmId: sandboxId)
+        if FileManager.default.fileExists(atPath: flatSocketPath) {
+            candidates.append((nil, nil, flatSocketPath))
+        }
+        guard !candidates.isEmpty else {
             throw SandboxRuntimeError.adoptionTargetGone(
                 "sandbox \(sandboxId) has no Firecracker API socket at \(flatSocketPath) nor inside its jail")
         }
 
-        logger.info(
-            "Re-adopting orphaned sandbox",
-            metadata: [
-                "sandboxId": .string(sandboxId),
-                "socket": .string(socketPath),
-                "jailed": .stringConvertible(jailPlan != nil),
-            ])
-
-        let manager: FirecrackerManager
-        let info: InstanceInfo
-        do {
-            (manager, info) = try await client.adoptVM(vmId: sandboxId, jail: jailOptions)
-        } catch {
-            // A live Firecracker always answers its API socket, so a failed
-            // connect means the process is gone and the socket merely outlived
-            // it. The Agent re-creates from the desired entry in that case.
+        var adoption: (manager: FirecrackerManager, info: InstanceInfo, jailPlan: SandboxJailPlan?)?
+        var lastError: Error?
+        for candidate in candidates {
+            logger.info(
+                "Re-adopting orphaned sandbox",
+                metadata: [
+                    "sandboxId": .string(sandboxId),
+                    "socket": .string(candidate.socketPath),
+                    "jailed": .stringConvertible(candidate.jailPlan != nil),
+                ])
+            do {
+                let (manager, info) = try await client.adoptVM(vmId: sandboxId, jail: candidate.jailOptions)
+                adoption = (manager, info, candidate.jailPlan)
+                break
+            } catch {
+                // A live Firecracker always answers its API socket, so a failed
+                // connect means this candidate's process is gone and its socket
+                // merely outlived it — try the next layout.
+                lastError = error
+            }
+        }
+        guard let (manager, info, jailPlan) = adoption else {
+            // Every candidate socket is dead. The Agent re-creates from the
+            // desired entry in that case.
             throw SandboxRuntimeError.adoptionTargetGone(
-                "sandbox \(sandboxId) Firecracker API socket at \(socketPath) is dead: \(error.localizedDescription)"
+                "sandbox \(sandboxId) has no live Firecracker API socket: \(lastError?.localizedDescription ?? "unknown error")"
             )
         }
 

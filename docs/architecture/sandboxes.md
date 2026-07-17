@@ -423,8 +423,11 @@ Firecracker release tarball; `task install-firecracker` and the agent's
 default binary probe both know it) — and otherwise logs a prominent warning
 and runs unjailed, keeping dev hosts working. `required` is the production
 posture: if the jailer is unusable the agent **does not advertise the sandbox
-capability** (the probe reports why), because silently running untrusted
-workloads unjailed on a host that demanded hardening is not an option.
+capability** (the probe reports why) and the runtime refuses creates, because
+silently running untrusted workloads unjailed on a host that demanded
+hardening is not an option — while *existing* sandboxes stay fully manageable
+(adopt/stop/delete need no new jailer spawn), so they never outlive their
+deletion unmanaged.
 `disabled` is the debugging escape hatch. Related knobs:
 `sandbox_jailer_binary_path`, `sandbox_jailer_chroot_dir` (default
 `<vm_storage_dir>/jailer` — each jail holds a full writable rootfs copy, so

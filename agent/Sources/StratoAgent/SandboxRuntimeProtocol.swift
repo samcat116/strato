@@ -121,10 +121,15 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
     /// filesystem/tooling operations a retry can succeed at once the host
     /// condition (disk pressure, an iproute2 hiccup) clears.
     case jailSetupFailed(String)
+    /// `sandbox_jailer_mode = "required"` is unmet on this host, so creating
+    /// a sandbox (which would have to run unjailed) is refused; existing
+    /// sandboxes are still adopted and torn down. Permanent: only a host or
+    /// config change (and an agent restart) can satisfy the mode.
+    case jailerRequiredUnavailable(String)
 
     var failureClassification: FailureClassification {
         switch self {
-        case .runtimeUnavailable, .unsupportedStep, .networkingUnsupported:
+        case .runtimeUnavailable, .unsupportedStep, .networkingUnsupported, .jailerRequiredUnavailable:
             return .permanent
         case .sandboxNotFound, .adoptionTargetGone, .execSessionNotFound, .jailSetupFailed:
             return .transient
@@ -147,6 +152,8 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
             return "networked sandboxes are not supported yet (the guest image has no in-guest networking)"
         case .jailSetupFailed(let reason):
             return "sandbox jail setup failed: \(reason)"
+        case .jailerRequiredUnavailable(let reason):
+            return "sandbox_jailer_mode is 'required' but the jailer is unusable: \(reason)"
         }
     }
 }

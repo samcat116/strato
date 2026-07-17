@@ -503,28 +503,30 @@ actor Agent {
                     }
                 case .blocked(let reason):
                     // `required` unmet: keep the capability dark (see
-                    // registerWithControlPlane) and leave the runtime nil so a
-                    // stray desired sandbox fails fast instead of running unjailed.
+                    // registerWithControlPlane) and make the runtime refuse
+                    // creates. The runtime itself is still constructed —
+                    // adopting, stopping, and deleting *existing* jailed
+                    // sandboxes needs no new jailer spawn, and skipping it
+                    // would leave their processes running unmanaged.
                     sandboxJailerBlockedReason = reason
                     logger.error(
                         "sandbox_jailer_mode is 'required' but the jailer is unusable; sandbox capability disabled",
                         metadata: ["reason": .string(reason)])
                 }
 
-                if sandboxJailerBlockedReason == nil {
-                    logger.info("Initializing sandbox runtime (Linux only)")
-                    sandboxRuntime = FirecrackerSandboxRuntime(
-                        logger: logger,
-                        client: firecrackerClient,
-                        imageService: SandboxImageService(logger: logger),
-                        socketDirectory: firecrackerSocketDir,
-                        sandboxStoragePath: vmStoragePath,
-                        guestImagePath: sandboxGuestImagePath,
-                        firecrackerBinaryPath: firecrackerBinaryPath,
-                        jailer: jailerConfig,
-                        jailNewSandboxes: jailNewSandboxes
-                    )
-                }
+                logger.info("Initializing sandbox runtime (Linux only)")
+                sandboxRuntime = FirecrackerSandboxRuntime(
+                    logger: logger,
+                    client: firecrackerClient,
+                    imageService: SandboxImageService(logger: logger),
+                    socketDirectory: firecrackerSocketDir,
+                    sandboxStoragePath: vmStoragePath,
+                    guestImagePath: sandboxGuestImagePath,
+                    firecrackerBinaryPath: firecrackerBinaryPath,
+                    jailer: jailerConfig,
+                    jailNewSandboxes: jailNewSandboxes,
+                    jailerBlockedReason: sandboxJailerBlockedReason
+                )
             } else {
                 logger.info("Sandbox guest image path not configured; sandbox runtime disabled")
             }
