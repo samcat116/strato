@@ -362,21 +362,34 @@ actor Agent {
             }
         }
 
-        // Initialize image cache service
-        logger.info("Initializing image cache service")
-        imageCacheService = ImageCacheService(
-            logger: logger,
-            cachePath: imageCachePath,
-            controlPlaneURL: webSocketURL.replacingOccurrences(of: "ws://", with: "http://")
-                .replacingOccurrences(of: "wss://", with: "https://")
-                .replacingOccurrences(of: "/agent/ws", with: "")
-        )
+        // Storage. A simulated agent still attracts volume work — it advertises
+        // QEMU, and volume placement picks any online agent that supports it —
+        // so the backend must be mocked too. Backing a dummy with the real one
+        // would qemu-img a file per volume and pull the whole image through the
+        // cache first; across a fleet that is enough disk and network traffic to
+        // take out the host, and it would contradict the mode's promise of no
+        // real storage. The image cache is skipped entirely for the same reason:
+        // nothing in simulation may fetch image bytes.
+        let storageBackend: any StorageBackend
+        if isSimulationMode {
+            logger.info("Simulation mode: registering mock storage backend (no image cache)")
+            storageBackend = MockStorageBackend(logger: logger)
+        } else {
+            logger.info("Initializing image cache service")
+            imageCacheService = ImageCacheService(
+                logger: logger,
+                cachePath: imageCachePath,
+                controlPlaneURL: webSocketURL.replacingOccurrences(of: "ws://", with: "http://")
+                    .replacingOccurrences(of: "wss://", with: "https://")
+                    .replacingOccurrences(of: "/agent/ws", with: "")
+            )
 
-        logger.info("Initializing storage backend")
-        let storageBackend = FileSystemStorageBackend(
-            logger: logger,
-            imageSource: imageCacheService
-        )
+            logger.info("Initializing storage backend")
+            storageBackend = FileSystemStorageBackend(
+                logger: logger,
+                imageSource: imageCacheService
+            )
+        }
         self.storageBackend = storageBackend
 
         if isSimulationMode {
