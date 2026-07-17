@@ -46,6 +46,18 @@ struct AgentOptions: ParsableArguments {
     @Option(name: .long, help: "Path to the join state file (overrides config file)")
     var stateFile: String?
 
+    @Flag(name: .long, help: "Run as a simulated 'dummy' agent: no real VMs, fake capacity (for scale testing)")
+    var simulate: Bool = false
+
+    @Option(name: .long, help: "Simulated logical CPU core count (simulation mode; overrides config)")
+    var simCpus: Int?
+
+    @Option(name: .long, help: "Simulated total memory in MB (simulation mode; overrides config)")
+    var simMemoryMb: Int?
+
+    @Option(name: .long, help: "Simulated total disk in GB (simulation mode; overrides config)")
+    var simDiskGb: Int?
+
     @Flag(name: .long, help: "Enable debug mode")
     var debug: Bool = false
 }
@@ -261,6 +273,20 @@ private func launchAgent(
     // Resolve hypervisor type
     let finalHypervisorType = config.hypervisorType ?? AgentConfig.defaultHypervisorType
 
+    // Resolve simulation ("dummy agent") settings: the `--simulate` flag or the
+    // config's [simulation] section turns it on, and CLI capacity flags override
+    // config values. When off, `finalSimulation` is nil and the agent runs real
+    // backends.
+    let simulationEnabled = options.simulate || (config.simulation?.enabled ?? false)
+    let finalSimulation: SimulationConfig? =
+        simulationEnabled
+        ? SimulationConfig(
+            enabled: true,
+            cpuCores: options.simCpus ?? config.simulation?.cpuCores,
+            memoryMB: options.simMemoryMb ?? config.simulation?.memoryMB,
+            diskGB: options.simDiskGb ?? config.simulation?.diskGB)
+        : nil
+
     // Resolve hardware acceleration preference. Acceleration is on by default;
     // operators can disable it (forcing TCG emulation) via config. `enable_kvm`
     // applies on Linux and `enable_hvf` on macOS — the other is ignored per platform.
@@ -293,7 +319,18 @@ private func launchAgent(
             "logLevel": .string(finalLogLevel),
             "stateFile": .string(statePath),
             "registrationMode": .string(isRegistrationMode ? "yes" : "no"),
+            "simulation": .string(finalSimulation?.enabled == true ? "enabled" : "disabled"),
         ])
+
+    if let sim = finalSimulation, sim.enabled {
+        logger.warning(
+            "Simulation mode: this agent will NOT run real VMs; reporting fake capacity",
+            metadata: [
+                "cpuCores": .stringConvertible(sim.resolvedCPUCores),
+                "memoryMB": .stringConvertible(sim.resolvedMemoryBytes / (1024 * 1024)),
+                "diskGB": .stringConvertible(sim.resolvedDiskBytes / (1024 * 1024 * 1024)),
+            ])
+    }
 
     // Log SPIFFE configuration if enabled
     if let spiffe = config.spiffe, spiffe.enabled {
@@ -329,6 +366,7 @@ private func launchAgent(
         sandboxJailerUidBase: finalSandboxJailerUidBase,
         hypervisorType: finalHypervisorType,
         hardwareAccelerationEnabled: finalHardwareAcceleration,
+        simulation: finalSimulation,
         spiffeConfig: config.spiffe,
         stateStore: stateStore
     )

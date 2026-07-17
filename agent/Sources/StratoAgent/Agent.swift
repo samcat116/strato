@@ -193,6 +193,15 @@ actor Agent {
     private let hypervisorType: HypervisorType
     private let hardwareAccelerationEnabled: Bool
 
+    // Simulation ("dummy agent") mode: the agent speaks the full control-plane
+    // protocol but drives a no-op mock hypervisor with no real
+    // networking/storage, and reports the configured fake host capacity instead
+    // of probing the machine. Lets a fleet of dummies scale-test a control plane
+    // far larger than the compute available to run real VMs. Nil/disabled means
+    // a normal agent.
+    private let simulation: SimulationConfig?
+    private var isSimulationMode: Bool { simulation?.enabled ?? false }
+
     // SPIFFE/SPIRE support
     private let spiffeConfig: SPIFFEConfig?
     private var svidManager: SVIDManager?
@@ -244,6 +253,7 @@ actor Agent {
         sandboxJailerUidBase: UInt32 = AgentConfig.defaultSandboxJailerUidBase,
         hypervisorType: HypervisorType = .qemu,
         hardwareAccelerationEnabled: Bool = true,
+        simulation: SimulationConfig? = nil,
         spiffeConfig: SPIFFEConfig? = nil,
         stateStore: (any AgentStateStore)? = nil
     ) {
@@ -272,6 +282,7 @@ actor Agent {
         self.sandboxJailerUidBase = sandboxJailerUidBase
         self.hypervisorType = hypervisorType
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
+        self.simulation = simulation
         self.spiffeConfig = spiffeConfig
         self.stateStore = stateStore
         self.manifestStore = VMManifestStore(
@@ -319,157 +330,206 @@ actor Agent {
                 ])
         }
 
-        logger.info("Initializing network service")
-
-        // Initialize network service based on config, falling back to platform defaults
-        let selectedMode =
-            networkMode
-            ?? {
-                #if os(Linux)
-                return .ovn
-                #else
-                return .user
-                #endif
-            }()
-
-        switch selectedMode {
-        case .ovn:
-            #if os(Linux)
-            logger.info("Network service initialized with SwiftOVN support")
-            networkService = NetworkServiceLinux(
-                nbConnection: ovnNorthbound, nbTLS: ovnNorthboundTLS, chassisConfig: ovnChassisConfig,
-                uplink: ovnUplink, logger: logger)
+        // Simulation mode drives no real network backend. `NetworkOrchestrator`
+        // already degrades to a no-op when `networkService` is nil, so
+        // VM-create networking becomes a clean pass-through. Pretend networking
+        // is connected in OVN mode so the agent advertises OVN networking and
+        // looks like a full Linux host to the scheduler.
+        if isSimulationMode {
+            logger.info("Simulation mode: skipping real network service; advertising OVN networking")
             effectiveNetworkMode = .ovn
-            #else
-            logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
-            networkService = NetworkServiceMacOS(logger: logger)
-            effectiveNetworkMode = .user
-            #endif
-        case .user:
-            logger.info("Network service initialized with user-mode networking")
-            networkService = NetworkServiceMacOS(logger: logger)
-            effectiveNetworkMode = .user
+            networkServiceConnected = true
+        } else {
+            logger.info("Initializing network service")
+
+            // Initialize network service based on config, falling back to platform defaults
+            let selectedMode =
+                networkMode
+                ?? {
+                    #if os(Linux)
+                    return .ovn
+                    #else
+                    return .user
+                    #endif
+                }()
+
+            switch selectedMode {
+            case .ovn:
+                #if os(Linux)
+                logger.info("Network service initialized with SwiftOVN support")
+                networkService = NetworkServiceLinux(
+                    nbConnection: ovnNorthbound, nbTLS: ovnNorthboundTLS, chassisConfig: ovnChassisConfig,
+                    uplink: ovnUplink, logger: logger)
+                effectiveNetworkMode = .ovn
+                #else
+                logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
+                networkService = NetworkServiceMacOS(logger: logger)
+                effectiveNetworkMode = .user
+                #endif
+            case .user:
+                logger.info("Network service initialized with user-mode networking")
+                networkService = NetworkServiceMacOS(logger: logger)
+                effectiveNetworkMode = .user
+            }
+
+            networkServiceConnected = await connectNetworkService()
+            if !networkServiceConnected {
+                logger.warning("VM networking will be limited until the network service connects")
+                // Keep retrying in the background: OVN/OVS coming up after the
+                // agent (boot ordering, or an operator installing it) restores
+                // networking without an agent restart.
+                startNetworkReconnectLoop()
+            }
         }
 
-        networkServiceConnected = await connectNetworkService()
-        if !networkServiceConnected {
-            logger.warning("VM networking will be limited until the network service connects")
-            // Keep retrying in the background: OVN/OVS coming up after the
-            // agent (boot ordering, or an operator installing it) restores
-            // networking without an agent restart.
-            startNetworkReconnectLoop()
+        // Storage. A simulated agent still attracts volume work — it advertises
+        // QEMU, and volume placement picks any online agent that supports it —
+        // so the backend must be mocked too. Backing a dummy with the real one
+        // would qemu-img a file per volume and pull the whole image through the
+        // cache first; across a fleet that is enough disk and network traffic to
+        // take out the host, and it would contradict the mode's promise of no
+        // real storage. The image cache is skipped entirely for the same reason:
+        // nothing in simulation may fetch image bytes.
+        let storageBackend: any StorageBackend
+        if isSimulationMode {
+            logger.info("Simulation mode: registering mock storage backend (no image cache)")
+            // Metadata goes in this agent's own storage dir, next to the VM
+            // manifest — never the shared default volume root, which every
+            // simulated agent on the host would otherwise write over. It is what
+            // lets volumes the control plane still has placed here survive a
+            // restart, exactly as the real backend's bytes on disk do.
+            storageBackend = MockStorageBackend(
+                logger: logger,
+                metadataPath: (vmStoragePath as NSString).appendingPathComponent("mock-volumes.json")
+            )
+        } else {
+            logger.info("Initializing image cache service")
+            imageCacheService = ImageCacheService(
+                logger: logger,
+                cachePath: imageCachePath,
+                controlPlaneURL: webSocketURL.replacingOccurrences(of: "ws://", with: "http://")
+                    .replacingOccurrences(of: "wss://", with: "https://")
+                    .replacingOccurrences(of: "/agent/ws", with: "")
+            )
+
+            logger.info("Initializing storage backend")
+            storageBackend = FileSystemStorageBackend(
+                logger: logger,
+                imageSource: imageCacheService
+            )
         }
-
-        // Initialize image cache service
-        logger.info("Initializing image cache service")
-        imageCacheService = ImageCacheService(
-            logger: logger,
-            cachePath: imageCachePath,
-            controlPlaneURL: webSocketURL.replacingOccurrences(of: "ws://", with: "http://")
-                .replacingOccurrences(of: "wss://", with: "https://")
-                .replacingOccurrences(of: "/agent/ws", with: "")
-        )
-
-        logger.info("Initializing storage backend")
-        let storageBackend = FileSystemStorageBackend(
-            logger: logger,
-            imageSource: imageCacheService
-        )
         self.storageBackend = storageBackend
 
-        logger.info("Initializing QEMU service")
-        #if canImport(SwiftQEMU)
-        hypervisorServices[.qemu] = QEMUService(
-            logger: logger, storage: storageBackend,
-            vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath,
-            hardwareAccelerationEnabled: hardwareAccelerationEnabled)
-        #else
-        hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
-        #endif
-
-        #if os(Linux)
-        logger.info("Initializing Firecracker service (Linux only)")
-        // One Firecracker client backs both VMs and sandboxes so they share the
-        // process registry, socket directory, and re-adoption machinery.
-        let firecrackerClient = FirecrackerClient(
-            firecrackerBinaryPath: firecrackerBinaryPath,
-            socketDirectory: firecrackerSocketDir,
-            logger: logger
-        )
-        hypervisorServices[.firecracker] = FirecrackerService(
-            logger: logger,
-            storage: storageBackend,
-            imageSource: imageCacheService,
-            vmStoragePath: vmStoragePath,
-            firecrackerBinaryPath: firecrackerBinaryPath,
-            socketDirectory: firecrackerSocketDir,
-            firecrackerClient: firecrackerClient
-        )
-
-        // The sandbox runtime (issue #421) shares that client. It lights up only
-        // when a guest base image (issue #419) is configured — the same
-        // prerequisite the capability probe gates on — so a build without one
-        // leaves `sandboxRuntime` nil and never attracts sandbox placements.
-        if let sandboxGuestImagePath {
-            // Resolve the jailer barrier (issue #425) once, at start: sandboxes
-            // run untrusted workloads, so the production posture is jailed.
-            // The config (layout) is built unconditionally — even an unjailed
-            // agent needs it to re-adopt and tear down jailed orphans from a
-            // previous life; the resolution only decides whether *new*
-            // sandboxes get the barrier.
-            let jailerConfig = SandboxJailerConfig(
-                jailerBinaryPath: sandboxJailerBinaryPath,
-                chrootBaseDir: sandboxJailerChrootDir,
-                uidBase: sandboxJailerUidBase)
-            var jailNewSandboxes = false
-            switch SandboxJailerResolver.resolve(
-                mode: sandboxJailerMode,
-                jailerBinaryPath: sandboxJailerBinaryPath,
-                isRoot: geteuid() == 0,
-                isExecutable: { FileManager.default.isExecutableFile(atPath: $0) }
-            ) {
-            case .jailed:
-                jailNewSandboxes = true
-                logger.info(
-                    "Sandbox jailer enabled",
-                    metadata: [
-                        "jailerBinaryPath": .string(sandboxJailerBinaryPath),
-                        "chrootBaseDir": .string(sandboxJailerChrootDir),
-                    ])
-            case .unjailed(let reason):
-                if let reason {
-                    logger.warning(
-                        "Sandbox jailer unavailable — sandboxes will run UNJAILED. Set sandbox_jailer_mode = \"required\" to refuse instead.",
-                        metadata: ["reason": .string(reason)])
-                }
-            case .blocked(let reason):
-                // `required` unmet: keep the capability dark (see
-                // registerWithControlPlane) and leave the runtime nil so a
-                // stray desired sandbox fails fast instead of running unjailed.
-                sandboxJailerBlockedReason = reason
-                logger.error(
-                    "sandbox_jailer_mode is 'required' but the jailer is unusable; sandbox capability disabled",
-                    metadata: ["reason": .string(reason)])
-            }
-
-            if sandboxJailerBlockedReason == nil {
-                logger.info("Initializing sandbox runtime (Linux only)")
-                sandboxRuntime = FirecrackerSandboxRuntime(
-                    logger: logger,
-                    client: firecrackerClient,
-                    imageService: SandboxImageService(logger: logger),
-                    socketDirectory: firecrackerSocketDir,
-                    sandboxStoragePath: vmStoragePath,
-                    guestImagePath: sandboxGuestImagePath,
-                    firecrackerBinaryPath: firecrackerBinaryPath,
-                    jailer: jailerConfig,
-                    jailNewSandboxes: jailNewSandboxes
-                )
+        if isSimulationMode {
+            // One mock backend per hypervisor type, so the agent is eligible for
+            // both QEMU and Firecracker placements. The mock tracks specs and
+            // reports real reservations, so placements deplete the agent's
+            // advertised capacity like a real host.
+            //
+            // Deliberately not gated on Linux, unlike the real drivers: a
+            // simulated agent models a Linux fleet whatever host it runs on —
+            // it already advertises ovn_networking on macOS for the same reason
+            // — so a macOS dev box can scale-test Firecracker placement too.
+            // Nothing here touches Firecracker itself.
+            logger.info("Simulation mode: registering mock hypervisor backend(s)")
+            for type in HypervisorType.allCases {
+                hypervisorServices[type] = MockHypervisorService(logger: logger, hypervisorType: type)
             }
         } else {
-            logger.info("Sandbox guest image path not configured; sandbox runtime disabled")
+            logger.info("Initializing QEMU service")
+            #if canImport(SwiftQEMU)
+            hypervisorServices[.qemu] = QEMUService(
+                logger: logger, storage: storageBackend,
+                vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmwarePath: firmwarePath,
+                hardwareAccelerationEnabled: hardwareAccelerationEnabled)
+            #else
+            hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
+            #endif
+
+            #if os(Linux)
+            logger.info("Initializing Firecracker service (Linux only)")
+            // One Firecracker client backs both VMs and sandboxes so they share the
+            // process registry, socket directory, and re-adoption machinery.
+            let firecrackerClient = FirecrackerClient(
+                firecrackerBinaryPath: firecrackerBinaryPath,
+                socketDirectory: firecrackerSocketDir,
+                logger: logger
+            )
+            hypervisorServices[.firecracker] = FirecrackerService(
+                logger: logger,
+                storage: storageBackend,
+                imageSource: imageCacheService,
+                vmStoragePath: vmStoragePath,
+                firecrackerBinaryPath: firecrackerBinaryPath,
+                socketDirectory: firecrackerSocketDir,
+                firecrackerClient: firecrackerClient
+            )
+
+            // The sandbox runtime (issue #421) shares that client. It lights up only
+            // when a guest base image (issue #419) is configured — the same
+            // prerequisite the capability probe gates on — so a build without one
+            // leaves `sandboxRuntime` nil and never attracts sandbox placements.
+            if let sandboxGuestImagePath {
+                // Resolve the jailer barrier (issue #425) once, at start: sandboxes
+                // run untrusted workloads, so the production posture is jailed.
+                // The config (layout) is built unconditionally — even an unjailed
+                // agent needs it to re-adopt and tear down jailed orphans from a
+                // previous life; the resolution only decides whether *new*
+                // sandboxes get the barrier.
+                let jailerConfig = SandboxJailerConfig(
+                    jailerBinaryPath: sandboxJailerBinaryPath,
+                    chrootBaseDir: sandboxJailerChrootDir,
+                    uidBase: sandboxJailerUidBase)
+                var jailNewSandboxes = false
+                switch SandboxJailerResolver.resolve(
+                    mode: sandboxJailerMode,
+                    jailerBinaryPath: sandboxJailerBinaryPath,
+                    isRoot: geteuid() == 0,
+                    isExecutable: { FileManager.default.isExecutableFile(atPath: $0) }
+                ) {
+                case .jailed:
+                    jailNewSandboxes = true
+                    logger.info(
+                        "Sandbox jailer enabled",
+                        metadata: [
+                            "jailerBinaryPath": .string(sandboxJailerBinaryPath),
+                            "chrootBaseDir": .string(sandboxJailerChrootDir),
+                        ])
+                case .unjailed(let reason):
+                    if let reason {
+                        logger.warning(
+                            "Sandbox jailer unavailable — sandboxes will run UNJAILED. Set sandbox_jailer_mode = \"required\" to refuse instead.",
+                            metadata: ["reason": .string(reason)])
+                    }
+                case .blocked(let reason):
+                    // `required` unmet: keep the capability dark (see
+                    // registerWithControlPlane) and leave the runtime nil so a
+                    // stray desired sandbox fails fast instead of running unjailed.
+                    sandboxJailerBlockedReason = reason
+                    logger.error(
+                        "sandbox_jailer_mode is 'required' but the jailer is unusable; sandbox capability disabled",
+                        metadata: ["reason": .string(reason)])
+                }
+
+                if sandboxJailerBlockedReason == nil {
+                    logger.info("Initializing sandbox runtime (Linux only)")
+                    sandboxRuntime = FirecrackerSandboxRuntime(
+                        logger: logger,
+                        client: firecrackerClient,
+                        imageService: SandboxImageService(logger: logger),
+                        socketDirectory: firecrackerSocketDir,
+                        sandboxStoragePath: vmStoragePath,
+                        guestImagePath: sandboxGuestImagePath,
+                        firecrackerBinaryPath: firecrackerBinaryPath,
+                        jailer: jailerConfig,
+                        jailNewSandboxes: jailNewSandboxes
+                    )
+                }
+            } else {
+                logger.info("Sandbox guest image path not configured; sandbox runtime disabled")
+            }
+            #endif
         }
-        #endif
 
         // Bridge the sandbox runtime's exec events and workload log lines onto
         // the agent WebSocket (issue #423). The handlers yield synchronously so
@@ -746,13 +806,22 @@ actor Agent {
         // OVN/OVS dependencies) runs on the same cadence and gates the
         // per-hypervisor probes: a host that cannot store VM disks must not
         // advertise any hypervisor, whatever the binary probes say.
-        let preflight = runHostPreflight()
-        logHostPreflight(preflight)
-        let hypervisors = preflight.gate(
-            HypervisorProbe.probeAll(
-                qemuBinaryPath: qemuBinaryPath,
-                firecrackerBinaryPath: firecrackerBinaryPath
-            ))
+        //
+        // Simulation mode bypasses the probes and preflight entirely: there is
+        // no real hypervisor to detect, so it advertises the mock backends as
+        // available+accelerated to make the agent placement-eligible.
+        let hypervisors: [HypervisorSupport]
+        if isSimulationMode {
+            hypervisors = simulatedHypervisorSupport()
+        } else {
+            let preflight = runHostPreflight()
+            logHostPreflight(preflight)
+            hypervisors = preflight.gate(
+                HypervisorProbe.probeAll(
+                    qemuBinaryPath: qemuBinaryPath,
+                    firecrackerBinaryPath: firecrackerBinaryPath
+                ))
+        }
         let networkCapability = currentNetworkCapability()
         var capabilities = getAgentCapabilities(hypervisors: hypervisors, networkCapability: networkCapability)
 
@@ -760,20 +829,34 @@ actor Agent {
         // (binary + KVM, folded into its probe) plus the guest base image
         // present on disk. The typed flag is what the scheduler keys sandbox
         // placement on (issue #415); the capability string is display-only.
-        let sandboxRuntime = SandboxRuntimeProbe.probe(
+        //
+        // The host probe is necessary but not sufficient: this agent must also
+        // actually hold a runtime to serve the workload. Simulation mode is the
+        // case that separates them — it registers mock hypervisors (whose
+        // Firecracker support reports available) but deliberately creates no
+        // sandbox runtime, so on any Linux host that happens to have a guest
+        // image installed the probe alone would advertise sandboxCapable and
+        // every sandbox scheduled here would fail with runtimeUnavailable.
+        // Never advertise what we cannot serve.
+        let sandboxProbe = SandboxRuntimeProbe.probe(
             firecracker: hypervisors.first { $0.type == .firecracker },
             guestImagePath: sandboxGuestImagePath,
             jailerBlockedReason: sandboxJailerBlockedReason
         )
-        if sandboxRuntime.capable {
+        let sandboxCapable = sandboxProbe.capable && sandboxRuntime != nil
+        if sandboxCapable {
             capabilities.append(SandboxRuntimeProbe.capabilityName)
         } else {
             #if os(Linux)
             // Only worth a log where the runtime could ever exist.
+            let reason =
+                sandboxProbe.unavailabilityReason
+                ?? (isSimulationMode
+                    ? "simulation mode provides no sandbox runtime" : "sandbox runtime was not initialized")
             logger.info(
                 "Sandbox runtime unavailable; not advertising sandbox capability",
                 metadata: [
-                    "reason": .string(sandboxRuntime.unavailabilityReason ?? "unknown")
+                    "reason": .string(reason)
                 ])
             #endif
         }
@@ -788,7 +871,7 @@ actor Agent {
             architecture: CPUArchitecture.current,
             hypervisors: hypervisors,
             networkCapability: networkCapability,
-            sandboxCapable: sandboxRuntime.capable,
+            sandboxCapable: sandboxCapable,
             operatingSystem: OperatingSystem.current,
             hostInfo: HostInfoProbe.gather()
         )
@@ -1070,6 +1153,23 @@ actor Agent {
         logger.info("Unregistration message sent to control plane")
     }
 
+    /// The hypervisor support to advertise in simulation mode: the mock
+    /// backends this agent actually registered, reported as available and
+    /// hardware-accelerated so the scheduler treats the dummy as a fully capable
+    /// host. Derived from `HypervisorType.allCases`, exactly like the mock
+    /// registration in `start()`, so the two cannot drift apart and a new
+    /// backend is simulated the moment it has an enum case.
+    private func simulatedHypervisorSupport() -> [HypervisorSupport] {
+        HypervisorType.allCases.map { type in
+            HypervisorSupport(
+                type: type,
+                available: true,
+                accelerated: true,
+                capabilities: HypervisorCapabilities.capabilities(for: type)
+            )
+        }
+    }
+
     // MARK: - Host preflight
 
     /// Runs the host-readiness checks against this agent's resolved
@@ -1341,9 +1441,19 @@ actor Agent {
     }
 
     private func getAgentResources() async -> AgentResources {
-        // Host capacity, probed live from the machine the agent runs on.
-        let totalCPU = HostResources.logicalCoreCount
-        let totalMemory = HostResources.physicalMemoryBytes
+        // Host capacity. In simulation mode this is the configured fake capacity
+        // — many dummies share one physical machine, so a spawner varies these
+        // to give the scheduler a realistic spread of host sizes. Otherwise it
+        // is probed live from the machine the agent runs on.
+        let totalCPU: Int
+        let totalMemory: Int64
+        if let simulation, simulation.enabled {
+            totalCPU = simulation.resolvedCPUCores
+            totalMemory = simulation.resolvedMemoryBytes
+        } else {
+            totalCPU = HostResources.logicalCoreCount
+            totalMemory = HostResources.physicalMemoryBytes
+        }
 
         // Resources committed to VMs currently managed on this host. We report
         // available = total - reserved (1:1, no overcommit) so the scheduler treats
@@ -1380,15 +1490,27 @@ actor Agent {
         let availableCPU = max(0, totalCPU - reservedCPU)
         let availableMemory = max(0, totalMemory - reservedMemory)
 
-        // VM disks are created directly on the storage filesystem, so query it live
-        // rather than tracking reservations — this naturally accounts for existing disks.
-        let disk = HostResources.diskCapacity(forPath: vmStoragePath)
-        if disk == nil {
-            logger.warning(
-                "Unable to determine disk capacity for VM storage path",
-                metadata: [
-                    "path": .string(vmStoragePath)
-                ])
+        // Disk. In simulation mode report the configured fake capacity (the real
+        // filesystem is shared by every dummy and has nothing to do with the
+        // sizes we're modeling). Otherwise query the storage filesystem live —
+        // VM disks are created directly on it, so this naturally accounts for
+        // existing disks without tracking reservations.
+        let totalDisk: Int64
+        let availableDisk: Int64
+        if let simulation, simulation.enabled {
+            totalDisk = simulation.resolvedDiskBytes
+            availableDisk = simulation.resolvedDiskBytes
+        } else {
+            let disk = HostResources.diskCapacity(forPath: vmStoragePath)
+            if disk == nil {
+                logger.warning(
+                    "Unable to determine disk capacity for VM storage path",
+                    metadata: [
+                        "path": .string(vmStoragePath)
+                    ])
+            }
+            totalDisk = disk?.total ?? 0
+            availableDisk = disk?.free ?? 0
         }
 
         return AgentResources(
@@ -1396,8 +1518,8 @@ actor Agent {
             availableCPU: availableCPU,
             totalMemory: totalMemory,
             availableMemory: availableMemory,
-            totalDisk: disk?.total ?? 0,
-            availableDisk: disk?.free ?? 0
+            totalDisk: totalDisk,
+            availableDisk: availableDisk
         )
     }
 

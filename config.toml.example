@@ -218,3 +218,47 @@ log_level = "info"
 # # certificate_path = "/var/run/spire/certs/svid.pem"
 # # private_key_path = "/var/run/spire/certs/svid_key.pem"
 # # trust_bundle_path = "/var/run/spire/certs/bundle.pem"
+
+# ---------------------------------------------------------------------------
+# Simulation ("dummy agent") mode — for scale-testing a control plane.
+#
+# When enabled, the agent registers and speaks the full agent protocol
+# (register, heartbeat, desired-state reconciliation) but drives a no-op mock
+# hypervisor with no real networking or storage, and reports the configurable
+# fake host capacity below instead of probing the machine. This lets a fleet of
+# dummy agents run on one host and load-test a control plane far larger than the
+# compute available to run real VMs.
+#
+# The `--simulate` / `--sim-cpus` / `--sim-memory-mb` / `--sim-disk-gb` CLI
+# flags override these. See agent/scripts/spawn-sim-fleet.sh to launch a whole
+# fleet with a spread of host sizes.
+#
+# IMPORTANT: never register simulated agents in a control plane / org that also
+# has real agents. A simulated agent advertises QEMU and full capacity, so the
+# scheduler and volume selector treat it as a real host — a real VM could be
+# placed on a dummy (and "run" on the mock while nothing executes), or a real
+# volume created on one with a path that does not exist. The control plane
+# cannot yet distinguish simulated agents from real ones; use a dedicated
+# control plane or org for simulation. Tracked in issue #487.
+# [simulation]
+# enabled = true
+#
+# # Fake capacity advertised to the scheduler. Unset fields use built-in
+# # defaults (8 cores / 16384 MB / 512 GB).
+# #
+# # cpu_cores and memory_mb deplete as VMs are placed, so the scheduler sees a
+# # simulated host fill up. disk_gb does NOT: a VM's disk requirement is not
+# # carried on the reconciliation wire (VMSpec has no disk field), so the agent
+# # cannot subtract it. A simulated agent therefore keeps reporting its full
+# # disk and will accept disk-heavy VMs past disk_gb as long as CPU/memory
+# # remain. Size CPU/memory to be the binding constraint in disk-sensitive
+# # scale tests. See issue #473.
+# #
+# # disk_gb is a reported number only. Simulated agents still attract volume
+# # work (they advertise QEMU, and volume placement picks any online agent that
+# # supports it), but volumes are mocked: nothing is written to
+# # vm_storage_dir, and image bytes are never fetched. The figure above is
+# # therefore unrelated to free space on the machine actually running the fleet.
+# cpu_cores = 16
+# memory_mb = 65536
+# disk_gb = 1024

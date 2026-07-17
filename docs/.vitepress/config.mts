@@ -31,6 +31,7 @@ export default defineConfig({
         items: [
           { text: 'Overview', link: '/architecture/overview' },
           { text: 'Scheduler', link: '/architecture/scheduler' },
+          { text: 'IAM', link: '/architecture/iam' },
           { text: 'Agent Updates', link: '/architecture/agent-updates' }
         ]
       },
