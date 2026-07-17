@@ -81,6 +81,22 @@ final class SandboxExpiryTests {
             .first()
     }
 
+    /// Waits for the sandbox's delete operation to reach a verdict. The record
+    /// is removed *before* the operation is completed, so a test that polls on
+    /// the row's absence can still catch the operation mid-flight.
+    private func pollDeleteOperationCompleted(
+        for sandboxID: UUID, on db: any Database
+    ) async throws -> ResourceOperation? {
+        for _ in 0..<100 {
+            if let operation = try await deleteOperation(for: sandboxID, on: db), operation.status != .pending {
+                return operation
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        Issue.record("Delete operation for sandbox \(sandboxID) never completed")
+        return nil
+    }
+
     // MARK: - expiresAt
 
     @Test("expiresAt is the creation anchor plus the TTL, and nil without one")
@@ -132,7 +148,7 @@ final class SandboxExpiryTests {
 
             // The operation outlives the row it removed — that is what makes an
             // unattended deletion auditable.
-            let operation = try #require(await deleteOperation(for: sandboxID, on: app.db))
+            let operation = try #require(await pollDeleteOperationCompleted(for: sandboxID, on: app.db))
             #expect(operation.status == .succeeded)
             #expect(operation.userID == ResourceOperation.systemUserID)
         }
@@ -183,7 +199,7 @@ final class SandboxExpiryTests {
             await app.agentService.sweepExpiredSandboxes()
 
             try await pollSandboxDeleted(sandboxID, on: app.db)
-            let operation = try #require(await deleteOperation(for: sandboxID, on: app.db))
+            let operation = try #require(await pollDeleteOperationCompleted(for: sandboxID, on: app.db))
             #expect(operation.status == .succeeded)
         }
     }
