@@ -1,0 +1,74 @@
+control-plane/web/src/components/workload-identity/workload-identity-view.tsx
+  s_144087aeeecff0::t_823d5acd9e5ff7 1-210
+control-plane/web/src/components/workload-identity/rail-cards.tsx
+  s_144087aeeecff0::t_59b34f785af20f 1-203
+control-plane/web/src/lib/hooks/use-workload-identity.ts
+  s_144087aeeecff0::t_80bff5de9368c4 1-28
+control-plane/web/src/lib/api/index.ts
+  s_144087aeeecff0::t_bc07cbf6ee725c 26
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_144087aeeecff0::t_f24193a28e9acd 716-719
+  s_144087aeeecff0::t_26598461bfe75e 649-650,655-656
+control-plane/web/src/components/workload-identity/index.ts
+  s_144087aeeecff0::t_b60b7ebef5ebfa 2
+  s_144087aeeecff0::t_27f819864d2671 1,3-10
+control-plane/Sources/SPIREServerAPI/SPIREServerAPIClient.swift
+  s_144087aeeecff0::t_d70107d81e07a0 289-293
+  s_144087aeeecff0::t_ec1b0559b08fb1 480-481
+  s_144087aeeecff0::t_3c6a1450d16b5a 100-184
+  s_144087aeeecff0::t_516fe6cdf4cb8d 46-53
+  s_144087aeeecff0::t_219d6c3b79faad 414-479,482-488
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_144087aeeecff0::t_675a8d63ba6275 249-253
+control-plane/Sources/App/Controllers/WorkloadIdentityController.swift
+  s_144087aeeecff0::t_d6e70d010c8b5b 48,50
+  s_144087aeeecff0::t_a347fd33c8da74 1-47,49,51-253
+control-plane/web/src/components/workload-identity/format.ts
+  s_144087aeeecff0::t_584ec323227eda 1-39
+control-plane/web/src/lib/api/workload-identity.ts
+  s_144087aeeecff0::t_f710f89c2d9a49 1-11
+control-plane/web/src/components/layout/nav.ts
+  s_144087aeeecff0::t_ed87e65eccd09e 78-83
+  s_144087aeeecff0::t_08dfe7db56fba5 9
+control-plane/Sources/App/routes.swift
+  s_144087aeeecff0::t_f20b995fb66271 69-71
+control-plane/Tests/AppTests/WorkloadIdentityControllerTests.swift
+  s_144087aeeecff0::t_c83ff8d6cc15a9 1-191
+control-plane/web/src/types/api.ts
+  s_144087aeeecff0::t_cd4b2a6a12a416 1213-1291
+control-plane/web/src/lib/hooks/index.ts
+  s_144087aeeecff0::t_0aad1c947c6dfa 128-132
+control-plane/web/src/components/workload-identity/svid-badge.tsx
+  s_144087aeeecff0::t_ea44308c819b32 1-26
+control-plane/web/src/app/(dashboard)/workload-identity/page.tsx
+  s_144087aeeecff0::t_b5fa9ebf457fcb 3,5,40-48
+  s_144087aeeecff0::t_8d27f4795333f3 1-2,4,6-39,49-50
+control-plane/web/src/components/workload-identity/entries-table.tsx
+  s_144087aeeecff0::t_744a3d55c0510f 1-123
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_8c1e5f09a9358c::t_56504c30ee9dce 42-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "2bafa6b79cda216db997aac3f25ac1e15b40a987",
+  "prompts": {},
+  "sessions": {
+    "s_144087aeeecff0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f63b6a09-71d4-4dc3-b928-75c8caa3da8d",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_8c1e5f09a9358c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2199962c-7ed0-4955-b63e-26e5b989a4bc",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
