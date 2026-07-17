@@ -61,6 +61,12 @@
 #   exit before dropping their PID records, so a straggler's late unregister
 #   can never land on a freshly started agent of the same name.
 #
+#   fleet.pids records outlive the processes they name, and PIDs get recycled,
+#   so a recorded PID is never trusted on liveness alone: a process counts as a
+#   fleet member only if its command line still carries this fleet's
+#   --state-file for that name. Stale records are reported and pruned, never
+#   signalled — the number may belong to someone else's process by then.
+#
 #   For a genuinely fresh fleet, deregister the agents in the UI (or via
 #   DELETE /api/agents/:id) and remove the base dir, or just pick a new
 #   --name-prefix.
@@ -105,7 +111,53 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Normalize the base dir to a real absolute path before anything derives from
+# it. Each agent's identity check below matches the --state-file string recorded
+# in its command line, so that string has to come out identical whether the
+# caller passed a relative path, a trailing slash, or /tmp (a symlink to
+# /private/tmp on macOS).
+mkdir -p "$BASE_DIR" 2>/dev/null || true
+BASE_DIR="$(cd "$BASE_DIR" 2>/dev/null && pwd -P)" || {
+  echo "error: cannot resolve --base-dir '$BASE_DIR'" >&2; exit 1; }
+
 PID_FILE="$BASE_DIR/fleet.pids"
+
+# --- pid identity -------------------------------------------------------------
+
+# Whether $pid really is this fleet's agent for $name, as opposed to an
+# unrelated process that inherited a recycled PID.
+#
+# fleet.pids lives under the base dir (/tmp by default) and outlives the
+# processes it records, so `kill -0` alone proves only that *something* answers
+# to that number — not that it is ours. Trusting it would let --stop SIGTERM a
+# stranger's process, and let --status/start misjudge which agents are up. The
+# agent's own --state-file argument is unique to (base dir, name), so match on
+# that. Uses `ps -ww` for the untruncated command line, and a case glob rather
+# than grep so path metacharacters cannot be reinterpreted as a pattern.
+pid_is_fleet_agent() {
+  local pid="$1" name="$2" cmd
+  cmd="$(ps -ww -o command= -p "$pid" 2>/dev/null)" || return 1
+  [[ -n "$cmd" ]] || return 1
+  case "$cmd" in
+    *"--state-file $BASE_DIR/$name/state.json"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Drop records whose process is gone (or was never ours), so the file cannot
+# grow without bound or accumulate PIDs that a later process may inherit.
+prune_pid_file() {
+  [[ -f "$PID_FILE" ]] || return 0
+  local tmp pid name profile
+  tmp="$(mktemp "$PID_FILE.XXXXXX")"
+  while IFS=$'\t' read -r pid name profile; do
+    [[ -z "${pid:-}" ]] && continue
+    if pid_is_fleet_agent "$pid" "$name"; then
+      printf '%s\t%s\t%s\n' "$pid" "$name" "$profile" >> "$tmp"
+    fi
+  done < "$PID_FILE"
+  mv "$tmp" "$PID_FILE"
+}
 
 # --- stop / status ------------------------------------------------------------
 stop_fleet() {
@@ -114,18 +166,27 @@ stop_fleet() {
     return 0
   fi
 
-  local pids=() pid name _rest
+  # Only ever signal PIDs that are still verifiably our agents. A stale record
+  # whose PID has been recycled belongs to someone else, and SIGTERMing it would
+  # kill an unrelated process.
+  local pids=() names=() pid name _rest stale=0
   while IFS=$'\t' read -r pid name _rest; do
     [[ -z "${pid:-}" ]] && continue
-    pids+=("$pid")
+    if pid_is_fleet_agent "$pid" "$name"; then
+      pids+=("$pid"); names+=("$name")
+    else
+      stale=$((stale + 1))
+    fi
   done < "$PID_FILE"
+
+  if (( stale > 0 )); then
+    echo "Ignoring $stale stale record(s): the process is gone or the PID is no longer ours."
+  fi
 
   local stopped=0
   for pid in ${pids[@]+"${pids[@]}"}; do
-    if kill -0 "$pid" 2>/dev/null; then
-      # SIGTERM triggers the agent's graceful unregister from the control plane.
-      kill -TERM "$pid" 2>/dev/null && stopped=$((stopped + 1))
-    fi
+    # SIGTERM triggers the agent's graceful unregister from the control plane.
+    kill -TERM "$pid" 2>/dev/null && stopped=$((stopped + 1))
   done
   echo "Sent SIGTERM to $stopped agent(s); waiting for them to exit..."
 
@@ -139,11 +200,14 @@ stop_fleet() {
   # offline, clear its socket route, and close its console/exec sessions. So the
   # PID records — which is what blocks a name from being reused — must outlive
   # the processes.
-  local waited=0 alive=1
+  # Re-check identity on every poll, not just liveness: a PID that exits here can
+  # in principle be reissued to an unrelated process, and the SIGKILL below must
+  # never land on it.
+  local waited=0 alive=1 i
   while (( waited < STOP_TIMEOUT )); do
     alive=0
-    for pid in ${pids[@]+"${pids[@]}"}; do
-      kill -0 "$pid" 2>/dev/null && alive=$((alive + 1))
+    for (( i = 0; i < ${#pids[@]}; i++ )); do
+      pid_is_fleet_agent "${pids[$i]}" "${names[$i]}" && alive=$((alive + 1))
     done
     (( alive == 0 )) && break
     sleep 1
@@ -151,9 +215,9 @@ stop_fleet() {
   done
 
   local killed=0
-  for pid in ${pids[@]+"${pids[@]}"}; do
-    if kill -0 "$pid" 2>/dev/null; then
-      kill -9 "$pid" 2>/dev/null && killed=$((killed + 1))
+  for (( i = 0; i < ${#pids[@]}; i++ )); do
+    if pid_is_fleet_agent "${pids[$i]}" "${names[$i]}"; then
+      kill -9 "${pids[$i]}" 2>/dev/null && killed=$((killed + 1))
     fi
   done
   if (( killed > 0 )); then
@@ -174,20 +238,25 @@ status_fleet() {
     echo "No fleet PID file at $PID_FILE."
     return 0
   fi
-  local running=0 dead=0
+  local running=0 dead=0 stale=0
   printf '%-24s %-8s %s\n' "NAME" "PID" "STATE"
   while IFS=$'\t' read -r pid name profile; do
     [[ -z "${pid:-}" ]] && continue
-    if kill -0 "$pid" 2>/dev/null; then
+    if pid_is_fleet_agent "$pid" "$name"; then
       printf '%-24s %-8s %s\n' "$name" "$pid" "running ($profile)"
       running=$((running + 1))
+    elif kill -0 "$pid" 2>/dev/null; then
+      # Something answers to this PID, but it is not our agent — the record is
+      # stale and the number has been reused. Never touch that process.
+      printf '%-24s %-8s %s\n' "$name" "$pid" "stale (pid reused by another process)"
+      stale=$((stale + 1))
     else
       printf '%-24s %-8s %s\n' "$name" "$pid" "exited"
       dead=$((dead + 1))
     fi
   done < "$PID_FILE"
   echo "---"
-  echo "$running running, $dead exited"
+  echo "$running running, $dead exited, $stale stale"
 }
 
 if [[ "$ACTION" == "stop" ]]; then stop_fleet; exit 0; fi
@@ -250,13 +319,15 @@ has_valid_unused_token() {
     'any(.[]; .agentName == $n and .isUsed == false and .isValid == true)' >/dev/null 2>&1
 }
 
-# Whether a live process for this agent name is already recorded.
+# Whether a live process for this agent name is already recorded. Identity, not
+# just liveness: a stale record whose PID was recycled must not make us skip an
+# agent that is actually down.
 agent_running() {
   local want="$1" pid name _rest
   [[ -f "$PID_FILE" ]] || return 1
   while IFS=$'\t' read -r pid name _rest; do
     [[ "$name" == "$want" ]] || continue
-    kill -0 "$pid" 2>/dev/null && return 0
+    pid_is_fleet_agent "$pid" "$name" && return 0
   done < "$PID_FILE"
   return 1
 }
@@ -266,6 +337,11 @@ echo "Profiles (cpus:memMB:diskGB): $PROFILES"
 echo "Binary: $AGENT_BIN"
 echo "Base dir: $BASE_DIR"
 echo
+
+# Drop records for processes that are gone before appending new ones, so the
+# file tracks only live agents and cannot accumulate PIDs that the OS may
+# later hand to unrelated processes.
+prune_pid_file
 
 launched=0 resumed=0 reused=0
 for i in $(seq 1 "$COUNT"); do
