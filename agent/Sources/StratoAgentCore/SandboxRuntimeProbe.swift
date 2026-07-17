@@ -55,15 +55,26 @@ public enum SandboxRuntimeProbe {
     ///   - runtimeBuilt: Whether the running build includes the sandbox
     ///     runtime driver. Defaults to this build's `runtimeBuilt` constant;
     ///     injectable so tests can exercise the host-prerequisite checks.
+    ///   - jailerBlockedReason: Non-nil when `sandbox_jailer_mode = "required"`
+    ///     could not be satisfied at agent start (issue #425). Running
+    ///     untrusted workloads unjailed on a host whose operator demanded the
+    ///     jailer is not an option, so the capability goes dark instead.
     public static func probe(
         firecracker: HypervisorSupport?,
         guestImagePath: String?,
-        runtimeBuilt: Bool = SandboxRuntimeProbe.runtimeBuilt
+        runtimeBuilt: Bool = SandboxRuntimeProbe.runtimeBuilt,
+        jailerBlockedReason: String? = nil
     ) -> Report {
         guard runtimeBuilt else {
             return Report(
                 capable: false,
                 unavailabilityReason: "this agent build does not include the sandbox runtime (issue #421)")
+        }
+        if let jailerBlockedReason {
+            return Report(
+                capable: false,
+                unavailabilityReason:
+                    "sandbox_jailer_mode is 'required' but the jailer is unusable: \(jailerBlockedReason)")
         }
         guard let firecracker, firecracker.type == .firecracker else {
             return Report(capable: false, unavailabilityReason: "Firecracker was not probed on this host")

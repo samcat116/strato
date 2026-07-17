@@ -26,16 +26,31 @@ public actor FirecrackerClient {
         /// adoption time. `nil` for spawned VMs (use `process` instead).
         let adoptedPID: Int32?
         let socketPath: String
+        /// The per-VM jail directory (`<chroot base>/<exec name>/<id>`) for a
+        /// jailed VM (issue #425), removed on destroy. `nil` for unjailed VMs.
+        let jailDirectory: String?
         let manager: FirecrackerManager
     }
 
-    /// The deterministic API socket path for a VM, shared by spawn and
-    /// re-adoption so the two can never drift. Kept flat under
-    /// `socketDirectory` today; when sandboxes gain the jailer (#425) this is
-    /// the single place that derives the path, so a per-chroot layout can be
-    /// introduced without reworking re-attach (#433).
+    /// The deterministic API socket path for an **unjailed** VM, shared by
+    /// spawn and re-adoption so the two can never drift. Jailed VMs (issue
+    /// #425) live under a per-VM chroot instead — see
+    /// `JailerOptions.socketPath(chrootBaseDir:firecrackerBinaryPath:vmId:)`;
+    /// `socketPath(vmId:jail:)` picks between the two layouts.
     public static func socketPath(socketDirectory: String, vmId: String) -> String {
         "\(socketDirectory)/\(vmId).sock"
+    }
+
+    /// The deterministic API socket path for a VM under this client, jailed or
+    /// not — the single derivation both spawn and re-adoption (#433) use.
+    public func socketPath(vmId: String, jail: JailerOptions?) -> String {
+        if let jail {
+            return JailerOptions.socketPath(
+                chrootBaseDir: jail.chrootBaseDir,
+                firecrackerBinaryPath: firecrackerBinaryPath,
+                vmId: vmId)
+        }
+        return Self.socketPath(socketDirectory: socketDirectory, vmId: vmId)
     }
 
     /// Creates a new FirecrackerClient
@@ -56,15 +71,34 @@ public actor FirecrackerClient {
     /// Creates a new microVM with the given configuration
     /// Returns a FirecrackerManager connected to the new VM
     public func createVM(vmId: String) async throws -> FirecrackerManager {
+        try await createVM(vmId: vmId, jail: nil)
+    }
+
+    /// Creates a new microVM, optionally inside the jailer barrier (issue
+    /// #425).
+    ///
+    /// When `jail` is set, the process is spawned through the `jailer` binary
+    /// — chrooted, privilege-dropped, and (optionally) netns/cgroup-confined —
+    /// and its API socket lives inside the chroot. The caller must have
+    /// populated the jail root with every file the VM will reference
+    /// **before** this call (the client never wipes an existing jail root, so
+    /// pre-staged content survives), and must pass in-jail paths to the
+    /// returned manager's configure calls.
+    public func createVM(vmId: String, jail: JailerOptions?) async throws -> FirecrackerManager {
         // Check if VM already exists
         guard runningVMs[vmId] == nil else {
             throw FirecrackerError.vmAlreadyRunning(vmId)
         }
 
-        // Verify the Firecracker binary is actually runnable — existence alone
-        // lets a chmod problem surface later as an opaque spawn failure.
+        // Verify the binaries are actually runnable — existence alone lets a
+        // chmod problem surface later as an opaque spawn failure.
         guard FileManager.default.isExecutableFile(atPath: firecrackerBinaryPath) else {
             throw FirecrackerError.binaryNotFound(firecrackerBinaryPath)
+        }
+        if let jail {
+            guard FileManager.default.isExecutableFile(atPath: jail.jailerBinaryPath) else {
+                throw FirecrackerError.binaryNotFound(jail.jailerBinaryPath)
+            }
         }
 
         // Create socket directory if needed
@@ -74,21 +108,29 @@ public actor FirecrackerClient {
             attributes: nil
         )
 
-        let socketPath = Self.socketPath(socketDirectory: socketDirectory, vmId: vmId)
+        let socketPath = self.socketPath(vmId: vmId, jail: jail)
 
         // Remove existing socket if present
         if FileManager.default.fileExists(atPath: socketPath) {
             try FileManager.default.removeItem(atPath: socketPath)
         }
 
-        // Spawn Firecracker process
+        // Spawn the Firecracker process — directly, or through the jailer,
+        // which sets up the barrier and then execs Firecracker in place (we
+        // never daemonize, so the child handle *is* the jailed Firecracker
+        // and terminate/wait work identically on both paths).
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: firecrackerBinaryPath)
-        process.arguments = [
-            "--api-sock", socketPath,
-            "--id", vmId,
-            "--level", "Info",
-        ]
+        if let jail {
+            process.executableURL = URL(fileURLWithPath: jail.jailerBinaryPath)
+            process.arguments = jail.arguments(vmId: vmId, firecrackerBinaryPath: firecrackerBinaryPath)
+        } else {
+            process.executableURL = URL(fileURLWithPath: firecrackerBinaryPath)
+            process.arguments = [
+                "--api-sock", socketPath,
+                "--id", vmId,
+                "--level", "Info",
+            ]
+        }
 
         // Capture output for logging
         let outputPipe = Pipe()
@@ -102,6 +144,7 @@ public actor FirecrackerClient {
                 "vm_id": "\(vmId)",
                 "socket": "\(socketPath)",
                 "binary": "\(firecrackerBinaryPath)",
+                "jailed": "\(jail != nil)",
             ])
 
         do {
@@ -111,7 +154,22 @@ public actor FirecrackerClient {
         }
 
         // Wait for socket to become available
-        try await waitForSocket(path: socketPath, timeout: 5.0)
+        do {
+            try await waitForSocket(path: socketPath, timeout: 5.0)
+        } catch {
+            // The jailer exits immediately on a setup failure (bad cgroup
+            // value, missing netns, unwritable chroot base); surface its
+            // stderr instead of an opaque socket timeout.
+            if !process.isRunning {
+                let stderr = String(
+                    data: errorPipe.fileHandleForReading.availableData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                throw FirecrackerError.processSpawnFailed(
+                    "process exited before its API socket appeared"
+                        + ((stderr?.isEmpty ?? true) ? "" : ": \(stderr!)"))
+            }
+            throw error
+        }
 
         // Create manager and connect
         let manager = FirecrackerManager(socketPath: socketPath, logger: logger)
@@ -122,6 +180,12 @@ public actor FirecrackerClient {
             process: process,
             adoptedPID: nil,
             socketPath: socketPath,
+            jailDirectory: jail.map {
+                JailerOptions.jailDirectory(
+                    chrootBaseDir: $0.chrootBaseDir,
+                    firecrackerBinaryPath: firecrackerBinaryPath,
+                    vmId: vmId)
+            },
             manager: manager
         )
 
@@ -139,6 +203,16 @@ public actor FirecrackerClient {
     /// (a stale socket left behind by a dead process). The caller leaves the VM
     /// orphaned in both cases.
     public func adoptVM(vmId: String) async throws -> (manager: FirecrackerManager, info: InstanceInfo) {
+        try await adoptVM(vmId: vmId, jail: nil)
+    }
+
+    /// Jail-aware re-adoption (issue #425): pass the same `JailerOptions` the
+    /// VM was created with so the API socket is looked up inside its chroot.
+    /// Jailed processes share one in-chroot socket path, so the surviving
+    /// PID is discovered by the `--id` argument instead of the socket path.
+    public func adoptVM(
+        vmId: String, jail: JailerOptions?
+    ) async throws -> (manager: FirecrackerManager, info: InstanceInfo) {
         if let existing = runningVMs[vmId] {
             // Already managed (a replayed sync can race adoption): just report
             // the current instance info against the live manager.
@@ -146,7 +220,7 @@ public actor FirecrackerClient {
             return (existing.manager, info)
         }
 
-        let socketPath = Self.socketPath(socketDirectory: socketDirectory, vmId: vmId)
+        let socketPath = self.socketPath(vmId: vmId, jail: jail)
         guard FileManager.default.fileExists(atPath: socketPath) else {
             throw FirecrackerError.invalidSocketPath(socketPath)
         }
@@ -160,12 +234,18 @@ public actor FirecrackerClient {
 
         // Learn the surviving process's PID so it can still be terminated on
         // delete despite this client never having spawned it.
-        let pid = Self.discoverPID(socketPath: socketPath)
+        let pid = jail != nil ? Self.discoverPID(vmId: vmId) : Self.discoverPID(socketPath: socketPath)
 
         runningVMs[vmId] = RunningVM(
             process: nil,
             adoptedPID: pid,
             socketPath: socketPath,
+            jailDirectory: jail.map {
+                JailerOptions.jailDirectory(
+                    chrootBaseDir: $0.chrootBaseDir,
+                    firecrackerBinaryPath: firecrackerBinaryPath,
+                    vmId: vmId)
+            },
             manager: manager
         )
 
@@ -216,6 +296,13 @@ public actor FirecrackerClient {
             try? FileManager.default.removeItem(atPath: vm.socketPath)
         }
 
+        // A jailed VM's whole world lives under its jail directory (chroot
+        // root, copied-in exec file, drives, sockets) — remove the subtree so
+        // per-sandbox uids never inherit a predecessor's files.
+        if let jailDirectory = vm.jailDirectory {
+            try? FileManager.default.removeItem(atPath: jailDirectory)
+        }
+
         // Remove from tracking
         runningVMs.removeValue(forKey: vmId)
 
@@ -259,6 +346,36 @@ public actor FirecrackerClient {
             // /proc/<pid>/cmdline is NUL-separated argv.
             let args = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
             if let i = args.firstIndex(of: "--api-sock"), i + 1 < args.count, args[i + 1] == socketPath {
+                return pid
+            }
+        }
+        return nil
+        #else
+        return nil
+        #endif
+    }
+
+    /// Finds the PID of the Firecracker process spawned for `vmId` by scanning
+    /// `/proc` for its `--id <vmId>` argument pair. This is the jailed variant
+    /// of `discoverPID(socketPath:)`: every jailed Firecracker sees the same
+    /// in-chroot `--api-sock` path, but the jailer passes each one its unique
+    /// `--id`. Skips `jailer` processes themselves (a jailer that has not yet
+    /// exec'd carries the same `--id`).
+    static func discoverPID(vmId: String) -> Int32? {
+        #if os(Linux)
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: "/proc") else {
+            return nil
+        }
+        for entry in entries {
+            guard let pid = Int32(entry),
+                let data = FileManager.default.contents(atPath: "/proc/\(entry)/cmdline")
+            else { continue }
+            // /proc/<pid>/cmdline is NUL-separated argv.
+            let args = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
+            guard let argv0 = args.first,
+                !URL(fileURLWithPath: argv0).lastPathComponent.contains("jailer")
+            else { continue }
+            if let i = args.firstIndex(of: "--id"), i + 1 < args.count, args[i + 1] == vmId {
                 return pid
             }
         }

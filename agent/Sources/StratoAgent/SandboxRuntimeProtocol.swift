@@ -116,12 +116,17 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
     /// unconfigured interface while the sandbox reported running. Permanent
     /// until guest-side networking lands (a guest-image change).
     case networkingUnsupported
+    /// Setting up the jailer barrier (issue #425) failed host-side — chroot
+    /// staging, ownership, or the network namespace. Transient: these are
+    /// filesystem/tooling operations a retry can succeed at once the host
+    /// condition (disk pressure, an iproute2 hiccup) clears.
+    case jailSetupFailed(String)
 
     var failureClassification: FailureClassification {
         switch self {
         case .runtimeUnavailable, .unsupportedStep, .networkingUnsupported:
             return .permanent
-        case .sandboxNotFound, .adoptionTargetGone, .execSessionNotFound:
+        case .sandboxNotFound, .adoptionTargetGone, .execSessionNotFound, .jailSetupFailed:
             return .transient
         }
     }
@@ -140,6 +145,8 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
             return "exec session not found: \(sessionId)"
         case .networkingUnsupported:
             return "networked sandboxes are not supported yet (the guest image has no in-guest networking)"
+        case .jailSetupFailed(let reason):
+            return "sandbox jail setup failed: \(reason)"
         }
     }
 }

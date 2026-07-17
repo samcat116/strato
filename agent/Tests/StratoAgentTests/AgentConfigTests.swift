@@ -54,6 +54,95 @@ struct AgentConfigTests {
         #expect(config.enableKVM == nil)
     }
 
+    // MARK: - Sandbox jailer settings (issue #425)
+
+    @Test("Load sandbox jailer settings")
+    func loadSandboxJailerSettings() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                sandbox_jailer_mode = "required"
+                sandbox_jailer_binary_path = "/opt/fc/jailer"
+                sandbox_jailer_chroot_dir = "/srv/jails"
+                sandbox_jailer_uid_base = 200000
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+
+            #expect(config.sandboxJailerMode == .required)
+            #expect(config.sandboxJailerBinaryPath == "/opt/fc/jailer")
+            #expect(config.sandboxJailerChrootDir == "/srv/jails")
+            #expect(config.sandboxJailerUidBase == 200_000)
+        }
+    }
+
+    @Test("Sandbox jailer settings default to nil when absent")
+    func sandboxJailerSettingsDefaultNil() throws {
+        try withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
+                toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+
+            #expect(config.sandboxJailerMode == nil)
+            #expect(config.sandboxJailerBinaryPath == nil)
+            #expect(config.sandboxJailerChrootDir == nil)
+            #expect(config.sandboxJailerUidBase == nil)
+        }
+    }
+
+    @Test("A misspelled sandbox_jailer_mode is rejected, never silently weakened to auto")
+    func invalidSandboxJailerModeRejected() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                sandbox_jailer_mode = "requierd"
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            #expect(throws: AgentConfigError.self) {
+                try AgentConfig.load(from: configPath)
+            }
+        }
+    }
+
+    @Test("A uid base without room for the per-sandbox range is rejected")
+    func invalidSandboxJailerUidBaseRejected() throws {
+        try withTempDirectory { tempDirectory in
+            for bad in ["0", "-5", "4294967295"] {
+                let tomlContent = """
+                    control_plane_url = "ws://localhost:8080/agent/ws"
+                    sandbox_jailer_uid_base = \(bad)
+                    """
+                let configPath = tempDirectory.appendingPathComponent("config.toml").path
+                try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+                #expect(throws: AgentConfigError.self) {
+                    try AgentConfig.load(from: configPath)
+                }
+            }
+        }
+    }
+
+    @Test("Jailer defaults: binary beside firecracker, chroot under VM storage")
+    func sandboxJailerDefaults() {
+        // The sibling path only wins when it exists on the test host, so pin
+        // the fallback shape instead: an absent sibling falls back to the
+        // sibling path itself (the well-known locations are also absent here).
+        let binary = AgentConfig.defaultSandboxJailerBinaryPath(
+            firecrackerBinaryPath: "/nonexistent/bin/firecracker")
+        #expect(binary == "/nonexistent/bin/jailer")
+
+        #expect(
+            AgentConfig.defaultSandboxJailerChrootDir(vmStoragePath: "/var/lib/strato/vms")
+                == "/var/lib/strato/vms/jailer")
+        #expect(AgentConfig.defaultSandboxJailerUidBase == 100_000)
+    }
+
     // MARK: - TOML Loading Tests
 
     @Test("Load valid TOML configuration")

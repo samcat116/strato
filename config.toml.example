@@ -96,6 +96,34 @@ log_level = "info"
 # KVM are usable AND something exists at this path.
 # Optional - defaults to /var/lib/strato/sandbox/guest
 # sandbox_guest_image_path = "/var/lib/strato/sandbox/guest"
+#
+# Sandbox jailer hardening (issue #425). Sandboxes run untrusted workloads,
+# so their Firecracker processes are wrapped in the jailer barrier: chroot,
+# privilege drop to a per-sandbox uid/gid, an empty per-sandbox network
+# namespace, and (on cgroup-v2 hosts) a memory ceiling.
+#   "auto"     - default: jail when the host can (agent running as root and
+#                the jailer binary present); otherwise log a warning and run
+#                sandboxes unjailed (dev posture).
+#   "required" - never run a sandbox unjailed: when the jailer is unusable the
+#                agent does not advertise the sandbox capability at all.
+#                Recommended for production.
+#   "disabled" - never jail (debugging escape hatch).
+# sandbox_jailer_mode = "auto"
+#
+# Path to the jailer binary (ships in the Firecracker release tarball).
+# Optional - defaults to "jailer" beside firecracker_binary_path, then
+# /usr/local/bin/jailer, /usr/bin/jailer.
+# sandbox_jailer_binary_path = "/usr/local/bin/jailer"
+#
+# Base directory for per-sandbox chroots. Each jail holds a full writable
+# rootfs copy, so this lives under VM storage by default.
+# Optional - defaults to <vm_storage_dir>/jailer
+# sandbox_jailer_chroot_dir = "/var/lib/strato/vms/jailer"
+#
+# First uid/gid of the per-sandbox range (65536 ids; each sandbox gets a
+# deterministic uid derived from its id). Must not collide with real users.
+# Optional - defaults to 100000
+# sandbox_jailer_uid_base = 100000
 
 # OVN chassis bootstrap (Linux, network_mode = "ovn" only)
 #

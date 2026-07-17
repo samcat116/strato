@@ -248,6 +248,16 @@ private func launchAgent(
     let finalSandboxGuestImagePath =
         config.sandboxGuestImagePath ?? AgentConfig.defaultSandboxGuestImagePath
 
+    // Resolve the sandbox jailer settings (issue #425)
+    let finalSandboxJailerMode = config.sandboxJailerMode ?? .auto
+    let finalSandboxJailerBinaryPath =
+        config.sandboxJailerBinaryPath
+        ?? AgentConfig.defaultSandboxJailerBinaryPath(firecrackerBinaryPath: finalFirecrackerBinaryPath)
+    let finalSandboxJailerChrootDir =
+        config.sandboxJailerChrootDir
+        ?? AgentConfig.defaultSandboxJailerChrootDir(vmStoragePath: finalVMStoragePath)
+    let finalSandboxJailerUidBase = config.sandboxJailerUidBase ?? AgentConfig.defaultSandboxJailerUidBase
+
     // Resolve hypervisor type
     let finalHypervisorType = config.hypervisorType ?? AgentConfig.defaultHypervisorType
 
@@ -277,6 +287,7 @@ private func launchAgent(
             "firecrackerBinaryPath": .string(finalFirecrackerBinaryPath),
             "firecrackerSocketDir": .string(finalFirecrackerSocketDir),
             "sandboxGuestImagePath": .string(finalSandboxGuestImagePath),
+            "sandboxJailerMode": .string(finalSandboxJailerMode.rawValue),
             "hypervisorType": .string(finalHypervisorType.rawValue),
             "hardwareAcceleration": .string(finalHardwareAcceleration ? "enabled" : "disabled"),
             "logLevel": .string(finalLogLevel),
@@ -312,6 +323,10 @@ private func launchAgent(
         firecrackerBinaryPath: finalFirecrackerBinaryPath,
         firecrackerSocketDir: finalFirecrackerSocketDir,
         sandboxGuestImagePath: finalSandboxGuestImagePath,
+        sandboxJailerMode: finalSandboxJailerMode,
+        sandboxJailerBinaryPath: finalSandboxJailerBinaryPath,
+        sandboxJailerChrootDir: finalSandboxJailerChrootDir,
+        sandboxJailerUidBase: finalSandboxJailerUidBase,
         hypervisorType: finalHypervisorType,
         hardwareAccelerationEnabled: finalHardwareAcceleration,
         spiffeConfig: config.spiffe,

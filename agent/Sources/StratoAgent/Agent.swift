@@ -10,6 +10,9 @@ import StratoAgentSPIFFE
 #if os(Linux)
 // One shared Firecracker client backs both VMs and sandboxes (issue #421).
 import SwiftFirecracker
+// geteuid(): the jailer needs root, so the start-time jailer resolution
+// (issue #425) checks the effective uid.
+import Glibc
 #endif
 
 enum AgentError: Error, LocalizedError {
@@ -178,6 +181,15 @@ actor Agent {
     // presence gates the sandbox-runtime capability advertised at
     // registration (issue #415).
     private let sandboxGuestImagePath: String?
+    // Sandbox jailer policy (issue #425): resolved once at start() into
+    // either a SandboxJailerConfig for the runtime or, when mode is
+    // `required` and the host can't satisfy it, a blocked-reason that keeps
+    // the sandbox capability dark at every registration.
+    private let sandboxJailerMode: SandboxJailerMode
+    private let sandboxJailerBinaryPath: String
+    private let sandboxJailerChrootDir: String
+    private let sandboxJailerUidBase: UInt32
+    private var sandboxJailerBlockedReason: String?
     private let hypervisorType: HypervisorType
     private let hardwareAccelerationEnabled: Bool
 
@@ -226,6 +238,10 @@ actor Agent {
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
         firecrackerSocketDir: String = "/tmp/firecracker",
         sandboxGuestImagePath: String? = nil,
+        sandboxJailerMode: SandboxJailerMode = .auto,
+        sandboxJailerBinaryPath: String = "/usr/local/bin/jailer",
+        sandboxJailerChrootDir: String = "/var/lib/strato/vms/jailer",
+        sandboxJailerUidBase: UInt32 = AgentConfig.defaultSandboxJailerUidBase,
         hypervisorType: HypervisorType = .qemu,
         hardwareAccelerationEnabled: Bool = true,
         spiffeConfig: SPIFFEConfig? = nil,
@@ -250,6 +266,10 @@ actor Agent {
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.firecrackerSocketDir = firecrackerSocketDir
         self.sandboxGuestImagePath = sandboxGuestImagePath
+        self.sandboxJailerMode = sandboxJailerMode
+        self.sandboxJailerBinaryPath = sandboxJailerBinaryPath
+        self.sandboxJailerChrootDir = sandboxJailerChrootDir
+        self.sandboxJailerUidBase = sandboxJailerUidBase
         self.hypervisorType = hypervisorType
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         self.spiffeConfig = spiffeConfig
@@ -391,15 +411,61 @@ actor Agent {
         // prerequisite the capability probe gates on — so a build without one
         // leaves `sandboxRuntime` nil and never attracts sandbox placements.
         if let sandboxGuestImagePath {
-            logger.info("Initializing sandbox runtime (Linux only)")
-            sandboxRuntime = FirecrackerSandboxRuntime(
-                logger: logger,
-                client: firecrackerClient,
-                imageService: SandboxImageService(logger: logger),
-                socketDirectory: firecrackerSocketDir,
-                sandboxStoragePath: vmStoragePath,
-                guestImagePath: sandboxGuestImagePath
-            )
+            // Resolve the jailer barrier (issue #425) once, at start: sandboxes
+            // run untrusted workloads, so the production posture is jailed.
+            // The config (layout) is built unconditionally — even an unjailed
+            // agent needs it to re-adopt and tear down jailed orphans from a
+            // previous life; the resolution only decides whether *new*
+            // sandboxes get the barrier.
+            let jailerConfig = SandboxJailerConfig(
+                jailerBinaryPath: sandboxJailerBinaryPath,
+                chrootBaseDir: sandboxJailerChrootDir,
+                uidBase: sandboxJailerUidBase)
+            var jailNewSandboxes = false
+            switch SandboxJailerResolver.resolve(
+                mode: sandboxJailerMode,
+                jailerBinaryPath: sandboxJailerBinaryPath,
+                isRoot: geteuid() == 0,
+                isExecutable: { FileManager.default.isExecutableFile(atPath: $0) }
+            ) {
+            case .jailed:
+                jailNewSandboxes = true
+                logger.info(
+                    "Sandbox jailer enabled",
+                    metadata: [
+                        "jailerBinaryPath": .string(sandboxJailerBinaryPath),
+                        "chrootBaseDir": .string(sandboxJailerChrootDir),
+                    ])
+            case .unjailed(let reason):
+                if let reason {
+                    logger.warning(
+                        "Sandbox jailer unavailable — sandboxes will run UNJAILED. Set sandbox_jailer_mode = \"required\" to refuse instead.",
+                        metadata: ["reason": .string(reason)])
+                }
+            case .blocked(let reason):
+                // `required` unmet: keep the capability dark (see
+                // registerWithControlPlane) and leave the runtime nil so a
+                // stray desired sandbox fails fast instead of running unjailed.
+                sandboxJailerBlockedReason = reason
+                logger.error(
+                    "sandbox_jailer_mode is 'required' but the jailer is unusable; sandbox capability disabled",
+                    metadata: ["reason": .string(reason)])
+            }
+
+            if sandboxJailerBlockedReason == nil {
+                logger.info("Initializing sandbox runtime (Linux only)")
+                sandboxRuntime = FirecrackerSandboxRuntime(
+                    logger: logger,
+                    client: firecrackerClient,
+                    imageService: SandboxImageService(logger: logger),
+                    socketDirectory: firecrackerSocketDir,
+                    sandboxStoragePath: vmStoragePath,
+                    guestImagePath: sandboxGuestImagePath,
+                    firecrackerBinaryPath: firecrackerBinaryPath,
+                    jailer: jailerConfig,
+                    jailNewSandboxes: jailNewSandboxes
+                )
+            }
         } else {
             logger.info("Sandbox guest image path not configured; sandbox runtime disabled")
         }
@@ -696,7 +762,8 @@ actor Agent {
         // placement on (issue #415); the capability string is display-only.
         let sandboxRuntime = SandboxRuntimeProbe.probe(
             firecracker: hypervisors.first { $0.type == .firecracker },
-            guestImagePath: sandboxGuestImagePath
+            guestImagePath: sandboxGuestImagePath,
+            jailerBlockedReason: sandboxJailerBlockedReason
         )
         if sandboxRuntime.capable {
             capabilities.append(SandboxRuntimeProbe.capabilityName)
