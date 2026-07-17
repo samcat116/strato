@@ -1,0 +1,23 @@
+control-plane/Tests/AppTests/ImageFetchRedirectTests.swift
+  s_066b55920da146::t_a0e1fde7200983 1-26,35,38-42,46,48,50-51,53,62-63,66-69,71-74,82-91,93-94,96-104,107-208
+  s_066b55920da146::t_5b9e262fa06bfc 105-106
+  s_066b55920da146::t_f7fe732c2f0d96 27-34,36-37,43-45,47,49,52,54-61,64-65,70,75-81,92,95
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_066b55920da146::t_cfbd330418a8e6 340-346
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "89391d4617d9566ba9bb85f5a087b9d4853f4f50",
+  "prompts": {},
+  "sessions": {
+    "s_066b55920da146": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "66d217b0-a1eb-472b-bddf-6de6ee91db37",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
