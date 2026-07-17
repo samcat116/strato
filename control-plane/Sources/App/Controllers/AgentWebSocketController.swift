@@ -25,6 +25,10 @@ struct AgentWebSocketController: RouteCollection {
     /// All access happens on the WebSocket's event loop, so no actual concurrency.
     private final class MessageState: @unchecked Sendable {
         var buffer: [String] = []
+        /// Total bytes held in `buffer`, checked against
+        /// `maxPreAuthBufferBytes` so an unauthenticated peer cannot grow the
+        /// buffer without bound while validation is in flight.
+        var bufferedBytes = 0
         /// Set exactly once, when authentication succeeds; nil means "buffer".
         var agentName: String?
         /// Whether this connection authenticated by redeeming a registration
@@ -43,6 +47,30 @@ struct AgentWebSocketController: RouteCollection {
         var pendingOrganizationScope: OrganizationScope?
     }
 
+    /// Ceiling on bytes buffered for a connection whose authentication is
+    /// still in flight. Legitimate pre-auth traffic is a register frame (a few
+    /// KB), at most followed by an early observed-state report; 4 MiB covers
+    /// both with orders-of-magnitude headroom. Without a cap, the route's
+    /// 16 MiB max frame size would let an unauthenticated peer queue
+    /// arbitrarily many large frames during the validation window.
+    private static let maxPreAuthBufferBytes = 1 << 22
+
+    /// Buffers a frame that arrived before authentication completed, closing
+    /// the connection instead if the peer has exceeded the pre-auth cap.
+    /// Runs on the WebSocket's event loop, like all `state` access.
+    private func bufferPreAuthFrame(req: Request, ws: WebSocket, text: String, state: MessageState) {
+        state.bufferedBytes += text.utf8.count
+        guard state.bufferedBytes <= Self.maxPreAuthBufferBytes else {
+            req.logger.warning(
+                "Closing agent WebSocket: pre-authentication buffer limit exceeded",
+                metadata: ["bufferedBytes": .stringConvertible(state.bufferedBytes)])
+            state.buffer.removeAll()
+            _ = ws.close(code: .policyViolation)
+            return
+        }
+        state.buffer.append(text)
+    }
+
     // Non-async handler - runs on WebSocket's event loop
     private func websocketHandler(req: Request, ws: WebSocket) {
         // Register message handlers IMMEDIATELY (before any await) so no frame
@@ -53,7 +81,7 @@ struct AgentWebSocketController: RouteCollection {
             if let agentName = state.agentName {
                 self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
             } else {
-                state.buffer.append(text)
+                self.bufferPreAuthFrame(req: req, ws: ws, text: text, state: state)
             }
         }
 
@@ -65,7 +93,7 @@ struct AgentWebSocketController: RouteCollection {
             if let agentName = state.agentName {
                 self.handleWebSocketMessage(req: req, ws: ws, text: text, agentName: agentName, state: state)
             } else {
-                state.buffer.append(text)
+                self.bufferPreAuthFrame(req: req, ws: ws, text: text, state: state)
             }
         }
 
