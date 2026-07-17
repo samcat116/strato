@@ -1155,6 +1155,14 @@ actor Agent {
 
         logger.warning("Lost connection to control plane; beginning reconnection with backoff")
 
+        // The control plane tears down this agent's console sessions when our
+        // socket drops (otherwise browser terminals freeze), and browsers must
+        // re-establish once we reconnect. Close our side's console pty channels
+        // now so they don't leak — the eventual browser-socket close on the
+        // control plane no-ops on the already-deleted session and never sends
+        // us a disconnect for them.
+        await consoleSocketManager?.disconnectAll()
+
         // Quiesce sandbox streams for the gap (issue #423): live exec sessions
         // end (their frontends are unreachable and the control plane cannot
         // close them over a dead socket), and log follows suspend so workload

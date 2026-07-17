@@ -282,9 +282,11 @@ struct AgentWebSocketController: RouteCollection {
                 return
             }
 
-            // Attached exec sessions cannot outlive the agent socket: close
-            // their browser sockets with an error frame instead of leaving
-            // frozen terminals behind.
+            // Console and attached exec sessions cannot outlive the agent
+            // socket: close their browser sockets with an error frame instead
+            // of leaving frozen terminals behind.
+            req.application.consoleSessionManager.closeAllSessions(
+                forAgent: agentName, reason: "agent disconnected")
             req.application.sandboxExecSessionManager.closeAllSessions(
                 forAgent: agentName, reason: "agent disconnected")
 
@@ -309,8 +311,15 @@ struct AgentWebSocketController: RouteCollection {
                     "agentName": .string(agentName)
                 ])
 
-            // Store WebSocket for this agent (WebSocketManager is lock-protected)
-            req.application.websocketManager.setConnection(agentName: agentName, websocket: ws)
+            // Store WebSocket for this agent (WebSocketManager is lock-protected).
+            // If this reconnect superseded a still-open prior socket, its
+            // console sessions are now stale (a fresh agent process holds no
+            // console pty) and the delayed close will skip them — tear them
+            // down here so their browsers don't sit on a frozen terminal.
+            if req.application.websocketManager.setConnection(agentName: agentName, websocket: ws) != nil {
+                req.application.consoleSessionManager.closeAllSessions(
+                    forAgent: agentName, reason: "agent reconnected")
+            }
 
             // Advertise which replica holds this agent's socket so other
             // replicas can route sync nudges here (issue #261). Refreshed
@@ -832,9 +841,11 @@ struct AgentWebSocketController: RouteCollection {
                     return
                 }
 
-                // Attached exec sessions cannot outlive the agent socket:
-                // close their browser sockets with an error frame instead of
-                // leaving frozen terminals behind.
+                // Console and attached exec sessions cannot outlive the agent
+                // socket: close their browser sockets with an error frame
+                // instead of leaving frozen terminals behind.
+                req.application.consoleSessionManager.closeAllSessions(
+                    forAgent: agentName, reason: "agent disconnected")
                 req.application.sandboxExecSessionManager.closeAllSessions(
                     forAgent: agentName, reason: "agent disconnected")
 
@@ -844,8 +855,15 @@ struct AgentWebSocketController: RouteCollection {
                 }
             }
 
-            // Store WebSocket for this agent
-            req.application.websocketManager.setConnection(agentName: agentName, websocket: ws)
+            // Store WebSocket for this agent. If this reconnect superseded a
+            // still-open prior socket, its console sessions are now stale (a
+            // fresh agent process holds no console pty) and the delayed close
+            // will skip them — tear them down here so their browsers don't sit
+            // on a frozen terminal.
+            if req.application.websocketManager.setConnection(agentName: agentName, websocket: ws) != nil {
+                req.application.consoleSessionManager.closeAllSessions(
+                    forAgent: agentName, reason: "agent reconnected")
+            }
 
             // Advertise which replica holds this agent's socket so other
             // replicas can route sync nudges here (issue #261). Refreshed

@@ -186,6 +186,17 @@ actor ConsoleSocketManager {
         }
     }
 
+    /// Disconnect every active console session. Used when the control-plane
+    /// connection drops: the control plane tears down this agent's console
+    /// sessions on socket loss (browsers must re-establish after we reconnect),
+    /// so these pty channels would otherwise leak, streaming output to session
+    /// IDs the control plane has already deleted.
+    func disconnectAll() async {
+        for sessionId in Array(connections.keys) {
+            await disconnect(sessionId: sessionId)
+        }
+    }
+
     /// Check if a session exists
     func hasSession(sessionId: String) -> Bool {
         return connections[sessionId] != nil
