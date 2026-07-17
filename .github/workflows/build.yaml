@@ -338,15 +338,11 @@ jobs:
         # pkg-config; both are needed to compile the StratoAgent executable.
         run: brew install glib pkg-config
 
-      - name: Cache Swift packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            agent/.build
-            shared/.build
-          key: macos-agent-swift-${{ hashFiles('agent/Package.resolved', 'shared/Package.resolved') }}
-          restore-keys: |
-            macos-agent-swift-
+      # No actions/cache for .build: Actions storage is billed against a 500MB
+      # account quota now that this repo is private, and this cache is scoped
+      # per branch — the same 0.51GB key was resident 7 times over (3.6GB) with
+      # one copy per active branch. This job is gated on agent/shared/firecracker
+      # changes, so it is rare enough to eat a cold build.
 
       # Install the toolchain by dropping the swift.org release .pkg directly.
       # vapor/swiftly-action's macOS path runs a Linux-only (apt/dnf/yum)
@@ -473,7 +469,6 @@ jobs:
           file: ./control-plane/web/Dockerfile
           push: false
           platforms: linux/amd64
-          # Readable from PRs because main-build saves it from main's scope —
-          # the frontend is the one image main-build still keeps a gha cache
-          # for (it compiles from source in-image).
-          cache-from: type=gha,key=frontend-x64
+          # Anonymous read of the public GHCR cache main-build writes; needs no
+          # registry login and works for fork PRs, which can't read gha caches.
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}-frontend:buildcache-x64

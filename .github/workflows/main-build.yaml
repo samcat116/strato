@@ -60,17 +60,17 @@ jobs:
       #
       # x64 runs on the swift-runners-strato ARC scale set, whose
       # RUNNER_TOOL_CACHE is a persistent volume — so the release build tree
-      # lives there via --scratch-path and stays warm across runs, off the 10GB
-      # actions/cache budget entirely. This mirrors build.yaml's Swift test jobs,
-      # which abandoned actions/cache because "every run paid a ~5 minute 1.4GB
-      # upload for a restore that always missed": the repo's ~11GB of caches
-      # (dominated by Docker type=gha blobs) exceeds GitHub's 10GB limit and
-      # evicts the 1.6GB release .build between runs, so this stage recompiled
-      # cold every single time.
+      # lives there via --scratch-path and stays warm across runs, off GitHub's
+      # storage entirely. This mirrors build.yaml's Swift test jobs, which
+      # abandoned actions/cache because "every run paid a ~5 minute 1.4GB upload
+      # for a restore that always missed".
       #
       # arm64 runs on an ephemeral GitHub-hosted runner with no persistent
-      # volume, so it stays on actions/cache + the default .build path (which now
-      # survives because the Docker cache-to churn below is trimmed).
+      # volume, so it builds cold. It used to keep a 1.6GB .build in
+      # actions/cache; that is gone because this repo is private and Actions
+      # storage is now billed against a 500MB account quota that a single
+      # release .build exceeds three times over. Restoring warm arm64 builds
+      # means an arm64 runner with a persistent volume, not actions/cache.
       - name: Configure release build cache
         run: |
           if [ "${{ matrix.arch }}" = "x64" ]; then
@@ -99,21 +99,6 @@ jobs:
               fi
             fi
           done
-
-      # Cache key salt (`v2`): #386 moved the x64 leg out of the swift job
-      # container, poisoning the pre-#386 .build ModuleCache; the salt bump
-      # sidestepped it. x64 no longer uses this step (see above); arm64 does.
-      - name: Cache Swift packages
-        if: matrix.arch == 'arm64'
-        uses: actions/cache@v4
-        with:
-          path: |
-            control-plane/.build
-            agent/.build
-            shared/.build
-          key: ${{ runner.os }}-${{ matrix.arch }}-swift-release-v2-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-swift-release-v2-
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -355,8 +340,13 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ steps.meta.outputs.created }}
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
-          cache-from: type=gha,key=frontend-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,key=frontend-${{ matrix.arch }}
+          # Registry cache, not type=gha: the gha backend writes into Actions
+          # storage, which this private repo pays for out of a 500MB quota (the
+          # frontend's mode=max blobs alone were ~3.8GB). GHCR is free because
+          # strato-frontend is a public package, and unlike gha the cache is
+          # readable from PR builds — no branch scoping.
+          cache-from: type=registry,ref=${{ steps.meta.outputs.name }}:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ steps.meta.outputs.name }}:buildcache-${{ matrix.arch }},mode=max
           build-args: |
             STRATO_VERSION=main
             STRATO_GIT_SHA=${{ github.sha }}
@@ -434,3 +424,48 @@ jobs:
           DIGESTS=$(for f in /tmp/digests/digest-frontend-*/*; do printf '%s@sha256:%s ' "$REF" "$(basename "$f")"; done)
           docker buildx imagetools create -t "${REF}:main" -t "${REF}:main-${SHA}" $DIGESTS
           docker buildx imagetools inspect "${REF}:main-${SHA}"
+
+  # The swift-binaries-* and digest-* artifacts are a job-to-job handoff, dead
+  # the moment publish-manifests reads them — but retention-days:1 is the floor
+  # GitHub allows, so they would otherwise sit in billed storage for ~24h. At
+  # ~117MB per run against a 500MB account quota, four merges in a day is enough
+  # to wedge every subsequent upload with "Artifact storage quota has been hit".
+  # Deleting them here cuts their life from a day to the length of a run.
+  #
+  # always(): a failed run's artifacts cost the same as a successful one's, and
+  # a run that dies after upload is exactly when the quota is most at risk.
+  cleanup-artifacts:
+    name: Delete Run Artifacts
+    needs: [publish-manifests]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete this run's artifacts
+        # Cleanup is best-effort end to end: by this point the images are
+        # published and the run's real work is done, so nothing here — not even
+        # the listing call below failing — should turn the build red.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ids=$(gh api --paginate \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+            --jq '.artifacts[].id')
+          if [ -z "$ids" ]; then
+            echo "No artifacts to delete."
+            exit 0
+          fi
+          # A delete that 404s (retention already reaped it) or trips a transient
+          # 5xx is not worth failing over; worst case the artifact expires on its
+          # own in 24h.
+          for id in $ids; do
+            if gh api -X DELETE \
+              "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" >/dev/null 2>&1; then
+              echo "deleted artifact ${id}"
+            else
+              echo "::warning::could not delete artifact ${id}; leaving it to expire"
+            fi
+          done
