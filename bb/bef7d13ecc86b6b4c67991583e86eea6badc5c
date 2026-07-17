@@ -1,0 +1,35 @@
+control-plane/Sources/App/Services/ImageValidationService.swift
+  s_066b55920da146::t_513ddb177ffc2a 28-41
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_066b55920da146::t_f1c770c648a93e 72,89-94
+  s_066b55920da146::t_ecf80a9540223a 95,262-383
+  s_066b55920da146::t_499441209a95ce 96
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_066b55920da146::t_831d1326f21b05 408-413,421-432
+control-plane/web/src/components/images/upload-image-dialog.tsx
+  s_066b55920da146::t_cd9ab6829e863b 92
+  s_066b55920da146::t_a4bd1bdfb5716a 137-140,142-143
+  s_066b55920da146::t_3c3a814b23e036 115
+  s_066b55920da146::t_ac70eae19af58d 222-228
+  s_066b55920da146::t_f20d3d00c7e68f 171-175
+  s_066b55920da146::t_f52454160ddcf7 36-45
+  s_066b55920da146::t_70d7e134cbd447 474,477
+control-plane/Tests/AppTests/ImageValidationServiceTests.swift
+  s_066b55920da146::t_28678ed9f67376 145-160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "bbbef7d13ecc86b6b4c67991583e86eea6badc5c",
+  "prompts": {},
+  "sessions": {
+    "s_066b55920da146": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "66d217b0-a1eb-472b-bddf-6de6ee91db37",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
