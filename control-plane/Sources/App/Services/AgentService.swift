@@ -846,6 +846,12 @@ actor AgentService {
 
                     try self.checkTickPreconditions()
 
+                    // Delete sandboxes past their TTL, and reap terminal
+                    // sandbox records past the retention window (issue #424).
+                    await sweepExpiredSandboxes()
+
+                    try self.checkTickPreconditions()
+
                     // Advance the agent auto-update rollout one agent at a
                     // time (issue #434).
                     await sweepAgentAutoUpdates()
@@ -1112,6 +1118,161 @@ actor AgentService {
         }
         if changed {
             try await sandbox.save(on: db)
+        }
+    }
+
+    // MARK: - Sandbox expiry (issue #424)
+
+    /// How long a terminal sandbox's record is kept by default.
+    static let defaultSandboxRetentionHours = 24
+
+    /// The retention window for terminal sandboxes, or nil when retention is
+    /// off. `SANDBOX_RETENTION_HOURS` overrides the default; a non-positive
+    /// value keeps terminal records — and the quota they still hold — forever,
+    /// which is a deliberate opt-in, not the default.
+    static var sandboxRetentionHours: Int? {
+        guard let raw = Environment.get("SANDBOX_RETENTION_HOURS").flatMap(Int.init) else {
+            return defaultSandboxRetentionHours
+        }
+        return raw > 0 ? raw : nil
+    }
+
+    /// Why the expiry sweep is deleting a sandbox. Both reasons end in the
+    /// same deletion; they differ only in what started the clock.
+    private enum SandboxExpiryReason {
+        /// The lifetime budget ran out (`ttl_seconds` from `createdAt`).
+        case ttl(seconds: Int)
+        /// A terminal sandbox outlived the retention window for its record.
+        case retention(hours: Int)
+
+        var description: String {
+            switch self {
+            case .ttl(let seconds):
+                return "TTL of \(seconds)s elapsed"
+            case .retention(let hours):
+                return "terminal record retained for \(hours)h"
+            }
+        }
+    }
+
+    /// Deletes sandboxes that have outlived either clock (issue #424):
+    ///
+    /// - **TTL** — `ttl_seconds` past `createdAt`. Sandboxes are ephemeral;
+    ///   this is what makes the stored budget real.
+    /// - **Retention** — an exited or errored sandbox keeps its terminal
+    ///   record (status and exit code) for `SANDBOX_RETENTION_HOURS` so the
+    ///   result stays inspectable, then the row goes. Errored sandboxes are
+    ///   included because they are terminal too and would otherwise hold their
+    ///   quota indefinitely.
+    ///
+    /// Cluster-singleton via the sweep lock, and level-triggered like every
+    /// other sweep: a skipped or crashed pass costs latency, never
+    /// correctness, because the next tick recomputes both clocks from scratch.
+    ///
+    /// Internal rather than private so tests can drive a pass directly.
+    func sweepExpiredSandboxes() async {
+        // Never touch app.db once shutdown has begun — after core teardown
+        // that is a process-killing fatal error, not a throw.
+        guard !isShutDown, !app.didShutdown else { return }
+        guard await app.coordination.acquireSweepLock("sandbox_expiry") else {
+            app.logger.debug("Skipping sandbox expiry sweep; lock held by another control-plane instance")
+            return
+        }
+
+        let db = app.db
+        let now = Date()
+
+        do {
+            var expiring: [(sandbox: Sandbox, reason: SandboxExpiryReason)] = []
+
+            // A sandbox already heading for `.absent` is being deleted by
+            // something else; leave it to that operation.
+            let budgeted = try await Sandbox.query(on: db)
+                .filter(\.$desiredStatus != .absent)
+                .filter(\.$ttlSeconds != nil)
+                .all()
+            for sandbox in budgeted where sandbox.isExpired(at: now) {
+                expiring.append((sandbox, .ttl(seconds: sandbox.ttlSeconds ?? 0)))
+            }
+
+            if let hours = Self.sandboxRetentionHours {
+                let window = TimeInterval(hours) * 3600
+                // A sandbox already expiring on TTL must not be queued twice:
+                // the second `begin` would collide with the first's pending
+                // operation and log a spurious conflict.
+                let alreadyExpiring = Set(expiring.compactMap(\.sandbox.id))
+                let terminal = try await Sandbox.query(on: db)
+                    .filter(\.$desiredStatus != .absent)
+                    .filter(\.$status ~~ [.exited, .error])
+                    .all()
+
+                for sandbox in terminal {
+                    guard let sandboxID = sandbox.id, !alreadyExpiring.contains(sandboxID) else { continue }
+                    // `statusChangedAt` is stamped on the transition into the
+                    // terminal status; the fallbacks are safety nets for rows
+                    // that predate it.
+                    let terminalSince = sandbox.statusChangedAt ?? sandbox.updatedAt ?? now
+                    guard now.timeIntervalSince(terminalSince) > window else { continue }
+                    expiring.append((sandbox, .retention(hours: hours)))
+                }
+            }
+
+            for (sandbox, reason) in expiring {
+                await expireSandbox(sandbox, reason: reason, on: db)
+            }
+        } catch {
+            app.logger.error("Sandbox expiry sweep failed: \(error)")
+        }
+    }
+
+    /// Deletes one expired sandbox down the same path as `DELETE
+    /// /api/sandboxes/:id`: a pending `.delete` operation and desired
+    /// `.absent` in one transaction, then either agent teardown (the row goes
+    /// once a report confirms absence) or — with no agent to converge on — a
+    /// direct record delete. Sharing the path is the point: quota release,
+    /// reservation release, and operation accounting all come for free, and
+    /// the operation row makes the unattended deletion auditable.
+    private func expireSandbox(_ sandbox: Sandbox, reason: SandboxExpiryReason, on db: Database) async {
+        guard let sandboxID = sandbox.id else { return }
+
+        var onlineAgentID: String?
+        if let agentId = sandbox.hypervisorId, let agent = await getAgentInfo(agentId), agent.status == .online {
+            onlineAgentID = agentId
+        }
+
+        do {
+            let operation = try await ResourceOperation.begin(
+                .delete,
+                resourceKind: .sandbox,
+                resourceID: sandboxID,
+                userID: ResourceOperation.systemUserID,
+                on: db
+            ) { db in
+                sandbox.setDesiredStatus(.absent)
+                try await sandbox.save(on: db)
+            }
+
+            app.logger.info(
+                "Expiring sandbox",
+                metadata: [
+                    "sandboxId": .string(sandboxID.uuidString),
+                    "reason": .string(reason.description),
+                    "operationId": .string(operation.id?.uuidString ?? ""),
+                ])
+
+            if let onlineAgentID {
+                await syncDesiredState(agentId: onlineAgentID)
+            } else {
+                SandboxController.runDirectSandboxDeletion(operation, sandbox: sandbox, app: app)
+            }
+        } catch {
+            // `begin` rejects with 409 when an operation is already pending —
+            // a user action owns the sandbox right now. Both clocks are
+            // recomputed next tick, so an expired sandbox is never dropped,
+            // only deferred.
+            app.logger.debug(
+                "Skipping sandbox expiry: \(error)",
+                metadata: ["sandboxId": .string(sandboxID.uuidString)])
         }
     }
 

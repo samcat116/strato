@@ -8,7 +8,6 @@ import {
   Cpu,
   MemoryStick,
   Clock,
-  Timer,
   Terminal,
   ScrollText,
 } from "lucide-react";
@@ -20,6 +19,7 @@ import {
   SandboxStatusBadge,
   SandboxActions,
   SandboxLogViewer,
+  SandboxTtlCard,
   formatMemory,
 } from "@/components/sandboxes";
 import { useSandbox, useInvalidateSandboxes } from "@/lib/hooks";
@@ -183,19 +183,10 @@ export default function SandboxDetailPage() {
                 </div>
               </CardContent>
             </Card>
-            <Card className="bg-card border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <Timer className="h-4 w-4" />
-                  TTL
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-xl font-bold text-foreground">
-                  {sandbox.ttlSeconds != null ? `${sandbox.ttlSeconds}s` : "—"}
-                </div>
-              </CardContent>
-            </Card>
+            <SandboxTtlCard
+              ttlSeconds={sandbox.ttlSeconds}
+              expiresAt={sandbox.expiresAt}
+            />
             <Card className="bg-card border-border">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">

@@ -128,6 +128,15 @@ final class ResourceOperation: Model, @unchecked Sendable {
 }
 
 extension ResourceOperation {
+    /// The actor recorded on operations the control plane starts by itself,
+    /// with no user behind them — today the sandbox expiry sweep (issue #424).
+    /// `user_id` deliberately has no foreign key (operations outlive the rows
+    /// they delete), so a sentinel matching no real user is safe. It also
+    /// scopes visibility sensibly: `OperationController` shows an operation to
+    /// its initiator or a system admin, and an unattended deletion has no
+    /// initiator to show it to.
+    static let systemUserID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+
     /// Marks the operation terminal if — and only if — it is still pending, so
     /// the two completion paths (agent response and stuck-operation sweep)
     /// cannot overwrite each other's verdict. Returns whether this call won.

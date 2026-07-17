@@ -182,9 +182,9 @@ same asymmetric hazard as the v3 networks list:
 
 - `Sandbox` model (`control-plane/Sources/App/Models/Sandbox.swift`) with the
   same desired/observed generation split as VMs, plus sandbox-only fields:
-  the OCI ref and resolved digest, entrypoint/cmd/env/workdir overrides, a
-  stored-but-unenforced `ttl_seconds` (enforcement is #424), and the reported
-  exit code (#413, landed).
+  the OCI ref and resolved digest, entrypoint/cmd/env/workdir overrides,
+  `ttl_seconds` (enforced by the expiry sweep below), and the reported exit
+  code (#413, landed).
 - `/api/sandboxes` (`SandboxController`): list/create/show/update/delete +
   start/stop/restart + status + operations. Mutations insert a
   `resource_operations` row (`resource_kind = sandbox`) and bump desired state
@@ -202,6 +202,23 @@ same asymmetric hazard as the v3 networks list:
   Valkey placement reservations as VMs; the reservation releases on the same
   triggers (send failure, the agent's observed-state reports accounting for
   the sandbox, deletion confirmation, TTL backstop).
+- **TTL and auto-expiry (#424)**: sandboxes are ephemeral, and
+  `sweepExpiredSandboxes` (on the `AgentService` heartbeat tick, a
+  cluster-singleton under the `sandbox_expiry` sweep lock) is what makes that
+  real. It deletes on two clocks: **TTL** — `ttl_seconds` past `created_at`,
+  surfaced to clients as the derived `expiresAt` and counted down on the
+  detail page — and **retention** — an exited or errored sandbox keeps its
+  terminal record (status and exit code) for `SANDBOX_RETENTION_HOURS`
+  (default 24; a non-positive value keeps terminal records forever), then the
+  row goes. Errored sandboxes are included because they are terminal too and
+  would otherwise hold their quota indefinitely. Both take the *same* path as
+  `DELETE /api/sandboxes/:id` — a `resource_operations` row (attributed to a
+  system sentinel user, so the unattended deletion stays auditable) plus
+  desired `.absent` in one transaction, then agent teardown or, with no agent
+  to converge on, a direct record delete — so quota and placement reservations
+  release identically. Level-triggered like every sweep: a sandbox whose
+  deletion is deferred (an operation is already pending) is simply
+  re-evaluated next tick.
 - **Quota accounting (#415)**: sandbox vCPUs and memory draw from the *same*
   `ResourceQuota` pools as VMs — `calculateActualUsage` and the reservation
   resync sum both workload kinds — while the count limit is a separate
