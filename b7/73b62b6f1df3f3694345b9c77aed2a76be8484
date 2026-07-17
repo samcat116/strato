@@ -1,0 +1,33 @@
+SwiftFirecracker/Tests/SwiftFirecrackerTests/JailerOptionsTests.swift
+  s_a80ae461e08851::t_735dc93bb90085 80-100
+docs/architecture/sandboxes.md
+  s_a80ae461e08851::t_9d1931de526d9c 413-416
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_a80ae461e08851::t_5c4bfb1ba77f21 300-303,311-313,328-337
+  s_a80ae461e08851::t_ec5a512ec58c31 259-263
+  s_a80ae461e08851::t_c498f4710a2200 193-198,264
+  s_a80ae461e08851::t_956cc0e9989196 32-35
+  s_a80ae461e08851::t_0d105d55856e63 338,393-397,412,422-430
+  s_a80ae461e08851::t_8967999b47656c 339
+  s_a80ae461e08851::t_4da8b9257a5434 431-432
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_a80ae461e08851::t_93494070a896f1 1238-1239,1242-1244
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Jailer.swift
+  s_a80ae461e08851::t_c7ec1ef57293b0 88-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "b773b62b6f1df3f3694345b9c77aed2a76be8484",
+  "prompts": {},
+  "sessions": {
+    "s_a80ae461e08851": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8acc851f-5517-4c80-8b67-2216544b35d9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
