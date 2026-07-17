@@ -737,19 +737,33 @@ actor Agent {
         // (binary + KVM, folded into its probe) plus the guest base image
         // present on disk. The typed flag is what the scheduler keys sandbox
         // placement on (issue #415); the capability string is display-only.
-        let sandboxRuntime = SandboxRuntimeProbe.probe(
+        //
+        // The host probe is necessary but not sufficient: this agent must also
+        // actually hold a runtime to serve the workload. Simulation mode is the
+        // case that separates them — it registers mock hypervisors (whose
+        // Firecracker support reports available) but deliberately creates no
+        // sandbox runtime, so on any Linux host that happens to have a guest
+        // image installed the probe alone would advertise sandboxCapable and
+        // every sandbox scheduled here would fail with runtimeUnavailable.
+        // Never advertise what we cannot serve.
+        let sandboxProbe = SandboxRuntimeProbe.probe(
             firecracker: hypervisors.first { $0.type == .firecracker },
             guestImagePath: sandboxGuestImagePath
         )
-        if sandboxRuntime.capable {
+        let sandboxCapable = sandboxProbe.capable && sandboxRuntime != nil
+        if sandboxCapable {
             capabilities.append(SandboxRuntimeProbe.capabilityName)
         } else {
             #if os(Linux)
             // Only worth a log where the runtime could ever exist.
+            let reason =
+                sandboxProbe.unavailabilityReason
+                ?? (isSimulationMode
+                    ? "simulation mode provides no sandbox runtime" : "sandbox runtime was not initialized")
             logger.info(
                 "Sandbox runtime unavailable; not advertising sandbox capability",
                 metadata: [
-                    "reason": .string(sandboxRuntime.unavailabilityReason ?? "unknown")
+                    "reason": .string(reason)
                 ])
             #endif
         }
@@ -764,7 +778,7 @@ actor Agent {
             architecture: CPUArchitecture.current,
             hypervisors: hypervisors,
             networkCapability: networkCapability,
-            sandboxCapable: sandboxRuntime.capable,
+            sandboxCapable: sandboxCapable,
             operatingSystem: OperatingSystem.current,
             hostInfo: HostInfoProbe.gather()
         )
