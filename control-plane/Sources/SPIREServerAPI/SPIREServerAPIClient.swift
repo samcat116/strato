@@ -411,13 +411,19 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
         }
     }
 
+    /// Page size requested from the SPIRE server's list APIs. SPIRE only engages
+    /// datastore pagination when `page_size > 0` (leaving it 0 makes it return
+    /// the entire result set in a single response), so an explicit bound is what
+    /// keeps these reads paging in chunks rather than loading a whole trust
+    /// domain at once.
+    private static let listPageSize: Int32 = 100
+
     public func listEntries() async throws -> [SPIREEntry] {
-        // Page through the full result set: the server may impose its own page
-        // size even when none is requested (see deleteEntries).
         var entries: [SPIREEntry] = []
         var pageToken = ""
         repeat {
             var request = Spire_Api_Server_Entry_V1_ListEntriesRequest()
+            request.pageSize = Self.listPageSize
             request.pageToken = pageToken
 
             let response: Spire_Api_Server_Entry_V1_ListEntriesResponse = try await unary(
@@ -434,6 +440,7 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
         var pageToken = ""
         repeat {
             var request = Spire_Api_Server_Agent_V1_ListAgentsRequest()
+            request.pageSize = Self.listPageSize
             request.pageToken = pageToken
 
             let response: Spire_Api_Server_Agent_V1_ListAgentsResponse = try await unary(
