@@ -3,10 +3,17 @@ import Vapor
 import Foundation
 import StratoShared
 
-/// Represents the format of a VM disk image
+/// Represents the format of a VM disk image.
+///
+/// Agents never convert *from* this value — `materializeDisk` re-detects the
+/// source format with `qemu-img info` — so these cases describe what we store
+/// and show, not what the hypervisor is handed. qemu-img reads all of them.
 public enum ImageFormat: String, Codable, CaseIterable, Sendable {
     case qcow2 = "qcow2"
     case raw = "raw"
+    case vmdk = "vmdk"
+    case vhd = "vhd"
+    case vhdx = "vhdx"
 }
 
 /// Represents the status of an image during its lifecycle
@@ -57,8 +64,18 @@ final class Image: Model, @unchecked Sendable {
     @Children(for: \.$image)
     var artifacts: [ImageArtifact]
 
+    /// SHA-256 of the bytes we actually stored. Computed, never user-supplied —
+    /// `VMSpecBuilder` hands this to agents to verify their own download against,
+    /// so it must always describe the real file.
     @OptionalField(key: "checksum")
     var checksum: String?
+
+    /// SHA-256 the caller expects the source to have, for URL imports. Compared
+    /// against `checksum` once the download finishes; a mismatch fails the image
+    /// rather than publishing it. Kept separate from `checksum` precisely because
+    /// that one is a fact about our bytes and this one is a claim about theirs.
+    @OptionalField(key: "expected_checksum")
+    var expectedChecksum: String?
 
     // Storage location (relative path from IMAGE_STORAGE_PATH)
     @OptionalField(key: "storage_path")
@@ -276,6 +293,8 @@ struct CreateImageRequest: Content {
     let description: String?
     let sourceURL: String?
     let architecture: CPUArchitecture?
+    /// Optional SHA-256 (64 hex chars) the downloaded image must match.
+    let checksum: String?
     let defaultCpu: Int?
     let defaultMemory: Int64?
     let defaultDisk: Int64?
@@ -288,6 +307,7 @@ struct CreateImageRequest: Content {
         description: String? = nil,
         sourceURL: String? = nil,
         architecture: CPUArchitecture? = nil,
+        checksum: String? = nil,
         defaultCpu: Int? = nil,
         defaultMemory: Int64? = nil,
         defaultDisk: Int64? = nil,
@@ -297,6 +317,7 @@ struct CreateImageRequest: Content {
         self.description = description
         self.sourceURL = sourceURL
         self.architecture = architecture
+        self.checksum = checksum
         self.defaultCpu = defaultCpu
         self.defaultMemory = defaultMemory
         self.defaultDisk = defaultDisk

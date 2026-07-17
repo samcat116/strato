@@ -119,6 +119,9 @@ export const imagesApi = {
     if (metadata.architecture) {
       formData.append("architecture", metadata.architecture);
     }
+    if (metadata.format) {
+      formData.append("format", metadata.format);
+    }
     if (metadata.defaultCpu) {
       formData.append("defaultCpu", metadata.defaultCpu.toString());
     }

@@ -117,8 +117,32 @@ actor ImageFetchService: ImageFetchServiceProtocol {
                 try await self?.updateProgress(imageId: imageId, progress: progress, db: db)
             }
 
-            // Update image with results
             let relativePath = "\(projectId)/\(imageId)/\(image.filename)"
+
+            // Verify against the caller's expected digest before publishing. The
+            // download already hashed every byte in-stream, so this costs nothing
+            // beyond the comparison. A mismatch means the bytes aren't what was
+            // asked for: bin them rather than leave an unreferenced file behind,
+            // and fail the image instead of serving it to an agent.
+            if let expected = image.expectedChecksum, expected != checksum {
+                image.status = .validating
+                try await image.save(on: db)
+
+                try? ImageStorageService.deleteFileAt(
+                    storagePath: storagePath, relativePath: relativePath)
+
+                app.logger.warning(
+                    "Image checksum mismatch",
+                    metadata: [
+                        "image_id": .string(imageId.uuidString),
+                        "expected": .string(expected),
+                        "actual": .string(checksum),
+                    ])
+                throw ImageError.downloadFailed(
+                    "Checksum verification failed: expected \(expected), got \(checksum)")
+            }
+
+            // Update image with results
             image.size = size
             image.checksum = checksum
             image.format = format
@@ -313,6 +337,13 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         request.headers.add(name: "User-Agent", value: "Strato/1.0")
         request.headers.add(name: "Accept", value: "*/*")
 
+        // `status` here is the FINAL response: `httpClient` is built with the
+        // default configuration, whose `RedirectConfiguration()` follows up to
+        // 5 redirects, so a mirror redirector's 3xx is resolved before this
+        // returns and never reaches the guard below. Every distro in the image
+        // catalog that isn't a direct CDN link (Fedora, openSUSE, Rocky) is
+        // reached this way, so disabling redirects would break them all —
+        // `ImageFetchRedirectTests` pins the behaviour.
         let response = try await httpClient.execute(request, timeout: .minutes(30))
 
         guard response.status == .ok else {

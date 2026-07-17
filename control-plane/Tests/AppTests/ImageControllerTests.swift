@@ -69,6 +69,7 @@ final class ImageControllerTests {
         description: String?,
         filename: String,
         fileContent: ByteBuffer,
+        format: String? = nil,
         boundary: String = "----TestBoundary\(UUID().uuidString)"
     ) -> (Data, String) {
         var body = Data()
@@ -83,6 +84,14 @@ final class ImageControllerTests {
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
             body.append("Content-Disposition: form-data; name=\"description\"\r\n\r\n".data(using: .utf8)!)
             body.append("\(desc)\r\n".data(using: .utf8)!)
+        }
+
+        // Explicit disk format (if provided). Omitting it is the client's
+        // "auto" case: the server detects from the file header instead.
+        if let format {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"format\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(format)\r\n".data(using: .utf8)!)
         }
 
         // File field
@@ -248,6 +257,256 @@ final class ImageControllerTests {
 
         try await app.shutdownForTesting()
         Self.cleanupTempStorageDirectory(tempStoragePath)
+    }
+
+    // MARK: - Artifact Disk Format Tests
+
+    /// The artifact path validates filenames through a separate whitelist to the
+    /// upload path. When `ImageFormat` grew vmdk/vhd/vhdx, only the upload one
+    /// was widened, so replacing a disk-image artifact with a format the API
+    /// advertised was refused before detection ever ran.
+    @Test(
+        "Disk-image artifacts accept every advertised disk format",
+        arguments: ["vmdk", "vhd", "vhdx"])
+    func testUploadDiskImageArtifactWithHypervisorFormat(ext: String) async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageID = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken, name: "artifact-\(ext)")
+
+            let image = try await Self.uploadArtifact(
+                app: app,
+                project: project,
+                imageID: imageID,
+                authToken: authToken,
+                kind: "disk-image",
+                filename: "disk.\(ext)",
+                fileContent: Self.createQCOW2Buffer())
+
+            #expect(image.artifacts.contains { $0.kind == .diskImage })
+        }
+    }
+
+    @Test("Rootfs artifacts accept a vmdk filename")
+    func testUploadRootfsArtifactWithVMDK() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageID = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken, name: "rootfs-vmdk")
+
+            let image = try await Self.uploadArtifact(
+                app: app,
+                project: project,
+                imageID: imageID,
+                authToken: authToken,
+                kind: "rootfs",
+                filename: "rootfs.vmdk",
+                fileContent: Self.createRawBuffer())
+
+            #expect(image.artifacts.contains { $0.kind == .rootfs })
+        }
+    }
+
+    // MARK: - Explicit Disk Format Tests
+
+    /// The regression behind the "raw .img stored as qcow2" report: an upload
+    /// with no explicit format must be detected, never assumed. `.img` names no
+    /// format, so the bytes are the only evidence.
+    @Test("Upload without an explicit format detects raw from the file header")
+    func testUploadWithoutFormatDetectsRaw() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "raw-img",
+                description: nil,
+                filename: "disk.img",
+                fileContent: Self.createRawBuffer())
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .init(
+                    type: "multipart", subType: "form-data",
+                    parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let image = try res.content.decode(ImageResponse.self)
+                #expect(image.format == .raw)
+            }
+        }
+    }
+
+    /// A headerless file could be raw, a fixed VHD, or a flat VMDK — detection
+    /// can't tell, so an explicit claim of those is taken on trust.
+    @Test("Explicit format is honoured when the header can't contradict it")
+    func testUploadExplicitFormatOnHeaderlessFile() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "flat-vmdk",
+                description: nil,
+                filename: "disk.vmdk",
+                fileContent: Self.createRawBuffer(),
+                format: "vmdk")
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .init(
+                    type: "multipart", subType: "form-data",
+                    parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let image = try res.content.decode(ImageResponse.self)
+                #expect(image.format == .vmdk)
+            }
+        }
+    }
+
+    /// qcow2 always carries its magic, so claiming it for a headerless file is
+    /// refused rather than stored as a format the bytes plainly aren't.
+    @Test("Claiming qcow2 for a file with no qcow2 magic is refused")
+    func testUploadRejectsUndetectableQcow2Claim() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "lying-qcow2",
+                description: nil,
+                filename: "disk.img",
+                fileContent: Self.createRawBuffer(),
+                format: "qcow2")
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .init(
+                    type: "multipart", subType: "form-data",
+                    parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("Claiming raw for a qcow2 file is refused")
+    func testUploadRejectsContradictedClaim() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "lying-raw",
+                description: nil,
+                filename: "disk.qcow2",
+                fileContent: Self.createQCOW2Buffer(),
+                format: "raw")
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .init(
+                    type: "multipart", subType: "form-data",
+                    parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("An unknown disk format is refused")
+    func testUploadRejectsUnknownFormat() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "bogus-format",
+                description: nil,
+                filename: "disk.qcow2",
+                fileContent: Self.createQCOW2Buffer(),
+                format: "wat")
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .init(
+                    type: "multipart", subType: "form-data",
+                    parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    // MARK: - Expected Checksum Tests
+
+    /// A digest that could never match is a client error, not a download that
+    /// runs to completion and then fails verification.
+    @Test(
+        "Create from URL rejects a malformed checksum",
+        arguments: [
+            "deadbeef",  // too short
+            String(repeating: "a", count: 63),  // off by one
+            String(repeating: "a", count: 65),  // off by one the other way
+            String(repeating: "z", count: 64),  // right length, not hex
+        ])
+    func testCreateFromURLRejectsMalformedChecksum(checksum: String) async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .json
+                try req.content.encode(
+                    CreateImageRequest(
+                        name: "bad-checksum",
+                        sourceURL: "https://example.com/disk.qcow2",
+                        checksum: checksum))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("Create from URL stores a valid checksum as the expected digest")
+    func testCreateFromURLStoresExpectedChecksum() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            // Uppercase on the way in: it should be normalised so the
+            // post-download compare can be a plain equality check.
+            let supplied = String(repeating: "AB", count: 32)
+            var imageID: UUID?
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .json
+                try req.content.encode(
+                    CreateImageRequest(
+                        name: "with-checksum",
+                        sourceURL: "https://example.com/disk.qcow2",
+                        checksum: supplied))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                imageID = try res.content.decode(ImageResponse.self).id
+            }
+
+            let id = try #require(imageID)
+            let saved = try await Image.find(id, on: app.db)
+            let image = try #require(saved)
+            #expect(image.expectedChecksum == supplied.lowercased())
+            // The observed digest stays empty until the download actually runs;
+            // the caller's claim must never be mistaken for it.
+            #expect(image.checksum == nil)
+        }
+    }
+
+    @Test("Create from URL leaves the expected digest unset when omitted")
+    func testCreateFromURLWithoutChecksum() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            var imageID: UUID?
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .json
+                try req.content.encode(
+                    CreateImageRequest(
+                        name: "no-checksum",
+                        sourceURL: "https://example.com/disk.qcow2"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                imageID = try res.content.decode(ImageResponse.self).id
+            }
+
+            let id = try #require(imageID)
+            let saved = try await Image.find(id, on: app.db)
+            let image = try #require(saved)
+            #expect(image.expectedChecksum == nil)
+        }
     }
 
     // MARK: - List Images Tests

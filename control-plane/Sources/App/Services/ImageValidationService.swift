@@ -7,6 +7,38 @@ struct ImageValidationService {
     /// QCOW2 magic bytes: 0x514649FB (QFI\xFB)
     static let qcow2Magic: [UInt8] = [0x51, 0x46, 0x49, 0xFB]
 
+    /// Header signatures we can recognise, longest first so a longer signature
+    /// is never shadowed by a shorter prefix.
+    ///
+    /// VHD's `conectix` lives in a 512-byte *footer*; dynamic/differencing VHDs
+    /// repeat it at offset 0, so a header probe catches those but not fixed VHDs.
+    /// A fixed VHD is byte-identical to raw plus a trailing footer, which is why
+    /// it falls through to `.raw` and why the upload form lets callers say so
+    /// explicitly.
+    private static let headerSignatures: [(magic: [UInt8], format: ImageFormat)] = [
+        (Array("vhdxfile".utf8), .vhdx),
+        (Array("conectix".utf8), .vhd),
+        (qcow2Magic, .qcow2),
+        (Array("KDMV".utf8), .vmdk),
+    ]
+
+    /// Number of leading bytes `detectFormat` needs to recognise every signature.
+    static let headerProbeLength = 8
+
+    /// Formats that *always* carry their signature at offset 0, so a header
+    /// probe finding nothing positively disproves a claim of that format.
+    ///
+    /// The others can legitimately look like raw data at the head: a fixed VHD
+    /// is raw sectors plus a footer at EOF, and a monolithic-flat VMDK's header
+    /// is a plain-text descriptor. Claims of those must be taken on trust —
+    /// which is much of the point of letting a caller state the format at all.
+    static func mustHaveHeaderSignature(_ format: ImageFormat) -> Bool {
+        switch format {
+        case .qcow2, .vhdx: return true
+        case .raw, .vhd, .vmdk: return false
+        }
+    }
+
     /// Detects the format of an image file by checking magic bytes
     static func detectFormat(filePath: String) throws -> ImageFormat {
         guard FileManager.default.fileExists(atPath: filePath) else {
@@ -18,44 +50,27 @@ struct ImageValidationService {
         }
         defer { try? fileHandle.close() }
 
-        // Read first 4 bytes for magic number detection
-        let headerData = fileHandle.readData(ofLength: 4)
-        guard headerData.count >= 4 else {
-            // If file is too small to have a proper header, assume raw
-            return .raw
-        }
-
-        let bytes = [UInt8](headerData)
-
-        // Check for QCOW2 magic bytes
-        if bytes[0] == qcow2Magic[0] && bytes[1] == qcow2Magic[1] && bytes[2] == qcow2Magic[2]
-            && bytes[3] == qcow2Magic[3]
-        {
-            return .qcow2
-        }
-
-        // If no recognized format, treat as raw
-        return .raw
+        let headerData = fileHandle.readData(ofLength: headerProbeLength)
+        return detectFormat(fromHeader: [UInt8](headerData))
     }
 
     /// Detects format from a ByteBuffer (for in-memory data)
     static func detectFormat(from buffer: ByteBuffer) -> ImageFormat {
-        guard buffer.readableBytes >= 4 else {
-            return .raw
-        }
-
         var tempBuffer = buffer
-        guard let bytes = tempBuffer.readBytes(length: 4) else {
-            return .raw
-        }
+        let available = min(tempBuffer.readableBytes, headerProbeLength)
+        let bytes = tempBuffer.readBytes(length: available) ?? []
+        return detectFormat(fromHeader: bytes)
+    }
 
-        // Check for QCOW2 magic bytes
-        if bytes[0] == qcow2Magic[0] && bytes[1] == qcow2Magic[1] && bytes[2] == qcow2Magic[2]
-            && bytes[3] == qcow2Magic[3]
-        {
-            return .qcow2
+    /// Matches a file header against the known signatures.
+    ///
+    /// Anything unrecognised is reported as `.raw`: raw images have no magic to
+    /// match on, so "no signature" and "raw" are indistinguishable here. Callers
+    /// that know better can override the result with an explicit format.
+    static func detectFormat(fromHeader bytes: [UInt8]) -> ImageFormat {
+        for (magic, format) in headerSignatures where bytes.starts(with: magic) {
+            return format
         }
-
         return .raw
     }
 
@@ -107,6 +122,29 @@ struct ImageValidationService {
         return actualChecksum.lowercased() == expectedChecksum.lowercased()
     }
 
+    /// Extensions a disk image may carry: every `ImageFormat` plus the
+    /// format-agnostic container names (`.img`, `.iso`) whose contents are only
+    /// settled by reading the header.
+    ///
+    /// `validateArtifactFilename` builds on this rather than repeating it — a
+    /// disk-image artifact is still a disk image, so a format accepted on the
+    /// upload path must not be rejected on the artifact path.
+    static let diskImageExtensions: Set<String> =
+        Set(ImageFormat.allCases.map(\.rawValue)).union(["img", "iso"])
+
+    /// Extensions only meaningful for the opaque artifact kinds: kernels are
+    /// commonly extensionless (`vmlinux`) or `.bin`/`.elf`, root filesystems can
+    /// be `.ext4`/`.squashfs`, and initramfs images are often `.cpio.gz`.
+    private static let nonDiskArtifactExtensions: Set<String> = [
+        "bin", "elf",  // kernels
+        "ext2", "ext3", "ext4", "squashfs",  // root filesystems
+        "cpio", "gz", "xz", "lz4", "zst",  // initramfs archives / compression
+    ]
+
+    /// Everything `validateArtifactFilename` accepts.
+    static let artifactExtensions: Set<String> =
+        diskImageExtensions.union(nonDiskArtifactExtensions)
+
     /// Validates that a filename is safe (no path traversal, etc.)
     static func validateFilename(_ filename: String) throws -> String {
         // Remove any path components
@@ -123,9 +161,8 @@ struct ImageValidationService {
         }
 
         // Check for valid extension
-        let validExtensions = ["qcow2", "img", "raw", "iso"]
         let ext = (sanitized as NSString).pathExtension.lowercased()
-        guard validExtensions.contains(ext) || ext.isEmpty else {
+        guard diskImageExtensions.contains(ext) || ext.isEmpty else {
             throw ImageError.invalidFormat("Invalid file extension: \(ext)")
         }
 
@@ -140,11 +177,11 @@ struct ImageValidationService {
 
     /// Validates a filename for a typed artifact (kernel/rootfs/initramfs/disk-image).
     ///
-    /// Firecracker artifacts don't fit the disk-image extension whitelist: kernels
-    /// are commonly extensionless (`vmlinux`) or `.bin`/`.elf`, root filesystems can
-    /// be `.ext4`/`.squashfs`, and initramfs images are often `.cpio.gz`. This keeps
-    /// the path-traversal and safe-character guarantees of `validateFilename` while
-    /// accepting the broader set of artifact extensions.
+    /// Accepts everything `validateFilename` does — a disk-image or rootfs
+    /// artifact is a disk image, so any format the upload path takes must be
+    /// accepted here too — plus the opaque-blob extensions Firecracker artifacts
+    /// use. Extensionless names (e.g. `vmlinux`) are allowed. Keeps the same
+    /// path-traversal and safe-character guarantees as `validateFilename`.
     static func validateArtifactFilename(_ filename: String) throws -> String {
         // Remove any path components
         let sanitized = (filename as NSString).lastPathComponent
@@ -157,16 +194,8 @@ struct ImageValidationService {
             throw ImageError.invalidFormat("Hidden files not allowed")
         }
 
-        // Broad whitelist covering disk images, kernels, root filesystems, and
-        // initramfs archives. Extensionless names (e.g. `vmlinux`) are allowed.
-        let validExtensions: Set<String> = [
-            "qcow2", "img", "raw", "iso",  // disk / rootfs images
-            "bin", "elf",  // kernels
-            "ext2", "ext3", "ext4", "squashfs",  // root filesystems
-            "cpio", "gz", "xz", "lz4", "zst",  // initramfs archives / compression
-        ]
         let ext = (sanitized as NSString).pathExtension.lowercased()
-        guard validExtensions.contains(ext) || ext.isEmpty else {
+        guard artifactExtensions.contains(ext) || ext.isEmpty else {
             throw ImageError.invalidFormat("Invalid file extension: \(ext)")
         }
 
