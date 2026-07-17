@@ -8,6 +8,51 @@ public enum NetworkMode: String, Codable {
     case user
 }
 
+/// Simulation ("dummy agent") configuration. When enabled the agent registers
+/// and speaks the full control-plane protocol but drives a no-op hypervisor and
+/// no real networking/storage, reporting configurable fake host capacity. This
+/// lets a fleet of agents be scale-tested against a control plane far larger
+/// than the compute available to actually run VMs.
+public struct SimulationConfig: Codable, Sendable, Equatable {
+    /// Whether simulation mode is active. When false, every other field is ignored.
+    public let enabled: Bool
+    /// Fake logical CPU core count to advertise. Nil uses `defaultCPUCores`.
+    public let cpuCores: Int?
+    /// Fake total memory in megabytes. Nil uses `defaultMemoryMB`.
+    public let memoryMB: Int?
+    /// Fake total disk in gigabytes. Nil uses `defaultDiskGB`.
+    public let diskGB: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case cpuCores = "cpu_cores"
+        case memoryMB = "memory_mb"
+        case diskGB = "disk_gb"
+    }
+
+    public init(enabled: Bool = false, cpuCores: Int? = nil, memoryMB: Int? = nil, diskGB: Int? = nil) {
+        self.enabled = enabled
+        self.cpuCores = cpuCores
+        self.memoryMB = memoryMB
+        self.diskGB = diskGB
+    }
+
+    /// Default simulation configuration (disabled).
+    public static let disabled = SimulationConfig(enabled: false)
+
+    public static let defaultCPUCores = 8
+    public static let defaultMemoryMB = 16 * 1024  // 16 GB
+    public static let defaultDiskGB = 512
+
+    /// Resolved fake capacity, applying defaults for any unset field. The agent
+    /// reports these instead of probing the real host, so a spawner can give
+    /// each dummy a different size and make the scheduler's placement decisions
+    /// non-trivial.
+    public var resolvedCPUCores: Int { cpuCores ?? Self.defaultCPUCores }
+    public var resolvedMemoryBytes: Int64 { Int64(memoryMB ?? Self.defaultMemoryMB) * 1024 * 1024 }
+    public var resolvedDiskBytes: Int64 { Int64(diskGB ?? Self.defaultDiskGB) * 1024 * 1024 * 1024 }
+}
+
 /// SPIFFE/SPIRE configuration
 public struct SPIFFEConfig: Codable, Sendable {
     /// Whether SPIFFE authentication is enabled
@@ -155,6 +200,9 @@ public struct AgentConfig: Codable {
     /// Site uplink for OVN SNAT egress (issue #342). When nil, routers +
     /// east-west are realized but no SNAT/uplink.
     public let ovnUplink: OVNUplinkConfig?
+    /// Simulation ("dummy agent") settings. Nil (or disabled) means a normal
+    /// agent that drives real hypervisor/network/storage backends.
+    public let simulation: SimulationConfig?
 
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
@@ -180,6 +228,7 @@ public struct AgentConfig: Codable {
         case hypervisorType = "hypervisor_type"
         case stateFilePath = "state_file"
         case ovnUplink = "ovn_uplink"
+        case simulation
     }
 
     public init(
@@ -205,7 +254,8 @@ public struct AgentConfig: Codable {
         sandboxGuestImagePath: String? = nil,
         hypervisorType: HypervisorType? = nil,
         stateFilePath: String? = nil,
-        ovnUplink: OVNUplinkConfig? = nil
+        ovnUplink: OVNUplinkConfig? = nil,
+        simulation: SimulationConfig? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
         self.qemuSocketDir = qemuSocketDir
@@ -230,6 +280,7 @@ public struct AgentConfig: Codable {
         self.hypervisorType = hypervisorType
         self.stateFilePath = stateFilePath
         self.ovnUplink = ovnUplink
+        self.simulation = simulation
     }
 
     /// The OVN chassis bootstrap settings derived from this configuration.
@@ -387,6 +438,30 @@ public struct AgentConfig: Codable {
             ovnUplink = nil
         }
 
+        // Parse simulation ("dummy agent") settings from the [simulation]
+        // section. Absent section means a normal agent. `table(_:)` returns an
+        // empty scoped view even for an absent section, so presence must be
+        // tested with `hasTable` (same gotcha as [ovn_northbound_tls] above).
+        let simulationConfig: SimulationConfig?
+        if tomlData.hasTable("simulation"), let simTable = tomlData.table("simulation") {
+            let enabled = simTable.bool("enabled") ?? false
+            simulationConfig = SimulationConfig(
+                enabled: enabled,
+                cpuCores: simTable.int("cpu_cores"),
+                memoryMB: simTable.int("memory_mb"),
+                diskGB: simTable.int("disk_gb")
+            )
+            if enabled {
+                logger?.warning(
+                    "Simulation mode enabled: this agent will NOT run real VMs",
+                    metadata: [
+                        "cpuCores": .stringConvertible(simulationConfig?.resolvedCPUCores ?? 0)
+                    ])
+            }
+        } else {
+            simulationConfig = nil
+        }
+
         // Validate platform-specific settings
         #if os(macOS)
         if enableKVM == true {
@@ -421,7 +496,8 @@ public struct AgentConfig: Codable {
             sandboxGuestImagePath: sandboxGuestImagePath,
             hypervisorType: hypervisorType,
             stateFilePath: stateFilePath,
-            ovnUplink: ovnUplink
+            ovnUplink: ovnUplink,
+            simulation: simulationConfig
         )
     }
 
