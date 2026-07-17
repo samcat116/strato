@@ -347,6 +347,102 @@ final class SiteTests {
         }
     }
 
+    @Test("organization_id narrows the site list, including for system admins")
+    func sitesListFilteredByOrganization() async throws {
+        try await withSiteTestApp { app, admin, _, token in
+            let ownSite = try await self.makeSite(app: app, name: "dc-own")
+
+            // A site in an organization the admin is not looking at.
+            let builder = TestDataBuilder(db: app.db)
+            let otherOrg = try await builder.createOrganization(name: "Other Org")
+            let otherSite = Site(name: "dc-other", organizationScope: .organization(otherOrg.id!))
+            try await otherSite.save(on: app.db)
+
+            // Unfiltered, a system admin still sees the whole fleet.
+            try await app.test(.GET, "/api/sites") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let sites = try res.content.decode([SiteResponse].self)
+                #expect(sites.count == 2)
+            }
+
+            // Filtered, the admin bypass must not widen the result back out.
+            let orgID = try #require(admin.currentOrganizationId)
+            try await app.test(.GET, "/api/sites?organization_id=\(orgID.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let sites = try res.content.decode([SiteResponse].self)
+                let names = sites.map(\.name)
+                #expect(names == [ownSite.name])
+            }
+        }
+    }
+
+    @Test("Filtering by an organization includes its OU-scoped sites")
+    func sitesListFilterIncludesOUScoped() async throws {
+        try await withSiteTestApp { app, admin, _, token in
+            let orgID = try #require(admin.currentOrganizationId)
+            let org = try #require(try await Organization.find(orgID, on: app.db))
+
+            let builder = TestDataBuilder(db: app.db)
+            let ou = try await builder.createOU(
+                name: "Nested OU", description: "delegated capacity", organization: org)
+            let ouSite = Site(name: "dc-ou", organizationScope: .organizationalUnit(ou.id!))
+            try await ouSite.save(on: app.db)
+            _ = try await self.makeSite(app: app, name: "dc-org")
+
+            // An organization contains every scope rooted in it, so a site
+            // delegated to one of its OUs is still the org's site.
+            try await app.test(.GET, "/api/sites?organization_id=\(orgID.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let sites = try res.content.decode([SiteResponse].self)
+                let names = Set(sites.map(\.name))
+                #expect(names == Set(["dc-org", "dc-ou"]))
+            }
+        }
+    }
+
+    @Test("A malformed organization_id is rejected rather than silently ignored")
+    func sitesListFilterRejectsMalformedOrganization() async throws {
+        try await withSiteTestApp { app, _, _, token in
+            _ = try await self.makeSite(app: app, name: "dc-guard")
+
+            // Falling through to an unfiltered fleet is the failure this filter exists
+            // to prevent, so a bad id must fail loudly.
+            try await app.test(.GET, "/api/sites?organization_id=not-a-uuid") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("Filtering by an organization the caller can't view is forbidden")
+    func sitesListFilterRequiresOrganizationAccess() async throws {
+        try await withSiteTestApp { app, admin, _, _ in
+            _ = try await self.makeSite(app: app, name: "dc-private")
+            let orgID = try #require(admin.currentOrganizationId)
+
+            let builder = TestDataBuilder(db: app.db)
+            let outsider = try await builder.createUser(
+                username: "outsider", email: "outsider@example.com",
+                displayName: "Outsider", isSystemAdmin: false)
+            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+
+            app.spicedbMockAllows = false
+            defer { app.spicedbMockAllows = true }
+            try await app.test(.GET, "/api/sites?organization_id=\(orgID.uuidString)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+        }
+    }
+
     // MARK: - Registration site assignment
 
     @Test("Registration assigns the token's site; re-registration without one preserves it")

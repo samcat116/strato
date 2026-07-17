@@ -17,8 +17,11 @@ import type {
 // background. Poll operationsApi.get (see OperationWatcher) until the operation
 // is terminal. Sandboxes have no pause/resume or console endpoints.
 export const sandboxesApi = {
-  list(): Promise<Sandbox[]> {
-    return api.get<Sandbox[]>("/api/sandboxes");
+  list(organizationId?: string): Promise<Sandbox[]> {
+    return api.get<Sandbox[]>(
+      "/api/sandboxes",
+      organizationId ? { organization_id: organizationId } : undefined
+    );
   },
 
   get(id: string): Promise<Sandbox> {
