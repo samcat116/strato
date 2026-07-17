@@ -34,9 +34,15 @@ public struct ProcessResult: Sendable {
 /// `Process.run()` + `waitUntilExit()` blocks the calling thread for the entire
 /// lifetime of the subprocess. Doing that directly inside an `async` method ties
 /// up a cooperative-pool thread, which can starve unrelated work. `ProcessRunner`
-/// moves the blocking wait and pipe draining onto global dispatch queues and hands
-/// the result back through continuations, so `await`ing it suspends rather than
-/// blocks.
+/// moves pipe draining onto global dispatch queues and observes exit through the
+/// process's `terminationHandler`, so `await`ing it suspends rather than blocks.
+///
+/// Exit is deliberately NOT observed via `waitUntilExit()`: on macOS
+/// (reproducible with the Xcode 27.0 beta toolchain) it can block forever when
+/// the child exits quickly — Foundation's internal event machinery reaps the
+/// child, but the thread parked in `waitUntilExit()` misses its wakeup.
+/// `terminationHandler` is driven by the same event that performs the reap, so
+/// it cannot miss, provided it is installed before the process is launched.
 public enum ProcessRunner {
     /// Launches `executableURL` with `arguments`, draining stdout and stderr, and
     /// returns once the process exits.
@@ -57,6 +63,8 @@ public enum ProcessRunner {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
+        let exited = exitSignal(for: process)
+
         // `run()` only spawns the child and returns; it does not block for the
         // subprocess lifetime, so calling it inline is fine.
         try process.run()
@@ -69,7 +77,7 @@ public enum ProcessRunner {
         async let stderrData = drain(fd: stderrFD)
 
         let (out, err) = await (stdoutData, stderrData)
-        await waitForExit(process)
+        await waitForExit(exited)
 
         return ProcessResult(
             terminationStatus: process.terminationStatus,
@@ -104,13 +112,15 @@ public enum ProcessRunner {
         let stderrPipe = Pipe()
         process.standardError = stderrPipe
 
+        let exited = exitSignal(for: process)
+
         try process.run()
 
         let stderrFD = stderrPipe.fileHandleForReading.fileDescriptor
         async let stderrData = drain(fd: stderrFD)
 
         let err = await stderrData
-        await waitForExit(process)
+        await waitForExit(exited)
 
         return ProcessResult(
             terminationStatus: process.terminationStatus,
@@ -142,13 +152,18 @@ public enum ProcessRunner {
         }
     }
 
-    /// Waits for the process to exit on a background queue.
-    private static func waitForExit(_ process: Process) async {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global().async {
-                process.waitUntilExit()
-                continuation.resume()
-            }
-        }
+    /// Returns a stream that finishes (yielding nothing) when `process` exits.
+    /// Must be called before `process.run()` — a fast-exiting child could
+    /// otherwise terminate before the handler is installed and never signal it.
+    private static func exitSignal(for process: Process) -> AsyncStream<Void> {
+        let (stream, continuation) = AsyncStream.makeStream(of: Void.self)
+        process.terminationHandler = { _ in continuation.finish() }
+        return stream
+    }
+
+    /// Suspends until an `exitSignal(for:)` stream finishes. Once this returns,
+    /// the process's `terminationStatus` is valid.
+    private static func waitForExit(_ exited: AsyncStream<Void>) async {
+        for await _ in exited {}
     }
 }
