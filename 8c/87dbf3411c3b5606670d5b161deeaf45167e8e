@@ -1,0 +1,26 @@
+agent/scripts/spawn-sim-fleet.sh
+  s_53168cace5d67d::t_7c6337c6c76d2b 344
+  s_53168cace5d67d::t_96296a1b6bec41 103-106
+  s_53168cace5d67d::t_411f69c213ce48 56,323-343,345-357
+  s_53168cace5d67d::t_6afa734d3a4d8d 126
+  s_53168cace5d67d::t_185817d370982f 36-40,45-55
+config.toml.example
+  s_53168cace5d67d::t_0dc30ec54f4044 207-213
+  s_53168cace5d67d::t_87264bd6ef36e2 214
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "8c87dbf3411c3b5606670d5b161deeaf45167e8e",
+  "prompts": {},
+  "sessions": {
+    "s_53168cace5d67d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "17217173-2f91-45c2-9999-559543ac6261",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
