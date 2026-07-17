@@ -91,10 +91,26 @@ struct SiteController: RouteCollection {
         return site
     }
 
+    /// GET /api/sites
+    /// Query params: organization_id (optional) — narrows to one org's hierarchy.
     func listSites(req: Request) async throws -> [SiteResponse] {
         let user = try requireUser(req)
-        let sites = try await Site.query(on: req.db).sort(\.$name).all()
+        let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
 
+        var query = Site.query(on: req.db).sort(\.$name)
+        if let orgFilter {
+            query = query.group(.or) { group in
+                group.filter(\.$organization.$id == orgFilter.organizationID)
+                if !orgFilter.organizationalUnitIDs.isEmpty {
+                    group.filter(\.$organizationalUnit.$id ~~ orgFilter.organizationalUnitIDs)
+                }
+            }
+        }
+        let sites = try await query.all()
+
+        // The org filter is applied in the query above, so it narrows the system-admin
+        // fleet view too — an admin who asks for one org's sites must not get every
+        // org's back just because they can see them all.
         let visible: [Site]
         if user.isSystemAdmin {
             visible = sites

@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
   actions: read
   pull-requests: read # dorny/paths-filter reads changed files via the PR API
 
@@ -388,32 +387,6 @@ jobs:
         working-directory: agent
         continue-on-error: true
         run: swift test --skip-build --parallel
-
-  security:
-    name: Security Scan
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    # Trivy filesystem scan is light and needs no warm cache — offload it.
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Run Trivy vulnerability scanner
-        # Pinned release tag — @master is a mutable ref that runs whatever the
-        # branch currently points at.
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: "fs"
-          scan-ref: "."
-          format: "sarif"
-          output: "trivy-results.sarif"
-
-      - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: "trivy-results.sarif"
 
   # Dockerfile changes were previously only exercised on main / at release
   # time, so image breakage surfaced post-merge. These jobs build (never

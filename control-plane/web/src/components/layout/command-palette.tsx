@@ -7,7 +7,7 @@ import { Cpu, Rows3, Search, type LucideIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { agentsApi, vmsApi } from "@/lib/api";
-import { useAuth } from "@/providers";
+import { useAuth, useOrganization } from "@/providers";
 import { flattenNav } from "./nav";
 
 interface PaletteEntry {
@@ -37,15 +37,20 @@ export function CommandPalette() {
   }, []);
 
   // Shares the query cache with useVMs()/useAgents(); only fetches while open.
+  // The keys must stay in step with those hooks — including the org id — or the
+  // palette silently fetches its own unscoped copy.
+  const { currentOrg, isLoading: orgLoading } = useOrganization();
+  const organizationId = currentOrg?.id;
+
   const { data: vms = [] } = useQuery({
-    queryKey: ["vms"],
-    queryFn: vmsApi.list,
-    enabled: open,
+    queryKey: ["vms", { orgId: organizationId ?? null }],
+    queryFn: () => vmsApi.list(organizationId),
+    enabled: open && !orgLoading,
   });
   const { data: agents = [] } = useQuery({
-    queryKey: ["agents"],
-    queryFn: agentsApi.list,
-    enabled: open,
+    queryKey: ["agents", { orgId: organizationId ?? null }],
+    queryFn: () => agentsApi.list(organizationId),
+    enabled: open && !orgLoading,
   });
 
   const isAdmin = user?.isSystemAdmin ?? false;

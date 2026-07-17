@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,13 +16,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Table,
   TableBody,
   TableCell,
@@ -32,23 +25,20 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { sitesApi } from "@/lib/api/sites";
-import { useAgents } from "@/lib/hooks";
-import { useOrganization } from "@/providers/organization-provider";
+import { useAgents, useSites } from "@/lib/hooks";
+import { useOrganization } from "@/providers";
 import { toast } from "sonner";
 
 export default function SitesPage() {
   const queryClient = useQueryClient();
-  const { currentOrg, organizations } = useOrganization();
+  // Sites are listed and created in the org selected in the sidebar switcher.
+  const { currentOrg } = useOrganization();
   const { data: agents = [] } = useAgents();
-  const { data: sites = [], isLoading } = useQuery({
-    queryKey: ["sites"],
-    queryFn: sitesApi.list,
-  });
+  const { data: sites = [], isLoading } = useSites();
 
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [organizationId, setOrganizationId] = useState<string | undefined>(undefined);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["sites"] });
 
@@ -75,9 +65,6 @@ export default function SitesPage() {
       toast.error(error instanceof Error ? error.message : "Failed to delete site"),
   });
 
-  const orgName = (id?: string) =>
-    id ? (organizations.find((o) => o.id === id)?.name ?? `${id.slice(0, 8)}…`) : "—";
-
   const controllerName = (id?: string) =>
     id ? (agents.find((a) => a.id === id)?.name ?? `${id.slice(0, 8)}…`) : "None";
 
@@ -85,19 +72,18 @@ export default function SitesPage() {
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
-    const targetOrgId = organizationId ?? currentOrg?.id;
     if (!name.trim()) {
       toast.error("Please enter a site name");
       return;
     }
-    if (!targetOrgId) {
-      toast.error("Please select an organization");
+    if (!currentOrg) {
+      toast.error("Select an organization before creating a site");
       return;
     }
     createSite.mutate({
       name: name.trim(),
       description: description.trim() || undefined,
-      organizationId: targetOrgId,
+      organizationId: currentOrg.id,
     });
   };
 
@@ -142,9 +128,6 @@ export default function SitesPage() {
               <TableHeader className="bg-background">
                 <TableRow className="border-border hover:bg-transparent">
                   <TableHead className="text-muted-foreground font-medium">Name</TableHead>
-                  <TableHead className="text-muted-foreground font-medium">
-                    Organization
-                  </TableHead>
                   <TableHead className="text-muted-foreground font-medium">Agents</TableHead>
                   <TableHead className="text-muted-foreground font-medium">
                     Network Controller
@@ -160,9 +143,6 @@ export default function SitesPage() {
                       {site.description && (
                         <p className="text-sm text-muted-foreground">{site.description}</p>
                       )}
-                    </TableCell>
-                    <TableCell className="text-foreground/80">
-                      {orgName(site.organizationId)}
                     </TableCell>
                     <TableCell className="text-foreground/80">
                       {memberCount(site.id)}
@@ -196,6 +176,9 @@ export default function SitesPage() {
             <DialogDescription className="text-muted-foreground">
               A site is an availability zone: agents in it share one OVN
               deployment, so networks pinned to the site span its nodes.
+              {currentOrg
+                ? ` The site is created in ${currentOrg.name}, and all its agents must belong to that organization.`
+                : ""}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleCreate}>
@@ -224,33 +207,6 @@ export default function SitesPage() {
                   className="bg-background border-border text-foreground"
                   disabled={createSite.isPending}
                 />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="siteOrganization" className="text-foreground">
-                  Organization
-                </Label>
-                <Select
-                  value={organizationId ?? currentOrg?.id ?? ""}
-                  onValueChange={setOrganizationId}
-                  disabled={createSite.isPending}
-                >
-                  <SelectTrigger
-                    id="siteOrganization"
-                    className="bg-background border-border text-foreground"
-                  >
-                    <SelectValue placeholder="Select an organization" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {organizations.map((org) => (
-                      <SelectItem key={org.id} value={org.id}>
-                        {org.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-sm text-muted-foreground">
-                  All agents in a site must belong to the same organization.
-                </p>
               </div>
             </div>
             <DialogFooter>

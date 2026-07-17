@@ -150,12 +150,22 @@ struct SandboxController: RouteCollection {
 
     // MARK: - Reads
 
+    /// GET /api/sandboxes
+    /// Query params: organization_id (optional) — narrows to one org's hierarchy.
     func index(req: Request) async throws -> [SandboxDetailResponse] {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
 
-        let allSandboxes = try await Sandbox.query(on: req.db).all()
+        // Scoped through the sandbox's project, as in VMController.index.
+        var query = Sandbox.query(on: req.db)
+        if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
+            let projectIDs = try await orgFilter.projectIDs(on: req.db)
+            if projectIDs.isEmpty { return [] }
+            query = query.filter(\.$project.$id ~~ projectIDs)
+        }
+
+        let allSandboxes = try await query.all()
         var authorized: [SandboxDetailResponse] = []
 
         for sandbox in allSandboxes {

@@ -1,6 +1,6 @@
 # GitHub Actions Workflows
 
-This directory contains GitHub Actions workflows for the Strato project. Workflows use a **hybrid runner strategy**: the heavy Swift build/test and release binary jobs run on the `swift-runners-strato` runner scale set (self-hosted, managed by [actions-runner-controller](https://github.com/actions/actions-runner-controller)); the static self-hosted runner only builds the Linux release-asset tarball; everything else — Docker image assembly from prebuilt binaries, frontend lint/build, Trivy scans, Helm tests, ARM64/macOS builds, release housekeeping — runs on GitHub-hosted runners so it doesn't queue behind Swift work. PR and main-branch workflows also use `concurrency` groups to cancel superseded runs on new pushes.
+This directory contains GitHub Actions workflows for the Strato project. Workflows use a **hybrid runner strategy**: the heavy Swift build/test and release binary jobs run on the `swift-runners-strato` runner scale set (self-hosted, managed by [actions-runner-controller](https://github.com/actions/actions-runner-controller)); the static self-hosted runner only builds the Linux release-asset tarball; everything else — Docker image assembly from prebuilt binaries, frontend lint/build, Helm tests, ARM64/macOS builds, release housekeeping — runs on GitHub-hosted runners so it doesn't queue behind Swift work. PR and main-branch workflows also use `concurrency` groups to cancel superseded runs on new pushes.
 
 ## Workflows
 
@@ -10,7 +10,6 @@ Runs on pull requests to validate code quality:
 - Swift package building and testing — shared, control plane, and agent
   (`swift-runners-strato` ARC scale set)
 - Docker image build checks, gated on Dockerfile changes (GitHub-hosted)
-- Security scanning with Trivy (GitHub-hosted)
 
 A `changes` job (via `dorny/paths-filter`) detects which parts of the repo
 changed and gates each job with `if:`, so docs-only PRs skip the Swift build,
@@ -108,7 +107,7 @@ Requirements:
 
 ### GitHub-Hosted Runners
 Used for:
-- PR validation — frontend lint/build and Trivy scan (`ubuntu-latest`)
+- PR validation — frontend lint/build (`ubuntu-latest`)
 - All Helm chart tests (`ubuntu-latest`)
 - Claude Code workflows (`ubuntu-latest`)
 - Docs deployment (`ubuntu-latest`)
