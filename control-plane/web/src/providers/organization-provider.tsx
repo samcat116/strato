@@ -8,7 +8,7 @@ import {
   useMemo,
   type ReactNode,
 } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { organizationsApi } from "@/lib/api/organizations";
 import { useAuth } from "./auth-provider";
 import type { Organization } from "@/types/api";
@@ -27,7 +27,6 @@ const OrganizationContext = createContext<OrganizationContextType | undefined>(
 
 export function OrganizationProvider({ children }: { children: ReactNode }) {
   const { user, isAuthenticated } = useAuth();
-  const queryClient = useQueryClient();
   // Only track user-selected org; null means use default
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
 
@@ -55,16 +54,13 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
     return organizations[0] || null;
   }, [selectedOrgId, organizations, userCurrentOrgId]);
 
-  const switchOrg = useCallback(
-    async (orgId: string) => {
-      await organizationsApi.switch(orgId);
-      setSelectedOrgId(orgId);
-      // Invalidate queries that depend on current org
-      queryClient.invalidateQueries({ queryKey: ["vms"] });
-      queryClient.invalidateQueries({ queryKey: ["agents"] });
-    },
-    [queryClient]
-  );
+  const switchOrg = useCallback(async (orgId: string) => {
+    await organizationsApi.switch(orgId);
+    setSelectedOrgId(orgId);
+    // No invalidation needed: org-scoped queries carry the org id in their key,
+    // so changing it refetches them. A hand-maintained list here only drifts —
+    // it used to cover vms and agents while sites and sandboxes went stale.
+  }, []);
 
   const refresh = useCallback(async () => {
     await refetch();

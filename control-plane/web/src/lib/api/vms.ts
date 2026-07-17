@@ -14,8 +14,11 @@ import type {
 // an Operation record, and the actual work completes in the background. Poll
 // operationsApi.get (see OperationWatcher) until the operation is terminal.
 export const vmsApi = {
-  list(): Promise<VM[]> {
-    return api.get<VM[]>("/api/vms");
+  list(organizationId?: string): Promise<VM[]> {
+    return api.get<VM[]>(
+      "/api/vms",
+      organizationId ? { organization_id: organizationId } : undefined
+    );
   },
 
   get(id: string): Promise<VM> {
