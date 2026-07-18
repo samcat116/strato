@@ -1,65 +1,160 @@
 # Strato Architecture
 
-This document provides a comprehensive overview of Strato's architecture, design decisions, and technical implementation details.
+Strato is a distributed private cloud platform. This page is the top-level
+map: the components, the core control loop, and pointers into the
+specialized documents that cover each subsystem in depth.
 
-> [!NOTE]
-> This document will be changing drastically as the project is built out.
+## Components
 
-## Overview
+Three independently built Swift packages plus a frontend:
 
-Strato is a private cloud platform built with Vapor that manages virtual machines, storage, and networking components. The control plane exposes a JSON/REST API consumed by a Next.js frontend. Strato runs as both a control plane service, as well as a service on different hypervisors.
+- **Control plane** (`control-plane/`, Vapor 4 + Fluent/PostgreSQL) — owns
+  the JSON API, the database, the scheduler, authorization, and the agent
+  WebSocket. Code map: [control-plane](./control-plane.md).
+- **Agent** (`agent/`) — runs on every hypervisor node; connects out to the
+  control plane and manages VMs and sandboxes through hypervisor drivers
+  (QEMU, Firecracker). Code map: [agent](./agent.md).
+- **Shared** (`shared/`, StratoShared) — the wire protocol and DTOs both
+  sides speak. Reference: [wire-protocol](./wire-protocol.md).
+- **Frontend** (`control-plane/web/`, Next.js) — a separate
+  `strato-frontend` service consuming the JSON API. Code map:
+  [frontend](./frontend.md).
 
-## Core Components
+```
+┌────────────┐   JSON API    ┌─────────────────┐   WebSocket   ┌──────────────┐
+│  Frontend   │ ────────────▶ │  Control plane   │ ◀──────────── │    Agent      │
+│  (Next.js)  │               │  (Vapor)         │  /agent/ws    │  (per node)   │
+└────────────┘               │                  │               │              │
+                             │  PostgreSQL ◀────│── truth       │  QEMU        │
+                             │  Valkey     ◀────│── coordination│  Firecracker │
+                             │  SpiceDB    ◀────│── authz       │  OVN/OVS     │
+                             └─────────────────┘               └──────────────┘
+```
 
-### Backend (Swift/Vapor)
-The backend is built using Vapor 4, leveraging Swift's performance and safety features:
+Agents always dial the control plane, never the reverse — hypervisor nodes
+need no inbound connectivity.
 
-- **Controllers**: Handle HTTP requests and coordinate business logic
-  - `UserController`: Manages user authentication and registration
-  - `VMController`: Handles virtual machine lifecycle operations
-- **Models**: Define data structures and database schema
-  - `User`: User accounts with WebAuthn credentials
-  - `VM`: Virtual machine specifications and state
-- **Services**: Encapsulate business logic and external integrations
-  - `WebAuthnService`: Manages WebAuthn/Passkey authentication flows
-  - `SpiceDBService`: Interfaces with the SpiceDB authorization service via its HTTP API
-- **Middleware**: Cross-cutting concerns and request processing
-  - `SpiceDBAuthMiddleware`: Enforces authorization policies on all requests
+## Desired state and reconciliation (the core control loop)
 
-### Database Layer
+The control plane is declarative, not imperative:
 
-**PostgreSQL with Fluent ORM**
-- **Connection**: Managed via FluentPostgresDriver
-- **Migrations**: Versioned database schema changes in `Sources/App/Migrations/`
-- **Models**: Swift structs that map to database tables
-- **Query Builder**: Type-safe database queries through Fluent
+- The database stores each VM's and sandbox's **desired state** (`running`,
+  `shutdown`, `paused`, `absent`) alongside its observed status. API
+  mutations update desired state; agents converge on it.
+- The control plane periodically sends each agent a full, authoritative
+  `DesiredStateMessage` covering VMs, sandboxes, and logical networks.
+  Each desired record carries a monotonic **generation** counter guarding
+  against reordering; syncs are level-triggered and safe to drop or replay.
+  Signed image URLs are refreshed at sync-assembly time.
+- The agent-side reconciler diffs observed vs desired and converges via
+  per-workload serial lanes, then reports observed state back — including
+  the generation it converged toward and any convergence error. Absence
+  from an observed-state report is what confirms a deletion.
 
-**Key Tables:**
-- `users`: User accounts and profile information
-- `user_credentials`: WebAuthn public keys and device metadata
-- `vms`: Virtual machine specifications and metadata
-- `sessions`: User session data for authentication state
+The protocol contract (generations, level-triggered semantics, version
+gates) is specified in [wire-protocol](./wire-protocol.md); the agent-side
+engine in [agent](./agent.md); the control-plane side in
+[control-plane](./control-plane.md).
 
-### Authorization System (SpiceDB)
+## Async resource operations
 
-Strato uses [SpiceDB](https://authzed.com/spicedb) for fine-grained, relationship-based access control, following the Google Zanzibar model.
+VM and sandbox mutation endpoints (create/start/stop/delete/reboot, plus
+pause/resume for VMs) insert a `ResourceOperation` row in the same
+transaction as the desired-state change and return **202 Accepted** with
+the operation object. The operation completes when an agent's observed
+state catches up (or fails, or a stuck-operation sweep times it out after a
+per-kind budget). Operation rows deliberately have no foreign key to the
+resource, so delete operations survive the row's removal. The frontend
+polls operations to a terminal state and refreshes the affected list.
 
-**Schema Definition** (`spicedb/schema.zed`):
+## Multi-replica control plane
 
-The schema defines a hierarchy — `organization` → `organizational_unit` → `project` → resources — plus `user`, `group`, `environment`, `virtual_machine`, `image`, `volume`, `volume_snapshot`, `resource_quota`, and `api_key` object types. Permissions inherit down the hierarchy: a `project` attaches to its `parent` (an organization or OU), and resource permissions resolve through the project. Abridged excerpt:
+Multiple control-plane replicas are supported. PostgreSQL is the only
+source of durable truth; **Valkey** holds ephemeral coordination state
+(agent presence, socket routing, placement reservations, singleton sweep
+locks) and the system fails open if it's unavailable — agents still
+converge via the periodic sync. A mutation on one replica for an agent
+socketed to another publishes a **sync nudge** over pub/sub; lost nudges
+are backstopped by the periodic sync timer. Details:
+[multi-replica](./multi-replica.md).
+
+## Scheduler
+
+`SchedulerService` places VMs on agents by resource availability with
+strategies `least_loaded` (default), `best_fit`, `round_robin`, and
+`random` (`SCHEDULING_STRATEGY`). Only online agents that reported support
+for the VM's hypervisor and have sufficient resources are candidates;
+placement uses Valkey reservations to avoid double-booking across
+replicas. Details: [scheduler](./scheduler.md).
+
+## Workload types
+
+- **VMs** — long-lived machines on QEMU (Linux KVM / macOS HVF) or
+  Firecracker, built from images with typed artifacts.
+- **Sandboxes** — fast, disposable Firecracker microVMs booted from OCI
+  images, with their own API surface and data model, TTL/auto-expiry, and
+  interactive exec. Details: [sandboxes](./sandboxes.md).
+
+On the agent, both route through a **hypervisor driver registry** keyed by
+`HypervisorType` — adding a backend is one registration, not new switch
+sites. A persisted manifest tracks which backend owns each workload,
+surviving restarts and enabling orphan re-adoption.
+
+## Networking
+
+Each NIC is a `VMNetworkInterface` row (network name, MAC, MTU, stable
+device name, ordered by index) with per-family address rows — there are no
+single-NIC fields on the VM. **The control plane does IPAM**: static
+IPv4/IPv6 addresses are allocated from a `LogicalNetwork`'s subnets and
+passed to the agent. Agent-side, a network orchestrator resolves specs into
+typed attachments consumed by the hypervisor drivers; Linux uses OVN/OVS
+for real SDN, macOS falls back to user-mode SLIRP (dev/test only).
+Details: [networking](./networking.md).
+
+## Storage and images
+
+Agents implement a `StorageBackend` protocol (currently filesystem +
+qemu-img); the agent owns all paths, and the control plane stores whatever
+the agent reports. A single `materializeDisk` path converts any image to
+the format the hypervisor asked for, publishing via atomic rename. Volume
+snapshots are external qcow2 overlays; volumes are host-local and pinned
+to their VM's agent. Details: [storage](./storage.md); the replicated
+design proposal is [distributed-storage](./distributed-storage.md).
+
+Images have an architecture and a set of typed artifacts (`diskImage` for
+QEMU; `rootfs`/`kernel`/`initramfs` for Firecracker/direct boot), each
+with format, checksum, and size. Agents filter artifacts by supported
+backend and host architecture, and image downloads use HMAC-signed URLs.
+
+## Identity: authentication, authorization, and the org hierarchy
+
+### Authentication
+
+- **WebAuthn/Passkeys** (swift-server/webauthn-swift) with Vapor sessions
+  is the primary human login; **API keys** (bearer tokens with scoping)
+  serve programmatic access; optional **OIDC** providers federate sign-in,
+  with **SCIM** provisioning for users and groups and a Shared Signals
+  (SSF) receiver for revocation events.
+- Agent transport security (optional): SPIFFE/SPIRE-issued mTLS terminated
+  by Envoy in front of the control plane.
+
+### Authorization (SpiceDB)
+
+[SpiceDB](https://authzed.com/spicedb) enforces relationship-based access
+control (the Zanzibar model); the schema lives in `spicedb/schema.zed`.
+
+> A migration to an embedded Cedar policy engine is designed and in
+> progress — see [iam](./iam.md) for the decision record. This section
+> describes the current implementation.
+
+The schema defines a hierarchy — `organization` → `organizational_unit` →
+`project` → resources — plus `user`, `group`, `environment`,
+`virtual_machine`, `sandbox`, `image`, `volume`, and related object types.
+Permissions inherit down the hierarchy: a `project` attaches to its
+`parent` (an organization or OU), and resource permissions resolve through
+the project. Abridged excerpt:
 
 ```zed
-definition user {}
-
-definition organization {
-    relation admin: user
-    relation member: user
-
-    permission manage_organization = admin
-    permission view_organization = admin + member
-    permission manage_members = admin
-}
-
 definition project {
     relation parent: organization | organizational_unit
     relation admin: user
@@ -77,195 +172,73 @@ definition virtual_machine {
     relation viewer: user
     relation editor: user
 
-    permission create = project->create_resources
     permission read = owner + viewer + editor + project->view_project
     permission update = owner + editor + project->manage_project
     permission delete = owner + project->manage_project
     permission start = owner + editor + project->create_resources
-    permission view_console = owner + editor + project->manage_project
 }
 ```
 
-**Integration Points:**
-- `SpiceDBAuthMiddleware` (registered globally in `configure.swift`): Intercepts all HTTP requests
-  - Skips public routes (health checks, `/login`, `/register`, `/auth/*`, static assets, the agent WebSocket)
-  - Requires a session-authenticated user for everything else; system admins bypass permission checks
-  - For the prefix-guarded resource APIs (`/api/vms` → `virtual_machine`, `/api/sandboxes` → `sandbox`), maps the HTTP method and path to a permission (`read`, `create`, `update`, `delete`, plus the resource's lifecycle verbs such as `start`, `stop`, `restart`, and — for VMs — `pause`, `resume`, and — for sandboxes — `exec`) and checks it against that resource; collection-level list/create operations check `view_organization` on the user's current organization
-- `SpiceDBService`: Swift wrapper around the SpiceDB HTTP API (`/v1/permissions/check` with full consistency, `/v1/relationships/write`, `/v1/schemas/write`), authenticated with a preshared key; includes helpers for group membership and group-to-project roles
-- Controllers perform additional per-resource `checkPermission` calls and write relationships on resource creation — e.g. creating a VM writes `owner` (user) and `project` relationships for the new `virtual_machine`, which inherits organization-admin access transitively through `project->parent`
-- Schema loading: a Helm post-install/post-upgrade Job runs `zed schema write`; for local development, `spicedb/init-schema.sh` posts the schema via the HTTP API
+Integration points:
 
-### Authentication System (WebAuthn/Passkeys)
+- `SpiceDBAuthMiddleware` (registered globally, including in tests)
+  intercepts all HTTP requests: it skips a public allowlist (health
+  checks, `/auth/*`, the agent WebSocket, signed download URLs), requires
+  an authenticated user for everything else, lets system admins bypass
+  permission checks, and for the prefix-guarded resource APIs maps HTTP
+  method + path to a permission (`read`, `create`, `update`, `delete`,
+  plus lifecycle verbs such as `start`, `stop`, `restart`, `pause`,
+  `resume`, and sandbox `exec`) checked against that resource.
+- `SpiceDBService` wraps the SpiceDB HTTP API (checks with full
+  consistency, relationship writes, schema writes), authenticated with a
+  preshared key.
+- Controllers write ownership relationships automatically on resource
+  creation (`owner` and `project` tuples), so org/OU admins inherit access
+  transitively, and perform additional per-object checks in handlers.
+- Schema loading: a Helm post-install/upgrade Job runs `zed schema write`;
+  local development posts the schema via the HTTP API.
 
-Modern passwordless authentication using the WebAuthn standard:
+### Hierarchy, groups, and quotas
 
-**Server-side** (swift-server/webauthn-swift):
-- Registration ceremony handling
-- Authentication ceremony validation
-- Public key storage and management
-- Challenge generation and verification
+Organization → optional nested **organizational units** (materialized
+path/depth) → projects (with environments). **Groups** — optionally
+SCIM-provisioned — grant access. **Resource quotas** (vCPU, memory,
+storage, VM count, sandbox count; optionally per-environment) attach at
+org, OU, or project level and are enforced on VM and sandbox
+create/delete; sandboxes draw from the same vCPU/memory pools as VMs.
 
-**Client-side** (WebAuthn JavaScript API):
-- Browser credential creation
-- Authentication assertion generation
-- Platform authenticator integration
-- Security key support
+## Observability
 
-**Supported Authenticators:**
-- Platform authenticators (Touch ID, Face ID, Windows Hello)
-- Cross-platform authenticators (USB security keys)
-- Bluetooth and NFC FIDO2 devices
+The control plane emits OTLP metrics, logs, and traces via swift-otel to
+an OTel collector, which exports to Prometheus, Loki, and Jaeger
+(`OTEL_METRICS_ENABLED` / `OTEL_LOGS_ENABLED` / `OTEL_TRACES_ENABLED`).
+VM and sandbox console/workload logs flow from agents over the WebSocket
+and are pushed to Loki. Audit events fan out to the database and optional
+external backends, with retention pruning.
 
-### Frontend Architecture
+## Deployment shapes
 
-**Next.js single-page app** (`control-plane/web/`):
+- **`deploy/compose/`** — the supported single-host production deployment
+  (published images, generated secrets).
+- **Helm + Skaffold** — Kubernetes deployment and development.
+- **`task dev`** — the primary local development flow (Docker
+  dependencies, native control plane and agent).
+- Agents self-update from the control plane over the existing WebSocket —
+  see [agent-updates](./agent-updates.md).
 
-- **App Router**: Route groups under `src/app/` (`(auth)`, `(dashboard)`)
-- **Components**: Feature components under `src/components/` (vms, agents, images, terminal) built on shadcn/ui + Radix primitives
-- **Data layer**: TanStack Query for server state and a typed API client in `src/lib/api`; Zustand for client state
-- **Terminal**: xterm.js for interactive VM consoles
+## Document index
 
-**Styling System:**
-- **TailwindCSS v4**: Utility-first CSS framework
-- **PostCSS**: Processes Tailwind via `@tailwindcss/postcss` as part of the Next.js build
-
-### Virtual Machine Management
-
-**QEMU Integration (via the Agent):**
-- **SwiftQEMU**: Swift wrapper over the QEMU Monitor Protocol (QMP) and guest agent
-- **Acceleration**: KVM on Linux, Hypervisor.framework (HVF) on macOS
-- **VM Lifecycle**: Create, start, stop, restart, delete operations
-- **Resource Management**: CPU, memory, and disk allocation
-
-**VM Model Properties:**
-```swift
-final class VM: Model, Content {
-    @ID(key: .id) var id: UUID?
-    @Field(key: "name") var name: String
-    @Field(key: "description") var description: String?
-    @Field(key: "image") var image: String
-    @Field(key: "cpu_count") var cpuCount: Int
-    @Field(key: "memory_mb") var memoryMB: Int
-    @Field(key: "disk_gb") var diskGB: Int
-    @Timestamp(key: "created_at", on: .create) var createdAt: Date?
-    @Timestamp(key: "updated_at", on: .update) var updatedAt: Date?
-}
-```
-
-## Development Patterns
-
-### MVC Architecture
-
-- **Models**: Data layer with database integration
-- **API Controllers**: Business logic and HTTP request handling, serving JSON to the Next.js frontend
-- **Frontend**: Next.js presentation layer (see Frontend Architecture above)
-
-### Dependency Injection
-
-Vapor's built-in container system provides:
-- Service registration in `configure.swift`
-- Automatic dependency resolution
-- Testable service isolation
-
-### Error Handling
-
-- **Vapor's Error Protocol**: Structured error responses
-- **HTTP Status Codes**: Appropriate response codes
-- **User-Friendly Messages**: Localized error presentation
-
-### Testing Strategy
-
-- **Unit Tests**: Service and model testing
-- **Integration Tests**: Full request/response cycles
-- **Database Tests**: In-memory test database
-- **Vapor Testing**: Built-in testing utilities
-
-## Security Considerations
-
-### Authentication
-- **WebAuthn**: Phishing-resistant authentication
-- **Session Management**: Secure session storage
-- **CSRF Protection**: Built into Vapor forms
-
-### Authorization
-- **Fine-grained Permissions**: SpiceDB relationship-based access (Zanzibar model)
-- **Middleware Enforcement**: All requests authorized
-- **Principle of Least Privilege**: Minimal required permissions
-
-### Data Protection
-- **Database Encryption**: PostgreSQL encryption at rest
-- **Transport Security**: HTTPS/TLS encryption
-- **Input Validation**: Comprehensive request validation
-
-## Deployment Architecture
-
-### Development Environment
-```yaml
-services:
-  app:          # Strato application
-  db:           # PostgreSQL database
-  spicedb:      # SpiceDB authorization service
-  migrate:      # Database migration runner
-```
-
-### Production Considerations
-- **Container Orchestration**: Kubernetes or Docker Swarm
-- **Load Balancing**: Multiple app instances
-- **Database Clustering**: PostgreSQL replication
-- **Monitoring**: Application and infrastructure metrics
-- **Backup Strategy**: Database and configuration backups
-
-## Configuration Management
-
-### Environment Variables
-- `DATABASE_URL`: PostgreSQL connection string
-- `SPICEDB_ENDPOINT`: SpiceDB HTTP API URL (required)
-- `SPICEDB_PRESHARED_KEY`: SpiceDB preshared authentication key
-- `STRATO_SECRET_ENCRYPTION_KEY`: 32-byte key (hex or base64) encrypting stored secrets (OIDC client secrets, SSF stream auth tokens) at rest; unset stores them in plaintext with a startup warning
-- `WEBAUTHN_RELYING_PARTY_*`: WebAuthn configuration
-- `VAPOR_ENV`: Application environment (development/production)
-
-### Configuration Files
-- `docker-compose.yml`: Development environment
-- `spicedb/schema.zed`: SpiceDB authorization schema
-- `control-plane/web/postcss.config.mjs`: TailwindCSS/PostCSS configuration for the frontend
-
-## Performance Characteristics
-
-### Swift/Vapor Benefits
-- **Memory Safety**: No buffer overflows or memory leaks
-- **Performance**: Compiled language performance
-- **Concurrency**: Swift's actor model and async/await
-- **Type Safety**: Compile-time error detection
-
-### Database Optimization
-- **Connection Pooling**: Efficient database connections
-- **Query Optimization**: Fluent query builder efficiency
-- **Indexing Strategy**: Optimized database indexes
-- **Migration Strategy**: Zero-downtime schema changes
-
-### Frontend Performance
-- **Next.js**: Code-splitting and optimized production builds
-- **TanStack Query**: Client-side caching and request deduplication
-- **TailwindCSS**: Optimized CSS bundle
-- **Static Assets**: Efficient caching and delivery
-
-## Future Architecture Considerations
-
-### Scalability
-- **Microservices**: Service decomposition options
-- **Event-Driven Architecture**: Asynchronous processing
-- **Caching Layer**: Redis or similar caching solution
-- **CDN Integration**: Global content delivery
-
-### Observability
-- **Structured Logging**: JSON-formatted logs
-- **Metrics Collection**: Prometheus integration
-- **Distributed Tracing**: Request tracing across services
-- **Health Checks**: Service availability monitoring
-
-### Integration Points
-- **Webhook Support**: External system notifications
-- **API Gateway**: Centralized API management
-- **Message Queues**: Asynchronous task processing
-- **External Storage**: Object storage integration
+| Document | Covers |
+|---|---|
+| [control-plane](./control-plane.md) | Control-plane code architecture: boot, services, request lifecycle, agent socket, sweeps, testing |
+| [agent](./agent.md) | Agent code architecture: targets, driver registry, reconciler, storage, networking, self-update |
+| [wire-protocol](./wire-protocol.md) | The StratoShared package: envelope, message catalog, reconciliation contract, DTOs |
+| [frontend](./frontend.md) | Next.js app structure, data layer, operation polling, auth flow |
+| [scheduler](./scheduler.md) | Placement strategies and integration |
+| [multi-replica](./multi-replica.md) | Running multiple control-plane replicas |
+| [networking](./networking.md) | OVN/OVS design, IPAM, roadmap |
+| [storage](./storage.md) | StorageBackend, volumes, snapshots, image materialization |
+| [distributed-storage](./distributed-storage.md) | Replicated block storage (design proposal) |
+| [sandboxes](./sandboxes.md) | OCI-image Firecracker microVMs |
+| [iam](./iam.md) | The Cedar migration decision record |
+| [agent-updates](./agent-updates.md) | Operator-triggered and declarative agent updates |
