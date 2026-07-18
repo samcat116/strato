@@ -34,7 +34,10 @@ spec:
             - -config
             - /etc/spire/server/server.conf
           env:
-            - name: SPIRE_DB_PASSWORD
+            # lib/pq reads the datastore password from PGPASSWORD; the DSN in
+            # server.conf carries no password= keyword, so values with spaces
+            # or quotes cannot corrupt its parsing.
+            - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
                   {{- if .Values.spire.database.existingSecret }}

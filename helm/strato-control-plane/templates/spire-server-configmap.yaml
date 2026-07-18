@@ -41,20 +41,23 @@ data:
                 SPIRE's sql plugin uses lib/pq semantics where plain `require`
                 encrypts but skips server-cert verification, so map require to
                 verify-full — same reasoning as the SpiceDB datastore URI.
-                Under verify-full lib/pq needs a root CA it trusts: when the
-                chart carries one (strato.database.tlsCACert) point sslrootcert
-                at its mount, mirroring SpiceDB's datastore URI.
+                Under the verify modes lib/pq needs a root CA it trusts: when
+                the chart carries one (strato.database.tlsCACert) point
+                sslrootcert at its mount. Modes below require (prefer/allow)
+                keep their fallback semantics and are left untouched.
+                The password is deliberately absent from the DSN: lib/pq falls
+                back to the PGPASSWORD environment variable, which keeps
+                arbitrary secret values out of keyword/value parsing.
                 */}}
                 {{- $tlsMode := include "strato-control-plane.databaseTLS" . }}
                 {{- $sslQuery := printf "sslmode=%s" $tlsMode }}
-                {{- if ne $tlsMode "disable" }}
-                  {{- if .Values.strato.database.tlsCACert }}
-                    {{- $sslQuery = "sslmode=verify-full sslrootcert=/etc/spire/db-tls/ca.crt" }}
-                  {{- else if eq $tlsMode "require" }}
-                    {{- $sslQuery = "sslmode=verify-full" }}
-                  {{- end }}
+                {{- if eq $tlsMode "require" }}
+                  {{- $sslQuery = "sslmode=verify-full" }}
                 {{- end }}
-                connection_string = "host={{ include "strato-control-plane.databaseHost" . }} port={{ include "strato-control-plane.databasePort" . }} dbname=spire user={{ .Values.spire.database.username }} password=${SPIRE_DB_PASSWORD} {{ $sslQuery }}"
+                {{- if and .Values.strato.database.tlsCACert (or (eq $tlsMode "require") (hasPrefix "verify" $tlsMode)) }}
+                  {{- $sslQuery = printf "%s sslrootcert=/etc/spire/db-tls/ca.crt" $sslQuery }}
+                {{- end }}
+                connection_string = "host={{ include "strato-control-plane.databaseHost" . }} port={{ include "strato-control-plane.databasePort" . }} dbname=spire user={{ .Values.spire.database.username }} {{ $sslQuery }}"
             }
         }
 

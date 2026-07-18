@@ -605,7 +605,9 @@ spire:
   # Database configuration (uses the same PostgreSQL as control plane).
   # With the bundled Postgres the chart provisions the `spire` database and
   # role automatically (spire-db-init-job.yaml); with an external database
-  # create them yourself using the password from the <fullname>-spire secret.
+  # create them yourself, using either the password from the <fullname>-spire
+  # secret or — when the external role's password is imposed on you —
+  # existingSecret below.
   database:
     username: spire
     # Image for the provisioning job (needs psql; only used when

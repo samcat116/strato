@@ -5,7 +5,8 @@ the bitnami subchart only creates the application database/role — without this
 job spire.enabled could never start against the bundled Postgres (the compose
 deployment does the equivalent with an initdb script). Idempotent: creates the
 role and database only when missing and re-syncs the role password to the
-<fullname>-spire secret. With an external database (postgresql.enabled=false)
+configured source (spire.database.existingSecret when set, else the generated
+<fullname>-spire secret). With an external database (postgresql.enabled=false)
 provisioning is the operator's responsibility, matching the docs.
 */}}
 {{- if and .Values.spire.enabled .Values.postgresql.enabled }}
