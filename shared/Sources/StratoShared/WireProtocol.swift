@@ -126,7 +126,12 @@ public enum WireProtocol {
     /// messages also advertise `sandbox_snapshot_create` in their registration
     /// `capabilities` (the `volumeSnapshotDelete` pattern), and the control
     /// plane checks the capability before sending.
-    public static let currentVersion = 9
+    ///
+    /// Version 10: removes the pre-state-sync imperative VM lifecycle message
+    /// cases. This is intentionally breaking for version 0/1 peers: both sides
+    /// gate registration on `supportsStateSync(_:)`, so an incompatible peer is
+    /// rejected before it can emit a message type this build no longer decodes.
+    public static let currentVersion = 10
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).

@@ -971,6 +971,17 @@ actor Agent {
     /// Handle registration response from control plane
     func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) async {
         let controlPlaneProtocolVersion = response.protocolVersion ?? 0
+        guard WireProtocol.supportsStateSync(controlPlaneProtocolVersion) else {
+            let reason =
+                "Control plane wire protocol version \(controlPlaneProtocolVersion) predates desired-state sync; "
+                + "the imperative VM lifecycle protocol has been removed. Upgrade the control plane."
+            logger.error("Registration rejected: \(reason)")
+            if let continuation = takeRegistrationContinuation() {
+                continuation.resume(throwing: AgentError.registrationRejected(reason))
+            }
+            return
+        }
+
         if controlPlaneProtocolVersion != WireProtocol.currentVersion {
             logger.warning(
                 "Control plane wire protocol version differs from agent",
