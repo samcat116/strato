@@ -1107,6 +1107,9 @@ actor Agent {
         // fails envelope decoding before any error response can be sent,
         // leaving the control plane to time out).
         capabilities.append(MessageType.volumeSnapshotDelete.rawValue)
+        // Sandbox snapshot/checkpoint message set (issue #426). One marker
+        // for the trio (create/delete/restore) — they ship together.
+        capabilities.append(MessageType.sandboxSnapshotCreate.rawValue)
 
         for hypervisor in hypervisors {
             if hypervisor.available {
@@ -1694,6 +1697,16 @@ extension Agent {
             case .sandboxExecClose:
                 let message = try envelope.decode(as: SandboxExecCloseMessage.self)
                 await handleSandboxExecClose(message)
+            // Sandbox snapshots / checkpoint-resume (issue #426)
+            case .sandboxSnapshotCreate:
+                let message = try envelope.decode(as: SandboxSnapshotCreateMessage.self)
+                await handleSandboxSnapshotCreate(message)
+            case .sandboxSnapshotDelete:
+                let message = try envelope.decode(as: SandboxSnapshotDeleteMessage.self)
+                await handleSandboxSnapshotDelete(message)
+            case .sandboxRestore:
+                let message = try envelope.decode(as: SandboxRestoreMessage.self)
+                await handleSandboxRestore(message)
             // Volume operations
             case .volumeCreate:
                 let message = try envelope.decode(as: VolumeCreateMessage.self)
@@ -2802,6 +2815,105 @@ extension Agent {
                     "error": .string(error.localizedDescription),
                 ])
             await sendSandboxExecClosed(sessionId: sessionId, reason: error.localizedDescription)
+        }
+    }
+
+    // MARK: - Sandbox snapshots / checkpoint-resume (issue #426)
+
+    private func handleSandboxSnapshotCreate(_ message: SandboxSnapshotCreateMessage) async {
+        logger.info(
+            "Sandbox snapshot create request received",
+            metadata: [
+                "sandboxId": .string(message.sandboxId),
+                "snapshotId": .string(message.snapshotId),
+                "mode": .string(message.mode.rawValue),
+            ])
+
+        guard let runtime = sandboxRuntime else {
+            await sendError(for: message.requestId, error: "this agent has no sandbox runtime")
+            return
+        }
+
+        do {
+            let result = try await runtime.snapshotSandbox(
+                sandboxId: message.sandboxId, snapshotId: message.snapshotId, mode: message.mode)
+            let response = SandboxSnapshotStatusResponse(
+                snapshotId: message.snapshotId,
+                sizeBytes: result.totalSizeBytes,
+                memorySizeBytes: result.memorySizeBytes,
+                vmstateSizeBytes: result.vmstateSizeBytes,
+                rootfsSizeBytes: result.rootfsSizeBytes,
+                storagePath: result.storagePath,
+                firecrackerVersion: result.firecrackerVersion,
+                architecture: CPUArchitecture.current)
+            let data = try AnyCodableValue(response)
+            await sendSuccess(for: message.requestId, message: "Sandbox snapshot created", data: data)
+        } catch {
+            await sendError(
+                for: message.requestId,
+                error: "Failed to snapshot sandbox: \(error.localizedDescription)")
+            logger.error(
+                "Failed to snapshot sandbox",
+                metadata: [
+                    "sandboxId": .string(message.sandboxId),
+                    "snapshotId": .string(message.snapshotId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    private func handleSandboxSnapshotDelete(_ message: SandboxSnapshotDeleteMessage) async {
+        logger.info(
+            "Sandbox snapshot delete request received",
+            metadata: [
+                "sandboxId": .string(message.sandboxId),
+                "snapshotId": .string(message.snapshotId),
+            ])
+
+        guard let runtime = sandboxRuntime else {
+            await sendError(for: message.requestId, error: "this agent has no sandbox runtime")
+            return
+        }
+
+        do {
+            try await runtime.deleteSandboxSnapshot(
+                sandboxId: message.sandboxId, snapshotId: message.snapshotId)
+            await sendSuccess(for: message.requestId, message: "Sandbox snapshot deleted")
+        } catch {
+            await sendError(
+                for: message.requestId,
+                error: "Failed to delete sandbox snapshot: \(error.localizedDescription)")
+        }
+    }
+
+    private func handleSandboxRestore(_ message: SandboxRestoreMessage) async {
+        logger.info(
+            "Sandbox restore request received",
+            metadata: [
+                "sandboxId": .string(message.sandboxId),
+                "snapshotId": .string(message.snapshotId),
+            ])
+
+        guard let runtime = sandboxRuntime else {
+            await sendError(for: message.requestId, error: "this agent has no sandbox runtime")
+            return
+        }
+
+        do {
+            try await runtime.restoreSandbox(
+                sandboxId: message.sandboxId, snapshotId: message.snapshotId)
+            await sendSuccess(for: message.requestId, message: "Sandbox restored from snapshot")
+        } catch {
+            await sendError(
+                for: message.requestId,
+                error: "Failed to restore sandbox: \(error.localizedDescription)")
+            logger.error(
+                "Failed to restore sandbox from snapshot",
+                metadata: [
+                    "sandboxId": .string(message.sandboxId),
+                    "snapshotId": .string(message.snapshotId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 

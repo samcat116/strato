@@ -100,6 +100,20 @@ struct SandboxControlProtocolTests {
         #expect(object.count == 2)
     }
 
+    @Test("sync_clock encodes unix_nanos in snake_case")
+    func syncClockEncodes() throws {
+        let object = try decodedObject(.syncClock(unixNanos: 1_752_700_000_000_000_000))
+        #expect(object["type"] as? String == "sync_clock")
+        #expect((object["unix_nanos"] as? NSNumber)?.int64Value == 1_752_700_000_000_000_000)
+        #expect(object.count == 2)
+    }
+
+    @Test("clock_synced decodes")
+    func clockSyncedDecodes() throws {
+        let response = try SandboxControlProtocol.Response.decode(line: #"{"type":"clock_synced"}"#)
+        #expect(response == .clockSynced)
+    }
+
     @Test("SandboxExecRequest maps onto the guest exec request field by field")
     func execRequestBridgesToGuestRequest() {
         let request = SandboxExecRequest(

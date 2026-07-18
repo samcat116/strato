@@ -56,6 +56,17 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
     }
     private var sandboxes: [String: MockSandbox] = [:]
 
+    /// Snapshots this mock has "taken" (issue #426), remembering the workload
+    /// state at checkpoint time so a restore can reproduce it — the observable
+    /// contract of a real checkpoint, minus the artifacts.
+    private struct MockSnapshot {
+        var sandboxId: String
+        var capturedStatus: SandboxStatus
+        var capturedExitCode: Int?
+        var memoryBytes: Int64
+    }
+    private var snapshots: [String: MockSnapshot] = [:]
+
     /// Live interactive (tty) exec sessions. One-shot (non-tty) sessions end
     /// inside `startExec` and are never stored.
     private struct ExecSession {
@@ -224,6 +235,66 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
         endWorkloadActivity(sandboxId: sandboxId, execCloseReason: "sandbox workload exited")
         sandboxes[sandboxId]?.status = .exited
         sandboxes[sandboxId]?.exitCode = 0
+    }
+
+    // MARK: - Snapshots / checkpoint-resume (issue #426)
+
+    public func snapshotSandbox(
+        sandboxId: String, snapshotId: String, mode: SandboxSnapshotMode
+    ) async throws -> SandboxSnapshotResult {
+        guard let sandbox = sandboxes[sandboxId] else {
+            throw SandboxRuntimeError.sandboxNotFound(sandboxId)
+        }
+        logger.info(
+            "Checkpointing mock sandbox (mock mode)",
+            metadata: [
+                "sandboxId": .string(sandboxId),
+                "snapshotId": .string(snapshotId),
+                "mode": .string(mode.rawValue),
+            ])
+        snapshots[snapshotId] = MockSnapshot(
+            sandboxId: sandboxId,
+            capturedStatus: sandbox.status,
+            capturedExitCode: sandbox.exitCode,
+            memoryBytes: sandbox.spec.memoryBytes)
+        if mode == .stop, sandbox.status == .running {
+            // Checkpoint-and-stop, like the real runtime leaving the microVM
+            // paused after the capture.
+            endWorkloadActivity(sandboxId: sandboxId, execCloseReason: "sandbox checkpoint")
+            sandboxes[sandboxId]?.status = .stopped
+        }
+        // Plausible-but-fake sizes: the memory file dominates a real
+        // checkpoint, so quota-path scale tests see realistic magnitudes.
+        return SandboxSnapshotResult(
+            memorySizeBytes: sandbox.spec.memoryBytes,
+            vmstateSizeBytes: 8 * 1024 * 1024,
+            rootfsSizeBytes: 256 * 1024 * 1024,
+            storagePath: "/simulated/sandboxes/\(sandboxId)/snapshots/\(snapshotId)",
+            firecrackerVersion: "simulated")
+    }
+
+    public func restoreSandbox(sandboxId: String, snapshotId: String) async throws {
+        guard sandboxes[sandboxId] != nil else {
+            throw SandboxRuntimeError.sandboxNotFound(sandboxId)
+        }
+        guard let snapshot = snapshots[snapshotId], snapshot.sandboxId == sandboxId else {
+            throw SandboxRuntimeError.snapshotNotFound(sandboxId: sandboxId, snapshotId: snapshotId)
+        }
+        logger.info(
+            "Restoring mock sandbox from snapshot (mock mode)",
+            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+        // The restored guest replaces whatever was running.
+        endWorkloadActivity(sandboxId: sandboxId, execCloseReason: "sandbox restore")
+        sandboxes[sandboxId]?.status = snapshot.capturedStatus
+        sandboxes[sandboxId]?.exitCode = snapshot.capturedExitCode
+        if snapshot.capturedStatus == .running {
+            markRunning(sandboxId)
+        }
+    }
+
+    public func deleteSandboxSnapshot(sandboxId: String, snapshotId: String) async throws {
+        // Idempotent, like the real artifact removal.
+        snapshots.removeValue(forKey: snapshotId)
     }
 
     // MARK: - Exec sessions

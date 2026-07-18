@@ -442,11 +442,82 @@ in-chroot `--api-sock` path). VMs (the
 `FirecrackerService` path) remain unjailed for now; extending the barrier to
 them is future work.
 
+## Phase 4: snapshot primitives + checkpoint/resume (issue #426)
+
+Firecracker snapshots capture the guest **memory + VMM/device state** of a
+*paused* microVM — not the disk — and are tied to the Firecracker version,
+host CPU, and device topology they were taken with. A Strato sandbox
+checkpoint is therefore three artifacts taken as one consistent point in
+time, plus recorded compatibility constraints:
+
+- `memory.snap` + `vmstate.snap` — written by `PUT /snapshot/create` (full
+  snapshots; `track_dirty_pages`/diff snapshots are wrapped in
+  SwiftFirecracker but unused until #428).
+- `rootfs.ext4` — a copy of the writable rootfs made **while the guest is
+  paused**, via `cp --reflink=auto` (a free clone on reflink filesystems —
+  btrfs/XFS today, the ZFS pool backend (#350) later — and a full copy
+  otherwise). The tiny `config.img` rides along so a jailed restore can
+  re-stage its chroot from the archive alone.
+
+### Agent-side sequences
+
+**Checkpoint** (`sandbox_snapshot_create`): drain host-side vsock connections
+(exec sessions end terminally, the log follow suspends keeping its seq
+checkpoint — Firecracker refuses to snapshot a vsock device with live
+connections) → pause → `PUT /snapshot/create` → copy rootfs + config drive →
+resume, or stay paused for **checkpoint-and-stop** (`mode: stop` — exactly
+the paused state a control-plane stop produces, so the sandbox converges to
+`stopped`). A `checkpointing` guard makes concurrent lifecycle calls
+(boot/stop/exec) fail transient and keeps status polls off the drained vsock
+channel. Jailed sandboxes stage the snapshot files inside the chroot (the
+jailed VMM writes them) and the runtime moves them out to the host-owned
+archive at `<sandbox storage>/<id>/snapshots/<snapshotId>/` — agent-owned
+paths beside the sandbox (the volume-snapshot precedent), removed with it.
+
+**Restore in place** (`sandbox_restore`, same agent, same identity): drain →
+destroy the current Firecracker process → re-stage the layout from the
+archive (for a jailed sandbox the whole chroot is rebuilt; kernel/initramfs
+are deliberately absent — a snapshot load never reads the boot source) →
+spawn a fresh process → `PUT /snapshot/load` (`resume_vm: true`) → guest-agent
+health check (ping + identity nonce, which the checkpointed memory carries) →
+best-effort `sync_clock` over vsock (the restored guest's wall clock froze at
+checkpoint time; PID 1 sets `CLOCK_REALTIME`) → log follow resumes from its
+seq checkpoint. The restored device topology re-binds the original vsock UDS
+path; the (future) TAP devices come back under their original names the same
+way.
+
+### Control plane
+
+`SandboxSnapshot` rows track status (`creating`/`ready`/`deleting`/`error`),
+size, agent placement, and the compat constraints (Firecracker version,
+architecture). `POST /api/sandboxes/:id/snapshots` (+ list/delete/restore)
+ride the generalized 202-operation machinery (#412) with new operation kinds
+`snapshot`/`snapshot_delete`/`restore`; the agent round-trip is an imperative
+request/response RPC like volume operations (replica-forwarded, capability-
+gated on `sandbox_snapshot_create`, wire protocol v9). Restore pins to the
+snapshot's agent in v1 and flips desired state to `running` in the same
+transaction (IPAM allocations stay held while checkpointed, so the sandbox
+keeps its addresses). Snapshot storage draws from the shared storage quota
+pool (#415): admission reserves the guest-memory size as an estimate, the
+agent's reported actual sizes replace it, and quota resync sums non-error
+snapshot rows.
+
+### Clone safety (deferred to #427)
+
+Restoring a snapshot **in place, once** — this phase — does not fork
+identity: same sandbox, same NIC/IP (none yet), same machine-id. Restoring
+one snapshot into *N* sandboxes does, and additionally requires RNG reseed
+(the `/entropy` virtio-rng device is wrapped in SwiftFirecracker but not yet
+attached — older Firecracker binaries reject it) plus the guest re-identify
+flow; both land with fork (#427). Warm start (boot-to-ready snapshot per
+base image, folded into #426's scope) is also deferred until the fork
+identity story settles, since a warm-start restore *is* a fork.
+
 ## Later phases
-- **Phase 4**: snapshot/checkpoint primitives and resume (#426), fork into new
-  sandboxes (#427), and snapshot mobility — off-node export, cross-agent
-  restore, diff snapshots (#428). Cross-agent restore is why the CPU-template
-  decision is forced at sandbox create time.
+- **Phase 4 (remaining)**: warm start (boot-latency measurement on
+  strato-dev), fork into new sandboxes (#427), and snapshot mobility —
+  off-node export, cross-agent restore, diff snapshots (#428). Cross-agent
+  restore is why the CPU-template decision is forced at sandbox create time.
 
 ## Non-goals (v1)
 

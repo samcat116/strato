@@ -45,10 +45,22 @@ public actor FirecrackerManager {
         let body = try encoder.encode(config)
         let response = try await httpClient.request(method: .PUT, path: "/machine-config", body: body)
         try handleResponse(response)
-        logger.info("Machine configured", metadata: [
-            "vcpus": "\(config.vcpuCount)",
-            "memory_mib": "\(config.memSizeMib)"
-        ])
+        logger.info(
+            "Machine configured",
+            metadata: [
+                "vcpus": "\(config.vcpuCount)",
+                "memory_mib": "\(config.memSizeMib)",
+            ])
+    }
+
+    /// Partially updates the machine configuration (`PATCH /machine-config`).
+    /// Only valid before the VM starts; the primary use is enabling
+    /// `track_dirty_pages` for diff snapshots.
+    public func updateMachineConfig(_ update: MachineConfigUpdate) async throws {
+        let body = try encoder.encode(update)
+        let response = try await httpClient.request(method: .PATCH, path: "/machine-config", body: body)
+        try handleResponse(response)
+        logger.info("Machine configuration updated")
     }
 
     /// Gets the current machine configuration
@@ -69,9 +81,11 @@ public actor FirecrackerManager {
         let body = try encoder.encode(bootSource)
         let response = try await httpClient.request(method: .PUT, path: "/boot-source", body: body)
         try handleResponse(response)
-        logger.info("Boot source configured", metadata: [
-            "kernel": "\(bootSource.kernelImagePath)"
-        ])
+        logger.info(
+            "Boot source configured",
+            metadata: [
+                "kernel": "\(bootSource.kernelImagePath)"
+            ])
     }
 
     // MARK: - Drive Management
@@ -81,11 +95,13 @@ public actor FirecrackerManager {
         let body = try encoder.encode(drive)
         let response = try await httpClient.request(method: .PUT, path: "/drives/\(drive.driveId)", body: body)
         try handleResponse(response)
-        logger.info("Drive configured", metadata: [
-            "drive_id": "\(drive.driveId)",
-            "path": "\(drive.pathOnHost)",
-            "is_root": "\(drive.isRootDevice)"
-        ])
+        logger.info(
+            "Drive configured",
+            metadata: [
+                "drive_id": "\(drive.driveId)",
+                "path": "\(drive.pathOnHost)",
+                "is_root": "\(drive.isRootDevice)",
+            ])
     }
 
     // MARK: - Network Configuration
@@ -93,12 +109,15 @@ public actor FirecrackerManager {
     /// Adds or updates a network interface
     public func configureNetwork(_ networkInterface: NetworkInterface) async throws {
         let body = try encoder.encode(networkInterface)
-        let response = try await httpClient.request(method: .PUT, path: "/network-interfaces/\(networkInterface.ifaceId)", body: body)
+        let response = try await httpClient.request(
+            method: .PUT, path: "/network-interfaces/\(networkInterface.ifaceId)", body: body)
         try handleResponse(response)
-        logger.info("Network interface configured", metadata: [
-            "iface_id": "\(networkInterface.ifaceId)",
-            "host_dev": "\(networkInterface.hostDevName)"
-        ])
+        logger.info(
+            "Network interface configured",
+            metadata: [
+                "iface_id": "\(networkInterface.ifaceId)",
+                "host_dev": "\(networkInterface.hostDevName)",
+            ])
     }
 
     // MARK: - Vsock Configuration
@@ -112,10 +131,25 @@ public actor FirecrackerManager {
         let body = try encoder.encode(vsock)
         let response = try await httpClient.request(method: .PUT, path: "/vsock", body: body)
         try handleResponse(response)
-        logger.info("Vsock configured", metadata: [
-            "guest_cid": "\(vsock.guestCid)",
-            "uds_path": "\(vsock.udsPath)"
-        ])
+        logger.info(
+            "Vsock configured",
+            metadata: [
+                "guest_cid": "\(vsock.guestCid)",
+                "uds_path": "\(vsock.udsPath)",
+            ])
+    }
+
+    // MARK: - Entropy Device
+
+    /// Attaches a virtio-rng entropy device (`PUT /entropy`) so the guest can
+    /// reseed its RNG — required for clone safety when a snapshot is restored
+    /// more than once. Must be called before starting the VM; requires
+    /// Firecracker >= 1.3.
+    public func configureEntropy(_ device: EntropyDevice = EntropyDevice()) async throws {
+        let body = try encoder.encode(device)
+        let response = try await httpClient.request(method: .PUT, path: "/entropy", body: body)
+        try handleResponse(response)
+        logger.info("Entropy device configured")
     }
 
     // MARK: - MMDS (Metadata Service)
@@ -126,10 +160,12 @@ public actor FirecrackerManager {
         let body = try encoder.encode(config)
         let response = try await httpClient.request(method: .PUT, path: "/mmds/config", body: body)
         try handleResponse(response)
-        logger.info("MMDS configured", metadata: [
-            "interfaces": "\(config.networkInterfaces.joined(separator: ","))",
-            "version": "\(config.version ?? "default")"
-        ])
+        logger.info(
+            "MMDS configured",
+            metadata: [
+                "interfaces": "\(config.networkInterfaces.joined(separator: ","))",
+                "version": "\(config.version ?? "default")",
+            ])
     }
 
     /// Replaces the MMDS metadata store with the given JSON-encodable value.
@@ -202,6 +238,52 @@ public actor FirecrackerManager {
         logger.info("VM resumed")
     }
 
+    // MARK: - Snapshots
+
+    /// Creates a snapshot of the guest memory + VMM state (`PUT /snapshot/create`).
+    /// The VM must be paused; disk contents are NOT captured — copy the drive
+    /// files while the VM is still paused for a consistent checkpoint.
+    public func createSnapshot(_ config: SnapshotCreateConfig) async throws {
+        guard vmState == .paused else {
+            throw FirecrackerError.invalidState(current: vmState.rawValue, expected: InstanceState.paused.rawValue)
+        }
+
+        let body = try encoder.encode(config)
+        let response = try await httpClient.request(method: .PUT, path: "/snapshot/create", body: body)
+        try handleResponse(response)
+        logger.info(
+            "Snapshot created",
+            metadata: [
+                "vmstate": "\(config.snapshotPath)",
+                "memory": "\(config.memFilePath)",
+                "type": "\(config.snapshotType?.rawValue ?? SnapshotCreateConfig.SnapshotType.full.rawValue)",
+            ])
+    }
+
+    /// Loads a snapshot into a freshly spawned, entirely unconfigured VM
+    /// (`PUT /snapshot/load`). The snapshot carries the full device topology,
+    /// so none of the usual configuration calls precede this; drive files must
+    /// exist at the paths recorded in the vmstate. Leaves the VM paused unless
+    /// `config.resumeVM` is true.
+    public func loadSnapshot(_ config: SnapshotLoadConfig) async throws {
+        guard vmState == .notStarted else {
+            throw FirecrackerError.invalidState(
+                current: vmState.rawValue, expected: InstanceState.notStarted.rawValue)
+        }
+
+        let body = try encoder.encode(config)
+        let response = try await httpClient.request(method: .PUT, path: "/snapshot/load", body: body)
+        try handleResponse(response)
+
+        vmState = (config.resumeVM ?? false) ? .running : .paused
+        logger.info(
+            "Snapshot loaded",
+            metadata: [
+                "vmstate": "\(config.snapshotPath)",
+                "resumed": "\(config.resumeVM ?? false)",
+            ])
+    }
+
     /// Sends Ctrl+Alt+Del to the VM (triggers reboot if configured)
     public func sendCtrlAltDel() async throws {
         let action = VMAction(actionType: .sendCtrlAltDel)
@@ -232,10 +314,12 @@ public actor FirecrackerManager {
         guard response.isSuccess else {
             var message = "HTTP \(response.statusCode)"
             if let body = response.body,
-               let errorResponse = try? decoder.decode(FirecrackerAPIError.self, from: body) {
+                let errorResponse = try? decoder.decode(FirecrackerAPIError.self, from: body)
+            {
                 message = errorResponse.faultMessage
             } else if let body = response.body,
-                      let bodyString = String(data: body, encoding: .utf8) {
+                let bodyString = String(data: body, encoding: .utf8)
+            {
                 message = bodyString
             }
             throw FirecrackerError.httpError(statusCode: response.statusCode, message: message)

@@ -76,6 +76,12 @@ public enum SandboxControlProtocol {
         /// stdout/stderr ring buffer from `sinceSeq` onward (records already
         /// evicted are silently skipped).
         case streamLogs(sinceSeq: UInt64)
+        /// Set the guest's realtime clock (issue #426): a guest restored from
+        /// a snapshot resumes with its wall clock frozen at checkpoint time,
+        /// so the host pushes the current time right after a restore. Guests
+        /// that predate this request answer `error`, which the host treats as
+        /// best-effort.
+        case syncClock(unixNanos: Int64)
 
         /// Flat encoding shape for the tagged request union. The synthesized
         /// `Encodable` conformance already does exactly what the guest's serde
@@ -92,6 +98,7 @@ public enum SandboxControlProtocol {
             var cols: Int?
             var data: String?
             var sinceSeq: UInt64?
+            var unixNanos: Int64?
 
             enum CodingKeys: String, CodingKey {
                 case type
@@ -103,6 +110,7 @@ public enum SandboxControlProtocol {
                 case cols
                 case data
                 case sinceSeq = "since_seq"
+                case unixNanos = "unix_nanos"
             }
         }
 
@@ -134,6 +142,9 @@ public enum SandboxControlProtocol {
             case .streamLogs(let sinceSeq):
                 raw = RawRequest(type: "stream_logs")
                 raw.sinceSeq = sinceSeq
+            case .syncClock(let unixNanos):
+                raw = RawRequest(type: "sync_clock")
+                raw.unixNanos = unixNanos
             }
             // A flat struct of JSON scalars/arrays/string-maps cannot fail to
             // encode; fall back to an empty line rather than crashing the host
@@ -171,6 +182,8 @@ public enum SandboxControlProtocol {
         /// EOF and all retained records were delivered — no record will ever
         /// follow, so a partial final line can be flushed now.
         case logEof
+        /// The guest applied a `sync_clock` request (issue #426).
+        case clockSynced
 
         /// Decode one response line (the trailing newline is optional).
         public static func decode(line: String) throws -> Response {
@@ -208,6 +221,8 @@ public enum SandboxControlProtocol {
                 return .log(seq: seq, stream: stream, data: payload)
             case "log_eof":
                 return .logEof
+            case "clock_synced":
+                return .clockSynced
             default:
                 throw SandboxControlError.malformedResponse(line)
             }
