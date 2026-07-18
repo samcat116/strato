@@ -219,7 +219,8 @@ fn serve_control(
                 control_response(&req, status)
             }
             Ok(_) => Response::Error {
-                message: "only ping/get_status/sync_clock are valid on a control connection".to_string(),
+                message: "only ping/get_status/sync_clock are valid on a control connection"
+                    .to_string(),
             },
             Err(e) => Response::Error {
                 message: format!("undecodable request: {e}"),
