@@ -7,6 +7,7 @@ const controlPlanePrefixes = [
   "/agent",
   "/health",
   "/organizations",
+  "/ssf",
 ];
 
 function isControlPlanePath(pathname: string): boolean {
