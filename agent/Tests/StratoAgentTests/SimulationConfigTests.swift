@@ -38,6 +38,30 @@ struct SimulationConfigTests {
         #expect(SimulationConfig.disabled.enabled == false)
     }
 
+    // MARK: - Sandbox knobs (issue #470)
+
+    @Test("Sandbox log interval defaults on, 0 disables, and set values convert to a Duration")
+    func resolvedSandboxLogInterval() {
+        let defaulted = SimulationConfig(enabled: true)
+        #expect(
+            defaulted.resolvedSandboxLogInterval
+                == .milliseconds(SimulationConfig.defaultSandboxLogIntervalMS))
+
+        let disabled = SimulationConfig(enabled: true, sandboxLogIntervalMS: 0)
+        #expect(disabled.resolvedSandboxLogInterval == nil)
+
+        let custom = SimulationConfig(enabled: true, sandboxLogIntervalMS: 250)
+        #expect(custom.resolvedSandboxLogInterval == .milliseconds(250))
+    }
+
+    @Test("Sandbox workload lifetime defaults off (workloads run until stopped)")
+    func resolvedSandboxLifetime() {
+        #expect(SimulationConfig(enabled: true).resolvedSandboxLifetime == nil)
+        #expect(SimulationConfig(enabled: true, sandboxExitAfterSeconds: 0).resolvedSandboxLifetime == nil)
+        let oneShot = SimulationConfig(enabled: true, sandboxExitAfterSeconds: 90)
+        #expect(oneShot.resolvedSandboxLifetime == .seconds(90))
+    }
+
     // MARK: - TOML parsing
 
     @Test("Load [simulation] section from config")
@@ -51,6 +75,8 @@ struct SimulationConfigTests {
                 cpu_cores = 16
                 memory_mb = 32768
                 disk_gb = 500
+                sandbox_log_interval_ms = 1000
+                sandbox_exit_after_seconds = 120
                 """
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
@@ -62,6 +88,8 @@ struct SimulationConfigTests {
             #expect(sim.memoryMB == 32768)
             #expect(sim.diskGB == 500)
             #expect(sim.resolvedMemoryBytes == 32768 * 1024 * 1024)
+            #expect(sim.sandboxLogIntervalMS == 1000)
+            #expect(sim.sandboxExitAfterSeconds == 120)
         }
     }
 
@@ -82,6 +110,8 @@ struct SimulationConfigTests {
             #expect(sim.enabled == true)
             #expect(sim.cpuCores == nil)
             #expect(sim.resolvedCPUCores == SimulationConfig.defaultCPUCores)
+            #expect(sim.sandboxLogIntervalMS == nil)
+            #expect(sim.sandboxExitAfterSeconds == nil)
         }
     }
 

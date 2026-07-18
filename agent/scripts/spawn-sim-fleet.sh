@@ -3,8 +3,9 @@
 # spawn-sim-fleet.sh — launch a fleet of simulated ("dummy") Strato agents for
 # scale-testing a control plane. Each agent speaks the full agent protocol
 # (register, heartbeat, desired-state reconciliation) but drives a no-op mock
-# hypervisor and reports configurable fake host capacity, so hundreds can run on
-# one machine that could never host that many real VMs.
+# hypervisor and a no-op mock sandbox runtime, and reports configurable fake
+# host capacity, so hundreds can run on one machine that could never host that
+# many real VMs or sandboxes.
 #
 # For each agent the script mints a single-use registration token via the
 # control-plane API, then launches `strato-agent run --simulate` with a distinct
@@ -43,12 +44,12 @@
 #   -h, --help           Show this help
 #
 # Never mix simulated and real agents in one control plane / org
-#   A simulated agent advertises QEMU and full capacity, so the scheduler and
-#   the volume selector treat it as a real host. In a control plane that also
-#   has real agents, a real VM can be scheduled onto a dummy (and "run" on the
-#   mock hypervisor while nothing actually runs), and a real volume can be
-#   created on a dummy with a path that does not exist and then fail when a real
-#   workload attaches it. The control plane cannot currently tell simulated
+#   A simulated agent advertises QEMU, sandbox support, and full capacity, so
+#   the scheduler and the volume selector treat it as a real host. In a control
+#   plane that also has real agents, a real VM or sandbox can be scheduled onto
+#   a dummy (and "run" on the mock backend while nothing actually runs), and a
+#   real volume can be created on a dummy with a path that does not exist and
+#   then fail when a real workload attaches it. The control plane cannot currently tell simulated
 #   agents from real ones, so the only safe arrangement is a dedicated control
 #   plane or a dedicated org for simulation. As a safeguard the script refuses
 #   to launch into an org that already holds agents outside this fleet; override

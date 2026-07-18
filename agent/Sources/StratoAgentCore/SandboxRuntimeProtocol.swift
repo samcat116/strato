@@ -1,20 +1,20 @@
 import Foundation
-import StratoAgentCore
 import StratoShared
 
 /// Driver seam for the sandbox runtime (issue #421): the reconciler's sandbox
 /// work items route here, exactly as VM items route to `HypervisorService`
 /// implementations. `FirecrackerSandboxRuntime` is the shipping driver (Linux
-/// only); on builds without one, `Agent.sandboxRuntime` stays nil, the sandbox
-/// capability stays off, and sandbox work reaching a nil runtime fails
-/// permanently with `SandboxRuntimeError.runtimeUnavailable`.
+/// only); `MockSandboxRuntime` backs simulation mode (issue #470). On builds
+/// with neither, `Agent.sandboxRuntime` stays nil, the sandbox capability
+/// stays off, and sandbox work reaching a nil runtime fails permanently with
+/// `SandboxRuntimeError.runtimeUnavailable`.
 ///
 /// Method contracts mirror `HypervisorService`: every operation must be
 /// idempotent at the "already satisfied" level, because level-triggered syncs
 /// re-drive any step whose effect was not yet observed. The exec/log surface
 /// (issue #423) is stream-shaped instead: sessions are keyed by the control
 /// plane's sessionId and end with exactly one terminal event.
-protocol SandboxRuntimeService: Sendable {
+public protocol SandboxRuntimeService: Sendable {
     /// Materialize the sandbox's rootfs from its OCI image and define the
     /// microVM (ends "exists, not running" — `SandboxStatus.stopped`).
     func createSandbox(
@@ -92,7 +92,7 @@ protocol SandboxRuntimeService: Sendable {
 
 /// Sandbox actuation failures raised by the Agent's reconcile routing (the
 /// runtime's own errors surface as-is).
-enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
+public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
     /// This build has no sandbox runtime driver. Permanent: retrying cannot
     /// grow one, only a new agent binary can (issue #421).
     case runtimeUnavailable
@@ -127,7 +127,7 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
     /// config change (and an agent restart) can satisfy the mode.
     case jailerRequiredUnavailable(String)
 
-    var failureClassification: FailureClassification {
+    public var failureClassification: FailureClassification {
         switch self {
         case .runtimeUnavailable, .unsupportedStep, .networkingUnsupported, .jailerRequiredUnavailable:
             return .permanent
@@ -136,7 +136,7 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
         }
     }
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .runtimeUnavailable:
             return "this agent build does not include the sandbox runtime (issue #421)"

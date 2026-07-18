@@ -123,12 +123,14 @@ actor Agent {
     private var orphanedVMs: [String: VMManifestEntry] = [:]
 
     // Sandbox workload tracking (issue #417): same manifest contract as VMs,
-    // kept in separate maps so the VM paths never have to filter by kind. The
-    // runtime driver (issue #421) is not built yet, so `sandboxRuntime` stays
-    // nil and `managedSandboxes` empty; only orphaned entries — written by a
-    // newer incarnation, then inherited across a downgrade/restart — can
-    // appear. They keep reserving capacity and can be deleted (manifest-only),
-    // but cannot be re-adopted until the runtime lands.
+    // kept in separate maps so the VM paths never have to filter by kind.
+    // `sandboxRuntime` is the driver seam (issue #421): the Firecracker
+    // runtime on Linux hosts with a guest image, the mock runtime in
+    // simulation mode (issue #470), nil otherwise. With no runtime the sandbox
+    // capability stays off and only orphaned entries — written by a runtime-
+    // bearing incarnation, then inherited across a downgrade/restart — can
+    // appear; they keep reserving capacity and can be deleted (manifest-only),
+    // but cannot be re-adopted.
     private var sandboxRuntime: (any SandboxRuntimeService)?
     private var managedSandboxes: [String: VMManifestEntry] = [:]
     private var orphanedSandboxes: [String: VMManifestEntry] = [:]
@@ -435,6 +437,20 @@ actor Agent {
             for type in HypervisorType.allCases {
                 hypervisorServices[type] = MockHypervisorService(logger: logger, hypervisorType: type)
             }
+
+            // The mock sandbox runtime (issue #470), so simulated agents host
+            // sandbox workloads too — sandbox scheduling, reconciliation, exec
+            // bridging, and log shipping all get scale coverage. Not gated on
+            // Linux, for the same reason as the mock hypervisors above: a
+            // simulated agent models a Linux fleet whatever host it runs on.
+            // No capacity accounting needed — sandbox reservations come from
+            // this agent's manifest, exactly like real hosts.
+            logger.info("Simulation mode: registering mock sandbox runtime")
+            sandboxRuntime = MockSandboxRuntime(
+                logger: logger,
+                workloadLifetime: simulation?.resolvedSandboxLifetime,
+                logInterval: simulation?.resolvedSandboxLogInterval
+            )
         } else {
             logger.info("Initializing QEMU service")
             #if canImport(SwiftQEMU)
@@ -834,29 +850,30 @@ actor Agent {
         // present on disk. The typed flag is what the scheduler keys sandbox
         // placement on (issue #415); the capability string is display-only.
         //
-        // The host probe is necessary but not sufficient: this agent must also
-        // actually hold a runtime to serve the workload. Simulation mode is the
-        // case that separates them — it registers mock hypervisors (whose
-        // Firecracker support reports available) but deliberately creates no
-        // sandbox runtime, so on any Linux host that happens to have a guest
-        // image installed the probe alone would advertise sandboxCapable and
-        // every sandbox scheduled here would fail with runtimeUnavailable.
-        // Never advertise what we cannot serve.
-        let sandboxProbe = SandboxRuntimeProbe.probe(
-            firecracker: hypervisors.first { $0.type == .firecracker },
-            guestImagePath: sandboxGuestImagePath,
-            jailerBlockedReason: sandboxJailerBlockedReason
-        )
+        // Simulation mode bypasses the host probe, mirroring the hypervisor
+        // bypass above: the host artifacts it checks for (a real Firecracker,
+        // the guest base image on disk) are meaningless for the mock runtime
+        // (issue #470). The "never advertise what we cannot serve" invariant
+        // holds either way, because capability additionally requires this
+        // agent to actually hold a runtime that will serve the workload —
+        // the host probe alone is necessary but not sufficient.
+        let sandboxProbe: SandboxRuntimeProbe.Report
+        if isSimulationMode {
+            sandboxProbe = SandboxRuntimeProbe.Report(capable: true)
+        } else {
+            sandboxProbe = SandboxRuntimeProbe.probe(
+                firecracker: hypervisors.first { $0.type == .firecracker },
+                guestImagePath: sandboxGuestImagePath,
+                jailerBlockedReason: sandboxJailerBlockedReason
+            )
+        }
         let sandboxCapable = sandboxProbe.capable && sandboxRuntime != nil
         if sandboxCapable {
             capabilities.append(SandboxRuntimeProbe.capabilityName)
-        } else {
+        } else if !isSimulationMode {
             #if os(Linux)
             // Only worth a log where the runtime could ever exist.
-            let reason =
-                sandboxProbe.unavailabilityReason
-                ?? (isSimulationMode
-                    ? "simulation mode provides no sandbox runtime" : "sandbox runtime was not initialized")
+            let reason = sandboxProbe.unavailabilityReason ?? "sandbox runtime was not initialized"
             logger.info(
                 "Sandbox runtime unavailable; not advertising sandbox capability",
                 metadata: [
