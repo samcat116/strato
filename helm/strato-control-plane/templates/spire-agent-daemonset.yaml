@@ -86,10 +86,24 @@ spec:
               mountPath: /var/run/spire/sockets
             - name: spire-token
               mountPath: /var/run/secrets/tokens
+            {{- if .Values.spire.notifier.k8sbundle.enabled }}
+            - name: spire-bundle
+              mountPath: /run/spire/bundle
+              readOnly: true
+            {{- end }}
       volumes:
         - name: config
           configMap:
             name: {{ include "strato-control-plane.fullname" . }}-spire-agent
+        {{- if .Values.spire.notifier.k8sbundle.enabled }}
+        # Published by the server's k8sbundle notifier; the bundle.crt key
+        # appears once the server CA activates. The wait-for-spire-server
+        # init container means the server is up before the agent reads it.
+        - name: spire-bundle
+          configMap:
+            name: {{ include "strato-control-plane.fullname" . }}-spire-bundle
+            optional: true
+        {{- end }}
         - name: spire-agent-socket-dir
           hostPath:
             path: /var/run/spire/sockets
