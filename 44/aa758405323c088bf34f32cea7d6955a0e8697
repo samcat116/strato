@@ -1,0 +1,46 @@
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_f7889c4d94528d::t_efd1afbcc7a761 268-273
+  s_f7889c4d94528d::t_8d20c78e043f22 794-815
+control-plane/Tests/AppTests/IAMRoleBindingTests.swift
+  s_f7889c4d94528d::t_3b02e80b8135db 62,64-77
+  s_f7889c4d94528d::t_534976913b60f8 165
+  s_f7889c4d94528d::t_fcd81be5b370e0 179,185-187
+  s_f7889c4d94528d::t_45d4e59f3ae6da 204,207-208
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_f7889c4d94528d::t_dc842a8d3344ad 411-415
+control-plane/Sources/App/Services/SCIM/UserSCIMHandler.swift
+  s_f7889c4d94528d::t_0fb75fd4e057ca 219-225
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_f7889c4d94528d::t_11debf6dd061c4 282-309
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_f7889c4d94528d::t_5b289f9e5dd16b 333,789-802
+  s_f7889c4d94528d::t_22a33e99b9533c 317-319,327-332
+  s_f7889c4d94528d::t_929a15029bb255 679-692
+  s_f7889c4d94528d::t_71117b046d08db 182-195
+control-plane/Sources/App/IAM/RoleBindingBackfill.swift
+  s_f7889c4d94528d::t_f144c5dd809840 137-145
+control-plane/Sources/App/IAM/RoleBindingService.swift
+  s_f7889c4d94528d::t_101d6e9b5230a1 23-32,37-40,43-52,55-63
+  s_f7889c4d94528d::t_698ef2a8174ea4 53-54
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_f7889c4d94528d::t_7092219e40c288 174-189
+control-plane/Sources/App/IAM/RoleRegistrySync.swift
+  s_f7889c4d94528d::t_ae7575cf4721a0 51-56
+  s_f7889c4d94528d::t_7e09520a11bf5f 25-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "44aa758405323c088bf34f32cea7d6955a0e8697",
+  "prompts": {},
+  "sessions": {
+    "s_f7889c4d94528d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1521141c-e609-417d-ac74-31da1f1766d9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
