@@ -1271,18 +1271,19 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     /// Best-effort teardown of a jailed sandbox's host-side leftovers: the
     /// chroot subtree and per-VM cgroup directory (normally the client's job,
-    /// but a crash can orphan both) and the network namespace (skipped on a
-    /// host with no `ip` — such a host cannot have created one).
+    /// but a crash can orphan both) and the network namespace.
     private func removeJailArtifacts(_ plan: SandboxJailPlan) async {
         try? FileManager.default.removeItem(atPath: plan.jailDirectory)
         _ = rmdir(
             JailerOptions.cgroupDirectory(
                 firecrackerBinaryPath: firecrackerBinaryPath, vmId: plan.sandboxId))
-        if let ipBinaryPath = jailerConfig.ipBinaryPath {
-            _ = try? await ProcessRunner.run(
-                executableURL: URL(fileURLWithPath: ipBinaryPath),
-                arguments: ["netns", "delete", plan.netnsName])
-        }
+        // `ip netns delete` is just an unmount plus unlink of the bind-mounted
+        // name (ip-netns(8)); doing the syscalls directly means teardown keeps
+        // working even when iproute2 was removed after a previous agent life
+        // created the namespace. Best effort — ENOENT (never created) and
+        // EPERM (non-root dev agent, which never created one) are both fine.
+        _ = umount2(plan.netnsPath, Int32(MNT_DETACH))
+        _ = unlink(plan.netnsPath)
     }
 
     // MARK: - Paths

@@ -35,7 +35,8 @@ public struct SandboxJailerConfig: Sendable, Equatable {
     /// service manager's stripped `PATH` must not turn a host the resolver
     /// declared usable into one whose netns calls fail at create time. Nil
     /// when the host has no `ip`, in which case the resolver never returns
-    /// `.jailed` and only best-effort netns teardown is skipped.
+    /// `.jailed`; only namespace *creation* needs the binary (teardown is
+    /// direct umount+unlink and works regardless).
     public let ipBinaryPath: String?
 
     /// Size of the per-sandbox uid/gid range. Fixed: 2^16 ids starting at
