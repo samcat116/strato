@@ -119,6 +119,32 @@ struct QuotaEnforcementService {
         }
     }
 
+    /// Post-completion validation for sandbox snapshots (issue #426):
+    /// admission reserved an *estimate*, so once the agent reports actual
+    /// sizes the caller re-checks the pool. Resyncs every applicable quota to
+    /// real usage and returns the name of the first enabled quota whose
+    /// storage pool is now over-committed — the caller deletes the snapshot
+    /// rather than keeping storage past the limit. Nil when everything fits.
+    static func storageOverCommit(
+        projectID: UUID,
+        environment: String,
+        on db: Database
+    ) async throws -> String? {
+        guard let project = try await Project.find(projectID, on: db) else { return nil }
+        let quotas = try await applicableQuotas(for: project, environment: environment, on: db)
+        // No advisory lock: like `releaseWorkload`, this runs outside the
+        // admission transaction and resync-to-real-usage is idempotent.
+        var violated: String?
+        for quota in quotas {
+            try await resyncReservations(quota, on: db)
+            try await quota.save(on: db)
+            if violated == nil, quota.isEnabled, quota.reservedStorage > quota.maxStorage {
+                violated = quota.name
+            }
+        }
+        return violated
+    }
+
     /// Shared check-then-reserve sequence over every applicable quota:
     /// advisory-lock, resync each quota to real usage, dry-run `apply` on all
     /// of them (mutating nothing on rejection), then apply and save. `apply`

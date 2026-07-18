@@ -228,7 +228,11 @@ definition sandbox_snapshot {
 
     permission read = owner + sandbox->read + project->view_project
     permission delete = owner + sandbox->owner + project->manage_project
-    permission restore = owner + sandbox->editor + project->manage_project
+    // Restore mutates the sandbox's running state, so it requires *current*
+    // start rights on the sandbox — snapshot ownership alone must not
+    // outlive a demotion (unlike volume_snapshot.restore, which only writes
+    // data back to the volume).
+    permission restore = sandbox->start
 }
 
 /** image represents a VM disk image that can be used to create VMs */

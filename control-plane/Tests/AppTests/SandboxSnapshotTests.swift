@@ -216,6 +216,25 @@ final class SandboxSnapshotTests {
         }
     }
 
+    @Test("A malformed snapshot request body is rejected instead of defaulted")
+    func createRejectsMalformedBody() async throws {
+        try await withSnapshotTestApp { app, _, _, sandbox, token in
+            _ = try await placeOnCapableAgent(app: app, sandbox: sandbox, status: .running)
+
+            try await app.test(.POST, "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                // `stop` must be a Bool; masking this behind defaults would
+                // silently run the wrong checkpoint mode.
+                try req.content.encode(["stop": "yes-please"])
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let snapshots = try await SandboxSnapshot.query(on: app.db).count()
+            #expect(snapshots == 0)
+        }
+    }
+
     @Test("A second mutation while the snapshot operation is pending is rejected with 409")
     func createBlocksConcurrentOperations() async throws {
         try await withSnapshotTestApp { app, _, _, sandbox, token in

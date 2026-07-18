@@ -26,9 +26,15 @@ extension SandboxController {
         let user = try req.auth.require(User.self)
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "snapshot")
         let sandboxID = try sandbox.requireID()
-        let request =
-            (try? req.content.decode(CreateSandboxSnapshotRequest.self))
-            ?? CreateSandboxSnapshotRequest(name: nil, stop: nil)
+        // The body is optional, but a body that *is* sent must decode:
+        // masking a malformed `stop` behind defaults would silently run the
+        // wrong checkpoint mode.
+        let request: CreateSandboxSnapshotRequest
+        if req.body.data == nil {
+            request = CreateSandboxSnapshotRequest(name: nil, stop: nil)
+        } else {
+            request = try req.content.decode(CreateSandboxSnapshotRequest.self)
+        }
         let stopAfterSnapshot = request.stop ?? false
 
         // Only a sandbox with live guest state can be checkpointed: it must
@@ -103,16 +109,33 @@ extension SandboxController {
 
         // Ownership relationships, mirroring volume snapshots: the creator,
         // the source sandbox (read/delete/restore resolve through it), and
-        // the project.
-        try await req.spicedb.writeRelationship(
-            entity: "sandbox_snapshot", entityId: snapshotID.uuidString,
-            relation: "owner", subject: "user", subjectId: userID.uuidString)
-        try await req.spicedb.writeRelationship(
-            entity: "sandbox_snapshot", entityId: snapshotID.uuidString,
-            relation: "sandbox", subject: "sandbox", subjectId: sandboxID.uuidString)
-        try await req.spicedb.writeRelationship(
-            entity: "sandbox_snapshot", entityId: snapshotID.uuidString,
-            relation: "project", subject: "project", subjectId: sandbox.$project.id.uuidString)
+        // the project. The operation and snapshot rows are already committed,
+        // so a failed write must compensate — without tuples the `.creating`
+        // row would be an unmanageable orphan holding quota until nothing.
+        do {
+            try await req.spicedb.writeRelationship(
+                entity: "sandbox_snapshot", entityId: snapshotID.uuidString,
+                relation: "owner", subject: "user", subjectId: userID.uuidString)
+            try await req.spicedb.writeRelationship(
+                entity: "sandbox_snapshot", entityId: snapshotID.uuidString,
+                relation: "sandbox", subject: "sandbox", subjectId: sandboxID.uuidString)
+            try await req.spicedb.writeRelationship(
+                entity: "sandbox_snapshot", entityId: snapshotID.uuidString,
+                relation: "project", subject: "project", subjectId: sandbox.$project.id.uuidString)
+        } catch {
+            snapshot.status = .error
+            snapshot.errorMessage = "authorization setup failed: \(error.localizedDescription)"
+            snapshot.size = 0
+            try? await snapshot.save(on: req.db)
+            _ = try? await operation.completeIfPending(
+                as: .failed,
+                error: "Failed to record snapshot ownership relationships",
+                on: req.db)
+            try? await QuotaEnforcementService.release(for: sandbox, on: req.db)
+            throw Abort(
+                .internalServerError,
+                reason: "Failed to record snapshot ownership relationships; the operation was cancelled")
+        }
 
         Self.runSnapshotCreation(
             operation, snapshot: snapshot, sandbox: sandbox,
@@ -142,6 +165,9 @@ extension SandboxController {
         guard let operationId = operation.id, let snapshotId = snapshot.id else { return }
         let sandboxID = operation.resourceID
 
+        let projectID = snapshot.$project.id
+        let environment = snapshot.environment
+
         app.backgroundTasks.spawn {
             do {
                 let report = try await SandboxSnapshotService.requestSnapshotCreate(
@@ -150,28 +176,55 @@ extension SandboxController {
 
                 if let current = try await SandboxSnapshot.find(snapshotId, on: app.db) {
                     current.status = .ready
-                    if let report {
-                        current.size = report.sizeBytes
-                        current.storagePath = report.storagePath
-                        current.firecrackerVersion = report.firecrackerVersion
-                        current.architecture = report.architecture?.rawValue
-                    }
+                    current.size = report.sizeBytes
+                    current.storagePath = report.storagePath
+                    current.firecrackerVersion = report.firecrackerVersion
+                    current.architecture = report.architecture?.rawValue
                     try await current.save(on: app.db)
                 }
-                // Reconcile the storage counters from the estimate to the
-                // agent's actual figures (release(for:) recalculates every
-                // quota in the sandbox's scope from rows).
-                try? await QuotaEnforcementService.release(for: sandbox, on: app.db)
+
+                // Admission reserved only an estimate (guest memory); the
+                // actual footprint adds vmstate + the rootfs copy. Resync the
+                // counters to the reported figures and, if that blew past an
+                // enabled storage quota, delete the snapshot rather than keep
+                // over-quota storage.
+                if let violatedQuota = try await QuotaEnforcementService.storageOverCommit(
+                    projectID: projectID, environment: environment, on: app.db)
+                {
+                    try? await SandboxSnapshotService.requestSnapshotDelete(
+                        sandboxId: sandboxID, snapshotId: snapshotId, agentId: agentId, app: app)
+                    if let current = try? await SandboxSnapshot.find(snapshotId, on: app.db) {
+                        current.status = .error
+                        current.errorMessage =
+                            "Snapshot exceeded storage quota '\(violatedQuota)' and was deleted"
+                        current.size = 0
+                        try? await current.save(on: app.db)
+                    }
+                    try? await QuotaEnforcementService.release(for: sandbox, on: app.db)
+                    await completeOperation(
+                        operationId, sandboxID: sandboxID, as: .failed,
+                        error:
+                            "Snapshot's actual size exceeded storage quota '\(violatedQuota)'; its artifacts were deleted",
+                        settingSandboxStatus: nil, app: app)
+                    return
+                }
 
                 await completeOperation(
                     operationId, sandboxID: sandboxID, as: .succeeded, error: nil,
                     settingSandboxStatus: nil, app: app)
             } catch {
+                // A clean agent-side failure already removed its partial
+                // artifacts. An ambiguous transport failure (timeout,
+                // disconnect) may have left real files behind — attempt the
+                // idempotent delete so the charge we drop below matches
+                // reality; if the agent is unreachable, the artifacts live
+                // under the sandbox's storage directory and are removed with
+                // the sandbox by the authoritative desired-state sync.
+                try? await SandboxSnapshotService.requestSnapshotDelete(
+                    sandboxId: sandboxID, snapshotId: snapshotId, agentId: agentId, app: app)
                 if let current = try? await SandboxSnapshot.find(snapshotId, on: app.db) {
                     current.status = .error
                     current.errorMessage = error.localizedDescription
-                    // A failed checkpoint removes its partial artifacts
-                    // agent-side; stop charging the estimate.
                     current.size = 0
                     try? await current.save(on: app.db)
                 }

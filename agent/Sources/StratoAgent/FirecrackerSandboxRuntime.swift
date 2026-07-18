@@ -445,6 +445,14 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     }
 
     func deleteSandbox(sandboxId: String) async throws {
+        // A delete interleaving with a checkpoint/restore (actor reentrancy
+        // across their awaits) could tear the sandbox down mid-sequence and
+        // leave the restore's freshly spawned process untracked. Refuse as
+        // transient; the reconciler re-drives the delete once the
+        // checkpoint/restore finishes.
+        guard !checkpointing.contains(sandboxId) else {
+            throw SandboxRuntimeError.checkpointInProgress(sandboxId)
+        }
         logger.info("Deleting sandbox", metadata: ["sandboxId": .string(sandboxId)])
         // End interactive/log streams first: the guest is about to disappear,
         // and their control-plane sessions must learn why. Deleting is the
@@ -654,7 +662,14 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
         let wasRunning = info.state == .running
         if wasRunning {
-            try await managed.manager.pause()
+            do {
+                try await managed.manager.pause()
+            } catch {
+                // The guest is still running; put the drained log follow
+                // back before surfacing the failure.
+                startLogFollow(sandboxId: sandboxId)
+                throw error
+            }
         }
 
         let archiveMemory = archiveDir + "/" + SnapshotFile.memory
@@ -749,7 +764,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let archiveVmstate = archiveDir + "/" + SnapshotFile.vmstate
         let archiveRootfs = archiveDir + "/" + SnapshotFile.rootfs
         let archiveConfig = archiveDir + "/" + SnapshotFile.configImage
-        for required in [archiveMemory, archiveVmstate, archiveRootfs] {
+        // The config image is required too: the jailed re-staging below reads
+        // it unconditionally, and a gap must surface before the live VM is
+        // destroyed, not after.
+        for required in [archiveMemory, archiveVmstate, archiveRootfs, archiveConfig] {
             guard FileManager.default.fileExists(atPath: required) else {
                 throw SandboxRuntimeError.snapshotNotFound(sandboxId: sandboxId, snapshotId: snapshotId)
             }
@@ -872,8 +890,19 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // Independent of the microVM's state, and deliberately no managed
         // guard: cleanup must work for snapshots whose sandbox this runtime
         // never tracked (crash leftovers). Idempotent — a missing directory
-        // confirms cleanly.
-        try? FileManager.default.removeItem(atPath: snapshotDirectory(sandboxId, snapshotId: snapshotId))
+        // confirms cleanly — but a real removal failure (permissions, I/O)
+        // must surface: the control plane releases the storage charge on
+        // this response, and a silent failure would strand real bytes
+        // unaccounted.
+        let directory = snapshotDirectory(sandboxId, snapshotId: snapshotId)
+        if FileManager.default.fileExists(atPath: directory) {
+            do {
+                try FileManager.default.removeItem(atPath: directory)
+            } catch {
+                throw SandboxRuntimeError.snapshotIOFailed(
+                    "removing snapshot artifacts at \(directory) failed: \(error.localizedDescription)")
+            }
+        }
         logger.info(
             "Sandbox snapshot deleted",
             metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
@@ -1164,6 +1193,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     func controlPlaneConnected() async {
         for (sandboxId, managed) in sandboxes {
+            // A checkpoint/restore in flight has deliberately drained this
+            // sandbox's vsock connections; it restarts the follow itself
+            // when it finishes.
+            guard !checkpointing.contains(sandboxId) else { continue }
             guard let info = try? await managed.manager.getInstanceInfo(), info.state == .running else {
                 continue
             }

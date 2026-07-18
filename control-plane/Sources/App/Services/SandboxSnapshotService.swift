@@ -36,20 +36,32 @@ enum SandboxSnapshotService {
     }
 
     /// Ask the sandbox's agent to checkpoint it and await the artifact
-    /// report (sizes + compatibility constraints).
+    /// report (sizes + compatibility constraints). The report is mandatory:
+    /// a success frame without a decodable payload is a protocol error, not a
+    /// completed snapshot — marking the row ready without sizes would corrupt
+    /// quota accounting and lose the restore-compat constraints.
     static func requestSnapshotCreate(
         sandboxId: UUID,
         snapshotId: UUID,
         mode: SandboxSnapshotMode,
         agentId: String,
         app: Application
-    ) async throws -> SandboxSnapshotStatusResponse? {
+    ) async throws -> SandboxSnapshotStatusResponse {
         let message = SandboxSnapshotCreateMessage(
             sandboxId: sandboxId.uuidString,
             snapshotId: snapshotId.uuidString,
             mode: mode)
         let response = try await send(message, toAgent: agentId, timeout: Self.snapshotTimeout, app: app)
-        return try? response?.decode(as: SandboxSnapshotStatusResponse.self)
+        guard let payload = response else {
+            throw SandboxSnapshotServiceError.malformedAgentResponse(
+                "agent confirmed the snapshot but sent no artifact report")
+        }
+        do {
+            return try payload.decode(as: SandboxSnapshotStatusResponse.self)
+        } catch {
+            throw SandboxSnapshotServiceError.malformedAgentResponse(
+                "agent snapshot report failed to decode: \(error.localizedDescription)")
+        }
     }
 
     /// Ask the agent to remove a snapshot's artifacts. Carries only IDs (the
@@ -112,6 +124,7 @@ enum SandboxSnapshotServiceError: Error, LocalizedError {
     case agentOffline(String)
     case operationUnsupportedByAgent(String)
     case agentOperationFailed(String, String?)
+    case malformedAgentResponse(String)
 
     var errorDescription: String? {
         switch self {
@@ -127,6 +140,8 @@ enum SandboxSnapshotServiceError: Error, LocalizedError {
                 return "\(error): \(details)"
             }
             return error
+        case .malformedAgentResponse(let reason):
+            return reason
         }
     }
 }
