@@ -197,7 +197,9 @@ strato:
     tls: ""
     # Optional PEM CA bundle used to verify the database server certificate.
     # When set, its contents are mounted into the control plane and SpiceDB and
-    # the server cert is verified against it (SpiceDB is pinned to verify-full).
+    # the server cert is verified against it under require/verify-* modes
+    # (SpiceDB maps `require` to verify-full). It has no effect under `prefer`,
+    # which keeps its fall-back-to-plaintext semantics.
     # Leave empty to use the image's system trust store (correct for a
     # publicly-rooted managed database).
     #   tlsCACert: |
