@@ -117,34 +117,12 @@ extension User {
         return userCount == 0
     }
 
-    /// Check if any system admin exists in the database
-    static func hasSystemAdmin(on database: Database) async throws -> Bool {
-        let adminCount = try await User.query(on: database)
-            .filter(\.$isSystemAdmin == true)
-            .count()
-        return adminCount > 0
-    }
-
-    /// Get the first system admin user
-    static func getFirstSystemAdmin(on database: Database) async throws -> User? {
-        return try await User.query(on: database)
-            .filter(\.$isSystemAdmin == true)
-            .first()
-    }
-
     /// Find a user by OIDC subject and provider ID
     static func findOIDCUser(subject: String, providerID: UUID, on database: Database) async throws -> User? {
         return try await User.query(on: database)
             .filter(\.$oidcSubject == subject)
             .filter(\.$oidcProvider.$id == providerID)
             .first()
-    }
-
-    /// Get all groups this user belongs to within a specific organization
-    func getGroupsInOrganization(_ organizationID: UUID, on db: Database) async throws -> [Group] {
-        return try await self.$groups.query(on: db)
-            .filter(\.$organization.$id, .equal, organizationID)
-            .all()
     }
 
     /// Check if user belongs to a specific group
@@ -167,12 +145,6 @@ extension User {
     /// Check if user is authenticated via OIDC
     var isOIDCAuthenticated: Bool {
         return oidcSubject != nil && $oidcProvider.id != nil
-    }
-
-    /// Check if user is authenticated via Passkey
-    func hasPasskeyCredentials(on db: Database) async throws -> Bool {
-        let credentialCount = try await self.$credentials.query(on: db).count()
-        return credentialCount > 0
     }
 
     /// Link user to an OIDC provider

@@ -23,23 +23,19 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
             return try await next.respond(to: request)
         }
 
-        // Skip auth for health checks, public routes, and auth endpoints.
-        // Note: `/login`, `/register`, and `/onboarding` are public frontend pages
-        // served by FileMiddleware (Public/login/index.html, etc.) in single-service
-        // deployments, so they must stay exempt or direct loads/bookmarks 401.
+        // Skip auth for health checks, public API routes, and auth endpoints.
         // Split into small sub-expressions: a single long `||` chain trips the
         // Swift type-checker ("unable to type-check in reasonable time").
         let path = request.url.path
         let exactPublic: Set<String> = [
-            "/", "/hello", "/login", "/register", "/claim", "/api/docs", "/openapi.json", "/favicon.ico",
+            "/api/docs", "/openapi.json",
         ]
         // `/ssf/events` is the RFC 8935 push-delivery endpoint: transmitters
         // authenticate with a per-stream bearer token checked in-handler.
         // `/api/public/` serves the login page (SSO provider discovery), so it
         // must be reachable without a session.
         let publicPrefixes = [
-            "/health", "/auth", "/api/users/register", "/onboarding", "/js/", "/styles/", "/agent/ws",
-            "/ssf/events/", "/api/public/",
+            "/health", "/auth", "/api/users/register", "/agent/ws", "/ssf/events/", "/api/public/",
         ]
         // Signed image-download URLs: agents fetch base images with an HMAC
         // signature, not a session; the controller verifies the signature.

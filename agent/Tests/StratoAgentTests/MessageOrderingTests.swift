@@ -117,64 +117,14 @@ struct MessageOrderingTests {
 
     // MARK: - serializationKey routing
 
-    @Test("Create and subsequent operations for the same VM share a lane")
-    func createAndOperationShareLane() {
-        let vmId = UUID()
-        let createKeys = MessageEnvelope.serializationKeys(
-            type: .vmCreate,
-            payload: payload(["vmData": ["id": vmId.uuidString], "requestId": "r1"])
-        )
-        let bootKeys = MessageEnvelope.serializationKeys(
-            type: .vmBoot,
-            payload: payload(["vmId": vmId.uuidString, "requestId": "r2"])
-        )
-        let deleteKeys = MessageEnvelope.serializationKeys(
-            type: .vmDelete,
-            payload: payload(["vmId": vmId.uuidString, "requestId": "r3"])
-        )
-
-        #expect(createKeys == bootKeys)
-        #expect(bootKeys == deleteKeys)
-    }
-
-    @Test("VM creation serializes against its configured network lanes")
-    func vmCreateSpansConfiguredNetworkLanes() {
-        let vmId = UUID()
-        let createKeys = MessageEnvelope.serializationKeys(
-            type: .vmCreate,
-            payload: payload([
-                "vmData": ["id": vmId.uuidString],
-                "vmSpec": ["networks": [["network": "net0"], [String: String]()]],
-                "requestId": "r1",
-            ])
-        )
-        // The VM lane, the named network, and network:default for the unnamed entry.
-        #expect(Set(createKeys) == Set([vmId.uuidString, "network:net0", "network:default"]))
-
-        // Must serialize against an adjacent create/delete of that same network.
-        let netDeleteKeys = MessageEnvelope.serializationKeys(
-            type: .networkDelete, payload: payload(["networkName": "net0"])
-        )
-        #expect(!Set(createKeys).isDisjoint(with: netDeleteKeys))
-    }
-
-    @Test("VM creation without configured networks uses only the VM lane")
-    func vmCreateWithoutNetworksUsesVMLane() {
-        let vmId = UUID()
-        let createKeys = MessageEnvelope.serializationKeys(
-            type: .vmCreate, payload: payload(["vmData": ["id": vmId.uuidString]])
-        )
-        #expect(createKeys == [vmId.uuidString])
-    }
-
     @Test("VM id lane is case-insensitive to UUID formatting")
     func vmIdNormalizedAcrossCasing() {
         let vmId = UUID()
         let upper = MessageEnvelope.serializationKeys(
-            type: .vmBoot, payload: payload(["vmId": vmId.uuidString])
+            type: .vmReboot, payload: payload(["vmId": vmId.uuidString])
         )
         let lower = MessageEnvelope.serializationKeys(
-            type: .vmDelete, payload: payload(["vmId": vmId.uuidString.lowercased()])
+            type: .vmReboot, payload: payload(["vmId": vmId.uuidString.lowercased()])
         )
         #expect(upper == lower)
     }
@@ -182,10 +132,10 @@ struct MessageOrderingTests {
     @Test("Different VMs get different lanes")
     func differentVMsGetDifferentLanes() {
         let a = MessageEnvelope.serializationKeys(
-            type: .vmBoot, payload: payload(["vmId": UUID().uuidString])
+            type: .vmReboot, payload: payload(["vmId": UUID().uuidString])
         )
         let b = MessageEnvelope.serializationKeys(
-            type: .vmBoot, payload: payload(["vmId": UUID().uuidString])
+            type: .vmReboot, payload: payload(["vmId": UUID().uuidString])
         )
         #expect(a != b)
     }
@@ -238,12 +188,12 @@ struct MessageOrderingTests {
             type: .volumeAttach,
             payload: payload(["vmId": vmId, "volumeId": volumeId])
         )
-        // Hot-plugging must serialize against a delete/shutdown of the same VM.
-        let vmDeleteKeys = MessageEnvelope.serializationKeys(
-            type: .vmDelete, payload: payload(["vmId": vmId])
+        // Hot-plugging must serialize against an action on the same VM.
+        let vmActionKeys = MessageEnvelope.serializationKeys(
+            type: .vmReboot, payload: payload(["vmId": vmId])
         )
         #expect(Set(attachKeys) == Set([vmId, volumeId]))
-        #expect(!Set(attachKeys).isDisjoint(with: vmDeleteKeys))
+        #expect(!Set(attachKeys).isDisjoint(with: vmActionKeys))
     }
 
     @Test("Network attach serializes against both the VM and the named network")
@@ -257,13 +207,13 @@ struct MessageOrderingTests {
         let netCreateKeys = MessageEnvelope.serializationKeys(
             type: .networkCreate, payload: payload(["networkName": "net0"])
         )
-        // ...and against lifecycle of the same VM.
-        let vmDeleteKeys = MessageEnvelope.serializationKeys(
-            type: .vmDelete, payload: payload(["vmId": vmId])
+        // ...and against an action on the same VM.
+        let vmActionKeys = MessageEnvelope.serializationKeys(
+            type: .vmReboot, payload: payload(["vmId": vmId])
         )
         #expect(Set(attachKeys) == Set([vmId, "network:net0"]))
         #expect(!Set(attachKeys).isDisjoint(with: netCreateKeys))
-        #expect(!Set(attachKeys).isDisjoint(with: vmDeleteKeys))
+        #expect(!Set(attachKeys).isDisjoint(with: vmActionKeys))
     }
 
     @Test("Volume clone serializes against both its source and target volume lanes")
@@ -377,7 +327,7 @@ struct MessageOrderingTests {
     @Test("Public serializationKeys works end-to-end on a real encoded envelope")
     func publicKeyOnEncodedEnvelope() throws {
         let vmId = UUID().uuidString
-        let envelope = try MessageEnvelope(message: VMOperationMessage(type: .vmBoot, vmId: vmId))
+        let envelope = try MessageEnvelope(message: VMOperationMessage(type: .vmReboot, vmId: vmId))
         #expect(envelope.serializationKeys == [vmId])
     }
 

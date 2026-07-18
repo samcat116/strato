@@ -71,11 +71,6 @@ public protocol HypervisorService: Actor, Sendable {
     /// - Parameter vmId: The VM identifier
     func deleteVM(vmId: String) async throws
 
-    /// Gets information about a VM
-    /// - Parameter vmId: The VM identifier
-    /// - Returns: VM configuration and state information
-    func getVMInfo(vmId: String) async throws -> VmInfo
-
     /// Gets the current status of a VM
     /// - Parameter vmId: The VM identifier
     /// - Returns: The current VM status
@@ -123,15 +118,6 @@ public extension HypervisorService {
         throw HypervisorServiceError.notSupported(
             "\(hypervisorType.displayName) does not support re-adopting orphaned VMs")
     }
-    /// Creates and starts a VM in a single operation
-    func createAndStartVM(
-        vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,
-        networkAttachments: [ResolvedNetworkAttachment] = []
-    ) async throws {
-        try await createVM(vmId: vmId, spec: spec, imageInfo: imageInfo, networkAttachments: networkAttachments)
-        try await bootVM(vmId: vmId)
-    }
-
     /// Stops and deletes a VM
     func stopAndDeleteVM(vmId: String) async throws {
         do {

@@ -329,41 +329,6 @@ extension ResourceQuota {
         sandboxCount += 1
     }
 
-    /// Release resources when a VM is deleted
-    func releaseResources(vcpus: Int, memory: Int64, storage: Int64) {
-        reservedVCPUs = max(0, reservedVCPUs - vcpus)
-        reservedMemory = max(0, reservedMemory - memory)
-        reservedStorage = max(0, reservedStorage - storage)
-        vmCount = max(0, vmCount - 1)
-    }
-
-    /// Update reserved resources when a VM is resized
-    func updateReservation(
-        oldVCPUs: Int, oldMemory: Int64, oldStorage: Int64,
-        newVCPUs: Int, newMemory: Int64, newStorage: Int64
-    ) throws {
-        // Calculate deltas
-        let vcpuDelta = newVCPUs - oldVCPUs
-        let memoryDelta = newMemory - oldMemory
-        let storageDelta = newStorage - oldStorage
-
-        // Check if increase is allowed
-        if vcpuDelta > 0 || memoryDelta > 0 || storageDelta > 0 {
-            let check = canAccommodateVM(
-                vcpus: max(0, vcpuDelta),
-                memory: max(0, memoryDelta),
-                storage: max(0, storageDelta)
-            )
-            if !check.allowed {
-                throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded for resize")
-            }
-        }
-
-        // Update reservations
-        reservedVCPUs += vcpuDelta
-        reservedMemory += memoryDelta
-        reservedStorage += storageDelta
-    }
 }
 
 // MARK: - Validations

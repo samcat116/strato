@@ -52,7 +52,6 @@ RUN addgroup --system --gid 1001 nodejs && \
 
 # Copy built application from builder
 # Next.js standalone output includes everything needed to run
-COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 

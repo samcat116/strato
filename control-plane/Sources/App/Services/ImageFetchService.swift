@@ -429,57 +429,6 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         try await image.save(on: db)
     }
 
-    /// Processes all pending images that need fetching
-    func processPendingFetches() async {
-        let db = app.db
-        let logger = app.logger
-
-        do {
-            // Find all images with pending status and a source URL
-            let pendingImages = try await Image.query(on: db)
-                .filter(\.$status == .pending)
-                .filter(\.$sourceURL != nil)
-                .all()
-
-            for image in pendingImages {
-                guard let imageId = image.id else { continue }
-
-                // Skip if already being fetched
-                if isFetchActive(imageId: imageId) {
-                    continue
-                }
-
-                logger.info(
-                    "Queueing pending image for fetch",
-                    metadata: [
-                        "image_id": .string(imageId.uuidString)
-                    ])
-
-                try await startFetch(imageId: imageId)
-            }
-
-            // Resume interrupted per-artifact URL fetches (e.g. after a restart).
-            // Both pending and downloading are re-enqueued; a downloading row was
-            // cut off mid-stream and simply restarts.
-            let pendingArtifacts = try await ImageArtifact.query(on: db)
-                .filter(\.$sourceURL != nil)
-                .group(.or) { group in
-                    group.filter(\.$status == .pending).filter(\.$status == .downloading)
-                }
-                .all()
-
-            for artifact in pendingArtifacts {
-                guard let artifactId = artifact.id else { continue }
-                if activeArtifactFetches[artifactId] != nil { continue }
-                logger.info(
-                    "Resuming pending artifact fetch",
-                    metadata: ["artifact_id": .string(artifactId.uuidString)])
-                try await startArtifactFetch(artifactId: artifactId)
-            }
-        } catch {
-            logger.error("Failed to process pending fetches: \(error)")
-        }
-    }
 }
 
 // MARK: - SHA256 Hasher Helper

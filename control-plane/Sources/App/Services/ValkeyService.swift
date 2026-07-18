@@ -38,13 +38,6 @@ struct ValkeyConfiguration: Sendable {
     }
 }
 
-/// Service status for health checks
-enum ValkeyServiceStatus: String, Sendable, Codable {
-    case connected
-    case disconnected
-    case unavailable
-}
-
 /// Holds the long-lived tasks that drive the Valkey client: the client's
 /// `run()` loop (which owns the connection pool) and every pub/sub
 /// subscription loop. All are cancelled together at shutdown so no loop
@@ -125,22 +118,6 @@ extension Application {
                 "port": .stringConvertible(config.port),
                 "database": .stringConvertible(config.database),
             ])
-    }
-
-    /// Check Valkey health
-    /// - Returns: Current Valkey service status
-    func checkValkeyHealth() async -> ValkeyServiceStatus {
-        guard valkeyEnabled else {
-            return .unavailable
-        }
-
-        do {
-            _ = try await valkey.ping()
-            return .connected
-        } catch {
-            logger.warning("Valkey health check failed: \(error)")
-            return .disconnected
-        }
     }
 
     // MARK: - Storage Keys

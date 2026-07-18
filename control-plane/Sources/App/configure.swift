@@ -685,6 +685,4 @@ public func configure(_ app: Application) async throws {
     app.lifecycle.use(SSFPollLifecycleHandler())
 
     try routes(app)
-
-    app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
 }

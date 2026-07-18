@@ -8,21 +8,11 @@ import Vapor
 /// are applied. If it sat inside `ErrorMiddleware` instead, synthesized 4xx/5xx
 /// responses would bypass it entirely.
 ///
-/// Being outermost, the headers land on API JSON, static assets, and error pages
-/// alike.
+/// Being outermost, the headers land on API JSON and error responses alike.
 ///
 /// `Content-Security-Policy` is only applied when the handler hasn't already set
 /// one, so endpoints that need a looser policy (e.g. `/api/docs`, which loads
 /// Swagger UI from a CDN) can opt out by supplying their own.
-///
-/// The default same-origin CSP is *not* applied to `text/html` responses. When
-/// `FileMiddleware` serves the bundled Next.js frontend from `Public/`, those
-/// pages carry inline hydration scripts (`self.__next_f.push(...)`) that a
-/// `default-src 'self'` policy with no script nonce/hash would block, leaving the
-/// UI stuck on its loading shell. HTML pages either ship their own CSP
-/// (`/api/docs`) or rely on `X-Frame-Options`/`nosniff` here plus the CSP set by
-/// the production frontend container; the strict default is reserved for the API
-/// and static assets.
 ///
 /// HSTS is gated on `enableHSTS` because `Strict-Transport-Security` must only be
 /// sent over HTTPS; sending it from a plaintext dev server would pin browsers to
@@ -50,11 +40,7 @@ struct SecurityHeadersMiddleware: AsyncMiddleware {
             )
         }
 
-        let isHTML =
-            response.headers.contentType.map {
-                $0.type == "text" && $0.subType == "html"
-            } ?? false
-        if !isHTML, !response.headers.contains(name: "Content-Security-Policy") {
+        if !response.headers.contains(name: "Content-Security-Policy") {
             response.headers.replaceOrAdd(
                 name: "Content-Security-Policy",
                 value: Self.defaultContentSecurityPolicy

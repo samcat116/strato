@@ -156,53 +156,6 @@ struct ImageStorageService {
     }
 
     /// Saves a file from a file handle (for streaming uploads)
-    static func saveFileStreaming(
-        from fileHandle: FileHandle,
-        to filePath: String,
-        storagePath: String,
-        projectId: UUID,
-        imageId: UUID,
-        filename: String,
-        onProgress: ((Int64) -> Void)? = nil
-    ) async throws -> (relativePath: String, size: Int64) {
-        // Create directory structure
-        try createDirectoryStructure(
-            storagePath: storagePath,
-            projectId: projectId,
-            imageId: imageId
-        )
-
-        let fullPath = buildFilePath(
-            storagePath: storagePath,
-            projectId: projectId,
-            imageId: imageId,
-            filename: filename
-        )
-
-        // Create output file
-        FileManager.default.createFile(atPath: fullPath, contents: nil)
-        guard let outputHandle = FileHandle(forWritingAtPath: fullPath) else {
-            throw ImageError.storageFailed("Failed to create output file")
-        }
-        defer { try? outputHandle.close() }
-
-        var totalBytesWritten: Int64 = 0
-        let bufferSize = 1024 * 1024  // 1MB chunks
-
-        // Stream data from input to output
-        while true {
-            let data = fileHandle.readData(ofLength: bufferSize)
-            if data.isEmpty { break }
-
-            try outputHandle.write(contentsOf: data)
-            totalBytesWritten += Int64(data.count)
-            onProgress?(totalBytesWritten)
-        }
-
-        let relativePath = "\(projectId)/\(imageId)/\(filename)"
-        return (relativePath, totalBytesWritten)
-    }
-
     /// Gets the full file path for an image
     static func getFilePath(
         storagePath: String,

@@ -39,7 +39,7 @@ public actor OCIRootfsCache {
     public static let rootfsFileName = "rootfs.ext4"
     public static let configFileName = "config.json"
 
-    /// Matches `ImageCacheService.cleanupCache`'s default retention.
+    /// Default retention for unused sandbox rootfs entries.
     public static let defaultTTL: TimeInterval = 7 * 24 * 60 * 60
     /// Staging directories older than this belong to crashed materializations.
     private static let stalePartialAge: TimeInterval = 24 * 60 * 60

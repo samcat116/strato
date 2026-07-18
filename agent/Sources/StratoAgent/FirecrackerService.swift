@@ -277,22 +277,6 @@ actor FirecrackerService: HypervisorService {
         logger.info("Firecracker VM deleted", metadata: ["vmId": .string(vmId)])
     }
 
-    func getVMInfo(vmId: String) async throws -> VmInfo {
-        guard let manager = vmManagers[vmId],
-            let spec = vmSpecs[vmId]
-        else {
-            throw HypervisorServiceError.vmNotFound(vmId)
-        }
-
-        let instanceInfo = try await manager.getInstanceInfo()
-
-        return VmInfo(
-            spec: spec,
-            state: instanceInfo.state.rawValue,
-            memoryActualSize: spec.memoryBytes
-        )
-    }
-
     func getVMStatus(vmId: String) async throws -> VMStatus {
         // An absent entry means this service does not manage the VM at all; report
         // that honestly instead of fabricating `.shutdown` (see QEMUService).
@@ -473,10 +457,6 @@ actor FirecrackerService: HypervisorService {
     }
 
     func deleteVM(vmId: String) async throws {
-        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
-    }
-
-    func getVMInfo(vmId: String) async throws -> VmInfo {
         throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
     }
 

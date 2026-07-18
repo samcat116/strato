@@ -248,11 +248,6 @@ struct WebAuthnService {
         try await authChallenge.save(on: database)
     }
 
-    func cleanupExpiredChallenges(on database: Database) async throws {
-        try await AuthenticationChallenge.query(on: database)
-            .filter(\.$expiresAt < Date())
-            .delete()
-    }
 }
 
 // MARK: - Errors

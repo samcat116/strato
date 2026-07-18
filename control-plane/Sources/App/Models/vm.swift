@@ -176,55 +176,9 @@ final class VM: Model, @unchecked Sendable {
 
 extension VM: Content {}
 
-// MARK: - Shared Model Conversion
-
-extension VM {
-    func toVMData() -> VMData {
-        return VMData(
-            id: id ?? UUID(),
-            name: name,
-            description: description,
-            image: image,
-            status: status,
-            hypervisorId: hypervisorId,
-            hypervisorType: hypervisorType,
-            cpu: cpu,
-            maxCpu: maxCpu,
-            memory: memory,
-            hugepages: hugepages,
-            sharedMemory: sharedMemory,
-            disk: disk,
-            diskPath: diskPath,
-            readonlyDisk: readonlyDisk,
-            kernelPath: kernelPath,
-            initramfsPath: initramfsPath,
-            cmdline: cmdline,
-            firmwarePath: firmwarePath,
-            consoleMode: consoleMode,
-            serialMode: serialMode,
-            consoleSocket: consoleSocket,
-            serialSocket: serialSocket,
-            createdAt: createdAt,
-            updatedAt: updatedAt
-        )
-    }
-}
-
 // MARK: - Computed Properties
 
 extension VM {
-    var memoryMB: Int {
-        return Int(memory / 1024 / 1024)
-    }
-
-    var memoryGB: Double {
-        return Double(memory) / 1024.0 / 1024.0 / 1024.0
-    }
-
-    var diskGB: Double {
-        return Double(disk) / 1024.0 / 1024.0 / 1024.0
-    }
-
     var isRunning: Bool {
         return status == .running
     }
@@ -237,11 +191,6 @@ extension VM {
 
     var canStop: Bool {
         return status == .running || status == .paused
-    }
-
-    /// True when a fresh boot is the right action (as opposed to resuming from pause).
-    var shouldBootOnStart: Bool {
-        return status == .created || status == .shutdown || status == .error
     }
 
     /// Updates the VM status and stamps the change time for the reconciliation sweep.
@@ -257,12 +206,6 @@ extension VM {
     func setDesiredStatus(_ newDesired: DesiredVMStatus) {
         desiredStatus = newDesired
         generation += 1
-    }
-
-    /// True once the owning agent has confirmed converging to the current
-    /// generation and the observed status satisfies the desired one.
-    var isConverged: Bool {
-        observedGeneration >= generation && desiredStatus.isSatisfied(by: status)
     }
 
     /// Realigns desired state with observed reality after a failed operation,

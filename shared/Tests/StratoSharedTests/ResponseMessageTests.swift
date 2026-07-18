@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import StratoShared
 
-@Suite("Success / error / status-update messages")
+@Suite("Success / error messages")
 struct ResponseMessageTests {
     @Test func successRoundTrip() throws {
         let payload = try AnyCodableValue(["state": "Running"])
@@ -58,32 +58,6 @@ struct ResponseMessageTests {
         #expect(decoded.error == "nope")
         #expect(decoded.details == nil)
         #expect(decoded.code == nil)
-    }
-
-    @Test func statusUpdateRoundTrip() throws {
-        let decoded = try throughEnvelope(
-            StatusUpdateMessage(
-                requestId: Fixtures.requestId,
-                timestamp: Fixtures.timestamp,
-                vmId: "vm-5",
-                status: .stopping,
-                details: "acpi shutdown requested"
-            )
-        )
-        #expect(decoded.type == .statusUpdate)
-        #expect(decoded.vmId == "vm-5")
-        #expect(decoded.status == .stopping)
-        #expect(decoded.details == "acpi shutdown requested")
-    }
-
-    /// A status string from a newer peer must degrade to `.unknown` inside a
-    /// real message, not fail the whole decode.
-    @Test func statusUpdateToleratesUnknownStatus() throws {
-        let json = """
-            {"requestId":"r","timestamp":0,"vmId":"vm-5","status":"Hibernated"}
-            """
-        let decoded = try decodeJSON(StatusUpdateMessage.self, from: json)
-        #expect(decoded.status == .unknown)
     }
 
     @Test func vmLogRoundTrip() throws {

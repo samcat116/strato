@@ -212,43 +212,6 @@ extension Image {
 // MARK: - Computed Properties
 
 extension Image {
-    var sizeGB: Double {
-        return Double(size) / 1024.0 / 1024.0 / 1024.0
-    }
-
-    var sizeMB: Double {
-        return Double(size) / 1024.0 / 1024.0
-    }
-
-    var isReady: Bool {
-        return status == .ready
-    }
-
-    var isDownloading: Bool {
-        return status == .downloading || status == .uploading
-    }
-
-    var hasError: Bool {
-        return status == .error
-    }
-
-    /// Builds the storage path for this image
-    func buildStoragePath() -> String? {
-        guard let id = self.id else { return nil }
-        let projectId = self.$project.id
-        return "\(projectId)/\(id)/\(filename)"
-    }
-
-    var defaultMemoryMB: Int? {
-        guard let memory = defaultMemory else { return nil }
-        return Int(memory / 1024 / 1024)
-    }
-
-    var defaultDiskGB: Int? {
-        guard let disk = defaultDisk else { return nil }
-        return Int(disk / 1024 / 1024 / 1024)
-    }
-
     // MARK: - Hypervisor Compatibility
 
     /// The hypervisor types that can run this image, derived from the artifact

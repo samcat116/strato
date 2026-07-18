@@ -82,10 +82,9 @@ extension MessageEnvelope {
     ///
     /// Frames acting on the same resource share a lane and are therefore applied in the order
     /// they arrived; frames for unrelated resources get independent lanes and may proceed
-    /// concurrently. VM ids are normalized so a VM's `create` frame (which carries the id under
-    /// `vmData.id`) and its later operation frames (which carry it under `vmId`) land together.
-    /// Most frames yield a single lane; operations spanning two resources (e.g. volume clone)
-    /// yield both so they serialize against each participating lane.
+    /// concurrently. VM ids are normalized so equivalent UUID spellings share
+    /// a lane. Most frames yield a single lane; operations spanning two resources
+    /// (e.g. volume clone) yield both so they serialize against each participating lane.
     public var serializationKeys: [String] {
         Self.serializationKeys(type: type, payload: payload)
     }
@@ -96,15 +95,6 @@ extension MessageEnvelope {
 
         let raws: [String?]
         switch type {
-        case .vmCreate:
-            // Creation also wires up the VM's configured networks (find-or-create of the
-            // logical switch), so serialize against those network lanes too. Fall back to
-            // "default" for an entry with no network reference.
-            var keys: [String?] = [fields?.vmData?.id.uuidString]
-            for net in fields?.vmSpec?.networks ?? [] {
-                keys.append("network:\(net.network ?? "default")")
-            }
-            raws = keys
         case .volumeClone:
             // A clone reads a source volume and writes a target volume; serialize against both
             // so it can't race a delete/resize/info on either resource.
@@ -147,7 +137,7 @@ extension MessageEnvelope {
             // and the sandbox's own lifecycle work — proceed concurrently.
             raws = [fields?.sessionId.map { "exec:\($0)" }]
         default:
-            // VM lifecycle, network detach, and info/status queries all carry vmId.
+            // VM actions and network detach carry vmId.
             raws = [fields?.vmId]
         }
 
@@ -163,11 +153,6 @@ extension MessageEnvelope {
     /// Minimal projection of the possible resource-identifying fields across frame payloads,
     /// decoded once for routing without paying for a full message decode.
     private struct RoutingFields: Decodable {
-        struct VMDataID: Decodable { let id: UUID }
-        struct NetStub: Decodable { let network: String? }
-        struct VMSpecStub: Decodable { let networks: [NetStub]? }
-        let vmData: VMDataID?
-        let vmSpec: VMSpecStub?
         let vmId: String?
         let volumeId: String?
         let sourceVolumeId: String?
