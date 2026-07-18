@@ -1,6 +1,6 @@
 # Envoy mTLS front for the Strato control plane (compose SPIFFE deployment).
 #
-# Adapted from envoy/standalone/envoy.yaml for containers: the upstream is the
+# Containerized topology: the upstream is the
 # control-plane compose service (not 127.0.0.1) and SDS is served by the
 # control-plane-side spire-agent over the shared workload socket. Terminates
 # agent mTLS on :8443, re-forwards the client cert as XFCC so the control plane
