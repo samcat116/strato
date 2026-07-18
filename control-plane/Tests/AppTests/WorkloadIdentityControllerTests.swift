@@ -338,6 +338,37 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
         }
     }
 
+    @Test("Treats a JWT-only peer bundle as synced")
+    func jwtOnlyBundleIsSynced() async throws {
+        try await withApp { app in
+            let token = try await makeAdmin(on: app.db)
+            let fake = FakeSPIREServerAPI()
+            await fake.setFederationRelationships([
+                // A JWT-only trust domain: a valid, synced bundle with zero
+                // X.509 authorities.
+                SPIREFederationRelationship(
+                    trustDomain: "jwt.example",
+                    bundleEndpointURL: "https://jwt.example/bundle",
+                    bundleEndpointProfile: "https_spiffe",
+                    endpointSPIFFEID: "spiffe://jwt.example/spire/server",
+                    bundleX509AuthorityCount: 0,
+                    bundleJWTAuthorityCount: 2,
+                    bundleSequenceNumber: 4
+                )
+            ])
+            installFakeSPIRE(on: app, fake: fake)
+
+            try await app.test(.GET, "/api/workload-identity") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let body = try res.content.decode(WorkloadIdentityResponse.self)
+                let domain = try #require(body.federation.domains.first { $0.trustDomain == "jwt.example" })
+                #expect(domain.state == "synced")
+            }
+        }
+    }
+
     // MARK: - Issuance
 
     @Test("Projects SVID issuance counts from the metrics provider")

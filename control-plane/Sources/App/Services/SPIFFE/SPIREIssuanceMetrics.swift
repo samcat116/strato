@@ -115,14 +115,16 @@ public struct PrometheusIssuanceMetricsProvider: SPIREIssuanceMetricsProvider {
             let uri = Self.queryURI(base: config.prometheusBaseURL, encodedQuery: encoded)
         else {
             throw SPIREIssuanceMetricsError.invalidConfiguration(
-                "Could not build a Prometheus query URL from base \(config.prometheusBaseURL)")
+                "Could not build a Prometheus query URL from base \(Self.sanitizedBaseURL(config.prometheusBaseURL))"
+            )
         }
 
         let response: ClientResponse
         do {
             response = try await client.get(uri)
         } catch {
-            throw SPIREIssuanceMetricsError.unreachable("\(config.prometheusBaseURL): \(error)")
+            throw SPIREIssuanceMetricsError.unreachable(
+                "\(Self.sanitizedBaseURL(config.prometheusBaseURL)): \(error)")
         }
 
         guard response.status == .ok else {
@@ -147,12 +149,26 @@ public struct PrometheusIssuanceMetricsProvider: SPIREIssuanceMetricsProvider {
 
     /// Sum an instant-vector query result and round to a whole SVID count.
     /// `increase()` is a float estimate; a `sum(...)` yields at most one sample.
-    /// Non-finite totals (e.g. an overflowing sum) collapse to 0 rather than
-    /// trapping in `Int(_:)`.
+    /// `Int(exactly:)` returns nil for NaN/Inf and for finite totals that
+    /// overflow `Int`, so an implausibly large or bad result collapses to 0
+    /// rather than trapping in `Int(_:)`.
     static func sumInstantVector(_ samples: [PrometheusSample]) -> Int {
         let total = samples.reduce(0.0) { $0 + $1.value }
-        guard total.isFinite else { return 0 }
-        return Int(total.rounded())
+        return Int(exactly: total.rounded()) ?? 0
+    }
+
+    /// A Prometheus base URL reduced to `scheme://host[:port]` for use in
+    /// errors and logs — userinfo (basic-auth credentials or tokens), path, and
+    /// query are dropped so they never reach a user-facing warning or a log.
+    static func sanitizedBaseURL(_ raw: String) -> String {
+        guard let components = URLComponents(string: raw), let host = components.host else {
+            return "<prometheus>"
+        }
+        var sanitized = ""
+        if let scheme = components.scheme { sanitized += "\(scheme)://" }
+        sanitized += host
+        if let port = components.port { sanitized += ":\(port)" }
+        return sanitized
     }
 
     static func queryURI(base: String, encodedQuery: String) -> URI? {
@@ -242,7 +258,8 @@ extension Application {
         logger.info(
             "SPIRE issuance metrics configured",
             metadata: [
-                "prometheusBaseURL": .string(config.prometheusBaseURL),
+                // Sanitized so basic-auth credentials or tokens in the URL never land in logs.
+                "prometheusBaseURL": .string(PrometheusIssuanceMetricsProvider.sanitizedBaseURL(config.prometheusBaseURL)),
                 "windowHours": .string("\(config.windowHours)"),
             ])
     }

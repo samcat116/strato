@@ -194,9 +194,11 @@ public struct SPIREAgent: Sendable, Equatable {
 /// `spire.api.types.FederationRelationship`.
 ///
 /// SPIRE does not expose an explicit per-relationship health field, so callers
-/// infer sync state from `bundleX509AuthorityCount`: SPIRE only holds a peer
-/// bundle once it has successfully fetched (or been bootstrapped with) one, so
-/// a populated bundle means the relationship has synced at least once.
+/// infer sync state from the presence of authorities in the held bundle: SPIRE
+/// only holds a peer bundle once it has successfully fetched (or been
+/// bootstrapped with) one. Use `bundleAuthorityCount` (X.509 *or* JWT) rather
+/// than X.509 alone, since a JWT-only trust domain has a valid bundle with zero
+/// X.509 authorities.
 public struct SPIREFederationRelationship: Sendable, Equatable {
     /// The peer trust domain name (e.g. `partner.example`), without scheme.
     public let trustDomain: String
@@ -209,8 +211,14 @@ public struct SPIREFederationRelationship: Sendable, Equatable {
     /// X.509 authorities in the peer bundle SPIRE currently holds; `0` when no
     /// bundle has been fetched or bootstrapped yet.
     public let bundleX509AuthorityCount: Int
+    /// JWT authorities in the peer bundle SPIRE currently holds; `0` when none.
+    public let bundleJWTAuthorityCount: Int
     /// Sequence number of the held peer bundle; `0` when absent.
     public let bundleSequenceNumber: UInt64
+
+    /// Total authorities (X.509 + JWT) in the held peer bundle. Zero means
+    /// SPIRE holds no usable bundle yet — the "not synced" signal.
+    public var bundleAuthorityCount: Int { bundleX509AuthorityCount + bundleJWTAuthorityCount }
 
     public init(
         trustDomain: String,
@@ -218,6 +226,7 @@ public struct SPIREFederationRelationship: Sendable, Equatable {
         bundleEndpointProfile: String,
         endpointSPIFFEID: String?,
         bundleX509AuthorityCount: Int,
+        bundleJWTAuthorityCount: Int = 0,
         bundleSequenceNumber: UInt64
     ) {
         self.trustDomain = trustDomain
@@ -225,6 +234,7 @@ public struct SPIREFederationRelationship: Sendable, Equatable {
         self.bundleEndpointProfile = bundleEndpointProfile
         self.endpointSPIFFEID = endpointSPIFFEID
         self.bundleX509AuthorityCount = bundleX509AuthorityCount
+        self.bundleJWTAuthorityCount = bundleJWTAuthorityCount
         self.bundleSequenceNumber = bundleSequenceNumber
     }
 }
@@ -577,6 +587,7 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
         // the peer; treat its absence as "no authorities" so callers read it as
         // not-yet-synced rather than crashing on the default-empty message.
         let x509Count = proto.hasTrustDomainBundle ? proto.trustDomainBundle.x509Authorities.count : 0
+        let jwtCount = proto.hasTrustDomainBundle ? proto.trustDomainBundle.jwtAuthorities.count : 0
         let sequence = proto.hasTrustDomainBundle ? proto.trustDomainBundle.sequenceNumber : 0
 
         return SPIREFederationRelationship(
@@ -585,6 +596,7 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
             bundleEndpointProfile: profile,
             endpointSPIFFEID: endpointSPIFFEID,
             bundleX509AuthorityCount: x509Count,
+            bundleJWTAuthorityCount: jwtCount,
             bundleSequenceNumber: sequence
         )
     }

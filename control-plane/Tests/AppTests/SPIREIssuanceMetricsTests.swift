@@ -53,6 +53,27 @@ struct SPIREIssuanceMetricsTests {
         #expect(total == 0)
     }
 
+    @Test("An oversized finite total collapses to zero rather than trapping")
+    func oversizedTotalIsZero() {
+        // A finite value far beyond Int.max would trap Int(_:); Int(exactly:)
+        // returns nil and we fall back to 0.
+        let total = PrometheusIssuanceMetricsProvider.sumInstantVector([
+            PrometheusSample(value: 1e30)
+        ])
+        #expect(total == 0)
+    }
+
+    @Test("Sanitizes credentials and path out of the Prometheus base URL")
+    func sanitizesBaseURL() {
+        #expect(
+            PrometheusIssuanceMetricsProvider.sanitizedBaseURL("http://user:token@prometheus:9090/foo?x=1")
+                == "http://prometheus:9090")
+        #expect(
+            PrometheusIssuanceMetricsProvider.sanitizedBaseURL("http://prometheus:9090") == "http://prometheus:9090")
+        // Unparseable input reveals nothing.
+        #expect(PrometheusIssuanceMetricsProvider.sanitizedBaseURL("not a url") == "<prometheus>")
+    }
+
     @Test("Builds the Prometheus query URL, trimming a trailing slash")
     func buildsQueryURI() {
         let uri = PrometheusIssuanceMetricsProvider.queryURI(

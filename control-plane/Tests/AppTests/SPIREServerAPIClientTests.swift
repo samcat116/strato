@@ -227,6 +227,9 @@ struct SPIREServerAPIClientTests {
         var authority = Spire_Api_Types_X509Certificate()
         authority.asn1 = Data([0x30, 0x01])
         bundle.x509Authorities = [authority, authority]
+        var jwtKey = Spire_Api_Types_JWTKey()
+        jwtKey.keyID = "kid-1"
+        bundle.jwtAuthorities = [jwtKey]
         bundle.sequenceNumber = 7
         withBundle.trustDomainBundle = bundle
 
@@ -246,6 +249,8 @@ struct SPIREServerAPIClientTests {
             #expect(partner.bundleEndpointProfile == "https_spiffe")
             #expect(partner.endpointSPIFFEID == "spiffe://partner.example/spire/server")
             #expect(partner.bundleX509AuthorityCount == 2)
+            #expect(partner.bundleJWTAuthorityCount == 1)
+            #expect(partner.bundleAuthorityCount == 3)
             #expect(partner.bundleSequenceNumber == 7)
 
             let notFetched = try #require(relationships.first { $0.trustDomain == "pending.example" })

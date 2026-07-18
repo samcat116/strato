@@ -448,8 +448,6 @@ networkPolicy:
         - protocol: TCP
           port: 4317   # OTLP export to the otel-collector
         - protocol: TCP
-          port: 9090   # Prometheus (Workload Identity issuance panel; when otel+prometheus enabled)
-        - protocol: TCP
           port: 443    # OIDC discovery/JWKS, SSF transmitters, audit webhooks
         - protocol: TCP
           port: 53     # DNS

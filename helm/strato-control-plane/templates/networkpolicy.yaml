@@ -82,19 +82,6 @@ spec:
         - protocol: TCP
           port: {{ .Values.opentelemetry.collector.service.grpcPort }}
     {{- end }}
-    {{- if and .Values.spire.enabled .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
-    # Allow the Workload Identity issuance panel to query the chart's Prometheus
-    # (SPIRE_METRICS_PROMETHEUS_URL). Without this the panel degrades to
-    # unavailable in clusters enforcing NetworkPolicy.
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "strato-control-plane.selectorLabels" . | nindent 14 }}
-              app.kubernetes.io/component: prometheus
-      ports:
-        - protocol: TCP
-          port: {{ .Values.opentelemetry.prometheus.service.port }}
-    {{- end }}
     # Allow outbound HTTPS (OIDC discovery/JWKS, SSF transmitters, audit
     # webhooks, external image URLs)
     - to: []
@@ -113,6 +100,21 @@ spec:
         - protocol: TCP
           port: 8081
     {{- end }}
+    {{- end }}
+    {{- if and .Values.spire.enabled .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
+    # Allow the Workload Identity issuance panel to query the chart's Prometheus
+    # (SPIRE_METRICS_PROMETHEUS_URL). Appended outside the egress with/else so it
+    # applies to both the default and any custom egress list, and scoped to the
+    # Prometheus pods rather than opening the port to every destination. For an
+    # *external* Prometheus, add your own egress rule to reach it.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "strato-control-plane.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: prometheus
+      ports:
+        - protocol: TCP
+          port: {{ .Values.opentelemetry.prometheus.service.port }}
     {{- end }}
 {{- end }}
 ---

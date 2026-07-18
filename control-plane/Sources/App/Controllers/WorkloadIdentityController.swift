@@ -323,12 +323,14 @@ struct FederatedDomainResponse: Content {
 extension FederatedDomainResponse {
     /// Project a real federation relationship. SPIRE exposes no explicit
     /// per-relationship health field, so sync state is inferred from whether it
-    /// currently holds the peer bundle: SPIRE stores a bundle only after a
-    /// successful fetch (or an explicit bootstrap), so a populated bundle means
-    /// `synced`, and its absence means a pending or failed refresh.
+    /// currently holds a peer bundle with any authorities: SPIRE stores a bundle
+    /// only after a successful fetch (or an explicit bootstrap), so a populated
+    /// bundle means `synced`, and its absence means a pending or failed refresh.
+    /// Counts X.509 *and* JWT authorities, since a JWT-only trust domain has a
+    /// valid bundle with zero X.509 authorities.
     init(from relationship: SPIREFederationRelationship) {
         self.trustDomain = relationship.trustDomain
-        self.state = relationship.bundleX509AuthorityCount > 0 ? "synced" : "refresh_failed"
+        self.state = relationship.bundleAuthorityCount > 0 ? "synced" : "refresh_failed"
     }
 }
 
