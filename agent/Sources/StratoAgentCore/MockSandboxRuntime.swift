@@ -138,8 +138,13 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
         }
         guard sandbox.status != .stopped else { return }
         logger.info("Shutting down mock sandbox (mock mode)", metadata: ["sandboxId": .string(sandboxId)])
-        endWorkloadActivity(sandboxId: sandboxId, execCloseReason: "sandbox stopped")
+        // Delay first, teardown after: the sleep throws on cancellation, and
+        // tearing down before it could leave a cancelled shutdown with a
+        // "running" sandbox whose emitter and exec sessions are already gone.
+        // It also keeps the workload live through the graceful-stop window,
+        // like a real guest.
         try await Task.sleep(for: shutdownDelay)  // Simulate shutdown delay
+        endWorkloadActivity(sandboxId: sandboxId, execCloseReason: "sandbox stopped")
         sandboxes[sandboxId]?.status = .stopped
     }
 
@@ -355,7 +360,11 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
     }
 
     private func emitLogLine(sandboxId: String) {
-        guard let logHandler, let sandbox = sandboxes[sandboxId], sandbox.status == .running else { return }
+        // Re-check the connection: a disconnect cancels the emitter, but a
+        // callback already queued on the actor still runs — drop it instead of
+        // emitting one late line into a dead send path.
+        guard controlPlaneIsConnected, let logHandler else { return }
+        guard let sandbox = sandboxes[sandboxId], sandbox.status == .running else { return }
         let line = sandbox.logLinesEmitted + 1
         sandboxes[sandboxId]?.logLinesEmitted = line
         logHandler(sandboxId, "stdout", "simulated workload log line \(line)")

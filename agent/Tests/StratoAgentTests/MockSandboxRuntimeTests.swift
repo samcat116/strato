@@ -400,7 +400,8 @@ struct MockSandboxRuntimeTests {
         try await runtime.createSandbox(
             sandboxId: "sb-1", spec: makeSpec(), registryCredential: nil, networkAttachments: [])
         try await runtime.bootSandbox(sandboxId: "sb-1")
-        _ = await eventually { lines.all.count >= 1 }
+        let emitted = await eventually { lines.all.count >= 1 }
+        #expect(emitted)
 
         try await runtime.shutdownSandbox(sandboxId: "sb-1")
         try await Task.sleep(for: .milliseconds(50))
