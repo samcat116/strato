@@ -120,6 +120,23 @@ spec:
               serviceName: {{ $fullName }}
               servicePort: {{ $svcPort }}
               {{- end }}
+          # RFC 8935 SSF push-delivery callback (POST /ssf/events/:streamID)
+          # that external transmitters POST to. Bare control-plane route, so it
+          # must bypass the frontend catch-all below.
+          - path: /ssf
+            {{- if semverCompare ">=1.18-0" $.Capabilities.KubeVersion.GitVersion }}
+            pathType: Prefix
+            {{- end }}
+            backend:
+              {{- if semverCompare ">=1.19-0" $.Capabilities.KubeVersion.GitVersion }}
+              service:
+                name: {{ $fullName }}
+                port:
+                  number: {{ $svcPort }}
+              {{- else }}
+              serviceName: {{ $fullName }}
+              servicePort: {{ $svcPort }}
+              {{- end }}
           # Frontend catch-all (must be last)
           {{- if $.Values.frontend.enabled }}
           - path: /

@@ -170,8 +170,8 @@ cd shared
 swift test
 
 # JavaScript linting
-cd control-plane
-npm run lint
+cd control-plane/web
+bun run lint
 ```
 
 ### Building Locally

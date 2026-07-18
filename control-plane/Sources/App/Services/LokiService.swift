@@ -148,23 +148,6 @@ actor LokiService {
         )
     }
 
-    /// Query logs with custom LogQL query
-    func queryLogs(
-        query: String,
-        start: Date? = nil,
-        end: Date? = nil,
-        limit: Int = 100,
-        direction: QueryDirection = .backward
-    ) async throws -> [LogEntry] {
-        return try await executeQuery(
-            query: query,
-            start: start,
-            end: end,
-            limit: limit,
-            direction: direction
-        )
-    }
-
     private func buildLogQLQuery(vmId: String) -> String {
         return "{vm_id=\"\(vmId)\"}"
     }

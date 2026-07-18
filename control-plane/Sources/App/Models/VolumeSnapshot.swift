@@ -119,22 +119,6 @@ extension VolumeSnapshot {
 // MARK: - Computed Properties
 
 extension VolumeSnapshot {
-    var sizeGB: Double {
-        return Double(size) / 1024.0 / 1024.0 / 1024.0
-    }
-
-    var sizeMB: Double {
-        return Double(size) / 1024.0 / 1024.0
-    }
-
-    var isAvailable: Bool {
-        return status == .available
-    }
-
-    var canRestore: Bool {
-        return status == .available
-    }
-
     /// `.deleting` is retryable: a control-plane restart mid-delete leaves the
     /// record in that state with no sweep to recover it, and agent-side file
     /// deletion is idempotent, so re-issuing the DELETE is always safe.
@@ -188,30 +172,5 @@ struct SnapshotResponse: Content {
         }
         let kb = Double(bytes) / 1024.0
         return String(format: "%.2f KB", kb)
-    }
-}
-
-// MARK: - Errors
-
-enum SnapshotError: Error, LocalizedError, Sendable {
-    case snapshotNotFound(UUID)
-    case snapshotNotAvailable(UUID, SnapshotStatus)
-    case createFailed(String)
-    case deleteFailed(String)
-    case restoreFailed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .snapshotNotFound(let id):
-            return "Snapshot '\(id)' not found."
-        case .snapshotNotAvailable(let id, let status):
-            return "Snapshot '\(id)' is not available. Current status: \(status.rawValue)"
-        case .createFailed(let reason):
-            return "Failed to create snapshot: \(reason)"
-        case .deleteFailed(let reason):
-            return "Failed to delete snapshot: \(reason)"
-        case .restoreFailed(let reason):
-            return "Failed to restore snapshot: \(reason)"
-        }
     }
 }

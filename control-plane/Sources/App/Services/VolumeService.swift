@@ -493,53 +493,6 @@ actor VolumeService {
         return status?.storagePath
     }
 
-    // MARK: - Message Handling
-
-    /// Handle a volume info response from an agent
-    /// This is used to update volume status after operations complete
-    func handleVolumeInfoResponse(_ response: VolumeInfoResponse) async {
-        guard let volumeId = UUID(uuidString: response.volumeId) else {
-            logger.warning(
-                "Invalid volume ID in info response",
-                metadata: [
-                    "volumeId": .string(response.volumeId)
-                ])
-            return
-        }
-
-        do {
-            guard let volume = try await Volume.find(volumeId, on: app.db) else {
-                logger.warning(
-                    "Volume not found for info response",
-                    metadata: [
-                        "volumeId": .string(response.volumeId)
-                    ])
-                return
-            }
-
-            // Update volume size info from agent
-            // The virtualSize is the provisioned size, actualSize is the real disk usage
-            logger.info(
-                "Received volume info from agent",
-                metadata: [
-                    "volumeId": .string(response.volumeId),
-                    "virtualSize": .stringConvertible(response.virtualSize),
-                    "actualSize": .stringConvertible(response.actualSize),
-                    "format": .string(response.format),
-                ])
-
-            // Volume info doesn't change the status - that's handled by operation-specific callbacks
-            try await volume.save(on: app.db)
-        } catch {
-            logger.error(
-                "Failed to process volume info response",
-                metadata: [
-                    "volumeId": .string(response.volumeId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
-
     // MARK: - Private Helpers
 
     /// Send a volume message to an agent and await the correlated

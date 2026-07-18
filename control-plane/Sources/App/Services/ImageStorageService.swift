@@ -156,53 +156,6 @@ struct ImageStorageService {
     }
 
     /// Saves a file from a file handle (for streaming uploads)
-    static func saveFileStreaming(
-        from fileHandle: FileHandle,
-        to filePath: String,
-        storagePath: String,
-        projectId: UUID,
-        imageId: UUID,
-        filename: String,
-        onProgress: ((Int64) -> Void)? = nil
-    ) async throws -> (relativePath: String, size: Int64) {
-        // Create directory structure
-        try createDirectoryStructure(
-            storagePath: storagePath,
-            projectId: projectId,
-            imageId: imageId
-        )
-
-        let fullPath = buildFilePath(
-            storagePath: storagePath,
-            projectId: projectId,
-            imageId: imageId,
-            filename: filename
-        )
-
-        // Create output file
-        FileManager.default.createFile(atPath: fullPath, contents: nil)
-        guard let outputHandle = FileHandle(forWritingAtPath: fullPath) else {
-            throw ImageError.storageFailed("Failed to create output file")
-        }
-        defer { try? outputHandle.close() }
-
-        var totalBytesWritten: Int64 = 0
-        let bufferSize = 1024 * 1024  // 1MB chunks
-
-        // Stream data from input to output
-        while true {
-            let data = fileHandle.readData(ofLength: bufferSize)
-            if data.isEmpty { break }
-
-            try outputHandle.write(contentsOf: data)
-            totalBytesWritten += Int64(data.count)
-            onProgress?(totalBytesWritten)
-        }
-
-        let relativePath = "\(projectId)/\(imageId)/\(filename)"
-        return (relativePath, totalBytesWritten)
-    }
-
     /// Gets the full file path for an image
     static func getFilePath(
         storagePath: String,
@@ -277,15 +230,23 @@ struct ImageStorageService {
             throw Abort(.notFound, reason: "Image file not found")
         }
 
-        // Get file size for Content-Length header
-        let fileSize = try getFileSize(storagePath: storagePath, relativePath: relativePath)
-
         // Stream the file
         let response = try await req.fileio.asyncStreamFile(at: fullPath)
 
-        // Set headers for download
-        response.headers.add(name: .contentDisposition, value: "attachment; filename=\"\(filename)\"")
-        response.headers.add(name: .contentLength, value: String(fileSize))
+        // Deliberately does NOT set Content-Length. asyncStreamFile already
+        // sets it from the body's byte count, and for a `Range` request that
+        // count is the requested slice, not the whole file (the response is a
+        // 206 with a matching Content-Range). Adding it here emitted the header
+        // twice, which nginx rejects outright ("upstream sent duplicate header
+        // line") with a 502 — that broke image downloads for every agent in the
+        // nginx-fronted deployment, so no VM could boot. Overriding it with the
+        // full file size instead would be just as wrong: partial responses
+        // would advertise more bytes than they stream, hanging or failing
+        // validation on resumable downloads.
+        //
+        // Content-Disposition is ours to set; asyncStreamFile never sets it.
+        response.headers.replaceOrAdd(
+            name: .contentDisposition, value: "attachment; filename=\"\(filename)\"")
 
         return response
     }

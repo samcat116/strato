@@ -13,27 +13,9 @@ public enum MessageType: String, Codable, Sendable {
     // the level-triggered desired-state sync.
     case agentUpdate = "agent_update"
 
-    // VM lifecycle operations.
-    //
-    // DEPRECATED (issue #261, kept one release for older control planes):
-    // the control plane drives VM lifecycle exclusively through desired-state
-    // sync (`desiredState`/`observedState`) and no longer sends `vmCreate`,
-    // `vmBoot`, `vmShutdown`, `vmPause`, `vmResume`, `vmDelete`, `vmInfo`,
-    // or `vmStatus`. Agents still handle them for compatibility with control
-    // planes that predate the removal. `vmReboot` remains live: a reboot is
-    // an action, not a state, so it cannot ride the level-triggered sync.
-    case vmCreate = "vm_create"
-    case vmBoot = "vm_boot"
-    case vmShutdown = "vm_shutdown"
+    // Reboot is an action, not a state, so it cannot ride the level-triggered
+    // desired-state sync.
     case vmReboot = "vm_reboot"
-    case vmPause = "vm_pause"
-    case vmResume = "vm_resume"
-    case vmDelete = "vm_delete"
-
-    // VM information queries (deprecated, see above — the database's
-    // observed state answers these now)
-    case vmInfo = "vm_info"
-    case vmStatus = "vm_status"
 
     // Network management operations
     case networkCreate = "network_create"
@@ -68,8 +50,6 @@ public enum MessageType: String, Codable, Sendable {
     // Responses
     case success = "success"
     case error = "error"
-    case statusUpdate = "status_update"
-
     // VM Logs
     case vmLog = "vm_log"
 
@@ -86,6 +66,14 @@ public enum MessageType: String, Codable, Sendable {
     case sandboxExecClose = "sandbox_exec_close"
     case sandboxExecClosed = "sandbox_exec_closed"
     case sandboxLog = "sandbox_log"
+
+    // Sandbox snapshot / checkpoint operations (protocol version >= 9, issue
+    // #426). Imperative request/response pairs like the volume operations —
+    // a snapshot is an action, not a state, so it cannot ride the
+    // level-triggered desired-state sync.
+    case sandboxSnapshotCreate = "sandbox_snapshot_create"
+    case sandboxSnapshotDelete = "sandbox_snapshot_delete"
+    case sandboxRestore = "sandbox_restore"
 }
 
 // MARK: - Base Message Protocol
@@ -394,31 +382,6 @@ public struct AgentResources: Codable, Sendable {
     }
 }
 
-// MARK: - VM Operation Messages
-
-public struct VMCreateMessage: WebSocketMessage {
-    public var type: MessageType { .vmCreate }
-    public let requestId: String
-    public let timestamp: Date
-    public let vmData: VMData
-    public let vmSpec: VMSpec
-    public let imageInfo: ImageInfo?
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        vmData: VMData,
-        vmSpec: VMSpec,
-        imageInfo: ImageInfo? = nil
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmData = vmData
-        self.vmSpec = vmSpec
-        self.imageInfo = imageInfo
-    }
-}
-
 // MARK: - Image Information
 
 /// Download information for a single typed artifact within an image's set.
@@ -539,23 +502,6 @@ public struct VMOperationMessage: WebSocketMessage {
     }
 }
 
-public struct VMInfoRequestMessage: WebSocketMessage {
-    public var type: MessageType { .vmInfo }
-    public let requestId: String
-    public let timestamp: Date
-    public let vmId: String
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        vmId: String
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmId = vmId
-    }
-}
-
 // MARK: - Response Messages
 
 public struct SuccessMessage: WebSocketMessage {
@@ -614,29 +560,6 @@ public struct ErrorMessage: WebSocketMessage {
         self.error = error
         self.details = details
         self.code = code
-    }
-}
-
-public struct StatusUpdateMessage: WebSocketMessage {
-    public var type: MessageType { .statusUpdate }
-    public let requestId: String
-    public let timestamp: Date
-    public let vmId: String
-    public let status: VMStatus
-    public let details: String?
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        vmId: String,
-        status: VMStatus,
-        details: String? = nil
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmId = vmId
-        self.status = status
-        self.details = details
     }
 }
 

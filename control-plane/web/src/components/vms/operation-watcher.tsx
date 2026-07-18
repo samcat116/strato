@@ -15,6 +15,9 @@ const verbs: Record<OperationKind, { succeeded: string; infinitive: string }> = 
   pause: { succeeded: "Paused", infinitive: "pause" },
   resume: { succeeded: "Resumed", infinitive: "resume" },
   delete: { succeeded: "Deleted", infinitive: "delete" },
+  snapshot: { succeeded: "Snapshotted", infinitive: "snapshot" },
+  snapshot_delete: { succeeded: "Snapshot deleted", infinitive: "delete the snapshot of" },
+  restore: { succeeded: "Restored", infinitive: "restore" },
 };
 
 // The list query key to refresh when an operation of a given resource kind

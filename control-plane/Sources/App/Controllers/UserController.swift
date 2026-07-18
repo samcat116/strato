@@ -95,6 +95,14 @@ struct UserController: RouteCollection {
         )
 
         try await user.save(on: req.db)
+
+        // Bind the account's first passkey enrollment to the browser session
+        // that created it: /auth/register/begin only issues a challenge for
+        // this user to this session (or to a session authenticated as the
+        // user). Without this, anyone who knows the username could enroll
+        // their own authenticator first and take the account over.
+        req.session.data[Self.pendingEnrollmentUserKey] = try user.requireID().uuidString
+
         return user.asPublic()
     }
 
@@ -282,13 +290,24 @@ struct UserController: RouteCollection {
     func beginRegistration(req: Request) async throws -> RegistrationBeginResponse {
         let beginRequest = try req.content.decode(RegistrationBeginRequest.self)
 
-        // Check if user exists
+        let user = try await User.query(on: req.db)
+            .filter(\.$username == beginRequest.username)
+            .first()
+
+        // This endpoint is public and finishRegistration logs in whoever the
+        // challenge belongs to, so issuing a challenge here IS authorizing an
+        // enrollment. Only two callers may proceed: a session authenticated as
+        // this user (adding another passkey), or the unauthenticated browser
+        // session that just created the account via /api/users/register (its
+        // first enrollment). Unknown usernames fail with the same error so this
+        // is not a username-enumeration oracle, and options.user.id (the
+        // account UUID) is never handed to an unauthorized caller.
         guard
-            let user = try await User.query(on: req.db)
-                .filter(\.$username == beginRequest.username)
-                .first()
+            let user,
+            req.auth.get(User.self)?.id == user.id
+                || req.session.data[Self.pendingEnrollmentUserKey] == user.id?.uuidString
         else {
-            throw Abort(.notFound, reason: "User not found")
+            throw Abort(.forbidden, reason: "Passkey enrollment is not authorized for this account")
         }
 
         // Admin-created accounts must enroll their passkey through the claim
@@ -306,6 +325,20 @@ struct UserController: RouteCollection {
 
         // Get existing credentials to exclude
         try await user.$credentials.load(on: req.db)
+
+        // This endpoint is public: finishRegistration logs in whoever the
+        // challenge belongs to, so it may only ever perform the *first*
+        // credential enrollment for a brand-new self-registered account. Once an
+        // account already has a passkey, adding another is a privileged
+        // operation that must be authenticated as the account owner — otherwise
+        // anyone who knows the username (including a system admin's) could
+        // enroll their own authenticator and take the account over.
+        if !user.credentials.isEmpty {
+            guard req.auth.get(User.self)?.id == user.id else {
+                throw Abort(.forbidden, reason: "This account already has a passkey; sign in to add another")
+            }
+        }
+
         let excludeCredentials = user.credentials.map { credential in
             PublicKeyCredentialDescriptor(
                 type: .publicKey,
@@ -363,6 +396,9 @@ struct UserController: RouteCollection {
 
         // Create session - log the user in automatically
         req.auth.login(user)
+        // The one-shot enrollment grant from /api/users/register is spent; the
+        // session is now authenticated, which is the only way to add more.
+        req.session.data[Self.pendingEnrollmentUserKey] = nil
         req.stampSessionEpoch(for: user)
         await req.recordAuthEvent(.register, user: user)
 
@@ -875,6 +911,12 @@ extension UserController {
     /// "registration" so a claim challenge can't be redeemed via the open
     /// self-registration finish endpoint, bypassing the one-time claim token.
     static let claimChallengeOperation = "claim"
+
+    /// Session key binding a freshly self-registered account to the browser
+    /// session that created it. Only that session may perform the account's
+    /// first passkey enrollment via /auth/register/begin; cleared once the
+    /// enrollment completes and the session is authenticated.
+    static let pendingEnrollmentUserKey = "pending_enrollment_user_id"
 
     /// Build the user-facing claim URL from the canonical browser origin. This
     /// mirrors the WebAuthn relying-party origin (which must match the browser

@@ -52,6 +52,9 @@ const kindToAction: Record<OperationKind, SandboxAction | null> = {
   pause: null,
   resume: null,
   delete: "delete",
+  snapshot: null,
+  snapshot_delete: null,
+  restore: null,
 };
 
 export function SandboxActions({

@@ -25,6 +25,7 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     case network
     case volume
     case volumeSnapshot = "volume_snapshot"
+    case sandboxSnapshot = "sandbox_snapshot"
 }
 
 /// The global roles. Each role is a curated action group that implies the one
@@ -76,6 +77,7 @@ enum IAMRoleRegistry {
         .editor: [
             "vm:create", "vm:update", "vm:delete", "vm:viewConsole",
             "sandbox:create", "sandbox:update", "sandbox:delete",
+            "sandbox:snapshot", "sandbox:restore",
             "volume:create", "volume:update", "volume:delete",
             "volume:attach", "volume:detach",
             "volume:snapshot", "volume:clone", "volume:restore",

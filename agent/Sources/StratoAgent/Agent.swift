@@ -174,6 +174,11 @@ actor Agent {
     // Background retry loop for a network service that failed to connect.
     private var networkConnectTask: Task<Void, Never>?
     private let imageCachePath: String?
+    // Byte budgets for the image caches; nil means unbounded (see
+    // image_cache_max_size_gb / sandbox_image_cache_max_size_gb).
+    private let imageCacheMaxSizeBytes: Int64?
+    private let sandboxImageCachePath: String?
+    private let sandboxImageCacheMaxSizeBytes: Int64?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
     private let firmwarePath: String?
@@ -243,6 +248,9 @@ actor Agent {
         isRegistrationMode: Bool,
         logger: Logger,
         imageCachePath: String? = nil,
+        imageCacheMaxSizeBytes: Int64? = nil,
+        sandboxImageCachePath: String? = nil,
+        sandboxImageCacheMaxSizeBytes: Int64? = nil,
         vmStoragePath: String,
         qemuBinaryPath: String,
         firmwarePath: String? = nil,
@@ -272,6 +280,9 @@ actor Agent {
         self.isRegistrationMode = isRegistrationMode
         self.logger = logger
         self.imageCachePath = imageCachePath
+        self.imageCacheMaxSizeBytes = imageCacheMaxSizeBytes
+        self.sandboxImageCachePath = sandboxImageCachePath
+        self.sandboxImageCacheMaxSizeBytes = sandboxImageCacheMaxSizeBytes
         self.vmStoragePath = vmStoragePath
         self.qemuBinaryPath = qemuBinaryPath
         self.firmwarePath = firmwarePath
@@ -411,7 +422,8 @@ actor Agent {
                 cachePath: imageCachePath,
                 controlPlaneURL: webSocketURL.replacingOccurrences(of: "ws://", with: "http://")
                     .replacingOccurrences(of: "wss://", with: "https://")
-                    .replacingOccurrences(of: "/agent/ws", with: "")
+                    .replacingOccurrences(of: "/agent/ws", with: ""),
+                maxCacheSizeBytes: imageCacheMaxSizeBytes
             )
 
             logger.info("Initializing storage backend")
@@ -536,7 +548,11 @@ actor Agent {
                 sandboxRuntime = FirecrackerSandboxRuntime(
                     logger: logger,
                     client: firecrackerClient,
-                    imageService: SandboxImageService(logger: logger),
+                    imageService: SandboxImageService(
+                        logger: logger,
+                        cacheRootPath: sandboxImageCachePath,
+                        cacheMaxSizeBytes: sandboxImageCacheMaxSizeBytes
+                    ),
                     socketDirectory: firecrackerSocketDir,
                     sandboxStoragePath: vmStoragePath,
                     guestImagePath: sandboxGuestImagePath,
@@ -971,6 +987,17 @@ actor Agent {
     /// Handle registration response from control plane
     func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) async {
         let controlPlaneProtocolVersion = response.protocolVersion ?? 0
+        guard WireProtocol.supportsStateSync(controlPlaneProtocolVersion) else {
+            let reason =
+                "Control plane wire protocol version \(controlPlaneProtocolVersion) predates desired-state sync; "
+                + "the imperative VM lifecycle protocol has been removed. Upgrade the control plane."
+            logger.error("Registration rejected: \(reason)")
+            if let continuation = takeRegistrationContinuation() {
+                continuation.resume(throwing: AgentError.registrationRejected(reason))
+            }
+            return
+        }
+
         if controlPlaneProtocolVersion != WireProtocol.currentVersion {
             logger.warning(
                 "Control plane wire protocol version differs from agent",
@@ -1107,6 +1134,9 @@ actor Agent {
         // fails envelope decoding before any error response can be sent,
         // leaving the control plane to time out).
         capabilities.append(MessageType.volumeSnapshotDelete.rawValue)
+        // Sandbox snapshot/checkpoint message set (issue #426). One marker
+        // for the trio (create/delete/restore) — they ship together.
+        capabilities.append(MessageType.sandboxSnapshotCreate.rawValue)
 
         for hypervisor in hypervisors {
             if hypervisor.available {
@@ -1598,30 +1628,12 @@ extension Agent {
             case .agentRegisterResponse:
                 let message = try envelope.decode(as: AgentRegisterResponseMessage.self)
                 await handleRegistrationResponse(message)
-            case .vmCreate:
-                let message = try envelope.decode(as: VMCreateMessage.self)
-                await handleVMCreate(message)
-            case .vmBoot:
-                let message = try envelope.decode(as: VMOperationMessage.self)
-                await handleVMBoot(message)
-            case .vmShutdown:
-                let message = try envelope.decode(as: VMOperationMessage.self)
-                await handleVMShutdown(message)
             case .vmReboot:
                 let message = try envelope.decode(as: VMOperationMessage.self)
                 await handleVMReboot(message)
             case .agentUpdate:
                 let message = try envelope.decode(as: AgentUpdateMessage.self)
                 await handleAgentUpdate(message)
-            case .vmPause:
-                let message = try envelope.decode(as: VMOperationMessage.self)
-                await handleVMPause(message)
-            case .vmResume:
-                let message = try envelope.decode(as: VMOperationMessage.self)
-                await handleVMResume(message)
-            case .vmDelete:
-                let message = try envelope.decode(as: VMOperationMessage.self)
-                await handleVMDelete(message)
             case .desiredState:
                 let message = try envelope.decode(as: DesiredStateMessage.self)
                 // Realize logical networks (per-project routers, SNAT uplinks)
@@ -1648,12 +1660,6 @@ extension Agent {
                 // precondition gate — the update only runs on a sync that
                 // arrives with the lanes already drained.
                 await handleDesiredAgentUpdate(message.desiredAgentUpdate)
-            case .vmInfo:
-                let message = try envelope.decode(as: VMInfoRequestMessage.self)
-                await handleVMInfo(message)
-            case .vmStatus:
-                let message = try envelope.decode(as: VMOperationMessage.self)
-                await handleVMStatus(message)
             case .networkCreate:
                 let message = try envelope.decode(as: NetworkCreateMessage.self)
                 await handleNetworkCreate(message)
@@ -1694,6 +1700,16 @@ extension Agent {
             case .sandboxExecClose:
                 let message = try envelope.decode(as: SandboxExecCloseMessage.self)
                 await handleSandboxExecClose(message)
+            // Sandbox snapshots / checkpoint-resume (issue #426)
+            case .sandboxSnapshotCreate:
+                let message = try envelope.decode(as: SandboxSnapshotCreateMessage.self)
+                await handleSandboxSnapshotCreate(message)
+            case .sandboxSnapshotDelete:
+                let message = try envelope.decode(as: SandboxSnapshotDeleteMessage.self)
+                await handleSandboxSnapshotDelete(message)
+            case .sandboxRestore:
+                let message = try envelope.decode(as: SandboxRestoreMessage.self)
+                await handleSandboxRestore(message)
             // Volume operations
             case .volumeCreate:
                 let message = try envelope.decode(as: VolumeCreateMessage.self)
@@ -1797,156 +1813,6 @@ extension Agent {
         var manifest = orphanedVMs.merging(managedVMs) { _, active in active }
         manifest.merge(orphanedSandboxes.merging(managedSandboxes) { _, active in active }) { _, sandbox in sandbox }
         manifestPersistFailed = !manifestStore.save(manifest)
-    }
-
-    private func handleVMCreate(_ message: VMCreateMessage) async {
-        let vmId = message.vmData.id.uuidString
-        let hypervisorType = message.vmData.hypervisorType
-
-        logger.info(
-            "Creating VM",
-            metadata: [
-                "vmId": .string(vmId),
-                "hypervisorType": .string(hypervisorType.rawValue),
-            ])
-        await sendVMLog(
-            vmId: vmId, level: .info, eventType: .operation,
-            message: "Starting VM creation with hypervisor: \(hypervisorType.rawValue)", operation: "create")
-
-        // Log image info if provided
-        if let imageInfo = message.imageInfo {
-            logger.info(
-                "VM creation includes image info",
-                metadata: [
-                    "vmId": .string(vmId),
-                    "imageId": .string(imageInfo.imageId.uuidString),
-                    "filename": .string(imageInfo.filename),
-                ])
-            await sendVMLog(
-                vmId: vmId, level: .info, eventType: .info, message: "Using image: \(imageInfo.filename)",
-                operation: "create")
-        }
-
-        guard let service = getHypervisorService(for: hypervisorType) else {
-            await sendError(
-                for: message.requestId, error: "Hypervisor service not available for type: \(hypervisorType.rawValue)")
-            await sendVMLog(
-                vmId: vmId, level: .error, eventType: .error,
-                message: "Hypervisor service not available for type: \(hypervisorType.rawValue)", operation: "create")
-            return
-        }
-
-        // Realize the VM's NICs on this host before the driver runs; the driver
-        // only translates the resolved attachments into its native config.
-        let attachments: [ResolvedNetworkAttachment]
-        do {
-            attachments = try await networkOrchestrator.prepareAttachments(
-                vmId: vmId, networks: message.vmSpec.networks)
-        } catch {
-            await sendError(
-                for: message.requestId, error: "Failed to prepare VM networking: \(error.localizedDescription)")
-            await sendVMLog(
-                vmId: vmId, level: .error, eventType: .error,
-                message: "Failed to prepare VM networking: \(error.localizedDescription)", operation: "create")
-            logger.error(
-                "Failed to prepare VM networking",
-                metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
-            return
-        }
-
-        do {
-            try await service.createVM(
-                vmId: vmId,
-                spec: message.vmSpec,
-                imageInfo: message.imageInfo,
-                networkAttachments: attachments
-            )
-            // Record the owning backend in the durable manifest; a re-created VM
-            // is actively managed again, so any orphan record is dropped.
-            managedVMs[vmId] = VMManifestEntry(hypervisorType: hypervisorType, spec: message.vmSpec)
-            orphanedVMs.removeValue(forKey: vmId)
-            persistManifest()
-            await sendSuccess(for: message.requestId, message: "VM created successfully")
-            await sendVMLog(
-                vmId: vmId, level: .info, eventType: .statusChange, message: "VM created successfully",
-                operation: "create", newStatus: .created)
-            logger.info("VM created successfully", metadata: ["vmId": .string(vmId)])
-        } catch {
-            // The driver never created the VM, so its NICs won't see a delete —
-            // roll back their host-side resources here.
-            await networkOrchestrator.teardownAttachments(vmId: vmId, count: attachments.count)
-            await sendError(for: message.requestId, error: "Failed to create VM: \(error.localizedDescription)")
-            await sendVMLog(
-                vmId: vmId, level: .error, eventType: .error,
-                message: "Failed to create VM: \(error.localizedDescription)", operation: "create")
-            logger.error(
-                "Failed to create VM", metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
-        }
-    }
-
-    private func handleVMBoot(_ message: VMOperationMessage) async {
-        logger.info("Booting VM", metadata: ["vmId": .string(message.vmId)])
-        await sendVMLog(
-            vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM boot", operation: "boot")
-
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            await sendVMLog(
-                vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available",
-                operation: "boot")
-            return
-        }
-
-        do {
-            try await service.bootVM(vmId: message.vmId)
-            await sendSuccess(for: message.requestId, message: "VM booted successfully")
-            await sendStatusUpdate(vmId: message.vmId, status: .running)
-            await sendVMLog(
-                vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM booted successfully",
-                operation: "boot", newStatus: .running)
-            logger.info("VM booted successfully", metadata: ["vmId": .string(message.vmId)])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to boot VM: \(error.localizedDescription)")
-            await sendVMLog(
-                vmId: message.vmId, level: .error, eventType: .error,
-                message: "Failed to boot VM: \(error.localizedDescription)", operation: "boot")
-            logger.error(
-                "Failed to boot VM",
-                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
-        }
-    }
-
-    private func handleVMShutdown(_ message: VMOperationMessage) async {
-        logger.info("Shutting down VM", metadata: ["vmId": .string(message.vmId)])
-        await sendVMLog(
-            vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM shutdown",
-            operation: "shutdown")
-
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            await sendVMLog(
-                vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available",
-                operation: "shutdown")
-            return
-        }
-
-        do {
-            try await service.shutdownVM(vmId: message.vmId)
-            await sendSuccess(for: message.requestId, message: "VM shut down successfully")
-            await sendStatusUpdate(vmId: message.vmId, status: .shutdown)
-            await sendVMLog(
-                vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM shut down successfully",
-                operation: "shutdown", newStatus: .shutdown)
-            logger.info("VM shut down successfully", metadata: ["vmId": .string(message.vmId)])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to shutdown VM: \(error.localizedDescription)")
-            await sendVMLog(
-                vmId: message.vmId, level: .error, eventType: .error,
-                message: "Failed to shutdown VM: \(error.localizedDescription)", operation: "shutdown")
-            logger.error(
-                "Failed to shutdown VM",
-                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
-        }
     }
 
     private func handleVMReboot(_ message: VMOperationMessage) async {
@@ -2153,174 +2019,6 @@ extension Agent {
         }
     }
 
-    private func handleVMPause(_ message: VMOperationMessage) async {
-        logger.info("Pausing VM", metadata: ["vmId": .string(message.vmId)])
-        await sendVMLog(
-            vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM pause", operation: "pause")
-
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            await sendVMLog(
-                vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available",
-                operation: "pause")
-            return
-        }
-
-        do {
-            try await service.pauseVM(vmId: message.vmId)
-            await sendSuccess(for: message.requestId, message: "VM paused successfully")
-            await sendStatusUpdate(vmId: message.vmId, status: .paused)
-            await sendVMLog(
-                vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM paused successfully",
-                operation: "pause", newStatus: .paused)
-            logger.info("VM paused successfully", metadata: ["vmId": .string(message.vmId)])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to pause VM: \(error.localizedDescription)")
-            await sendVMLog(
-                vmId: message.vmId, level: .error, eventType: .error,
-                message: "Failed to pause VM: \(error.localizedDescription)", operation: "pause")
-            logger.error(
-                "Failed to pause VM",
-                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
-        }
-    }
-
-    private func handleVMResume(_ message: VMOperationMessage) async {
-        logger.info("Resuming VM", metadata: ["vmId": .string(message.vmId)])
-        await sendVMLog(
-            vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM resume", operation: "resume")
-
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            await sendVMLog(
-                vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available",
-                operation: "resume")
-            return
-        }
-
-        do {
-            try await service.resumeVM(vmId: message.vmId)
-            await sendSuccess(for: message.requestId, message: "VM resumed successfully")
-            await sendStatusUpdate(vmId: message.vmId, status: .running)
-            await sendVMLog(
-                vmId: message.vmId, level: .info, eventType: .statusChange, message: "VM resumed successfully",
-                operation: "resume", newStatus: .running)
-            logger.info("VM resumed successfully", metadata: ["vmId": .string(message.vmId)])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to resume VM: \(error.localizedDescription)")
-            await sendVMLog(
-                vmId: message.vmId, level: .error, eventType: .error,
-                message: "Failed to resume VM: \(error.localizedDescription)", operation: "resume")
-            logger.error(
-                "Failed to resume VM",
-                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
-        }
-    }
-
-    private func handleVMDelete(_ message: VMOperationMessage) async {
-        logger.info("Deleting VM", metadata: ["vmId": .string(message.vmId)])
-        await sendVMLog(
-            vmId: message.vmId, level: .info, eventType: .operation, message: "Starting VM deletion",
-            operation: "delete")
-
-        // A VM orphaned by an agent restart has no live hypervisor session to tear
-        // down. Deleting it releases its manifest entry and reservation so the
-        // control plane can remove the record; any surviving hypervisor process
-        // must be cleaned up manually (or via Option B re-adoption, #260).
-        if managedVMs[message.vmId] == nil, let orphan = orphanedVMs.removeValue(forKey: message.vmId) {
-            persistManifest()
-            // Host-side network resources (OVN ports, TAP devices) are derived
-            // from deterministic names, so they can be torn down even though no
-            // hypervisor session survives. Best-effort by design.
-            await networkOrchestrator.teardownAttachments(
-                vmId: message.vmId, count: orphan.spec.networks.count)
-            logger.warning(
-                "Deleted orphaned VM from manifest; any surviving hypervisor process must be cleaned up manually",
-                metadata: ["vmId": .string(message.vmId)])
-            await sendSuccess(for: message.requestId, message: "VM deleted successfully")
-            await sendVMLog(
-                vmId: message.vmId, level: .info, eventType: .operation, message: "VM deleted successfully",
-                operation: "delete")
-            return
-        }
-
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            await sendVMLog(
-                vmId: message.vmId, level: .error, eventType: .error, message: "Hypervisor service not available",
-                operation: "delete")
-            return
-        }
-
-        do {
-            let nicCount = managedVMs[message.vmId]?.spec.networks.count ?? 0
-            try await service.deleteVM(vmId: message.vmId)
-            // Tear down the VM's host-side network resources now that the
-            // hypervisor session is gone (best-effort; never blocks deletion).
-            await networkOrchestrator.teardownAttachments(vmId: message.vmId, count: nicCount)
-            // Clean up the hypervisor mapping
-            managedVMs.removeValue(forKey: message.vmId)
-            persistManifest()
-            await sendSuccess(for: message.requestId, message: "VM deleted successfully")
-            await sendVMLog(
-                vmId: message.vmId, level: .info, eventType: .operation, message: "VM deleted successfully",
-                operation: "delete")
-            logger.info("VM deleted successfully", metadata: ["vmId": .string(message.vmId)])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to delete VM: \(error.localizedDescription)")
-            await sendVMLog(
-                vmId: message.vmId, level: .error, eventType: .error,
-                message: "Failed to delete VM: \(error.localizedDescription)", operation: "delete")
-            logger.error(
-                "Failed to delete VM",
-                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
-        }
-    }
-
-    private func handleVMInfo(_ message: VMInfoRequestMessage) async {
-        logger.info("Getting VM info", metadata: ["vmId": .string(message.vmId)])
-
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            return
-        }
-
-        do {
-            let vmInfo = try await service.getVMInfo(vmId: message.vmId)
-            let data = try AnyCodableValue(vmInfo)
-            await sendSuccess(for: message.requestId, message: "VM info retrieved", data: data)
-            logger.info("VM info retrieved successfully", metadata: ["vmId": .string(message.vmId)])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to get VM info: \(error.localizedDescription)")
-            logger.error(
-                "Failed to get VM info",
-                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
-        }
-    }
-
-    private func handleVMStatus(_ message: VMOperationMessage) async {
-        logger.info("Getting VM status", metadata: ["vmId": .string(message.vmId)])
-
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            return
-        }
-
-        do {
-            let status = try await service.getVMStatus(vmId: message.vmId)
-            let data = try AnyCodableValue(status)
-            await sendSuccess(for: message.requestId, message: "VM status retrieved", data: data)
-            logger.info(
-                "VM status retrieved successfully",
-                metadata: ["vmId": .string(message.vmId), "status": .string(status.rawValue)])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to get VM status: \(error.localizedDescription)")
-            logger.error(
-                "Failed to get VM status",
-                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
-        }
-    }
-
     private func sendSuccess(for requestId: String, message: String? = nil, data: AnyCodableValue? = nil) async {
         let successMessage = SuccessMessage(requestId: requestId, message: message, data: data)
         do {
@@ -2336,15 +2034,6 @@ extension Agent {
             try await websocketClient?.sendMessage(errorMessage)
         } catch {
             logger.error("Failed to send error message: \(error)")
-        }
-    }
-
-    private func sendStatusUpdate(vmId: String, status: VMStatus, details: String? = nil) async {
-        let statusMessage = StatusUpdateMessage(vmId: vmId, status: status, details: details)
-        do {
-            try await websocketClient?.sendMessage(statusMessage)
-        } catch {
-            logger.error("Failed to send status update: \(error)")
         }
     }
 
@@ -2802,6 +2491,105 @@ extension Agent {
                     "error": .string(error.localizedDescription),
                 ])
             await sendSandboxExecClosed(sessionId: sessionId, reason: error.localizedDescription)
+        }
+    }
+
+    // MARK: - Sandbox snapshots / checkpoint-resume (issue #426)
+
+    private func handleSandboxSnapshotCreate(_ message: SandboxSnapshotCreateMessage) async {
+        logger.info(
+            "Sandbox snapshot create request received",
+            metadata: [
+                "sandboxId": .string(message.sandboxId),
+                "snapshotId": .string(message.snapshotId),
+                "mode": .string(message.mode.rawValue),
+            ])
+
+        guard let runtime = sandboxRuntime else {
+            await sendError(for: message.requestId, error: "this agent has no sandbox runtime")
+            return
+        }
+
+        do {
+            let result = try await runtime.snapshotSandbox(
+                sandboxId: message.sandboxId, snapshotId: message.snapshotId, mode: message.mode)
+            let response = SandboxSnapshotStatusResponse(
+                snapshotId: message.snapshotId,
+                sizeBytes: result.totalSizeBytes,
+                memorySizeBytes: result.memorySizeBytes,
+                vmstateSizeBytes: result.vmstateSizeBytes,
+                rootfsSizeBytes: result.rootfsSizeBytes,
+                storagePath: result.storagePath,
+                firecrackerVersion: result.firecrackerVersion,
+                architecture: CPUArchitecture.current)
+            let data = try AnyCodableValue(response)
+            await sendSuccess(for: message.requestId, message: "Sandbox snapshot created", data: data)
+        } catch {
+            await sendError(
+                for: message.requestId,
+                error: "Failed to snapshot sandbox: \(error.localizedDescription)")
+            logger.error(
+                "Failed to snapshot sandbox",
+                metadata: [
+                    "sandboxId": .string(message.sandboxId),
+                    "snapshotId": .string(message.snapshotId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    private func handleSandboxSnapshotDelete(_ message: SandboxSnapshotDeleteMessage) async {
+        logger.info(
+            "Sandbox snapshot delete request received",
+            metadata: [
+                "sandboxId": .string(message.sandboxId),
+                "snapshotId": .string(message.snapshotId),
+            ])
+
+        guard let runtime = sandboxRuntime else {
+            await sendError(for: message.requestId, error: "this agent has no sandbox runtime")
+            return
+        }
+
+        do {
+            try await runtime.deleteSandboxSnapshot(
+                sandboxId: message.sandboxId, snapshotId: message.snapshotId)
+            await sendSuccess(for: message.requestId, message: "Sandbox snapshot deleted")
+        } catch {
+            await sendError(
+                for: message.requestId,
+                error: "Failed to delete sandbox snapshot: \(error.localizedDescription)")
+        }
+    }
+
+    private func handleSandboxRestore(_ message: SandboxRestoreMessage) async {
+        logger.info(
+            "Sandbox restore request received",
+            metadata: [
+                "sandboxId": .string(message.sandboxId),
+                "snapshotId": .string(message.snapshotId),
+            ])
+
+        guard let runtime = sandboxRuntime else {
+            await sendError(for: message.requestId, error: "this agent has no sandbox runtime")
+            return
+        }
+
+        do {
+            try await runtime.restoreSandbox(
+                sandboxId: message.sandboxId, snapshotId: message.snapshotId)
+            await sendSuccess(for: message.requestId, message: "Sandbox restored from snapshot")
+        } catch {
+            await sendError(
+                for: message.requestId,
+                error: "Failed to restore sandbox: \(error.localizedDescription)")
+            logger.error(
+                "Failed to restore sandbox from snapshot",
+                metadata: [
+                    "sandboxId": .string(message.sandboxId),
+                    "snapshotId": .string(message.snapshotId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 

@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import SQLKit
 import StratoShared
 
 /// Control-plane IP address management: allocates static NIC addresses from a
@@ -9,8 +10,10 @@ import StratoShared
 /// Allocation strategy: lowest free host address, skipping the network address,
 /// broadcast address, and gateway, with existing `VMNetworkInterface` rows on
 /// the same network as the used set. Callers should run inside the same
-/// transaction that saves the interface row; the unique `(network, ip_address)`
-/// index is the backstop against concurrent creates racing to the same address.
+/// transaction that saves the interface row; a per-network advisory lock
+/// serializes concurrent allocations (VM and sandbox rows live in different
+/// tables, so no unique index can span them), and each table's unique
+/// `(network, address)` index backstops same-table races.
 enum IPAMService {
     struct Allocation: Equatable {
         let ipAddress: String
@@ -46,13 +49,33 @@ enum IPAMService {
     /// the exhaustion scan unreasonably large.
     static let allocatablePrefixRange = 8...30
 
+    /// Takes a transaction-scoped advisory lock on the network so concurrent
+    /// allocations serialize their read-allocate-insert cycle. The per-table
+    /// `(network, address)` unique indexes only catch same-table races: a
+    /// concurrent VM create and sandbox create insert into different tables,
+    /// so neither hits a constraint and both could commit the same address.
+    /// With the lock, the second allocator waits until the first transaction
+    /// commits and then reads a used set that includes the winner's row.
+    ///
+    /// Postgres only: `pg_advisory_xact_lock` is held until the enclosing
+    /// transaction ends, giving cross-replica serialization (see
+    /// `QuotaEnforcementService.lockQuotas` for the same pattern). On SQLite
+    /// (local tests) there is no advisory-lock primitive and writes already
+    /// serialize on the database file, so this is a no-op.
+    private static func lockAllocations(network: String, on db: Database) async throws {
+        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
+        try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: "ipam:\(network)")))").run()
+    }
+
     /// Allocates the lowest free host address in `network`'s subnet.
     static func allocateIP(for network: LogicalNetwork, on db: Database) async throws -> Allocation {
         // The used set is the union of VM and sandbox addresses on the network
         // (issue #416): both draw from the same subnet, so an allocation must
         // see the other's addresses or two workloads could get the same IP.
         // Each table's own `(network, address)` unique index backstops
-        // concurrent same-table creates.
+        // concurrent same-table creates; cross-table (VM vs sandbox) races
+        // are serialized by the advisory lock, which no unique index covers.
+        try await lockAllocations(network: network.name, on: db)
         let usedVM = try await VMInterfaceAddress.query(on: db)
             .filter(\.$network == network.name)
             .filter(\.$family == IPFamily.ipv4.rawValue)
@@ -112,7 +135,8 @@ enum IPAMService {
     static func allocateIPv6(for network: LogicalNetwork, on db: Database) async throws -> Allocation6? {
         guard let subnet6 = network.subnet6 else { return nil }
         // Union of VM and sandbox interface IDs on the network (issue #416),
-        // for the same reason as the v4 path.
+        // for the same reason as the v4 path, under the same advisory lock.
+        try await lockAllocations(network: network.name, on: db)
         let usedVM = try await VMInterfaceAddress.query(on: db)
             .filter(\.$network == network.name)
             .filter(\.$family == IPFamily.ipv6.rawValue)

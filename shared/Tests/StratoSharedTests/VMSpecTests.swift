@@ -119,18 +119,6 @@ struct VMSpecTests {
         #expect(decoded.cpus == 2)
     }
 
-    @Test func vmInfoRoundTrip() throws {
-        let info = VmInfo(
-            spec: VMSpec(cpus: 2, memoryBytes: 1_073_741_824, boot: .disk(firmware: nil)),
-            state: "Running",
-            memoryActualSize: 1_000_000_000
-        )
-        let decoded = try roundTrip(info)
-        #expect(decoded.spec.cpus == 2)
-        #expect(decoded.state == "Running")
-        #expect(decoded.memoryActualSize == 1_000_000_000)
-    }
-
     @Test func dualStackNetworkSpecRoundTrip() throws {
         let spec = NetworkSpec(
             network: "default",

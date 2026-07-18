@@ -645,12 +645,6 @@ struct AgentWebSocketController: RouteCollection {
                     await req.agentService.handleAgentResponse(envelope)
                 }
 
-            case .statusUpdate:
-                // Unsolicited VM state change reported by the agent; persist it
-                Task {
-                    await req.agentService.applyStatusUpdate(envelope, fromAgentNamed: agentName)
-                }
-
             case .observedState:
                 // Full observed-state report from a state-sync agent: updates
                 // observed status/generation, completes operations, confirms

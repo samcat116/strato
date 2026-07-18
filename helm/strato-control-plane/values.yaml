@@ -59,8 +59,10 @@ frontend:
 
   # Environment variables
   env:
-    # Empty means use same origin (ingress handles routing)
-    NEXT_PUBLIC_API_URL: ""
+    # Server-side destination for same-origin API proxying. Empty derives the
+    # in-cluster control-plane service URL, which also makes a direct frontend
+    # service port-forward fully functional without ingress.
+    STRATO_API_URL: ""
 
 serviceAccount:
   create: true
@@ -114,6 +116,83 @@ ingress:
   #   - secretName: strato-tls
   #     hosts:
   #       - strato.example.com
+
+# Gateway API (Envoy Gateway) routing — the destination for external exposure,
+# superseding the legacy `ingress:` block above (issue #508). Both can render
+# side by side during migration, gated by their own `enabled` toggles.
+#
+# The model routes everything through one LoadBalancer on :443 by SNI:
+#   web host       -> HTTPRoute, TLS terminated at the Gateway -> control plane
+#                     (/api, /auth, /agent, /health, /organizations) + frontend
+#   agents.<host>  -> TLSRoute passthrough -> control-plane `agent-mtls` (Envoy
+#                     sidecar :8443); TLS must NOT be terminated at the edge so
+#                     the sidecar sees the agent SVID client cert
+#   spire.<host>   -> TLSRoute passthrough -> SPIRE server node API (:8081);
+#                     SPIRE does its own TLS
+#
+# TLSRoute is still an experimental Gateway API channel: the chart pins
+# gateway.networking.k8s.io/v1alpha2 for it (shipped by Envoy Gateway's
+# experimental install). Gateway/GatewayClass/HTTPRoute use the stable v1.
+gateway:
+  enabled: false
+
+  # When true, the chart renders the Gateway itself (and, if
+  # gatewayClass.create, a GatewayClass). Leave false to attach the chart's
+  # routes to a Gateway owned by your infrastructure — the conventional split
+  # is infra owns the Gateway/GatewayClass (e.g. an Argo app deploying Envoy
+  # Gateway), app charts attach routes via parentRef.
+  create: false
+
+  # parentRef the routes attach to. When create=true these default to the
+  # chart's own Gateway in the release namespace. Set them to bind the routes to
+  # an operator-provided Gateway when create=false.
+  name: ""       # default: <fullname> when empty
+  namespace: ""  # default: release namespace when empty
+
+  # GatewayClass the rendered Gateway binds to (only used when create=true).
+  gatewayClassName: "eg"  # Envoy Gateway's default GatewayClass
+
+  gatewayClass:
+    # Render a (cluster-scoped) GatewayClass. Usually infra-owned; off by
+    # default even when create=true so two releases can't fight over it.
+    create: false
+    controllerName: gateway.envoyproxy.io/gatewayclass-controller
+
+  # SNI hostnames. `web` is the UI/API (HTTPRoute, TLS terminated at the
+  # Gateway); `agents` and `spire` are TLS passthrough. Leave any empty to
+  # derive from strato.externalHostname as <host>, agents.<host>, spire.<host>.
+  hostnames:
+    web: ""
+    agents: ""
+    spire: ""
+
+  # Listener names on the target Gateway that each route attaches to
+  # (sectionName in the parentRef). When create=true the rendered Gateway uses
+  # these names; when binding to an operator-provided Gateway, align them with
+  # that Gateway's listener names.
+  listeners:
+    web: web-https
+    agents: agents-tls
+    spire: spire-tls
+
+  # TLS for the terminated web listener (only rendered when create=true).
+  tls:
+    # Secret cert-manager populates / that already holds the web-host cert.
+    secretName: ""  # default: <fullname>-gateway-tls
+    certManager:
+      # Add the cert-manager Gateway-shim annotation to the Gateway so
+      # cert-manager issues the web-host cert into tls.secretName. The
+      # wildcard/multi-host SAN needs a DNS-01 solver on the issuer.
+      enabled: false
+      issuerRef:
+        name: ""
+        kind: ClusterIssuer  # ClusterIssuer or Issuer
+
+  # Extra annotations/labels for the rendered Gateway (e.g. external-dns
+  # hostname hints). external-dns needs --source=gateway-httproute and
+  # --source=gateway-tlsroute to publish records for the three SNI hosts.
+  annotations: {}
+  labels: {}
 
 resources:
   limits:
@@ -680,6 +759,12 @@ spire:
     # and entry revocation. Leave empty to use this chart's SPIRE server
     # Service; set only when the SPIRE server runs elsewhere.
     serverApiAddress: ""
+    # Public address remote nodes dial for node attestation
+    # (SPIRE_SERVER_PUBLIC_ADDRESS). Leave empty to default to
+    # `spire.<gateway web host>:443` when gateway.enabled (the SNI-passthrough
+    # entry point), otherwise the control plane derives it from EXTERNAL_HOSTNAME
+    # as <host>:8085 (the compose bridge port).
+    serverPublicAddress: ""
 
   # Envoy sidecar configuration for mTLS termination
   envoy:

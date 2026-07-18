@@ -23,23 +23,19 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
             return try await next.respond(to: request)
         }
 
-        // Skip auth for health checks, public routes, and auth endpoints.
-        // Note: `/login`, `/register`, and `/onboarding` are public frontend pages
-        // served by FileMiddleware (Public/login/index.html, etc.) in single-service
-        // deployments, so they must stay exempt or direct loads/bookmarks 401.
+        // Skip auth for health checks, public API routes, and auth endpoints.
         // Split into small sub-expressions: a single long `||` chain trips the
         // Swift type-checker ("unable to type-check in reasonable time").
         let path = request.url.path
         let exactPublic: Set<String> = [
-            "/", "/hello", "/login", "/register", "/claim", "/api/docs", "/openapi.json", "/favicon.ico",
+            "/api/docs", "/openapi.json",
         ]
         // `/ssf/events` is the RFC 8935 push-delivery endpoint: transmitters
         // authenticate with a per-stream bearer token checked in-handler.
         // `/api/public/` serves the login page (SSO provider discovery), so it
         // must be reachable without a session.
         let publicPrefixes = [
-            "/health", "/auth", "/api/users/register", "/onboarding", "/js/", "/styles/", "/agent/ws",
-            "/ssf/events/", "/api/public/",
+            "/health", "/auth", "/api/users/register", "/agent/ws", "/ssf/events/", "/api/public/",
         ]
         // Signed image-download URLs: agents fetch base images with an HMAC
         // signature, not a session; the controller verifies the signature.
@@ -101,6 +97,14 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         let method = request.method
         let pathComponents = request.url.path.split(separator: "/")
 
+        // Snapshot subresource (issue #426): creating, deleting, or restoring
+        // a sandbox snapshot is guarded by the parent resource's `snapshot`
+        // permission (finer per-snapshot checks live in the handlers);
+        // listing follows plain `read`. Without this carve-out the generic
+        // mapping below would demand `delete` on the *sandbox* to delete one
+        // of its snapshots.
+        let isSnapshotSubresource = pathComponents.count >= 4 && pathComponents[3] == "snapshots"
+
         // Determine required permission based on HTTP method and path
         let permission: String
         switch method {
@@ -108,7 +112,9 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
             permission = "read"
         case .POST:
             // Special handling for lifecycle actions
-            if pathComponents.count >= 4 {
+            if isSnapshotSubresource {
+                permission = "snapshot"
+            } else if pathComponents.count >= 4 {
                 let action = String(pathComponents[3])
                 permission = resource.actionVerbs.contains(action) ? action : "update"
             } else {
@@ -117,7 +123,7 @@ struct SpiceDBAuthMiddleware: AsyncMiddleware {
         case .PUT, .PATCH:
             permission = "update"
         case .DELETE:
-            permission = "delete"
+            permission = isSnapshotSubresource ? "snapshot" : "delete"
         default:
             throw Abort(.methodNotAllowed)
         }

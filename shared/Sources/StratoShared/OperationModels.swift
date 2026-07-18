@@ -11,6 +11,12 @@ public enum VMOperationKind: String, Codable, CaseIterable, Sendable {
     case pause
     case resume
     case delete
+    // Sandbox checkpoint/restore (issue #426). Snapshot deletion gets its own
+    // kind so a failed cleanup is distinguishable from a failed delete of the
+    // sandbox itself.
+    case snapshot
+    case snapshotDelete = "snapshot_delete"
+    case restore
 }
 
 /// Terminal-or-not state of an asynchronous VM operation. `pending` is the only

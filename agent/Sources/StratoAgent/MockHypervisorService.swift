@@ -99,17 +99,6 @@ actor MockHypervisorService: HypervisorService {
         vms.removeValue(forKey: vmId)
     }
 
-    func getVMInfo(vmId: String) async throws -> VmInfo {
-        guard let vm = vms[vmId] else {
-            throw HypervisorServiceError.vmNotFound(vmId)
-        }
-        return VmInfo(
-            spec: vm.spec,
-            state: vm.status.rawValue,
-            memoryActualSize: vm.spec.memoryBytes
-        )
-    }
-
     func getVMStatus(vmId: String) async throws -> VMStatus {
         guard let vm = vms[vmId] else {
             throw HypervisorServiceError.vmNotFound(vmId)

@@ -197,35 +197,6 @@ extension Organization {
         )
     }
 
-    /// Create a default project for backward compatibility
-    func createDefaultProject(on db: Database) async throws -> Project {
-        let project = Project(
-            name: "Default Project",
-            description: "Default project for \(self.name)",
-            organizationID: self.id,
-            path: "/\(self.id?.uuidString ?? "")/default"
-        )
-
-        try await project.save(on: db)
-
-        // Update path with actual project ID
-        project.path = try await project.buildPath(on: db)
-        try await project.save(on: db)
-
-        return project
-    }
-
-    /// Get all groups in this organization
-    func getAllGroups(on db: Database) async throws -> [Group] {
-        return try await self.$groups.query(on: db).all()
-    }
-
-    /// Get group by name within this organization
-    func getGroup(named name: String, on db: Database) async throws -> Group? {
-        return try await self.$groups.query(on: db)
-            .filter(\.$name, .equal, name)
-            .first()
-    }
 }
 
 extension OrganizationalUnit {

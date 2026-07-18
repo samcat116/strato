@@ -380,25 +380,6 @@ actor QEMUService: HypervisorService {
         logger.info("QEMU VM deleted", metadata: ["vmId": .string(vmId)])
     }
 
-    // MARK: - VM Information
-
-    func getVMInfo(vmId: String) async throws -> VmInfo {
-        guard let qemuManager = activeVMs[vmId],
-            let spec = vmSpecs[vmId]
-        else {
-            throw QEMUServiceError.vmNotFound("VM \(vmId) not found")
-        }
-
-        // Query VM status
-        let status = try await qemuManager.getStatus()
-
-        return VmInfo(
-            spec: spec,
-            state: status.rawValue,
-            memoryActualSize: spec.memoryBytes
-        )
-    }
-
     /// Returns the console socket path for a VM
     /// The path is computed deterministically from vmStoragePath and vmId
     /// Returns nil if the socket file doesn't exist (VM not running or not created)
@@ -573,38 +554,6 @@ actor QEMUService: HypervisorService {
             memoryBytes += spec.memoryBytes
         }
         return (vcpus, memoryBytes)
-    }
-
-    // MARK: - Legacy Methods (for backward compatibility)
-
-    /// Syncs VM status for the first VM (legacy method)
-    func syncVMStatus() async throws -> VMStatus {
-        guard let vmId = activeVMs.keys.first else {
-            return .shutdown
-        }
-        return try await getVMStatus(vmId: vmId)
-    }
-
-    /// Gets VM info for the first VM (legacy method)
-    func getVMInfo() async throws -> VmInfo {
-        guard let vmId = activeVMs.keys.first else {
-            throw QEMUServiceError.vmNotFound("No VM available for info")
-        }
-        return try await getVMInfo(vmId: vmId)
-    }
-
-    // MARK: - VM Management Helpers
-
-    func stopAndDeleteVM(vmId: String) async throws {
-        do {
-            try await shutdownVM(vmId: vmId)
-            // Wait a moment for graceful shutdown
-            try await Task.sleep(for: .seconds(2))
-        } catch {
-            logger.warning("VM shutdown failed, forcing delete: \(error)")
-        }
-
-        try await deleteVM(vmId: vmId)
     }
 
     // MARK: - Disk Hot-Plug Operations (Volume Support)

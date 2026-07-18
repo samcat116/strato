@@ -381,6 +381,11 @@ public func configure(_ app: Application) async throws {
     // echo the OIDC nonce, so allow disabling it to avoid failing every login.
     app.migrations.add(AddUseNonceToOIDCProvider())
 
+    // Per-provider SSRF allow-list: hosts the provider's own discovery document
+    // named as its token/userinfo/JWKS endpoints, so an IdP serving keys from a
+    // second domain (Google) works without editing the global allow-list.
+    app.migrations.add(AddDiscoveredHostsToOIDCProvider())
+
     // Generalize the async-operation machinery beyond VMs (issue #412):
     // vm_operations becomes resource_operations with a resource_kind
     // discriminator, so new resource types reuse the 202/poll/sweep pattern.
@@ -420,6 +425,9 @@ public func configure(_ app: Application) async throws {
     // role/action registry, dual-written alongside SpiceDB tuples.
     app.migrations.add(CreateRoleBinding())
     app.migrations.add(CreateIAMRoleRegistry())
+
+    // Sandbox snapshots / checkpoint-resume (issue #426).
+    app.migrations.add(CreateSandboxSnapshot())
 
     try await app.autoMigrate()
 
@@ -685,6 +693,4 @@ public func configure(_ app: Application) async throws {
     app.lifecycle.use(SSFPollLifecycleHandler())
 
     try routes(app)
-
-    app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
 }

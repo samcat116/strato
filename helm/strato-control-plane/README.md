@@ -153,6 +153,9 @@ spicedb:
 | `image.tag` | string | `""` | Container image tag (defaults to chart appVersion) |
 | `image.pullPolicy` | string | `"IfNotPresent"` | Image pull policy |
 | `replicaCount` | int | `1` | Number of replicas |
+| `frontend.enabled` | bool | `true` | Deploy the standalone Next.js frontend |
+| `frontend.service.port` | int | `3000` | Frontend service port |
+| `frontend.env.STRATO_API_URL` | string | `""` | Server-side API proxy destination; empty derives the in-cluster control-plane service URL |
 | `resources.limits.cpu` | string | `"1000m"` | CPU limit |
 | `resources.limits.memory` | string | `"1Gi"` | Memory limit |
 | `resources.requests.cpu` | string | `"500m"` | CPU request |
@@ -174,7 +177,11 @@ spicedb:
 | `spicedb.datastore.connPool.write.minOpen` | int | `1` | Min (idle) Postgres connections in SpiceDB's write pool |
 | `spicedb.resources.limits.cpu` | string | `"500m"` | SpiceDB CPU limit |
 | `spicedb.resources.limits.memory` | string | `"512Mi"` | SpiceDB memory limit |
-| `ingress.enabled` | bool | `false` | Enable ingress |
+| `ingress.enabled` | bool | `false` | Enable the legacy ingress-nginx path (superseded by `gateway`) |
+| `gateway.enabled` | bool | `false` | Route external traffic via Gateway API (Envoy Gateway): HTTPRoute for UI/API + frontend, TLS-passthrough TLSRoutes for `agents.<host>` (Envoy sidecar mTLS) and `spire.<host>` (SPIRE node API), all sharing :443 by SNI |
+| `gateway.create` | bool | `false` | Render the Gateway (and optional GatewayClass) instead of only attaching routes to an operator-provided one |
+| `gateway.hostnames.web` / `.agents` / `.spire` | string | `""` | SNI hosts; empty derives `<host>`, `agents.<host>`, `spire.<host>` from `strato.externalHostname` |
+| `gateway.tls.certManager.enabled` | bool | `false` | Add the cert-manager Gateway-shim annotation to the rendered Gateway (DNS-01 issuer required for the multi-host SAN) |
 | `networkPolicy.enabled` | bool | `false` | Enable network policies |
 | `podDisruptionBudget.enabled` | bool | `false` | Enable pod disruption budget |
 | `monitoring.serviceMonitor.enabled` | bool | `false` | Enable ServiceMonitor for Prometheus |

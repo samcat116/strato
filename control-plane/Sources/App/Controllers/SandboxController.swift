@@ -23,6 +23,14 @@ struct SandboxController: RouteCollection {
             sandbox.get("status", use: status)
             sandbox.get("operations", use: listOperations)
             sandbox.post("exec", use: exec)
+            // Snapshots / checkpoint-resume (issue #426); handlers live in
+            // SandboxSnapshotController.swift.
+            sandbox.post("snapshots", use: createSnapshot)
+            sandbox.get("snapshots", use: listSnapshots)
+            sandbox.group("snapshots", ":snapshotID") { snapshot in
+                snapshot.delete(use: deleteSnapshot)
+                snapshot.post("restore", use: restoreSnapshot)
+            }
         }
     }
 
@@ -31,8 +39,9 @@ struct SandboxController: RouteCollection {
     /// Sandbox-flavored front of `ResourceOperation.begin`: creates the pending
     /// operation record and applies the sandbox's desired-state change in one
     /// transaction, rejecting with `409 Conflict` when any operation is already
-    /// pending for the sandbox.
-    private func beginOperation(
+    /// pending for the sandbox. Internal (not private) because the snapshot
+    /// handlers in SandboxSnapshotController.swift share it.
+    func beginOperation(
         _ kind: VMOperationKind,
         sandbox: Sandbox,
         user: User,
@@ -55,7 +64,7 @@ struct SandboxController: RouteCollection {
 
     /// Whether the sandbox's owning agent is online somewhere in the cluster.
     /// False for unplaced sandboxes.
-    private static func agentIsOnline(sandbox: Sandbox, app: Application) async -> Bool {
+    static func agentIsOnline(sandbox: Sandbox, app: Application) async -> Bool {
         guard let agentId = sandbox.hypervisorId else { return false }
         guard let agent = await app.agentService.getAgentInfo(agentId) else { return false }
         return agent.status == .online
@@ -92,7 +101,7 @@ struct SandboxController: RouteCollection {
     }
 
     /// `202 Accepted` carrying the operation record for the client to poll.
-    private static func accepted(_ operation: ResourceOperation) throws -> Response {
+    static func accepted(_ operation: ResourceOperation) throws -> Response {
         let response = Response(status: .accepted)
         try response.content.encode(OperationResponse(from: operation))
         return response
@@ -101,7 +110,7 @@ struct SandboxController: RouteCollection {
     /// Records a verdict on the operation row and resolves the sandbox status
     /// it left in flight. Gated on the operation still being pending, so this
     /// path and the stuck-operation sweep cannot overwrite each other.
-    private static func completeOperation(
+    static func completeOperation(
         _ operationId: UUID,
         sandboxID: UUID,
         as status: VMOperationStatus,
@@ -185,7 +194,7 @@ struct SandboxController: RouteCollection {
 
     /// Fetch a sandbox by its :sandboxID route parameter and enforce a SpiceDB
     /// permission on it (per-handler defense in depth over the middleware).
-    private func fetchSandboxWithPermission(req: Request, permission: String) async throws -> Sandbox {
+    func fetchSandboxWithPermission(req: Request, permission: String) async throws -> Sandbox {
         guard let sandboxID = req.parameters.get("sandboxID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid sandbox ID")
         }
@@ -348,11 +357,13 @@ struct SandboxController: RouteCollection {
         // draw from the same vCPU/memory pools as VMs, count against the sandbox
         // count limit, and reserve no storage (issue #415).
         //
-        // IPAM's unique (network, address) index is the backstop against
-        // concurrent creates racing to the same address (across VMs and
-        // sandboxes, issue #416). A violation poisons the whole Postgres
-        // transaction, so the retry wraps the transaction: the loser re-reads
-        // the used set and allocates the next free address.
+        // IPAM serializes concurrent allocations with a per-network advisory
+        // lock (a VM-vs-sandbox race lands in different tables, which no
+        // unique index can span); each table's unique (network, address)
+        // index still backstops same-table races (issue #416). A violation
+        // poisons the whole Postgres transaction, so the retry wraps the
+        // transaction: the loser re-reads the used set and allocates the
+        // next free address.
         let operation: ResourceOperation
         do {
             let initialGeneration = sandbox.generation

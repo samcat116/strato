@@ -233,10 +233,6 @@ struct URLSigningService {
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Extracts expiration date from a signed URL's expires parameter
-    static func expirationDate(from expires: Int) -> Date {
-        return Date(timeIntervalSince1970: TimeInterval(expires))
-    }
 }
 
 // MARK: - Application Extension for Signing Key Cache

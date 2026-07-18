@@ -44,10 +44,8 @@ spec:
               value: "production"
             - name: PORT
               value: "3000"
-            {{- if .Values.frontend.env.NEXT_PUBLIC_API_URL }}
-            - name: NEXT_PUBLIC_API_URL
-              value: "{{ .Values.frontend.env.NEXT_PUBLIC_API_URL }}"
-            {{- end }}
+            - name: STRATO_API_URL
+              value: {{ .Values.frontend.env.STRATO_API_URL | default (printf "http://%s:%v" (include "strato-control-plane.fullname" .) .Values.service.port) | quote }}
           {{- if .Values.frontend.livenessProbe.enabled }}
           livenessProbe:
             httpGet:

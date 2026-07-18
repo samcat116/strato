@@ -98,12 +98,6 @@ actor WebSocketClient {
         logger.info("TLS configuration updated")
     }
 
-    /// Update the connection URL. Takes effect on the next connect; the current
-    /// connection is unaffected.
-    func updateURL(_ newURL: String) {
-        self.url = newURL
-    }
-
     /// Update the registration token (for single-use token rotation). Takes effect
     /// on the next connect; the current connection is unaffected.
     func updateToken(_ newToken: String?) {

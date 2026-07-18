@@ -52,6 +52,10 @@ const kindToAction: Record<OperationKind, VMAction | null> = {
   pause: "pause",
   resume: "resume",
   delete: "delete",
+  // Sandbox-only kinds; VMs never carry them but the map stays total.
+  snapshot: null,
+  snapshot_delete: null,
+  restore: null,
 };
 
 export function VMActions({ vm, onActionComplete }: VMActionsProps) {

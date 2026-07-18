@@ -166,10 +166,14 @@ extension ResourceQuota {
             sandboxes = try await sandboxQuery.all()
         }
 
-        // Calculate actual usage across both workload kinds
+        // Calculate actual usage across both workload kinds. Storage counts
+        // VM disks plus sandbox snapshot artifacts (issue #426) — sandboxes
+        // themselves reserve no storage, but their checkpoints persist real
+        // bytes in the shared pool.
         let totalVCPUs = vms.reduce(0) { $0 + $1.cpu } + sandboxes.reduce(0) { $0 + $1.cpus }
         let totalMemory = vms.reduce(Int64(0)) { $0 + $1.memory } + sandboxes.reduce(Int64(0)) { $0 + $1.memory }
-        let totalStorage = vms.reduce(Int64(0)) { $0 + $1.disk }
+        let totalStorage =
+            vms.reduce(Int64(0)) { $0 + $1.disk } + (try await sandboxSnapshotStorageInScope(on: db))
 
         let actualUsage = QuotaUsage(
             vcpus: totalVCPUs,
@@ -181,6 +185,23 @@ extension ResourceQuota {
         )
 
         return (actualUsage, vms, sandboxes)
+    }
+
+    /// Total sandbox-snapshot storage within this quota's scope (issue #426):
+    /// the sum of `size` over non-error snapshots of in-scope projects.
+    /// `creating` rows carry the admission estimate (the sandbox's guest
+    /// memory) until the agent reports actual sizes; `error` rows are
+    /// excluded — a failed checkpoint removes its partial artifacts.
+    func sandboxSnapshotStorageInScope(on db: Database) async throws -> Int64 {
+        guard let projectIDs = try await scopedProjectIDs(on: db), !projectIDs.isEmpty else { return 0 }
+        let query = SandboxSnapshot.query(on: db)
+            .filter(\.$project.$id ~~ projectIDs)
+            .filter(\.$status != .error)
+        if let environment = environment {
+            query.filter(\.$environment == environment)
+        }
+        let snapshots = try await query.all()
+        return snapshots.reduce(Int64(0)) { $0 + ($1.size ?? 0) }
     }
 }
 
@@ -246,11 +267,13 @@ extension ResourceQuota {
             return (true, nil)
         }
 
-        if reservedVCPUs + vcpus > maxVCPUs {
+        let (newVCPUs, vcpusOverflowed) = reservedVCPUs.addingReportingOverflow(vcpus)
+        if vcpusOverflowed || newVCPUs > maxVCPUs {
             return (false, "Insufficient vCPU quota: \(availableVCPUs) available, \(vcpus) requested")
         }
 
-        if reservedMemory + memory > maxMemory {
+        let (newMemory, memoryOverflowed) = reservedMemory.addingReportingOverflow(memory)
+        if memoryOverflowed || newMemory > maxMemory {
             let availableGB = Double(availableMemory) / 1024 / 1024 / 1024
             let requestedGB = Double(memory) / 1024 / 1024 / 1024
             return (
@@ -259,7 +282,8 @@ extension ResourceQuota {
             )
         }
 
-        if reservedStorage + storage > maxStorage {
+        let (newStorage, storageOverflowed) = reservedStorage.addingReportingOverflow(storage)
+        if storageOverflowed || newStorage > maxStorage {
             let availableGB = Double(availableStorage) / 1024 / 1024 / 1024
             let requestedGB = Double(storage) / 1024 / 1024 / 1024
             return (
@@ -283,11 +307,13 @@ extension ResourceQuota {
             return (true, nil)
         }
 
-        if reservedVCPUs + vcpus > maxVCPUs {
+        let (newVCPUs, vcpusOverflowed) = reservedVCPUs.addingReportingOverflow(vcpus)
+        if vcpusOverflowed || newVCPUs > maxVCPUs {
             return (false, "Insufficient vCPU quota: \(availableVCPUs) available, \(vcpus) requested")
         }
 
-        if reservedMemory + memory > maxMemory {
+        let (newMemory, memoryOverflowed) = reservedMemory.addingReportingOverflow(memory)
+        if memoryOverflowed || newMemory > maxMemory {
             let availableGB = Double(availableMemory) / 1024 / 1024 / 1024
             let requestedGB = Double(memory) / 1024 / 1024 / 1024
             return (
@@ -329,40 +355,30 @@ extension ResourceQuota {
         sandboxCount += 1
     }
 
-    /// Release resources when a VM is deleted
-    func releaseResources(vcpus: Int, memory: Int64, storage: Int64) {
-        reservedVCPUs = max(0, reservedVCPUs - vcpus)
-        reservedMemory = max(0, reservedMemory - memory)
-        reservedStorage = max(0, reservedStorage - storage)
-        vmCount = max(0, vmCount - 1)
+    /// Check whether `bytes` of sandbox-snapshot storage fits (issue #426).
+    /// Snapshots draw from the same storage pool as VM disks.
+    func canAccommodateSnapshotStorage(_ bytes: Int64) -> (allowed: Bool, reason: String?) {
+        if !isEnabled {
+            return (true, nil)
+        }
+        if reservedStorage + bytes > maxStorage {
+            let availableGB = Double(availableStorage) / 1024 / 1024 / 1024
+            let requestedGB = Double(bytes) / 1024 / 1024 / 1024
+            return (
+                false,
+                "Insufficient storage quota for the snapshot: \(String(format: "%.2f", availableGB))GB available, \(String(format: "%.2f", requestedGB))GB requested"
+            )
+        }
+        return (true, nil)
     }
 
-    /// Update reserved resources when a VM is resized
-    func updateReservation(
-        oldVCPUs: Int, oldMemory: Int64, oldStorage: Int64,
-        newVCPUs: Int, newMemory: Int64, newStorage: Int64
-    ) throws {
-        // Calculate deltas
-        let vcpuDelta = newVCPUs - oldVCPUs
-        let memoryDelta = newMemory - oldMemory
-        let storageDelta = newStorage - oldStorage
-
-        // Check if increase is allowed
-        if vcpuDelta > 0 || memoryDelta > 0 || storageDelta > 0 {
-            let check = canAccommodateVM(
-                vcpus: max(0, vcpuDelta),
-                memory: max(0, memoryDelta),
-                storage: max(0, storageDelta)
-            )
-            if !check.allowed {
-                throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded for resize")
-            }
+    /// Reserve sandbox-snapshot storage (issue #426).
+    func reserveSnapshotStorage(_ bytes: Int64) throws {
+        let check = canAccommodateSnapshotStorage(bytes)
+        if !check.allowed {
+            throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
-
-        // Update reservations
-        reservedVCPUs += vcpuDelta
-        reservedMemory += memoryDelta
-        reservedStorage += storageDelta
+        reservedStorage += bytes
     }
 }
 
