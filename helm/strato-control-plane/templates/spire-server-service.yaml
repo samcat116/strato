@@ -17,18 +17,15 @@ spec:
       port: {{ .Values.spire.service.federationPort }}
       targetPort: federation
       protocol: TCP
-    {{- if and .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
-    - name: metrics
-      port: 9988
-      targetPort: metrics
-      protocol: TCP
-    {{- end }}
   selector:
     {{- include "strato-control-plane.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: spire-server
 {{- if and .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
 ---
-# Headless companion Service exposing SPIRE server metrics per pod. Prometheus
+# Headless companion Service exposing SPIRE server metrics per pod. This is a
+# separate, always-ClusterIP-None Service so the unauthenticated metrics port
+# is never published externally when the main Service above is a LoadBalancer
+# or NodePort (spire.service.type). Prometheus
 # discovers it with dns_sd_configs so every replica is scraped as its own
 # target — the load-balanced Service above would pin each scrape to a single
 # replica and under-count SVID signings when spire.replicaCount > 1.
