@@ -438,10 +438,6 @@ final class SandboxSnapshotTests {
             let accepted = try #require(operation)
             #expect(accepted.kind == .restore)
 
-            // Desired state flipped to running in the accept transaction.
-            let mid = try #require(await Sandbox.find(sandbox.id, on: app.db))
-            #expect(mid.desiredStatus == .running)
-
             // The RPC fails fast (no socket): the operation records it and
             // the unachieved desired state reverts to observed reality. The
             // operation row and the sandbox revert are separate writes, so
@@ -454,6 +450,11 @@ final class SandboxSnapshotTests {
                 reverted = try #require(await Sandbox.find(sandbox.id, on: app.db))
             }
             #expect(reverted.desiredStatus == .stopped)
+            // Two generation bumps prove the accept transaction flipped
+            // desired to running (gen 1 → 2) and the failure reverted it
+            // (gen 2 → 3) — the transient running value itself can be gone
+            // before any read lands.
+            #expect(reverted.generation == 3)
         }
     }
 
