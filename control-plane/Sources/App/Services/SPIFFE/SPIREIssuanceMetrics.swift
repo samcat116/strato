@@ -255,11 +255,12 @@ extension Application {
     public func configureSPIREIssuanceMetrics() {
         guard let config = SPIREIssuanceMetricsConfig.fromEnvironment() else { return }
         spireIssuanceMetrics = PrometheusIssuanceMetricsProvider(config: config, logger: logger)
+        // Sanitized so basic-auth credentials or tokens in the URL never land in logs.
+        let sanitizedURL = PrometheusIssuanceMetricsProvider.sanitizedBaseURL(config.prometheusBaseURL)
         logger.info(
             "SPIRE issuance metrics configured",
             metadata: [
-                // Sanitized so basic-auth credentials or tokens in the URL never land in logs.
-                "prometheusBaseURL": .string(PrometheusIssuanceMetricsProvider.sanitizedBaseURL(config.prometheusBaseURL)),
+                "prometheusBaseURL": .string(sanitizedURL),
                 "windowHours": .string("\(config.windowHours)"),
             ])
     }
