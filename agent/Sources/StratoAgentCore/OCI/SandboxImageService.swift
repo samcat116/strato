@@ -73,13 +73,15 @@ public actor SandboxImageService {
         clientConfiguration: OCIRegistryClient.Configuration = OCIRegistryClient.Configuration(),
         imageBuilder: (any RootfsImageBuilder)? = nil,
         decompressor: LayerDecompressor = LayerDecompressor(),
-        cacheTTL: TimeInterval = OCIRootfsCache.defaultTTL
+        cacheTTL: TimeInterval = OCIRootfsCache.defaultTTL,
+        cacheMaxSizeBytes: Int64? = nil
     ) {
         let root = cacheRootPath ?? Self.defaultCacheRootPath
         self.logger = logger
         self.client = OCIRegistryClient(
             transport: transport, logger: logger, configuration: clientConfiguration)
-        self.cache = OCIRootfsCache(rootPath: root, ttl: cacheTTL, logger: logger)
+        self.cache = OCIRootfsCache(
+            rootPath: root, ttl: cacheTTL, maxSizeBytes: cacheMaxSizeBytes, logger: logger)
         self.imageBuilder = imageBuilder ?? Ext4ImageBuilder(logger: logger)
         self.decompressor = decompressor
         self.workRoot = root + "/work"
@@ -237,6 +239,10 @@ public actor SandboxImageService {
                 "digest": .string(published.manifestDigest),
                 "rootfs": .string(published.rootfsPath),
             ])
+
+        // The cache only grows when a materialization publishes, so this is
+        // the natural point to enforce the idle TTL and size budget.
+        await cache.cleanup()
         return MaterializedRootfs(
             manifestDigest: published.manifestDigest,
             rootfsPath: published.rootfsPath,

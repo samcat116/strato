@@ -12,6 +12,10 @@ actor ImageCacheService {
     private let logger: Logger
     private let cachePath: String
     private let controlPlaneURL: String
+    /// Byte budget for the whole cache; nil means unbounded (the historical
+    /// behavior). Enforced by LRU eviction of whole image directories before
+    /// each download.
+    private let maxCacheSizeBytes: Int64?
 
     /// Default cache path for images (platform-specific)
     static var defaultCachePath: String {
@@ -25,10 +29,11 @@ actor ImageCacheService {
         #endif
     }
 
-    init(logger: Logger, cachePath: String? = nil, controlPlaneURL: String) {
+    init(logger: Logger, cachePath: String? = nil, controlPlaneURL: String, maxCacheSizeBytes: Int64? = nil) {
         self.logger = logger
         self.cachePath = cachePath ?? Self.defaultCachePath
         self.controlPlaneURL = controlPlaneURL
+        self.maxCacheSizeBytes = maxCacheSizeBytes
 
         // Ensure cache directory exists
         do {
@@ -52,6 +57,7 @@ actor ImageCacheService {
 
         // Check if image is already cached and valid
         if try await isCached(imageInfo: imageInfo) {
+            DiskCacheLRU.touch(entryDirectory: imageDirectory(imageInfo: imageInfo))
             logger.info(
                 "Image found in cache",
                 metadata: [
@@ -69,6 +75,7 @@ actor ImageCacheService {
                 "url": .string(imageInfo.downloadURL),
             ])
 
+        makeRoom(forIncomingBytes: imageInfo.size, into: imageDirectory(imageInfo: imageInfo))
         try await downloadImage(imageInfo: imageInfo, to: cachedPath)
 
         return cachedPath
@@ -108,6 +115,58 @@ actor ImageCacheService {
         return "\(cachePath)/\(imageInfo.projectId)/\(imageInfo.imageId)/\(imageInfo.filename)"
     }
 
+    /// The eviction unit: everything cached for one image lives under
+    /// {cachePath}/{projectId}/{imageId}, and its mtime is the image's
+    /// last-use marker.
+    private func imageDirectory(imageInfo: ImageInfo) -> String {
+        return "\(cachePath)/\(imageInfo.projectId)/\(imageInfo.imageId)"
+    }
+
+    /// All cached image directories (the second level of the
+    /// {projectId}/{imageId} layout).
+    private func cacheEntryDirectories() -> [String] {
+        let fileManager = FileManager.default
+        var entries: [String] = []
+        for project in (try? fileManager.contentsOfDirectory(atPath: cachePath)) ?? [] {
+            let projectPath = cachePath + "/" + project
+            for image in (try? fileManager.contentsOfDirectory(atPath: projectPath)) ?? [] {
+                entries.append(projectPath + "/" + image)
+            }
+        }
+        return entries
+    }
+
+    /// Evicts least-recently-used images until the cache (plus the download
+    /// about to land in `entryDirectory`) fits the configured budget. No-op
+    /// when no budget is configured. The target image's own directory is
+    /// touched first so partial multi-artifact entries are never evicted out
+    /// from under the download that is adding to them.
+    private func makeRoom(forIncomingBytes incomingBytes: Int64, into entryDirectory: String) {
+        guard let maxCacheSizeBytes else { return }
+        if FileManager.default.fileExists(atPath: entryDirectory) {
+            DiskCacheLRU.touch(entryDirectory: entryDirectory)
+        }
+        DiskCacheLRU.sweep(
+            entryDirectories: cacheEntryDirectories(),
+            budgetBytes: maxCacheSizeBytes,
+            incomingBytes: max(0, incomingBytes),
+            logger: logger
+        )
+        pruneEmptyProjectDirectories()
+    }
+
+    /// Removes project-level directories left empty by eviction so the cache
+    /// root doesn't accumulate husks.
+    private func pruneEmptyProjectDirectories() {
+        let fileManager = FileManager.default
+        for project in (try? fileManager.contentsOfDirectory(atPath: cachePath)) ?? [] {
+            let projectPath = cachePath + "/" + project
+            if let contents = try? fileManager.contentsOfDirectory(atPath: projectPath), contents.isEmpty {
+                try? fileManager.removeItem(atPath: projectPath)
+            }
+        }
+    }
+
     /// Builds the local cache path for a specific typed artifact. Artifacts are
     /// namespaced by kind so a kernel and a rootfs with colliding filenames
     /// never overwrite each other.
@@ -133,6 +192,7 @@ actor ImageCacheService {
         let cachedPath = buildArtifactCachePath(imageInfo: imageInfo, artifact: artifact)
 
         if try await isArtifactCached(cachedPath: cachedPath, checksum: artifact.checksum) {
+            DiskCacheLRU.touch(entryDirectory: imageDirectory(imageInfo: imageInfo))
             logger.info(
                 "Artifact found in cache",
                 metadata: [
@@ -151,6 +211,7 @@ actor ImageCacheService {
                 "url": .string(artifact.downloadURL),
             ])
 
+        makeRoom(forIncomingBytes: artifact.size, into: imageDirectory(imageInfo: imageInfo))
         try await downloadArtifact(
             from: artifact.downloadURL,
             checksum: artifact.checksum,

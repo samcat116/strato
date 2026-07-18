@@ -46,14 +46,23 @@ public actor OCIRootfsCache {
 
     private let rootPath: String
     private let ttl: TimeInterval
+    /// Byte budget for the materialized images; nil means bounded only by
+    /// the idle TTL. Enforced by LRU eviction during `cleanup`.
+    private let maxSizeBytes: Int64?
     private let logger: Logger
 
     private var imagesPath: String { rootPath + "/images" }
     private var aliasesPath: String { rootPath + "/aliases" }
 
-    public init(rootPath: String, ttl: TimeInterval = OCIRootfsCache.defaultTTL, logger: Logger) {
+    public init(
+        rootPath: String,
+        ttl: TimeInterval = OCIRootfsCache.defaultTTL,
+        maxSizeBytes: Int64? = nil,
+        logger: Logger
+    ) {
         self.rootPath = rootPath
         self.ttl = ttl
+        self.maxSizeBytes = maxSizeBytes
         self.logger = logger
     }
 
@@ -171,11 +180,14 @@ public actor OCIRootfsCache {
         }
     }
 
-    /// Evicts idle images (directory mtime older than the TTL), aliases whose
-    /// target is gone, and staging directories old enough to be crash debris.
+    /// Evicts idle images (directory mtime older than the TTL), then — when a
+    /// size budget is configured — least-recently-used images until the cache
+    /// fits it, then aliases whose target is gone and staging directories old
+    /// enough to be crash debris.
     public func cleanup(now: Date = Date()) {
         let cutoff = now.addingTimeInterval(-ttl)
 
+        var imageDirectories: [String] = []
         for name in (try? FileManager.default.contentsOfDirectory(atPath: imagesPath)) ?? [] {
             let path = imagesPath + "/" + name
             if name.hasSuffix(".partial") {
@@ -187,7 +199,22 @@ public actor OCIRootfsCache {
             if isOlder(path: path, than: cutoff) {
                 logger.info("Evicting idle sandbox rootfs", metadata: ["entry": .string(name)])
                 try? FileManager.default.removeItem(atPath: path)
+                continue
             }
+            imageDirectories.append(path)
+        }
+
+        // Size budget on whatever the TTL pass left behind. Entries used
+        // within the grace window survive even over budget: their rootfs may
+        // be mid-copy into a jail. The alias pass below runs afterwards so
+        // aliases pointing at evicted images are dropped in the same cycle.
+        if let maxSizeBytes {
+            DiskCacheLRU.sweep(
+                entryDirectories: imageDirectories,
+                budgetBytes: maxSizeBytes,
+                now: now,
+                logger: logger
+            )
         }
 
         for name in (try? FileManager.default.contentsOfDirectory(atPath: aliasesPath)) ?? [] {

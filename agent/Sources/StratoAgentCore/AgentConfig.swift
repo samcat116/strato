@@ -218,6 +218,20 @@ public struct AgentConfig: Codable {
     public let enableHVF: Bool?
     public let enableKVM: Bool?
     public let vmStoragePath: String?
+    /// Where downloaded VM images (disk images, kernels, rootfs artifacts)
+    /// are cached between VM launches. Nil means the platform default
+    /// (`/var/cache/strato/images` on Linux).
+    public let imageCacheDir: String?
+    /// Size budget for the VM image cache in GB. When set, least-recently-
+    /// used images are evicted to keep the cache under this budget; unset
+    /// means unbounded.
+    public let imageCacheMaxSizeGB: Int?
+    /// Where materialized sandbox rootfs images are cached. Nil means the
+    /// platform default (`/var/cache/strato/sandbox-images` on Linux).
+    public let sandboxImageCacheDir: String?
+    /// Size budget for the sandbox rootfs cache in GB, enforced the same way
+    /// (on top of the idle-TTL eviction that cache always applies).
+    public let sandboxImageCacheMaxSizeGB: Int?
     public let qemuBinaryPath: String?
     public let firmwarePathARM64: String?
     public let firmwarePathX86_64: String?
@@ -262,6 +276,10 @@ public struct AgentConfig: Codable {
         case enableHVF = "enable_hvf"
         case enableKVM = "enable_kvm"
         case vmStoragePath = "vm_storage_dir"
+        case imageCacheDir = "image_cache_dir"
+        case imageCacheMaxSizeGB = "image_cache_max_size_gb"
+        case sandboxImageCacheDir = "sandbox_image_cache_dir"
+        case sandboxImageCacheMaxSizeGB = "sandbox_image_cache_max_size_gb"
         case qemuBinaryPath = "qemu_binary_path"
         case firmwarePathARM64 = "firmware_path_arm64"
         case firmwarePathX86_64 = "firmware_path_x86_64"
@@ -293,6 +311,10 @@ public struct AgentConfig: Codable {
         enableHVF: Bool? = nil,
         enableKVM: Bool? = nil,
         vmStoragePath: String? = nil,
+        imageCacheDir: String? = nil,
+        imageCacheMaxSizeGB: Int? = nil,
+        sandboxImageCacheDir: String? = nil,
+        sandboxImageCacheMaxSizeGB: Int? = nil,
         qemuBinaryPath: String? = nil,
         firmwarePathARM64: String? = nil,
         firmwarePathX86_64: String? = nil,
@@ -322,6 +344,10 @@ public struct AgentConfig: Codable {
         self.enableHVF = enableHVF
         self.enableKVM = enableKVM
         self.vmStoragePath = vmStoragePath
+        self.imageCacheDir = imageCacheDir
+        self.imageCacheMaxSizeGB = imageCacheMaxSizeGB
+        self.sandboxImageCacheDir = sandboxImageCacheDir
+        self.sandboxImageCacheMaxSizeGB = sandboxImageCacheMaxSizeGB
         self.qemuBinaryPath = qemuBinaryPath
         self.firmwarePathARM64 = firmwarePathARM64
         self.firmwarePathX86_64 = firmwarePathX86_64
@@ -337,6 +363,16 @@ public struct AgentConfig: Codable {
         self.stateFilePath = stateFilePath
         self.ovnUplink = ovnUplink
         self.simulation = simulation
+    }
+
+    /// The VM image cache budget in bytes (config stores whole GB).
+    public var imageCacheMaxSizeBytes: Int64? {
+        imageCacheMaxSizeGB.map { Int64($0) * 1024 * 1024 * 1024 }
+    }
+
+    /// The sandbox rootfs cache budget in bytes (config stores whole GB).
+    public var sandboxImageCacheMaxSizeBytes: Int64? {
+        sandboxImageCacheMaxSizeGB.map { Int64($0) * 1024 * 1024 * 1024 }
     }
 
     /// The OVN chassis bootstrap settings derived from this configuration.
@@ -413,6 +449,12 @@ public struct AgentConfig: Codable {
         let enableHVF = tomlData.bool("enable_hvf")
         let enableKVM = tomlData.bool("enable_kvm")
         let vmStoragePath = tomlData.string("vm_storage_dir")
+        let imageCacheDir = tomlData.string("image_cache_dir")
+        let sandboxImageCacheDir = tomlData.string("sandbox_image_cache_dir")
+        // Cache budgets must be positive: 0 would mean "evict everything, every
+        // time" — an operator who wants no cache bound should omit the key.
+        let imageCacheMaxSizeGB = try Self.positiveInt(tomlData, key: "image_cache_max_size_gb")
+        let sandboxImageCacheMaxSizeGB = try Self.positiveInt(tomlData, key: "sandbox_image_cache_max_size_gb")
         let qemuBinaryPath = tomlData.string("qemu_binary_path")
         let firmwarePathARM64 = tomlData.string("firmware_path_arm64")
         let firmwarePathX86_64 = tomlData.string("firmware_path_x86_64")
@@ -572,6 +614,10 @@ public struct AgentConfig: Codable {
             enableHVF: enableHVF,
             enableKVM: enableKVM,
             vmStoragePath: vmStoragePath,
+            imageCacheDir: imageCacheDir,
+            imageCacheMaxSizeGB: imageCacheMaxSizeGB,
+            sandboxImageCacheDir: sandboxImageCacheDir,
+            sandboxImageCacheMaxSizeGB: sandboxImageCacheMaxSizeGB,
             qemuBinaryPath: qemuBinaryPath,
             firmwarePathARM64: firmwarePathARM64,
             firmwarePathX86_64: firmwarePathX86_64,
@@ -588,6 +634,15 @@ public struct AgentConfig: Codable {
             ovnUplink: ovnUplink,
             simulation: simulationConfig
         )
+    }
+
+    /// Reads an integer key that must be positive when present.
+    private static func positiveInt(_ toml: Toml, key: String) throws -> Int? {
+        guard let value = toml.int(key) else { return nil }
+        guard value > 0 else {
+            throw AgentConfigError.invalidConfiguration("\(key) must be a positive integer, got \(value)")
+        }
+        return value
     }
 
     /// Writes a minimal config file containing just the control plane URL,

@@ -147,6 +147,14 @@ differs (qcow2 cloud image → raw Firecracker rootfs), preflights free
 space, writes to a `.partial` staging path, and publishes with an atomic
 rename. See [storage](./storage.md).
 
+`ImageCacheService` (executable target) feeds `materializeDisk` through the
+`ImageSource` seam: downloaded image artifacts are checksum-verified and
+kept under `image_cache_dir` so repeat launches of the same image skip the
+download. The cache is LRU-evicted to the `image_cache_max_size_gb` budget
+(unset = unbounded) using the shared `DiskCacheLRU` helper in
+`StratoAgentCore`; the sandbox rootfs cache enforces
+`sandbox_image_cache_max_size_gb` the same way, on top of its idle TTL.
+
 `VMManifestStore` is the durable JSON record of which backend owns each
 workload and its resource-reserving spec. It survives restarts: previously
 managed workloads load as **orphans**, keep reserving capacity, and are
