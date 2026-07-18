@@ -147,8 +147,11 @@ public struct PrometheusIssuanceMetricsProvider: SPIREIssuanceMetricsProvider {
 
     /// Sum an instant-vector query result and round to a whole SVID count.
     /// `increase()` is a float estimate; a `sum(...)` yields at most one sample.
+    /// Non-finite totals (e.g. an overflowing sum) collapse to 0 rather than
+    /// trapping in `Int(_:)`.
     static func sumInstantVector(_ samples: [PrometheusSample]) -> Int {
         let total = samples.reduce(0.0) { $0 + $1.value }
+        guard total.isFinite else { return 0 }
         return Int(total.rounded())
     }
 
@@ -184,8 +187,12 @@ struct PrometheusSample: Decodable {
         var pair = try container.nestedUnkeyedContainer(forKey: .value)
         _ = try pair.decode(Double.self)  // timestamp — unused
         let raw = try pair.decode(String.self)
-        // Prometheus reports NaN/Inf as strings; treat non-numeric as zero.
-        self.value = Double(raw) ?? 0
+        // Prometheus reports NaN/+Inf/-Inf as quoted strings, and `Double(_:)`
+        // parses those to non-finite values (not nil), so the `?? 0` fallback
+        // alone would let a NaN/Inf through to `Int(_:)`, which traps. Coerce
+        // any non-numeric or non-finite sample to zero.
+        let parsed = Double(raw) ?? 0
+        self.value = parsed.isFinite ? parsed : 0
     }
 
     init(value: Double) {
