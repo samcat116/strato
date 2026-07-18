@@ -1,0 +1,52 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommitsDisabled",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "timezone": "America/New_York",
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 10,
+  "labels": ["dependencies"],
+  "rebaseWhen": "conflicted",
+  "dependencyDashboard": true,
+  "lockFileMaintenance": {
+    "enabled": true
+  },
+  "vulnerabilityAlerts": {
+    "labels": ["dependencies", "security"]
+  },
+  "packageRules": [
+    {
+      "description": "Group GitHub Actions bumps into a single PR.",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    },
+    {
+      "description": "Group Swift package bumps across control-plane, agent, shared, and SwiftFirecracker.",
+      "matchManagers": ["swift"],
+      "groupName": "swift packages"
+    },
+    {
+      "description": "Group the Next.js frontend's dependencies (Bun workspace).",
+      "matchFileNames": ["control-plane/web/package.json"],
+      "groupName": "frontend dependencies"
+    },
+    {
+      "description": "Group Helm chart dependencies.",
+      "matchManagers": ["helmv3"],
+      "groupName": "helm chart dependencies"
+    },
+    {
+      "description": "Group base image bumps across all Dockerfiles.",
+      "matchManagers": ["dockerfile"],
+      "groupName": "docker base images"
+    },
+    {
+      "description": "swift-ovn is pinned to a specific revision on purpose; bump it by hand.",
+      "matchPackageNames": ["/swift-ovn/"],
+      "enabled": false
+    }
+  ]
+}
