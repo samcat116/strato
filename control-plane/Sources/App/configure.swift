@@ -579,6 +579,10 @@ public func configure(_ app: Application) async throws {
     // (requires SPIRE_ENABLED plus SPIRE_SERVER_API_ADDRESS)
     try app.configureSPIRERegistration()
 
+    // Configure SVID issuance telemetry for the Workload Identity view
+    // (requires SPIRE_METRICS_PROMETHEUS_URL; otherwise the panel stays empty)
+    app.configureSPIREIssuanceMetrics()
+
     // Configure OpenTelemetry observability (metrics, logs, traces)
     if app.environment != .testing {
         let metricsEnabled = Environment.get("OTEL_METRICS_ENABLED").flatMap(Bool.init) ?? true

@@ -12,3 +12,11 @@ scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
+
+  # SPIRE server telemetry (SVID-signing counters), scraped only when the
+  # spiffe profile is up. Backs the control plane's Workload Identity
+  # "Issuance" panel. Absent (profile down), the panel simply reports
+  # unavailable. See spiffe/spire-server.conf telemetry block.
+  - job_name: spire-server
+    static_configs:
+      - targets: ["spire-server:9988"]

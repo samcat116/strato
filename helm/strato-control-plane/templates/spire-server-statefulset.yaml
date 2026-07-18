@@ -57,6 +57,11 @@ spec:
             - name: federation
               containerPort: 8443
               protocol: TCP
+            {{- if and .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
+            - name: metrics
+              containerPort: 9988
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /live

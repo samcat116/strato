@@ -648,12 +648,20 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     private var entryResult: SPIREEntryCreationResult = .created(entryID: "entry-1")
     private var entries: [SPIREEntry] = []
     private var agents: [SPIREAgent] = []
+    private var federationRelationships: [SPIREFederationRelationship] = []
+    private var failFederation = false
 
     func setFailJoinToken(_ fail: Bool) { failJoinToken = fail }
     func setFailCreateEntry(_ fail: Bool) { failCreateEntry = fail }
     func setFailDelete(_ fail: Bool) { failDelete = fail }
     func setEntries(_ entries: [SPIREEntry]) { self.entries = entries }
     func setAgents(_ agents: [SPIREAgent]) { self.agents = agents }
+    func setFederationRelationships(_ relationships: [SPIREFederationRelationship]) {
+        self.federationRelationships = relationships
+    }
+    /// listFederationRelationships throws, as SPIRE does when the trustdomain
+    /// API is unreachable.
+    func setFailFederation(_ fail: Bool) { failFederation = fail }
     /// deleteEntries throws invalidArgument, as SPIRE does for a malformed
     /// SPIFFE ID filter (legacy agent names with illegal characters).
     func setDeleteInvalidArgument(_ fail: Bool) { deleteInvalidArgument = fail }
@@ -717,4 +725,11 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     func listEntries() async throws -> [SPIREEntry] { entries }
 
     func listAgents() async throws -> [SPIREAgent] { agents }
+
+    func listFederationRelationships() async throws -> [SPIREFederationRelationship] {
+        if failFederation {
+            throw SPIREServerAPIError.unreachable("fake: SPIRE trustdomain API down")
+        }
+        return federationRelationships
+    }
 }

@@ -80,14 +80,69 @@ struct WorkloadIdentityController: RouteCollection {
                 + "(set SPIRE_SERVER_API_ADDRESS); registration entries and attested nodes are unavailable."
         }
 
-        // Federation domains are surfaced from what the entries themselves
-        // federate with (real data), but relationship sync-state has no source
-        // yet — hence `available: false` and `state: unknown`.
-        let federatedDomains = Set(entries.flatMap(\.federatesWith)).sorted()
-        let federation = FederationResponse(
-            available: false,
-            domains: federatedDomains.map { FederatedDomainResponse(trustDomain: $0, state: "unknown") }
-        )
+        // Federation relationships come from SPIRE's trustdomain read API. When
+        // it answers we report real relationships and sync state; if it fails,
+        // degrade to the domains the entries themselves federate with (state
+        // unknown) and surface a warning rather than blanking the panel.
+        var federation = FederationResponse(available: false, domains: [])
+        if let registration {
+            do {
+                let relationships = try await registration.listFederationRelationships()
+                // Real relationships from the trustdomain API, keyed by trust
+                // domain and carrying real sync state.
+                var domainsByName: [String: FederatedDomainResponse] = [:]
+                for relationship in relationships {
+                    let domain = FederatedDomainResponse(from: relationship)
+                    domainsByName[domain.trustDomain] = domain
+                }
+                // The trustdomain API omits *static* relationships (those
+                // declared via `federates_with` in server.conf), so supplement
+                // with the trust domains entries federate with that the API did
+                // not return — with unknown state — to avoid regressing a
+                // static-federation install to "no federated domains".
+                for federated in entries.flatMap(\.federatesWith) {
+                    let name = Self.trustDomainName(from: federated)
+                    if domainsByName[name] == nil {
+                        domainsByName[name] = FederatedDomainResponse(trustDomain: name, state: "unknown")
+                    }
+                }
+                federation = FederationResponse(
+                    available: true,
+                    domains: domainsByName.values.sorted { $0.trustDomain < $1.trustDomain }
+                )
+            } catch {
+                let message = "Could not list federation relationships: \(error.localizedDescription)"
+                warning = warning.map { "\($0); \(message)" } ?? message
+                req.logger.warning("Workload Identity: listing federation relationships failed: \(error)")
+                let federatedDomains = Set(entries.flatMap(\.federatesWith).map(Self.trustDomainName(from:)))
+                    .sorted()
+                federation = FederationResponse(
+                    available: false,
+                    domains: federatedDomains.map { FederatedDomainResponse(trustDomain: $0, state: "unknown") }
+                )
+            }
+        }
+
+        // SVID issuance counts come from an external metrics store (the control
+        // plane is not in the signing path). Absent a configured provider the
+        // panel stays unavailable; a query failure degrades the same way with a
+        // warning rather than failing the page.
+        var issuance = IssuanceResponse.unavailable
+        if let metrics = req.application.spireIssuanceMetrics {
+            do {
+                let counts = try await metrics.issuanceCounts(client: req.client)
+                issuance = IssuanceResponse(
+                    available: true,
+                    windowHours: counts.windowHours,
+                    x509SVIDs: counts.x509SVIDs,
+                    jwtSVIDs: counts.jwtSVIDs
+                )
+            } catch {
+                let message = "Could not read SVID issuance metrics: \(error.localizedDescription)"
+                warning = warning.map { "\($0); \(message)" } ?? message
+                req.logger.warning("Workload Identity: reading issuance metrics failed: \(error)")
+            }
+        }
 
         return WorkloadIdentityResponse(
             enabled: true,
@@ -96,9 +151,20 @@ struct WorkloadIdentityController: RouteCollection {
             nodeAttestation: nodeAttestation,
             trustBundle: trustBundle,
             federation: federation,
-            issuance: .unavailable,
+            issuance: issuance,
             warning: warning
         )
+    }
+
+    /// The bare trust domain name from an entry's `federatesWith` value, which
+    /// SPIRE may report either as a plain name (`partner.example`) or a SPIFFE
+    /// ID (`spiffe://partner.example`). Normalizing lets these dedupe against
+    /// the trustdomain API's bare-name relationships.
+    static func trustDomainName(from federated: String) -> String {
+        var value = federated
+        if value.hasPrefix("spiffe://") { value = String(value.dropFirst("spiffe://".count)) }
+        if let slash = value.firstIndex(of: "/") { value = String(value[..<slash]) }
+        return value
     }
 
     /// Collapse attested nodes into per-attestation-type counts for the
@@ -236,9 +302,13 @@ struct TrustBundleResponse: Content {
     }
 }
 
-/// Federation relationships. `available` is false until the control plane wires
-/// SPIRE's federation-relationship API; `domains` is still populated from the
-/// trust domains entries federate with, with `state: unknown`.
+/// Federation relationships. When `available` is true, `domains` are the trust
+/// domain's dynamic relationships with real sync state read from SPIRE's
+/// trustdomain API, supplemented with any additional domains entries federate
+/// with that the API omits (static `federates_with` relationships) at
+/// `state: unknown`. When false (unconfigured, or the trustdomain API could not
+/// be reached), `domains` degrades to just the trust domains entries federate
+/// with, all `state: unknown`.
 struct FederationResponse: Content {
     let available: Bool
     let domains: [FederatedDomainResponse]
@@ -248,6 +318,20 @@ struct FederatedDomainResponse: Content {
     let trustDomain: String
     /// `synced` | `refresh_failed` | `unknown`.
     let state: String
+}
+
+extension FederatedDomainResponse {
+    /// Project a real federation relationship. SPIRE exposes no explicit
+    /// per-relationship health field, so sync state is inferred from whether it
+    /// currently holds a peer bundle with any authorities: SPIRE stores a bundle
+    /// only after a successful fetch (or an explicit bootstrap), so a populated
+    /// bundle means `synced`, and its absence means a pending or failed refresh.
+    /// Counts X.509 *and* JWT authorities, since a JWT-only trust domain has a
+    /// valid bundle with zero X.509 authorities.
+    init(from relationship: SPIREFederationRelationship) {
+        self.trustDomain = relationship.trustDomain
+        self.state = relationship.bundleAuthorityCount > 0 ? "synced" : "refresh_failed"
+    }
 }
 
 /// SVID issuance metrics. Placeholder until issuance telemetry is collected;

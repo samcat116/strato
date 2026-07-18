@@ -109,4 +109,16 @@ data:
         live_path = "/live"
         ready_path = "/ready"
     }
+    {{- if and .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
+
+    # Expose SPIRE server telemetry (incl. the CA SVID-signing counters
+    # spire_server_server_ca_sign_x509_svid / _jwt_svid) for Prometheus to
+    # scrape. Backs the control plane's Workload Identity "Issuance" panel.
+    telemetry {
+        Prometheus {
+            host = "0.0.0.0"
+            port = 9988
+        }
+    }
+    {{- end }}
 {{- end }}
