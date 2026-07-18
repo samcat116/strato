@@ -1,0 +1,46 @@
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_2f8f967320d6ec::t_cc5da4a5e8b4a7 189-190,671-672
+control-plane/Sources/App/Services/SSRFGuard.swift
+  s_2f8f967320d6ec::t_790189e337c925 2,22-28
+  s_2f8f967320d6ec::t_4c3ea4c3e52041 96-98,100,102
+  s_2f8f967320d6ec::t_ef268945222125 99
+  s_2f8f967320d6ec::t_623672e99b6d4f 49-50,54-61,63,75-86
+control-plane/Sources/App/configure.swift
+  s_2f8f967320d6ec::t_48ae62baf755ef 384-388
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_2f8f967320d6ec::t_e6a5baf05e12c3 969,971-972
+  s_2f8f967320d6ec::t_3b1b30edb32d0c 869
+  s_2f8f967320d6ec::t_0b89125f7b9e61 905,909-910
+  s_2f8f967320d6ec::t_8194f67fa2b62a 724-728
+  s_2f8f967320d6ec::t_bb1f75e31c1922 801-804
+  s_2f8f967320d6ec::t_83d71f8ac73c6f 943
+control-plane/Sources/App/Migrations/AddDiscoveredHostsToOIDCProvider.swift
+  s_2f8f967320d6ec::t_1ab79509a892ca 1-75
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_2f8f967320d6ec::t_021836db8c4a6f 46-57
+  s_2f8f967320d6ec::t_cf0caeb51c39ba 129
+  s_2f8f967320d6ec::t_48f4e7d3580232 217-240
+control-plane/Tests/AppTests/OIDCAuthFlowTests.swift
+  s_2f8f967320d6ec::t_0d7c02ced1d262 498-568
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_2f8f967320d6ec::t_2a16182c1cc535 346
+  s_2f8f967320d6ec::t_7ab177f713027b 363
+control-plane/Sources/App/Services/OIDCValidation.swift
+  s_2f8f967320d6ec::t_808f02393bec50 346-364,373-375
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "652268ca462aab5ecb56973cc37a4a938ee698df",
+  "prompts": {},
+  "sessions": {
+    "s_2f8f967320d6ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85d6a84a-bc30-403a-ae2b-52838d91338a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
