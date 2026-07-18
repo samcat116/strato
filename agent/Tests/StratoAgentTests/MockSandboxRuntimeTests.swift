@@ -201,6 +201,14 @@ struct MockSandboxRuntimeTests {
         await #expect(throws: SandboxRuntimeError.self) {
             try await runtime.sendExecInput(sessionId: "sess-1", data: Data("x".utf8), eof: false)
         }
+
+        // A replayed start for the completed session must not re-run it — that
+        // would emit a second terminal event for the same control-plane session.
+        try await runtime.startExec(
+            sandboxId: "sb-1", sessionId: "sess-1",
+            request: SandboxExecRequest(command: ["echo", "hi"])
+        ) { events.append($0) }
+        #expect(events.all == recorded)
     }
 
     @Test("A tty exec session echoes input and exits exactly once on EOF")
@@ -229,6 +237,14 @@ struct MockSandboxRuntimeTests {
             return false
         }
         #expect(terminals.count == 1)
+
+        // A replayed start after EOF must not resurrect the ended session.
+        let countAfterEOF = events.all.count
+        try await runtime.startExec(
+            sandboxId: "sb-1", sessionId: "sess-1",
+            request: SandboxExecRequest(command: ["sh"], tty: true)
+        ) { events.append($0) }
+        #expect(events.all.count == countAfterEOF)
     }
 
     @Test("A duplicate startExec for the same session is a no-op replay")
@@ -288,6 +304,13 @@ struct MockSandboxRuntimeTests {
         await #expect(throws: SandboxRuntimeError.self) {
             try await runtime.sendExecInput(sessionId: "sess-1", data: nil, eof: true)
         }
+
+        // A replayed start after close must not resurrect the ended session.
+        try await runtime.startExec(
+            sandboxId: "sb-1", sessionId: "sess-1",
+            request: SandboxExecRequest(command: ["sh"], tty: true)
+        ) { events.append($0) }
+        #expect(events.all == [.started])
     }
 
     @Test("Sandbox shutdown ends live exec sessions with exactly one closed event")

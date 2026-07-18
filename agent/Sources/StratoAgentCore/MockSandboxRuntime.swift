@@ -64,6 +64,16 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
     }
     private var execSessions: [String: ExecSession] = [:]
 
+    /// Tombstones for sessions that already ended (one-shot completion, EOF,
+    /// close, or teardown), so a replayed `startExec` for a finished session
+    /// cannot emit a second terminal event — session ids are minted per attach
+    /// by the control plane, and each may see at most one terminal. Bounded
+    /// FIFO: replays are near-in-time, so evicting old ids is safe and keeps a
+    /// long-lived fleet from growing this without limit.
+    private var completedExecSessions: Set<String> = []
+    private var completedExecSessionOrder: [String] = []
+    private static let completedExecSessionLimit = 1024
+
     private var logHandler: (@Sendable (String, String, String) -> Void)?
     /// One emitter task per running sandbox while the control plane is
     /// connected; suspended (cancelled) on disconnect, mirroring the real
@@ -179,7 +189,17 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
         lifetimeTasks.removeValue(forKey: sandboxId)?.cancel()
         for (sessionId, session) in execSessions where session.sandboxId == sandboxId {
             execSessions.removeValue(forKey: sessionId)
+            recordCompletedExecSession(sessionId)
             session.events(.closed(reason: execCloseReason))
+        }
+    }
+
+    /// Tombstone a finished session id (bounded FIFO eviction).
+    private func recordCompletedExecSession(_ sessionId: String) {
+        guard completedExecSessions.insert(sessionId).inserted else { return }
+        completedExecSessionOrder.append(sessionId)
+        if completedExecSessionOrder.count > Self.completedExecSessionLimit {
+            completedExecSessions.remove(completedExecSessionOrder.removeFirst())
         }
     }
 
@@ -212,9 +232,11 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
         guard let sandbox = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
-        guard execSessions[sessionId] == nil else {
+        guard execSessions[sessionId] == nil, !completedExecSessions.contains(sessionId) else {
             // Session ids are minted per attach by the control plane; a
-            // duplicate start is a stream replay we must not double-bridge.
+            // duplicate start is a stream replay we must not double-bridge —
+            // whether the session is still live or already ended (re-running a
+            // finished one-shot would emit a second terminal event).
             return
         }
         guard sandbox.status == .running else {
@@ -241,7 +263,8 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
             execSessions[sessionId] = ExecSession(sandboxId: sandboxId, events: events)
         } else {
             // One-shot: echo the command and exit — the session's single
-            // terminal event.
+            // terminal event. Tombstoned so a replayed start cannot re-run it.
+            recordCompletedExecSession(sessionId)
             let line = "simulated exec: \(request.command.joined(separator: " "))\n"
             events(.output(stream: "stdout", data: Data(line.utf8)))
             events(.exited(code: 0))
@@ -259,6 +282,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
             // Stdin EOF ends the interactive workload, like `cat`: the exit
             // is the session's single terminal event.
             execSessions.removeValue(forKey: sessionId)
+            recordCompletedExecSession(sessionId)
             session.events(.exited(code: 0))
         }
     }
@@ -272,8 +296,10 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
 
     public func closeExec(sessionId: String) async {
         // Idempotent; no event is emitted for a session closed this way (the
-        // requester already knows).
-        execSessions.removeValue(forKey: sessionId)
+        // requester already knows). Still tombstoned: the session is over, so
+        // a replayed start must not resurrect it.
+        guard execSessions.removeValue(forKey: sessionId) != nil else { return }
+        recordCompletedExecSession(sessionId)
     }
 
     // MARK: - Control-plane connectivity
@@ -286,6 +312,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
         // path, which is fine).
         for (sessionId, session) in execSessions {
             execSessions.removeValue(forKey: sessionId)
+            recordCompletedExecSession(sessionId)
             session.events(.closed(reason: "control plane disconnected"))
         }
         // Log emission: suspend, keeping each sandbox's line counter, so
