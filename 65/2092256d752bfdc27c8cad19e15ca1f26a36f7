@@ -1,0 +1,66 @@
+agent/Sources/StratoAgentCore/OCI/OCIRootfsCache.swift
+  s_d7ccadb4db3458::t_031f4681e4dd8e 183-186,190,202,204-217
+  s_d7ccadb4db3458::t_f41cc6fbe9a67e 49-51,57-62,65
+agent/Sources/StratoAgentCore/DiskCacheLRU.swift
+  s_d7ccadb4db3458::t_6b71871a7e9a33 1-181
+agent/Tests/StratoAgentTests/DiskCacheLRUTests.swift
+  s_d7ccadb4db3458::t_4a537568e0dc03 60-61
+  s_d7ccadb4db3458::t_d85dc99360694d 1-59,62-148
+config.toml.example
+  s_d7ccadb4db3458::t_d18c3eaae2a4a1 43-69
+docs/architecture/storage.md
+  s_d7ccadb4db3458::t_763b9abb47b277 43-63
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_d7ccadb4db3458::t_738c71fd45c263 313-316
+  s_d7ccadb4db3458::t_a39a3b79f8efdf 363-366
+agent/Sources/StratoAgent/ImageCacheService.swift
+  s_d7ccadb4db3458::t_3826460f470c3b 32,36
+  s_d7ccadb4db3458::t_ee60b6909fbbcf 60,78
+  s_d7ccadb4db3458::t_299bfffb1ebce9 118-169
+  s_d7ccadb4db3458::t_d1336863514df4 195,214
+  s_d7ccadb4db3458::t_978c2655fca19c 15-18
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_d7ccadb4db3458::t_ab98786bff6525 57-73,76-77,79-80,82-119
+  s_d7ccadb4db3458::t_c0540f4f828257 74-75,78,81
+docs/architecture/sandboxes.md
+  s_d7ccadb4db3458::t_13efcf67a8ac5e 249-252
+agent/Sources/StratoAgent/Agent.swift
+  s_d7ccadb4db3458::t_13648fd2b213c2 251-253
+  s_d7ccadb4db3458::t_64783ed54d5bd6 177-181
+  s_d7ccadb4db3458::t_7d32579f2360f0 551-555
+  s_d7ccadb4db3458::t_550801d7e1261c 283-285
+  s_d7ccadb4db3458::t_e98b5390c89c1c 425-426
+docs/architecture/agent.md
+  s_d7ccadb4db3458::t_ed075553c1a98b 150-157
+agent/Tests/StratoAgentTests/OCIRootfsCacheTests.swift
+  s_d7ccadb4db3458::t_c6096908aae299 154-188
+  s_d7ccadb4db3458::t_f5b1f4a387af3b 19-22
+agent/Sources/StratoAgentCore/OCI/SandboxImageService.swift
+  s_d7ccadb4db3458::t_268a1464b9c001 76-77,83-84
+  s_d7ccadb4db3458::t_bb0208aa3c5b9a 242-245
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_d7ccadb4db3458::t_495ca3869f3e0d 368-377
+  s_d7ccadb4db3458::t_977a382a39c8f4 347-350
+  s_d7ccadb4db3458::t_4962ad8d7955af 279-282
+  s_d7ccadb4db3458::t_e4bdfde090478b 314-317
+  s_d7ccadb4db3458::t_0ab54ae8a6bf29 221-234
+  s_d7ccadb4db3458::t_468646f345bd51 617-620
+  s_d7ccadb4db3458::t_e6625d8054c212 639-647
+  s_d7ccadb4db3458::t_fd16dceffd98a6 452-457
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "652092256d752bfdc27c8cad19e15ca1f26a36f7",
+  "prompts": {},
+  "sessions": {
+    "s_d7ccadb4db3458": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9f9bc249-b5dc-47e9-9f65-bf2ffd3969e1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
