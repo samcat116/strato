@@ -75,7 +75,7 @@ When running on the strato-dev Linux VM (Ubuntu, headless):
 
 ## Architecture
 
-Strato is a distributed private cloud platform. The **Control Plane** (Vapor 4 + Fluent/PostgreSQL) owns the API, database, scheduler, and authorization; **Agents** run on hypervisor nodes and manage VMs through hypervisor drivers (QEMU, Firecracker). They communicate over a WebSocket (`/agent/ws`). The **shared/** package defines the wire protocol and DTOs used by both. Design docs live in `docs/architecture/` (`overview.md`, `multi-replica.md`, `scheduler.md`, `storage.md`) and are kept current.
+Strato is a distributed private cloud platform. The **Control Plane** (Vapor 4 + Fluent/PostgreSQL) owns the API, database, scheduler, and authorization; **Agents** run on hypervisor nodes and manage VMs through hypervisor drivers (QEMU, Firecracker). They communicate over a WebSocket (`/agent/ws`). The **shared/** package defines the wire protocol and DTOs used by both. Design docs live in `docs/architecture/` and are kept current: `overview.md` is the top-level map; `control-plane.md`, `agent.md`, `wire-protocol.md`, and `frontend.md` document the code architecture of each component; the rest cover individual subsystems (scheduler, networking, storage, sandboxes, multi-replica, IAM, agent updates).
 
 ### Desired state and reconciliation (the core control loop)
 
