@@ -120,6 +120,7 @@ struct VMSpecBuilder {
             cpus: cpuCount,
             maxCpus: vm.maxCpu > 0 ? vm.maxCpu : cpuCount,
             memoryBytes: memorySize,
+            diskBytes: vm.disk,
             sharedMemory: vm.sharedMemory,
             hugepages: vm.hugepages,
             boot: bootSource(
@@ -157,6 +158,7 @@ struct VMSpecBuilder {
             cpus: cpuCount,
             maxCpus: vm.maxCpu > 0 ? vm.maxCpu : cpuCount,
             memoryBytes: memorySize,
+            diskBytes: vm.disk,
             sharedMemory: vm.sharedMemory,
             hugepages: vm.hugepages,
             boot: bootSource(

@@ -1511,16 +1511,23 @@ actor Agent {
         let availableCPU = max(0, totalCPU - reservedCPU)
         let availableMemory = max(0, totalMemory - reservedMemory)
 
-        // Disk. In simulation mode report the configured fake capacity (the real
-        // filesystem is shared by every dummy and has nothing to do with the
-        // sizes we're modeling). Otherwise query the storage filesystem live —
-        // VM disks are created directly on it, so this naturally accounts for
-        // existing disks without tracking reservations.
+        // Disk. In simulation mode the total is the configured fake capacity
+        // (the real filesystem is shared by every dummy and has nothing to do
+        // with the sizes we're modeling), and committed disk is subtracted from
+        // it manifest-side, mirroring the CPU/memory accounting above: the
+        // manifest carries each VM's `diskBytes` from both the vmCreate and
+        // reconciliation paths, and orphans keep reserving across restarts
+        // (issue #473). Sandboxes reserve no disk, matching the scheduler.
+        // Otherwise query the storage filesystem live — VM disks are created
+        // directly on it, so this naturally accounts for existing disks
+        // without tracking reservations.
         let totalDisk: Int64
         let availableDisk: Int64
         if let simulation, simulation.enabled {
             totalDisk = simulation.resolvedDiskBytes
-            availableDisk = simulation.resolvedDiskBytes
+            let reservedDisk =
+                managedVMs.values.totalReservedDiskBytes + orphanedVMs.values.totalReservedDiskBytes
+            availableDisk = max(0, totalDisk - reservedDisk)
         } else {
             let disk = HostResources.diskCapacity(forPath: vmStoragePath)
             if disk == nil {

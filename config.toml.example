@@ -248,19 +248,16 @@ log_level = "info"
 # # Fake capacity advertised to the scheduler. Unset fields use built-in
 # # defaults (8 cores / 16384 MB / 512 GB).
 # #
-# # cpu_cores and memory_mb deplete as VMs are placed, so the scheduler sees a
-# # simulated host fill up. disk_gb does NOT: a VM's disk requirement is not
-# # carried on the reconciliation wire (VMSpec has no disk field), so the agent
-# # cannot subtract it. A simulated agent therefore keeps reporting its full
-# # disk and will accept disk-heavy VMs past disk_gb as long as CPU/memory
-# # remain. Size CPU/memory to be the binding constraint in disk-sensitive
-# # scale tests. See issue #473.
+# # All three deplete as VMs are placed and recover as they are deleted, so
+# # the scheduler sees a simulated host fill up. Disk accounting needs a
+# # control plane that sends `diskBytes` on the VM spec (issue #473); against
+# # an older control plane, disk_gb reports full and only CPU/memory bind.
 # #
-# # disk_gb is a reported number only. Simulated agents still attract volume
-# # work (they advertise QEMU, and volume placement picks any online agent that
-# # supports it), but volumes are mocked: nothing is written to
-# # vm_storage_dir, and image bytes are never fetched. The figure above is
-# # therefore unrelated to free space on the machine actually running the fleet.
+# # Volumes are mocked: simulated agents still attract volume work (they
+# # advertise QEMU, and volume placement picks any online agent that supports
+# # it), but nothing is written to vm_storage_dir, and image bytes are never
+# # fetched. The figures above are therefore unrelated to free space on the
+# # machine actually running the fleet.
 # cpu_cores = 16
 # memory_mb = 65536
 # disk_gb = 1024

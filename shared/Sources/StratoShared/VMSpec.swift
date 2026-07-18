@@ -17,6 +17,11 @@ public struct VMSpec: Codable, Sendable {
     public let maxCpus: Int
     /// Guest memory size in bytes.
     public let memoryBytes: Int64
+    /// Disk requirement in bytes — the figure the scheduler gated placement on
+    /// (`vm.disk`), carried so agents can account committed disk without
+    /// deriving it from volumes (which don't carry sizes). Nil from control
+    /// planes that predate the field (issue #473); consumers treat nil as 0.
+    public let diskBytes: Int64?
     /// Whether guest memory should be file-backed/shared (required by e.g. vhost-user backends).
     public let sharedMemory: Bool
     /// Whether guest memory should be backed by huge pages.
@@ -39,6 +44,7 @@ public struct VMSpec: Codable, Sendable {
         cpus: Int,
         maxCpus: Int? = nil,
         memoryBytes: Int64,
+        diskBytes: Int64? = nil,
         sharedMemory: Bool = false,
         hugepages: Bool = false,
         boot: BootSource,
@@ -50,6 +56,7 @@ public struct VMSpec: Codable, Sendable {
         self.cpus = cpus
         self.maxCpus = maxCpus ?? cpus
         self.memoryBytes = memoryBytes
+        self.diskBytes = diskBytes
         self.sharedMemory = sharedMemory
         self.hugepages = hugepages
         self.boot = boot
@@ -59,16 +66,17 @@ public struct VMSpec: Codable, Sendable {
         self.sshAuthorizedKeys = sshAuthorizedKeys
     }
 
-    // Custom decode so `sshAuthorizedKeys` tolerates absence: a spec produced by
-    // an older control plane (before this field existed) decodes to [] rather
-    // than throwing, keeping agent↔control-plane compatible across version skew.
-    // `encode(to:)` stays synthesized. All other keys remain required, matching
-    // the existing wire contract.
+    // Custom decode so `sshAuthorizedKeys` and `diskBytes` tolerate absence: a
+    // spec produced by an older control plane (before these fields existed)
+    // decodes to []/nil rather than throwing, keeping agent↔control-plane
+    // compatible across version skew. `encode(to:)` stays synthesized. All
+    // other keys remain required, matching the existing wire contract.
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         cpus = try c.decode(Int.self, forKey: .cpus)
         maxCpus = try c.decode(Int.self, forKey: .maxCpus)
         memoryBytes = try c.decode(Int64.self, forKey: .memoryBytes)
+        diskBytes = try c.decodeIfPresent(Int64.self, forKey: .diskBytes)
         sharedMemory = try c.decode(Bool.self, forKey: .sharedMemory)
         hugepages = try c.decode(Bool.self, forKey: .hugepages)
         boot = try c.decode(BootSource.self, forKey: .boot)
