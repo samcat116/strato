@@ -1,0 +1,139 @@
+docs/architecture/sandboxes.md
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 445-515,517-520
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Snapshot.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1-189
+docs/deployment/agents.md
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 340,343-376
+helm/strato-control-plane/templates/deployment.yaml
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 212-221,245-254
+agent/Sources/StratoAgent/Agent.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1110-1112,1676-1685,2470-2567
+  s_bf31020fa8ebfe::t_b0896db25d2193 2568
+control-plane/Sources/App/Services/SandboxSnapshotService.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1-147
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 52-54,70
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 100-107,115-117,126
+.github/workflows/helm-test.yml
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 180-208,216
+CLAUDE.md
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 78
+helm/strato-control-plane/values.yaml
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 118-194,760-765
+control-plane/Sources/App/configure.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 424-426
+control-plane/web/src/components/vms/vm-status-badge.tsx
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 56-59
+helm/strato-control-plane/templates/_helpers.tpl
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 260-308,313-315,339-340
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 26-33,42-44,67,104,113,197
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 69-76
+control-plane/Sources/App/Models/SandboxSnapshot.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1-161
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 103-147,251-253
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1-472
+helm/strato-control-plane/templates/gateway.yaml
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1-84
+control-plane/web/src/components/sandboxes/sandbox-actions.tsx
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 55-57
+sandbox-guest/init/src/protocol.rs
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 103-110,171-172,225-245
+  s_bf31020fa8ebfe::t_251957e9e2d7ef 246
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 55-58
+agent/Sources/StratoAgentCore/SandboxJail.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 143-149
+control-plane/Sources/App/Migrations/CreateSandboxSnapshot.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1-56
+docs/architecture/wire-protocol.md
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1-192
+spicedb/schema.zed
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 213-235
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 47-51,65-69
+  s_bf31020fa8ebfe::t_fbe8d788a8bb24 70
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 169-172,175-176,189-205,353-377
+agent/Tests/StratoAgentTests/SandboxControlProtocolTests.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 103-116
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 28,80
+agent/Sources/StratoAgentCore/SandboxControlProtocol.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 79-84,101,113,145-147,185-186,224-225
+helm/strato-control-plane/templates/ingress.yaml
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 123-131
+  s_bf31020fa8ebfe::t_90be6ffa3eb4a9 115-122
+sandbox-guest/init/src/linux/vsock.rs
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 154,218-220,222-223,236-245,254,262-280
+  s_bf31020fa8ebfe::t_8edef2b800560f 281
+docs/architecture/control-plane.md
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1-212
+control-plane/web/src/components/vms/operation-watcher.tsx
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 18-20
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 99-107,386-388,427-429,448-455,604-952,964-966,1196-1199,1443-1449,1784-1796
+  s_bf31020fa8ebfe::t_1f4e3850e449ce 1797
+helm/strato-control-plane/templates/NOTES.txt
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 2-5,68-78
+docs/architecture/agent.md
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1-201
+docs/architecture/overview.md
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 3-21,23-32,34-129,131,133-139,141,143-144,146-148,150-155,182-244
+helm/strato-control-plane/files/spicedb-schema.zed
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 213-235
+docs/.vitepress/config.mts
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 7,33-36,38-42
+agent/Sources/StratoAgentCore/MockSandboxRuntime.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 59-69,240-298
+  s_bf31020fa8ebfe::t_7c8e34c50a796d 299
+control-plane/Tests/AppTests/SandboxSnapshotTests.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1-538
+shared/Sources/StratoShared/OperationModels.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 14-19
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 206-225
+helm/strato-control-plane/templates/gateway-routes.yaml
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1-103
+SwiftFirecracker/Tests/SwiftFirecrackerTests/SwiftFirecrackerTests.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 142-197
+helm/strato-control-plane/README.md
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 177-181
+shared/Sources/StratoShared/WireProtocol.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 119-129,222-231
+  s_bf31020fa8ebfe::t_5fc1073efc399b 232-233
+control-plane/web/src/types/api.ts
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 616-620
+shared/Sources/StratoShared/SandboxSnapshotMessages.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1-138
+docs/architecture/frontend.md
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 1-142
+control-plane/web/src/components/sandboxes/sandbox-status-badge.tsx
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 51-53
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerManager.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 48-63,84-88,98-104,112-113,115-120,134-152,163-168,241-286,317-318,321-322
+agent/Sources/StratoAgentCore/SandboxRuntimeProtocol.swift
+  s_bf31020fa8ebfe::t_6aee01f2186b1e 44-66,116-143,180-191,195-196,198-199,222-229
+package-lock.json
+  s_bf31020fa8ebfe::t_b7e0ad2d641cdd 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "fd36bb1f4f7ce3d2d34338bb980735f6e8878819",
+  "prompts": {},
+  "sessions": {
+    "s_bf31020fa8ebfe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7311-f2e7-7270-8251-882a13ca8e59",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
