@@ -37,29 +37,24 @@ Build & test notes:
 - **Frontend**: `cd control-plane/web && bun run lint` and `bun run build` — CI runs both with Bun (`bun install --frozen-lockfile`). The frontend uses Bun, not npm.
 - Legacy JS in `control-plane/Public/js`: `cd control-plane && npm run lint` (eslint).
 
-### Local development environment (Taskfile — primary flow)
+### Local development
 
-`task` (go-task) drives local development; see `Taskfile.yml` and DEV-SETUP.md:
-
-- `task dev` — start the full backend: Postgres, SpiceDB (schema auto-loaded), Valkey, Loki, OTel collector in Docker; then builds/starts the control plane and agent natively, creates an agent registration token, test admin user/org/project, and a test VM. Sets `DEV_AUTH_BYPASS=true`.
-- `task dev-frontend` — Next.js dev server at http://localhost:3000 (run in a separate terminal)
-- `task status` / `task logs` / `task stop` / `task clean` — inspect, stop, or tear down everything
-- `task dev-linux` — Linux variant (KVM + Firecracker ready); `task install-firecracker` installs the Firecracker binary
-- `task dev-spiffe` — mTLS variant with SPIRE server/agent + Envoy proxy (agent connects via wss://localhost:8443)
-- Control plane API: http://localhost:8080; logs at `/tmp/strato-control-plane.log` and `/tmp/strato-agent.log`
-- Database migrations run automatically at control-plane startup — there is no separate migrate step.
+There is no turnkey dev environment — no Taskfile, no root `docker-compose.yml`,
+no Skaffold. The inner loop is `swift build` / `swift test` (which need no
+running services), and full-stack runs go through `deploy/compose`. See
+`docs/development/local-development.md`.
 
 ### Running services directly
 
-- `cd control-plane && swift run` — control plane (needs Postgres/SpiceDB env vars; `task dev` handles this)
-- `cd agent && swift run StratoAgent --config-file ./config.toml` — agent (TOML config; CLI args override config values; `control_plane_url` is required; key options: `qemu_socket_dir`, `log_level`, `network_mode` = `ovn`|`user`, `firecracker_binary_path`). See `config.toml.example`.
+- `cd control-plane && swift run` — control plane. Needs Postgres/SpiceDB/Valkey env vars pointed at reachable services; `deploy/compose` does **not** publish those ports, so this requires a `docker-compose.override.yml` that does.
+- `cd agent && swift run StratoAgent --config-file ./config.toml` — agent (TOML config; CLI args override config values; `control_plane_url` is required; key options: `qemu_socket_dir`, `log_level`, `network_mode` = `ovn`|`user`, `firecracker_binary_path`). Copy `config.toml.example` to start.
 - First-time agent registration uses a one-time token URL: `--registration-url 'ws://host:8080/agent/ws?token=...&name=...'`; the agent persists a rotated reconnect token afterwards.
+- `DEV_AUTH_BYPASS=true` disables authentication (development environment only) — never set it on a host reachable by anyone else.
 
-### Other environments
+### Deployment environments (the two supported paths)
 
-- **Skaffold + Helm (Kubernetes)**: `minikube start`, `cd helm/strato-control-plane && helm dependency build` (once), then `skaffold dev` (`--profile=minimal` for no observability stack, `--profile=debug` for debug builds).
-- **Root `docker-compose.yml`**: local development only (fixed dev credentials, `DEV_AUTH_BYPASS`). `docker compose up control-plane` starts the control plane with dependencies.
-- **`deploy/compose/`**: the supported single-host production deployment. `./setup.sh` generates `.env` with strong random secrets, then `docker compose up -d`. Published images, persistent SpiceDB, no auth bypass.
+- **`deploy/compose/`**: single-host Docker Compose. `./setup.sh` generates `.env` with strong random secrets, then `docker compose up -d`. Published GHCR images by default; comment out `image:` and uncomment `build:` on the `control-plane` service to build from source. Only the proxy publishes a port. Put local changes in an untracked `deploy/compose/docker-compose.override.yml`, never in the tracked compose file.
+- **`helm/strato-control-plane/`**: Kubernetes. `helm dependency build` once, then `helm install strato .`. Example values live in `helm/strato-control-plane/ci/`; `.github/workflows/helm-test.yml` templates and installs against them.
 - **Docs site**: VitePress under `docs/` — `npm run docs:dev` / `docs:build` at the repo root.
 
 ### strato-dev VM (remote sessions at /home/sam/strato)
@@ -131,11 +126,11 @@ A persisted VM manifest tracks which backend owns each VM (survives restarts, en
 - **SpiceDB** (schema in `spicedb/schema.zed`) enforces relationship-based access control; `SpiceDBAuthMiddleware` intercepts requests, `SpiceDBService` wraps the HTTP API. Ownership relationships are written automatically on resource creation.
 - **Authentication** is WebAuthn/Passkeys (swift-server/webauthn-swift) with Vapor sessions, plus API keys for programmatic access and optional OIDC providers. WebAuthn env vars: `WEBAUTHN_RELYING_PARTY_ID`, `WEBAUTHN_RELYING_PARTY_NAME`, `WEBAUTHN_RELYING_PARTY_ORIGIN` (origin must exactly match the browser URL).
 - Hierarchy: Organization → optional nested **Organizational Units** (materialized `path`/`depth`) → Projects (with environments). **Groups** (optionally SCIM-provisioned, see `SCIMToken`/`SCIMExternalID`) grant access; **ResourceQuotas** (vCPU/memory/storage/VM count/sandbox count, optionally per-environment) attach at org, OU, or project level and are enforced on VM and sandbox create/delete; sandboxes draw from the same vCPU/memory pools as VMs.
-- Agent transport security (optional): SPIFFE/SPIRE-issued mTLS terminated by Envoy in front of the control plane (`envoy/standalone/`, `task dev-spiffe`).
+- Agent transport security (optional): SPIFFE/SPIRE-issued mTLS terminated by Envoy in front of the control plane. Config lives in `deploy/compose/spiffe/` (SPIRE server, Envoy, bootstrap) and is wired into the compose stack by default.
 
 ### Observability
 
-The control plane emits OTLP metrics/logs/traces via swift-otel to an OTel collector (`observability/`), which exports to Prometheus/Loki/Jaeger. Toggled with `OTEL_METRICS_ENABLED` / `OTEL_LOGS_ENABLED` / `OTEL_TRACES_ENABLED` (disabled in `task dev`'s control plane, but the collector and Loki still run for VM console logs).
+The control plane emits OTLP metrics/logs/traces via swift-otel, toggled with `OTEL_METRICS_ENABLED` / `OTEL_LOGS_ENABLED` / `OTEL_TRACES_ENABLED`. The Helm chart ships an OTel collector whose config is inlined in `templates/otel-collector-configmap.yaml` (gated on `opentelemetry.enabled`). `deploy/compose` leaves OTLP export off and runs Loki directly for VM console logs, plus Prometheus for SPIRE issuance metrics.
 
 ### Frontend
 
@@ -153,9 +148,7 @@ strato/
 ├── shared/               # Wire protocol, DTOs (StratoShared)
 ├── SwiftFirecracker/     # Vendored Swift wrapper for the Firecracker API
 ├── spicedb/schema.zed    # Authorization schema
-├── deploy/compose/       # Supported single-host deployment
-├── helm/ + skaffold.yaml # Kubernetes deployment / dev
-├── envoy/, observability/ # mTLS proxy config, OTel collector config
-├── docs/                 # VitePress site incl. docs/architecture/*.md
-└── Taskfile.yml          # Primary local dev entry point (task dev)
+├── deploy/compose/       # Supported single-host deployment (incl. spiffe/ mTLS config)
+├── helm/                 # Kubernetes Helm chart
+└── docs/                 # VitePress site incl. docs/architecture/*.md
 ```

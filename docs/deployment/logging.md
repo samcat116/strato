@@ -28,26 +28,22 @@ line-oriented, so logs appear promptly.
 
 ### Development: line-buffer when redirecting to a file
 
-The `Taskfile.yml` dev flow runs the binaries under `nohup ... > file.log`. When
-stdout is a regular file (not a TTY), glibc **block-buffers** it, so log lines
-can sit in a 4–8 KB buffer for minutes — or be lost entirely if the process is
-killed — before reaching the file.
+If you run a binary by hand and redirect it to a file — `nohup ... > file.log`
+— the rules change. When stdout is a regular file rather than a TTY, glibc
+**block-buffers** it, so log lines can sit in a 4–8 KB buffer for minutes, or
+be lost entirely if the process is killed, before reaching the file.
 
-The Taskfile works around this by launching under `stdbuf -oL -eL`, which forces
-line buffering on stdout/stderr:
+Launch under `stdbuf -oL -eL` to force line buffering on stdout/stderr:
 
 ```sh
 nohup stdbuf -oL -eL swift run > /tmp/strato-control-plane.log 2>&1 &
 ```
 
-`stdbuf` ships with GNU coreutils. On macOS it isn't present by default — install
-coreutils (`brew install coreutils`), where it's available as `gstdbuf` unless the
-`gnubin` PATH is added. The Taskfile detects `stdbuf`/`gstdbuf` and simply runs
-without the wrapper if neither is found, so dev startup never breaks; logs just
-fall back to block buffering on that platform.
+`stdbuf` ships with GNU coreutils. On macOS it isn't present by default —
+install coreutils (`brew install coreutils`), where it's available as
+`gstdbuf` unless the `gnubin` PATH is added.
 
-If you launch a binary by hand and redirect to a file, do the same, or `tail -f`
-a TTY instead.
+Alternatively, skip the redirect and `tail -f` a TTY instead.
 
 ## HTTP request logging (control plane)
 

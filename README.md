@@ -64,9 +64,18 @@ automatically after restarts.
 
 ### Local development
 
-For hacking on Strato itself, use the Taskfile-based dev environment
-(`task dev`) or the root `docker-compose.yml` (dev credentials, localhost
-only). See [DEV-SETUP.md](DEV-SETUP.md).
+The three Swift packages build and test with no infrastructure at all — the
+control-plane test suite runs against in-memory SQLite:
+
+```bash
+swift test --package-path control-plane
+swift test --package-path agent
+swift test --package-path shared
+```
+
+To run the full stack, use the Docker Compose deployment above; it can build
+the control plane from your working tree instead of pulling the published
+image. See the [local development guide](docs/development/local-development.md).
 
 ## Core Technologies
 
@@ -100,7 +109,7 @@ strato/
 ├── deploy/compose/      # Single-host Docker Compose deployment
 ├── helm/                # Kubernetes Helm chart
 ├── spicedb/             # Authorization schema
-└── docker-compose.yml   # Local development environment
+└── docs/                # VitePress documentation site
 ```
 
 ## Documentation

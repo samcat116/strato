@@ -93,7 +93,7 @@ Built with modern technologies:
 
 ### Developer Experience
 
-- Hot-reload development (Skaffold)
+- Swift packages that build and test with no infrastructure
 - Comprehensive documentation
 - Active development
 

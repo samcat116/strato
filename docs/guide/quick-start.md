@@ -11,7 +11,7 @@ change before going to production except your hostname.
 | **Docker Compose** | A single host, trying Strato out | this page + [details](/deployment/docker-compose) |
 | **Kubernetes (Helm)** | Clusters, HA control plane | this page + [details](/deployment/kubernetes) |
 
-(For hacking on Strato itself, see the [development guide](/development/skaffold) instead.)
+(For hacking on Strato itself, see the [development guide](/development/local-development) instead.)
 
 ## Docker Compose
 

@@ -300,7 +300,7 @@ Phases; each lands independently:
 5. **Cutover.** Flip `req.can` and the middleware to Cedar; default-deny
    middleware; admin bypass through the evaluator; creator bindings at create.
 6. **Deletion.** Remove tuple writes, the SpiceDB reconciliation services,
-   `SpiceDBService`, `schema.zed`; drop SpiceDB from compose/helm/Taskfile/CI.
+   `SpiceDBService`, `schema.zed`; drop SpiceDB from compose/helm/CI.
    Keep a read-only rollback window first.
 7. **Payoff features.** symcc write-time guardrail check (`403
    GuardrailViolation` naming the guardrail), policy simulator, workload
