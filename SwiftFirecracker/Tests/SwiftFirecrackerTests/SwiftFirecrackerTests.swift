@@ -139,6 +139,62 @@ struct SwiftFirecrackerTests {
         #expect(json.contains("\"action_type\":\"InstanceStart\""))
     }
 
+    @Test("SnapshotCreateConfig encodes correctly")
+    func testSnapshotCreateConfigEncoding() throws {
+        let config = SnapshotCreateConfig(
+            snapshotPath: "/snapshots/vmstate.snap",
+            memFilePath: "/snapshots/memory.snap",
+            snapshotType: .full
+        )
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(config)
+        let json = String(data: data, encoding: .utf8)!
+
+        #expect(json.contains("snapshot_path"))
+        #expect(json.contains("mem_file_path"))
+        #expect(json.contains("\"snapshot_type\":\"Full\""))
+    }
+
+    @Test("SnapshotLoadConfig encodes the file-backed memory backend")
+    func testSnapshotLoadConfigEncoding() throws {
+        let config = SnapshotLoadConfig(
+            snapshotPath: "/snapshots/vmstate.snap",
+            memFilePath: "/snapshots/memory.snap",
+            resumeVM: true
+        )
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(config)
+        let json = String(data: data, encoding: .utf8)!
+
+        #expect(json.contains("snapshot_path"))
+        #expect(json.contains("mem_backend"))
+        #expect(json.contains("\"backend_type\":\"File\""))
+        #expect(json.contains("backend_path"))
+        #expect(json.contains("\"resume_vm\":true"))
+    }
+
+    @Test("MachineConfigUpdate encodes only the provided fields")
+    func testMachineConfigUpdateEncoding() throws {
+        let update = MachineConfigUpdate(trackDirtyPages: true)
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(update)
+        let json = String(data: data, encoding: .utf8)!
+
+        #expect(json.contains("\"track_dirty_pages\":true"))
+        #expect(!json.contains("vcpu_count"))
+        #expect(!json.contains("mem_size_mib"))
+    }
+
+    @Test("EntropyDevice encodes an empty body by default")
+    func testEntropyDeviceEncoding() throws {
+        let device = EntropyDevice()
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(device)
+        let json = String(data: data, encoding: .utf8)!
+
+        #expect(json == "{}")
+    }
+
     @Test("FirecrackerError provides descriptions")
     func testErrorDescriptions() {
         let error1 = FirecrackerError.vmNotFound("test-vm")

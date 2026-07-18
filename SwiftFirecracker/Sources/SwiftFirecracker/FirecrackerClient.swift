@@ -203,6 +203,26 @@ public actor FirecrackerClient {
         return manager
     }
 
+    /// Spawns a fresh Firecracker process and restores it from a snapshot
+    /// (issue #426) — the restore counterpart of the boot flow. The snapshot
+    /// carries the full device topology, so no configuration calls are made;
+    /// the caller must have staged the memory/vmstate files and every drive
+    /// file at the paths recorded in the vmstate (in-jail paths for a jailed
+    /// VM, with a jail root laid out exactly as at snapshot time). A load
+    /// failure tears the spawned process back down so a retry starts clean.
+    public func restoreVM(
+        vmId: String, jail: JailerOptions?, snapshot: SnapshotLoadConfig
+    ) async throws -> FirecrackerManager {
+        let manager = try await createVM(vmId: vmId, jail: jail)
+        do {
+            try await manager.loadSnapshot(snapshot)
+        } catch {
+            try? await destroyVM(vmId: vmId)
+            throw error
+        }
+        return manager
+    }
+
     /// Re-attaches to a Firecracker process that outlived the owning agent, by
     /// connecting to its existing API socket *without* spawning a new process
     /// (orphan re-adoption after an agent restart, issue #433). Returns the

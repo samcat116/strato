@@ -4,7 +4,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: "Strato",
   description: "Fast, secure, and easy to deploy private cloud platform",
-  base: '/',
+  base: '/strato/',
 
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
@@ -30,7 +30,16 @@ export default defineConfig({
         text: 'Architecture',
         items: [
           { text: 'Overview', link: '/architecture/overview' },
+          { text: 'Control Plane', link: '/architecture/control-plane' },
+          { text: 'Agent', link: '/architecture/agent' },
+          { text: 'Wire Protocol', link: '/architecture/wire-protocol' },
+          { text: 'Frontend', link: '/architecture/frontend' },
           { text: 'Scheduler', link: '/architecture/scheduler' },
+          { text: 'Multi-Replica Control Plane', link: '/architecture/multi-replica' },
+          { text: 'Networking', link: '/architecture/networking' },
+          { text: 'Storage', link: '/architecture/storage' },
+          { text: 'Distributed Storage (Proposal)', link: '/architecture/distributed-storage' },
+          { text: 'Sandboxes', link: '/architecture/sandboxes' },
           { text: 'IAM', link: '/architecture/iam' },
           { text: 'Agent Updates', link: '/architecture/agent-updates' }
         ]

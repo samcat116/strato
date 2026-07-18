@@ -421,6 +421,9 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateRoleBinding())
     app.migrations.add(CreateIAMRoleRegistry())
 
+    // Sandbox snapshots / checkpoint-resume (issue #426).
+    app.migrations.add(CreateSandboxSnapshot())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

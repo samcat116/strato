@@ -100,6 +100,51 @@ struct QuotaEnforcementService {
         }
     }
 
+    /// Sandbox-snapshot counterpart (issue #426): snapshots persist real bytes
+    /// in the shared storage pool, so admission checks `size` — the guest
+    /// memory as an estimate, later replaced by the agent's actual figures —
+    /// against every applicable quota's storage limit. Call inside the same
+    /// transaction as the snapshot insert.
+    static func reserveSandboxSnapshot(
+        for project: Project,
+        environment: String,
+        size: Int64,
+        on db: Database
+    ) async throws {
+        try await reserveWorkload(for: project, environment: environment, on: db) { quota in
+            let check = quota.canAccommodateSnapshotStorage(size)
+            guard check.allowed else { return check }
+            try quota.reserveSnapshotStorage(size)
+            return check
+        }
+    }
+
+    /// Post-completion validation for sandbox snapshots (issue #426):
+    /// admission reserved an *estimate*, so once the agent reports actual
+    /// sizes the caller re-checks the pool. Resyncs every applicable quota to
+    /// real usage and returns the name of the first enabled quota whose
+    /// storage pool is now over-committed — the caller deletes the snapshot
+    /// rather than keeping storage past the limit. Nil when everything fits.
+    static func storageOverCommit(
+        projectID: UUID,
+        environment: String,
+        on db: Database
+    ) async throws -> String? {
+        guard let project = try await Project.find(projectID, on: db) else { return nil }
+        let quotas = try await applicableQuotas(for: project, environment: environment, on: db)
+        // No advisory lock: like `releaseWorkload`, this runs outside the
+        // admission transaction and resync-to-real-usage is idempotent.
+        var violated: String?
+        for quota in quotas {
+            try await resyncReservations(quota, on: db)
+            try await quota.save(on: db)
+            if violated == nil, quota.isEnabled, quota.reservedStorage > quota.maxStorage {
+                violated = quota.name
+            }
+        }
+        return violated
+    }
+
     /// Shared check-then-reserve sequence over every applicable quota:
     /// advisory-lock, resync each quota to real usage, dry-run `apply` on all
     /// of them (mutating nothing on rejection), then apply and save. `apply`
@@ -203,7 +248,9 @@ struct QuotaEnforcementService {
         let (_, vms, sandboxes) = try await quota.calculateActualUsage(on: db)
         quota.reservedVCPUs = vms.reduce(0) { $0 + $1.cpu } + sandboxes.reduce(0) { $0 + $1.cpus }
         quota.reservedMemory = vms.reduce(Int64(0)) { $0 + $1.memory } + sandboxes.reduce(Int64(0)) { $0 + $1.memory }
-        quota.reservedStorage = vms.reduce(Int64(0)) { $0 + $1.disk }
+        // Storage: VM disks plus sandbox snapshot artifacts (issue #426).
+        quota.reservedStorage =
+            vms.reduce(Int64(0)) { $0 + $1.disk } + (try await quota.sandboxSnapshotStorageInScope(on: db))
         quota.vmCount = vms.count
         quota.sandboxCount = sandboxes.count
     }

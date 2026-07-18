@@ -177,6 +177,35 @@ jobs:
           print("✅ SPIRE database password auto-generated and strong")
           EOF
 
+      - name: Template with Gateway API enabled
+        run: |
+          # Chart-owned Gateway + GatewayClass + all three routes (HTTPRoute and
+          # both passthrough TLSRoutes), with cert-manager shim annotations.
+          helm template strato-gw helm/strato-control-plane/ \
+            --set gateway.enabled=true \
+            --set gateway.create=true \
+            --set gateway.gatewayClass.create=true \
+            --set strato.externalHostname=strato.example.com \
+            --set gateway.tls.certManager.enabled=true \
+            --set gateway.tls.certManager.issuerRef.name=letsencrypt-dns \
+            --set spire.enabled=true \
+            --set spire.controlPlane.enableMTLS=true > /tmp/gateway-template.yaml
+          # Routes-only render binding to an operator-provided Gateway.
+          helm template strato-gw-bind helm/strato-control-plane/ \
+            --set gateway.enabled=true \
+            --set gateway.name=infra-gateway \
+            --set gateway.namespace=envoy-gateway-system \
+            --set strato.externalHostname=strato.example.com > /tmp/gateway-bind-template.yaml
+          # create=false must NOT render a Gateway object of its own.
+          if grep -qE '^kind: Gateway$' /tmp/gateway-bind-template.yaml; then
+            echo "❌ gateway.create=false rendered a Gateway resource"
+            exit 1
+          fi
+          for kind in HTTPRoute TLSRoute; do
+            grep -q "kind: $kind" /tmp/gateway-template.yaml || { echo "❌ missing $kind in gateway render"; exit 1; }
+          done
+          echo "✅ Gateway API templates generated successfully"
+
       - name: Validate generated YAML
         run: |
           # Parse every document of every render and reject duplicate mapping
@@ -184,7 +213,7 @@ jobs:
           # once shipped a SPIRE server that could never start). The previous
           # incarnation of this step used safe_load (single-doc, dup-tolerant)
           # and swallowed failures with `|| echo`, so it could never fail.
-          for file in /tmp/default-template.yaml /tmp/production-template.yaml /tmp/external-db-template.yaml /tmp/spire-template.yaml /tmp/spire-ephemeral-template.yaml; do
+          for file in /tmp/default-template.yaml /tmp/production-template.yaml /tmp/external-db-template.yaml /tmp/spire-template.yaml /tmp/spire-ephemeral-template.yaml /tmp/gateway-template.yaml /tmp/gateway-bind-template.yaml; do
             python3 - "$file" <<'EOF'
           import sys, yaml
 
