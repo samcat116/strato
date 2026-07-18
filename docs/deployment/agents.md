@@ -337,6 +337,40 @@ Control-plane environment reference:
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `SPIRE_SERVER_API_ADDRESS` | SPIRE server registration API (`unix:///path` or loopback `host:port` bridge) | unset (provisioning off) |
-| `SPIRE_SERVER_PUBLIC_ADDRESS` | Address nodes dial for attestation | `EXTERNAL_HOSTNAME:8085` |
+| `SPIRE_SERVER_PUBLIC_ADDRESS` | Address nodes dial for attestation | `EXTERNAL_HOSTNAME:8085` (compose); the Helm chart sets `spire.<host>:443` when `gateway.enabled` |
 | `SPIRE_AGENT_SELECTORS` | Comma-separated workload selectors | `unix:uid:0` |
 | `SPIRE_SVID_TTL` | X.509 SVID TTL for agent entries (seconds) | `3600` |
+
+### Connectivity (remote nodes)
+
+Agents only ever dial **out**, so a hypervisor behind a home/ISP network needs
+no inbound ports — but the control plane must be reachable. How that reachability
+is exposed depends on the deployment:
+
+- **Compose** (`deploy/compose`) publishes distinct ports on the host: the web
+  UI/API, the Envoy mTLS listener (`:8443`), and the SPIRE node API (`:8085`).
+  Each must be reachable from the hypervisor.
+- **Kubernetes (Helm chart, `gateway.enabled`)** collapses all three onto a
+  single LoadBalancer on **:443**, routed by SNI with Gateway API (Envoy
+  Gateway) so nothing extra needs opening:
+
+  | SNI host | Gateway route | Terminates where | Backend |
+  | --- | --- | --- | --- |
+  | `<host>` | `HTTPRoute` | at the Gateway | control plane / frontend (token join at `wss://<host>/agent/ws`) |
+  | `agents.<host>` | `TLSRoute` passthrough | at the Envoy sidecar (sees the SVID) | control-plane `agent-mtls` `:8443` |
+  | `spire.<host>` | `TLSRoute` passthrough | at the SPIRE server | SPIRE node API `:8081` |
+
+  So an SVID node connects to `wss://agents.<host>/agent/ws` and attests against
+  `spire.<host>:443` — outbound-443-only, the friendliest shape for nodes behind
+  home networks. When `spire.controlPlane.enableMTLS`, the chart points
+  `EXTERNAL_HOSTNAME` at `agents.<host>`, so the registration URL, bootstrap
+  command, and telemetry-ingest origin the UI hands you already target the
+  passthrough listener — no manual rewrite needed. `TLSRoute` is an experimental
+  Gateway API channel; the chart pins `gateway.networking.k8s.io/v1alpha2` for
+  it, matching Envoy Gateway's experimental install. See the `gateway:` block in
+  the chart's `values.yaml`.
+
+  > Deploying Envoy Gateway and cutting the LoadBalancer/DNS over from
+  > ingress-nginx are infrastructure concerns handled outside the chart; by
+  > default the chart only attaches its routes to an operator-provided Gateway
+  > (`gateway.create=false`).

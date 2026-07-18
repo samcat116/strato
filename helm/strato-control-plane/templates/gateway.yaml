@@ -1,0 +1,84 @@
+{{- if and .Values.gateway.enabled .Values.gateway.create }}
+{{- $webHost := include "strato-control-plane.gateway.webHost" . }}
+{{- if .Values.gateway.gatewayClass.create }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .Values.gateway.gatewayClassName }}
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+spec:
+  controllerName: {{ .Values.gateway.gatewayClass.controllerName }}
+---
+{{- end }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ include "strato-control-plane.gateway.name" . }}
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    {{- with .Values.gateway.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- $annotations := dict }}
+  {{- with .Values.gateway.annotations }}{{ $annotations = merge $annotations . }}{{ end }}
+  {{- if .Values.gateway.tls.certManager.enabled }}
+  {{- $issuer := required "gateway.tls.certManager.enabled requires gateway.tls.certManager.issuerRef.name" .Values.gateway.tls.certManager.issuerRef.name }}
+  {{- if eq .Values.gateway.tls.certManager.issuerRef.kind "Issuer" }}
+  {{- $annotations = merge $annotations (dict "cert-manager.io/issuer" $issuer) }}
+  {{- else }}
+  {{- $annotations = merge $annotations (dict "cert-manager.io/cluster-issuer" $issuer) }}
+  {{- end }}
+  {{- end }}
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  gatewayClassName: {{ .Values.gateway.gatewayClassName }}
+  listeners:
+    # UI/API + frontend, terminated here so the Gateway can do HTTP routing.
+    - name: {{ .Values.gateway.listeners.web }}
+      protocol: HTTPS
+      port: 443
+      hostname: {{ $webHost | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ include "strato-control-plane.gateway.tlsSecretName" . }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds:
+          - kind: HTTPRoute
+    {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
+    # Agent WebSocket + telemetry ingest: passthrough so the Envoy sidecar
+    # sees the agent SVID client cert (must not be terminated at the edge).
+    - name: {{ .Values.gateway.listeners.agents }}
+      protocol: TLS
+      port: 443
+      hostname: {{ include "strato-control-plane.gateway.agentsHost" . | quote }}
+      tls:
+        mode: Passthrough
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds:
+          - kind: TLSRoute
+    {{- end }}
+    {{- if .Values.spire.enabled }}
+    # SPIRE server node-attestation API: passthrough, SPIRE does its own TLS.
+    - name: {{ .Values.gateway.listeners.spire }}
+      protocol: TLS
+      port: 443
+      hostname: {{ include "strato-control-plane.gateway.spireHost" . | quote }}
+      tls:
+        mode: Passthrough
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds:
+          - kind: TLSRoute
+    {{- end }}
+{{- end }}
