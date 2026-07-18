@@ -97,6 +97,26 @@ struct VMSpecTests {
         #expect(decoded.volumes.isEmpty)
         #expect(decoded.networks.isEmpty)
         #expect(decoded.console == nil)
+        #expect(decoded.diskBytes == nil)
+    }
+
+    @Test func diskBytesRoundTrip() throws {
+        let spec = VMSpec(
+            cpus: 1, memoryBytes: 268_435_456, diskBytes: 10_737_418_240, boot: .disk(firmware: nil))
+        let decoded = try roundTrip(spec)
+        #expect(decoded.diskBytes == 10_737_418_240)
+    }
+
+    /// A spec from a control plane that predates `diskBytes` (issue #473) has
+    /// no such key; a new agent must decode it to nil (rolling-upgrade skew).
+    @Test func specWithoutDiskBytesKeyDecodesToNil() throws {
+        let json = """
+            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"sharedMemory":false,"hugepages":false,
+             "boot":{"disk":{}},"volumes":[],"networks":[]}
+            """
+        let decoded = try decodeJSON(VMSpec.self, from: json)
+        #expect(decoded.diskBytes == nil)
+        #expect(decoded.cpus == 2)
     }
 
     @Test func vmInfoRoundTrip() throws {

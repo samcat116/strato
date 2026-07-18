@@ -159,6 +159,19 @@ struct VMSpecBuilderTests {
         #expect(spec.memoryBytes == 4096)
     }
 
+    @Test("VMSpecBuilder carries the VM's disk requirement on both build paths")
+    func testDiskBytes() throws {
+        let image = createTestImage()
+        let vm = createTestVM(disk: 10_737_418_240)
+
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
+        #expect(spec.diskBytes == 10_737_418_240)
+
+        let specWithVolumes = VMSpecBuilder.buildVMSpecWithVolumes(
+            from: vm, image: image, volumes: [], networkInterfaces: [])
+        #expect(specWithVolumes.diskBytes == 10_737_418_240)
+    }
+
     @Test("VMSpecBuilder configures hugepages correctly")
     func testHugepagesConfiguration() throws {
         let image = createTestImage()
