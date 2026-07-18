@@ -275,11 +275,65 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let body = try res.content.decode(WorkloadIdentityResponse.self)
-                // Falls back to entry-derived domains with unknown state.
+                // Falls back to entry-derived domains (normalized to bare trust
+                // domain names) with unknown state.
                 #expect(body.federation.available == false)
-                #expect(body.federation.domains.map(\.trustDomain) == ["spiffe://partner.example"])
+                #expect(body.federation.domains.map(\.trustDomain) == ["partner.example"])
                 #expect(body.federation.domains.first?.state == "unknown")
                 #expect(body.warning?.contains("federation relationships") == true)
+            }
+        }
+    }
+
+    @Test("Merges static (entry-derived) federation domains the API omits")
+    func mergesStaticFederationDomains() async throws {
+        try await withApp { app in
+            let token = try await makeAdmin(on: app.db)
+            let fake = FakeSPIREServerAPI()
+            // An entry federates with two domains; only one has a dynamic
+            // relationship in the trustdomain API. The other is a static
+            // (server.conf `federates_with`) relationship the API never returns.
+            await fake.setEntries([
+                SPIREEntry(
+                    id: "e1",
+                    spiffeID: "spiffe://strato.test/db/primary",
+                    parentID: "spiffe://strato.test/node/agent-1",
+                    selectors: [SPIRESelector(type: "unix", value: "uid:1000")],
+                    x509SVIDTTLSeconds: 3600,
+                    jwtSVIDTTLSeconds: 0,
+                    federatesWith: ["spiffe://dynamic.example", "spiffe://static.example"],
+                    admin: false,
+                    downstream: false,
+                    hint: "",
+                    expiresAt: nil,
+                    createdAt: nil
+                )
+            ])
+            await fake.setFederationRelationships([
+                SPIREFederationRelationship(
+                    trustDomain: "dynamic.example",
+                    bundleEndpointURL: "https://dynamic.example/bundle",
+                    bundleEndpointProfile: "https_spiffe",
+                    endpointSPIFFEID: "spiffe://dynamic.example/spire/server",
+                    bundleX509AuthorityCount: 1,
+                    bundleSequenceNumber: 3
+                )
+            ])
+            installFakeSPIRE(on: app, fake: fake)
+
+            try await app.test(.GET, "/api/workload-identity") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let body = try res.content.decode(WorkloadIdentityResponse.self)
+                #expect(body.federation.available == true)
+                // Both domains appear: the dynamic one with real state, the
+                // static one (API-omitted) supplemented with unknown state.
+                #expect(body.federation.domains.map(\.trustDomain) == ["dynamic.example", "static.example"])
+                let dynamic = try #require(body.federation.domains.first { $0.trustDomain == "dynamic.example" })
+                #expect(dynamic.state == "synced")
+                let staticDomain = try #require(body.federation.domains.first { $0.trustDomain == "static.example" })
+                #expect(staticDomain.state == "unknown")
             }
         }
     }
