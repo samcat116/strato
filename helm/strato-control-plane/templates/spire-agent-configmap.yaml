@@ -16,6 +16,19 @@ data:
         server_port = "{{ .Values.spire.service.grpcPort }}"
         socket_path = "/var/run/spire/sockets/workload.sock"
         trust_domain = "{{ .Values.spire.trustDomain }}"
+        {{- if .Values.spire.notifier.k8sbundle.enabled }}
+        {{- /*
+        Bootstrap trust: the server's k8sbundle notifier publishes its CA
+        into the <fullname>-spire-bundle ConfigMap, which the DaemonSet
+        mounts here. Without one of trust_bundle_path/insecure_bootstrap
+        the agent refuses to start.
+        */}}
+        trust_bundle_path = "/run/spire/bundle/bundle.crt"
+        {{- else }}
+        # No bundle notifier to publish the server CA: trust the first
+        # connection instead of failing to boot.
+        insecure_bootstrap = true
+        {{- end }}
 
         # Enable SDS for Envoy
         sds {
