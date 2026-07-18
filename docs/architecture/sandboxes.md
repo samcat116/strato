@@ -361,10 +361,88 @@ The frontend's sandbox detail page grows Terminal and Logs tabs mirroring the
 VM page — the terminal drives exec sessions (default `/bin/sh`, PTY, resize
 wired to xterm's fit addon), and the logs tab tails the Loki-backed endpoint.
 
-## Later phases
+## Phase 3: jailer hardening (issue #425)
 
-- **Phase 2 (remaining)**: TTL/auto-expiry (#424).
-- **Phase 3**: jailer hardening (#425).
+Sandboxes run **untrusted** workloads by definition, so their VMM processes
+get a hardening barrier VMs (operator-trusted workloads) don't: Firecracker's
+own [jailer](https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md).
+`SwiftFirecracker` grew `JailerOptions` and jail-aware spawn/adopt/destroy in
+`FirecrackerClient`; the runtime derives everything per sandbox from a pure
+`SandboxJailPlan` (`StratoAgentCore/SandboxJail.swift`), so create, adoption
+after an agent restart, and teardown always agree on the layout with nothing
+persisted.
+
+**The barrier.** Each sandbox's Firecracker is spawned via
+`jailer --id <sandboxId> --exec-file firecracker --uid/--gid ... --netns ...`:
+
+- **Chroot**: `<sandbox_jailer_chroot_dir>/firecracker/<sandboxId>/root`
+  becomes the process's `/`. Everything the microVM touches is staged inside
+  before spawn — the writable rootfs copy and config drive are written
+  directly there (jailed sandboxes don't use the flat per-sandbox directory at
+  all), the shared kernel/initramfs are hard-linked in (copy across
+  filesystems), and the Firecracker API receives in-jail paths (`/rootfs.ext4`,
+  `/config.img`, `/kernel`, `/initramfs`). The API socket
+  (`/run/firecracker.socket`) and vsock UDS (`/run/vsock.sock`) are created by
+  the jailed process under `run/`; the host dials them through the chroot
+  prefix. Phase-4 snapshot files will follow the same rule: staged into, and
+  loaded from, in-jail paths. Teardown removes the whole jail subtree.
+- **Privilege drop**: each sandbox runs as its own uid/gid, derived
+  statelessly as `sandbox_jailer_uid_base + (FNV-1a-64(sandboxId) % 65536)` —
+  stable across restarts, no allocation state. Writable artifacts are chowned
+  to it; a slot collision between two sandboxes (rare at 2^16) weakens only
+  their mutual isolation, never the host boundary.
+- **Network namespace**: every jailed sandbox gets a dedicated netns
+  (`strato-sbx-<id>`, created with `ip netns add`), today deliberately
+  **empty** — a compromised VMM sees no host interfaces at all. This is the
+  reconciliation point with the TAP/OVN attach flow: when guest networking
+  lands, the agent creates the TAP in the host namespace, plugs it into the
+  OVS integration bridge (exactly as for VMs), then moves it into the
+  sandbox's netns before spawning the jailer with `--netns` — OVS keeps the
+  port (datapath binding survives the namespace move) while the jailed
+  process sees the device.
+- **Seccomp**: Firecracker installs its own default seccomp filters
+  unconditionally; the jailer adds no flag for it and the agent never passes
+  `--no-seccomp`. Nothing to configure.
+
+**Resource limits: one owner.** The agent's manifest-based reservation remains
+the **only capacity/accounting owner** (what the scheduler sees), and the
+Firecracker machine config remains the enforcement point for guest sizing
+(vCPUs, guest RAM). The jailer cgroup adds exactly one thing on cgroup-v2
+hosts: `memory.max = guest memory + 128 MiB`, a *host-protection backstop*
+against a compromised VMM ballooning its host process — it feeds nothing back
+into scheduling and is deliberately not a second accounting system. The
+jailer never removes the per-VM cgroup directory it creates, so destroy
+rmdir's it (after the process exits) and the crash-leftover sweep does the
+same. No CPU
+cgroup is set (vCPU count already bounds compute; host fairness is the kernel
+scheduler's job). Cgroup-v1 hosts get the rest of the barrier and one warning.
+
+**Policy: `sandbox_jailer_mode`.** `auto` (default) jails when the host can —
+agent running as root and the jailer binary present (it ships in the
+Firecracker release tarball; `task install-firecracker` and the agent's
+default binary probe both know it) — and otherwise logs a prominent warning
+and runs unjailed, keeping dev hosts working. `required` is the production
+posture: if the jailer is unusable the agent **does not advertise the sandbox
+capability** (the probe reports why) and the runtime refuses creates, because
+silently running untrusted workloads unjailed on a host that demanded
+hardening is not an option — while *existing* sandboxes stay fully manageable
+(adopt/stop/delete need no new jailer spawn), so they never outlive their
+deletion unmanaged.
+`disabled` is the debugging escape hatch. Related knobs:
+`sandbox_jailer_binary_path`, `sandbox_jailer_chroot_dir` (default
+`<vm_storage_dir>/jailer` — each jail holds a full writable rootfs copy, so
+it belongs on VM storage), `sandbox_jailer_uid_base` (default 100000).
+
+**Adoption across config changes.** Orphan re-adoption always probes both
+socket layouts (in-jail first, then flat), so a running sandbox survives an
+operator flipping the jailer on or off between agent lives — the process
+keeps whatever barrier it was born with until it is deleted (jailed PIDs are
+rediscovered by the `--id` argument, since every jail shares the same
+in-chroot `--api-sock` path). VMs (the
+`FirecrackerService` path) remain unjailed for now; extending the barrier to
+them is future work.
+
+## Later phases
 - **Phase 4**: snapshot/checkpoint primitives and resume (#426), fork into new
   sandboxes (#427), and snapshot mobility — off-node export, cross-agent
   restore, diff snapshots (#428). Cross-agent restore is why the CPU-template

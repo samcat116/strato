@@ -192,12 +192,17 @@ public actor VsockConnection {
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let capacity = MemoryLayout.size(ofValue: addr.sun_path)
-        guard path.utf8.count < capacity else {
+        // A jailed VM's vsock UDS can exceed sun_path under a long storage
+        // directory; UnixSocketPath falls back to a /proc/self/fd alias.
+        let connectable: UnixSocketPath.Connectable
+        do {
+            connectable = try UnixSocketPath.connectable(path: path, capacity: capacity)
+        } catch {
             closeFD(sock)
-            throw FirecrackerError.invalidSocketPath(
-                "vsock UDS path is \(path.utf8.count) bytes; must be < \(capacity): \(path)")
+            throw error
         }
-        path.withCString { ptr in
+        defer { connectable.closeDirFD() }
+        connectable.path.withCString { ptr in
             withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
                 sunPath.withMemoryRebound(to: CChar.self, capacity: capacity) { dest in
                     strncpy(dest, ptr, capacity - 1)

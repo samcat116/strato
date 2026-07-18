@@ -4,6 +4,7 @@ import StratoAgentCore
 import StratoShared
 
 #if os(Linux)
+import Glibc
 import SwiftFirecracker
 
 /// The concrete sandbox runtime (issue #421): OCI-image Firecracker microVMs.
@@ -38,6 +39,27 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     private let socketDirectory: String
     private let sandboxStoragePath: String
     private let guestImagePath: String
+    /// The Firecracker binary the shared client spawns — the jail layout keys
+    /// on its basename, so create/adopt/teardown derive identical chroots.
+    private let firecrackerBinaryPath: String
+    /// Jailer settings (issue #425). Always present: even when new sandboxes
+    /// run unjailed (`jailNewSandboxes == false`), the *layout* is what lets
+    /// jailed orphans from a previous agent life be re-adopted and torn down
+    /// after the operator flips the mode — a running process keeps the
+    /// barrier it was born with.
+    private let jailerConfig: SandboxJailerConfig
+    /// Whether newly created sandboxes get the jailer barrier
+    /// (`sandbox_jailer_mode` resolution — see `SandboxJailerMode`).
+    private let jailNewSandboxes: Bool
+    /// Non-nil when `sandbox_jailer_mode = "required"` is unmet on this host:
+    /// creating a sandbox is refused (running one unjailed is not an option),
+    /// while everything an *existing* sandbox needs — adoption, status, stop,
+    /// delete — keeps working, since none of it spawns a new jailer. Without
+    /// this, jailed orphans would outlive their deletion unmanaged.
+    private let jailerBlockedReason: String?
+    /// Logged once: hosts without a usable cgroup-v2 memory controller get no
+    /// jailer memory ceiling.
+    private var warnedNoMemoryCeiling = false
 
     /// Guest context ID for the single vsock device. CIDs 0–2 are reserved, so
     /// 3 is the first usable guest CID.
@@ -55,6 +77,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let vsockUdsPath: String
         /// The boot nonce stamped into the config drive, echoed by the guest.
         let identityNonce: String
+        /// The jail layout when this sandbox runs inside the jailer barrier
+        /// (issue #425); nil for an unjailed sandbox (jailer disabled, or an
+        /// orphan adopted from a pre-jailer life).
+        let jail: SandboxJailPlan?
         /// The live Firecracker session, present for the sandbox's whole life.
         var manager: FirecrackerManager
         /// The workload's exit code once it has ended, cached so it survives a
@@ -118,7 +144,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         imageService: SandboxImageService,
         socketDirectory: String,
         sandboxStoragePath: String,
-        guestImagePath: String
+        guestImagePath: String,
+        firecrackerBinaryPath: String,
+        jailer: SandboxJailerConfig,
+        jailNewSandboxes: Bool,
+        jailerBlockedReason: String? = nil
     ) {
         self.logger = logger
         self.client = client
@@ -126,12 +156,17 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         self.socketDirectory = socketDirectory
         self.sandboxStoragePath = sandboxStoragePath
         self.guestImagePath = guestImagePath
+        self.firecrackerBinaryPath = firecrackerBinaryPath
+        self.jailerConfig = jailer
+        self.jailNewSandboxes = jailNewSandboxes
+        self.jailerBlockedReason = jailerBlockedReason
 
         logger.info(
             "Sandbox runtime initialized",
             metadata: [
                 "socketDirectory": .string(socketDirectory),
                 "guestImagePath": .string(guestImagePath),
+                "jailed": .stringConvertible(jailNewSandboxes),
             ])
     }
 
@@ -147,6 +182,14 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // no-op (the Firecracker process is already configured).
         if sandboxes[sandboxId] != nil {
             return
+        }
+
+        // The jailer is required but unusable: creating this sandbox would
+        // mean running an untrusted workload unjailed, which `required`
+        // forbids. (Normally unreachable — the capability is dark — but a
+        // stray desired entry must fail here, not fall through.)
+        if let jailerBlockedReason {
+            throw SandboxRuntimeError.jailerRequiredUnavailable(jailerBlockedReason)
         }
 
         // v1 has no in-guest networking: the guest init mounts the rootfs and
@@ -173,30 +216,114 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let materialized = try await imageService.materializeRootfs(
             image: spec.image, imageDigest: spec.imageDigest, credential: registryCredential)
 
-        let dir = sandboxDirectory(sandboxId)
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-
-        let rootfsPath = dir + "/rootfs.ext4"
-        if FileManager.default.fileExists(atPath: rootfsPath) {
-            try FileManager.default.removeItem(atPath: rootfsPath)
-        }
-        try FileManager.default.copyItem(atPath: materialized.rootfsPath, toPath: rootfsPath)
-
         // Stage the config drive the guest init reads at boot.
         let nonce = UUID().uuidString
         let configDrive = SandboxConfigDrive(
             sandboxId: sandboxId, identityNonce: nonce,
             guestConfig: materialized.guestConfig, spec: spec)
-        let configPath = dir + "/config.img"
-        try configDrive.blockImage().write(to: URL(fileURLWithPath: configPath))
 
-        let vsockUdsPath = vsockUDSPath(sandboxId)
+        // Stage the per-sandbox artifacts. Jailed (issue #425), everything the
+        // microVM touches lives inside its chroot and the Firecracker API is
+        // given in-jail paths; unjailed, the historical flat layout is kept.
+        // `rootfsPath`/`configPath`/`vsockUdsPath` are always the *host* views.
+        let jailPlan: SandboxJailPlan?
+        let rootfsPath: String
+        let configPath: String
+        let vsockUdsPath: String
+        let apiPaths: (rootfs: String, config: String, kernel: String, initrd: String, vsock: String)
+        var jailOptions: JailerOptions?
+
+        if jailNewSandboxes {
+            let jailer = jailerConfig
+            let plan = SandboxJailPlan(
+                sandboxId: sandboxId, config: jailer, firecrackerBinaryPath: firecrackerBinaryPath)
+            jailPlan = plan
+            // This id is being created fresh, so anything already under its
+            // jail is a stale leftover from a crashed previous life.
+            try? FileManager.default.removeItem(atPath: plan.jailDirectory)
+            // `run/` holds the API socket and vsock UDS the jailed process
+            // creates at runtime, so it must exist and be writable by its uid.
+            try FileManager.default.createDirectory(
+                atPath: plan.jailRoot + "/run", withIntermediateDirectories: true)
+
+            rootfsPath = plan.hostPath(forInJail: SandboxJailPlan.rootfsPathInJail)
+            try FileManager.default.copyItem(atPath: materialized.rootfsPath, toPath: rootfsPath)
+            configPath = plan.hostPath(forInJail: SandboxJailPlan.configPathInJail)
+            try configDrive.blockImage().write(to: URL(fileURLWithPath: configPath))
+            // Kernel/initramfs are shared read-only artifacts: hard-link when
+            // the chroot shares their filesystem, copy otherwise. They stay
+            // root-owned (world-readable suffices, and chowning a hard link
+            // would chown the installed guest image itself).
+            try linkOrCopy(
+                from: guestImage.kernelPath,
+                to: plan.hostPath(forInJail: SandboxJailPlan.kernelPathInJail))
+            try linkOrCopy(
+                from: guestImage.initramfsPath,
+                to: plan.hostPath(forInJail: SandboxJailPlan.initramfsPathInJail))
+            // The jailed process runs as the per-sandbox uid: it writes the
+            // rootfs and creates sockets under run/.
+            for path in [plan.jailRoot, plan.jailRoot + "/run", rootfsPath, configPath] {
+                try chownPath(path, uid: plan.uid, gid: plan.gid)
+            }
+
+            // A dedicated — and, until guest networking lands, deliberately
+            // empty — network namespace: even a compromised VMM sees no host
+            // interfaces. The future TAP attach flow creates the device in the
+            // host namespace, plugs it into the OVS bridge, and moves it in
+            // here before spawn.
+            try await createNetns(plan.netnsName)
+
+            vsockUdsPath = plan.vsockUDSHostPath
+            apiPaths = (
+                rootfs: SandboxJailPlan.rootfsPathInJail,
+                config: SandboxJailPlan.configPathInJail,
+                kernel: SandboxJailPlan.kernelPathInJail,
+                initrd: SandboxJailPlan.initramfsPathInJail,
+                vsock: SandboxJailPlan.vsockUDSPathInJail
+            )
+
+            let cgroups = jailerCgroups(guestMemoryBytes: spec.memoryBytes)
+            jailOptions = JailerOptions(
+                jailerBinaryPath: jailer.jailerBinaryPath,
+                chrootBaseDir: jailer.chrootBaseDir,
+                uid: plan.uid,
+                gid: plan.gid,
+                netnsPath: plan.netnsPath,
+                cgroupVersion: cgroups.version,
+                cgroups: cgroups.entries)
+        } else {
+            jailPlan = nil
+            let dir = sandboxDirectory(sandboxId)
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+
+            rootfsPath = dir + "/rootfs.ext4"
+            if FileManager.default.fileExists(atPath: rootfsPath) {
+                try FileManager.default.removeItem(atPath: rootfsPath)
+            }
+            try FileManager.default.copyItem(atPath: materialized.rootfsPath, toPath: rootfsPath)
+            configPath = dir + "/config.img"
+            try configDrive.blockImage().write(to: URL(fileURLWithPath: configPath))
+            vsockUdsPath = vsockUDSPath(sandboxId)
+            apiPaths = (
+                rootfs: rootfsPath, config: configPath,
+                kernel: guestImage.kernelPath, initrd: guestImage.initramfsPath,
+                vsock: vsockUdsPath
+            )
+        }
 
         // Spawn and fully configure the Firecracker microVM, leaving it in
         // `Not started` (== stopped). Roll the process back on any configuration
         // failure so a retry starts from a clean slate rather than
         // `vmAlreadyRunning`.
-        let manager = try await client.createVM(vmId: sandboxId)
+        let manager: FirecrackerManager
+        do {
+            manager = try await client.createVM(vmId: sandboxId, jail: jailOptions)
+        } catch {
+            if let plan = jailPlan {
+                await removeJailArtifacts(plan)
+            }
+            throw error
+        }
         do {
             try await manager.configureMachine(
                 MachineConfig(
@@ -204,8 +331,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                     memSizeMib: Int(spec.memoryBytes / (1024 * 1024))))
 
             let bootSource = SwiftFirecracker.BootSource(
-                kernelImagePath: guestImage.kernelPath,
-                initrdPath: guestImage.initramfsPath,
+                kernelImagePath: apiPaths.kernel,
+                initrdPath: apiPaths.initrd,
                 bootArgs: guestImage.bootArgs + " strato.config=/dev/vdb")
             try await manager.configureBootSource(bootSource)
 
@@ -213,25 +340,34 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             // config drive names), config second ⇒ /dev/vdb (what the guest
             // reads by default).
             try await manager.configureDrive(
-                Drive.rootDrive(id: "rootfs", path: rootfsPath, readOnly: false))
+                Drive.rootDrive(id: "rootfs", path: apiPaths.rootfs, readOnly: false))
             try await manager.configureDrive(
-                Drive.dataDrive(id: "config", path: configPath, readOnly: true))
+                Drive.dataDrive(id: "config", path: apiPaths.config, readOnly: true))
 
             // No network interface: networked specs are rejected above until the
             // guest image can configure one.
 
             try await manager.configureVsock(
-                VsockConfig(guestCid: Self.guestCID, udsPath: vsockUdsPath))
+                VsockConfig(guestCid: Self.guestCID, udsPath: apiPaths.vsock))
         } catch {
             try? await client.destroyVM(vmId: sandboxId)
+            if let plan = jailPlan {
+                await removeJailArtifacts(plan)
+            }
             throw error
         }
 
         sandboxes[sandboxId] = Managed(
             spec: spec, rootfsPath: rootfsPath, configPath: configPath,
-            vsockUdsPath: vsockUdsPath, identityNonce: nonce, manager: manager, lastExitCode: nil)
+            vsockUdsPath: vsockUdsPath, identityNonce: nonce, jail: jailPlan,
+            manager: manager, lastExitCode: nil)
 
-        logger.info("Sandbox created", metadata: ["sandboxId": .string(sandboxId)])
+        logger.info(
+            "Sandbox created",
+            metadata: [
+                "sandboxId": .string(sandboxId),
+                "jailed": .stringConvertible(jailPlan != nil),
+            ])
     }
 
     func bootSandbox(sandboxId: String) async throws {
@@ -303,9 +439,17 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         await stopLogFollow(sandboxId: sandboxId, retire: true)
         // Tear the Firecracker process down (idempotent — a sandbox whose
         // process the client no longer tracks throws, which we ignore), then
-        // remove the per-sandbox artifacts.
+        // remove the per-sandbox artifacts. The client removes a jailed
+        // sandbox's chroot subtree itself, but a delete can also arrive for a
+        // sandbox this runtime never tracked (crash leftovers): sweep the
+        // derived jail layout best-effort so netns and chroot never leak.
         try? await client.destroyVM(vmId: sandboxId)
         removeArtifacts(sandboxId)
+        let plan =
+            sandboxes[sandboxId]?.jail
+            ?? SandboxJailPlan(
+                sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+        await removeJailArtifacts(plan)
         sandboxes.removeValue(forKey: sandboxId)
     }
 
@@ -316,40 +460,92 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             return try await getSandboxStatus(sandboxId: sandboxId)
         }
 
-        let socketPath = FirecrackerClient.socketPath(socketDirectory: socketDirectory, vmId: sandboxId)
-        guard FileManager.default.fileExists(atPath: socketPath) else {
+        // A jailed orphan's socket lives inside its chroot, an unjailed one's
+        // in the flat socket directory — and both files can exist at once (a
+        // stale chroot left by a crashed jailed life beside a live unjailed
+        // recreation, or vice versa). A running process keeps whatever barrier
+        // it was born with, so every layout whose socket exists is *attempted*,
+        // jail first; only a candidate whose socket is dead falls through to
+        // the next, and existence alone never rules the live one out.
+        var candidates: [(jailPlan: SandboxJailPlan?, jailOptions: JailerOptions?, socketPath: String)] = []
+        let jailedSocketPath = JailerOptions.socketPath(
+            chrootBaseDir: jailerConfig.chrootBaseDir,
+            firecrackerBinaryPath: firecrackerBinaryPath,
+            vmId: sandboxId)
+        if FileManager.default.fileExists(atPath: jailedSocketPath) {
+            let plan = SandboxJailPlan(
+                sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+            candidates.append(
+                (
+                    plan,
+                    JailerOptions(
+                        jailerBinaryPath: jailerConfig.jailerBinaryPath,
+                        chrootBaseDir: jailerConfig.chrootBaseDir,
+                        uid: plan.uid, gid: plan.gid),
+                    jailedSocketPath
+                ))
+        }
+        let flatSocketPath = FirecrackerClient.socketPath(socketDirectory: socketDirectory, vmId: sandboxId)
+        if FileManager.default.fileExists(atPath: flatSocketPath) {
+            candidates.append((nil, nil, flatSocketPath))
+        }
+        guard !candidates.isEmpty else {
             throw SandboxRuntimeError.adoptionTargetGone(
-                "sandbox \(sandboxId) has no Firecracker API socket at \(socketPath)")
+                "sandbox \(sandboxId) has no Firecracker API socket at \(flatSocketPath) nor inside its jail")
         }
 
-        logger.info(
-            "Re-adopting orphaned sandbox",
-            metadata: ["sandboxId": .string(sandboxId), "socket": .string(socketPath)])
-
-        let manager: FirecrackerManager
-        let info: InstanceInfo
-        do {
-            (manager, info) = try await client.adoptVM(vmId: sandboxId)
-        } catch {
-            // A live Firecracker always answers its API socket, so a failed
-            // connect means the process is gone and the socket merely outlived
-            // it. The Agent re-creates from the desired entry in that case.
+        var adoption: (manager: FirecrackerManager, info: InstanceInfo, jailPlan: SandboxJailPlan?)?
+        var lastError: Error?
+        for candidate in candidates {
+            logger.info(
+                "Re-adopting orphaned sandbox",
+                metadata: [
+                    "sandboxId": .string(sandboxId),
+                    "socket": .string(candidate.socketPath),
+                    "jailed": .stringConvertible(candidate.jailPlan != nil),
+                ])
+            do {
+                let (manager, info) = try await client.adoptVM(vmId: sandboxId, jail: candidate.jailOptions)
+                adoption = (manager, info, candidate.jailPlan)
+                break
+            } catch {
+                // A live Firecracker always answers its API socket, so a failed
+                // connect means this candidate's process is gone and its socket
+                // merely outlived it — try the next layout.
+                lastError = error
+            }
+        }
+        guard let (manager, info, jailPlan) = adoption else {
+            // Every candidate socket is dead. The Agent re-creates from the
+            // desired entry in that case.
             throw SandboxRuntimeError.adoptionTargetGone(
-                "sandbox \(sandboxId) Firecracker API socket at \(socketPath) is dead: \(error.localizedDescription)"
+                "sandbox \(sandboxId) has no live Firecracker API socket: \(lastError?.localizedDescription ?? "unknown error")"
             )
         }
 
-        let dir = sandboxDirectory(sandboxId)
+        let rootfsPath: String
+        let configPath: String
+        let vsockUdsPath: String
+        if let plan = jailPlan {
+            rootfsPath = plan.hostPath(forInJail: SandboxJailPlan.rootfsPathInJail)
+            configPath = plan.hostPath(forInJail: SandboxJailPlan.configPathInJail)
+            vsockUdsPath = plan.vsockUDSHostPath
+        } else {
+            let dir = sandboxDirectory(sandboxId)
+            rootfsPath = dir + "/rootfs.ext4"
+            configPath = dir + "/config.img"
+            vsockUdsPath = vsockUDSPath(sandboxId)
+        }
         // Recover the boot nonce from the staged config drive so post-adoption
         // identity checks can still distinguish this generation.
-        let identityNonce = recoverIdentityNonce(sandboxId: sandboxId)
+        let identityNonce = recoverIdentityNonce(configPath: configPath)
         sandboxes[sandboxId] = Managed(
-            spec: spec, rootfsPath: dir + "/rootfs.ext4", configPath: dir + "/config.img",
-            vsockUdsPath: vsockUDSPath(sandboxId), identityNonce: identityNonce, manager: manager,
-            lastExitCode: nil)
+            spec: spec, rootfsPath: rootfsPath, configPath: configPath,
+            vsockUdsPath: vsockUdsPath, identityNonce: identityNonce, jail: jailPlan,
+            manager: manager, lastExitCode: nil)
 
         let status = await mappedStatus(
-            instance: info.state, udsPath: vsockUDSPath(sandboxId), sandboxId: sandboxId)
+            instance: info.state, udsPath: vsockUdsPath, sandboxId: sandboxId)
         if info.state == .running {
             // Same contract as boot: while the microVM runs, the guest serves
             // vsock and its retained ring buffer must ship — even when the
@@ -995,17 +1191,103 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         return true
     }
 
-    /// Read the boot nonce back from a sandbox's staged config drive. Empty when
-    /// the drive is missing or unreadable, in which case identity checks fall
-    /// back to the sandbox id alone.
-    private func recoverIdentityNonce(sandboxId: String) -> String {
-        let configPath = sandboxDirectory(sandboxId) + "/config.img"
+    /// Read the boot nonce back from a sandbox's staged config drive (at its
+    /// host-view path, flat or in-jail). Empty when the drive is missing or
+    /// unreadable, in which case identity checks fall back to the sandbox id
+    /// alone.
+    private func recoverIdentityNonce(configPath: String) -> String {
         guard let data = FileManager.default.contents(atPath: configPath),
             let drive = try? SandboxConfigDrive.decode(fromBlockImage: data)
         else {
             return ""
         }
         return drive.identityNonce
+    }
+
+    // MARK: - Jail plumbing (issue #425)
+
+    /// Hard-link `from` to `to` when both live on one filesystem (the shared
+    /// kernel/initramfs are read-only, so a link is safe), falling back to a
+    /// copy across filesystems.
+    private func linkOrCopy(from: String, to: String) throws {
+        if (try? FileManager.default.linkItem(atPath: from, toPath: to)) != nil {
+            return
+        }
+        try FileManager.default.copyItem(atPath: from, toPath: to)
+    }
+
+    /// `chown(2)` wrapper — the jailed Firecracker runs as a per-sandbox uid
+    /// and must own its writable artifacts.
+    private func chownPath(_ path: String, uid: UInt32, gid: UInt32) throws {
+        guard chown(path, uid_t(uid), gid_t(gid)) == 0 else {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "chown \(uid):\(gid) \(path) failed: \(String(cString: strerror(errno)))")
+        }
+    }
+
+    /// The jailer cgroup flags for one sandbox: on hosts with a cgroup-v2
+    /// memory controller, a `memory.max` ceiling protecting the *host* from a
+    /// compromised VMM (the agent's manifest accounting remains the only
+    /// capacity owner — see docs/architecture/sandboxes.md). Hosts without
+    /// one (cgroup v1, or v2 with the memory controller disabled — the jailer
+    /// aborts on any `--cgroup` file it cannot write) get no ceiling and one
+    /// warning.
+    private func jailerCgroups(guestMemoryBytes: Int64) -> (version: Int?, entries: [String]) {
+        guard SandboxJailPlan.hostSupportsMemoryCeiling() else {
+            if !warnedNoMemoryCeiling {
+                warnedNoMemoryCeiling = true
+                logger.warning(
+                    "Host has no usable cgroup-v2 memory controller; sandboxes run jailed but without a jailer memory ceiling"
+                )
+            }
+            return (nil, [])
+        }
+        return (2, ["memory.max=\(SandboxJailPlan.memoryLimitBytes(guestMemoryBytes: guestMemoryBytes))"])
+    }
+
+    /// Create the sandbox's dedicated network namespace. A namespace left by
+    /// a crashed previous life is reused — it is empty either way. Invokes
+    /// the `ip` binary the resolver located, never a `PATH` lookup: the
+    /// resolution that declared this host jail-capable and the spawn must
+    /// agree on the same binary.
+    private func createNetns(_ name: String) async throws {
+        guard let ipBinaryPath = jailerConfig.ipBinaryPath else {
+            // Unreachable when the resolver gated jailing: it requires `ip`.
+            throw SandboxRuntimeError.jailSetupFailed(
+                "the `ip` tool (iproute2) was not found on this host")
+        }
+        let result: ProcessResult
+        do {
+            result = try await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: ipBinaryPath),
+                arguments: ["netns", "add", name])
+        } catch {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "spawning `\(ipBinaryPath) netns add \(name)` failed: \(error.localizedDescription)")
+        }
+        if result.terminationStatus != 0 {
+            let output = result.combinedOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            if output.contains("File exists") { return }
+            throw SandboxRuntimeError.jailSetupFailed(
+                "`ip netns add \(name)` failed (exit \(result.terminationStatus)): \(output)")
+        }
+    }
+
+    /// Best-effort teardown of a jailed sandbox's host-side leftovers: the
+    /// chroot subtree and per-VM cgroup directory (normally the client's job,
+    /// but a crash can orphan both) and the network namespace.
+    private func removeJailArtifacts(_ plan: SandboxJailPlan) async {
+        try? FileManager.default.removeItem(atPath: plan.jailDirectory)
+        _ = rmdir(
+            JailerOptions.cgroupDirectory(
+                firecrackerBinaryPath: firecrackerBinaryPath, vmId: plan.sandboxId))
+        // `ip netns delete` is just an unmount plus unlink of the bind-mounted
+        // name (ip-netns(8)); doing the syscalls directly means teardown keeps
+        // working even when iproute2 was removed after a previous agent life
+        // created the namespace. Best effort — ENOENT (never created) and
+        // EPERM (non-root dev agent, which never created one) are both fine.
+        _ = umount2(plan.netnsPath, Int32(MNT_DETACH))
+        _ = unlink(plan.netnsPath)
     }
 
     // MARK: - Paths

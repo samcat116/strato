@@ -1236,7 +1236,7 @@ tasks:
   # Firecracker Tasks (Linux only)
   # ============================================================================
   install-firecracker:
-    desc: Download and install Firecracker binary (Linux only)
+    desc: Download and install Firecracker + jailer binaries (Linux only)
     cmds:
       - echo "📥 Installing Firecracker..."
       - |
@@ -1248,8 +1248,11 @@ tasks:
         mkdir -p ~/.local/bin
         cp /tmp/release-${LATEST}-${ARCH}/firecracker-${LATEST}-${ARCH} ~/.local/bin/firecracker
         chmod +x ~/.local/bin/firecracker
+        # The jailer (sandbox hardening, issue #425) ships in the same tarball.
+        cp /tmp/release-${LATEST}-${ARCH}/jailer-${LATEST}-${ARCH} ~/.local/bin/jailer
+        chmod +x ~/.local/bin/jailer
         rm -rf /tmp/release-${LATEST}-${ARCH}
-      - echo "✅ Firecracker installed at ~/.local/bin/firecracker"
+      - echo "✅ Firecracker + jailer installed in ~/.local/bin"
       - ~/.local/bin/firecracker --version
 
   download-firecracker-images:
