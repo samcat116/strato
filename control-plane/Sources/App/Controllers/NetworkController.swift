@@ -171,7 +171,22 @@ struct NetworkController: RouteCollection {
         )
 
         do {
-            try await network.save(on: req.db)
+            // IAM dual-write (issue #477): the creator's explicit, revocable
+            // binding on the network, in the same transaction as the row;
+            // SpiceDB stays authoritative.
+            let creatorID = user.id!
+            try await req.db.transaction { db in
+                try await network.save(on: db)
+                try await RoleBindingService.grant(
+                    principalType: .user,
+                    principalID: creatorID,
+                    role: .admin,
+                    nodeType: .network,
+                    nodeID: network.id!,
+                    createdBy: creatorID,
+                    on: db
+                )
+            }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A network named '\(name)' already exists")
         }
@@ -458,7 +473,13 @@ struct NetworkController: RouteCollection {
             )
         }
 
-        try await network.delete(on: req.db)
+        try await req.db.transaction { db in
+            try await network.delete(on: db)
+            // IAM dual-write: bindings have no FK to the resources they
+            // protect, so drop them with the node.
+            try await RoleBindingService.revokeAll(
+                nodeType: .network, nodeID: network.id!, on: db)
+        }
 
         req.logger.info(
             "Network deleted",

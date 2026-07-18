@@ -265,7 +265,12 @@ struct ProjectController: RouteCollection {
             throw Abort(.conflict, reason: "Cannot delete project with sandboxes. Delete sandboxes first.")
         }
 
-        try await project.delete(on: req.db)
+        // IAM dual-write (issue #477): bindings have no FK to the nodes they
+        // protect, so drop the project node's bindings with the row.
+        try await req.db.transaction { db in
+            try await project.delete(on: db)
+            try await RoleBindingService.revokeAll(nodeType: .project, nodeID: projectID, on: db)
+        }
         return .noContent
     }
 
@@ -785,11 +790,29 @@ struct ProjectController: RouteCollection {
         )
 
         try project.validate()
-        try await project.save(on: db)
 
-        // Update path with actual ID
-        project.path = try await project.buildPath(on: db)
-        try await project.save(on: db)
+        // Persist the project (two saves: the path embeds the generated id)
+        // and the creator's explicit admin binding in one transaction (IAM
+        // dual-write, issue #477). Deliberately new behavior — today a
+        // member-created project has no administrator besides org admins; the
+        // binding fixes that (it grants nothing until the Cedar cutover).
+        let creatorID = req.auth.get(User.self)?.id
+        try await db.transaction { transaction in
+            try await project.save(on: transaction)
+            project.path = try await project.buildPath(on: transaction)
+            try await project.save(on: transaction)
+            if let creatorID {
+                try await RoleBindingService.grant(
+                    principalType: .user,
+                    principalID: creatorID,
+                    role: .admin,
+                    nodeType: .project,
+                    nodeID: try project.requireID(),
+                    createdBy: creatorID,
+                    on: transaction
+                )
+            }
+        }
 
         // Write the SpiceDB project#parent tuple against the *immediate* parent (the
         // OU when OU-scoped, else the organization) using the persisted project id.
@@ -799,6 +822,7 @@ struct ProjectController: RouteCollection {
         guard let projectId = project.id else {
             throw Abort(.internalServerError, reason: "Project was not assigned an ID after save")
         }
+
         guard let parent = project.spiceDBParentRef else {
             throw Abort(.internalServerError, reason: "Project has no parent")
         }

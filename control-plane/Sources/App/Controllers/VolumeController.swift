@@ -178,7 +178,21 @@ struct VolumeController: RouteCollection {
             sourceImageID: request.sourceImageId
         )
 
-        try await volume.save(on: req.db)
+        // IAM dual-write (issue #477): the creator's explicit, revocable
+        // binding on the volume, in the same transaction as the row; SpiceDB
+        // stays authoritative.
+        try await req.db.transaction { db in
+            try await volume.save(on: db)
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: user.id!,
+                role: .admin,
+                nodeType: .volume,
+                nodeID: volume.id!,
+                createdBy: user.id,
+                on: db
+            )
+        }
 
         // Create SpiceDB relationship
         try await req.spicedb.writeRelationship(
@@ -300,7 +314,9 @@ struct VolumeController: RouteCollection {
             .all()
 
         for snapshot in snapshots {
-            // Delete SpiceDB relationship
+            // Delete SpiceDB relationships — both tuples, matching
+            // deleteSnapshot: a stale owner tuple would re-create the
+            // snapshot's binding via the SpiceDB export backfill.
             try await req.spicedb.deleteRelationship(
                 entity: "volume_snapshot",
                 entityId: snapshot.id!.uuidString,
@@ -308,7 +324,19 @@ struct VolumeController: RouteCollection {
                 subject: "volume",
                 subjectId: volume.id!.uuidString
             )
-            try await snapshot.delete(on: req.db)
+            try await req.spicedb.deleteRelationship(
+                entity: "volume_snapshot",
+                entityId: snapshot.id!.uuidString,
+                relation: "owner",
+                subject: "user",
+                subjectId: snapshot.$createdBy.id.uuidString
+            )
+            try await req.db.transaction { db in
+                try await snapshot.delete(on: db)
+                // IAM dual-write: drop the snapshot's bindings with the row.
+                try await RoleBindingService.revokeAll(
+                    nodeType: .volumeSnapshot, nodeID: snapshot.id!, on: db)
+            }
         }
 
         // Delete SpiceDB relationships
@@ -328,7 +356,13 @@ struct VolumeController: RouteCollection {
             subjectId: volume.$project.id.uuidString
         )
 
-        try await volume.delete(on: req.db)
+        try await req.db.transaction { db in
+            try await volume.delete(on: db)
+            // IAM dual-write: bindings have no FK to the resources they
+            // protect, so drop them with the node.
+            try await RoleBindingService.revokeAll(
+                nodeType: .volume, nodeID: volume.id!, on: db)
+        }
 
         req.logger.info(
             "Volume deleted",
@@ -642,7 +676,20 @@ struct VolumeController: RouteCollection {
             createdByID: user.id!
         )
 
-        try await snapshot.save(on: req.db)
+        // IAM dual-write (issue #477): creator binding on the snapshot, in the
+        // same transaction as the row.
+        try await req.db.transaction { db in
+            try await snapshot.save(on: db)
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: user.id!,
+                role: .admin,
+                nodeType: .volumeSnapshot,
+                nodeID: snapshot.id!,
+                createdBy: user.id,
+                on: db
+            )
+        }
 
         // Create SpiceDB relationships
         try await req.spicedb.writeRelationship(
@@ -739,7 +786,20 @@ struct VolumeController: RouteCollection {
             sourceVolumeID: sourceVolume.id
         )
 
-        try await newVolume.save(on: req.db)
+        // IAM dual-write (issue #477): creator binding on the cloned volume,
+        // in the same transaction as the row.
+        try await req.db.transaction { db in
+            try await newVolume.save(on: db)
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: user.id!,
+                role: .admin,
+                nodeType: .volume,
+                nodeID: newVolume.id!,
+                createdBy: user.id,
+                on: db
+            )
+        }
 
         // Create SpiceDB relationships
         try await req.spicedb.writeRelationship(
@@ -882,7 +942,12 @@ struct VolumeController: RouteCollection {
             subjectId: snapshot.$createdBy.id.uuidString
         )
 
-        try await snapshot.delete(on: req.db)
+        try await req.db.transaction { db in
+            try await snapshot.delete(on: db)
+            // IAM dual-write: drop the snapshot's bindings with the row.
+            try await RoleBindingService.revokeAll(
+                nodeType: .volumeSnapshot, nodeID: snapshotId, on: db)
+        }
 
         req.logger.info(
             "Snapshot deleted",

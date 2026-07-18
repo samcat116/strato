@@ -189,6 +189,20 @@ struct UserController: RouteCollection {
                 )
                 try await membership.save(on: db)
 
+                // IAM dual-write (issue #477): org admins get an admin binding
+                // on the org node, in the same transaction as the mirror row.
+                if let bindingRole = IAMRole.fromOrganizationRole(assignedRole) {
+                    try await RoleBindingService.grant(
+                        principalType: .user,
+                        principalID: try user.requireID(),
+                        role: bindingRole,
+                        nodeType: .organization,
+                        nodeID: orgID,
+                        createdBy: createdByID,
+                        on: db
+                    )
+                }
+
                 // Authorization reads org access from SpiceDB (e.g. VM
                 // collection checks need view_organization), and missing tuples
                 // are only reconciled by a boot-time backfill. Write the tuple
