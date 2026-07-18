@@ -37,8 +37,13 @@ spec:
             - name: SPIRE_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
+                  {{- if .Values.spire.database.existingSecret }}
+                  name: {{ .Values.spire.database.existingSecret }}
+                  key: {{ .Values.spire.database.existingSecretPasswordKey }}
+                  {{- else }}
                   name: {{ include "strato-control-plane.fullname" . }}-spire
                   key: database-password
+                  {{- end }}
           ports:
             - name: grpc
               containerPort: 8081
@@ -73,6 +78,11 @@ spec:
               readOnly: true
             - name: data
               mountPath: /var/lib/spire/server
+            {{- if .Values.strato.database.tlsCACert }}
+            - name: db-tls-ca
+              mountPath: /etc/spire/db-tls
+              readOnly: true
+            {{- end }}
             {{- if .Values.spire.socketPath }}
             - name: socket
               mountPath: {{ dir .Values.spire.socketPath }}
@@ -81,6 +91,11 @@ spec:
         - name: config
           configMap:
             name: {{ include "strato-control-plane.fullname" . }}-spire-server
+        {{- if .Values.strato.database.tlsCACert }}
+        - name: db-tls-ca
+          secret:
+            secretName: {{ include "strato-control-plane.fullname" . }}-db-tls-ca
+        {{- end }}
         {{- if .Values.spire.socketPath }}
         - name: socket
           emptyDir: {}

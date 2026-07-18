@@ -41,9 +41,20 @@ data:
                 SPIRE's sql plugin uses lib/pq semantics where plain `require`
                 encrypts but skips server-cert verification, so map require to
                 verify-full — same reasoning as the SpiceDB datastore URI.
+                Under verify-full lib/pq needs a root CA it trusts: when the
+                chart carries one (strato.database.tlsCACert) point sslrootcert
+                at its mount, mirroring SpiceDB's datastore URI.
                 */}}
                 {{- $tlsMode := include "strato-control-plane.databaseTLS" . }}
-                connection_string = "host={{ include "strato-control-plane.databaseHost" . }} port={{ include "strato-control-plane.databasePort" . }} dbname=spire user={{ .Values.spire.database.username }} password=${SPIRE_DB_PASSWORD} sslmode={{ if eq $tlsMode "require" }}verify-full{{ else }}{{ $tlsMode }}{{ end }}"
+                {{- $sslQuery := printf "sslmode=%s" $tlsMode }}
+                {{- if ne $tlsMode "disable" }}
+                  {{- if .Values.strato.database.tlsCACert }}
+                    {{- $sslQuery = "sslmode=verify-full sslrootcert=/etc/spire/db-tls/ca.crt" }}
+                  {{- else if eq $tlsMode "require" }}
+                    {{- $sslQuery = "sslmode=verify-full" }}
+                  {{- end }}
+                {{- end }}
+                connection_string = "host={{ include "strato-control-plane.databaseHost" . }} port={{ include "strato-control-plane.databasePort" . }} dbname=spire user={{ .Values.spire.database.username }} password=${SPIRE_DB_PASSWORD} {{ $sslQuery }}"
             }
         }
 

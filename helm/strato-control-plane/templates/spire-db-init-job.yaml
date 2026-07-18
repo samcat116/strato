@@ -64,8 +64,13 @@ spec:
             - name: SPIRE_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
+                  {{- if .Values.spire.database.existingSecret }}
+                  name: {{ .Values.spire.database.existingSecret }}
+                  key: {{ .Values.spire.database.existingSecretPasswordKey }}
+                  {{- else }}
                   name: {{ include "strato-control-plane.fullname" . }}-spire
                   key: database-password
+                  {{- end }}
           command:
             - sh
             - -c

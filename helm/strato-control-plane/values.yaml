@@ -617,6 +617,12 @@ spire:
     # Retrieve it with:
     #   kubectl get secret <release>-spire -o jsonpath='{.data.database-password}' | base64 -d
     password: ""
+    # For external databases whose role password you cannot choose (e.g. DO
+    # Managed Postgres generates it), point at a pre-provisioned Secret holding
+    # that password instead. Takes precedence over password/auto-generation;
+    # the <release>-spire secret is then not created.
+    existingSecret: ""
+    existingSecretPasswordKey: "database-password"
 
   # Service configuration
   service:
