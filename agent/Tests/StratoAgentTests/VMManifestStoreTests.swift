@@ -46,6 +46,36 @@ struct VMManifestStoreTests {
         #expect(loaded["vm-b"]?.spec.memoryBytes == 1_073_741_824)
     }
 
+    @Test("Disk reservations survive the manifest round-trip")
+    func diskReservationRoundTrip() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let store = makeStore(dir: dir)
+
+        let spec = VMSpec(
+            cpus: 2, memoryBytes: 1_073_741_824, diskBytes: 21_474_836_480, boot: .disk(firmware: nil))
+        store.save(["vm-a": VMManifestEntry(hypervisorType: .qemu, spec: spec)])
+
+        let loaded = store.load()
+        #expect(loaded["vm-a"]?.spec.diskBytes == 21_474_836_480)
+        #expect(loaded.values.totalReservedDiskBytes == 21_474_836_480)
+    }
+
+    @Test("Reserved-disk total treats missing diskBytes and sandbox entries as zero")
+    func totalReservedDiskTreatsMissingAsZero() {
+        let withDisk = VMSpec(
+            cpus: 1, memoryBytes: 268_435_456, diskBytes: 5_368_709_120, boot: .disk(firmware: nil))
+        let entries: [String: VMManifestEntry] = [
+            "vm-new": VMManifestEntry(hypervisorType: .qemu, spec: withDisk),
+            // A spec persisted before diskBytes existed (issue #473).
+            "vm-old": VMManifestEntry(hypervisorType: .qemu, spec: makeSpec()),
+            // Sandboxes reserve no disk, matching the scheduler.
+            "sb-a": VMManifestEntry(
+                sandboxSpec: SandboxSpec(image: "ghcr.io/acme/worker:v3", cpus: 1, memoryBytes: 268_435_456)),
+        ]
+        #expect(entries.values.totalReservedDiskBytes == 5_368_709_120)
+    }
+
     @Test("Load returns empty when no manifest exists")
     func emptyWhenMissing() throws {
         let dir = try makeTempDir()

@@ -50,6 +50,17 @@ public struct VMManifestEntry: Codable, Sendable {
     }
 }
 
+extension Sequence where Element == VMManifestEntry {
+    /// Total disk committed across these workloads' specs. Specs from a
+    /// control plane that predates `VMSpec.diskBytes` (issue #473) count as 0
+    /// — under-reporting matches the old behavior rather than blocking
+    /// placement. Sandbox entries carry no `diskBytes` and naturally add 0,
+    /// mirroring the scheduler (sandboxes reserve no disk).
+    public var totalReservedDiskBytes: Int64 {
+        reduce(0) { $0 + ($1.spec.diskBytes ?? 0) }
+    }
+}
+
 /// Persists the set of workloads (VMs and sandboxes) an agent is managing —
 /// across all backends — to disk so that, after an agent restart, the agent can
 /// route operations to the right backend and keep orphaned workloads' resources
