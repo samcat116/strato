@@ -57,8 +57,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// delete — keeps working, since none of it spawns a new jailer. Without
     /// this, jailed orphans would outlive their deletion unmanaged.
     private let jailerBlockedReason: String?
-    /// Logged once: cgroup-v1 hosts get no jailer memory ceiling.
-    private var warnedCgroupV1 = false
+    /// Logged once: hosts without a usable cgroup-v2 memory controller get no
+    /// jailer memory ceiling.
+    private var warnedNoMemoryCeiling = false
 
     /// Guest context ID for the single vsock device. CIDs 0–2 are reserved, so
     /// 3 is the first usable guest CID.
@@ -1224,17 +1225,20 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         }
     }
 
-    /// The jailer cgroup flags for one sandbox: on cgroup-v2 hosts, a
-    /// `memory.max` ceiling protecting the *host* from a compromised VMM (the
-    /// agent's manifest accounting remains the only capacity owner — see
-    /// docs/architecture/sandboxes.md). Cgroup-v1 hosts get no ceiling and one
+    /// The jailer cgroup flags for one sandbox: on hosts with a cgroup-v2
+    /// memory controller, a `memory.max` ceiling protecting the *host* from a
+    /// compromised VMM (the agent's manifest accounting remains the only
+    /// capacity owner — see docs/architecture/sandboxes.md). Hosts without
+    /// one (cgroup v1, or v2 with the memory controller disabled — the jailer
+    /// aborts on any `--cgroup` file it cannot write) get no ceiling and one
     /// warning.
     private func jailerCgroups(guestMemoryBytes: Int64) -> (version: Int?, entries: [String]) {
-        guard SandboxJailPlan.hostUsesCgroupV2() else {
-            if !warnedCgroupV1 {
-                warnedCgroupV1 = true
+        guard SandboxJailPlan.hostSupportsMemoryCeiling() else {
+            if !warnedNoMemoryCeiling {
+                warnedNoMemoryCeiling = true
                 logger.warning(
-                    "Host mounts cgroup v1; sandboxes run jailed but without a jailer memory ceiling")
+                    "Host has no usable cgroup-v2 memory controller; sandboxes run jailed but without a jailer memory ceiling"
+                )
             }
             return (nil, [])
         }

@@ -175,13 +175,19 @@ public struct SandboxJailPlan: Sendable, Equatable {
         guestMemoryBytes + 128 * 1024 * 1024
     }
 
-    /// Whether this host mounts cgroup v2 (the only hierarchy the agent
-    /// drives jailer cgroup limits against; v1 hosts get no limits and a log
-    /// line). Injectable for tests.
-    public static func hostUsesCgroupV2(
-        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+    /// Whether this host can take the jailer memory ceiling: cgroup v2
+    /// mounted (`cgroup.controllers` readable) **with** the `memory`
+    /// controller actually listed. The jailer writes every `--cgroup` file it
+    /// is given and aborts the spawn when one cannot be written, so passing
+    /// `memory.max` on a v2 host whose hierarchy lacks the memory controller
+    /// (e.g. `cgroup_disable=memory`) would fail every jailed create. Hosts
+    /// without it — like v1 hosts — get the rest of the barrier and no
+    /// ceiling. Injectable for tests.
+    public static func hostSupportsMemoryCeiling(
+        readFile: (String) -> String? = { try? String(contentsOfFile: $0, encoding: .utf8) }
     ) -> Bool {
-        fileExists("/sys/fs/cgroup/cgroup.controllers")
+        guard let controllers = readFile("/sys/fs/cgroup/cgroup.controllers") else { return false }
+        return controllers.split(whereSeparator: { $0.isWhitespace }).contains("memory")
     }
 
     /// Fixed FNV-1a 64 (not Swift's per-process-seeded `Hasher`), so uid

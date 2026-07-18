@@ -87,10 +87,19 @@ struct SandboxJailTests {
         #expect(SandboxJailPlan.memoryLimitBytes(guestMemoryBytes: guest) == guest + 128 * 1024 * 1024)
     }
 
-    @Test("cgroup v2 detection keys on cgroup.controllers")
-    func cgroupDetection() {
-        #expect(SandboxJailPlan.hostUsesCgroupV2(fileExists: { $0 == "/sys/fs/cgroup/cgroup.controllers" }))
-        #expect(!SandboxJailPlan.hostUsesCgroupV2(fileExists: { _ in false }))
+    @Test("the memory ceiling requires the v2 memory controller, not just a v2 mount")
+    func memoryCeilingDetection() {
+        // Full controller set: ceiling available.
+        #expect(
+            SandboxJailPlan.hostSupportsMemoryCeiling(readFile: { path in
+                path == "/sys/fs/cgroup/cgroup.controllers" ? "cpuset cpu io memory pids\n" : nil
+            }))
+        // v2 mounted but memory controller disabled (cgroup_disable=memory):
+        // passing memory.max would make the jailer abort every create.
+        #expect(
+            SandboxJailPlan.hostSupportsMemoryCeiling(readFile: { _ in "cpuset cpu io pids\n" }) == false)
+        // No v2 hierarchy at all (cgroup v1 host).
+        #expect(SandboxJailPlan.hostSupportsMemoryCeiling(readFile: { _ in nil }) == false)
     }
 }
 
