@@ -760,27 +760,8 @@ struct OIDCController: RouteCollection {
     }
 
     private func fetchDiscoveryDocument(url: String, on req: Request) async throws -> OIDCDiscoveryDocument {
-        // Validate URL to prevent SSRF attacks
-        guard let parsedURL = URL(string: url),
-            let host = parsedURL.host,
-            parsedURL.scheme == "https"
-        else {
-            throw Abort(.badRequest, reason: "Discovery URL must be a valid HTTPS URL")
-        }
-
-        // Load allowed hosts and suffixes from environment/config, fallback to defaults
-        let allowedHosts = OIDCValidation.allowedHosts()
-        let allowedDomainSuffixes = OIDCValidation.allowedDomainSuffixes()
-
-        let isHostAllowed = allowedHosts.contains(host) || allowedDomainSuffixes.contains { host.hasSuffix($0) }
-
-        guard isHostAllowed else {
-            throw Abort(
-                .badRequest,
-                reason:
-                    "Discovery URL host is not in the allowed list for security reasons. If you are an administrator, set OIDC_DISCOVERY_ALLOWED_HOSTS or OIDC_DISCOVERY_ALLOWED_SUFFIXES to allow this host."
-            )
-        }
+        // Validate URL to prevent SSRF attacks (HTTPS + host allow-list)
+        try OIDCValidation.validateAllowedFetchURL(url, label: "Discovery URL")
 
         let response = try await req.client.get(URI(string: url))
         return try response.content.decode(OIDCDiscoveryDocument.self)
@@ -810,6 +791,10 @@ struct OIDCController: RouteCollection {
         guard let tokenEndpoint = provider.tokenEndpoint else {
             throw Abort(.internalServerError, reason: "Token endpoint not configured")
         }
+
+        // Same SSRF guard as the discovery fetch: the stored endpoint may
+        // have been set manually or copied from a discovery document.
+        try OIDCValidation.validateAllowedFetchURL(tokenEndpoint, label: "Token endpoint")
 
         let redirectURI = try oidcRedirectURI(
             organizationID: organizationID, providerID: providerID, on: req)
@@ -912,6 +897,8 @@ struct OIDCController: RouteCollection {
         accessToken: String,
         on req: Request
     ) async throws -> OIDCUserInfoResponse {
+        // Same SSRF guard as the discovery fetch (HTTPS + host allow-list).
+        try OIDCValidation.validateAllowedFetchURL(endpoint, label: "UserInfo endpoint")
         let response = try await req.client.get(URI(string: endpoint)) { clientReq in
             clientReq.headers.bearerAuthorization = BearerAuthorization(token: accessToken)
         }
@@ -971,13 +958,8 @@ struct OIDCController: RouteCollection {
     /// per-key in `OIDCTokenVerification.makeSigners` so one unsupported key
     /// can't invalidate the whole set.
     private func fetchJWKS(uri: String, on req: Request) async throws -> Data {
-        // Validate JWKS URI for security
-        guard let url = URL(string: uri),
-            let scheme = url.scheme,
-            scheme == "https"
-        else {
-            throw Abort(.badRequest, reason: "JWKS URI must be HTTPS")
-        }
+        // Validate JWKS URI for security (HTTPS + host allow-list)
+        try OIDCValidation.validateAllowedFetchURL(uri, label: "JWKS URI")
 
         req.logger.debug("Fetching JWKS from URI", metadata: ["uri": .string(uri)])
 

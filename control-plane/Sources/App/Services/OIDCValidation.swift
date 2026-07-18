@@ -341,4 +341,29 @@ struct OIDCValidation {
         }
         return defaultAllowedDomainSuffixes
     }
+
+    /// SSRF guard for every server-side OIDC fetch (discovery, token exchange,
+    /// UserInfo, JWKS): the URL must be HTTPS and its host must be in the
+    /// allow-list. Endpoints can be set manually by an org admin or copied
+    /// from a discovery document, so enforcing the allow-list only on the
+    /// discovery fetch is not enough — the other endpoints could otherwise be
+    /// pointed at internal services.
+    static func validateAllowedFetchURL(_ url: String, label: String) throws {
+        guard let parsedURL = URL(string: url),
+            let host = parsedURL.host,
+            parsedURL.scheme == "https"
+        else {
+            throw Abort(.badRequest, reason: "\(label) must be a valid HTTPS URL")
+        }
+
+        let isHostAllowed =
+            allowedHosts().contains(host) || allowedDomainSuffixes().contains { host.hasSuffix($0) }
+        guard isHostAllowed else {
+            throw Abort(
+                .badRequest,
+                reason:
+                    "\(label) host is not in the allowed list for security reasons. If you are an administrator, set OIDC_DISCOVERY_ALLOWED_HOSTS or OIDC_DISCOVERY_ALLOWED_SUFFIXES to allow this host."
+            )
+        }
+    }
 }

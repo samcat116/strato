@@ -178,9 +178,17 @@ struct ImageController: RouteCollection {
                 req: req, projectID: projectID, userID: userID, createRequest: createRequest)
         }
 
-        // Validate URL
-        guard let url = URL(string: sourceURL), url.scheme == "http" || url.scheme == "https" else {
+        // Validate URL. The scheme check is a fast client-error; the SSRF guard
+        // rejects hosts that resolve to non-public addresses (metadata endpoint,
+        // loopback, internal services) before any DB rows are created. The fetch
+        // path re-validates at connection time, covering redirects and rebinds.
+        guard let url = URL(string: sourceURL) else {
             throw Abort(.badRequest, reason: "Invalid source URL")
+        }
+        do {
+            try SSRFGuard.validate(url: url, environment: req.application.environment)
+        } catch let error as SSRFGuard.BlockedHostError {
+            throw Abort(.badRequest, reason: error.reason)
         }
 
         // Reject a malformed checksum now rather than after downloading gigabytes
@@ -654,10 +662,14 @@ struct ImageController: RouteCollection {
         guard let kind = ArtifactKind(rawValue: fetchRequest.kind) else {
             throw Abort(.badRequest, reason: "Unknown artifact kind '\(fetchRequest.kind)'")
         }
-        guard let url = URL(string: fetchRequest.sourceURL),
-            url.scheme == "http" || url.scheme == "https"
-        else {
+        guard let url = URL(string: fetchRequest.sourceURL) else {
             throw Abort(.badRequest, reason: "Invalid source URL")
+        }
+        // Reject SSRF targets up front; the fetch path re-checks each redirect hop.
+        do {
+            try SSRFGuard.validate(url: url, environment: req.application.environment)
+        } catch let error as SSRFGuard.BlockedHostError {
+            throw Abort(.badRequest, reason: error.reason)
         }
         let filename = try ImageValidationService.validateArtifactFilename(
             url.lastPathComponent.isEmpty ? kind.rawValue : url.lastPathComponent)

@@ -501,6 +501,15 @@ struct VMController: RouteCollection {
         let cpuValue = createRequest.cpu ?? image.defaultCpu ?? 1
         let memoryValue = createRequest.memory ?? image.defaultMemory ?? Int64(1024 * 1024 * 1024)
         let diskValue = createRequest.disk ?? image.defaultDisk ?? Int64(10 * 1024 * 1024 * 1024)
+        guard cpuValue > 0 else {
+            throw Abort(.badRequest, reason: "'cpu' must be positive")
+        }
+        guard memoryValue > 0 else {
+            throw Abort(.badRequest, reason: "'memory' must be positive")
+        }
+        guard diskValue > 0 else {
+            throw Abort(.badRequest, reason: "'disk' must be positive")
+        }
         let cmdlineValue = createRequest.cmdline ?? image.defaultCmdline
 
         // Choose the hypervisor: an explicit request wins; otherwise infer

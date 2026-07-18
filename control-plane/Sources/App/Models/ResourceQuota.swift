@@ -267,11 +267,13 @@ extension ResourceQuota {
             return (true, nil)
         }
 
-        if reservedVCPUs + vcpus > maxVCPUs {
+        let (newVCPUs, vcpusOverflowed) = reservedVCPUs.addingReportingOverflow(vcpus)
+        if vcpusOverflowed || newVCPUs > maxVCPUs {
             return (false, "Insufficient vCPU quota: \(availableVCPUs) available, \(vcpus) requested")
         }
 
-        if reservedMemory + memory > maxMemory {
+        let (newMemory, memoryOverflowed) = reservedMemory.addingReportingOverflow(memory)
+        if memoryOverflowed || newMemory > maxMemory {
             let availableGB = Double(availableMemory) / 1024 / 1024 / 1024
             let requestedGB = Double(memory) / 1024 / 1024 / 1024
             return (
@@ -280,7 +282,8 @@ extension ResourceQuota {
             )
         }
 
-        if reservedStorage + storage > maxStorage {
+        let (newStorage, storageOverflowed) = reservedStorage.addingReportingOverflow(storage)
+        if storageOverflowed || newStorage > maxStorage {
             let availableGB = Double(availableStorage) / 1024 / 1024 / 1024
             let requestedGB = Double(storage) / 1024 / 1024 / 1024
             return (
@@ -304,11 +307,13 @@ extension ResourceQuota {
             return (true, nil)
         }
 
-        if reservedVCPUs + vcpus > maxVCPUs {
+        let (newVCPUs, vcpusOverflowed) = reservedVCPUs.addingReportingOverflow(vcpus)
+        if vcpusOverflowed || newVCPUs > maxVCPUs {
             return (false, "Insufficient vCPU quota: \(availableVCPUs) available, \(vcpus) requested")
         }
 
-        if reservedMemory + memory > maxMemory {
+        let (newMemory, memoryOverflowed) = reservedMemory.addingReportingOverflow(memory)
+        if memoryOverflowed || newMemory > maxMemory {
             let availableGB = Double(availableMemory) / 1024 / 1024 / 1024
             let requestedGB = Double(memory) / 1024 / 1024 / 1024
             return (
