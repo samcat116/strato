@@ -53,6 +53,13 @@ public struct SPIRERegistrationService: Sendable {
         try await api.listAgents()
     }
 
+    /// List the trust domain's configured federation relationships and the peer
+    /// bundles SPIRE currently holds for them. Read-only; backs the Workload
+    /// Identity view's Federation panel.
+    public func listFederationRelationships() async throws -> [SPIREFederationRelationship] {
+        try await api.listFederationRelationships()
+    }
+
     /// Provision a node in SPIRE: mint a join token and create the workload
     /// entry. An entry identical to an existing one is reused (idempotent
     /// re-issue after a token expired unredeemed).

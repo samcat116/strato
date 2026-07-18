@@ -224,22 +224,24 @@ log_level = "info"
 #
 # When enabled, the agent registers and speaks the full agent protocol
 # (register, heartbeat, desired-state reconciliation) but drives a no-op mock
-# hypervisor with no real networking or storage, and reports the configurable
-# fake host capacity below instead of probing the machine. This lets a fleet of
-# dummy agents run on one host and load-test a control plane far larger than the
-# compute available to run real VMs.
+# hypervisor and a no-op mock sandbox runtime with no real networking or
+# storage, and reports the configurable fake host capacity below instead of
+# probing the machine. This lets a fleet of dummy agents run on one host and
+# load-test a control plane far larger than the compute available to run real
+# VMs or sandboxes.
 #
 # The `--simulate` / `--sim-cpus` / `--sim-memory-mb` / `--sim-disk-gb` CLI
 # flags override these. See agent/scripts/spawn-sim-fleet.sh to launch a whole
 # fleet with a spread of host sizes.
 #
 # IMPORTANT: never register simulated agents in a control plane / org that also
-# has real agents. A simulated agent advertises QEMU and full capacity, so the
-# scheduler and volume selector treat it as a real host — a real VM could be
-# placed on a dummy (and "run" on the mock while nothing executes), or a real
-# volume created on one with a path that does not exist. The control plane
-# cannot yet distinguish simulated agents from real ones; use a dedicated
-# control plane or org for simulation. Tracked in issue #487.
+# has real agents. A simulated agent advertises QEMU, sandbox support, and full
+# capacity, so the scheduler and volume selector treat it as a real host — a
+# real VM or sandbox could be placed on a dummy (and "run" on the mock while
+# nothing executes), or a real volume created on one with a path that does not
+# exist. The control plane cannot yet distinguish simulated agents from real
+# ones; use a dedicated control plane or org for simulation. Tracked in issue
+# #487.
 # [simulation]
 # enabled = true
 #
@@ -259,3 +261,17 @@ log_level = "info"
 # cpu_cores = 16
 # memory_mb = 65536
 # disk_gb = 1024
+#
+# # Sandbox workloads (issue #470). Simulated agents advertise sandbox support
+# # backed by a mock runtime: sandbox placements deplete cpu_cores/memory_mb
+# # like VM placements, exec sessions are answered synthetically (non-tty
+# # commands echo and exit 0; tty sessions echo stdin until EOF), and each
+# # running sandbox emits one synthetic workload log line per interval below,
+# # to load-test log shipping. 0 disables emission; unset uses the built-in
+# # default (5000 ms).
+# sandbox_log_interval_ms = 5000
+#
+# # When set (> 0), simulated sandbox workloads exit on their own (code 0)
+# # this many seconds after boot, exercising the one-shot `Exited` path at
+# # scale. Unset/0 (the default) means workloads run until stopped.
+# sandbox_exit_after_seconds = 0

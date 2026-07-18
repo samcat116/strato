@@ -284,7 +284,9 @@ private func launchAgent(
             enabled: true,
             cpuCores: options.simCpus ?? config.simulation?.cpuCores,
             memoryMB: options.simMemoryMb ?? config.simulation?.memoryMB,
-            diskGB: options.simDiskGb ?? config.simulation?.diskGB)
+            diskGB: options.simDiskGb ?? config.simulation?.diskGB,
+            sandboxLogIntervalMS: config.simulation?.sandboxLogIntervalMS,
+            sandboxExitAfterSeconds: config.simulation?.sandboxExitAfterSeconds)
         : nil
 
     // Resolve hardware acceleration preference. Acceleration is on by default;

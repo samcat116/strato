@@ -22,19 +22,38 @@ public struct SimulationConfig: Codable, Sendable, Equatable {
     public let memoryMB: Int?
     /// Fake total disk in gigabytes. Nil uses `defaultDiskGB`.
     public let diskGB: Int?
+    /// Milliseconds between synthetic workload log lines from each running
+    /// simulated sandbox (issue #470); 0 disables emission. Nil uses
+    /// `defaultSandboxLogIntervalMS`.
+    public let sandboxLogIntervalMS: Int?
+    /// When set (> 0), a simulated sandbox workload exits (code 0) this many
+    /// seconds after boot, exercising the one-shot `.exited` path at scale.
+    /// Nil means workloads run until stopped.
+    public let sandboxExitAfterSeconds: Int?
 
     enum CodingKeys: String, CodingKey {
         case enabled
         case cpuCores = "cpu_cores"
         case memoryMB = "memory_mb"
         case diskGB = "disk_gb"
+        case sandboxLogIntervalMS = "sandbox_log_interval_ms"
+        case sandboxExitAfterSeconds = "sandbox_exit_after_seconds"
     }
 
-    public init(enabled: Bool = false, cpuCores: Int? = nil, memoryMB: Int? = nil, diskGB: Int? = nil) {
+    public init(
+        enabled: Bool = false,
+        cpuCores: Int? = nil,
+        memoryMB: Int? = nil,
+        diskGB: Int? = nil,
+        sandboxLogIntervalMS: Int? = nil,
+        sandboxExitAfterSeconds: Int? = nil
+    ) {
         self.enabled = enabled
         self.cpuCores = cpuCores
         self.memoryMB = memoryMB
         self.diskGB = diskGB
+        self.sandboxLogIntervalMS = sandboxLogIntervalMS
+        self.sandboxExitAfterSeconds = sandboxExitAfterSeconds
     }
 
     /// Default simulation configuration (disabled).
@@ -43,6 +62,7 @@ public struct SimulationConfig: Codable, Sendable, Equatable {
     public static let defaultCPUCores = 8
     public static let defaultMemoryMB = 16 * 1024  // 16 GB
     public static let defaultDiskGB = 512
+    public static let defaultSandboxLogIntervalMS = 5000
 
     /// Resolved fake capacity, applying defaults for any unset field. The agent
     /// reports these instead of probing the real host, so a spawner can give
@@ -51,6 +71,20 @@ public struct SimulationConfig: Codable, Sendable, Equatable {
     public var resolvedCPUCores: Int { cpuCores ?? Self.defaultCPUCores }
     public var resolvedMemoryBytes: Int64 { Int64(memoryMB ?? Self.defaultMemoryMB) * 1024 * 1024 }
     public var resolvedDiskBytes: Int64 { Int64(diskGB ?? Self.defaultDiskGB) * 1024 * 1024 * 1024 }
+
+    /// Interval between synthetic sandbox workload log lines, or nil when
+    /// emission is disabled (interval configured to 0).
+    public var resolvedSandboxLogInterval: Duration? {
+        let ms = sandboxLogIntervalMS ?? Self.defaultSandboxLogIntervalMS
+        return ms > 0 ? .milliseconds(ms) : nil
+    }
+
+    /// How long a simulated sandbox workload runs before exiting on its own,
+    /// or nil when workloads should run until stopped (the default).
+    public var resolvedSandboxLifetime: Duration? {
+        guard let seconds = sandboxExitAfterSeconds, seconds > 0 else { return nil }
+        return .seconds(seconds)
+    }
 }
 
 /// SPIFFE/SPIRE configuration
@@ -498,7 +532,9 @@ public struct AgentConfig: Codable {
                 enabled: enabled,
                 cpuCores: simTable.int("cpu_cores"),
                 memoryMB: simTable.int("memory_mb"),
-                diskGB: simTable.int("disk_gb")
+                diskGB: simTable.int("disk_gb"),
+                sandboxLogIntervalMS: simTable.int("sandbox_log_interval_ms"),
+                sandboxExitAfterSeconds: simTable.int("sandbox_exit_after_seconds")
             )
             if enabled {
                 logger?.warning(

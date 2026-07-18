@@ -96,6 +96,17 @@ extension SandboxController {
             try await QuotaEnforcementService.reserveSandboxSnapshot(
                 for: project, environment: environment, size: memory, on: db)
             try await snapshot.save(on: db)
+            // IAM dual-write (issue #477): the creator's binding on the
+            // snapshot, in the create transaction (the volume-snapshot path).
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: userID,
+                role: .admin,
+                nodeType: .sandboxSnapshot,
+                nodeID: snapshot.requireID(),
+                createdBy: userID,
+                on: db
+            )
             if stopAfterSnapshot {
                 // Checkpoint-and-stop: the agent leaves the microVM paused
                 // after the capture, and the desired state must agree so the
@@ -314,7 +325,12 @@ extension SandboxController {
                 let sandboxRef = snapshot.$sandbox.id
                 let projectRef = snapshot.$project.id
                 let ownerRef = snapshot.$createdBy.id
-                try await snapshot.delete(on: app.db)
+                try await app.db.transaction { db in
+                    try await snapshot.delete(on: db)
+                    // IAM dual-write: drop the snapshot's bindings with the row.
+                    try await RoleBindingService.revokeAll(
+                        nodeType: .sandboxSnapshot, nodeID: snapshotId, on: db)
+                }
                 // Relationship cleanup mirrors what create wrote; best-effort
                 // (a leaked tuple on a deleted row grants nothing reachable).
                 try? await app.spicedb.deleteRelationship(

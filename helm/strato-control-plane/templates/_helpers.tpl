@@ -109,20 +109,21 @@ plain `sslmode=require` encrypts but does NOT validate the server certificate
 or hostname — so it would accept any cert and leak the datastore password to a
 MITM. To match the control plane (which verifies under require), `require` maps
 to `verify-full`: pgx then verifies against the system trust roots, or against
-the supplied CA bundle via sslrootcert when one is mounted. `prefer` stays
-best-effort (may fall back to plaintext); `disable` is plaintext.
+the supplied CA bundle via sslrootcert when one is mounted. The CA is only
+attached under require/verify-* modes: modes below require (`prefer`, `allow`)
+keep their documented fall-back-to-plaintext semantics and are left untouched
+even when a CA is configured; `disable` is plaintext.
 */}}
 {{- define "strato-control-plane.spicedbSslQuery" -}}
 {{- $mode := include "strato-control-plane.databaseTLS" . -}}
-{{- if eq $mode "disable" -}}
-sslmode=disable
-{{- else if .Values.strato.database.tlsCACert -}}
-sslmode=verify-full&sslrootcert=/etc/spicedb/db-tls/ca.crt
-{{- else if eq $mode "require" -}}
-sslmode=verify-full
-{{- else -}}
-sslmode={{ $mode }}
+{{- $query := printf "sslmode=%s" $mode -}}
+{{- if eq $mode "require" -}}
+{{- $query = "sslmode=verify-full" -}}
 {{- end -}}
+{{- if and .Values.strato.database.tlsCACert (or (eq $mode "require") (hasPrefix "verify" $mode)) -}}
+{{- $query = printf "%s&sslrootcert=/etc/spicedb/db-tls/ca.crt" $query -}}
+{{- end -}}
+{{- $query -}}
 {{- end }}
 
 {{/*

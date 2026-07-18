@@ -41,9 +41,23 @@ data:
                 SPIRE's sql plugin uses lib/pq semantics where plain `require`
                 encrypts but skips server-cert verification, so map require to
                 verify-full — same reasoning as the SpiceDB datastore URI.
+                Under the verify modes lib/pq needs a root CA it trusts: when
+                the chart carries one (strato.database.tlsCACert) point
+                sslrootcert at its mount. Modes below require (prefer/allow)
+                keep their fallback semantics and are left untouched.
+                The password is deliberately absent from the DSN: lib/pq falls
+                back to the PGPASSWORD environment variable, which keeps
+                arbitrary secret values out of keyword/value parsing.
                 */}}
                 {{- $tlsMode := include "strato-control-plane.databaseTLS" . }}
-                connection_string = "host={{ include "strato-control-plane.databaseHost" . }} port={{ include "strato-control-plane.databasePort" . }} dbname=spire user={{ .Values.spire.database.username }} password=${SPIRE_DB_PASSWORD} sslmode={{ if eq $tlsMode "require" }}verify-full{{ else }}{{ $tlsMode }}{{ end }}"
+                {{- $sslQuery := printf "sslmode=%s" $tlsMode }}
+                {{- if eq $tlsMode "require" }}
+                  {{- $sslQuery = "sslmode=verify-full" }}
+                {{- end }}
+                {{- if and .Values.strato.database.tlsCACert (or (eq $tlsMode "require") (hasPrefix "verify" $tlsMode)) }}
+                  {{- $sslQuery = printf "%s sslrootcert=/etc/spire/db-tls/ca.crt" $sslQuery }}
+                {{- end }}
+                connection_string = "host={{ include "strato-control-plane.databaseHost" . }} port={{ include "strato-control-plane.databasePort" . }} dbname=spire user={{ .Values.spire.database.username }} {{ $sslQuery }}"
             }
         }
 
@@ -52,11 +66,20 @@ data:
         }
 
         {{- if .Values.spire.attestors.k8sPsat.enabled }}
+        {{- /*
+        Allow-list entries must be "namespace:serviceaccount". When unset,
+        default to the agent DaemonSet's own service account — the identity
+        that actually presents the projected token.
+        */}}
+        {{- $allowList := .Values.spire.attestors.k8sPsat.serviceAccountAllowList }}
+        {{- if not $allowList }}
+          {{- $allowList = list (printf "%s:%s-spire-agent" .Release.Namespace (include "strato-control-plane.fullname" .)) }}
+        {{- end }}
         NodeAttestor "k8s_psat" {
             plugin_data {
                 clusters = {
                     "{{ .Values.spire.clusterName }}" = {
-                        service_account_allow_list = {{ toJson .Values.spire.attestors.k8sPsat.serviceAccountAllowList }}
+                        service_account_allow_list = {{ toJson $allowList }}
                     }
                 }
             }
@@ -86,4 +109,16 @@ data:
         live_path = "/live"
         ready_path = "/ready"
     }
+    {{- if and .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
+
+    # Expose SPIRE server telemetry (incl. the CA SVID-signing counters
+    # spire_server_server_ca_sign_x509_svid / _jwt_svid) for Prometheus to
+    # scrape. Backs the control plane's Workload Identity "Issuance" panel.
+    telemetry {
+        Prometheus {
+            host = "0.0.0.0"
+            port = 9988
+        }
+    }
+    {{- end }}
 {{- end }}

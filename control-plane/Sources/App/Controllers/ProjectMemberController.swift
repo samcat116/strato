@@ -118,7 +118,21 @@ struct ProjectMemberController: RouteCollection {
             throw Abort(.conflict, reason: "User already has a role on this project")
         }
 
-        try await ProjectMember(projectID: projectID, userID: userID, role: role.rawValue).save(on: req.db)
+        // IAM dual-write (issue #477): the role binding lands in the same
+        // transaction as the mirror row; SpiceDB stays authoritative.
+        let actorID = req.auth.get(User.self)?.id
+        try await req.db.transaction { db in
+            try await ProjectMember(projectID: projectID, userID: userID, role: role.rawValue).save(on: db)
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: userID,
+                role: .fromProjectRole(role),
+                nodeType: .project,
+                nodeID: projectID,
+                createdBy: actorID,
+                on: db
+            )
+        }
         try await req.spicedb.setProjectRole(
             userID: userID.uuidString,
             projectID: projectID.uuidString,
@@ -150,8 +164,32 @@ struct ProjectMemberController: RouteCollection {
         }
 
         let previousRole = membership.role
+        let actorID = req.auth.get(User.self)?.id
         membership.role = role.rawValue
-        try await membership.save(on: req.db)
+        try await req.db.transaction { db in
+            try await membership.save(on: db)
+            // Replace the old role's binding with the new one atomically with
+            // the mirror-row update.
+            if let previous = ProjectRole(rawValue: previousRole) {
+                try await RoleBindingService.revoke(
+                    principalType: .user,
+                    principalID: userID,
+                    role: .fromProjectRole(previous),
+                    nodeType: .project,
+                    nodeID: projectID,
+                    on: db
+                )
+            }
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: userID,
+                role: .fromProjectRole(role),
+                nodeType: .project,
+                nodeID: projectID,
+                createdBy: actorID,
+                on: db
+            )
+        }
 
         try await req.spicedb.setProjectRole(
             userID: userID.uuidString,
@@ -182,7 +220,16 @@ struct ProjectMemberController: RouteCollection {
         }
 
         let role = membership.role
-        try await membership.delete(on: req.db)
+        try await req.db.transaction { db in
+            try await membership.delete(on: db)
+            try await RoleBindingService.revoke(
+                principalType: .user,
+                principalID: userID,
+                nodeType: .project,
+                nodeID: projectID,
+                on: db
+            )
+        }
         try await req.spicedb.removeProjectMember(
             userID: userID.uuidString,
             projectID: projectID.uuidString,
@@ -218,8 +265,20 @@ struct ProjectMemberController: RouteCollection {
             throw Abort(.conflict, reason: "Group already has a role on this project")
         }
 
-        try await ProjectGroupGrant(projectID: projectID, groupID: body.groupID, role: role.rawValue)
-            .save(on: req.db)
+        let actorID = req.auth.get(User.self)?.id
+        try await req.db.transaction { db in
+            try await ProjectGroupGrant(projectID: projectID, groupID: body.groupID, role: role.rawValue)
+                .save(on: db)
+            try await RoleBindingService.grant(
+                principalType: .group,
+                principalID: body.groupID,
+                role: .fromProjectRole(role),
+                nodeType: .project,
+                nodeID: projectID,
+                createdBy: actorID,
+                on: db
+            )
+        }
         try await req.spicedb.addGroupToProject(
             groupID: body.groupID.uuidString,
             projectID: projectID.uuidString,
@@ -248,7 +307,16 @@ struct ProjectMemberController: RouteCollection {
         }
 
         let role = ProjectRole(rawValue: grant.role) ?? .viewer
-        try await grant.delete(on: req.db)
+        try await req.db.transaction { db in
+            try await grant.delete(on: db)
+            try await RoleBindingService.revoke(
+                principalType: .group,
+                principalID: groupID,
+                nodeType: .project,
+                nodeID: projectID,
+                on: db
+            )
+        }
         try await req.spicedb.removeGroupFromProject(
             groupID: groupID.uuidString,
             projectID: projectID.uuidString,

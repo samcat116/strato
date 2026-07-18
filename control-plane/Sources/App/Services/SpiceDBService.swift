@@ -13,6 +13,7 @@ protocol SpiceDBServiceProtocol: Sendable {
     func deleteRelationship(entity: String, entityId: String, relation: String, subject: String, subjectId: String)
         async throws
     func touchRelationships(_ tuples: [RelationshipTuple]) async throws
+    func readRelationships(resourceType: String, relation: String?) async throws -> [RelationshipTuple]
     func setOrganizationRole(userID: String, organizationID: String, oldRole: String?, newRole: String) async throws
     func removeOrganizationMember(userID: String, organizationID: String, role: String) async throws
     func addUserToGroup(userID: String, groupID: String) async throws
@@ -400,6 +401,63 @@ struct SpiceDBService: SpiceDBServiceProtocol {
             index += chunkSize
         }
     }
+
+    /// Read every relationship of `resourceType` (optionally narrowed to one
+    /// relation). Used by the IAM bindings backfill to export resource-level
+    /// `owner`/`viewer`/`editor` tuples, which exist only in SpiceDB.
+    ///
+    /// The HTTP API streams newline-delimited JSON — one `{"result": …}`
+    /// envelope per relationship — so this parses the body line by line.
+    /// Vapor's client buffers the whole response before we see it; that is a
+    /// deliberate trade-off: the export is scoped per (resource type, relation)
+    /// pair and runs once per boot, so response sizes stay modest. Move to
+    /// AsyncHTTPClient's chunked body iteration if a deployment ever has enough
+    /// tuples of one relation for buffering to matter.
+    func readRelationships(resourceType: String, relation: String?) async throws -> [RelationshipTuple] {
+        let url = URI(string: "\(endpoint)/v1/relationships/read")
+
+        let payload = ReadRelationshipsRequest(
+            consistency: Consistency(fullyConsistent: true),
+            relationshipFilter: RelationshipFilter(
+                resourceType: resourceType,
+                optionalRelation: relation
+            )
+        )
+
+        let response = try await client.post(url) { req in
+            try req.content.encode(payload)
+            req.headers.add(name: .contentType, value: "application/json")
+            req.headers.add(name: .authorization, value: "Bearer \(presharedKey)")
+        }
+
+        guard response.status == .ok else {
+            throw SpiceDBError.relationshipReadFailed(response.status)
+        }
+
+        guard let body = response.body else { return [] }
+        let text = String(buffer: body)
+        let decoder = JSONDecoder()
+        var tuples: [RelationshipTuple] = []
+        for line in text.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { continue }
+            let envelope = try decoder.decode(ReadRelationshipsResponseLine.self, from: data)
+            if envelope.error != nil {
+                throw SpiceDBError.relationshipReadFailed(.internalServerError)
+            }
+            guard let relationship = envelope.result?.relationship else { continue }
+            tuples.append(
+                RelationshipTuple(
+                    entity: relationship.resource.objectType,
+                    entityId: relationship.resource.objectId,
+                    relation: relationship.relation,
+                    subject: relationship.subject.object.objectType,
+                    subjectId: relationship.subject.object.objectId
+                )
+            )
+        }
+        return tuples
+    }
 }
 
 // MARK: - DTOs
@@ -486,6 +544,41 @@ struct Relationship: Content {
     let subject: SubjectReference
 }
 
+struct ReadRelationshipsRequest: Content {
+    let consistency: Consistency
+    let relationshipFilter: RelationshipFilter
+
+    enum CodingKeys: String, CodingKey {
+        case consistency
+        case relationshipFilter = "relationship_filter"
+    }
+}
+
+struct RelationshipFilter: Content {
+    let resourceType: String
+    let optionalRelation: String?
+
+    enum CodingKeys: String, CodingKey {
+        case resourceType = "resource_type"
+        case optionalRelation = "optional_relation"
+    }
+}
+
+/// One line of the streamed ReadRelationships response: either a result
+/// envelope or a mid-stream error object.
+struct ReadRelationshipsResponseLine: Content {
+    struct Result: Content {
+        let relationship: Relationship?
+    }
+    let result: Result?
+    let error: ErrorBody?
+
+    struct ErrorBody: Content {
+        let code: Int?
+        let message: String?
+    }
+}
+
 // MARK: - Group Helper Methods
 
 extension SpiceDBService {
@@ -565,6 +658,7 @@ enum SpiceDBError: Error, Sendable {
     case schemaWriteFailed(HTTPStatus)
     case relationshipWriteFailed(HTTPStatus)
     case relationshipDeleteFailed(HTTPStatus)
+    case relationshipReadFailed(HTTPStatus)
     case invalidConfiguration
 }
 
@@ -608,6 +702,9 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
     /// When true, relationship writes throw, so tests can exercise the
     /// partial-failure paths of flows that pair SQL rows with SpiceDB tuples.
     var writesFail: Bool = false
+    /// Canned relationships served by `readRelationships`, so tests can
+    /// exercise export-driven flows (the IAM bindings backfill).
+    var relationships: [RelationshipTuple] = []
 
     func readSchema() async throws -> String? {
         return "mock schema"
@@ -666,6 +763,12 @@ struct MockSpiceDBService: SpiceDBServiceProtocol {
                     subjectId: tuple.subjectId
                 )
             )
+        }
+    }
+
+    func readRelationships(resourceType: String, relation: String?) async throws -> [RelationshipTuple] {
+        relationships.filter { tuple in
+            tuple.entity == resourceType && (relation == nil || tuple.relation == relation)
         }
     }
 
@@ -736,6 +839,19 @@ extension Application {
         set { storage[SpiceDBMockWritesFailKey.self] = newValue }
     }
 
+    /// Storage key for the testing SpiceDB mock's canned relationships.
+    private struct SpiceDBMockRelationshipsKey: StorageKey {
+        typealias Value = [RelationshipTuple]
+    }
+
+    /// In testing mode, the relationships the mock SpiceDB's
+    /// `readRelationships` serves, so tests can exercise export-driven flows
+    /// (the IAM bindings backfill). Empty by default.
+    var spicedbMockRelationships: [RelationshipTuple] {
+        get { storage[SpiceDBMockRelationshipsKey.self] ?? [] }
+        set { storage[SpiceDBMockRelationshipsKey.self] = newValue }
+    }
+
     /// Storage key for the testing SpiceDB mock's relationship-write recorder.
     private struct SpiceDBMockRecorderKey: StorageKey {
         typealias Value = SpiceDBMockRecorder
@@ -763,7 +879,8 @@ extension Application {
                     checkPermissionResult: spicedbMockAllows,
                     deniedResources: spicedbMockDeniedResources,
                     recorder: spicedbMockRecorder,
-                    writesFail: spicedbMockWritesFail
+                    writesFail: spicedbMockWritesFail,
+                    relationships: spicedbMockRelationships
                 )
             }
 

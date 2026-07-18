@@ -197,7 +197,9 @@ strato:
     tls: ""
     # Optional PEM CA bundle used to verify the database server certificate.
     # When set, its contents are mounted into the control plane and SpiceDB and
-    # the server cert is verified against it (SpiceDB is pinned to verify-full).
+    # the server cert is verified against it under require/verify-* modes
+    # (SpiceDB maps `require` to verify-full). It has no effect under `prefer`,
+    # which keeps its fall-back-to-plaintext semantics.
     # Leave empty to use the image's system trust store (correct for a
     # publicly-rooted managed database).
     #   tlsCACert: |
@@ -605,7 +607,9 @@ spire:
   # Database configuration (uses the same PostgreSQL as control plane).
   # With the bundled Postgres the chart provisions the `spire` database and
   # role automatically (spire-db-init-job.yaml); with an external database
-  # create them yourself using the password from the <fullname>-spire secret.
+  # create them yourself, using either the password from the <fullname>-spire
+  # secret or — when the external role's password is imposed on you —
+  # existingSecret below.
   database:
     username: spire
     # Image for the provisioning job (needs psql; only used when
@@ -617,6 +621,12 @@ spire:
     # Retrieve it with:
     #   kubectl get secret <release>-spire -o jsonpath='{.data.database-password}' | base64 -d
     password: ""
+    # For external databases whose role password you cannot choose (e.g. DO
+    # Managed Postgres generates it), point at a pre-provisioned Secret holding
+    # that password instead. Takes precedence over password/auto-generation;
+    # the <release>-spire secret is then not created.
+    existingSecret: ""
+    existingSecretPasswordKey: "database-password"
 
   # Service configuration
   service:
@@ -648,8 +658,10 @@ spire:
     # Kubernetes Projected Service Account Token attestor
     k8sPsat:
       enabled: false
-      serviceAccountAllowList:
-        - "strato-agent"
+      # Entries are "namespace:serviceaccount". Leave empty to allow the
+      # chart's own agent DaemonSet service account (the only identity that
+      # presents the projected token in this deployment).
+      serviceAccountAllowList: []
 
   # Trust bundle notifier
   notifier:

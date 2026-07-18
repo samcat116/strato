@@ -380,6 +380,12 @@ services:
       # loopback (never exposed to the compose network).
       SPIRE_SERVER_API_ADDRESS: 127.0.0.1:8081
       SPIRE_TRUST_BUNDLE_PATH: /run/spire/handoff/bundle.pem
+      # Workload Identity "Issuance" panel: read SPIRE's SVID-signing counters
+      # from the compose Prometheus over a rolling 24h window. Unset this to
+      # leave the panel unavailable. Metric names default to SPIRE's server CA
+      # counters and can be overridden with SPIRE_METRICS_X509_SVID_METRIC /
+      # SPIRE_METRICS_JWT_SVID_METRIC if a SPIRE version renames them.
+      SPIRE_METRICS_PROMETHEUS_URL: http://prometheus:9090
     ports:
       # Published on behalf of the Envoy sidecar (network_mode: service:
       # control-plane): agents dial wss://<host>:<AGENT_MTLS_PORT>/agent/ws. The
