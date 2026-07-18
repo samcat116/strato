@@ -100,6 +100,25 @@ struct QuotaEnforcementService {
         }
     }
 
+    /// Sandbox-snapshot counterpart (issue #426): snapshots persist real bytes
+    /// in the shared storage pool, so admission checks `size` — the guest
+    /// memory as an estimate, later replaced by the agent's actual figures —
+    /// against every applicable quota's storage limit. Call inside the same
+    /// transaction as the snapshot insert.
+    static func reserveSandboxSnapshot(
+        for project: Project,
+        environment: String,
+        size: Int64,
+        on db: Database
+    ) async throws {
+        try await reserveWorkload(for: project, environment: environment, on: db) { quota in
+            let check = quota.canAccommodateSnapshotStorage(size)
+            guard check.allowed else { return check }
+            try quota.reserveSnapshotStorage(size)
+            return check
+        }
+    }
+
     /// Shared check-then-reserve sequence over every applicable quota:
     /// advisory-lock, resync each quota to real usage, dry-run `apply` on all
     /// of them (mutating nothing on rejection), then apply and save. `apply`
@@ -203,7 +222,9 @@ struct QuotaEnforcementService {
         let (_, vms, sandboxes) = try await quota.calculateActualUsage(on: db)
         quota.reservedVCPUs = vms.reduce(0) { $0 + $1.cpu } + sandboxes.reduce(0) { $0 + $1.cpus }
         quota.reservedMemory = vms.reduce(Int64(0)) { $0 + $1.memory } + sandboxes.reduce(Int64(0)) { $0 + $1.memory }
-        quota.reservedStorage = vms.reduce(Int64(0)) { $0 + $1.disk }
+        // Storage: VM disks plus sandbox snapshot artifacts (issue #426).
+        quota.reservedStorage =
+            vms.reduce(Int64(0)) { $0 + $1.disk } + (try await quota.sandboxSnapshotStorageInScope(on: db))
         quota.vmCount = vms.count
         quota.sandboxCount = sandboxes.count
     }

@@ -140,6 +140,13 @@ public struct SandboxJailPlan: Sendable, Equatable {
     /// beside the API socket (both are created at runtime by the jailed
     /// process, which owns that directory).
     public static let vsockUDSPathInJail = "/run/vsock.sock"
+    /// Where a jailed Firecracker writes snapshot files (`PUT /snapshot/create`)
+    /// and reads them back on load (issue #426). Created and chowned to the
+    /// per-sandbox uid by the runtime before a checkpoint or restore; the
+    /// runtime archives the files to host-owned storage afterwards.
+    public static let snapshotDirInJail = "/snapshots"
+    public static let snapshotMemoryPathInJail = "/snapshots/memory.snap"
+    public static let snapshotVmstatePathInJail = "/snapshots/vmstate.snap"
 
     public init(sandboxId: String, config: SandboxJailerConfig, firecrackerBinaryPath: String) {
         self.sandboxId = sandboxId

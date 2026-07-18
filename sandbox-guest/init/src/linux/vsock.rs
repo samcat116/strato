@@ -151,7 +151,7 @@ fn handle_connection(conn: OwnedFd, state: &GuestState) -> std::io::Result<()> {
     }
 
     match decode_request(&first) {
-        Ok(req @ (Request::Ping | Request::GetStatus)) => {
+        Ok(req @ (Request::Ping | Request::GetStatus | Request::SyncClock { .. })) => {
             serve_control(req, reader, writer, &state.status)
         }
         Ok(Request::Exec {
@@ -215,9 +215,11 @@ fn serve_control(
             continue;
         }
         let response = match decode_request(&line) {
-            Ok(req @ (Request::Ping | Request::GetStatus)) => control_response(&req, status),
+            Ok(req @ (Request::Ping | Request::GetStatus | Request::SyncClock { .. })) => {
+                control_response(&req, status)
+            }
             Ok(_) => Response::Error {
-                message: "only ping/get_status are valid on a control connection".to_string(),
+                message: "only ping/get_status/sync_clock are valid on a control connection".to_string(),
             },
             Err(e) => Response::Error {
                 message: format!("undecodable request: {e}"),
@@ -230,6 +232,16 @@ fn serve_control(
 }
 
 fn control_response(request: &Request, status: &SharedStatus) -> Response {
+    // Clock sync is stateless — handle it before taking the status lock.
+    if let Request::SyncClock { unix_nanos } = request {
+        return match set_realtime_clock(*unix_nanos) {
+            Ok(()) => Response::ClockSynced,
+            Err(e) => Response::Error {
+                message: format!("clock_settime failed: {e}"),
+            },
+        };
+    }
+
     let s = status.lock().expect("status poisoned");
     match request {
         Request::GetStatus => Response::Status {
@@ -238,11 +250,31 @@ fn control_response(request: &Request, status: &SharedStatus) -> Response {
             state: s.state,
             exit_code: s.exit_code,
         },
-        // serve_control is only ever called with Ping or GetStatus; answer
+        // serve_control is only ever called with the control subset; answer
         // Pong for anything that is not GetStatus rather than panicking.
         _ => Response::Pong {
             sandbox_id: s.sandbox_id.clone(),
             nonce: s.nonce.clone(),
         },
+    }
+}
+
+/// Set CLOCK_REALTIME (issue #426): a guest restored from a snapshot resumes
+/// with the wall clock it was checkpointed with, so the host pushes the
+/// current time right after a restore. PID 1 has CAP_SYS_TIME, so this only
+/// fails on a nonsensical timestamp.
+fn set_realtime_clock(unix_nanos: i64) -> Result<(), String> {
+    if unix_nanos < 0 {
+        return Err("timestamp is before the Unix epoch".to_string());
+    }
+    let ts = libc::timespec {
+        tv_sec: (unix_nanos / 1_000_000_000) as _,
+        tv_nsec: (unix_nanos % 1_000_000_000) as _,
+    };
+    let rc = unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &ts) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error().to_string())
     }
 }

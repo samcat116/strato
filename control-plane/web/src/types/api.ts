@@ -613,7 +613,11 @@ export type OperationKind =
   | "reboot"
   | "pause"
   | "resume"
-  | "delete";
+  | "delete"
+  // Sandbox checkpoint/restore (backend issue #426).
+  | "snapshot"
+  | "snapshot_delete"
+  | "restore";
 
 export type OperationStatus = "pending" | "succeeded" | "failed";
 

@@ -116,7 +116,17 @@ public enum WireProtocol {
     /// with an older version (see `supportsSandboxExec(_:)`). `sandboxLog` is
     /// agent→control-plane only and harmless across skew: a pre-v8 control
     /// plane never receives one because a pre-v8 agent never sends one.
-    public static let currentVersion = 8
+    /// Version 9: sandbox snapshots / checkpoint-resume (issue #426). Adds the
+    /// `sandboxSnapshotCreate`/`sandboxSnapshotDelete`/`sandboxRestore`
+    /// request/response pairs. Like `agentUpdate` in v6, the gate is
+    /// load-bearing on the send side: a pre-v9 agent has no
+    /// `sandbox_snapshot_create` case in its `MessageType` enum, so the
+    /// envelope decode fails silently and the request would burn its full
+    /// timeout against silence. Belt and braces, agents that handle these
+    /// messages also advertise `sandbox_snapshot_create` in their registration
+    /// `capabilities` (the `volumeSnapshotDelete` pattern), and the control
+    /// plane checks the capability before sending.
+    public static let currentVersion = 9
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -207,6 +217,18 @@ public enum WireProtocol {
     /// against silence.
     public static func supportsSandboxExec(_ version: Int) -> Bool {
         version >= sandboxExecMinimumVersion
+    }
+
+    /// The lowest protocol version that speaks sandbox snapshot operations
+    /// (see `currentVersion` version 9 notes).
+    public static let sandboxSnapshotMinimumVersion = 9
+
+    /// Whether an agent registered with `version` can be sent sandbox
+    /// snapshot/restore messages. A pre-v9 agent cannot decode the envelope
+    /// (unknown `MessageType` case) and never replies, so the control plane
+    /// must refuse the request up front rather than time out against silence.
+    public static func supportsSandboxSnapshots(_ version: Int) -> Bool {
+        version >= sandboxSnapshotMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

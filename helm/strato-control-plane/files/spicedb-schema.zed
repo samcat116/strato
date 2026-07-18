@@ -210,6 +210,25 @@ definition sandbox {
     permission stop = owner + editor + project->create_resources + environment->deploy
     permission restart = owner + editor + project->create_resources + environment->deploy
     permission exec = owner + editor + project->create_resources + environment->deploy
+    permission snapshot = owner + editor + project->manage_project
+}
+
+/** sandbox_snapshot represents a checkpoint of a sandbox (issue #426):
+    Firecracker memory/vmstate + a consistent rootfs copy, restorable in
+    place onto the sandbox it was taken from */
+definition sandbox_snapshot {
+    /** owner is the user who created the snapshot */
+    relation owner: user
+
+    /** sandbox this snapshot was taken from */
+    relation sandbox: sandbox
+
+    /** project that contains this snapshot */
+    relation project: project
+
+    permission read = owner + sandbox->read + project->view_project
+    permission delete = owner + sandbox->owner + project->manage_project
+    permission restore = owner + sandbox->editor + project->manage_project
 }
 
 /** image represents a VM disk image that can be used to create VMs */

@@ -44,6 +44,11 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable {
                 return 300
             case .shutdown, .reboot, .pause, .resume:
                 return 120
+            case .snapshot, .snapshotDelete, .restore:
+                // Unreachable for VMs (no endpoint issues them — snapshots
+                // are a sandbox operation, issue #426) but the budget
+                // function stays total.
+                return 300
             }
         case .sandbox:
             switch kind {
@@ -56,6 +61,12 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable {
             case .shutdown, .reboot, .pause, .resume:
                 // Pause/resume are unreachable for sandboxes (no endpoint
                 // issues them) but the budget total function stays total.
+                return 120
+            case .snapshot, .restore:
+                // Checkpoint/restore copy the guest memory file plus a full
+                // rootfs on filesystems without reflink support (issue #426).
+                return 600
+            case .snapshotDelete:
                 return 120
             }
         }

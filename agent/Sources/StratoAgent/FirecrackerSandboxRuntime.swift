@@ -96,6 +96,15 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     private var sandboxes: [String: Managed] = [:]
 
+    /// Sandboxes with a checkpoint or restore in flight (issue #426). The
+    /// snapshot sequence drains vsock connections and pauses the guest, so
+    /// while a sandbox is in this set: lifecycle operations (boot, stop,
+    /// exec) are refused as transient, and status mapping skips the guest
+    /// vsock poll — actor reentrancy would otherwise let a concurrent status
+    /// poll open a connection between the drain and the pause, which
+    /// Firecracker rejects a vsock snapshot over.
+    private var checkpointing: Set<String> = []
+
     // MARK: Exec/log state (issue #423)
 
     /// One live exec session: a dedicated guest connection plus the detached
@@ -374,6 +383,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
+        guard !checkpointing.contains(sandboxId) else {
+            throw SandboxRuntimeError.checkpointInProgress(sandboxId)
+        }
 
         let info = try await managed.manager.getInstanceInfo()
         switch info.state {
@@ -411,6 +423,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     func shutdownSandbox(sandboxId: String) async throws {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
+        }
+        guard !checkpointing.contains(sandboxId) else {
+            throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
         // A paused guest can't serve exec sessions or the log follow stream:
         // end the former (terminal for their control-plane sessions) and stop
@@ -578,6 +593,334 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         sandboxes[sandboxId]?.lastExitCode
     }
 
+    // MARK: - Snapshots / checkpoint-resume (issue #426)
+
+    /// Archive filenames inside a snapshot directory. `configImage` rides
+    /// along (it is tiny) so a jailed restore can re-stage the chroot without
+    /// depending on the live sandbox's staging surviving.
+    private enum SnapshotFile {
+        static let memory = "memory.snap"
+        static let vmstate = "vmstate.snap"
+        static let rootfs = "rootfs.ext4"
+        static let configImage = "config.img"
+    }
+
+    /// Host-owned archive directory for one snapshot. Lives under the
+    /// sandbox's storage directory, so snapshot artifacts are removed with
+    /// the sandbox (same-agent restore only in v1 — the volume-snapshot
+    /// precedent).
+    private func snapshotDirectory(_ sandboxId: String, snapshotId: String) -> String {
+        sandboxDirectory(sandboxId) + "/snapshots/" + snapshotId
+    }
+
+    func snapshotSandbox(
+        sandboxId: String, snapshotId: String, mode: SandboxSnapshotMode
+    ) async throws -> SandboxSnapshotResult {
+        guard let managed = sandboxes[sandboxId] else {
+            throw SandboxRuntimeError.sandboxNotFound(sandboxId)
+        }
+        guard !checkpointing.contains(sandboxId) else {
+            throw SandboxRuntimeError.checkpointInProgress(sandboxId)
+        }
+        checkpointing.insert(sandboxId)
+        defer { checkpointing.remove(sandboxId) }
+
+        let info = try await managed.manager.getInstanceInfo()
+        guard info.state != .notStarted else {
+            throw SandboxRuntimeError.notSnapshottable("the sandbox has never been booted")
+        }
+
+        logger.info(
+            "Checkpointing sandbox",
+            metadata: [
+                "sandboxId": .string(sandboxId),
+                "snapshotId": .string(snapshotId),
+                "mode": .string(mode.rawValue),
+            ])
+
+        // Stage the archive directory before touching the guest, so a
+        // filesystem failure here cannot leave the sandbox paused.
+        let archiveDir = snapshotDirectory(sandboxId, snapshotId: snapshotId)
+        // A leftover from a failed earlier attempt must not pollute this one.
+        try? FileManager.default.removeItem(atPath: archiveDir)
+        try FileManager.default.createDirectory(atPath: archiveDir, withIntermediateDirectories: true)
+
+        // Drain host-side vsock connections first: Firecracker refuses to
+        // snapshot a vsock device with live connections, and a paused guest
+        // could not serve them anyway. Exec sessions end terminally; the log
+        // follow keeps its seq state for the resume.
+        await closeExecSessions(sandboxId: sandboxId, reason: "sandbox checkpoint")
+        await stopLogFollow(sandboxId: sandboxId, retire: false)
+
+        let wasRunning = info.state == .running
+        if wasRunning {
+            try await managed.manager.pause()
+        }
+
+        let archiveMemory = archiveDir + "/" + SnapshotFile.memory
+        let archiveVmstate = archiveDir + "/" + SnapshotFile.vmstate
+        let archiveRootfs = archiveDir + "/" + SnapshotFile.rootfs
+        let archiveConfig = archiveDir + "/" + SnapshotFile.configImage
+
+        do {
+            if let plan = managed.jail {
+                // A jailed Firecracker writes inside its chroot: stage the
+                // snapshot files there, then move them out to the archive.
+                let stagingHost = plan.hostPath(forInJail: SandboxJailPlan.snapshotDirInJail)
+                try? FileManager.default.removeItem(atPath: stagingHost)
+                try FileManager.default.createDirectory(
+                    atPath: stagingHost, withIntermediateDirectories: true)
+                try chownPath(stagingHost, uid: plan.uid, gid: plan.gid)
+                try await managed.manager.createSnapshot(
+                    SnapshotCreateConfig(
+                        snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
+                        memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
+                        snapshotType: .full))
+                try moveReplacingItem(
+                    from: plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail),
+                    to: archiveMemory)
+                try moveReplacingItem(
+                    from: plan.hostPath(forInJail: SandboxJailPlan.snapshotVmstatePathInJail),
+                    to: archiveVmstate)
+                try? FileManager.default.removeItem(atPath: stagingHost)
+            } else {
+                // Unjailed, Firecracker can write the archive files directly.
+                try await managed.manager.createSnapshot(
+                    SnapshotCreateConfig(
+                        snapshotPath: archiveVmstate,
+                        memFilePath: archiveMemory,
+                        snapshotType: .full))
+            }
+
+            // Copy the rootfs (and the tiny config drive, which a jailed
+            // restore re-stages the chroot from) while the guest is still
+            // paused, so disk and memory are one consistent point in time.
+            // `cp --reflink=auto` makes this a free clone on filesystems that
+            // support it and a full copy otherwise.
+            try await reflinkCopy(from: managed.rootfsPath, to: archiveRootfs)
+            try await reflinkCopy(from: managed.configPath, to: archiveConfig)
+        } catch {
+            // Failed checkpoint: drop partial artifacts and put the guest
+            // back the way it was found.
+            try? FileManager.default.removeItem(atPath: archiveDir)
+            if wasRunning {
+                try? await managed.manager.resume()
+                startLogFollow(sandboxId: sandboxId)
+            }
+            throw error
+        }
+
+        if mode == .resume, wasRunning {
+            try await managed.manager.resume()
+            startLogFollow(sandboxId: sandboxId)
+        }
+        // `mode == .stop` leaves the microVM paused — exactly the state a
+        // control-plane stop produces, so the sandbox converges to `stopped`
+        // and can later resume from this checkpoint via restore.
+
+        let result = SandboxSnapshotResult(
+            memorySizeBytes: fileSize(archiveMemory),
+            vmstateSizeBytes: fileSize(archiveVmstate),
+            rootfsSizeBytes: fileSize(archiveRootfs),
+            storagePath: archiveDir,
+            firecrackerVersion: info.vmlinuxVersion)
+        logger.info(
+            "Sandbox checkpoint complete",
+            metadata: [
+                "sandboxId": .string(sandboxId),
+                "snapshotId": .string(snapshotId),
+                "totalBytes": .stringConvertible(result.totalSizeBytes),
+            ])
+        return result
+    }
+
+    func restoreSandbox(sandboxId: String, snapshotId: String) async throws {
+        guard let managed = sandboxes[sandboxId] else {
+            throw SandboxRuntimeError.sandboxNotFound(sandboxId)
+        }
+        guard !checkpointing.contains(sandboxId) else {
+            throw SandboxRuntimeError.checkpointInProgress(sandboxId)
+        }
+        checkpointing.insert(sandboxId)
+        defer { checkpointing.remove(sandboxId) }
+
+        let archiveDir = snapshotDirectory(sandboxId, snapshotId: snapshotId)
+        let archiveMemory = archiveDir + "/" + SnapshotFile.memory
+        let archiveVmstate = archiveDir + "/" + SnapshotFile.vmstate
+        let archiveRootfs = archiveDir + "/" + SnapshotFile.rootfs
+        let archiveConfig = archiveDir + "/" + SnapshotFile.configImage
+        for required in [archiveMemory, archiveVmstate, archiveRootfs] {
+            guard FileManager.default.fileExists(atPath: required) else {
+                throw SandboxRuntimeError.snapshotNotFound(sandboxId: sandboxId, snapshotId: snapshotId)
+            }
+        }
+
+        logger.info(
+            "Restoring sandbox from snapshot",
+            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+
+        // The current guest is about to be replaced wholesale.
+        await closeExecSessions(sandboxId: sandboxId, reason: "sandbox restore")
+        await stopLogFollow(sandboxId: sandboxId, retire: false)
+
+        // Tear down the current Firecracker process. For a jailed sandbox
+        // this removes the whole chroot subtree, which the staging below
+        // rebuilds from the archive.
+        try? await client.destroyVM(vmId: sandboxId)
+
+        let newManager: FirecrackerManager
+        if let plan = managed.jail {
+            // Re-stage the jail exactly as at snapshot time. The kernel and
+            // initramfs are deliberately absent: a snapshot load restores
+            // guest memory directly and never reads the boot source.
+            try FileManager.default.createDirectory(
+                atPath: plan.jailRoot + "/run", withIntermediateDirectories: true)
+            let rootfsHost = plan.hostPath(forInJail: SandboxJailPlan.rootfsPathInJail)
+            try await reflinkCopy(from: archiveRootfs, to: rootfsHost)
+            let configHost = plan.hostPath(forInJail: SandboxJailPlan.configPathInJail)
+            try await reflinkCopy(from: archiveConfig, to: configHost)
+            let snapshotDirHost = plan.hostPath(forInJail: SandboxJailPlan.snapshotDirInJail)
+            try FileManager.default.createDirectory(
+                atPath: snapshotDirHost, withIntermediateDirectories: true)
+            try await reflinkCopy(
+                from: archiveMemory,
+                to: plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail))
+            try await reflinkCopy(
+                from: archiveVmstate,
+                to: plan.hostPath(forInJail: SandboxJailPlan.snapshotVmstatePathInJail))
+            for path in [
+                plan.jailRoot, plan.jailRoot + "/run", rootfsHost, configHost, snapshotDirHost,
+                plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail),
+                plan.hostPath(forInJail: SandboxJailPlan.snapshotVmstatePathInJail),
+            ] {
+                try chownPath(path, uid: plan.uid, gid: plan.gid)
+            }
+            // The namespace usually survives the old process; recreate for a
+            // crash-swept host (reused when it exists).
+            try await createNetns(plan.netnsName)
+
+            let cgroups = jailerCgroups(guestMemoryBytes: managed.spec.memoryBytes)
+            let jailOptions = JailerOptions(
+                jailerBinaryPath: jailerConfig.jailerBinaryPath,
+                chrootBaseDir: jailerConfig.chrootBaseDir,
+                uid: plan.uid,
+                gid: plan.gid,
+                netnsPath: plan.netnsPath,
+                cgroupVersion: cgroups.version,
+                cgroups: cgroups.entries)
+            newManager = try await client.restoreVM(
+                vmId: sandboxId, jail: jailOptions,
+                snapshot: SnapshotLoadConfig(
+                    snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
+                    memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
+                    resumeVM: true))
+        } else {
+            // Unjailed: replace the live rootfs with the checkpointed copy
+            // and load memory/vmstate straight from the archive (Firecracker
+            // only reads the memory file for a file-backed load).
+            try? FileManager.default.removeItem(atPath: managed.rootfsPath)
+            try await reflinkCopy(from: archiveRootfs, to: managed.rootfsPath)
+            if !FileManager.default.fileExists(atPath: managed.configPath) {
+                try await reflinkCopy(from: archiveConfig, to: managed.configPath)
+            }
+            // The restored vsock device re-binds the deterministic UDS; a
+            // stale file from the old process would make that bind fail.
+            try? FileManager.default.removeItem(atPath: managed.vsockUdsPath)
+            newManager = try await client.restoreVM(
+                vmId: sandboxId, jail: nil,
+                snapshot: SnapshotLoadConfig(
+                    snapshotPath: archiveVmstate,
+                    memFilePath: archiveMemory,
+                    resumeVM: true))
+        }
+
+        sandboxes[sandboxId]?.manager = newManager
+        // Whatever exit the pre-restore guest reported no longer describes
+        // this guest; the restored one re-reports over vsock.
+        sandboxes[sandboxId]?.lastExitCode = nil
+
+        // Health check: the restored guest must answer with this sandbox's
+        // identity (the checkpointed memory carries the original nonce).
+        let response = try await sendControl(.ping, udsPath: managed.vsockUdsPath, timeout: 20)
+        guard identityMatches(response, sandboxId: sandboxId, expectedNonce: managed.identityNonce) else {
+            throw SandboxControlError.identityMismatch(
+                expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(response)")
+        }
+
+        // Best-effort clock resync: the restored guest's wall clock froze at
+        // checkpoint time. Guests that predate `sync_clock` answer `error`.
+        let unixNanos = Int64(Date().timeIntervalSince1970 * 1_000_000_000)
+        do {
+            _ = try await sendControl(
+                .syncClock(unixNanos: unixNanos), udsPath: managed.vsockUdsPath, timeout: 5)
+        } catch {
+            logger.warning(
+                "Restored sandbox guest did not accept clock resync (older guest image?)",
+                metadata: [
+                    "sandboxId": .string(sandboxId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+
+        startLogFollow(sandboxId: sandboxId)
+        logger.info(
+            "Sandbox restored from snapshot",
+            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+    }
+
+    func deleteSandboxSnapshot(sandboxId: String, snapshotId: String) async throws {
+        // Independent of the microVM's state, and deliberately no managed
+        // guard: cleanup must work for snapshots whose sandbox this runtime
+        // never tracked (crash leftovers). Idempotent — a missing directory
+        // confirms cleanly.
+        try? FileManager.default.removeItem(atPath: snapshotDirectory(sandboxId, snapshotId: snapshotId))
+        logger.info(
+            "Sandbox snapshot deleted",
+            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+    }
+
+    /// `stat(2)` size of a file, 0 when unreadable (sizes are advisory —
+    /// quota accounting — never load-bearing for correctness).
+    private func fileSize(_ path: String) -> Int64 {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+        return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
+    /// Move a file, replacing any existing target. `moveItem` falls back to
+    /// copy+delete across filesystems, so this works whether or not the
+    /// archive shares a filesystem with the jail chroot.
+    private func moveReplacingItem(from source: String, to target: String) throws {
+        if FileManager.default.fileExists(atPath: target) {
+            try FileManager.default.removeItem(atPath: target)
+        }
+        try FileManager.default.moveItem(atPath: source, toPath: target)
+    }
+
+    /// Copy a file via `cp --reflink=auto --sparse=auto`: a metadata-only
+    /// clone on filesystems that support reflinks (btrfs, XFS, future ZFS
+    /// pools — issue #350), a regular copy otherwise. Sparse regions of the
+    /// memory file stay sparse either way.
+    private func reflinkCopy(from source: String, to target: String) async throws {
+        let cpCandidates = ["/usr/bin/cp", "/bin/cp"]
+        guard let cpBinary = cpCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+        else {
+            // No cp binary — fall back to a plain (non-reflink) copy.
+            if FileManager.default.fileExists(atPath: target) {
+                try FileManager.default.removeItem(atPath: target)
+            }
+            try FileManager.default.copyItem(atPath: source, toPath: target)
+            return
+        }
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: cpBinary),
+            arguments: ["--reflink=auto", "--sparse=auto", "--force", source, target])
+        if result.terminationStatus != 0 {
+            throw SandboxRuntimeError.snapshotIOFailed(
+                "`cp --reflink=auto \(source) \(target)` failed (exit \(result.terminationStatus)): "
+                    + result.combinedOutput.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+
     // MARK: - Exec sessions (issue #423)
 
     func startExec(
@@ -588,6 +931,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     ) async throws {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
+        }
+        guard !checkpointing.contains(sandboxId) else {
+            throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
         guard execSessions[sessionId] == nil else {
             // Session ids are minted per attach by the control plane; a
@@ -1061,6 +1407,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             // remembered as such.
             return sandboxes[sandboxId]?.lastExitCode != nil ? .exited : .stopped
         case .running:
+            // A checkpoint/restore in flight has drained the guest control
+            // channel; opening a fresh connection here would race the drain
+            // (Firecracker refuses to snapshot a vsock device with live
+            // connections). The instance is demonstrably running.
+            if checkpointing.contains(sandboxId) {
+                return .running
+            }
             do {
                 let response = try await sendControl(.getStatus, udsPath: udsPath, timeout: 5)
                 guard case .status(_, _, let state, let exitCode) = response else {
@@ -1393,6 +1746,20 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     func exitCode(sandboxId: String) async -> Int? {
         nil
+    }
+
+    func snapshotSandbox(
+        sandboxId: String, snapshotId: String, mode: SandboxSnapshotMode
+    ) async throws -> SandboxSnapshotResult {
+        throw HypervisorServiceError.notSupported("sandboxes are only available on Linux")
+    }
+
+    func restoreSandbox(sandboxId: String, snapshotId: String) async throws {
+        throw HypervisorServiceError.notSupported("sandboxes are only available on Linux")
+    }
+
+    func deleteSandboxSnapshot(sandboxId: String, snapshotId: String) async throws {
+        throw HypervisorServiceError.notSupported("sandboxes are only available on Linux")
     }
 
     func startExec(

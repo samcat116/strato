@@ -416,6 +416,9 @@ public func configure(_ app: Application) async throws {
     // Descriptive host hardware/platform/OS details for operator display.
     app.migrations.add(AddHostInfoToAgent())
 
+    // Sandbox snapshots / checkpoint-resume (issue #426).
+    app.migrations.add(CreateSandboxSnapshot())
+
     try await app.autoMigrate()
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth

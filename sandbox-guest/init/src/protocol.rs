@@ -100,6 +100,14 @@ pub enum Request {
         /// at the oldest retained).
         since_seq: u64,
     },
+    /// Set the guest's realtime clock (v3, issue #426). Sent by the host
+    /// right after restoring the guest from a snapshot, whose wall clock
+    /// resumed frozen at checkpoint time. Answered with
+    /// [`Response::ClockSynced`].
+    SyncClock {
+        /// Current host wall-clock time as nanoseconds since the Unix epoch.
+        unix_nanos: i64,
+    },
 }
 
 /// The workload's lifecycle state as observed by the guest agent.
@@ -160,6 +168,8 @@ pub enum Response {
     /// without a trailing newline) instead of holding it until teardown. The
     /// guest closes the connection after sending it.
     LogEof,
+    /// Reply to [`Request::SyncClock`]: the realtime clock was set.
+    ClockSynced,
     /// The request could not be decoded, is not valid for the connection's
     /// role, or the exec spawn failed.
     Error { message: String },
@@ -210,6 +220,28 @@ mod tests {
     #[test]
     fn unknown_request_is_rejected() {
         assert!(decode_request("{\"type\":\"reboot\"}").is_err());
+    }
+
+    #[test]
+    fn sync_clock_round_trips() {
+        let req = decode_request(r#"{"type":"sync_clock","unix_nanos":1752700000000000000}"#)
+            .expect("decode");
+        assert_eq!(
+            req,
+            Request::SyncClock {
+                unix_nanos: 1_752_700_000_000_000_000
+            }
+        );
+        let decoded: Request = serde_json::from_str(encode_line(&req).trim()).expect("re-decode");
+        assert_eq!(decoded, req);
+    }
+
+    #[test]
+    fn clock_synced_encodes() {
+        assert_eq!(
+            encode_line(&Response::ClockSynced).trim(),
+            r#"{"type":"clock_synced"}"#
+        );
     }
 
     #[test]

@@ -41,6 +41,29 @@ protocol SandboxRuntimeService: Sendable {
     /// reported one over vsock.
     func exitCode(sandboxId: String) async -> Int?
 
+    // MARK: Snapshots / checkpoint-resume (issue #426)
+
+    /// Checkpoint the sandbox: drain host↔guest connections, pause the
+    /// microVM, capture guest memory + vmstate via the Firecracker snapshot
+    /// API, copy the rootfs while paused, then resume (`.resume`) or stay
+    /// stopped (`.stop`). The runtime owns the artifact layout (host-side,
+    /// beside the sandbox) and reports sizes + the Firecracker version the
+    /// snapshot is tied to.
+    func snapshotSandbox(
+        sandboxId: String, snapshotId: String, mode: SandboxSnapshotMode
+    ) async throws -> SandboxSnapshotResult
+
+    /// Restore the sandbox in place from one of its snapshots: tear down the
+    /// current microVM process, re-stage the checkpointed rootfs, spawn a
+    /// fresh Firecracker, load the snapshot, resume, and confirm the guest
+    /// answers. Same identity — the vsock wiring and (future) NIC devices come
+    /// back under their original names from the snapshotted device topology.
+    func restoreSandbox(sandboxId: String, snapshotId: String) async throws
+
+    /// Remove a snapshot's artifacts from this host. Idempotent: deleting a
+    /// snapshot that left no files (or was already deleted) succeeds.
+    func deleteSandboxSnapshot(sandboxId: String, snapshotId: String) async throws
+
     // MARK: Exec sessions and workload logs (issue #423)
 
     /// Start an exec session inside a running sandbox: spawn `request.command`
@@ -90,6 +113,20 @@ protocol SandboxRuntimeService: Sendable {
     func controlPlaneConnected() async
 }
 
+/// What one completed sandbox snapshot left on disk (issue #426): the input
+/// for the agent's `SandboxSnapshotStatusResponse` back to the control plane.
+struct SandboxSnapshotResult: Sendable {
+    let memorySizeBytes: Int64
+    let vmstateSizeBytes: Int64
+    let rootfsSizeBytes: Int64
+    /// The agent-owned directory holding the snapshot artifacts.
+    let storagePath: String
+    /// `vmm_version` of the Firecracker that took the snapshot.
+    let firecrackerVersion: String
+
+    var totalSizeBytes: Int64 { memorySizeBytes + vmstateSizeBytes + rootfsSizeBytes }
+}
+
 /// Sandbox actuation failures raised by the Agent's reconcile routing (the
 /// runtime's own errors surface as-is).
 enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
@@ -126,12 +163,26 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
     /// sandboxes are still adopted and torn down. Permanent: only a host or
     /// config change (and an agent restart) can satisfy the mode.
     case jailerRequiredUnavailable(String)
+    /// A checkpoint or restore is in flight for this sandbox, so lifecycle
+    /// operations that would race it (boot, stop, exec) are refused.
+    /// Transient by construction: the checkpoint finishes.
+    case checkpointInProgress(String)
+    /// The referenced snapshot has no artifacts on this host.
+    case snapshotNotFound(sandboxId: String, snapshotId: String)
+    /// The sandbox has no state worth checkpointing (never booted), or its
+    /// state cannot be captured.
+    case notSnapshottable(String)
+    /// Copying or moving snapshot artifacts failed host-side. Transient:
+    /// disk pressure or an I/O hiccup a retry can clear.
+    case snapshotIOFailed(String)
 
     var failureClassification: FailureClassification {
         switch self {
-        case .runtimeUnavailable, .unsupportedStep, .networkingUnsupported, .jailerRequiredUnavailable:
+        case .runtimeUnavailable, .unsupportedStep, .networkingUnsupported, .jailerRequiredUnavailable,
+            .notSnapshottable, .snapshotNotFound:
             return .permanent
-        case .sandboxNotFound, .adoptionTargetGone, .execSessionNotFound, .jailSetupFailed:
+        case .sandboxNotFound, .adoptionTargetGone, .execSessionNotFound, .jailSetupFailed,
+            .checkpointInProgress, .snapshotIOFailed:
             return .transient
         }
     }
@@ -154,6 +205,14 @@ enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Sendable {
             return "sandbox jail setup failed: \(reason)"
         case .jailerRequiredUnavailable(let reason):
             return "sandbox_jailer_mode is 'required' but the jailer is unusable: \(reason)"
+        case .checkpointInProgress(let id):
+            return "a checkpoint or restore is in progress for sandbox \(id)"
+        case .snapshotNotFound(let sandboxId, let snapshotId):
+            return "snapshot \(snapshotId) of sandbox \(sandboxId) has no artifacts on this host"
+        case .notSnapshottable(let reason):
+            return "sandbox cannot be checkpointed: \(reason)"
+        case .snapshotIOFailed(let reason):
+            return "snapshot artifact I/O failed: \(reason)"
         }
     }
 }

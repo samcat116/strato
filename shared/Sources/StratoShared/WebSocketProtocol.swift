@@ -86,6 +86,14 @@ public enum MessageType: String, Codable, Sendable {
     case sandboxExecClose = "sandbox_exec_close"
     case sandboxExecClosed = "sandbox_exec_closed"
     case sandboxLog = "sandbox_log"
+
+    // Sandbox snapshot / checkpoint operations (protocol version >= 9, issue
+    // #426). Imperative request/response pairs like the volume operations —
+    // a snapshot is an action, not a state, so it cannot ride the
+    // level-triggered desired-state sync.
+    case sandboxSnapshotCreate = "sandbox_snapshot_create"
+    case sandboxSnapshotDelete = "sandbox_snapshot_delete"
+    case sandboxRestore = "sandbox_restore"
 }
 
 // MARK: - Base Message Protocol
