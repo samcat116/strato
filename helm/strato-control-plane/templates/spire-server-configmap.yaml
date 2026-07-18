@@ -94,7 +94,7 @@ data:
     telemetry {
         Prometheus {
             host = "0.0.0.0"
-            port = "9988"
+            port = 9988
         }
     }
     {{- end }}
