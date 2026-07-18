@@ -63,11 +63,20 @@ data:
         }
 
         {{- if .Values.spire.attestors.k8sPsat.enabled }}
+        {{- /*
+        Allow-list entries must be "namespace:serviceaccount". When unset,
+        default to the agent DaemonSet's own service account — the identity
+        that actually presents the projected token.
+        */}}
+        {{- $allowList := .Values.spire.attestors.k8sPsat.serviceAccountAllowList }}
+        {{- if not $allowList }}
+          {{- $allowList = list (printf "%s:%s-spire-agent" .Release.Namespace (include "strato-control-plane.fullname" .)) }}
+        {{- end }}
         NodeAttestor "k8s_psat" {
             plugin_data {
                 clusters = {
                     "{{ .Values.spire.clusterName }}" = {
-                        service_account_allow_list = {{ toJson .Values.spire.attestors.k8sPsat.serviceAccountAllowList }}
+                        service_account_allow_list = {{ toJson $allowList }}
                     }
                 }
             }

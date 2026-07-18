@@ -654,8 +654,10 @@ spire:
     # Kubernetes Projected Service Account Token attestor
     k8sPsat:
       enabled: false
-      serviceAccountAllowList:
-        - "strato-agent"
+      # Entries are "namespace:serviceaccount". Leave empty to allow the
+      # chart's own agent DaemonSet service account (the only identity that
+      # presents the projected token in this deployment).
+      serviceAccountAllowList: []
 
   # Trust bundle notifier
   notifier:
