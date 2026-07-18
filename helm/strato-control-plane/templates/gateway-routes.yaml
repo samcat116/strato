@@ -22,8 +22,9 @@ spec:
     - {{ include "strato-control-plane.gateway.webHost" . | quote }}
   rules:
     # Control-plane routes. /organizations is the SCIM protocol + token
-    # management surface and bypasses the frontend, so Next.js pages must not
-    # live under /organizations.
+    # management surface and /ssf is the RFC 8935 push-delivery callback
+    # (POST /ssf/events/:streamID) that external SSF transmitters POST to; both
+    # bypass the frontend, so Next.js pages must not live under either prefix.
     - matches:
         - path:
             type: PathPrefix
@@ -40,6 +41,9 @@ spec:
         - path:
             type: PathPrefix
             value: /organizations
+        - path:
+            type: PathPrefix
+            value: /ssf
       backendRefs:
         - name: {{ $fullName }}
           port: {{ $svcPort }}
