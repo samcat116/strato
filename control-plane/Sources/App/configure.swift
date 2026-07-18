@@ -416,7 +416,17 @@ public func configure(_ app: Application) async throws {
     // Descriptive host hardware/platform/OS details for operator display.
     app.migrations.add(AddHostInfoToAgent())
 
+    // IAM phase 1 (issue #477): the role_bindings policy store and the
+    // role/action registry, dual-written alongside SpiceDB tuples.
+    app.migrations.add(CreateRoleBinding())
+    app.migrations.add(CreateIAMRoleRegistry())
+
     try await app.autoMigrate()
+
+    // Reconcile the iam_roles/iam_role_actions tables with the code-side
+    // curated registry. Runs every startup so registry changes land with the
+    // deploy that carries them.
+    try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth
     // tokens) to encrypted form. Runs every startup (not a one-shot migration)
@@ -442,6 +452,14 @@ public func configure(_ app: Application) async throws {
         try await backfillOrganizationMemberRelationships(app)
         //  - agent#parent / site#parent tuples for org-scoped infrastructure.
         try await backfillInfraParentRelationships(app)
+
+        // IAM phase 1: populate role_bindings from the relational mirrors and
+        // from a SpiceDB export of resource-level owner/viewer/editor tuples
+        // (those exist only in SpiceDB and would be lost at cutover). Both are
+        // idempotent, so re-running every boot also repairs any dual-write a
+        // crashed request missed.
+        try await RoleBindingBackfill.backfillFromMirrors(app)
+        try await RoleBindingBackfill.backfillFromSpiceDB(app)
     }
 
     // Initialize the image download signing key (generates if not exists)
@@ -539,6 +557,28 @@ public func configure(_ app: Application) async throws {
         } catch SpiceDBError.relationshipWriteFailed(let status) where status == .conflict {
             // Relationship already exists, which is fine
         }
+
+        // IAM dual-write: the dev user's admin binding on the default org, and
+        // a creator binding on the default project (grant is an idempotent
+        // upsert, safe to repeat every boot).
+        try await RoleBindingService.grant(
+            principalType: .user,
+            principalID: devUser.id!,
+            role: .admin,
+            nodeType: .organization,
+            nodeID: defaultOrg.id!,
+            createdBy: devUser.id,
+            on: app.db
+        )
+        try await RoleBindingService.grant(
+            principalType: .user,
+            principalID: devUser.id!,
+            role: .admin,
+            nodeType: .project,
+            nodeID: defaultProject.id!,
+            createdBy: devUser.id,
+            on: app.db
+        )
 
         // Link dev user to organization if not already linked
         let existingMembership = try await UserOrganization.query(on: app.db)

@@ -668,6 +668,20 @@ struct VMController: RouteCollection {
                     let operation = ResourceOperation(vmID: vmID, userID: userID, kind: .create)
                     try await operation.save(on: db)
 
+                    // IAM dual-write (issue #477): the creator's explicit,
+                    // revocable binding on the VM, in the create transaction.
+                    // The SpiceDB owner tuple (still authoritative) is written
+                    // after commit, as before.
+                    try await RoleBindingService.grant(
+                        principalType: .user,
+                        principalID: userID,
+                        role: .admin,
+                        nodeType: .virtualMachine,
+                        nodeID: vmID,
+                        createdBy: userID,
+                        on: db
+                    )
+
                     return operation
                 }
             }

@@ -799,6 +799,23 @@ struct ProjectController: RouteCollection {
         guard let projectId = project.id else {
             throw Abort(.internalServerError, reason: "Project was not assigned an ID after save")
         }
+
+        // IAM dual-write (issue #477): an explicit, revocable admin binding for
+        // the project's creator. Deliberately new behavior — today a
+        // member-created project has no administrator besides org admins; the
+        // binding fixes that (it grants nothing until the Cedar cutover).
+        if let creatorID = req.auth.get(User.self)?.id {
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: creatorID,
+                role: .admin,
+                nodeType: .project,
+                nodeID: projectId,
+                createdBy: creatorID,
+                on: db
+            )
+        }
+
         guard let parent = project.spiceDBParentRef else {
             throw Abort(.internalServerError, reason: "Project has no parent")
         }

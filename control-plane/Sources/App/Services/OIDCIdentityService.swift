@@ -183,6 +183,20 @@ struct OIDCIdentityService {
             )
             try await membership.save(on: transaction)
 
+            // IAM dual-write (issue #477): org admins get an admin binding on
+            // the org node, in the same transaction as the mirror row.
+            if let bindingRole = IAMRole.fromOrganizationRole(role) {
+                try await RoleBindingService.grant(
+                    principalType: .user,
+                    principalID: userID,
+                    role: bindingRole,
+                    nodeType: .organization,
+                    nodeID: organizationID,
+                    createdBy: nil,
+                    on: transaction
+                )
+            }
+
             // Mirror the membership into SpiceDB, like OrganizationController's
             // addMember does — without this tuple the new user authenticates
             // but fails every permission check.
@@ -352,6 +366,29 @@ struct OIDCIdentityService {
         let spicedb = self.spicedb
         try await db.transaction { transaction in
             try await membership.save(on: transaction)
+            // IAM dual-write (issue #477): swap the role binding with the
+            // mirror-row update (admin↔member; bare membership has none).
+            if let oldBinding = IAMRole.fromOrganizationRole(oldRole) {
+                try await RoleBindingService.revoke(
+                    principalType: .user,
+                    principalID: userID,
+                    role: oldBinding,
+                    nodeType: .organization,
+                    nodeID: organizationID,
+                    on: transaction
+                )
+            }
+            if let newBinding = IAMRole.fromOrganizationRole(desired) {
+                try await RoleBindingService.grant(
+                    principalType: .user,
+                    principalID: userID,
+                    role: newBinding,
+                    nodeType: .organization,
+                    nodeID: organizationID,
+                    createdBy: nil,
+                    on: transaction
+                )
+            }
             try await spicedb.setOrganizationRole(
                 userID: userID.uuidString,
                 organizationID: organizationID.uuidString,

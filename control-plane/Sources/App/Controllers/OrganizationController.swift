@@ -117,13 +117,26 @@ struct OrganizationController: RouteCollection {
 
         try await organization.save(on: req.db)
 
-        // Add creator as admin
+        // Add creator as admin. IAM dual-write (issue #477): the admin role
+        // binding lands in the same transaction as the mirror row; SpiceDB
+        // stays authoritative.
         let userOrganization = UserOrganization(
             userID: user.id!,
             organizationID: organization.id!,
             role: "admin"
         )
-        try await userOrganization.save(on: req.db)
+        try await req.db.transaction { db in
+            try await userOrganization.save(on: db)
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: user.id!,
+                role: .admin,
+                nodeType: .organization,
+                nodeID: organization.id!,
+                createdBy: user.id,
+                on: db
+            )
+        }
 
         // Set as current organization if user doesn't have one
         if user.currentOrganizationId == nil {
@@ -153,6 +166,18 @@ struct OrganizationController: RouteCollection {
         // Update project path with its own ID
         defaultProject.path = "/\(organization.id!.uuidString)/\(defaultProject.id!.uuidString)"
         try await defaultProject.save(on: req.db)
+
+        // Creator binding on the default project (project creation writes an
+        // explicit, revocable binding for its creator).
+        try await RoleBindingService.grant(
+            principalType: .user,
+            principalID: user.id!,
+            role: .admin,
+            nodeType: .project,
+            nodeID: defaultProject.id!,
+            createdBy: user.id,
+            on: req.db
+        )
 
         // Link the default project to its parent organization in SpiceDB.
         try await req.spicedb.writeRelationship(
@@ -374,7 +399,23 @@ struct OrganizationController: RouteCollection {
             organizationID: organizationID,
             role: addRequest.role
         )
-        try await membership.save(on: req.db)
+        // IAM dual-write (issue #477): org admins get an admin binding on the
+        // org node; bare membership maps to no binding.
+        let actorID = req.auth.get(User.self)?.id
+        try await req.db.transaction { db in
+            try await membership.save(on: db)
+            if let bindingRole = IAMRole.fromOrganizationRole(addRequest.role) {
+                try await RoleBindingService.grant(
+                    principalType: .user,
+                    principalID: targetUser.id!,
+                    role: bindingRole,
+                    nodeType: .organization,
+                    nodeID: organizationID,
+                    createdBy: actorID,
+                    on: db
+                )
+            }
+        }
 
         // Create SpiceDB relationship (no previous role for a brand-new member).
         try await req.spicedb.setOrganizationRole(
@@ -433,7 +474,17 @@ struct OrganizationController: RouteCollection {
         }
 
         let removedRole = membership.role
-        try await membership.delete(on: req.db)
+        try await req.db.transaction { db in
+            try await membership.delete(on: db)
+            // IAM dual-write: drop the departing member's bindings on the org node.
+            try await RoleBindingService.revoke(
+                principalType: .user,
+                principalID: userID,
+                nodeType: .organization,
+                nodeID: organizationID,
+                on: db
+            )
+        }
 
         // Delete the SpiceDB tuple too, or the removed user keeps SpiceDB-granted
         // access even though their relational membership is gone.
@@ -499,7 +550,34 @@ struct OrganizationController: RouteCollection {
 
         let previousRole = membership.role
         membership.role = updateRequest.role
-        try await membership.save(on: req.db)
+        let actorID = req.auth.get(User.self)?.id
+        try await req.db.transaction { db in
+            try await membership.save(on: db)
+            // IAM dual-write: swap the role's binding atomically with the
+            // mirror-row update (admin↔member changes add/remove the admin
+            // binding; bare membership has none).
+            if let oldBinding = IAMRole.fromOrganizationRole(previousRole) {
+                try await RoleBindingService.revoke(
+                    principalType: .user,
+                    principalID: userID,
+                    role: oldBinding,
+                    nodeType: .organization,
+                    nodeID: organizationID,
+                    on: db
+                )
+            }
+            if let newBinding = IAMRole.fromOrganizationRole(updateRequest.role) {
+                try await RoleBindingService.grant(
+                    principalType: .user,
+                    principalID: userID,
+                    role: newBinding,
+                    nodeType: .organization,
+                    nodeID: organizationID,
+                    createdBy: actorID,
+                    on: db
+                )
+            }
+        }
 
         // Update SpiceDB: delete the old role tuple before writing the new one, or
         // the stale tuple lingers and a demoted admin keeps admin permissions.

@@ -1,0 +1,140 @@
+import Fluent
+import Foundation
+import Vapor
+
+/// A role grant: `principal` holds `role` on `node` (an org-tree node or an
+/// individual resource), optionally conditioned and optionally expiring.
+///
+/// This table is the future policy store for the Cedar-based evaluator (see
+/// docs/architecture/iam.md). During the migration it is dual-written alongside
+/// the SpiceDB tuples, which remain authoritative; nothing enforces from this
+/// table yet. Rows are written in the same database transaction as the
+/// mutation they accompany wherever one exists.
+///
+/// There is deliberately no foreign key on `node_id`: the column points at
+/// many tables (discriminated by `node_type`), same as `ResourceOperation`.
+final class RoleBinding: Model, @unchecked Sendable {
+    static let schema = "role_bindings"
+
+    @ID(key: .id)
+    var id: UUID?
+
+    @Field(key: "principal_type")
+    var principalType: String
+
+    @Field(key: "principal_id")
+    var principalID: UUID
+
+    @Field(key: "role")
+    var role: String
+
+    @Field(key: "node_type")
+    var nodeType: String
+
+    @Field(key: "node_id")
+    var nodeID: UUID
+
+    /// Optional condition from the fixed vocabulary (`mfa`, `ip_range`,
+    /// `tags`/`environment`), stored as a JSON document. Unused in phase 1;
+    /// the column exists so conditioned bindings need no schema change.
+    @OptionalField(key: "condition")
+    var condition: String?
+
+    /// TTL of the grant. A nil value never expires. Every read path must
+    /// exclude expired rows (`.active()`).
+    @OptionalField(key: "expires_at")
+    var expiresAt: Date?
+
+    /// The user who wrote the grant; nil for system-written rows (backfills).
+    @OptionalField(key: "created_by")
+    var createdBy: UUID?
+
+    @Timestamp(key: "created_at", on: .create)
+    var createdAt: Date?
+
+    init() {}
+
+    init(
+        id: UUID? = nil,
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        role: IAMRole,
+        nodeType: IAMNodeType,
+        nodeID: UUID,
+        condition: String? = nil,
+        expiresAt: Date? = nil,
+        createdBy: UUID? = nil
+    ) {
+        self.id = id
+        self.principalType = principalType.rawValue
+        self.principalID = principalID
+        self.role = role.rawValue
+        self.nodeType = nodeType.rawValue
+        self.nodeID = nodeID
+        self.condition = condition
+        self.expiresAt = expiresAt
+        self.createdBy = createdBy
+    }
+}
+
+extension RoleBinding: Content {}
+
+extension QueryBuilder<RoleBinding> {
+    /// Excludes expired bindings. Every path that *reads* bindings must apply
+    /// this — `expires_at` is enforced at read time, not by a sweep.
+    func active(at now: Date = Date()) -> Self {
+        group(.or) { group in
+            group.filter(\.$expiresAt == nil)
+            group.filter(\.$expiresAt > now)
+        }
+    }
+}
+
+/// A row of the role registry: one global role and the role it implies.
+/// Mirrors `IAMRoleRegistry` (the code is the curated source of truth);
+/// `RoleRegistrySync` reconciles these tables at boot.
+final class IAMRoleRecord: Model, @unchecked Sendable {
+    static let schema = "iam_roles"
+
+    @ID(key: .id)
+    var id: UUID?
+
+    @Field(key: "name")
+    var name: String
+
+    /// The next role down the nesting chain (`admin` → `editor`, …).
+    @OptionalField(key: "implies")
+    var implies: String?
+
+    init() {}
+
+    init(id: UUID? = nil, name: String, implies: String?) {
+        self.id = id
+        self.name = name
+        self.implies = implies
+    }
+}
+
+/// One action in a role's *expanded* action group (direct actions plus
+/// everything inherited via `implies`), so `iam_role_actions` can answer
+/// "which roles contain action X" with a plain lookup.
+final class IAMRoleAction: Model, @unchecked Sendable {
+    static let schema = "iam_role_actions"
+
+    @ID(key: .id)
+    var id: UUID?
+
+    @Field(key: "role")
+    var role: String
+
+    @Field(key: "action")
+    var action: String
+
+    init() {}
+
+    init(id: UUID? = nil, role: IAMRole, action: String) {
+        self.id = id
+        self.role = role.rawValue
+        self.action = action
+    }
+}

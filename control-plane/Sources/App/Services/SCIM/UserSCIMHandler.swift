@@ -225,8 +225,18 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             subjectId: uuid.uuidString
         )
 
-        // Remove organization membership from database
-        try await membership.delete(on: db)
+        // Remove organization membership from database, and any role bindings
+        // the user held on the org node (IAM dual-write, issue #477).
+        try await db.transaction { transaction in
+            try await membership.delete(on: transaction)
+            try await RoleBindingService.revoke(
+                principalType: .user,
+                principalID: uuid,
+                nodeType: .organization,
+                nodeID: organizationID,
+                on: transaction
+            )
+        }
 
         // Delete external ID mapping
         try await SCIMExternalID.deleteMapping(

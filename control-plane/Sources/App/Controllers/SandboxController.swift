@@ -391,6 +391,18 @@ struct SandboxController: RouteCollection {
                         sandboxID: sandboxID, userID: userID, kind: .create)
                     try await operation.save(on: db)
 
+                    // IAM dual-write (issue #477): the creator's binding on the
+                    // sandbox, in the create transaction (see the VM path).
+                    try await RoleBindingService.grant(
+                        principalType: .user,
+                        principalID: userID,
+                        role: .admin,
+                        nodeType: .sandbox,
+                        nodeID: sandboxID,
+                        createdBy: userID,
+                        on: db
+                    )
+
                     return operation
                 }
             }

@@ -212,23 +212,10 @@ struct ImageController: RouteCollection {
 
         try await image.save(on: req.db)
 
-        // Create SpiceDB relationships
-        let imageId = image.id?.uuidString ?? ""
-        try await req.spicedb.writeRelationship(
-            entity: "image",
-            entityId: imageId,
-            relation: "project",
-            subject: "project",
-            subjectId: projectID.uuidString
-        )
-
-        try await req.spicedb.writeRelationship(
-            entity: "image",
-            entityId: imageId,
-            relation: "owner",
-            subject: "user",
-            subjectId: userID.uuidString
-        )
+        // Create SpiceDB relationships and the creator's IAM binding.
+        let imageId = try image.requireID().uuidString
+        try await writeImageRelationships(
+            req: req, imageID: try image.requireID(), projectID: projectID, userID: userID)
 
         // Start background fetch
         req.logger.info(
@@ -306,10 +293,21 @@ struct ImageController: RouteCollection {
         return ImageResponse(from: image)
     }
 
-    /// Writes the standard SpiceDB ownership relationships for a new image.
+    /// Writes the standard SpiceDB ownership relationships for a new image,
+    /// plus the creator's role binding (IAM dual-write, issue #477 — SpiceDB
+    /// stays authoritative).
     private func writeImageRelationships(
         req: Request, imageID: UUID, projectID: UUID, userID: UUID
     ) async throws {
+        try await RoleBindingService.grant(
+            principalType: .user,
+            principalID: userID,
+            role: .admin,
+            nodeType: .image,
+            nodeID: imageID,
+            createdBy: userID,
+            on: req.db
+        )
         try await req.spicedb.writeRelationship(
             entity: "image",
             entityId: imageID.uuidString,
@@ -483,28 +481,14 @@ struct ImageController: RouteCollection {
         // Reflect the new artifact in the response (relation isn't auto-loaded).
         tempImage.$artifacts.value = [diskArtifact]
 
-        // Create SpiceDB relationships
-        let imageId = imageID.uuidString
-        try await req.spicedb.writeRelationship(
-            entity: "image",
-            entityId: imageId,
-            relation: "project",
-            subject: "project",
-            subjectId: projectID.uuidString
-        )
-
-        try await req.spicedb.writeRelationship(
-            entity: "image",
-            entityId: imageId,
-            relation: "owner",
-            subject: "user",
-            subjectId: userID.uuidString
-        )
+        // Create SpiceDB relationships and the creator's IAM binding.
+        try await writeImageRelationships(
+            req: req, imageID: imageID, projectID: projectID, userID: userID)
 
         req.logger.info(
             "Image uploaded successfully",
             metadata: [
-                "image_id": .string(imageId),
+                "image_id": .string(imageID.uuidString),
                 "filename": .string(filename),
                 "size": .stringConvertible(size),
                 "format": .string(format.rawValue),
