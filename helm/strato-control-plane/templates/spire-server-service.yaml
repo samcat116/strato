@@ -26,4 +26,32 @@ spec:
   selector:
     {{- include "strato-control-plane.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: spire-server
+{{- if and .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
+---
+# Headless companion Service exposing SPIRE server metrics per pod. Prometheus
+# discovers it with dns_sd_configs so every replica is scraped as its own
+# target — the load-balanced Service above would pin each scrape to a single
+# replica and under-count SVID signings when spire.replicaCount > 1.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spire-server-metrics
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-server
+spec:
+  clusterIP: None
+  # Publish addresses before readiness so a starting replica is still
+  # discoverable (scrapes just fail until it is up), rather than vanishing from
+  # DNS during rollouts.
+  publishNotReadyAddresses: true
+  ports:
+    - name: metrics
+      port: 9988
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    {{- include "strato-control-plane.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-server
+{{- end }}
 {{- end }}

@@ -36,11 +36,16 @@ data:
 
       {{- if .Values.spire.enabled }}
       # Scrape SPIRE server telemetry (SVID-signing counters) for the control
-      # plane's Workload Identity "Issuance" panel. See the SPIRE server
-      # ConfigMap telemetry block.
+      # plane's Workload Identity "Issuance" panel. DNS discovery against the
+      # headless metrics Service yields one target per replica pod (a plain
+      # Service would load-balance and under-count with replicaCount > 1). See
+      # the SPIRE server ConfigMap telemetry block.
       - job_name: 'spire-server'
-        static_configs:
-          - targets: ['{{ include "strato-control-plane.fullname" . }}-spire-server:9988']
+        dns_sd_configs:
+          - names:
+              - '{{ include "strato-control-plane.fullname" . }}-spire-server-metrics.{{ .Release.Namespace }}.svc.cluster.local'
+            type: 'A'
+            port: 9988
       {{- end }}
 
       # NOTE: the control plane is deliberately not scraped directly — it has
