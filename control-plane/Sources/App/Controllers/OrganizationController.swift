@@ -279,7 +279,34 @@ struct OrganizationController: RouteCollection {
             try await user.save(on: req.db)
         }
 
-        try await organization.delete(on: req.db)
+        // IAM dual-write (issue #477): bindings have no FK to the nodes they
+        // protect, so drop the org node's bindings — and those of every
+        // project that cascades away with it — alongside the row.
+        let orgProjectIDs = try await Project.query(on: req.db)
+            .filter(\.$organization.$id == organizationID)
+            .all()
+            .compactMap { $0.id }
+        let ouIDs = try await OrganizationalUnit.query(on: req.db)
+            .filter(\.$organization.$id == organizationID)
+            .all()
+            .compactMap { $0.id }
+        var ouProjectIDs: [UUID] = []
+        if !ouIDs.isEmpty {
+            ouProjectIDs = try await Project.query(on: req.db)
+                .filter(\.$organizationalUnit.$id ~~ ouIDs)
+                .all()
+                .compactMap { $0.id }
+        }
+        let cascadedProjectIDs = orgProjectIDs + ouProjectIDs
+        try await req.db.transaction { db in
+            try await organization.delete(on: db)
+            try await RoleBindingService.revokeAll(
+                nodeType: .organization, nodeID: organizationID, on: db)
+            for projectID in cascadedProjectIDs {
+                try await RoleBindingService.revokeAll(
+                    nodeType: .project, nodeID: projectID, on: db)
+            }
+        }
 
         return .noContent
     }

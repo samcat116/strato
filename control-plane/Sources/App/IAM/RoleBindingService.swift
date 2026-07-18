@@ -20,29 +20,47 @@ enum RoleBindingService {
         expiresAt: Date? = nil,
         on db: Database
     ) async throws {
-        if let existing = try await RoleBinding.query(on: db)
-            .filter(\.$principalType == principalType.rawValue)
-            .filter(\.$principalID == principalID)
-            .filter(\.$role == role.rawValue)
-            .filter(\.$nodeType == nodeType.rawValue)
-            .filter(\.$nodeID == nodeID)
-            .first()
-        {
+        func find() async throws -> RoleBinding? {
+            try await RoleBinding.query(on: db)
+                .filter(\.$principalType == principalType.rawValue)
+                .filter(\.$principalID == principalID)
+                .filter(\.$role == role.rawValue)
+                .filter(\.$nodeType == nodeType.rawValue)
+                .filter(\.$nodeID == nodeID)
+                .first()
+        }
+        func refresh(_ existing: RoleBinding) async throws {
             if existing.expiresAt != expiresAt {
                 existing.expiresAt = expiresAt
                 try await existing.save(on: db)
             }
+        }
+
+        if let existing = try await find() {
+            try await refresh(existing)
             return
         }
-        try await RoleBinding(
-            principalType: principalType,
-            principalID: principalID,
-            role: role,
-            nodeType: nodeType,
-            nodeID: nodeID,
-            expiresAt: expiresAt,
-            createdBy: createdBy
-        ).save(on: db)
+        do {
+            try await RoleBinding(
+                principalType: principalType,
+                principalID: principalID,
+                role: role,
+                nodeType: nodeType,
+                nodeID: nodeID,
+                expiresAt: expiresAt,
+                createdBy: createdBy
+            ).save(on: db)
+        } catch {
+            guard let dbError = error as? any DatabaseError, dbError.isConstraintFailure else { throw error }
+            // A concurrent writer (another request, or another replica's boot
+            // backfill) won the insert race on the uniqueness key. Outside a
+            // transaction this is recoverable: adopt the winner's row and
+            // apply our expiry. Inside an already-aborted Postgres transaction
+            // the re-read below fails and propagates, which is the correct
+            // outcome — the whole transaction retries or errors as a unit.
+            guard let existing = try await find() else { throw error }
+            try await refresh(existing)
+        }
     }
 
     /// Revoke a principal's binding(s) on a node — one role, or all of the

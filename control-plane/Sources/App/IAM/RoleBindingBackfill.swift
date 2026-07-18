@@ -134,7 +134,15 @@ enum RoleBindingBackfill {
     ) async throws -> Int {
         let bindingKey = key(binding)
         guard !existing.contains(bindingKey) else { return 0 }
-        try await binding.save(on: db)
+        do {
+            try await binding.save(on: db)
+        } catch let error as any DatabaseError where error.isConstraintFailure {
+            // Another replica's backfill inserted the same binding between our
+            // key-set snapshot and this insert; the row exists, which is all
+            // this backfill wants.
+            existing.insert(bindingKey)
+            return 0
+        }
         existing.insert(bindingKey)
         return 1
     }

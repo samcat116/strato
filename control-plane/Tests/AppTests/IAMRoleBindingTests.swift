@@ -59,14 +59,22 @@ final class IAMRoleBindingTests {
             // configure() already ran the sync once; run it again.
             try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
 
+            // Every persisted (role → implies) mapping matches the registry.
             let roles = try await IAMRoleRecord.query(on: app.db).all()
-            #expect(Set(roles.map(\.name)) == Set(IAMRole.allCases.map(\.rawValue)))
-            let adminRow = roles.first { $0.name == "admin" }
-            #expect(adminRow?.implies == "editor")
+            let persistedImplies = Dictionary(uniqueKeysWithValues: roles.map { ($0.name, $0.implies) })
+            let expectedImplies = Dictionary(
+                uniqueKeysWithValues: IAMRole.allCases.map { ($0.rawValue, $0.implies?.rawValue) })
+            #expect(persistedImplies == expectedImplies)
 
-            let actionCount = try await IAMRoleAction.query(on: app.db).count()
-            let expected = IAMRole.allCases.reduce(0) { $0 + IAMRoleRegistry.actions(for: $1).count }
-            #expect(actionCount == expected)
+            // Every persisted (role, action) pair matches the expanded registry
+            // exactly — not just in aggregate count.
+            let actions = try await IAMRoleAction.query(on: app.db).all()
+            let persistedPairs = Set(actions.map { "\($0.role)|\($0.action)" })
+            let expectedPairs = Set(
+                IAMRole.allCases.flatMap { role in
+                    IAMRoleRegistry.actions(for: role).map { "\(role.rawValue)|\($0)" }
+                })
+            #expect(persistedPairs == expectedPairs)
         }
     }
 
@@ -154,6 +162,7 @@ final class IAMRoleBindingTests {
             let projectBindings = try await bindings(on: app.db, nodeType: .project, nodeID: project.id!)
             #expect(projectBindings.count == 2)
             let userBinding = projectBindings.first { $0.principalType == IAMPrincipalType.user.rawValue }
+            #expect(userBinding?.principalID == member.id)
             #expect(userBinding?.role == IAMRole.editor.rawValue)
             let groupBinding = projectBindings.first { $0.principalType == IAMPrincipalType.group.rawValue }
             #expect(groupBinding?.principalID == group.id)
@@ -167,11 +176,15 @@ final class IAMRoleBindingTests {
             let vmID = UUID()
             let volumeID = UUID()
             let owner = UUID()
+            let editor = UUID()
             let viewer = UUID()
             app.spicedbMockRelationships = [
                 RelationshipTuple(
                     entity: "virtual_machine", entityId: vmID.uuidString.uppercased(),
                     relation: "owner", subject: "user", subjectId: owner.uuidString.uppercased()),
+                RelationshipTuple(
+                    entity: "virtual_machine", entityId: vmID.uuidString,
+                    relation: "editor", subject: "user", subjectId: editor.uuidString),
                 RelationshipTuple(
                     entity: "virtual_machine", entityId: vmID.uuidString,
                     relation: "viewer", subject: "user", subjectId: viewer.uuidString),
@@ -188,9 +201,11 @@ final class IAMRoleBindingTests {
             try await RoleBindingBackfill.backfillFromSpiceDB(app)
 
             let vmBindings = try await bindings(on: app.db, nodeType: .virtualMachine, nodeID: vmID)
-            #expect(vmBindings.count == 2)
+            #expect(vmBindings.count == 3)
             let ownerBinding = vmBindings.first { $0.principalID == owner }
             #expect(ownerBinding?.role == IAMRole.admin.rawValue)
+            let editorBinding = vmBindings.first { $0.principalID == editor }
+            #expect(editorBinding?.role == IAMRole.editor.rawValue)
             let viewerBinding = vmBindings.first { $0.principalID == viewer }
             #expect(viewerBinding?.role == IAMRole.viewer.rawValue)
 

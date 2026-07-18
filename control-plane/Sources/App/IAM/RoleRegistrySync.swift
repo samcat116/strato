@@ -22,7 +22,12 @@ enum RoleRegistrySync {
                     try await record.save(on: db)
                 }
             } else {
-                try await IAMRoleRecord(name: role.rawValue, implies: role.implies?.rawValue).save(on: db)
+                do {
+                    try await IAMRoleRecord(name: role.rawValue, implies: role.implies?.rawValue).save(on: db)
+                } catch let error as any DatabaseError where error.isConstraintFailure {
+                    // Another replica booting concurrently inserted this role;
+                    // the reconciled end state is identical.
+                }
             }
         }
         let knownRoles = Set(IAMRole.allCases.map(\.rawValue))
@@ -43,8 +48,12 @@ enum RoleRegistrySync {
             let desired = IAMRoleRegistry.actions(for: role)
             let current = existingByRole[role.rawValue] ?? []
             for action in desired.subtracting(current) {
-                try await IAMRoleAction(role: role, action: action).save(on: db)
-                inserted += 1
+                do {
+                    try await IAMRoleAction(role: role, action: action).save(on: db)
+                    inserted += 1
+                } catch let error as any DatabaseError where error.isConstraintFailure {
+                    // Concurrent boot already inserted this (role, action) row.
+                }
             }
             let stale = current.subtracting(desired)
             if !stale.isEmpty {

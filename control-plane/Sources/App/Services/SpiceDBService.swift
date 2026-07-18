@@ -408,6 +408,11 @@ struct SpiceDBService: SpiceDBServiceProtocol {
     ///
     /// The HTTP API streams newline-delimited JSON — one `{"result": …}`
     /// envelope per relationship — so this parses the body line by line.
+    /// Vapor's client buffers the whole response before we see it; that is a
+    /// deliberate trade-off: the export is scoped per (resource type, relation)
+    /// pair and runs once per boot, so response sizes stay modest. Move to
+    /// AsyncHTTPClient's chunked body iteration if a deployment ever has enough
+    /// tuples of one relation for buffering to matter.
     func readRelationships(resourceType: String, relation: String?) async throws -> [RelationshipTuple] {
         let url = URI(string: "\(endpoint)/v1/relationships/read")
 

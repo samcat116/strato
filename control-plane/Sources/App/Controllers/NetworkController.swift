@@ -171,22 +171,25 @@ struct NetworkController: RouteCollection {
         )
 
         do {
-            try await network.save(on: req.db)
+            // IAM dual-write (issue #477): the creator's explicit, revocable
+            // binding on the network, in the same transaction as the row;
+            // SpiceDB stays authoritative.
+            let creatorID = user.id!
+            try await req.db.transaction { db in
+                try await network.save(on: db)
+                try await RoleBindingService.grant(
+                    principalType: .user,
+                    principalID: creatorID,
+                    role: .admin,
+                    nodeType: .network,
+                    nodeID: network.id!,
+                    createdBy: creatorID,
+                    on: db
+                )
+            }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A network named '\(name)' already exists")
         }
-
-        // IAM dual-write (issue #477): the creator's explicit, revocable
-        // binding on the network; SpiceDB stays authoritative.
-        try await RoleBindingService.grant(
-            principalType: .user,
-            principalID: user.id!,
-            role: .admin,
-            nodeType: .network,
-            nodeID: network.id!,
-            createdBy: user.id,
-            on: req.db
-        )
 
         // Create SpiceDB relationships
         try await req.spicedb.writeRelationship(
