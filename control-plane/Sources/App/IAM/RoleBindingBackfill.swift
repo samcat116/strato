@@ -86,8 +86,27 @@ enum RoleBindingBackfill {
 
         for nodeType in exportedResourceTypes {
             for relation in exportedRelations {
-                let tuples = try await spicedb.readRelationships(
-                    resourceType: nodeType.rawValue, relation: relation)
+                // Not every exported type defines every role relation: `network`
+                // and `volume_snapshot` carry only `owner`. SpiceDB rejects a
+                // filter naming a relation its schema does not define with a
+                // 400, so skip those pairs rather than fail. This runs at boot
+                // behind a fatal error, so treating it as fatal made the control
+                // plane unbootable.
+                let tuples: [RelationshipTuple]
+                do {
+                    tuples = try await spicedb.readRelationships(
+                        resourceType: nodeType.rawValue, relation: relation)
+                } catch let error as SpiceDBError {
+                    guard case .relationshipReadFailed(let status) = error, status == .badRequest
+                    else { throw error }
+                    app.logger.debug(
+                        "Skipping role-binding export for a relation the schema does not define",
+                        metadata: [
+                            "resourceType": .string(nodeType.rawValue),
+                            "relation": .string(relation),
+                        ])
+                    continue
+                }
                 for tuple in tuples {
                     // Resource role tuples are user grants; SpiceDB returns
                     // uppercase UUID object ids, which UUID(uuidString:) accepts.

@@ -489,6 +489,37 @@ struct ObjectReference: Content {
         case objectType = "object_type"
         case objectId = "object_id"
     }
+
+    /// SpiceDB's grpc-gateway accepts snake_case on input but emits camelCase
+    /// on output, and this type is used for both request bodies and response
+    /// parsing. Decoding only `object_type` meant every ReadRelationships
+    /// response failed to decode, which crashed the control plane at boot once
+    /// `RoleBindingBackfill.backfillFromSpiceDB` started running there. Encode
+    /// stays snake_case (accepted by every version); decode takes either.
+    private enum ResponseCodingKeys: String, CodingKey {
+        case objectType
+        case objectId
+    }
+
+    init(objectType: String, objectId: String) {
+        self.objectType = objectType
+        self.objectId = objectId
+    }
+
+    init(from decoder: Decoder) throws {
+        let snakeCase = try decoder.container(keyedBy: CodingKeys.self)
+        if let objectType = try snakeCase.decodeIfPresent(String.self, forKey: .objectType),
+            let objectId = try snakeCase.decodeIfPresent(String.self, forKey: .objectId)
+        {
+            self.objectType = objectType
+            self.objectId = objectId
+            return
+        }
+
+        let camelCase = try decoder.container(keyedBy: ResponseCodingKeys.self)
+        self.objectType = try camelCase.decode(String.self, forKey: .objectType)
+        self.objectId = try camelCase.decode(String.self, forKey: .objectId)
+    }
 }
 
 struct SubjectReference: Content {

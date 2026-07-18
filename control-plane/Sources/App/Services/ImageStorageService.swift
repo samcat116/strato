@@ -236,9 +236,15 @@ struct ImageStorageService {
         // Stream the file
         let response = try await req.fileio.asyncStreamFile(at: fullPath)
 
-        // Set headers for download
-        response.headers.add(name: .contentDisposition, value: "attachment; filename=\"\(filename)\"")
-        response.headers.add(name: .contentLength, value: String(fileSize))
+        // Set headers for download. These must REPLACE rather than append:
+        // asyncStreamFile already sets Content-Length, so `add` emitted the
+        // header twice. Permissive clients accept the duplicate, but nginx
+        // rejects the upstream response outright ("upstream sent duplicate
+        // header line") and returns 502 — which broke image downloads for
+        // every agent in the nginx-fronted deployment, so no VM could boot.
+        response.headers.replaceOrAdd(
+            name: .contentDisposition, value: "attachment; filename=\"\(filename)\"")
+        response.headers.replaceOrAdd(name: .contentLength, value: String(fileSize))
 
         return response
     }
