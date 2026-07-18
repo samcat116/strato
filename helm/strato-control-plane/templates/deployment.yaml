@@ -209,7 +209,16 @@ spec:
             - name: LOKI_ENDPOINT
               value: "{{ .Values.strato.lokiEndpoint }}"
             {{- end }}
-            {{- if .Values.strato.externalHostname }}
+            {{- if and .Values.gateway.enabled .Values.spire.enabled .Values.spire.controlPlane.enableMTLS .Values.spire.envoy.enabled }}
+            # EXTERNAL_HOSTNAME seeds the generated agent WebSocket URL (and, via
+            # the installer, the telemetry-ingest origin). With mTLS on, agents
+            # must dial the agents SNI passthrough listener so the Envoy sidecar
+            # terminates the SVID and adds XFCC; the web listener terminates TLS
+            # itself and would strip the client cert, so mTLS auth would reject
+            # the connection. Point it at agents.<host> rather than the web host.
+            - name: EXTERNAL_HOSTNAME
+              value: "{{ include "strato-control-plane.gateway.agentsHost" . }}"
+            {{- else if .Values.strato.externalHostname }}
             - name: EXTERNAL_HOSTNAME
               value: "{{ .Values.strato.externalHostname }}"
             {{- end }}

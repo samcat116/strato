@@ -362,9 +362,13 @@ is exposed depends on the deployment:
 
   So an SVID node connects to `wss://agents.<host>/agent/ws` and attests against
   `spire.<host>:443` — outbound-443-only, the friendliest shape for nodes behind
-  home networks. `TLSRoute` is an experimental Gateway API channel; the chart
-  pins `gateway.networking.k8s.io/v1alpha2` for it, matching Envoy Gateway's
-  experimental install. See the `gateway:` block in the chart's `values.yaml`.
+  home networks. When `spire.controlPlane.enableMTLS`, the chart points
+  `EXTERNAL_HOSTNAME` at `agents.<host>`, so the registration URL, bootstrap
+  command, and telemetry-ingest origin the UI hands you already target the
+  passthrough listener — no manual rewrite needed. `TLSRoute` is an experimental
+  Gateway API channel; the chart pins `gateway.networking.k8s.io/v1alpha2` for
+  it, matching Envoy Gateway's experimental install. See the `gateway:` block in
+  the chart's `values.yaml`.
 
   > Deploying Envoy Gateway and cutting the LoadBalancer/DNS over from
   > ingress-nginx are infrastructure concerns handled outside the chart; by
