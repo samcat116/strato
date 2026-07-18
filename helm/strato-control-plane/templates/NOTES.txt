@@ -1,5 +1,8 @@
 1. Get the application URL by running these commands:
-{{- if .Values.ingress.enabled }}
+{{- if .Values.gateway.enabled }}
+  https://{{ include "strato-control-plane.gateway.webHost" . }}
+  (Gateway API / Envoy Gateway — TLS terminated at the Gateway on :443)
+{{- else if .Values.ingress.enabled }}
 {{- range $host := .Values.ingress.hosts }}
   {{- range .paths }}
   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
@@ -62,7 +65,17 @@
 
 6. To connect Strato Agents to this control plane:
    - WebSocket URL: ws://{{ include "strato-control-plane.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/agent/ws
-   {{- if .Values.strato.externalHostname }}
+   {{- if .Values.gateway.enabled }}
+   - Token join (TLS terminated at the Gateway):
+     wss://{{ include "strato-control-plane.gateway.webHost" . }}/agent/ws
+   {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
+   - SVID mTLS (SNI passthrough to the Envoy sidecar):
+     wss://{{ include "strato-control-plane.gateway.agentsHost" . }}/agent/ws
+   {{- end }}
+   {{- if .Values.spire.enabled }}
+   - SPIRE node attestation (SNI passthrough): {{ include "strato-control-plane.gateway.spireHost" . }}:443
+   {{- end }}
+   {{- else if .Values.strato.externalHostname }}
    - External WebSocket URL: ws://{{ .Values.strato.externalHostname }}:{{ .Values.service.port }}/agent/ws
    {{- end }}
 

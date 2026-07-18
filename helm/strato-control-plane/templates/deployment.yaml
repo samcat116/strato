@@ -233,6 +233,16 @@ spec:
             # server Service.
             - name: SPIRE_SERVER_API_ADDRESS
               value: "{{ .Values.spire.controlPlane.serverApiAddress | default (printf "%s-spire-server.%s.svc.cluster.local:%v" (include "strato-control-plane.fullname" .) .Release.Namespace .Values.spire.service.grpcPort) }}"
+            {{- if .Values.spire.controlPlane.serverPublicAddress }}
+            # Public address remote nodes dial for attestation (explicit override).
+            - name: SPIRE_SERVER_PUBLIC_ADDRESS
+              value: "{{ .Values.spire.controlPlane.serverPublicAddress }}"
+            {{- else if .Values.gateway.enabled }}
+            # With the gateway, nodes attest through the SNI-passthrough entry
+            # point spire.<host>:443 rather than the compose EXTERNAL_HOSTNAME:8085.
+            - name: SPIRE_SERVER_PUBLIC_ADDRESS
+              value: "{{ printf "%s:443" (include "strato-control-plane.gateway.spireHost" .) }}"
+            {{- end }}
             {{- if and .Values.opentelemetry.enabled .Values.opentelemetry.prometheus.enabled }}
             # Workload Identity "Issuance" panel: read SPIRE's SVID-signing
             # counters from this chart's Prometheus over a rolling 24h window.

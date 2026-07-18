@@ -258,10 +258,61 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
+Gateway web host (SNI for the TLS-terminated HTTPRoute serving UI + API).
+Falls back to strato.externalHostname; one of the two must be set when
+gateway.enabled.
+*/}}
+{{- define "strato-control-plane.gateway.webHost" -}}
+{{- $h := default .Values.strato.externalHostname .Values.gateway.hostnames.web -}}
+{{- required "gateway.enabled requires gateway.hostnames.web or strato.externalHostname" $h -}}
+{{- end }}
+
+{{/*
+Gateway agents host (SNI for the TLS-passthrough route to the Envoy sidecar).
+Defaults to agents.<webHost>.
+*/}}
+{{- define "strato-control-plane.gateway.agentsHost" -}}
+{{- default (printf "agents.%s" (include "strato-control-plane.gateway.webHost" .)) .Values.gateway.hostnames.agents -}}
+{{- end }}
+
+{{/*
+Gateway spire host (SNI for the TLS-passthrough route to the SPIRE server).
+Defaults to spire.<webHost>.
+*/}}
+{{- define "strato-control-plane.gateway.spireHost" -}}
+{{- default (printf "spire.%s" (include "strato-control-plane.gateway.webHost" .)) .Values.gateway.hostnames.spire -}}
+{{- end }}
+
+{{/*
+Name of the Gateway the routes attach to (parentRef). Defaults to the chart's
+own Gateway (<fullname>) when gateway.name is unset.
+*/}}
+{{- define "strato-control-plane.gateway.name" -}}
+{{- default (include "strato-control-plane.fullname" .) .Values.gateway.name -}}
+{{- end }}
+
+{{/*
+Namespace of the Gateway the routes attach to. Defaults to the release
+namespace when gateway.namespace is unset.
+*/}}
+{{- define "strato-control-plane.gateway.namespace" -}}
+{{- default .Release.Namespace .Values.gateway.namespace -}}
+{{- end }}
+
+{{/*
+Secret holding the terminated web listener's certificate.
+*/}}
+{{- define "strato-control-plane.gateway.tlsSecretName" -}}
+{{- default (printf "%s-gateway-tls" (include "strato-control-plane.fullname" .)) .Values.gateway.tls.secretName -}}
+{{- end }}
+
+{{/*
 Get the primary hostname
 */}}
 {{- define "strato-control-plane.hostname" -}}
-{{- if .Values.ingress.enabled }}
+{{- if .Values.gateway.enabled }}
+{{- include "strato-control-plane.gateway.webHost" . }}
+{{- else if .Values.ingress.enabled }}
 {{- (first .Values.ingress.hosts).host }}
 {{- else }}
 {{- "localhost" }}
@@ -285,6 +336,8 @@ Get the WebAuthn origin URL (protocol + domain + port)
 {{- define "strato-control-plane.webauthnOrigin" -}}
 {{- if .Values.strato.webauthn.relyingPartyOrigin }}
 {{- .Values.strato.webauthn.relyingPartyOrigin }}
+{{- else if .Values.gateway.enabled }}
+{{- printf "https://%s" (include "strato-control-plane.gateway.webHost" .) }}
 {{- else if .Values.ingress.enabled }}
 {{- if .Values.ingress.tls }}
 {{- printf "https://%s" (first .Values.ingress.hosts).host }}
