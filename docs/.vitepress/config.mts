@@ -4,7 +4,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: "Strato",
   description: "Fast, secure, and easy to deploy private cloud platform",
-  base: '/',
+  base: '/strato/',
 
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
