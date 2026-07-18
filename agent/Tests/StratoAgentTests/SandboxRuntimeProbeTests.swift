@@ -110,4 +110,18 @@ struct SandboxRuntimeProbeTests {
         #expect(!report.capable)
         #expect(report.unavailabilityReason?.contains(missingPath) == true)
     }
+
+    @Test("a required-but-unusable jailer keeps the capability dark (issue #425)")
+    func jailerBlockedGatesOff() {
+        // Every other prerequisite is satisfied — the jailer block alone must
+        // dominate, because running untrusted workloads unjailed on a host
+        // whose operator demanded the jailer is not an option.
+        let report = SandboxRuntimeProbe.probe(
+            firecracker: firecrackerAvailable, guestImagePath: presentPath,
+            jailerBlockedReason: "the agent is not running as root")
+
+        #expect(!report.capable)
+        #expect(report.unavailabilityReason?.contains("sandbox_jailer_mode") == true)
+        #expect(report.unavailabilityReason?.contains("not running as root") == true)
+    }
 }

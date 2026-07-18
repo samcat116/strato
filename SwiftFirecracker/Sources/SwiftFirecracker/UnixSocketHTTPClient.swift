@@ -46,22 +46,24 @@ public actor UnixSocketHTTPClient {
         addr.sun_family = sa_family_t(AF_UNIX)
 
         // sun_path is a fixed-size C buffer (108 bytes on Linux, 104 on macOS).
-        // Guard against overflow before copying — a path that doesn't fit, with
-        // room for the trailing NUL, cannot be represented.
+        // Paths that don't fit — a jailed VM's in-chroot socket under a long
+        // storage directory — are connected through a short /proc/self/fd
+        // alias instead (see UnixSocketPath).
         let sunPathCapacity = MemoryLayout.size(ofValue: addr.sun_path)
-        let pathBytes = socketPath.utf8
-        guard pathBytes.count < sunPathCapacity else {
+        let connectable: UnixSocketPath.Connectable
+        do {
+            connectable = try UnixSocketPath.connectable(path: socketPath, capacity: sunPathCapacity)
+        } catch {
             close(sock)
-            throw FirecrackerError.invalidSocketPath(
-                "Socket path is \(pathBytes.count) bytes; must be < \(sunPathCapacity): \(socketPath)"
-            )
+            throw error
         }
+        defer { connectable.closeDirFD() }
 
-        socketPath.withCString { ptr in
+        connectable.path.withCString { ptr in
             withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
                 sunPath.withMemoryRebound(to: CChar.self, capacity: sunPathCapacity) { dest in
                     // Bounded copy: strncpy never writes past `sunPathCapacity - 1`,
-                    // and the guard above guarantees the source fits with a NUL.
+                    // and `connectable` guarantees the source fits with a NUL.
                     strncpy(dest, ptr, sunPathCapacity - 1)
                     dest[sunPathCapacity - 1] = 0
                 }

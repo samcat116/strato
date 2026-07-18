@@ -195,6 +195,16 @@ public struct AgentConfig: Codable {
     /// probe — is what makes the agent advertise the sandbox-runtime
     /// capability at registration (issue #415).
     public let sandboxGuestImagePath: String?
+    /// Whether sandboxes run inside Firecracker's jailer (issue #425):
+    /// `auto` (default — jail when root + jailer binary), `required`
+    /// (production posture: no jailer, no sandbox capability), or `disabled`.
+    public let sandboxJailerMode: SandboxJailerMode?
+    public let sandboxJailerBinaryPath: String?
+    /// Base directory for per-sandbox chroots. Defaults to `<vm_storage_dir>/jailer`
+    /// (each jail holds a full writable rootfs copy, so it belongs on VM storage).
+    public let sandboxJailerChrootDir: String?
+    /// First uid/gid of the per-sandbox uid range (65536 ids). Default 100000.
+    public let sandboxJailerUidBase: UInt32?
     public let hypervisorType: HypervisorType?
     public let stateFilePath: String?
     /// Site uplink for OVN SNAT egress (issue #342). When nil, routers +
@@ -225,6 +235,10 @@ public struct AgentConfig: Codable {
         case firecrackerBinaryPath = "firecracker_binary_path"
         case firecrackerSocketDir = "firecracker_socket_dir"
         case sandboxGuestImagePath = "sandbox_guest_image_path"
+        case sandboxJailerMode = "sandbox_jailer_mode"
+        case sandboxJailerBinaryPath = "sandbox_jailer_binary_path"
+        case sandboxJailerChrootDir = "sandbox_jailer_chroot_dir"
+        case sandboxJailerUidBase = "sandbox_jailer_uid_base"
         case hypervisorType = "hypervisor_type"
         case stateFilePath = "state_file"
         case ovnUplink = "ovn_uplink"
@@ -252,6 +266,10 @@ public struct AgentConfig: Codable {
         firecrackerBinaryPath: String? = nil,
         firecrackerSocketDir: String? = nil,
         sandboxGuestImagePath: String? = nil,
+        sandboxJailerMode: SandboxJailerMode? = nil,
+        sandboxJailerBinaryPath: String? = nil,
+        sandboxJailerChrootDir: String? = nil,
+        sandboxJailerUidBase: UInt32? = nil,
         hypervisorType: HypervisorType? = nil,
         stateFilePath: String? = nil,
         ovnUplink: OVNUplinkConfig? = nil,
@@ -277,6 +295,10 @@ public struct AgentConfig: Codable {
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.firecrackerSocketDir = firecrackerSocketDir
         self.sandboxGuestImagePath = sandboxGuestImagePath
+        self.sandboxJailerMode = sandboxJailerMode
+        self.sandboxJailerBinaryPath = sandboxJailerBinaryPath
+        self.sandboxJailerChrootDir = sandboxJailerChrootDir
+        self.sandboxJailerUidBase = sandboxJailerUidBase
         self.hypervisorType = hypervisorType
         self.stateFilePath = stateFilePath
         self.ovnUplink = ovnUplink
@@ -365,6 +387,33 @@ public struct AgentConfig: Codable {
         let sandboxGuestImagePath = tomlData.string("sandbox_guest_image_path")
         let hypervisorTypeString = tomlData.string("hypervisor_type")
         let stateFilePath = tomlData.string("state_file")
+
+        // Sandbox jailer settings (issue #425). The mode is strictly decoded —
+        // a typo like "requierd" silently falling back to auto would quietly
+        // weaken a host an operator believed hardened.
+        let sandboxJailerMode: SandboxJailerMode?
+        if let modeString = tomlData.string("sandbox_jailer_mode") {
+            guard let mode = SandboxJailerMode(rawValue: modeString) else {
+                throw AgentConfigError.invalidConfiguration(
+                    "sandbox_jailer_mode must be 'auto', 'required', or 'disabled', got '\(modeString)'")
+            }
+            sandboxJailerMode = mode
+        } else {
+            sandboxJailerMode = nil
+        }
+        let sandboxJailerBinaryPath = tomlData.string("sandbox_jailer_binary_path")
+        let sandboxJailerChrootDir = tomlData.string("sandbox_jailer_chroot_dir")
+        let sandboxJailerUidBase: UInt32?
+        if let uidBase = tomlData.int("sandbox_jailer_uid_base") {
+            guard uidBase > 0, uidBase <= Int(UInt32.max) - Int(SandboxJailerConfig.uidCount) else {
+                throw AgentConfigError.invalidConfiguration(
+                    "sandbox_jailer_uid_base must be a positive uid with room for a \(SandboxJailerConfig.uidCount)-id range, got \(uidBase)"
+                )
+            }
+            sandboxJailerUidBase = UInt32(uidBase)
+        } else {
+            sandboxJailerUidBase = nil
+        }
 
         // Validate and parse network mode
         let networkMode: NetworkMode?
@@ -494,6 +543,10 @@ public struct AgentConfig: Codable {
             firecrackerBinaryPath: firecrackerBinaryPath,
             firecrackerSocketDir: firecrackerSocketDir,
             sandboxGuestImagePath: sandboxGuestImagePath,
+            sandboxJailerMode: sandboxJailerMode,
+            sandboxJailerBinaryPath: sandboxJailerBinaryPath,
+            sandboxJailerChrootDir: sandboxJailerChrootDir,
+            sandboxJailerUidBase: sandboxJailerUidBase,
             hypervisorType: hypervisorType,
             stateFilePath: stateFilePath,
             ovnUplink: ovnUplink,
@@ -701,6 +754,28 @@ public struct AgentConfig: Codable {
     public static var defaultSandboxGuestImagePath: String {
         return "/var/lib/strato/sandbox/guest"
     }
+
+    /// Default jailer binary path (Linux only). The jailer ships in the same
+    /// release tarball as Firecracker, so look beside the resolved Firecracker
+    /// binary first, then the same well-known locations.
+    public static func defaultSandboxJailerBinaryPath(firecrackerBinaryPath: String) -> String {
+        let sibling = URL(fileURLWithPath: firecrackerBinaryPath)
+            .deletingLastPathComponent().appendingPathComponent("jailer").path
+        let candidates = [sibling, "/usr/local/bin/jailer", "/usr/bin/jailer"]
+        return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? sibling
+    }
+
+    /// Default per-sandbox chroot base directory: under VM storage, because
+    /// every jail holds a full writable rootfs copy and the jailer's stock
+    /// `/srv/jailer` is rarely provisioned for that.
+    public static func defaultSandboxJailerChrootDir(vmStoragePath: String) -> String {
+        vmStoragePath + "/jailer"
+    }
+
+    /// Default first uid of the per-sandbox uid/gid range: 100000, clear of
+    /// system and login users on stock hosts (shared with the systemd-nspawn
+    /// container range, which a Firecracker hypervisor host does not use).
+    public static let defaultSandboxJailerUidBase: UInt32 = 100_000
 
     /// Default hypervisor type (platform-specific)
     /// Linux defaults to QEMU, but can be configured to use Firecracker
