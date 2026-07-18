@@ -186,8 +186,7 @@ jobs:
           fi
           # Copy resources
           find -L "$BIN/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/control-plane/resources/ \; || true
-          # Copy Public and Resources directories
-          [ -d Public ] && cp -R Public ../artifacts/control-plane/ || true
+          # Copy application resources
           [ -d Resources ] && cp -R Resources ../artifacts/control-plane/ || true
 
       - name: Build Agent Release Binary

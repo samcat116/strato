@@ -153,6 +153,9 @@ spicedb:
 | `image.tag` | string | `""` | Container image tag (defaults to chart appVersion) |
 | `image.pullPolicy` | string | `"IfNotPresent"` | Image pull policy |
 | `replicaCount` | int | `1` | Number of replicas |
+| `frontend.enabled` | bool | `true` | Deploy the standalone Next.js frontend |
+| `frontend.service.port` | int | `3000` | Frontend service port |
+| `frontend.env.STRATO_API_URL` | string | `""` | Server-side API proxy destination; empty derives the in-cluster control-plane service URL |
 | `resources.limits.cpu` | string | `"1000m"` | CPU limit |
 | `resources.limits.memory` | string | `"1Gi"` | Memory limit |
 | `resources.requests.cpu` | string | `"500m"` | CPU request |

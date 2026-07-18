@@ -209,18 +209,6 @@ extension Volume {
         return Double(size) / 1024.0 / 1024.0 / 1024.0
     }
 
-    var sizeMB: Double {
-        return Double(size) / 1024.0 / 1024.0
-    }
-
-    var isAttached: Bool {
-        return status == .attached
-    }
-
-    var isAvailable: Bool {
-        return status == .available
-    }
-
     var canAttach: Bool {
         return status == .available
     }
@@ -337,62 +325,5 @@ struct VolumeResponse: Content {
         }
         let kb = Double(bytes) / 1024.0
         return String(format: "%.2f KB", kb)
-    }
-}
-
-// MARK: - Errors
-
-enum VolumeError: Error, LocalizedError, Sendable {
-    case volumeNotFound(UUID)
-    case volumeNotAvailable(UUID, VolumeStatus)
-    case volumeAlreadyAttached(UUID)
-    case volumeNotAttached(UUID)
-    case invalidFormat(String)
-    case invalidVolumeType(String)
-    case resizeTooSmall(Int64, Int64)  // current, requested
-    case attachFailed(String)
-    case detachFailed(String)
-    case createFailed(String)
-    case deleteFailed(String)
-    case snapshotFailed(String)
-    case cloneFailed(String)
-    case hypervisorMismatch(String)  // Volume and VM on different hypervisors
-    case firecrackerNotSupported  // Firecracker doesn't support volumes
-
-    var errorDescription: String? {
-        switch self {
-        case .volumeNotFound(let id):
-            return "Volume '\(id)' not found."
-        case .volumeNotAvailable(let id, let status):
-            return "Volume '\(id)' is not available. Current status: \(status.rawValue)"
-        case .volumeAlreadyAttached(let id):
-            return "Volume '\(id)' is already attached to a VM."
-        case .volumeNotAttached(let id):
-            return "Volume '\(id)' is not attached to any VM."
-        case .invalidFormat(let format):
-            return "Invalid volume format: \(format). Must be 'qcow2' or 'raw'."
-        case .invalidVolumeType(let volumeType):
-            return "Invalid volume type: \(volumeType). Must be 'boot' or 'data'."
-        case .resizeTooSmall(let current, let requested):
-            return
-                "Cannot resize volume: requested size (\(requested) bytes) must be larger than current size (\(current) bytes)."
-        case .attachFailed(let reason):
-            return "Failed to attach volume: \(reason)"
-        case .detachFailed(let reason):
-            return "Failed to detach volume: \(reason)"
-        case .createFailed(let reason):
-            return "Failed to create volume: \(reason)"
-        case .deleteFailed(let reason):
-            return "Failed to delete volume: \(reason)"
-        case .snapshotFailed(let reason):
-            return "Failed to create snapshot: \(reason)"
-        case .cloneFailed(let reason):
-            return "Failed to clone volume: \(reason)"
-        case .hypervisorMismatch(let reason):
-            return "Hypervisor mismatch: \(reason)"
-        case .firecrackerNotSupported:
-            return
-                "Volume operations are not supported for Firecracker VMs. Firecracker only supports a single root disk."
-        }
     }
 }

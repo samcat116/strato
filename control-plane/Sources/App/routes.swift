@@ -2,10 +2,6 @@ import Fluent
 import Vapor
 
 func routes(_ app: Application) throws {
-    app.get("hello") { _ async -> String in
-        "Hello, world!"
-    }
-
     // Register controllers
     try app.register(collection: HealthController())
     try app.register(collection: UserController())
@@ -75,6 +71,6 @@ func routes(_ app: Application) throws {
     // let apiImpl = GeneratedAPIImpl() // conforms to generated protocol
     // try apiImpl.registerHandlers(on: transport)
 
-    // Note: Frontend is now served by a separate Next.js container.
-    // SPA catch-all routes have been removed - routing is handled by ingress/nginx.
+    // The frontend is served by the separate Next.js container; ingress owns
+    // user-facing page routing.
 }

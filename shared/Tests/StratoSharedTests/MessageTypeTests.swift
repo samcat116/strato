@@ -14,15 +14,7 @@ struct MessageTypeTests {
         case .agentHeartbeat: return "agent_heartbeat"
         case .agentUnregister: return "agent_unregister"
         case .agentUpdate: return "agent_update"
-        case .vmCreate: return "vm_create"
-        case .vmBoot: return "vm_boot"
-        case .vmShutdown: return "vm_shutdown"
         case .vmReboot: return "vm_reboot"
-        case .vmPause: return "vm_pause"
-        case .vmResume: return "vm_resume"
-        case .vmDelete: return "vm_delete"
-        case .vmInfo: return "vm_info"
-        case .vmStatus: return "vm_status"
         case .networkCreate: return "network_create"
         case .networkDelete: return "network_delete"
         case .networkList: return "network_list"
@@ -47,7 +39,6 @@ struct MessageTypeTests {
         case .observedState: return "observed_state"
         case .success: return "success"
         case .error: return "error"
-        case .statusUpdate: return "status_update"
         case .vmLog: return "vm_log"
         case .sandboxExecStart: return "sandbox_exec_start"
         case .sandboxExecStarted: return "sandbox_exec_started"
@@ -66,14 +57,13 @@ struct MessageTypeTests {
 
     private static let allTypes: [MessageType] = [
         .agentRegister, .agentRegisterResponse, .agentHeartbeat, .agentUnregister, .agentUpdate,
-        .vmCreate, .vmBoot, .vmShutdown, .vmReboot, .vmPause, .vmResume, .vmDelete,
-        .vmInfo, .vmStatus,
+        .vmReboot,
         .networkCreate, .networkDelete, .networkList, .networkInfo, .networkAttach, .networkDetach,
         .volumeCreate, .volumeDelete, .volumeAttach, .volumeDetach, .volumeResize,
         .volumeSnapshot, .volumeSnapshotDelete, .volumeClone, .volumeInfo,
         .consoleConnect, .consoleDisconnect, .consoleData, .consoleConnected, .consoleDisconnected,
         .desiredState, .observedState,
-        .success, .error, .statusUpdate, .vmLog,
+        .success, .error, .vmLog,
         .sandboxExecStart, .sandboxExecStarted, .sandboxExecInput, .sandboxExecOutput,
         .sandboxExecResize, .sandboxExecExit, .sandboxExecClose, .sandboxExecClosed,
         .sandboxLog,

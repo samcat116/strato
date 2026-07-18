@@ -211,7 +211,7 @@ struct ReconciliationProtocolTests {
         }
     }
 
-    @Test("State-sync support is keyed on protocol version 2")
+    @Test("State-sync support rejects peers that can emit imperative VM messages")
     func stateSyncVersionGate() {
         #expect(!WireProtocol.supportsStateSync(0))
         #expect(!WireProtocol.supportsStateSync(1))

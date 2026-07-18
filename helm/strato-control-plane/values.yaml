@@ -59,8 +59,10 @@ frontend:
 
   # Environment variables
   env:
-    # Empty means use same origin (ingress handles routing)
-    NEXT_PUBLIC_API_URL: ""
+    # Server-side destination for same-origin API proxying. Empty derives the
+    # in-cluster control-plane service URL, which also makes a direct frontend
+    # service port-forward fully functional without ingress.
+    STRATO_API_URL: ""
 
 serviceAccount:
   create: true

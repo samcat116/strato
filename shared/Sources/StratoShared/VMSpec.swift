@@ -246,22 +246,3 @@ public struct ConsoleSpec: Codable, Sendable {
         self.serial = serial
     }
 }
-
-// MARK: - VM Info Response
-
-/// Agent → control plane response describing a VM's spec and runtime state.
-public struct VmInfo: Codable, Sendable {
-    public let spec: VMSpec
-    public let state: String
-    public let memoryActualSize: Int64?
-
-    public init(
-        spec: VMSpec,
-        state: String,
-        memoryActualSize: Int64? = nil
-    ) {
-        self.spec = spec
-        self.state = state
-        self.memoryActualSize = memoryActualSize
-    }
-}

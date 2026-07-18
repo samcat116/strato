@@ -85,13 +85,6 @@ final class WebSocketManager: @unchecked Sendable {
         }
     }
 
-    /// Get all agent names (for diagnostics)
-    func getAllAgentNames() -> [String] {
-        lock.withLock {
-            Array(connections.keys)
-        }
-    }
-
     /// Every locally connected agent that has completed registration, as
     /// (name, database UUID) pairs. This is the periodic sync's work list:
     /// each replica syncs exactly the agents whose sockets it holds.
@@ -527,8 +520,7 @@ actor AgentService {
     /// Whether `vmId` is currently assigned to the agent authenticated as
     /// `agentName`. Used to reject agent-reported data (VM logs, console)
     /// tagged with a VM the reporting agent doesn't own — otherwise a compromised
-    /// agent could forge log entries for another tenant's VM. Mirrors the
-    /// `vm.hypervisorId == senderAgentId` guard in `applyStatusUpdate`.
+    /// agent could forge log entries for another tenant's VM.
     func vmIsOwnedByAgent(vmId: String, agentName: String) async -> Bool {
         guard let vmUUID = UUID(uuidString: vmId),
             let senderAgentId = await agentId(forName: agentName),
@@ -3196,8 +3188,7 @@ actor AgentService {
                 case .error:
                     requestId = try envelope.decode(as: ErrorMessage.self).requestId
                 default:
-                    // Other message types (e.g. unsolicited statusUpdate) are not
-                    // request/response correlated and are handled elsewhere.
+                    // Other message types are not request/response correlated.
                     return
                 }
             } catch {
@@ -3222,107 +3213,6 @@ actor AgentService {
                 }
             } catch {
                 continuation.resume(throwing: error)
-            }
-        }
-    }
-
-    /// Applies an unsolicited VM status update reported by an agent to the database.
-    /// This is how transitional states (.starting/.stopping) get confirmed into their
-    /// terminal states (.running/.shutdown/.paused) once the agent completes the work.
-    /// `agentName` identifies the authenticated connection the update arrived on, so
-    /// an agent can only mutate VMs the database actually maps to it.
-    func applyStatusUpdate(_ envelope: MessageEnvelope, fromAgentNamed agentName: String) {
-        Task {
-            let update: StatusUpdateMessage
-            do {
-                update = try envelope.decode(as: StatusUpdateMessage.self)
-            } catch {
-                app.logger.error("Failed to decode status update from agent: \(error)")
-                return
-            }
-
-            guard let vmUUID = UUID(uuidString: update.vmId) else {
-                app.logger.warning(
-                    "Status update referenced an invalid VM id", metadata: ["vmId": .string(update.vmId)])
-                return
-            }
-
-            guard let senderAgentId = await self.agentId(forName: agentName) else {
-                app.logger.warning(
-                    "Status update from unregistered agent; ignoring",
-                    metadata: [
-                        "vmId": .string(update.vmId),
-                        "agentName": .string(agentName),
-                    ])
-                return
-            }
-
-            do {
-                guard let vm = try await VM.find(vmUUID, on: app.db) else {
-                    app.logger.warning("Status update for unknown VM", metadata: ["vmId": .string(update.vmId)])
-                    return
-                }
-
-                guard vm.hypervisorId == senderAgentId else {
-                    app.logger.warning(
-                        "Status update from agent that does not own the VM; ignoring",
-                        metadata: [
-                            "vmId": .string(update.vmId),
-                            "agentName": .string(agentName),
-                            "senderAgentId": .string(senderAgentId),
-                            "owningAgentId": .string(vm.hypervisorId ?? "none"),
-                        ])
-                    return
-                }
-
-                // The owning agent is reporting on this VM, so its resource
-                // reports now account for it: the placement reservation (if
-                // one is still held) has served its purpose. No-op otherwise.
-                await self.app.coordination.releaseReservation(agentId: senderAgentId, vmId: update.vmId)
-
-                guard vm.status != update.status else { return }
-
-                // A transitional state means a control-plane-initiated operation is in
-                // flight. Only the confirmation that completes that transition (or an
-                // error) may land; anything else is a delayed update from an operation
-                // that predates the transition — the controller guards (canStart/canStop/
-                // canPause) make any other concurrent operation impossible — and applying
-                // it would mask the in-flight one (e.g. a late `Paused` overwriting
-                // `.stopping`, hiding a lost stop from the sweep).
-                if vm.status.isTransitional {
-                    let expected: Set<VMStatus> =
-                        vm.status == .starting
-                        ? [.running, .error]
-                        : [.shutdown, .error]
-                    guard expected.contains(update.status) else {
-                        app.logger.warning(
-                            "Ignoring stale agent status update during in-flight operation",
-                            metadata: [
-                                "vmId": .string(update.vmId),
-                                "current": .string(vm.status.rawValue),
-                                "reported": .string(update.status.rawValue),
-                            ])
-                        return
-                    }
-                }
-
-                let previous = vm.status
-                vm.setStatus(update.status)
-                try await vm.save(on: app.db)
-                if update.status == .error {
-                    // The agent pushed an error state — e.g. a failed create/boot.
-                    Telemetry.vmEnteredError(reason: "agent_reported")
-                }
-
-                app.logger.info(
-                    "Applied agent status update",
-                    metadata: [
-                        "vmId": .string(update.vmId),
-                        "from": .string(previous.rawValue),
-                        "to": .string(update.status.rawValue),
-                    ])
-            } catch {
-                app.logger.error("Failed to apply status update for VM \(update.vmId): \(error)")
             }
         }
     }
