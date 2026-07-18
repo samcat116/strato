@@ -16,8 +16,10 @@ struct OCIRootfsCacheTests {
         return dir
     }
 
-    private func makeCache(_ root: String, ttl: TimeInterval = OCIRootfsCache.defaultTTL) -> OCIRootfsCache {
-        OCIRootfsCache(rootPath: root, ttl: ttl, logger: Logger(label: "test"))
+    private func makeCache(
+        _ root: String, ttl: TimeInterval = OCIRootfsCache.defaultTTL, maxSizeBytes: Int64? = nil
+    ) -> OCIRootfsCache {
+        OCIRootfsCache(rootPath: root, ttl: ttl, maxSizeBytes: maxSizeBytes, logger: Logger(label: "test"))
     }
 
     private func stageAndPublish(_ cache: OCIRootfsCache, digest: String) async throws -> CachedSandboxRootfs {
@@ -147,6 +149,41 @@ struct OCIRootfsCacheTests {
         #expect(!FileManager.default.fileExists(atPath: idleDir))
         #expect(!FileManager.default.fileExists(atPath: stalePartial))
         #expect(FileManager.default.fileExists(atPath: fresh.rootfsPath))
+    }
+
+    @Test("cleanup evicts LRU entries beyond the size budget, protecting recent ones")
+    func sizeBudgetCleanup() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        // Each published entry is ~7 bytes ("image" + "{}"); a 10-byte budget
+        // holds exactly one.
+        let cache = makeCache(root, maxSizeBytes: 10)
+
+        let older = try await stageAndPublish(cache, digest: digest)
+        let newer = try await stageAndPublish(cache, digest: otherDigest)
+
+        // Backdate the older entry past the eviction grace window (but well
+        // within the idle TTL, so only the size budget can evict it).
+        let olderDir = (older.rootfsPath as NSString).deletingLastPathComponent
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: olderDir)
+
+        await cache.cleanup()
+
+        #expect(!FileManager.default.fileExists(atPath: older.rootfsPath))
+        #expect(FileManager.default.fileExists(atPath: newer.rootfsPath))
+    }
+
+    @Test("entries inside the grace window survive cleanup even over budget")
+    func sizeBudgetGrace() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = makeCache(root, maxSizeBytes: 1)
+
+        let entry = try await stageAndPublish(cache, digest: digest)
+        await cache.cleanup()
+
+        #expect(FileManager.default.fileExists(atPath: entry.rootfsPath))
     }
 
     @Test("lookups refresh the entry's last-use time")

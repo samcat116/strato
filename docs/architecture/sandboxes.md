@@ -246,7 +246,10 @@ The agent-side pipeline, all native Swift:
    `mkfs.ext4 -d` builds the image sized to content plus configurable
    headroom, staged and published atomically. The cache is
    **content-addressed by platform manifest digest** (with index→platform
-   alias files so digest-pinned sandboxes hit it offline), TTL-evicted — v1
+   alias files so digest-pinned sandboxes hit it offline) and evicted after
+   each materialization: entries idle past a 7-day TTL, plus — when
+   `sandbox_image_cache_max_size_gb` is set — least-recently-used entries
+   beyond the size budget (recently used entries are grace-protected). v1
    caches flattened images only (no layer-level dedup/snapshotter). The image
    config's execution parameters (entrypoint/cmd/env/workdir/user) are staged
    as `config.json` beside `rootfs.ext4` — the rootfs stays a pristine

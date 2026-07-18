@@ -40,6 +40,27 @@ atomic rename, so the final path never holds a half-written disk; that makes
 the operation safely idempotent — an existing disk at the target path is
 reused.
 
+### The host image cache
+
+Downloaded image artifacts are cached on the host by `ImageCacheService`
+(`agent/Sources/StratoAgent/ImageCacheService.swift`) under
+`image_cache_dir` (default `/var/cache/strato/images`), laid out as
+`{projectId}/{imageId}/[{artifactKind}/]{filename}`. Repeat launches of the
+same image verify the cached file's SHA-256 against the control plane's
+checksum and skip the download entirely; downloads are staged and published
+by atomic rename, so the cache never holds partial bytes. Materialization
+always copies/converts out of the cache — cached files are never used as
+qcow2 backing files — so evicting an entry can't break an existing VM.
+
+The cache is bounded by `image_cache_max_size_gb` (unset = unbounded): before
+each download, least-recently-used image directories are evicted (shared
+`DiskCacheLRU` helper in `StratoAgentCore`) until the cache plus the incoming
+artifact fits the budget. Cache hits refresh an image's last-use time, and
+images used within the last 30 minutes are never evicted — a VM create that
+is still copying an image out of the cache can briefly hold it over budget.
+The sandbox rootfs cache applies the same budget mechanism via
+`sandbox_image_cache_max_size_gb` (see `sandboxes.md`).
+
 ### The agent owns path layout
 
 Volume placement is decided by the storage backend:

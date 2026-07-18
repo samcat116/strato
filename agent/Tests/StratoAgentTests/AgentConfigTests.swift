@@ -54,6 +54,69 @@ struct AgentConfigTests {
         #expect(config.enableKVM == nil)
     }
 
+    // MARK: - Image cache settings
+
+    @Test("Load image cache settings")
+    func loadImageCacheSettings() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                image_cache_dir = "/mnt/big/strato-images"
+                image_cache_max_size_gb = 50
+                sandbox_image_cache_dir = "/mnt/big/strato-sandbox-images"
+                sandbox_image_cache_max_size_gb = 20
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+
+            let expectedImageBytes: Int64 = 50 * 1024 * 1024 * 1024
+            let expectedSandboxBytes: Int64 = 20 * 1024 * 1024 * 1024
+            #expect(config.imageCacheDir == "/mnt/big/strato-images")
+            #expect(config.imageCacheMaxSizeGB == 50)
+            #expect(config.imageCacheMaxSizeBytes == expectedImageBytes)
+            #expect(config.sandboxImageCacheDir == "/mnt/big/strato-sandbox-images")
+            #expect(config.sandboxImageCacheMaxSizeGB == 20)
+            #expect(config.sandboxImageCacheMaxSizeBytes == expectedSandboxBytes)
+        }
+    }
+
+    @Test("Image cache settings default to nil (unbounded, default paths) when absent")
+    func imageCacheSettingsDefaultNil() throws {
+        try withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
+                toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+
+            #expect(config.imageCacheDir == nil)
+            #expect(config.imageCacheMaxSizeGB == nil)
+            #expect(config.imageCacheMaxSizeBytes == nil)
+            #expect(config.sandboxImageCacheDir == nil)
+            #expect(config.sandboxImageCacheMaxSizeGB == nil)
+        }
+    }
+
+    @Test("Non-positive cache budgets are rejected")
+    func nonPositiveCacheBudgetRejected() throws {
+        try withTempDirectory { tempDirectory in
+            for key in ["image_cache_max_size_gb", "sandbox_image_cache_max_size_gb"] {
+                let tomlContent = """
+                    control_plane_url = "ws://localhost:8080/agent/ws"
+                    \(key) = 0
+                    """
+                let configPath = tempDirectory.appendingPathComponent("config.toml").path
+                try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+                #expect(throws: AgentConfigError.self) {
+                    try AgentConfig.load(from: configPath)
+                }
+            }
+        }
+    }
+
     // MARK: - Sandbox jailer settings (issue #425)
 
     @Test("Load sandbox jailer settings")

@@ -174,6 +174,11 @@ actor Agent {
     // Background retry loop for a network service that failed to connect.
     private var networkConnectTask: Task<Void, Never>?
     private let imageCachePath: String?
+    // Byte budgets for the image caches; nil means unbounded (see
+    // image_cache_max_size_gb / sandbox_image_cache_max_size_gb).
+    private let imageCacheMaxSizeBytes: Int64?
+    private let sandboxImageCachePath: String?
+    private let sandboxImageCacheMaxSizeBytes: Int64?
     private let vmStoragePath: String
     private let qemuBinaryPath: String
     private let firmwarePath: String?
@@ -243,6 +248,9 @@ actor Agent {
         isRegistrationMode: Bool,
         logger: Logger,
         imageCachePath: String? = nil,
+        imageCacheMaxSizeBytes: Int64? = nil,
+        sandboxImageCachePath: String? = nil,
+        sandboxImageCacheMaxSizeBytes: Int64? = nil,
         vmStoragePath: String,
         qemuBinaryPath: String,
         firmwarePath: String? = nil,
@@ -272,6 +280,9 @@ actor Agent {
         self.isRegistrationMode = isRegistrationMode
         self.logger = logger
         self.imageCachePath = imageCachePath
+        self.imageCacheMaxSizeBytes = imageCacheMaxSizeBytes
+        self.sandboxImageCachePath = sandboxImageCachePath
+        self.sandboxImageCacheMaxSizeBytes = sandboxImageCacheMaxSizeBytes
         self.vmStoragePath = vmStoragePath
         self.qemuBinaryPath = qemuBinaryPath
         self.firmwarePath = firmwarePath
@@ -411,7 +422,8 @@ actor Agent {
                 cachePath: imageCachePath,
                 controlPlaneURL: webSocketURL.replacingOccurrences(of: "ws://", with: "http://")
                     .replacingOccurrences(of: "wss://", with: "https://")
-                    .replacingOccurrences(of: "/agent/ws", with: "")
+                    .replacingOccurrences(of: "/agent/ws", with: ""),
+                maxCacheSizeBytes: imageCacheMaxSizeBytes
             )
 
             logger.info("Initializing storage backend")
@@ -536,7 +548,11 @@ actor Agent {
                 sandboxRuntime = FirecrackerSandboxRuntime(
                     logger: logger,
                     client: firecrackerClient,
-                    imageService: SandboxImageService(logger: logger),
+                    imageService: SandboxImageService(
+                        logger: logger,
+                        cacheRootPath: sandboxImageCachePath,
+                        cacheMaxSizeBytes: sandboxImageCacheMaxSizeBytes
+                    ),
                     socketDirectory: firecrackerSocketDir,
                     sandboxStoragePath: vmStoragePath,
                     guestImagePath: sandboxGuestImagePath,
