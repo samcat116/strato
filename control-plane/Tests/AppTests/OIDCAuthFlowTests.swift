@@ -270,6 +270,12 @@ private final class FakeIdPClient: Client, @unchecked Sendable {
 @Suite("OIDC Auth Flow Tests", .serialized)
 final class OIDCAuthFlowTests {
 
+    init() {
+        // The token-exchange, UserInfo, and JWKS fetches enforce the same SSRF
+        // host allow-list as discovery, so the fake IdP's host must be listed.
+        setenv("OIDC_DISCOVERY_ALLOWED_HOSTS", "idp.example.com", 1)
+    }
+
     private let issuer = "https://idp.example.com"
     private let tokenEndpointPath = "https://idp.example.com/token"
     private let jwksPath = "https://idp.example.com/jwks"
@@ -462,6 +468,102 @@ final class OIDCAuthFlowTests {
             let count = try await userCount(on: app.db)
             #expect(count == 0)
         }
+    }
+
+    @Test("JWKS fetch for a non-allow-listed host is blocked without any request")
+    func testJWKSFetchBlockedByAllowList() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            // An org admin points the JWKS URI at an internal service. The
+            // login must fail and the control plane must never issue the
+            // request — the SSRF allow-list covers more than discovery.
+            provider.jwksURI = "https://internal-admin.svc.example.org/jwks"
+            try await provider.save(on: app.db)
+
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            let idToken = try await signIDToken(nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: "internal-admin.svc.example.org", json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                expectLoginFailedRedirect(res)
+            }
+            #expect(idp.requests(urlContaining: "internal-admin.svc.example.org").isEmpty)
+            #expect(try await userCount(on: app.db) == 0)
+        }
+    }
+
+    @Test("JWKS on a discovery-vouched host is fetched even when off the global allow-list")
+    func testJWKSFetchAllowedByDiscoveredHost() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            // The Google shape: discovery lives on the allow-listed host, but
+            // the keys are served from a second domain that no operator listed.
+            // The discovery document naming it is what authorizes the fetch, so
+            // the login must succeed — before per-provider hosts this failed.
+            provider.jwksURI = "https://keys.googleapis.example/jwks"
+            provider.setDiscoveredHosts(
+                from: discoveryDocument(jwksURI: "https://keys.googleapis.example/jwks"))
+            try await provider.save(on: app.db)
+
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            let idToken = try await signIDToken(nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: "keys.googleapis.example", json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                #expect(res.status == .seeOther)
+            }
+            #expect(!idp.requests(urlContaining: "keys.googleapis.example").isEmpty)
+            #expect(try await userCount(on: app.db) == 1)
+        }
+    }
+
+    @Test("A manually-set endpoint is not trusted just because discovery vouched for another host")
+    func testDiscoveredHostsDoNotWidenToOtherHosts() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            // Discovery vouched for one off-allow-list host; that must not make
+            // a DIFFERENT host fetchable. Otherwise an org admin could add a
+            // discovery URL and then hand-point JWKS at an internal service.
+            provider.jwksURI = "https://internal-admin.svc.example.org/jwks"
+            provider.setDiscoveredHosts(
+                from: discoveryDocument(jwksURI: "https://keys.googleapis.example/jwks"))
+            try await provider.save(on: app.db)
+
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            let idToken = try await signIDToken(nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: "internal-admin.svc.example.org", json: jwksJSON())
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
+            ) { res in
+                expectLoginFailedRedirect(res)
+            }
+            #expect(idp.requests(urlContaining: "internal-admin.svc.example.org").isEmpty)
+            #expect(try await userCount(on: app.db) == 0)
+        }
+    }
+
+    /// A discovery document shaped like this suite's fake IdP, with the JWKS
+    /// URI overridden so tests can vouch for an off-allow-list keys host.
+    private func discoveryDocument(jwksURI: String) -> OIDCDiscoveryDocument {
+        OIDCDiscoveryDocument(
+            issuer: issuer,
+            authorizationEndpoint: "https://idp.example.com/authorize",
+            tokenEndpoint: tokenEndpointPath,
+            userinfoEndpoint: nil,
+            endSessionEndpoint: nil,
+            jwksURI: jwksURI,
+            responseTypesSupported: ["code"],
+            subjectTypesSupported: ["public"],
+            idTokenSigningAlgValuesSupported: ["RS256"]
+        )
     }
 
     @Test("Callback without the initiating session is rejected")

@@ -323,6 +323,11 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.notFound, reason: "Organizational unit not found")
         }
 
+        // Verify OU belongs to the organization
+        if rootOU.$organization.id != organizationID {
+            throw Abort(.badRequest, reason: "OU does not belong to the specified organization")
+        }
+
         return try await buildOUTree(ou: rootOU, on: req.db)
     }
 
@@ -346,11 +351,21 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.notFound, reason: "Organizational unit not found")
         }
 
+        // Verify OU belongs to the organization
+        if ou.$organization.id != organizationID {
+            throw Abort(.badRequest, reason: "OU does not belong to the specified organization")
+        }
+
         // Validate new parent
         var newParent: OrganizationalUnit?
         if let newParentID = moveRequest.newParentOuId {
             guard let parent = try await OrganizationalUnit.find(newParentID, on: req.db) else {
                 throw Abort(.badRequest, reason: "New parent OU not found")
+            }
+
+            // Verify new parent belongs to same organization
+            if parent.$organization.id != organizationID {
+                throw Abort(.badRequest, reason: "New parent OU must belong to the same organization")
             }
 
             // Prevent moving to a descendant (circular reference)
@@ -421,6 +436,15 @@ struct OrganizationalUnitController: RouteCollection {
 
         // Verify user has access
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
+
+        guard let parentOU = try await OrganizationalUnit.find(ouID, on: req.db) else {
+            throw Abort(.notFound, reason: "Organizational unit not found")
+        }
+
+        // Verify OU belongs to the organization
+        if parentOU.$organization.id != organizationID {
+            throw Abort(.badRequest, reason: "OU does not belong to the specified organization")
+        }
 
         // Get sub-OUs
         let subOUs = try await OrganizationalUnit.query(on: req.db)

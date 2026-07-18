@@ -144,7 +144,22 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         // Update user fields
         user.username = resource.userName
         user.displayName = resource.displayName ?? resource.name?.formatted ?? resource.userName
+        let wasActive = user.scimActive
         user.scimActive = resource.active ?? true
+
+        // SCIM deactivation is the IdP's offboarding/suspension signal, so it
+        // must revoke access immediately — `scimActive` alone is only checked
+        // at OIDC login. Mirror the SSF disable path: `disabledAt` makes
+        // `UserSecurityMiddleware` and the passkey login path reject the user,
+        // and the `sessionEpoch` bump invalidates existing sessions.
+        if wasActive && !user.scimActive {
+            if user.disabledAt == nil {
+                user.disabledAt = Date()
+            }
+            user.sessionEpoch += 1
+        } else if !wasActive && user.scimActive {
+            user.disabledAt = nil
+        }
 
         if let email = resource.emails?.first(where: { $0.primary == true })?.value
             ?? resource.emails?.first?.value
@@ -193,8 +208,15 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
-        // Soft delete - set scimActive to false
+        // Soft delete - set scimActive to false, and revoke access immediately
+        // (mirrors the SSF disable path): `disabledAt` makes the security
+        // middleware and passkey login reject the user, and the epoch bump
+        // invalidates existing sessions.
         user.scimActive = false
+        if user.disabledAt == nil {
+            user.disabledAt = Date()
+        }
+        user.sessionEpoch += 1
         try await user.save(on: db)
 
         // Remove user from all groups in this organization

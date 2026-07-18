@@ -357,11 +357,13 @@ struct SandboxController: RouteCollection {
         // draw from the same vCPU/memory pools as VMs, count against the sandbox
         // count limit, and reserve no storage (issue #415).
         //
-        // IPAM's unique (network, address) index is the backstop against
-        // concurrent creates racing to the same address (across VMs and
-        // sandboxes, issue #416). A violation poisons the whole Postgres
-        // transaction, so the retry wraps the transaction: the loser re-reads
-        // the used set and allocates the next free address.
+        // IPAM serializes concurrent allocations with a per-network advisory
+        // lock (a VM-vs-sandbox race lands in different tables, which no
+        // unique index can span); each table's unique (network, address)
+        // index still backstops same-table races (issue #416). A violation
+        // poisons the whole Postgres transaction, so the retry wraps the
+        // transaction: the loser re-reads the used set and allocates the
+        // next free address.
         let operation: ResourceOperation
         do {
             let initialGeneration = sandbox.generation
