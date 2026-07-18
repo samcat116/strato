@@ -230,15 +230,23 @@ struct ImageStorageService {
             throw Abort(.notFound, reason: "Image file not found")
         }
 
-        // Get file size for Content-Length header
-        let fileSize = try getFileSize(storagePath: storagePath, relativePath: relativePath)
-
         // Stream the file
         let response = try await req.fileio.asyncStreamFile(at: fullPath)
 
-        // Set headers for download
-        response.headers.add(name: .contentDisposition, value: "attachment; filename=\"\(filename)\"")
-        response.headers.add(name: .contentLength, value: String(fileSize))
+        // Deliberately does NOT set Content-Length. asyncStreamFile already
+        // sets it from the body's byte count, and for a `Range` request that
+        // count is the requested slice, not the whole file (the response is a
+        // 206 with a matching Content-Range). Adding it here emitted the header
+        // twice, which nginx rejects outright ("upstream sent duplicate header
+        // line") with a 502 — that broke image downloads for every agent in the
+        // nginx-fronted deployment, so no VM could boot. Overriding it with the
+        // full file size instead would be just as wrong: partial responses
+        // would advertise more bytes than they stream, hanging or failing
+        // validation on resumable downloads.
+        //
+        // Content-Disposition is ours to set; asyncStreamFile never sets it.
+        response.headers.replaceOrAdd(
+            name: .contentDisposition, value: "attachment; filename=\"\(filename)\"")
 
         return response
     }
