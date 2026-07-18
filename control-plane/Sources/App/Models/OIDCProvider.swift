@@ -43,6 +43,18 @@ final class OIDCProvider: Model, @unchecked Sendable {
     @OptionalField(key: "end_session_endpoint")
     var endSessionEndpoint: String?  // RP-initiated logout (OIDC Session Management)
 
+    // JSON array of hosts this provider's own discovery document named as its
+    // server-fetched endpoints (token, userinfo, JWKS). An allow-listed issuer
+    // vouching for a host is what makes it fetchable, so an IdP that serves
+    // JWKS from a different domain than its discovery URL (Google: discovery on
+    // accounts.google.com, keys on www.googleapis.com) works without every
+    // operator hand-maintaining OIDC_DISCOVERY_ALLOWED_HOSTS. Rewritten in full
+    // on each discovery refresh so repointing a provider drops stale trust, and
+    // deliberately NOT extended by manually-set endpoints — those have no
+    // issuer vouching for them and stay gated by the global allow-list.
+    @Field(key: "discovered_hosts")
+    var discoveredHosts: String
+
     @Field(key: "scopes")
     var scopes: String  // JSON array of scopes, default: ["openid", "profile", "email"]
 
@@ -114,6 +126,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
         self.userinfoEndpoint = userinfoEndpoint
         self.jwksURI = jwksURI
         self.endSessionEndpoint = endSessionEndpoint
+        self.discoveredHosts = "[]"
         self.scopes = Self.encodeScopesArray(scopes)
         self.enabled = enabled
         self.useNonce = useNonce
@@ -199,6 +212,30 @@ extension OIDCProvider {
     /// Set admin claim values from an array
     func setAdminClaimValuesArray(_ values: [String]) {
         self.adminClaimValues = Self.encodeJSON(values, fallback: "[]")
+    }
+
+    /// Hosts this provider's discovery document vouched for, as a set for the
+    /// SSRF allow-list check on token/userinfo/JWKS fetches.
+    var discoveredHostSet: Set<String> {
+        guard let data = discoveredHosts.data(using: .utf8),
+            let array = try? JSONDecoder().decode([String].self, from: data)
+        else {
+            return []
+        }
+        return Set(array)
+    }
+
+    /// Records the hosts of the endpoints a discovery document supplied.
+    /// Replaces the previous set rather than merging: an IdP that moves or a
+    /// provider repointed at a different one must not keep trusting the old
+    /// document's hosts. Only endpoints Strato fetches server-side are
+    /// recorded — the authorization and end-session endpoints are browser
+    /// redirects, never server fetches, so they need no fetch allow-list entry.
+    func setDiscoveredHosts(from discovery: OIDCDiscoveryDocument) {
+        let hosts = [discovery.tokenEndpoint, discovery.userinfoEndpoint, discovery.jwksURI]
+            .compactMap { $0 }
+            .compactMap { URL(string: $0)?.host }
+        self.discoveredHosts = Self.encodeJSON(Array(Set(hosts)).sorted(), fallback: "[]")
     }
 
     /// Check if the provider has the required endpoints configured.

@@ -186,7 +186,8 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid source URL")
         }
         do {
-            try SSRFGuard.validate(url: url, environment: req.application.environment)
+            try await SSRFGuard.validate(
+                url: url, environment: req.application.environment, on: req.application.threadPool)
         } catch let error as SSRFGuard.BlockedHostError {
             throw Abort(.badRequest, reason: error.reason)
         }
@@ -667,7 +668,8 @@ struct ImageController: RouteCollection {
         }
         // Reject SSRF targets up front; the fetch path re-checks each redirect hop.
         do {
-            try SSRFGuard.validate(url: url, environment: req.application.environment)
+            try await SSRFGuard.validate(
+                url: url, environment: req.application.environment, on: req.application.threadPool)
         } catch let error as SSRFGuard.BlockedHostError {
             throw Abort(.badRequest, reason: error.reason)
         }

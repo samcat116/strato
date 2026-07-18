@@ -343,12 +343,25 @@ struct OIDCValidation {
     }
 
     /// SSRF guard for every server-side OIDC fetch (discovery, token exchange,
-    /// UserInfo, JWKS): the URL must be HTTPS and its host must be in the
-    /// allow-list. Endpoints can be set manually by an org admin or copied
-    /// from a discovery document, so enforcing the allow-list only on the
-    /// discovery fetch is not enough — the other endpoints could otherwise be
-    /// pointed at internal services.
-    static func validateAllowedFetchURL(_ url: String, label: String) throws {
+    /// UserInfo, JWKS): the URL must be HTTPS and its host must be allowed.
+    /// Endpoints can be set manually by an org admin or copied from a discovery
+    /// document, so enforcing the allow-list only on the discovery fetch is not
+    /// enough — the other endpoints could otherwise be pointed at internal
+    /// services.
+    ///
+    /// Two things make a host allowed. The global allow-list
+    /// (`OIDC_DISCOVERY_ALLOWED_HOSTS`/`_SUFFIXES`) is the operator's static
+    /// trust and is the ONLY thing that can authorize a discovery URL — it is
+    /// the root of trust, so nothing else may widen it. `perProviderHosts` is
+    /// the delegated trust for the remaining fetches: hosts an already
+    /// allow-listed discovery document named as its own endpoints (see
+    /// `OIDCProvider.setDiscoveredHosts`). Without that delegation any IdP
+    /// serving JWKS off a second domain — Google's keys live on
+    /// `www.googleapis.com`, not `accounts.google.com` — would fail every login
+    /// until an operator hand-edited the environment.
+    static func validateAllowedFetchURL(
+        _ url: String, label: String, perProviderHosts: Set<String> = []
+    ) throws {
         guard let parsedURL = URL(string: url),
             let host = parsedURL.host,
             parsedURL.scheme == "https"
@@ -357,7 +370,9 @@ struct OIDCValidation {
         }
 
         let isHostAllowed =
-            allowedHosts().contains(host) || allowedDomainSuffixes().contains { host.hasSuffix($0) }
+            allowedHosts().contains(host)
+            || allowedDomainSuffixes().contains { host.hasSuffix($0) }
+            || perProviderHosts.contains(host)
         guard isHostAllowed else {
             throw Abort(
                 .badRequest,

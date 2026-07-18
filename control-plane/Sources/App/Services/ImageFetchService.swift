@@ -343,6 +343,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         onProgress: @escaping (Int) async throws -> Void
     ) async throws -> (size: Int64, checksum: String, format: ImageFormat) {
         let environment = app.environment
+        let threadPool = app.threadPool
 
         // Redirects are followed BY HAND rather than by AsyncHTTPClient so the
         // SSRF guard sees every hop's host: an attacker-controlled `sourceURL`
@@ -359,7 +360,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
             // non-public address is rejected, not just the initial URL. (The
             // connection re-resolves the host; pinning the resolved address to
             // fully close the DNS-rebind window is a follow-up.)
-            try SSRFGuard.validate(url: currentURL, environment: environment)
+            try await SSRFGuard.validate(url: currentURL, environment: environment, on: threadPool)
 
             var request = HTTPClientRequest(url: currentURL.absoluteString)
             request.method = .GET

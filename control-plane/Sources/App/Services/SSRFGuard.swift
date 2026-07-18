@@ -1,4 +1,5 @@
 import Foundation
+import NIOPosix
 import Vapor
 
 #if canImport(Glibc)
@@ -18,9 +19,13 @@ import Darwin
 ///
 /// The check runs at two points: in the controller for a fast, well-formed 400
 /// before any DB rows are created, and again in `ImageFetchService` on the URL
-/// actually about to be fetched — the latter also covers redirect targets and
-/// returns the validated addresses so the fetch can pin its connection to them,
-/// closing the DNS-rebind window between the check and the connect.
+/// actually about to be fetched, which also covers redirect targets.
+///
+/// KNOWN GAP: the fetch re-resolves the host when it connects, so a low-TTL
+/// record can rebind the name to an internal address between this check and
+/// the connect. `validate` returns the addresses it approved so a future
+/// change can pin the connection to them (AsyncHTTPClient's `dnsOverride`);
+/// no caller does that yet.
 enum SSRFGuard {
     /// Blocked because the resolved address is not a public, routable host.
     struct BlockedHostError: Error, CustomStringConvertible {
@@ -41,20 +46,21 @@ enum SSRFGuard {
         return environment == .testing || environment == .development
     }
 
-    /// Validates that `url` is safe to fetch server-side, returning the resolved
-    /// public addresses so the caller can pin the connection to them.
+    /// Validates that `url` is safe to fetch server-side, returning the IP
+    /// literals that passed validation (empty when private hosts are allowed).
     ///
     /// Requires an http/https URL with a host, and — unless private hosts are
     /// allowed for this environment — that every address the host resolves to
-    /// is a routable public address. Throws `BlockedHostError` otherwise. The
-    /// returned IP literals are the exact addresses that passed validation;
-    /// callers MUST connect to one of them (e.g. via AsyncHTTPClient's
-    /// `dnsOverride`) instead of re-resolving the host, or a low-TTL record can
-    /// rebind the name to an internal address between this check and the
-    /// connect. Returns an empty array when private hosts are allowed, in which
-    /// case no pinning is required.
+    /// is a routable public address. Throws `BlockedHostError` otherwise.
+    ///
+    /// Resolution runs on `threadPool` because `getaddrinfo` is a blocking
+    /// syscall: called inline it would park a NIO event-loop thread (or a
+    /// cooperative-pool thread from an actor) for the length of the lookup, and
+    /// the host being resolved is attacker-supplied — a deliberately stalling
+    /// authoritative nameserver would otherwise be a cheap way to starve the
+    /// server's threads.
     @discardableResult
-    static func validate(url: URL, environment: Environment) throws -> [String] {
+    static func validate(url: URL, environment: Environment, on threadPool: NIOThreadPool) async throws -> [String] {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             throw BlockedHostError(reason: "Source URL must use http or https")
         }
@@ -66,15 +72,19 @@ enum SSRFGuard {
             return []
         }
 
-        let addresses = try resolve(host: host)
-        guard !addresses.isEmpty else {
-            throw BlockedHostError(reason: "Could not resolve host '\(host)'")
+        // Resolve AND classify inside the pool: `ResolvedAddress` wraps C
+        // sockaddr types, so the boundary only carries the resulting strings.
+        return try await threadPool.runIfActive {
+            let addresses = try resolve(host: host)
+            guard !addresses.isEmpty else {
+                throw BlockedHostError(reason: "Could not resolve host '\(host)'")
+            }
+            for address in addresses where !address.isPubliclyRoutable {
+                throw BlockedHostError(
+                    reason: "Refusing to fetch from non-public address (\(address.description)) for host '\(host)'")
+            }
+            return addresses.map { $0.description }
         }
-        for address in addresses where !address.isPubliclyRoutable {
-            throw BlockedHostError(
-                reason: "Refusing to fetch from non-public address (\(address.description)) for host '\(host)'")
-        }
-        return addresses.map { $0.description }
     }
 
     /// Resolves `host` to its IP addresses. A bare IP literal resolves to
@@ -83,7 +93,13 @@ enum SSRFGuard {
     private static func resolve(host: String) throws -> [ResolvedAddress] {
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
+        // `SOCK_STREAM` imports as `Int32` on Darwin but as the `__socket_type`
+        // C enum on Glibc, while `ai_socktype` is `Int32` on both.
+        #if canImport(Glibc)
+        hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
+        #else
         hints.ai_socktype = SOCK_STREAM
+        #endif
 
         var result: UnsafeMutablePointer<addrinfo>?
         let status = getaddrinfo(host, nil, &hints, &result)

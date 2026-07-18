@@ -721,6 +721,11 @@ struct OIDCController: RouteCollection {
         provider.authorizationEndpoint = discovery.authorizationEndpoint
         provider.tokenEndpoint = discovery.tokenEndpoint
         provider.jwksURI = discovery.jwksURI
+        // The allow-listed discovery host vouches for the endpoint hosts it
+        // names, so they become fetchable for this provider only (Google serves
+        // JWKS from www.googleapis.com, not accounts.google.com). Recorded from
+        // the document itself, never from a manually-set endpoint.
+        provider.setDiscoveredHosts(from: discovery)
         if discovery.userinfoEndpoint != nil {
             provider.userinfoEndpoint = discovery.userinfoEndpoint
         } else if clearOmittedOptionals && !explicitUserinfoEndpoint {
@@ -793,8 +798,10 @@ struct OIDCController: RouteCollection {
         }
 
         // Same SSRF guard as the discovery fetch: the stored endpoint may
-        // have been set manually or copied from a discovery document.
-        try OIDCValidation.validateAllowedFetchURL(tokenEndpoint, label: "Token endpoint")
+        // have been set manually or copied from a discovery document. A
+        // manually-set host still has to satisfy the global allow-list.
+        try OIDCValidation.validateAllowedFetchURL(
+            tokenEndpoint, label: "Token endpoint", perProviderHosts: provider.discoveredHostSet)
 
         let redirectURI = try oidcRedirectURI(
             organizationID: organizationID, providerID: providerID, on: req)
@@ -859,7 +866,7 @@ struct OIDCController: RouteCollection {
             || claims.preferredUsername == nil
         if idTokenIncomplete, let endpoint = provider.userinfoEndpoint, !endpoint.isEmpty {
             if let info = try? await fetchUserInfo(
-                endpoint: endpoint, accessToken: tokenResponse.accessToken, on: req),
+                endpoint: endpoint, accessToken: tokenResponse.accessToken, provider: provider, on: req),
                 info.sub == claims.sub
             {
                 userInfo = info
@@ -895,10 +902,12 @@ struct OIDCController: RouteCollection {
     private func fetchUserInfo(
         endpoint: String,
         accessToken: String,
+        provider: OIDCProvider,
         on req: Request
     ) async throws -> OIDCUserInfoResponse {
         // Same SSRF guard as the discovery fetch (HTTPS + host allow-list).
-        try OIDCValidation.validateAllowedFetchURL(endpoint, label: "UserInfo endpoint")
+        try OIDCValidation.validateAllowedFetchURL(
+            endpoint, label: "UserInfo endpoint", perProviderHosts: provider.discoveredHostSet)
         let response = try await req.client.get(URI(string: endpoint)) { clientReq in
             clientReq.headers.bearerAuthorization = BearerAuthorization(token: accessToken)
         }
@@ -931,7 +940,7 @@ struct OIDCController: RouteCollection {
             throw Abort(.internalServerError, reason: "JWKS URI not configured for provider")
         }
 
-        let jwksJSON = try await fetchJWKS(uri: jwksURI, on: req)
+        let jwksJSON = try await fetchJWKS(uri: jwksURI, provider: provider, on: req)
 
         // JWTKit selects the key by the header's `kid` and cross-checks the
         // header `alg` against the key's type (RSA/EC/OKP), so a token can't
@@ -957,9 +966,10 @@ struct OIDCController: RouteCollection {
     /// Fetches the provider's JWKS document as raw JSON; decoding happens
     /// per-key in `OIDCTokenVerification.makeSigners` so one unsupported key
     /// can't invalidate the whole set.
-    private func fetchJWKS(uri: String, on req: Request) async throws -> Data {
+    private func fetchJWKS(uri: String, provider: OIDCProvider, on req: Request) async throws -> Data {
         // Validate JWKS URI for security (HTTPS + host allow-list)
-        try OIDCValidation.validateAllowedFetchURL(uri, label: "JWKS URI")
+        try OIDCValidation.validateAllowedFetchURL(
+            uri, label: "JWKS URI", perProviderHosts: provider.discoveredHostSet)
 
         req.logger.debug("Fetching JWKS from URI", metadata: ["uri": .string(uri)])
 
