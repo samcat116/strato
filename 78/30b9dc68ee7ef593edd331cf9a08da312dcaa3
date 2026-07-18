@@ -1,0 +1,21 @@
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_a80ae461e08851::t_cc3b0cffbac7f7 1274,1280-1286
+agent/Sources/StratoAgentCore/SandboxJail.swift
+  s_a80ae461e08851::t_b15248731aa3f0 38-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "7830b9dc68ee7ef593edd331cf9a08da312dcaa3",
+  "prompts": {},
+  "sessions": {
+    "s_a80ae461e08851": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8acc851f-5517-4c80-8b67-2216544b35d9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
