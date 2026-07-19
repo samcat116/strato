@@ -1350,7 +1350,7 @@ extension NetworkServiceLinux: NetworkActuator {
         // Default route out the uplink, so SNAT'd traffic to off-subnet
         // destinations actually has a route (the NAT rule alone is not enough).
         if let nextHop = uplink.gateway {
-            try await ensureDefaultRoute(router: router.name, nextHop: nextHop)
+            try await ensureDefaultRoute(router: router.name, nextHop: nextHop, family: .v4)
         } else {
             let message =
                 "OVN uplink has no gateway; skipping the router default route "
@@ -1370,7 +1370,7 @@ extension NetworkServiceLinux: NetworkActuator {
                 // so a typo in the optional v6 next hop would take IPv4 egress
                 // down with it. Degrade to a v4 uplink instead.
                 if IPv6Address(nextHop6) != nil {
-                    try await ensureDefaultRoute(router: router.name, nextHop: nextHop6)
+                    try await ensureDefaultRoute(router: router.name, nextHop: nextHop6, family: .v6)
                     installedIPv6Default = true
                 } else {
                     logger.error(
@@ -1393,7 +1393,7 @@ extension NetworkServiceLinux: NetworkActuator {
         // cost the router its IPv4 SNAT, the very coupling fixed above.
         if !installedIPv6Default {
             do {
-                try await removeManagedDefaultRoute(router: router.name, prefix: "::/0")
+                try await removeManagedDefaultRoute(router: router.name, family: .v6)
             } catch {
                 logger.error(
                     "Failed to remove the stale IPv6 default route",
@@ -1499,6 +1499,21 @@ extension NetworkServiceLinux: NetworkActuator {
 }
 
 #if os(Linux)
+/// Which address family a router's default route belongs to. Each family owns
+/// its own default prefix and reconciles only that prefix, so a v4 and a v6
+/// default coexist on one router without disturbing each other.
+fileprivate enum DefaultRouteFamily {
+    case v4
+    case v6
+
+    var defaultPrefix: String {
+        switch self {
+        case .v4: "0.0.0.0/0"
+        case .v6: "::/0"
+        }
+    }
+}
+
 extension NetworkServiceLinux {
     /// Create a router port and its peering `type=router` switch port in an
     /// idempotent pair (both, or neither, so the switch never has a dangling
@@ -1706,7 +1721,16 @@ extension NetworkServiceLinux {
     /// hop, so SNAT'd traffic to addresses outside the provider subnet has a
     /// route out. Uses SwiftOVN's `Logical_Router_Static_Route` API directly
     /// against the NB DB — no `ovn-nbctl` dependency on the host.
-    fileprivate func ensureDefaultRoute(router routerName: String, nextHop: String) async throws {
+    ///
+    /// `family` is declared by the caller, never sniffed from `nextHop`:
+    /// `[ovn_uplink] gateway` is the IPv4 next hop and `gateway6` the IPv6 one,
+    /// so an address of the wrong family is an operator error to reject, not a
+    /// family to infer. Inferring it would let a v6 address in `gateway` install
+    /// a `::/0`, skip `0.0.0.0/0` entirely, and still report the uplink ready —
+    /// leaving IPv4 SNAT running over a router with no IPv4 default route.
+    fileprivate func ensureDefaultRoute(
+        router routerName: String, nextHop: String, family: DefaultRouteFamily
+    ) async throws {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
@@ -1714,21 +1738,24 @@ extension NetworkServiceLinux {
         // ourselves — the old `ovn-nbctl lr-route-add` rejected a malformed one.
         // Throwing keeps this a failed uplink instead of committing a broken route
         // and then proceeding to install SNAT over silently dead egress.
-        // The next hop's family picks the default prefix; each family reconciles
-        // only its own, so a v4 and a v6 default coexist untouched. The v6 hop is
-        // canonicalized, so a non-canonical operator spelling (`2001:0db8::1`)
-        // doesn't read as drift on every reconcile.
-        let defaultPrefix: String
+        let defaultPrefix = family.defaultPrefix
         let hop: String
-        if IPv4Address(nextHop) != nil {
-            defaultPrefix = "0.0.0.0/0"
+        switch family {
+        case .v4:
+            guard IPv4Address(nextHop) != nil else {
+                throw NetworkError.invalidConfiguration(
+                    "OVN uplink gateway '\(nextHop)' is not a valid IPv4 address; cannot install default route")
+            }
             hop = nextHop
-        } else if let address6 = IPv6Address(nextHop) {
-            defaultPrefix = "::/0"
+        case .v6:
+            // Canonicalized, so a non-canonical operator spelling
+            // (`2001:0db8::1`) doesn't read as drift on every reconcile.
+            guard let address6 = IPv6Address(nextHop) else {
+                throw NetworkError.invalidConfiguration(
+                    "OVN uplink gateway6 '\(nextHop)' is not a valid IPv6 address; cannot install default route"
+                )
+            }
             hop = address6.description
-        } else {
-            throw NetworkError.invalidConfiguration(
-                "OVN uplink gateway '\(nextHop)' is not a valid IP address; cannot install default route")
         }
         // The agent owns L3 on this router (deterministically named, created with
         // the managed external ID), so it owns the router's default route too.
@@ -1775,10 +1802,11 @@ extension NetworkServiceLinux {
     /// also clears untagged duplicates, but that is safe only because it is
     /// replacing them — here there is no replacement, so an operator's own
     /// default (untagged, or policy/named-table) is left alone.
-    fileprivate func removeManagedDefaultRoute(router routerName: String, prefix: String) async throws {
+    fileprivate func removeManagedDefaultRoute(router routerName: String, family: DefaultRouteFamily) async throws {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
+        let prefix = family.defaultPrefix
         for route in try await staticRoutes(onRouter: routerName)
         where route.ip_prefix == prefix
             && (route.policy ?? "dst-ip") == "dst-ip"
