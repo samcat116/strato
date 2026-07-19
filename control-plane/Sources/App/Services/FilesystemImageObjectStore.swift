@@ -54,6 +54,7 @@ struct FilesystemImageObjectStore: ImageObjectStore {
         try await threadPool.runIfActive {
             try FileManager.default.createDirectory(
                 atPath: directory, withIntermediateDirectories: true, attributes: nil)
+            Self.sweepStaleStagingFiles(in: directory)
             guard FileManager.default.createFile(atPath: staging, contents: nil) else {
                 throw ImageError.storageFailed("Failed to create staging file for \(key)")
             }
@@ -70,6 +71,39 @@ struct FilesystemImageObjectStore: ImageObjectStore {
             destinationPath: destination,
             threadPool: threadPool
         )
+    }
+
+    /// Age past which an abandoned `.partial.*` file is assumed dead.
+    ///
+    /// Comfortably longer than any legitimate upload: a 4 GiB image over a slow
+    /// link is still hours short of this, so an in-flight sibling upload is
+    /// never swept out from under itself.
+    static let stagingFileTTL: TimeInterval = 24 * 60 * 60
+
+    /// Removes abandoned staging files left in `directory` by a control plane
+    /// that died mid-upload.
+    ///
+    /// Without this they are invisible garbage: nothing references them, and
+    /// only deleting the whole image would ever clear them. Swept here, on the
+    /// directory an upload is about to write to, rather than by a boot-time
+    /// walk of the entire store — the work lands where it's cheap and where a
+    /// leak would otherwise accumulate. Best-effort throughout; a failure to
+    /// tidy must never fail the upload.
+    private static func sweepStaleStagingFiles(in directory: String) {
+        guard
+            let entries = try? FileManager.default.contentsOfDirectory(atPath: directory)
+        else { return }
+
+        let cutoff = Date().addingTimeInterval(-stagingFileTTL)
+        for entry in entries where entry.contains(".partial.") {
+            let candidate = "\(directory)/\(entry)"
+            guard
+                let attributes = try? FileManager.default.attributesOfItem(atPath: candidate),
+                let modified = attributes[.modificationDate] as? Date,
+                modified < cutoff
+            else { continue }
+            try? FileManager.default.removeItem(atPath: candidate)
+        }
     }
 
     func delete(key: String) async throws {
@@ -156,11 +190,10 @@ private final class FilesystemImageObjectWriter: ImageObjectWriter, @unchecked S
     }
 
     func write(_ buffer: ByteBuffer) async throws {
-        var buffer = buffer
-        guard let bytes = buffer.readBytes(length: buffer.readableBytes), !bytes.isEmpty else {
-            return
-        }
-        let data = Data(bytes)
+        guard buffer.readableBytes > 0 else { return }
+        // One copy, not two: `readBytes` into `[UInt8]` and then `Data(bytes)`
+        // duplicated every chunk of a multi-gigabyte upload.
+        let data = Data(buffer.readableBytesView)
         let handle = self.handle
         try await threadPool.runIfActive {
             try handle.write(contentsOf: data)

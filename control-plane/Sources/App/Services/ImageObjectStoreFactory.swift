@@ -17,8 +17,21 @@ enum ImageObjectStoreFactory {
         typealias Value = AWSClient
     }
 
+    /// Reads an environment variable, treating an empty value as absent.
+    ///
+    /// Deployment templates routinely set a variable to the empty string rather
+    /// than omitting it — Compose's `KEY: ${KEY:-}` map form always sets the
+    /// key. `Environment.get` returns `""` there, which is non-nil, so an
+    /// unconfigured option would otherwise read as configured-but-blank: empty
+    /// credentials failed the "set together" check and an empty endpoint was
+    /// handed to Soto as a literal base URL, breaking real AWS.
+    private static func env(_ key: String) -> String? {
+        guard let value = Environment.get(key), !value.isEmpty else { return nil }
+        return value
+    }
+
     static func configure(_ app: Application) throws {
-        let raw = Environment.get("IMAGE_STORAGE_BACKEND")?.lowercased() ?? Backend.filesystem.rawValue
+        let raw = env("IMAGE_STORAGE_BACKEND")?.lowercased() ?? Backend.filesystem.rawValue
         guard let backend = Backend(rawValue: raw) else {
             throw ImageError.storageFailed(
                 "Unknown IMAGE_STORAGE_BACKEND '\(raw)' (expected 'filesystem' or 's3')")
@@ -39,13 +52,13 @@ enum ImageObjectStoreFactory {
                 "Image storage backend: s3",
                 metadata: [
                     "bucket": .string(store.bucket),
-                    "endpoint": .string(Environment.get("IMAGE_S3_ENDPOINT") ?? "aws"),
+                    "endpoint": .string(env("IMAGE_S3_ENDPOINT") ?? "aws"),
                 ])
         }
     }
 
     private static func makeS3Store(_ app: Application) throws -> S3ImageObjectStore {
-        guard let bucket = Environment.get("IMAGE_S3_BUCKET"), !bucket.isEmpty else {
+        guard let bucket = env("IMAGE_S3_BUCKET") else {
             throw ImageError.storageFailed("IMAGE_S3_BUCKET is required when IMAGE_STORAGE_BACKEND=s3")
         }
 
@@ -53,14 +66,12 @@ enum ImageObjectStoreFactory {
         // Soto's default chain so IRSA / instance roles / ~/.aws work without
         // putting long-lived keys in the environment.
         let credentialProvider: CredentialProviderFactory
-        let accessKey = Environment.get("IMAGE_S3_ACCESS_KEY_ID")
-        let secretKey = Environment.get("IMAGE_S3_SECRET_ACCESS_KEY")
-        switch (accessKey, secretKey) {
-        case let (key?, secret?) where !key.isEmpty && !secret.isEmpty:
+        switch (env("IMAGE_S3_ACCESS_KEY_ID"), env("IMAGE_S3_SECRET_ACCESS_KEY")) {
+        case let (key?, secret?):
             credentialProvider = .static(
                 accessKeyId: key,
                 secretAccessKey: secret,
-                sessionToken: Environment.get("IMAGE_S3_SESSION_TOKEN")
+                sessionToken: env("IMAGE_S3_SESSION_TOKEN")
             )
         case (nil, nil):
             credentialProvider = .default
@@ -79,19 +90,19 @@ enum ImageObjectStoreFactory {
         // self-hosted implementations (MinIO, Garage, Ceph RGW) expect. Some
         // providers require virtual-host addressing instead.
         var options: AWSServiceConfig.Options = []
-        if Environment.get("IMAGE_S3_VIRTUAL_HOST_STYLE").flatMap(Bool.init) == true {
+        if env("IMAGE_S3_VIRTUAL_HOST_STYLE").flatMap(Bool.init) == true {
             options.insert(.s3ForceVirtualHost)
         }
 
         // A region is still required for request signing even against an
         // implementation that ignores regions; us-east-1 is the conventional
         // placeholder MinIO and Garage accept.
-        let region = Region(rawValue: Environment.get("IMAGE_S3_REGION") ?? "us-east-1")
+        let region = Region(rawValue: env("IMAGE_S3_REGION") ?? "us-east-1")
 
         let s3 = S3(
             client: client,
             region: region,
-            endpoint: Environment.get("IMAGE_S3_ENDPOINT"),
+            endpoint: env("IMAGE_S3_ENDPOINT"),
             options: options
         )
 

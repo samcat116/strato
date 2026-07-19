@@ -22,6 +22,13 @@ enum StreamingMultipartReceiver {
     /// they're held in memory whole.
     static let maxFieldBytes = 64 * 1024
 
+    /// Cap on how many non-file fields one upload may carry. `maxFieldBytes`
+    /// bounds each field but not how many of them accumulate in memory, so
+    /// without this a client could stream unlimited small fields and grow the
+    /// dictionary without ever tripping the per-field limit. No real upload
+    /// sends more than a handful.
+    static let maxFieldCount = 64
+
     struct Result {
         /// Non-file form fields, decoded as UTF-8.
         var fields: [String: String]
@@ -187,6 +194,16 @@ private final class ParserState: @unchecked Sendable {
         // filename — a text field called "file" isn't an upload.
         currentIsFile = currentName == fileFieldName && currentFilename != nil
         if currentIsFile {
+            // A second file part would append to the writer already opened
+            // under the first part's key while overwriting `fileFilename`, so
+            // the row would record one filename and the bytes would live under
+            // another. Reject rather than silently store the mismatch.
+            guard fileFilename == nil else {
+                failure = Abort(
+                    .badRequest,
+                    reason: "Only one '\(fileFieldName)' part is allowed per upload")
+                return
+            }
             fileFilename = currentFilename
             fieldsBeforeFile = fields
         }
@@ -210,7 +227,14 @@ private final class ParserState: @unchecked Sendable {
 
     func completePart() {
         if !currentIsFile, let name = currentName {
-            fields[name] = currentFieldValue.readString(length: currentFieldValue.readableBytes) ?? ""
+            if fields[name] == nil, fields.count >= StreamingMultipartReceiver.maxFieldCount {
+                failure = Abort(
+                    .badRequest,
+                    reason:
+                        "Upload carries more than \(StreamingMultipartReceiver.maxFieldCount) form fields")
+            } else {
+                fields[name] = currentFieldValue.readString(length: currentFieldValue.readableBytes) ?? ""
+            }
         }
         currentName = nil
         currentFilename = nil

@@ -142,8 +142,10 @@ spec:
             - name: IMAGE_STORAGE_PATH
               value: "{{ .Values.strato.imageStorage.path }}"
             {{- else }}
+            {{- /* Fail at install time rather than crashlooping on the
+                   control plane's own IMAGE_S3_BUCKET guard. */}}
             - name: IMAGE_S3_BUCKET
-              value: "{{ .Values.strato.imageStorage.s3.bucket }}"
+              value: {{ required "strato.imageStorage.s3.bucket is required when strato.imageStorage.backend is 's3'" .Values.strato.imageStorage.s3.bucket | quote }}
             {{- with .Values.strato.imageStorage.s3.endpoint }}
             - name: IMAGE_S3_ENDPOINT
               value: "{{ . }}"

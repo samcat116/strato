@@ -63,16 +63,25 @@ struct S3ImageObjectStore: ImageObjectStore {
         } while continuationToken != nil
     }
 
+    /// True when the error means "no such object", across the two shapes Soto
+    /// reports it in: a typed `notFound`/`noSuchKey`, or — because some S3
+    /// implementations answer HEAD on a missing key with a bare 404 and no
+    /// parsable error body — an untyped raw error carrying a 404.
+    private static func isNotFound(_ error: any Error) -> Bool {
+        if let error = error as? S3ErrorType, error == .notFound || error == .noSuchKey {
+            return true
+        }
+        if let error = error as? AWSRawError, error.context.responseCode == .notFound {
+            return true
+        }
+        return false
+    }
+
     func exists(key: String) async throws -> Bool {
         do {
             _ = try await s3.headObject(.init(bucket: bucket, key: key))
             return true
-        } catch let error as S3ErrorType where error == .notFound {
-            return false
-        } catch let error as AWSRawError where error.context.responseCode == .notFound {
-            // Some S3 implementations answer HEAD on a missing key with a bare
-            // 404 and no parsable error body, which Soto surfaces as a raw error
-            // rather than a typed one.
+        } catch  where Self.isNotFound(error) {
             return false
         }
     }
@@ -86,7 +95,16 @@ struct S3ImageObjectStore: ImageObjectStore {
     }
 
     func stream(key: String, filename: String, on req: Request) async throws -> Response {
-        let head = try await s3.headObject(.init(bucket: bucket, key: key))
+        // A row can outlive its object (a failed write, an out-of-band delete).
+        // That's a 404, the same as the filesystem backend gives — without this
+        // catch the head call escaped as an unhandled Soto error and the caller
+        // saw a 500.
+        let head: S3.HeadObjectOutput
+        do {
+            head = try await s3.headObject(.init(bucket: bucket, key: key))
+        } catch  where Self.isNotFound(error) {
+            throw Abort(.notFound, reason: "Image file not found")
+        }
         guard let totalSize = head.contentLength else {
             throw Abort(.internalServerError, reason: "Could not determine object size")
         }
@@ -101,7 +119,8 @@ struct S3ImageObjectStore: ImageObjectStore {
             object = try await s3.getObject(
                 .init(bucket: bucket, key: key, range: range?.headerValue)
             )
-        } catch let error as S3ErrorType where error == .noSuchKey {
+        } catch  where Self.isNotFound(error) {
+            // Deleted between the head and the get.
             throw Abort(.notFound, reason: "Image file not found")
         }
 
@@ -174,9 +193,12 @@ private actor S3ImageObjectWriter: ImageObjectWriter {
     }
 
     func finish() async throws {
-        // The final part is the only one allowed below the 5 MiB minimum, and a
-        // zero-byte object legitimately has no parts at all.
-        if pending.readableBytes > 0 {
+        // The final part is the only one allowed below the 5 MiB minimum.
+        //
+        // It is uploaded even when empty: S3 rejects `completeMultipartUpload`
+        // with an empty part list, so a zero-byte object needs one zero-byte
+        // part rather than none.
+        if pending.readableBytes > 0 || completedParts.isEmpty {
             let tail = pending.readSlice(length: pending.readableBytes) ?? ByteBuffer()
             try await uploadPart(tail)
         }

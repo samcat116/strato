@@ -164,6 +164,34 @@ final class ImageObjectStoreTests {
         #expect(siblings.isEmpty)
     }
 
+    @Test("Opening a writer sweeps staging files abandoned by an earlier crash")
+    func staleStagingFilesAreSwept() async throws {
+        let root = try Self.createTempStorageDirectory()
+        defer { Self.cleanupTempStorageDirectory(root) }
+        let store = FilesystemImageObjectStore(rootPath: root)
+        let directory = "\(root)/p/i"
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+
+        // What a control plane killed mid-upload leaves behind. Nothing
+        // references it, so only this sweep will ever reclaim it.
+        let abandoned = "\(directory)/disk.qcow2.partial.\(UUID().uuidString)"
+        FileManager.default.createFile(atPath: abandoned, contents: Data("orphan".utf8))
+        let longAgo = Date().addingTimeInterval(-FilesystemImageObjectStore.stagingFileTTL - 60)
+        try FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: abandoned)
+
+        // A staging file from an upload still in flight must survive.
+        let inFlight = "\(directory)/other.qcow2.partial.\(UUID().uuidString)"
+        FileManager.default.createFile(atPath: inFlight, contents: Data("live".utf8))
+
+        try await Self.write("new upload", to: "p/i/disk.qcow2", in: store)
+
+        #expect(FileManager.default.fileExists(atPath: abandoned) == false)
+        #expect(FileManager.default.fileExists(atPath: inFlight) == true)
+        // The real object is unaffected by the sweep.
+        let onDisk = try String(contentsOfFile: "\(directory)/disk.qcow2", encoding: .utf8)
+        #expect(onDisk == "new upload")
+    }
+
     @Test("A failed rewrite does not destroy the object already at that key")
     func failedRewritePreservesExisting() async throws {
         let root = try Self.createTempStorageDirectory()

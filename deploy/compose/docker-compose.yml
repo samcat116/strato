@@ -369,11 +369,18 @@ services:
       # store is bundled here — you supply the bucket.
       IMAGE_STORAGE_BACKEND: ${IMAGE_STORAGE_BACKEND:-filesystem}
       IMAGE_STORAGE_PATH: /app/images
+      # Only read when IMAGE_STORAGE_BACKEND=s3. Compose's map form always sets
+      # these, so an unset variable arrives as an empty string — the control
+      # plane treats empty as absent, which is what makes "leave the endpoint
+      # blank for AWS" and "leave the keys blank for IRSA / instance roles"
+      # behave as documented.
       IMAGE_S3_ENDPOINT: ${IMAGE_S3_ENDPOINT:-}
       IMAGE_S3_BUCKET: ${IMAGE_S3_BUCKET:-}
       IMAGE_S3_REGION: ${IMAGE_S3_REGION:-us-east-1}
+      IMAGE_S3_VIRTUAL_HOST_STYLE: ${IMAGE_S3_VIRTUAL_HOST_STYLE:-}
       IMAGE_S3_ACCESS_KEY_ID: ${IMAGE_S3_ACCESS_KEY_ID:-}
       IMAGE_S3_SECRET_ACCESS_KEY: ${IMAGE_S3_SECRET_ACCESS_KEY:-}
+      IMAGE_S3_SESSION_TOKEN: ${IMAGE_S3_SESSION_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       OTEL_METRICS_ENABLED: "false"
       OTEL_LOGS_ENABLED: "false"

@@ -1688,6 +1688,91 @@ final class ImageControllerTests {
         }
     }
 
+    @Test("A second file part is rejected rather than silently mis-recorded")
+    func testSecondFilePartRejected() async throws {
+        // The writer is opened under the first part's key, but `filename` would
+        // be overwritten by the second — the row would name one file and the
+        // bytes would live under another.
+        try await withImageTestApp { app, _, _, project, authToken, tempStoragePath in
+            let boundary = "----TestBoundary\(UUID().uuidString)"
+            var body = Data()
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"name\"\r\n\r\n".data(using: .utf8)!)
+            body.append("Two files\r\n".data(using: .utf8)!)
+            for filename in ["first.img", "second.img"] {
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append(
+                    "Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n"
+                        .data(using: .utf8)!)
+                body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+                body.append("bytes of \(filename)".data(using: .utf8)!)
+                body.append("\r\n".data(using: .utf8)!)
+            }
+            body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // The rejected upload must leave neither a row nor stray bytes.
+            let images = try await Image.query(on: app.db).all()
+            #expect(images.isEmpty)
+            let leftovers =
+                FileManager.default.enumerator(atPath: tempStoragePath)?
+                .compactMap { $0 as? String }
+                .filter { !$0.hasSuffix("/") } ?? []
+            #expect(
+                leftovers.allSatisfy { path in
+                    var isDirectory: ObjCBool = false
+                    _ = FileManager.default.fileExists(
+                        atPath: "\(tempStoragePath)/\(path)", isDirectory: &isDirectory)
+                    return isDirectory.boolValue
+                })
+        }
+    }
+
+    @Test("An upload carrying an absurd number of form fields is rejected")
+    func testTooManyFormFieldsRejected() async throws {
+        // Each field is individually under maxFieldBytes, so only the count cap
+        // stops a client from growing the field dictionary without limit.
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let boundary = "----TestBoundary\(UUID().uuidString)"
+            var body = Data()
+            for index in 0...StreamingMultipartReceiver.maxFieldCount {
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append(
+                    "Content-Disposition: form-data; name=\"filler\(index)\"\r\n\r\n".data(
+                        using: .utf8)!)
+                body.append("x\r\n".data(using: .utf8)!)
+            }
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append(
+                "Content-Disposition: form-data; name=\"file\"; filename=\"disk.img\"\r\n".data(
+                    using: .utf8)!)
+            body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+            body.append("bytes".data(using: .utf8)!)
+            body.append("\r\n".data(using: .utf8)!)
+            body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let images = try await Image.query(on: app.db).all()
+            #expect(images.isEmpty)
+        }
+    }
+
     @Test("Artifact upload accepts the kind as a query parameter, order-independently")
     func testArtifactKindFromQueryParameter() async throws {
         try await withImageTestApp { app, _, _, project, authToken, tempStoragePath in

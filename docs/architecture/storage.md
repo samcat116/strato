@@ -58,7 +58,10 @@ appear anywhere in the body.
 
 A write that fails part-way is never published — the filesystem backend stages
 to a sibling path and publishes with `rename(2)`, and the S3 backend abandons
-the multipart upload — so an agent can never fetch a truncated image.
+the multipart upload — so an agent can never fetch a truncated image. If the
+control plane dies mid-upload the filesystem staging file is left behind;
+opening a writer in that directory sweeps `.partial.*` siblings older than a
+day, so abandoned bytes are reclaimed rather than accumulating unreferenced.
 
 ### Configuration
 
@@ -71,6 +74,12 @@ signing even by implementations that ignore regions. Setting
 `IMAGE_S3_ACCESS_KEY_ID` and `IMAGE_S3_SECRET_ACCESS_KEY` together uses static
 credentials; leaving both unset falls back to the ambient credential chain
 (IRSA, workload identity, instance role), which is preferable where available.
+`IMAGE_S3_SESSION_TOKEN` is optional alongside static credentials.
+
+Every `IMAGE_S3_*` variable treats an empty value as unset. Deployment
+templates routinely set a variable to the empty string rather than omitting it
+— Compose's `KEY: ${KEY:-}` form always sets the key — so "leave it empty"
+and "leave it unset" mean the same thing here.
 
 No object store is bundled with either deployment path — you supply the bucket.
 
