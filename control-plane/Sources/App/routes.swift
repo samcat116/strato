@@ -52,6 +52,9 @@ func routes(_ app: Application) throws {
     // Network management controller
     try app.register(collection: NetworkController())
 
+    // Floating IPs: external address pools + VM NIC attachments (issue #344)
+    try app.register(collection: FloatingIPController())
+
     // Console WebSocket controller for VM console streaming
     try app.register(collection: ConsoleWebSocketController())
 

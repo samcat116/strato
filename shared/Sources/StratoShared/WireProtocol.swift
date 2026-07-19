@@ -138,7 +138,17 @@ public enum WireProtocol {
     /// to rotate. Breaking only for agents that dial with a token, and those are
     /// already refused at the socket — the control plane no longer has a token
     /// auth path to fall back to.
-    public static let currentVersion = 11
+    ///
+    /// Version 12: floating IPs (issue #344). `DesiredNetworkState` gains the
+    /// optional `floatingIPs` list, realized as `dnat_and_snat` rules by the
+    /// topology-authority agent. Additive and tolerant on the wire — a pre-v12
+    /// agent decodes the message and ignores the field — which is exactly the
+    /// hazard: the API would report an address as attached while its NAT rule
+    /// is never realized. The gate is load-bearing on the control-plane side:
+    /// attaches are refused when the realizing agent registered pre-v12, and
+    /// sync assembly omits the field for such agents (see
+    /// `supportsFloatingIPs(_:)`).
+    public static let currentVersion = 12
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -241,6 +251,20 @@ public enum WireProtocol {
     /// must refuse the request up front rather than time out against silence.
     public static func supportsSandboxSnapshots(_ version: Int) -> Bool {
         version >= sandboxSnapshotMinimumVersion
+    }
+
+    /// The lowest protocol version whose network reconciler realizes
+    /// `DesiredNetworkState.floatingIPs` (see `currentVersion` version 12
+    /// notes).
+    public static let floatingIPMinimumVersion = 12
+
+    /// Whether an agent registered with `version` realizes floating IP NAT
+    /// rules. A pre-v12 agent decodes the sync and silently ignores the field,
+    /// so the control plane must refuse attaches whose realizing agent is too
+    /// old — otherwise the API reports an attached address that no NAT rule
+    /// ever backs.
+    public static func supportsFloatingIPs(_ version: Int) -> Bool {
+        version >= floatingIPMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

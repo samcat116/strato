@@ -21,6 +21,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// Site uplink for SNAT egress; nil disables SNAT (issue #342). SNAT needs a
     /// dedicated external IP the host doesn't own, so it is explicit config.
     private let uplinkConfig: OVNUplinkConfig?
+    /// OVN native dynamic routing (issue #344): BGP advertisement of floating
+    /// IPs / tenant routes via FRR. Nil or disabled strips any previously
+    /// applied `dynamic-routing*` options during reconcile.
+    private let dynamicRoutingConfig: OVNDynamicRoutingConfig?
 
     /// Whether this agent may author NB topology (switches, routers, NAT,
     /// teardown), per the control plane's last sync. False on agents sharing a
@@ -52,6 +56,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         ovsSocketPath: String = "/var/run/openvswitch/db.sock",
         chassisConfig: OVNChassisConfig = OVNChassisConfig(),
         uplink: OVNUplinkConfig? = nil,
+        dynamicRouting: OVNDynamicRoutingConfig? = nil,
         logger: Logger
     ) {
         self.ovnNBConnection = nbConnection ?? "unix:/var/run/ovn/ovnnb_db.sock"
@@ -59,6 +64,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         self.ovsSocketPath = ovsSocketPath
         self.chassisConfig = chassisConfig
         self.uplinkConfig = uplink
+        self.dynamicRoutingConfig = dynamicRouting
         self.logger = logger
 
         #if os(Linux)
@@ -87,11 +93,11 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         externalIDs?[managedKey] == managedValue
     }
 
-    /// OVN logical switch port name for one NIC of a VM. NIC 0 keeps the
-    /// historical `vm-<vmId>` name so ports created by older agents are still
-    /// found and torn down; additional NICs are suffixed with their index.
+    /// OVN logical switch port name for one NIC of a VM. Delegates to
+    /// `OVNNaming` so the control-plane-driven floating IP path derives the
+    /// same name for a NIC's port (issue #344).
     static func portName(vmId: String, nicIndex: Int) -> String {
-        nicIndex == 0 ? "vm-\(vmId)" : "vm-\(vmId)-\(nicIndex)"
+        OVNNaming.vmPortName(vmId: vmId, nicIndex: nicIndex)
     }
 
     /// Bound on `ovs-vsctl` so a config change can't hang the network actor
@@ -1183,10 +1189,14 @@ extension NetworkServiceLinux: NetworkActuator {
         let managedRouters = routers.filter { Self.isManaged($0.external_ids) }
         let natByUUID = Dictionary(uniqueKeysWithValues: nats.compactMap { nat in nat.uuid.map { ($0, nat) } })
         var snatRules = Set<SNATRuleKey>()
+        var dnatRules = Set<DNATRuleKey>()
         for router in managedRouters {
             for uuid in router.nat ?? [] {
-                if let nat = natByUUID[uuid], nat.natType == "snat", Self.isManaged(nat.external_ids) {
+                guard let nat = natByUUID[uuid], Self.isManaged(nat.external_ids) else { continue }
+                if nat.natType == "snat" {
                     snatRules.insert(SNATRuleKey(router: router.name, logicalIP: nat.logical_ip))
+                } else if nat.natType == "dnat_and_snat" {
+                    dnatRules.insert(DNATRuleKey(router: router.name, externalIP: nat.external_ip))
                 }
             }
         }
@@ -1199,7 +1209,8 @@ extension NetworkServiceLinux: NetworkActuator {
             externalSwitchNames: Set(
                 switches.filter { $0.external_ids?[Self.externalRoleKey] == Self.externalRoleValue }.map(
                     \.name)),
-            snatRules: snatRules)
+            snatRules: snatRules,
+            dnatRules: dnatRules)
         #else
         return ObservedNetworkTopology()
         #endif
@@ -1485,6 +1496,119 @@ extension NetworkServiceLinux: NetworkActuator {
         for rule in try await snatRules(onRouter: routerName)
         where rule.natType == "snat" && rule.logical_ip == logicalIP && Self.isManaged(rule.external_ids) {
             if let uuid = rule.uuid { try await ovnManager.deleteNATRule(uuid: uuid) }
+        }
+        #endif
+    }
+
+    func ensureDNAT(router routerName: String, rule: DesiredDNATRule) async throws {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        // Idempotent by external IP (the rule's identity): reuse a matching
+        // rule; re-point one whose attachment (logical IP/port) drifted —
+        // that's a floating IP moving to another VM, which must update in
+        // place rather than delete/recreate.
+        for existing in try await snatRules(onRouter: routerName)
+        where existing.natType == "dnat_and_snat" && existing.external_ip == rule.externalIP {
+            if existing.logical_ip == rule.logicalIP
+                && existing.logical_port == rule.logicalPort
+                && existing.external_mac == rule.externalMAC
+            {
+                return
+            }
+            if let uuid = existing.uuid { try await ovnManager.deleteNATRule(uuid: uuid) }
+        }
+        let nat = OVNNAT(
+            natType: "dnat_and_snat", external_ip: rule.externalIP, logical_ip: rule.logicalIP,
+            external_mac: rule.externalMAC, logical_port: rule.logicalPort,
+            external_ids: [Self.managedKey: Self.managedValue])
+        _ = try await ovnManager.createNATRule(nat, onRouter: routerName)
+        logger.info(
+            "Ensured floating IP NAT",
+            metadata: [
+                "router": .string(routerName),
+                "externalIP": .string(rule.externalIP),
+                "logicalIP": .string(rule.logicalIP),
+            ])
+        #endif
+    }
+
+    func removeDNAT(router routerName: String, externalIP: String) async throws {
+        #if os(Linux)
+        guard let ovnManager else { return }
+        for rule in try await snatRules(onRouter: routerName)
+        where rule.natType == "dnat_and_snat" && rule.external_ip == externalIP {
+            if let uuid = rule.uuid { try await ovnManager.deleteNATRule(uuid: uuid) }
+        }
+        #endif
+    }
+
+    func ensureDynamicRouting(for router: DesiredRouter, uplinkReady: Bool) async throws {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        guard let lr = try await ovnManager.getLogicalRouter(named: router.name), let lrUUID = lr.uuid
+        else { return }
+
+        // Enabling needs a realized uplink (the gateway port is what faces
+        // the fabric); everything else — disabled, absent, or an uplink that
+        // went away — converges to stripped options.
+        if let config = dynamicRoutingConfig, config.enabled, uplinkReady {
+            // Router: enable + what to redistribute. `withoutDynamicRouting()`
+            // first, so an option removed from the config (e.g. vrf_name) is
+            // dropped rather than lingering.
+            let redistribute = Set(
+                config.redistribute.compactMap { OVNDynamicRoutingRedistribute(rawValue: $0) })
+            let desired = lr.withoutDynamicRouting().withDynamicRouting(
+                enabled: true, redistribute: redistribute, vrfName: config.vrfName)
+            if (lr.options ?? [:]) != (desired.options ?? [:]) {
+                try await ovnManager.updateLogicalRouter(uuid: lrUUID, desired)
+                logger.info(
+                    "Enabled OVN dynamic routing on router",
+                    metadata: [
+                        "router": .string(router.name),
+                        "redistribute": .string(config.redistribute.joined(separator: ",")),
+                    ])
+            }
+            // Gateway port: VRF maintenance + which protocol traffic to punt
+            // to the local FRR. Only meaningful on the uplink port — it is the
+            // port facing the fabric.
+            if let port = try await ovnManager.getLogicalRouterPort(named: router.externalRouterPortName),
+                let portUUID = port.uuid
+            {
+                let protocols = Set(config.routingProtocols.compactMap { OVNRoutingProtocol(rawValue: $0) })
+                let desiredPort = port.withoutDynamicRoutingOverrides().withDynamicRouting(
+                    maintainVRF: config.maintainVRF, routingProtocols: protocols)
+                if (port.options ?? [:]) != (desiredPort.options ?? [:]) {
+                    try await ovnManager.updateLogicalRouterPort(uuid: portUUID, desiredPort)
+                }
+            }
+        } else {
+            // Converge off: strip any dynamic-routing options this agent set
+            // earlier. The row encoder omits nil maps (which would leave the
+            // stale options in place), so an empty result is written as an
+            // explicit `[:]` via a minimal model.
+            let strippedOptions = lr.withoutDynamicRouting().options
+            if (lr.options ?? [:]) != (strippedOptions ?? [:]) {
+                try await ovnManager.updateLogicalRouter(
+                    uuid: lrUUID, OVNLogicalRouter(name: lr.name, options: strippedOptions ?? [:]))
+                logger.info(
+                    "Disabled OVN dynamic routing on router", metadata: ["router": .string(router.name)])
+            }
+            if let port = try await ovnManager.getLogicalRouterPort(named: router.externalRouterPortName),
+                let portUUID = port.uuid
+            {
+                let strippedPortOptions = port.withoutDynamicRoutingOverrides().options
+                if (port.options ?? [:]) != (strippedPortOptions ?? [:]) {
+                    try await ovnManager.updateLogicalRouterPort(
+                        uuid: portUUID,
+                        OVNLogicalRouterPort(
+                            name: port.name, mac: port.mac, networks: port.networks,
+                            options: strippedPortOptions ?? [:]))
+                }
+            }
         }
         #endif
     }

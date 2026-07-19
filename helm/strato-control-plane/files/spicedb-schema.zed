@@ -128,6 +128,7 @@ definition project {
     permission update_project = manage_project
     permission create_volume = create_resources
     permission create_network = create_resources
+    permission create_floating_ip = create_resources
 }
 
 /** environment represents a deployment environment within a project */
@@ -288,6 +289,30 @@ definition network {
     relation project: project
 
     // Permissions - combining direct relations and project permissions
+    permission read = owner + project->view_project
+    permission update = owner + project->manage_project
+    permission delete = owner + project->manage_project
+}
+
+/** floating_ip_pool: a pool of external addresses floating IPs are allocated
+    from (issue #344). Infrastructure, scoped like sites. */
+definition floating_ip_pool {
+    /** parent is the org or OU that owns the pool's address space */
+    relation parent: organization | organizational_unit
+
+    permission view = parent->view_organization + parent->view_ou
+    permission manage = parent->manage_organization + parent->manage_ou
+}
+
+/** floating_ip: one external address allocated to a project, attachable to a
+    VM NIC (issue #344). Project-scoped like a network. */
+definition floating_ip {
+    /** owner is the user who allocated the address */
+    relation owner: user
+
+    /** project the address is allocated to */
+    relation project: project
+
     permission read = owner + project->view_project
     permission update = owner + project->manage_project
     permission delete = owner + project->manage_project
