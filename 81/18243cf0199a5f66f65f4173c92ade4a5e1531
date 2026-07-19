@@ -1,0 +1,25 @@
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_db16b30eee15e6::t_fe317de794fd4f 337-363
+agent/scripts/spawn-sim-fleet.sh
+  s_db16b30eee15e6::t_b54ab4ee4addc6 357-366,369-376
+  s_db16b30eee15e6::t_5b38ebffae6e94 50-53
+  s_db16b30eee15e6::t_2232de68e6b852 377
+deploy/agent/install.sh
+  s_db16b30eee15e6::t_bcb67dad47bcbb 778,780-800
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "8118243cf0199a5f66f65f4173c92ade4a5e1531",
+  "prompts": {},
+  "sessions": {
+    "s_db16b30eee15e6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "57e2fd00-5fd9-4c09-b8b2-1248afa3c8a4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
