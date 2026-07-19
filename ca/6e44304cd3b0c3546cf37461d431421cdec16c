@@ -1,0 +1,21 @@
+control-plane/Tests/AppTests/SeedDefaultNetworkDNSTests.swift
+  s_2113b28cc3dcb5::t_08ef1b72d5b40c 57-60,63,69-70,78,84,92,94,97
+control-plane/Sources/App/Migrations/SeedDefaultNetworkDNS.swift
+  s_2113b28cc3dcb5::t_79542f354f5a2d 29-38,40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "ca6e44304cd3b0c3546cf37461d431421cdec16c",
+  "prompts": {},
+  "sessions": {
+    "s_2113b28cc3dcb5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3ae6ec5d-10c8-40b8-a7a9-32ddcf995b4b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
