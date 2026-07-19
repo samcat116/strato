@@ -1,4 +1,6 @@
-FROM ubuntu:24.04
+# 26.04 LTS: OVN native dynamic routing (issue #344) needs northd/SB schema
+# >= 25.03 (Advertised_Route/Learned_Route tables); 24.04 ships OVN 24.03.
+FROM ubuntu:26.04
 
 # Per-site OVN central: northbound DB, southbound DB, and ovn-northd for one
 # Strato site (issue #343). Every hypervisor in the site points its

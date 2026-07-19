@@ -350,7 +350,7 @@ Remaining in this phase: controller-failover UX (re-designation is a manual
 geneve verification on real multi-node hardware (recipe in
 `deploy/ovn-central/README.md`).
 
-### Phase 3 — Floating IPs + north-south advertisement
+### Phase 3 — Floating IPs + north-south advertisement — **implemented (first cut)**
 
 - Control plane: external/floating **IP pool** in IPAM, `FloatingIP` model +
   association to a VM NIC, push `dnat_and_snat` into the site NB.
@@ -358,6 +358,53 @@ geneve verification on real multi-node hardware (recipe in
   (needs OVN ≥ 25.03 on agents; SwiftOVN needs the `dynamic-routing*` fields on
   its router/router-port models).
 - **Result:** customer-provided public IPs at a site, with BGP failover/ECMP.
+
+**As built (issue #344):**
+
+- **Control plane:** `FloatingIPPool` rows (external IPv4 CIDR, optional
+  gateway exclusion, optional site pin, org/OU-scoped like sites) and
+  `FloatingIP` rows (pool + address + project, optional FK to a
+  `VMNetworkInterface`; `SET NULL` on NIC delete, so removing a VM *detaches*
+  rather than releases). `IPAMService.allocateFloatingIP` reuses the
+  lowest-free v4 allocator under a per-pool advisory lock. API:
+  `/api/floating-ip-pools` (site-style authz: system admin or org
+  `manage_agents` to create, `floating_ip_pool#view/manage` after) and
+  `/api/floating-ips` (network-style authz: project `create_floating_ip` to
+  allocate; `floating_ip#read/update/delete`; `POST :id/attach` / `:id/detach`).
+  Attach requires the NIC's network to have `externalAccess` (the NAT needs
+  the router's uplink), matching pool/network site when the pool is pinned,
+  one floating IP per NIC, and bumps the network `generation` so replayed
+  syncs can't resurrect old NAT state.
+- **Wire:** `DesiredNetworkState.floatingIPs: [DesiredFloatingIP]?` (optional,
+  version-tolerant) — `externalIP`, `logicalIP`, plus `vmId`/`nicIndex` so the
+  agent derives the NIC's logical switch port name itself. Assembly scopes
+  floating IPs to the VMs whose topology the receiving agent authors (own VMs
+  for a site-less agent; every site VM for the site's controller).
+- **Agent:** `NetworkReconciler.plan` turns each attachment into a
+  `dnat_and_snat` rule on the network's router (gated on `externalAccess`, so
+  an isolated `-internal` router never grows an uplink), keyed for
+  observe/teardown by `(router, externalIP)` — re-attachment re-points
+  `logical_ip` in place. Rules carry `logical_port` (`vm-<id>[-n]`) and a
+  derived `external_mac` (`02:01:` + the floating address), making the NAT
+  **distributed**: the VM's own chassis handles the floating IP and answers
+  external ARP, no gateway-chassis hairpin. The gateway port stays pinned to
+  the controller's chassis (`Gateway_Chassis`) as before for subnet SNAT.
+- **Dynamic routing (reachability tier 2):** opt-in `[ovn_dynamic_routing]`
+  agent config (`enabled`, `redistribute` — default `connected,nat`, `nat` is
+  what advertises floating IPs — `vrf_name`, `maintain_vrf`,
+  `routing_protocols`). The topology-authority agent applies
+  `dynamic-routing*` options to every uplinked router and its gateway port
+  via SwiftOVN's helpers, level-triggered, and strips them when disabled.
+  FRR does the actual BGP: the agent image ships the `frr` package (inert
+  until configured); `deploy/frr/` has the operator recipe + example
+  `frr.conf`. Reachability tier 1 (static routes to the uplink IP) needs no
+  BGP and works on any OVN.
+- **Version floor:** the agent image and `deploy/ovn-central` moved from
+  Ubuntu noble (OVN 24.03) to 26.04 LTS (OVN 26.03), clearing the ≥ 25.03
+  floor for dynamic routing.
+- Remaining in this phase: floating IPs are IPv4-only (like IPAM generally);
+  no floating-IP quota; UI; and end-to-end verification of the
+  Advertised_Route → FRR path on real multi-node hardware.
 
 ### Phase 4 — CP-hosted ingress ("public IP as a service" / CDN)
 
@@ -384,9 +431,12 @@ geneve verification on real multi-node hardware (recipe in
   so the Linux netdev materializes — issue #371); the agent's
   `ensureBridgeLocalPort` still runs as a repair path for bridges created by
   older agents.
-- **Agent image** ships the chassis side only (`ovn-host` + OVS); the
-  NB/SB/northd central is the separate per-site `deploy/ovn-central/` unit.
-- **OVN version floor** for dynamic routing (≥ 25.03, experimental).
+- **Agent image** ships the chassis side only (`ovn-host` + OVS, plus an
+  unconfigured `frr` for BGP advertisement); the NB/SB/northd central is the
+  separate per-site `deploy/ovn-central/` unit.
+- **OVN version floor** for dynamic routing (≥ 25.03, experimental) — met
+  since the images moved to Ubuntu 26.04 (OVN 26.03), but still experimental
+  upstream.
 - **IPv4-only IPAM** today; IPv6 is out of scope for this roadmap.
 
 ## References

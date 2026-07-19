@@ -377,6 +377,22 @@ struct NetworkController: RouteCollection {
         }
 
         if let externalAccess = request.externalAccess {
+            // Turning egress off pulls the router's uplink, which is what
+            // every floating IP on the network NATs through — the planner
+            // would silently drop their dnat_and_snat rules while the API kept
+            // reporting the addresses as attached (issue #344). Make the
+            // dependency explicit: detach first.
+            if !externalAccess && network.externalAccess {
+                let attachedFloatingIPs = try await Self.attachedFloatingIPCount(
+                    networkName: network.name, on: req.db)
+                guard attachedFloatingIPs == 0 else {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "Network has \(attachedFloatingIPs) attached floating IP(s); detach them before disabling external access"
+                    )
+                }
+            }
             network.externalAccess = externalAccess
         }
 
@@ -492,6 +508,20 @@ struct NetworkController: RouteCollection {
     }
 
     // MARK: - Helper Methods
+
+    /// How many floating IPs are attached to NICs on the named network.
+    static func attachedFloatingIPCount(networkName: String, on db: Database) async throws -> Int {
+        let nicIDs = Set(
+            try await VMNetworkInterface.query(on: db)
+                .filter(\.$network == networkName)
+                .all()
+                .compactMap(\.id))
+        guard !nicIDs.isEmpty else { return 0 }
+        return try await FloatingIP.query(on: db)
+            .all()
+            .filter { floatingIP in floatingIP.$interface.id.map(nicIDs.contains) ?? false }
+            .count
+    }
 
     /// Whether two CIDRs overlap. For CIDRs, ranges are either disjoint or one
     /// contains the other, so masking both to the shorter prefix and comparing
