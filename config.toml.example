@@ -218,11 +218,19 @@ log_level = "info"
 # east-west are realized but no SNAT. The operator connects `bridge` to the
 # external network out of band; the agent only wires the OVN side.
 #
+# Networks are dual-stack by default, so their router ports advertise an IPv6
+# default route. Set external_cidr6/gateway6 to give that route somewhere to go —
+# without them the v6 SNAT rule is skipped and IPv6 egress black-holes (clients
+# with Happy Eyeballs fall back to v4; anything preferring v6 hangs). These are
+# additive: external_cidr stays required either way.
+#
 # [ovn_uplink]
 # external_cidr = "203.0.113.2/24"   # dedicated router IP on the provider net
 # gateway = "203.0.113.1"            # next hop for the router's default route
 # bridge = "br-ex"                   # OVS provider bridge (default br-ex)
 # physnet = "physnet-strato"         # OVN physnet mapped to the bridge
+# external_cidr6 = "2001:db8::2/64"  # dedicated router IPv6 on the provider net
+# gateway6 = "2001:db8::1"           # next hop for the router's ::/0 route
 
 # Additional configuration options can be added here as needed
 # Examples:
