@@ -197,9 +197,37 @@ struct AuthorizationController: RouteCollection {
         return IAMNode(type: type, id: id)
     }
 
+    /// The SpiceDB permission standing for "administrative control of this
+    /// node" — the grantee set allowed to read who holds access here.
+    ///
+    /// Containers have an explicit `manage_*`. Individual resources have no
+    /// `manage` in `schema.zed`; their `delete` is the permission whose
+    /// grantees are exactly the resource owner plus project admins, which is
+    /// the set we want. Gating a *read* on `delete` reads oddly, so: this is a
+    /// grantee-set equivalence, not a claim that the caller may delete
+    /// anything. At cutover it becomes `iam:readPolicy` and the indirection
+    /// goes away.
+    ///
+    /// A node type absent here (`sandbox_snapshot`, which has no SpiceDB
+    /// definition) simply falls through to the containers above it.
+    private static func adminPermission(for nodeType: IAMNodeType) -> String? {
+        switch nodeType {
+        case .organization: return "manage_organization"
+        case .organizationalUnit: return "manage_ou"
+        case .project: return "manage_project"
+        case .site, .agent: return "manage"
+        case .virtualMachine, .sandbox, .image, .volume, .network, .volumeSnapshot: return "delete"
+        case .sandboxSnapshot: return nil
+        }
+    }
+
     /// Reading who holds access is itself an administrative act — the answer
-    /// lists other people's grants. Require system admin, or admin over some
-    /// container in the resource's chain.
+    /// lists other people's grants. Require system admin, or admin over the
+    /// resource itself or any container above it.
+    ///
+    /// The resource node is checked too, not just its containers: resource-level
+    /// grants exist from day one, so a VM's owner can audit their own VM without
+    /// holding project admin.
     ///
     /// Gated through SpiceDB because it is what enforces today; this moves to
     /// `iam:readPolicy` through the evaluator at cutover.
@@ -209,13 +237,7 @@ struct AuthorizationController: RouteCollection {
 
         let chain = try await IAMResourceTree.ancestors(of: node, on: req.db)
         for ancestor in chain {
-            let permission: String
-            switch ancestor.type {
-            case .project: permission = "manage_project"
-            case .organizationalUnit: permission = "manage_ou"
-            case .organization: permission = "manage_organization"
-            default: continue
-            }
+            guard let permission = adminPermission(for: ancestor.type) else { continue }
             let allowed = try await req.spicedb.checkPermission(
                 subject: callerID,
                 permission: permission,

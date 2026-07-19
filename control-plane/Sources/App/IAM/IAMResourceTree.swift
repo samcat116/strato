@@ -105,14 +105,24 @@ enum IAMResourceTree {
             }
             // A site-scoped network has no project; it inherits from whichever
             // org or folder owns the site's capacity.
-            guard let siteID = network.$site.id, let site = try await Site.find(siteID, on: db) else { return nil }
-            if let ouID = site.$organizationalUnit.id {
-                return IAMNode(type: .organizationalUnit, id: ouID)
-            }
-            if let orgID = site.$organization.id {
-                return IAMNode(type: .organization, id: orgID)
-            }
-            return nil
+            guard let siteID = network.$site.id else { return nil }
+            return try await parent(of: IAMNode(type: .site, id: siteID), on: db)
+
+        case .site:
+            guard let site = try await Site.find(node.id, on: db) else { return nil }
+            return scopeNode(ouID: site.$organizationalUnit.id, orgID: site.$organization.id)
+
+        case .agent:
+            guard let agent = try await Agent.find(node.id, on: db) else { return nil }
+            return scopeNode(ouID: agent.$organizationalUnit.id, orgID: agent.$organization.id)
         }
+    }
+
+    /// Sites and agents are dedicated to exactly one of an org or a folder
+    /// (`OrganizationScope`), so the two ids are mutually exclusive.
+    private static func scopeNode(ouID: UUID?, orgID: UUID?) -> IAMNode? {
+        if let ouID { return IAMNode(type: .organizationalUnit, id: ouID) }
+        if let orgID { return IAMNode(type: .organization, id: orgID) }
+        return nil
     }
 }

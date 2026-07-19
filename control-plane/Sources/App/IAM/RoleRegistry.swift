@@ -26,6 +26,12 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     case volume
     case volumeSnapshot = "volume_snapshot"
     case sandboxSnapshot = "sandbox_snapshot"
+    /// Org/folder-scoped infrastructure. Nothing binds directly to these yet —
+    /// their access derives entirely from the container above — but they are
+    /// real resources with `site:*` / `agent:*` actions in the registry, so
+    /// reverse lookups must be able to name them.
+    case site
+    case agent
 }
 
 /// The global roles. Each role is a curated action group that implies the one

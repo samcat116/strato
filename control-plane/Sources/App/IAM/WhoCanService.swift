@@ -251,13 +251,17 @@ enum WhoCanService {
     static func can(
         principalType: IAMPrincipalType, principalID: UUID, action: String, node: IAMNode, on db: any Database
     ) async throws -> Bool {
-        if principalType == .user, let user = try await User.find(principalID, on: db), user.isSystemAdmin {
-            return true
-        }
+        let user = principalType == .user ? try await User.find(principalID, on: db) : nil
+        if let user, user.isSystemAdmin { return true }
 
-        // Actions that need no grant at all short-circuit before any lookup —
-        // otherwise this reports `false` for a request the API would allow.
-        if try await isOpenToAllAuthenticatedUsers(action: action, node: node, on: db) {
+        // Actions open to every authenticated user need no grant — otherwise
+        // this reports `false` for a request the API would allow. "Authenticated
+        // user" is the whole rule, though: a group is not a principal that logs
+        // in, an unknown id is nobody, and a disabled account is rejected by
+        // `UserSecurityMiddleware` before authorization ever runs.
+        if let user, user.disabledAt == nil,
+            try await isOpenToAllAuthenticatedUsers(action: action, node: node, on: db)
+        {
             return true
         }
 

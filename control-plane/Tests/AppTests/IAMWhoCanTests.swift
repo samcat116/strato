@@ -313,6 +313,77 @@ final class IAMWhoCanTests {
         }
     }
 
+    @Test("Global-network openness applies only to real, enabled user accounts")
+    func globalNetworkOpennessRequiresRealUser() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let disabled = try await builder.createUser(username: "disabled", email: "disabled@example.com")
+            disabled.disabledAt = Date()
+            try await disabled.save(on: app.db)
+            let org = try await builder.createOrganization(name: "Open Org")
+            let group = try await builder.createGroup(name: "Open Team", description: "d", organization: org)
+            let network = LogicalNetwork(name: "open-net", subnet: "10.92.0.0/24", gateway: "10.92.0.1")
+            try await network.save(on: app.db)
+            let node = IAMNode(type: .network, id: network.id!)
+
+            func can(_ type: IAMPrincipalType, _ id: UUID) async throws -> Bool {
+                try await WhoCanService.can(
+                    principalType: type, principalID: id, action: "network:read", node: node, on: app.db)
+            }
+
+            // A group never logs in; an unknown id is nobody; a disabled account
+            // is rejected before authorization runs.
+            let groupAllowed = try await can(.group, group.id!)
+            let unknownAllowed = try await can(.user, UUID())
+            let disabledAllowed = try await can(.user, disabled.id!)
+            #expect(!groupAllowed)
+            #expect(!unknownAllowed)
+            #expect(!disabledAllowed)
+        }
+    }
+
+    // MARK: - Org/folder-scoped infrastructure
+
+    @Test("Sites and agents resolve to their org or folder scope")
+    func siteAndAgentWalk() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Infra Org")
+            let ou = try await builder.createOU(name: "Infra OU", description: "d", organization: org)
+            let site = Site(name: "site-a", organizationScope: .organizationalUnit(ou.id!))
+            try await site.save(on: app.db)
+
+            let chain = try await IAMResourceTree.ancestors(
+                of: IAMNode(type: .site, id: site.id!), on: app.db)
+            #expect(
+                chain == [
+                    IAMNode(type: .site, id: site.id!),
+                    IAMNode(type: .organizationalUnit, id: ou.id!),
+                    IAMNode(type: .organization, id: org.id!),
+                ])
+        }
+    }
+
+    @Test("An admin above a site can be found by who-can on the site")
+    func whoCanOnSite() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Site Org")
+            let admin = try await builder.createUser(username: "siteadm", email: "siteadm@example.com")
+            let site = Site(name: "site-b", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
+
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: admin.id!, role: .admin,
+                nodeType: .organization, nodeID: org.id!, createdBy: nil, on: app.db)
+
+            let entries = try await WhoCanService.whoCan(
+                action: "site:manage", node: IAMNode(type: .site, id: site.id!), on: app.db
+            ).principals
+            #expect(entries.contains { $0.principal.id == admin.id! && $0.source == .binding })
+        }
+    }
+
     // MARK: - Forward check for an arbitrary principal
 
     @Test("can() agrees with whoCan across binding, group, and expiry")
@@ -417,6 +488,34 @@ final class IAMWhoCanTests {
                         resourceType: "toaster", resourceId: UUID().uuidString, action: "vm:read"))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("A resource-level admin may read policy without holding project admin")
+    func whoCanAllowsResourceLevelAdmin() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let tree = try await buildTree(builder, prefix: "ResAdmin")
+            let owner = try await builder.createUser(username: "vmowner", email: "vmowner@example.com")
+            try await builder.addUserToOrganization(user: owner, organization: tree.org, role: "member")
+            let token = try await owner.generateAPIKey(on: app.db)
+
+            // Admin on the VM itself, nothing above it — a VM creator's position.
+            app.spicedbMockAllows = true
+            app.spicedbMockDeniedResources = ["project", "organizational_unit", "organization"]
+            defer { app.spicedbMockDeniedResources = [] }
+
+            try await app.test(.POST, "/api/authorization/who-can") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    AuthorizationController.WhoCanRequest(
+                        resourceType: "virtual_machine",
+                        resourceId: tree.vm.id!.uuidString,
+                        action: "vm:create"
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
             }
         }
     }
