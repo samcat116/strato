@@ -2722,6 +2722,14 @@ actor AgentService {
                     "snapshot agent \(pinned.name) is too old for sandbox forks (need wire protocol >= \(WireProtocol.sandboxForkMinimumVersion))"
                 )
             }
+            guard
+                SandboxGuestControlProtocol.supportsReidentify(
+                    snapshot.guestControlProtocolVersion)
+            else {
+                throw AgentServiceError.schedulingFailed(
+                    "snapshot guest is too old for sandbox forks (need guest control protocol >= \(SandboxGuestControlProtocol.reidentifyMinimumVersion))"
+                )
+            }
             schedulableAgents = [pinned]
             if let rawArchitecture = snapshot.architecture {
                 guard let architecture = CPUArchitecture(rawValue: rawArchitecture) else {

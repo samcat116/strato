@@ -227,7 +227,19 @@ struct SandboxControlProtocolTests {
     func v1ResponsesDecode() throws {
         let pong = try SandboxControlProtocol.Response.decode(
             line: #"{"type":"pong","sandbox_id":"sb-1","nonce":"n-1"}"#)
-        #expect(pong == .pong(sandboxId: "sb-1", nonce: "n-1"))
+        #expect(
+            pong
+                == .pong(
+                    sandboxId: "sb-1", nonce: "n-1", controlProtocolVersion: nil))
+
+        let versionedPong = try SandboxControlProtocol.Response.decode(
+            line:
+                #"{"type":"pong","sandbox_id":"sb-1","nonce":"n-1","control_protocol_version":3}"#
+        )
+        #expect(
+            versionedPong
+                == .pong(
+                    sandboxId: "sb-1", nonce: "n-1", controlProtocolVersion: 3))
 
         let running = try SandboxControlProtocol.Response.decode(
             line: #"{"type":"status","sandbox_id":"sb-1","nonce":"n-1","state":"running"}"#)

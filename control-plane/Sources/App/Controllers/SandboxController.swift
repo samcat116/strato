@@ -314,6 +314,16 @@ struct SandboxController: RouteCollection {
                         "Agent '\(pinnedAgent.name)' is too old for sandbox forks (wire protocol \(pinnedAgent.wireProtocolVersion ?? 0), need >= \(WireProtocol.sandboxForkMinimumVersion))"
                 )
             }
+            guard
+                SandboxGuestControlProtocol.supportsReidentify(
+                    snapshot.guestControlProtocolVersion)
+            else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Snapshot's checkpointed guest is too old for sandbox forks (guest control protocol \(snapshot.guestControlProtocolVersion ?? 0), need >= \(SandboxGuestControlProtocol.reidentifyMinimumVersion))"
+                )
+            }
             restoreSnapshot = snapshot
             restoreSource = source
         } else {

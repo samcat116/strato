@@ -191,6 +191,7 @@ extension SandboxController {
                     current.storagePath = report.storagePath
                     current.firecrackerVersion = report.firecrackerVersion
                     current.architecture = report.architecture?.rawValue
+                    current.guestControlProtocolVersion = report.guestControlProtocolVersion
                     try await current.save(on: app.db)
                 }
 

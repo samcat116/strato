@@ -28,6 +28,7 @@ use strato_sandbox_init::config::{self, ImageConfig, ProcessOverrides, ResolvedP
 use strato_sandbox_init::logbuf::LogBuffer;
 use strato_sandbox_init::protocol::{
     decode_base64, decode_request, encode_line, Request, Response, WorkloadState,
+    CONTROL_PROTOCOL_VERSION,
 };
 
 use super::exec::{self, ExecRequest};
@@ -302,6 +303,7 @@ fn control_response(request: Request, state: &GuestState) -> Response {
             Response::Pong {
                 sandbox_id: s.sandbox_id.clone(),
                 nonce: s.nonce.clone(),
+                control_protocol_version: CONTROL_PROTOCOL_VERSION,
             }
         }
     }
@@ -473,18 +475,11 @@ fn set_guest_hostname(hostname: &str) -> Result<(), String> {
 }
 
 fn reset_machine_id(entropy: &[u8]) -> Result<(), String> {
-    let machine_id = entropy[..16]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    std::fs::write("/etc/machine-id", format!("{machine_id}\n"))
-        .map_err(|e| format!("write /etc/machine-id: {e}"))?;
-    let dbus_path = std::path::Path::new("/var/lib/dbus/machine-id");
-    if dbus_path.exists() && !dbus_path.is_symlink() {
-        std::fs::write(dbus_path, format!("{machine_id}\n"))
-            .map_err(|e| format!("write {}: {e}", dbus_path.display()))?;
-    }
-    Ok(())
+    strato_sandbox_init::identity::reset_machine_id_files(
+        entropy,
+        std::path::Path::new("/etc/machine-id"),
+        std::path::Path::new("/var/lib/dbus/machine-id"),
+    )
 }
 
 /// Set CLOCK_REALTIME (issue #426): a guest restored from a snapshot resumes

@@ -74,6 +74,11 @@ final class SandboxSnapshot: Model, @unchecked Sendable {
     @OptionalField(key: "architecture")
     var architecture: String?
 
+    /// Guest init version frozen into memory. Nil means legacy/unknown and is
+    /// intentionally ineligible for fork re-identification.
+    @OptionalField(key: "guest_control_protocol_version")
+    var guestControlProtocolVersion: Int?
+
     @OptionalField(key: "error_message")
     var errorMessage: String?
 
@@ -139,6 +144,7 @@ struct SandboxSnapshotResponse: Content {
     let agentId: String?
     let firecrackerVersion: String?
     let architecture: String?
+    let guestControlProtocolVersion: Int?
     let errorMessage: String?
     let createdById: UUID?
     let createdAt: Date?
@@ -153,6 +159,7 @@ struct SandboxSnapshotResponse: Content {
         self.agentId = snapshot.agentId
         self.firecrackerVersion = snapshot.firecrackerVersion
         self.architecture = snapshot.architecture
+        self.guestControlProtocolVersion = snapshot.guestControlProtocolVersion
         self.errorMessage = snapshot.errorMessage
         self.createdById = snapshot.$createdBy.id
         self.createdAt = snapshot.createdAt

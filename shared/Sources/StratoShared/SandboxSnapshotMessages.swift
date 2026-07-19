@@ -115,6 +115,10 @@ public struct SandboxSnapshotStatusResponse: Codable, Sendable {
     public let firecrackerVersion: String
     /// Host CPU architecture the snapshot was taken on.
     public let architecture: CPUArchitecture?
+    /// Version advertised by the guest frozen into this checkpoint. Nil is a
+    /// legacy/unknown guest and must not be assumed to support fork identity
+    /// rotation merely because its owning agent is current.
+    public let guestControlProtocolVersion: Int?
 
     public init(
         snapshotId: String,
@@ -124,7 +128,8 @@ public struct SandboxSnapshotStatusResponse: Codable, Sendable {
         rootfsSizeBytes: Int64,
         storagePath: String,
         firecrackerVersion: String,
-        architecture: CPUArchitecture?
+        architecture: CPUArchitecture?,
+        guestControlProtocolVersion: Int? = nil
     ) {
         self.snapshotId = snapshotId
         self.sizeBytes = sizeBytes
@@ -134,5 +139,6 @@ public struct SandboxSnapshotStatusResponse: Codable, Sendable {
         self.storagePath = storagePath
         self.firecrackerVersion = firecrackerVersion
         self.architecture = architecture
+        self.guestControlProtocolVersion = guestControlProtocolVersion
     }
 }

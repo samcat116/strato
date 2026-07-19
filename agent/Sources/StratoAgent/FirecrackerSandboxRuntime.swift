@@ -113,6 +113,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let vsockUdsPath: String
         /// The boot nonce stamped into the config drive, echoed by the guest.
         let identityNonce: String
+        /// Learned from a versioned `pong`. Nil is intentionally conservative:
+        /// it covers legacy guests and paused guests adopted before the host
+        /// could query them.
+        var guestControlProtocolVersion: Int? = nil
         /// The jail layout when this sandbox runs inside the jailer barrier
         /// (issue #425); nil for an unjailed sandbox (jailer disabled, or an
         /// orphan adopted from a pre-jailer life).
@@ -743,6 +747,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                     expected: "\(sourceConfig.sandboxId)/\(sourceConfig.identityNonce)",
                     got: "\(sourceResponse)")
             }
+            guard
+                SandboxGuestControlProtocol.supportsReidentify(
+                    sourceResponse.controlProtocolVersion)
+            else {
+                throw SandboxControlError.malformedResponse(
+                    "checkpointed guest does not advertise re-identification support")
+            }
 
             let nonce = UUID().uuidString
             let entropy = Self.freshEntropy()
@@ -789,6 +800,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             sandboxes[sandboxId] = Managed(
                 spec: spec, rootfsPath: rootfsHost, configPath: configHost,
                 vsockUdsPath: plan.vsockUDSHostPath, identityNonce: nonce,
+                guestControlProtocolVersion: health.controlProtocolVersion,
                 jail: plan, manager: manager, lastExitCode: nil)
             startLogFollow(sandboxId: sandboxId)
             logger.info(
@@ -928,6 +940,24 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 return
             }
         }
+
+        // Agent wire compatibility says nothing about a guest already
+        // running inside this microVM. Capture the guest's own advertised
+        // protocol version so a later checkpoint can prove it supports fork
+        // re-identification. Legacy guests still answer ping, but omit the
+        // version and remain valid for ordinary lifecycle operations.
+        let capability = try await sendControl(
+            .ping, udsPath: managed.vsockUdsPath, timeout: 10)
+        guard
+            identityMatches(
+                capability, sandboxId: sandboxId, expectedNonce: managed.identityNonce)
+        else {
+            throw SandboxControlError.identityMismatch(
+                expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(capability)")
+        }
+        sandboxes[sandboxId]?.guestControlProtocolVersion =
+            capability.controlProtocolVersion
+
         logger.info(
             "Sandbox guest agent healthy",
             metadata: [
@@ -1272,6 +1302,32 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 "the sandbox has never been booted (warm-provisioned, awaiting launch)")
         }
 
+        // A running guest can be queried immediately. A paused guest uses the
+        // version learned during its last boot; after an agent restart that
+        // value is unknown, deliberately making the snapshot ineligible for
+        // fork while preserving in-place checkpoint/restore support.
+        var guestControlProtocolVersion = managed.guestControlProtocolVersion
+        if info.state == .running {
+            do {
+                let response = try await sendControl(
+                    .ping, udsPath: managed.vsockUdsPath, timeout: 10)
+                if identityMatches(
+                    response, sandboxId: sandboxId, expectedNonce: managed.identityNonce)
+                {
+                    guestControlProtocolVersion = response.controlProtocolVersion
+                    sandboxes[sandboxId]?.guestControlProtocolVersion =
+                        guestControlProtocolVersion
+                }
+            } catch {
+                logger.warning(
+                    "Could not discover sandbox guest control version before checkpoint",
+                    metadata: [
+                        "sandboxId": .string(sandboxId),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+        }
+
         logger.info(
             "Checkpointing sandbox",
             metadata: [
@@ -1347,7 +1403,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             vmstateSizeBytes: fileSize(archiveVmstate),
             rootfsSizeBytes: fileSize(archiveRootfs),
             storagePath: archiveDir,
-            firecrackerVersion: info.vmlinuxVersion)
+            firecrackerVersion: info.vmlinuxVersion,
+            guestControlProtocolVersion: guestControlProtocolVersion)
         logger.info(
             "Sandbox checkpoint complete",
             metadata: [
@@ -1465,6 +1522,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             throw SandboxControlError.identityMismatch(
                 expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(response)")
         }
+        sandboxes[sandboxId]?.guestControlProtocolVersion = response.controlProtocolVersion
 
         // Best-effort clock resync: the restored guest's wall clock froze at
         // checkpoint time.
@@ -2439,7 +2497,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let echoedId: String
         let echoedNonce: String
         switch response {
-        case .pong(let id, let nonce):
+        case .pong(let id, let nonce, _):
             (echoedId, echoedNonce) = (id, nonce)
         case .status(let id, let nonce, _, _):
             (echoedId, echoedNonce) = (id, nonce)

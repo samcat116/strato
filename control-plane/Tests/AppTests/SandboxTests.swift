@@ -307,6 +307,8 @@ final class SandboxTests {
                 createdByID: user.id!)
             snapshot.status = .ready
             snapshot.architecture = CPUArchitecture.current.rawValue
+            snapshot.guestControlProtocolVersion =
+                SandboxGuestControlProtocol.currentVersion
             try await snapshot.save(on: app.db)
 
             var operation: OperationResponse?
@@ -401,6 +403,40 @@ final class SandboxTests {
             } afterResponse: { res in
                 #expect(res.status == .conflict)
                 #expect(res.body.string.contains("too old"))
+            }
+        }
+    }
+
+    @Test("Fork refuses a checkpoint whose guest predates re-identification")
+    func createFromSnapshotRejectsLegacyGuest() async throws {
+        try await withSandboxTestApp { app, user, project, source, token in
+            let agentId = try await registerAgent(
+                app: app,
+                sandbox: source,
+                named: "current-agent-with-legacy-guest",
+                sandboxCapable: true)
+            let snapshot = SandboxSnapshot(
+                name: "legacy-guest-checkpoint",
+                sandboxID: source.id!,
+                projectID: project.id!,
+                environment: source.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            snapshot.guestControlProtocolVersion =
+                SandboxGuestControlProtocol.reidentifyMinimumVersion - 1
+            try await snapshot.save(on: app.db)
+
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "unsafe-fork",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("checkpointed guest is too old"))
             }
         }
     }

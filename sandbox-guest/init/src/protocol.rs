@@ -45,6 +45,11 @@ use crate::config::{ImageConfig, ProcessOverrides};
 /// first freely usable port and keeps us clear of them.
 pub const DEFAULT_VSOCK_PORT: u32 = 1024;
 
+/// Version of the guest control surface. This is advertised in `pong` so an
+/// upgraded host can distinguish a new guest from an older init frozen inside
+/// a checkpoint.
+pub const CONTROL_PROTOCOL_VERSION: u32 = 3;
+
 /// Default for [`Request::Exec`]'s `tty` when the host omits it.
 pub const DEFAULT_EXEC_TTY: bool = false;
 /// Default PTY rows for [`Request::Exec`] when the host omits `rows`.
@@ -175,7 +180,11 @@ pub enum WorkloadState {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     /// Reply to [`Request::Ping`].
-    Pong { sandbox_id: String, nonce: String },
+    Pong {
+        sandbox_id: String,
+        nonce: String,
+        control_protocol_version: u32,
+    },
     /// Reply to [`Request::GetStatus`].
     Status {
         sandbox_id: String,
@@ -477,12 +486,13 @@ mod tests {
         let resp = Response::Pong {
             sandbox_id: "sb-1".into(),
             nonce: "n-1".into(),
+            control_protocol_version: CONTROL_PROTOCOL_VERSION,
         };
         let line = encode_line(&resp);
         assert!(line.ends_with('\n'));
         assert_eq!(
             line.trim(),
-            "{\"type\":\"pong\",\"sandbox_id\":\"sb-1\",\"nonce\":\"n-1\"}"
+            "{\"type\":\"pong\",\"sandbox_id\":\"sb-1\",\"nonce\":\"n-1\",\"control_protocol_version\":3}"
         );
     }
 

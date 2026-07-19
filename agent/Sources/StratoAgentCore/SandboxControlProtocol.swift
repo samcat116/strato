@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 
 /// The host side of the guest control protocol (issues #421/#423), mirroring
 /// `sandbox-guest/init/src/protocol.rs`.
@@ -309,7 +310,10 @@ public enum SandboxControlProtocol {
 
     /// A control response sent guest → host.
     public enum Response: Equatable, Sendable {
-        case pong(sandboxId: String, nonce: String)
+        /// `controlProtocolVersion` is nil for guests predating explicit
+        /// capability advertisement. Callers must treat nil as legacy rather
+        /// than inferring support from the host agent's version.
+        case pong(sandboxId: String, nonce: String, controlProtocolVersion: Int?)
         case status(sandboxId: String, nonce: String, state: WorkloadState, exitCode: Int?)
         case error(message: String)
         /// The exec process spawned; output may follow on this connection.
@@ -335,6 +339,13 @@ public enum SandboxControlProtocol {
         /// The guest completed fork identity rotation (issue #427).
         case reidentified
 
+        /// Explicitly advertised only by versioned `pong` replies. A missing
+        /// value means the checkpointed guest predates capability discovery.
+        public var controlProtocolVersion: Int? {
+            guard case .pong(_, _, let version) = self else { return nil }
+            return version
+        }
+
         /// Decode one response line (the trailing newline is optional).
         public static func decode(line: String) throws -> Response {
             guard let data = line.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8) else {
@@ -343,7 +354,9 @@ public enum SandboxControlProtocol {
             let raw = try JSONDecoder().decode(RawResponse.self, from: data)
             switch raw.type {
             case "pong":
-                return .pong(sandboxId: raw.sandboxId ?? "", nonce: raw.nonce ?? "")
+                return .pong(
+                    sandboxId: raw.sandboxId ?? "", nonce: raw.nonce ?? "",
+                    controlProtocolVersion: raw.controlProtocolVersion)
             case "status":
                 guard let stateString = raw.state, let state = WorkloadState(rawValue: stateString) else {
                     throw SandboxControlError.malformedResponse(line)
@@ -394,6 +407,7 @@ public enum SandboxControlProtocol {
         let stream: String?
         let data: String?
         let seq: UInt64?
+        let controlProtocolVersion: Int?
 
         /// The base64 `data` field decoded to bytes; nil when absent or not
         /// valid base64.
@@ -411,6 +425,7 @@ public enum SandboxControlProtocol {
             case stream
             case data
             case seq
+            case controlProtocolVersion = "control_protocol_version"
         }
     }
 }

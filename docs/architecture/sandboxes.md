@@ -603,13 +603,21 @@ action.
 
 Snapshot artifacts are still agent-local, so scheduling is deliberately
 pinned to the snapshot's `agent_id` (wire protocol **version 12**). The agent
+also captures the checkpointed guest's own control-protocol version from its
+versioned `pong` and persists it on the snapshot. Fork admission and placement
+require guest control protocol v3; an upgraded v12 agent therefore cannot
+mistake an older guest frozen in memory for one that understands
+`reidentify`, and legacy/unknown snapshots remain usable for in-place restore
+only. The runtime repeats the guest capability check after loading the
+checkpoint as defense in depth. The agent
 reflink-copies, or normally copies, `rootfs.ext4`, `memory.snap`,
 `vmstate.snap`, and `config.img` into a new jailed sandbox layout and loads
 the snapshot resumed. It first proves that the resumed guest has the source
 sandbox id + nonce, then sends a one-shot `reidentify` request over the
 restored vsock listener. That request supplies a fresh target nonce,
 hostname, host entropy, and wall clock; PID 1 strictly reseeds `/dev/urandom`,
-rewrites machine-id, sets the hostname and `CLOCK_REALTIME`, and swaps its
+rewrites machine-id when the image provides one (scratch/distroless images may
+omit `/etc` entirely), sets the hostname and `CLOCK_REALTIME`, and swaps its
 reported sandbox identity last. Retained guest log history is cleared at that
 boundary (sequence numbers and live stdio writers continue), so source output
 is never replayed under the target. A second ping must return the target id +

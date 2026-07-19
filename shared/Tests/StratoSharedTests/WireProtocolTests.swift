@@ -57,6 +57,16 @@ struct WireProtocolTests {
         #expect(WireProtocol.supportsSandboxFork(WireProtocol.currentVersion))
     }
 
+    @Test("sandbox fork guest gate rejects legacy and unknown checkpoints")
+    func sandboxForkGuestGate() {
+        #expect(!SandboxGuestControlProtocol.supportsReidentify(nil))
+        #expect(!SandboxGuestControlProtocol.supportsReidentify(2))
+        #expect(SandboxGuestControlProtocol.supportsReidentify(3))
+        #expect(
+            SandboxGuestControlProtocol.supportsReidentify(
+                SandboxGuestControlProtocol.currentVersion))
+    }
+
     // MARK: - Registration version negotiation
 
     @Test("registration messages default to the current wire version")

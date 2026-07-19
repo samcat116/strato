@@ -303,6 +303,8 @@ final class SandboxSnapshotTests {
                 createdByID: user.id!)
             snapshot.status = .ready
             snapshot.size = 42
+            snapshot.guestControlProtocolVersion =
+                SandboxGuestControlProtocol.currentVersion
             try await snapshot.save(on: app.db)
 
             try await app.test(.GET, "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots") { req in
@@ -314,6 +316,9 @@ final class SandboxSnapshotTests {
                 #expect(listed.first?.name == "seeded")
                 #expect(listed.first?.status == .ready)
                 #expect(listed.first?.size == 42)
+                #expect(
+                    listed.first?.guestControlProtocolVersion
+                        == SandboxGuestControlProtocol.currentVersion)
             }
         }
     }

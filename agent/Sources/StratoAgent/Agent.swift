@@ -2575,7 +2575,8 @@ extension Agent {
                 rootfsSizeBytes: result.rootfsSizeBytes,
                 storagePath: result.storagePath,
                 firecrackerVersion: result.firecrackerVersion,
-                architecture: CPUArchitecture.current)
+                architecture: CPUArchitecture.current,
+                guestControlProtocolVersion: result.guestControlProtocolVersion)
             let data = try AnyCodableValue(response)
             await sendSuccess(for: message.requestId, message: "Sandbox snapshot created", data: data)
         } catch {

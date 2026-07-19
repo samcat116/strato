@@ -716,6 +716,7 @@ export interface SandboxSnapshot {
   agentId?: string | null;
   firecrackerVersion?: string | null;
   architecture?: string | null;
+  guestControlProtocolVersion?: number | null;
   errorMessage?: string | null;
   createdById?: string | null;
   createdAt?: string | null;
