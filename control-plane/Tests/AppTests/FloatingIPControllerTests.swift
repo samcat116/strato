@@ -338,6 +338,108 @@ final class FloatingIPControllerTests {
         }
     }
 
+    @Test("Disabling a network's external access is refused while floating IPs are attached")
+    func externalAccessDisableGuard() async throws {
+        try await withFloatingIPTestApp { app, _, org, project, token in
+            let pool = try await self.createPool(app: app, org: org, token: token)
+            let network = LogicalNetwork(
+                name: "egress-guard-net", subnet: "10.60.0.0/24", gateway: "10.60.0.1",
+                projectID: project.id, externalAccess: true)
+            try await network.save(on: app.db)
+            let (vm, _) = try await self.createVMWithNIC(
+                app: app, project: project, network: network, fixedIP: "10.60.0.5")
+
+            var fipId: UUID?
+            try await app.test(.POST, "/api/floating-ips") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["poolId": pool.id.uuidString, "projectId": project.id!.uuidString])
+            } afterResponse: { res in
+                fipId = try res.content.decode(FloatingIPResponse.self).id
+            }
+            try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["vmId": vm.id!.uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            // Turning egress off would silently drop the attached FIP's NAT.
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["externalAccess": false])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            // Detach, then the same update succeeds.
+            try await app.test(.POST, "/api/floating-ips/\(fipId!)/detach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["externalAccess": false])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+        }
+    }
+
+    @Test("Moving a pool between sites is refused while addresses are attached")
+    func poolSiteMoveGuard() async throws {
+        try await withFloatingIPTestApp { app, _, org, project, token in
+            let pool = try await self.createPool(app: app, org: org, token: token)
+            let network = LogicalNetwork(
+                name: "site-move-net", subnet: "10.70.0.0/24", gateway: "10.70.0.1",
+                projectID: project.id, externalAccess: true)
+            try await network.save(on: app.db)
+            let (vm, _) = try await self.createVMWithNIC(
+                app: app, project: project, network: network, fixedIP: "10.70.0.5")
+
+            var fipId: UUID?
+            try await app.test(.POST, "/api/floating-ips") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["poolId": pool.id.uuidString, "projectId": project.id!.uuidString])
+            } afterResponse: { res in
+                fipId = try res.content.decode(FloatingIPResponse.self).id
+            }
+            try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["vmId": vm.id!.uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            let site = Site(name: "move-target", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
+
+            // Pinning the pool to a site while an address is attached to the
+            // (unpinned) old scope would strand the attachment.
+            try await app.test(.PUT, "/api/floating-ip-pools/\(pool.id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["siteId": site.id!.uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            // Detached, the move goes through.
+            try await app.test(.POST, "/api/floating-ips/\(fipId!)/detach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            try await app.test(.PUT, "/api/floating-ip-pools/\(pool.id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["siteId": site.id!.uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let body = try res.content.decode(FloatingIPPoolResponse.self)
+                #expect(body.siteId == site.id)
+            }
+        }
+    }
+
     @Test("Pool deletion is refused while addresses are allocated")
     func poolDeleteGuard() async throws {
         try await withFloatingIPTestApp { app, _, org, project, token in

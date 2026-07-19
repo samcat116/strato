@@ -193,8 +193,23 @@ struct FloatingIPController: RouteCollection {
             }
         }
         // Moving the pool between sites (or unpinning it) changes which pools
-        // it can conflict with — re-check at the new scope.
+        // it can conflict with — re-check at the new scope. And it must not
+        // strand live attachments: the site constraint is only enforced at
+        // attach time, so a move would leave the old site advertising
+        // addresses from a pool that now claims to answer elsewhere.
         if update.siteId != pool.$site.id {
+            let attached = try await FloatingIP.query(on: req.db)
+                .filter(\.$pool.$id == pool.requireID())
+                .all()
+                .filter { $0.$interface.id != nil }
+                .count
+            guard attached == 0 else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Pool has \(attached) attached floating IP(s); detach them before changing the pool's site"
+                )
+            }
             try await Self.assertNoPoolOverlap(
                 cidr: pool.cidr, siteId: update.siteId, excluding: pool.id, on: req.db)
         }
