@@ -190,7 +190,7 @@ struct GuardrailController: RouteCollection {
         // The guardrail and the version bump commit together: a ceiling that
         // exists under a version nobody bumped is a ceiling the replicas never
         // recompile against.
-        let guardrail = try await req.db.transaction { db in
+        let guardrail = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
             let guardrail = try await GuardrailStore.create(
                 name: payload.name,
                 description: payload.description,
@@ -228,9 +228,10 @@ struct GuardrailController: RouteCollection {
             throw Abort(.internalServerError, reason: "Guardrail row is missing its id")
         }
 
-        let updated = try await req.db.transaction { db in
+        let updated = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
             // Re-read inside the transaction so the update and the version bump
-            // see the same row.
+            // see the same row — and so a retried attempt starts from the row
+            // as it is now, not from a copy loaded before the first try.
             guard let guardrail = try await Guardrail.find(id, on: db) else {
                 throw Abort(.notFound, reason: "Guardrail not found")
             }
@@ -262,7 +263,7 @@ struct GuardrailController: RouteCollection {
         guard let id = guardrail.id else {
             throw Abort(.internalServerError, reason: "Guardrail row is missing its id")
         }
-        try await req.db.transaction { db in
+        try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
             try await Guardrail.query(on: db).filter(\.$id == id).delete()
             try await PolicySetVersionService.bump(
                 reason: "guardrail deleted: \(name)", changedBy: user.id, on: db)

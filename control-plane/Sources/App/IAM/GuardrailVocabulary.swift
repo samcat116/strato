@@ -182,7 +182,7 @@ enum GuardrailError: Error, AbortError, Equatable {
     case unknownActionService(String)
     case missingSubjectID(String)
     case missingMatchValue(String)
-    case forbidsEverything
+    case locksOutPolicyAdministration
     case duplicateName(String)
 
     var status: HTTPResponseStatus { .badRequest }
@@ -203,9 +203,9 @@ enum GuardrailError: Error, AbortError, Equatable {
             return "A '\(kind)' principal match requires a subject id."
         case .missingMatchValue(let kind):
             return "A '\(kind)' resource match requires a value."
-        case .forbidsEverything:
+        case .locksOutPolicyAdministration:
             return
-                "A guardrail forbidding every action for every principal on every resource would lock the subtree out irrecoverably. Narrow the actions, the principals, or the resources."
+                "A guardrail that forbids 'iam:setPolicy' for every principal on every resource would outlaw its own removal, locking the subtree's policy administration irrecoverably. Narrow the principals or the resources it applies to, or exclude 'iam:setPolicy' from its actions."
         case .duplicateName(let name):
             return "A guardrail named '\(name)' is already attached to this node."
         }

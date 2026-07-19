@@ -66,6 +66,55 @@ final class IAMPolicySetVersionTests {
         }
     }
 
+    @Test("A colliding policy write retries the whole transaction instead of failing the request")
+    func collisionRetriesTheWholeTransaction() async throws {
+        try await withApp { app in
+            let taken = try await PolicySetVersionService.current(on: app.db)
+            #expect(taken > 0)
+            let attempts = AttemptCounter()
+
+            // The first attempt claims a version that already exists, which is
+            // what losing the allocation race looks like. Retrying *inside* the
+            // transaction cannot work — Postgres marks it aborted — so the
+            // recovery has to be a fresh transaction from the top.
+            let allocated = try await PolicySetVersionService.withPolicySetChange(on: app.db) { db in
+                let attempt = await attempts.next()
+                if attempt == 1 {
+                    try await PolicySetVersion(version: taken, reason: "collision", changedBy: nil)
+                        .save(on: db)
+                }
+                return try await PolicySetVersionService.bump(reason: "after collision", on: db)
+            }
+
+            let attemptCount = await attempts.total()
+            #expect(attemptCount == 2)
+            #expect(allocated == taken + 1)
+
+            // The rolled-back attempt left nothing behind.
+            let rows = try await PolicySetVersion.query(on: app.db)
+                .filter(\.$reason == "collision")
+                .count()
+            #expect(rows == 0)
+        }
+    }
+
+    @Test("An error the work itself raises is not retried")
+    func nonCollisionErrorsSurfaceImmediately() async throws {
+        try await withApp { app in
+            let attempts = AttemptCounter()
+
+            await #expect(throws: GuardrailError.locksOutPolicyAdministration) {
+                try await PolicySetVersionService.withPolicySetChange(on: app.db) { _ in
+                    _ = await attempts.next()
+                    throw GuardrailError.locksOutPolicyAdministration
+                }
+            }
+
+            let attemptCount = await attempts.total()
+            #expect(attemptCount == 1)
+        }
+    }
+
     @Test("The registry sync bumps once on a change and stays quiet when there is nothing to do")
     func registrySyncBumpsOnlyOnChange() async throws {
         try await withApp { app in
@@ -135,6 +184,16 @@ final class IAMPolicySetVersionTests {
             #expect(finalVersion == bumped)
             #expect(recorded == [expected, bumped])
         }
+    }
+
+    /// Counts how many times a retried closure ran.
+    private actor AttemptCounter {
+        private var attempts = 0
+        func next() -> Int {
+            attempts += 1
+            return attempts
+        }
+        func total() -> Int { attempts }
     }
 
     /// Collects the versions a cache listener saw.

@@ -65,7 +65,8 @@ enum GuardrailStore {
             throw GuardrailError.unattachableNode(node.type.rawValue)
         }
         let canonicalActions = try GuardrailActions.canonicalize(actions)
-        try validateNotTotal(actions: canonicalActions, principalMatch: principalMatch, resourceMatch: resourceMatch)
+        try validateNotSelfLocking(
+            actions: canonicalActions, principalMatch: principalMatch, resourceMatch: resourceMatch)
 
         let guardrail = Guardrail(
             name: name,
@@ -86,22 +87,31 @@ enum GuardrailStore {
         return guardrail
     }
 
-    /// A guardrail that forbids every action, for every principal, on every
-    /// resource is the one ceiling nobody can climb back out of: it denies the
-    /// `iam:setPolicy` that would be needed to remove it, on the node it is
-    /// attached to and everything below. Refusing it is not paternalism about
-    /// strict policy — it is refusing to let an org lock itself out with a
-    /// single write.
-    private static func validateNotTotal(
+    /// The action that removes a guardrail. A ceiling covering this one is a
+    /// ceiling that can outlaw its own removal.
+    static let policyWriteAction = "iam:setPolicy"
+
+    /// Refuse the ceilings nobody can climb back out of.
+    ///
+    /// A guardrail that applies to **every** principal on **every** resource
+    /// and forbids `iam:setPolicy` denies the one action needed to disable or
+    /// delete it, on its own subtree and everything below. `*` is the obvious
+    /// spelling, but `iam:*` and a bare `iam:setPolicy` bolt the same door, so
+    /// the test is whether the action patterns *match* `iam:setPolicy` rather
+    /// than whether they equal the wildcard.
+    ///
+    /// Conditioned ceilings on `iam:setPolicy` stay legal and are useful
+    /// ("contractors may not set policy here"): someone outside the condition
+    /// can still undo them. It is only the unconditional form that leaves no
+    /// one holding the key.
+    private static func validateNotSelfLocking(
         actions: [String],
         principalMatch: GuardrailPrincipalMatch,
         resourceMatch: GuardrailResourceMatch
     ) throws {
-        guard actions == [GuardrailActions.wildcard],
-            principalMatch == .any,
-            resourceMatch == .any
-        else { return }
-        throw GuardrailError.forbidsEverything
+        guard principalMatch == .any, resourceMatch == .any else { return }
+        guard GuardrailActions.matches(actions, action: policyWriteAction) else { return }
+        throw GuardrailError.locksOutPolicyAdministration
     }
 
     /// Apply a partial update. Only the fields present are touched; the effect
@@ -129,7 +139,7 @@ enum GuardrailStore {
         }
         if let enabled { guardrail.enabled = enabled }
 
-        try validateNotTotal(
+        try validateNotSelfLocking(
             actions: guardrail.actions,
             principalMatch: try guardrail.principalMatch(),
             resourceMatch: try guardrail.resourceMatch()
@@ -272,15 +282,25 @@ enum GuardrailStore {
     }
 
     /// The `environment` attribute of a resource, for resource-side matching.
-    /// Only the types that carry one answer; containers have no environment of
-    /// their own, since environment is an attribute and never a container.
+    ///
+    /// Every type that stores one has to be listed, or an environment ceiling
+    /// silently stops covering that type — a snapshot of a production sandbox
+    /// is as much a production resource as the sandbox. Containers are absent
+    /// because they genuinely have no environment: it is an attribute, never a
+    /// container.
     private static func resourceEnvironment(of node: IAMNode, on db: any Database) async throws -> String? {
         switch node.type {
         case .virtualMachine:
             return try await VM.find(node.id, on: db)?.environment
         case .sandbox:
             return try await Sandbox.find(node.id, on: db)?.environment
-        default:
+        case .sandboxSnapshot:
+            return try await SandboxSnapshot.find(node.id, on: db)?.environment
+        case .organization, .organizationalUnit, .project, .image, .network,
+            .volume, .volumeSnapshot, .site, .agent:
+            // Listed exhaustively rather than defaulted: a new resource type
+            // carrying an environment should fail to compile here, not quietly
+            // fall out of every environment ceiling.
             return nil
         }
     }

@@ -150,10 +150,14 @@ Notes on the shape, each of which is load-bearing:
 - **Attach points are containers only.** A ceiling exists to cover what is
   beneath it; on a leaf it would be an ordinary per-resource rule wearing
   tier 2's clothes.
-- **A guardrail forbidding every action for every principal on every resource
-  is refused**: it would deny the `iam:setPolicy` needed to remove it, on its
-  own subtree. Refusing is not a view about strict policy — it is refusing to
-  let one write lock an org out irrecoverably.
+- **An unconditional ceiling over `iam:setPolicy` is refused.** It would outlaw
+  its own removal on its own subtree. The rule keys on whether the action
+  patterns *match* `iam:setPolicy`, not on the literal `*`: `iam:*` and a bare
+  `iam:setPolicy` bolt the same door. Conditioned ceilings over `iam:setPolicy`
+  stay legal and useful ("contractors may not set policy here") — someone
+  outside the condition can still undo them. Refusing is not a view about
+  strict policy — it is refusing to let one write lock an org out
+  irrecoverably.
 - Guardrails can be **disabled** without being deleted. Ceilings get switched
   off to unblock an incident far more often than they get removed, and the row
   is the record of what was in force.
