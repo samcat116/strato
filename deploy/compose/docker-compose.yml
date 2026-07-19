@@ -441,6 +441,12 @@ services:
         condition: service_healthy
       spicedb-schema:
         condition: service_completed_successfully
+      # The command boots the full Vapor app, whose production startup requires
+      # Valkey (sessions + coordination, pinged at didBoot) — without this the
+      # standalone `docker compose run --rm bootstrap` on a fresh project would
+      # exit before seeding.
+      valkey:
+        condition: service_healthy
     restart: "no"
 
   frontend:
