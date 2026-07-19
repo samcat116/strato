@@ -517,6 +517,11 @@ public struct AgentConfig: Codable {
             sandboxJailerUidBase = nil
         }
 
+        // Warm start (issue #426).
+        let sandboxWarmStart = tomlData.bool("sandbox_warm_start")
+        let sandboxWarmCacheMaxSizeGB = try Self.positiveInt(
+            tomlData, key: "sandbox_warm_cache_max_size_gb")
+
         // Validate and parse network mode
         let networkMode: NetworkMode?
         if let modeString = networkModeString {
@@ -656,6 +661,8 @@ public struct AgentConfig: Codable {
             sandboxJailerBinaryPath: sandboxJailerBinaryPath,
             sandboxJailerChrootDir: sandboxJailerChrootDir,
             sandboxJailerUidBase: sandboxJailerUidBase,
+            sandboxWarmStart: sandboxWarmStart,
+            sandboxWarmCacheMaxSizeGB: sandboxWarmCacheMaxSizeGB,
             hypervisorType: hypervisorType,
             stateFilePath: stateFilePath,
             ovnUplink: ovnUplink,

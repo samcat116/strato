@@ -87,6 +87,58 @@ struct AgentConfigTests {
         }
     }
 
+    // MARK: - Warm start (issue #426)
+
+    @Test("Load warm-start settings")
+    func loadWarmStartSettings() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                sandbox_warm_start = false
+                sandbox_warm_cache_max_size_gb = 40
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+
+            #expect(config.sandboxWarmStart == false, "the documented kill switch must actually load")
+            #expect(config.sandboxWarmCacheMaxSizeGB == 40)
+            let budgetBytes: Int64? = config.sandboxWarmCacheMaxSizeBytes
+            #expect(budgetBytes == Int64(40) * 1024 * 1024 * 1024)
+        }
+    }
+
+    @Test("Warm-start settings default to nil (enabled, default budget) when absent")
+    func warmStartSettingsDefaultNil() throws {
+        try withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
+                toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+
+            #expect(config.sandboxWarmStart == nil)
+            #expect(config.sandboxWarmCacheMaxSizeGB == nil)
+        }
+    }
+
+    @Test("A non-positive warm cache budget is rejected")
+    func nonPositiveWarmCacheBudgetRejected() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                sandbox_warm_cache_max_size_gb = 0
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            #expect(throws: AgentConfigError.self) {
+                try AgentConfig.load(from: configPath)
+            }
+        }
+    }
+
     // MARK: - Image cache settings
 
     @Test("Load image cache settings")
