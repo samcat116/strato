@@ -73,6 +73,10 @@ Volume placement is decided by the storage backend:
 <volumeStoragePath>/<volumeId>/snapshots/<snapshotId>.qcow2
 ```
 
+The volume root is the agent's `volume_storage_dir` config key (default
+`/var/lib/strato/volumes` on Linux), so a non-root agent can point it at a
+directory it can write.
+
 The control plane never derives paths; it stores whatever path the agent
 reports in `VolumeStatusResponse` and passes it back verbatim on later
 operations. Delete and snapshot-delete work from IDs alone, so cleanup
