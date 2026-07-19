@@ -26,6 +26,12 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     case volume
     case volumeSnapshot = "volume_snapshot"
     case sandboxSnapshot = "sandbox_snapshot"
+    /// Org/folder-scoped infrastructure. Nothing binds directly to these yet —
+    /// their access derives entirely from the container above — but they are
+    /// real resources with `site:*` / `agent:*` actions in the registry, so
+    /// reverse lookups must be able to name them.
+    case site
+    case agent
 }
 
 /// The global roles. Each role is a curated action group that implies the one
@@ -96,6 +102,19 @@ enum IAMRoleRegistry {
             "site:manage",
         ],
     ]
+
+    /// Actions that bare org membership grants on its own, with no role
+    /// binding behind them (docs/architecture/iam.md: "bare org membership
+    /// grants `org:read` and `project:create` — nothing else"). Reverse
+    /// lookups must add these, or they under-report every org member.
+    static let membershipDerivedActions: Set<String> = ["org:read", "project:create"]
+
+    /// The roles whose expanded action group contains `action` — the set a
+    /// binding must name to grant it. Empty for an action no role carries
+    /// (e.g. `project:create`, which comes from membership instead).
+    static func roles(granting action: String) -> Set<IAMRole> {
+        Set(IAMRole.allCases.filter { actions(for: $0).contains(action) })
+    }
 
     /// The full expanded action group for a role: its direct actions plus
     /// everything from the roles it implies.
