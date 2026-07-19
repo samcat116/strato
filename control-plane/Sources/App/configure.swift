@@ -291,6 +291,9 @@ public func configure(_ app: Application) async throws {
     // loads VM models (e.g. MigrateVMDisksToVolumes) runs on a fresh database.
     app.migrations.add(AddSSHPublicKeyToVM())
 
+    // Cloud-init user data column. Same ordering constraint as above.
+    app.migrations.add(AddUserDataToVM())
+
     // App settings migration (for signing keys, etc.)
     app.migrations.add(CreateAppSetting())
 

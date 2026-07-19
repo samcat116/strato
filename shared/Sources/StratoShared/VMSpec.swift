@@ -39,6 +39,12 @@ public struct VMSpec: Codable, Sendable {
     /// the backend's guest-provisioning mechanism (cloud-init `ssh_authorized_keys`
     /// for QEMU disk boot). Empty when the caller provided none.
     public let sshAuthorizedKeys: [String]
+    /// Caller-supplied cloud-init user data, verbatim (any format cloud-init
+    /// dispatches on: `#cloud-config`, `#!` scripts, `#include`, MIME
+    /// multipart, ...). The agent combines it with Strato's own provisioning
+    /// config when it builds the guest-bootstrap media. Nil when the caller
+    /// provided none.
+    public let userData: String?
 
     public init(
         cpus: Int,
@@ -51,7 +57,8 @@ public struct VMSpec: Codable, Sendable {
         volumes: [VolumeSpec] = [],
         networks: [NetworkSpec] = [],
         console: ConsoleSpec? = nil,
-        sshAuthorizedKeys: [String] = []
+        sshAuthorizedKeys: [String] = [],
+        userData: String? = nil
     ) {
         self.cpus = cpus
         self.maxCpus = maxCpus ?? cpus
@@ -64,13 +71,15 @@ public struct VMSpec: Codable, Sendable {
         self.networks = networks
         self.console = console
         self.sshAuthorizedKeys = sshAuthorizedKeys
+        self.userData = userData
     }
 
-    // Custom decode so `sshAuthorizedKeys` and `diskBytes` tolerate absence: a
-    // spec produced by an older control plane (before these fields existed)
-    // decodes to []/nil rather than throwing, keeping agent↔control-plane
-    // compatible across version skew. `encode(to:)` stays synthesized. All
-    // other keys remain required, matching the existing wire contract.
+    // Custom decode so `sshAuthorizedKeys`, `diskBytes`, and `userData`
+    // tolerate absence: a spec produced by an older control plane (before
+    // these fields existed) decodes to []/nil rather than throwing, keeping
+    // agent↔control-plane compatible across version skew. `encode(to:)` stays
+    // synthesized. All other keys remain required, matching the existing wire
+    // contract.
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         cpus = try c.decode(Int.self, forKey: .cpus)
@@ -84,6 +93,7 @@ public struct VMSpec: Codable, Sendable {
         networks = try c.decode([NetworkSpec].self, forKey: .networks)
         console = try c.decodeIfPresent(ConsoleSpec.self, forKey: .console)
         sshAuthorizedKeys = try c.decodeIfPresent([String].self, forKey: .sshAuthorizedKeys) ?? []
+        userData = try c.decodeIfPresent(String.self, forKey: .userData)
     }
 }
 

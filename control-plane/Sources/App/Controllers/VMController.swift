@@ -22,6 +22,32 @@ struct VMController: RouteCollection {
         return (vmDir as NSString).appendingPathComponent(filename)
     }
 
+    /// Validates caller-supplied cloud-init user data: bounded in size and
+    /// starting with a header cloud-init actually dispatches on — a payload
+    /// without one (say, a script missing its shebang) would be silently
+    /// ignored in the guest, so rejecting it here turns a hard-to-debug boot
+    /// no-op into an immediate 400. Empty/whitespace-only input normalizes to
+    /// nil; valid input is returned verbatim (the leading bytes ARE the format
+    /// header, so no trimming).
+    static func validatedUserData(_ userData: String?) throws -> String? {
+        guard let userData, !userData.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        guard userData.utf8.count <= CloudInitUserDataFormat.maxBytes else {
+            throw Abort(
+                .badRequest,
+                reason: "'userData' exceeds \(CloudInitUserDataFormat.maxBytes / 1024) KiB")
+        }
+        guard CloudInitUserDataFormat.detect(userData) != nil else {
+            throw Abort(
+                .badRequest,
+                reason: "'userData' must start with a cloud-init header: #cloud-config, #! (shell script), "
+                    + "#include, #cloud-boothook, #part-handler, '## template: jinja', or a MIME document"
+            )
+        }
+        return userData
+    }
+
     /// Runs `body` again (up to `attempts` total) when it fails with a
     /// database constraint violation. Used around the VM-create transaction:
     /// two concurrent creates can race IPAM to the same address, and the
@@ -354,6 +380,10 @@ struct VMController: RouteCollection {
             let networkName: String?
             // SSH public key authorized for the guest's default user (cloud-init).
             let sshPublicKey: String?
+            // Cloud-init user data, verbatim (#cloud-config, #! script, MIME
+            // multipart, ...). Combined with Strato's built-in provisioning
+            // config on the agent; a full MIME document replaces it.
+            let userData: String?
             // Target hypervisor. Optional: when omitted, it's inferred from the
             // image's artifact set if that set is compatible with exactly one
             // hypervisor, else falls back to the platform default (QEMU).
@@ -559,6 +589,20 @@ struct VMController: RouteCollection {
         vm.sshPublicKey = createRequest.sshPublicKey?.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
+
+        // Guest provisioning: caller-supplied cloud-init user data, stored
+        // verbatim (leading bytes are the format header cloud-init dispatches
+        // on, so no trimming).
+        vm.userData = try Self.validatedUserData(createRequest.userData)
+
+        // User data is only delivered on the QEMU disk-boot path (the NoCloud
+        // seed ISO); Firecracker VMs have no injection path yet. Reject rather
+        // than return 202 and silently ignore the payload.
+        if vm.userData != nil, vm.hypervisorType == .firecracker {
+            throw Abort(
+                .badRequest,
+                reason: "'userData' is not supported for firecracker VMs (cloud-init runs only on QEMU disk boot)")
+        }
 
         let userID = try user.requireID()
 
@@ -772,7 +816,7 @@ struct VMController: RouteCollection {
         }
     }
 
-    func update(req: Request) async throws -> VM {
+    func update(req: Request) async throws -> VMDetailResponse {
         let user = try req.auth.require(User.self)
         let existingVM = try await fetchVMWithPermission(req: req, user: user, permission: "update")
 
@@ -794,7 +838,14 @@ struct VMController: RouteCollection {
         }
 
         try await existingVM.save(on: req.db)
-        return existingVM
+
+        // The DTO, not the model: the raw `VM` encoding would expose fields
+        // that must stay server-side (cloud-init user_data can carry secrets).
+        try await existingVM.$networkInterfaces.load(on: req.db)
+        for interface in existingVM.networkInterfaces {
+            try await interface.$addresses.load(on: req.db)
+        }
+        return VMDetailResponse(from: existingVM)
     }
 
     func delete(req: Request) async throws -> Response {
@@ -898,15 +949,21 @@ struct VMController: RouteCollection {
         return try Self.accepted(operation)
     }
 
-    func status(req: Request) async throws -> VM {
+    func status(req: Request) async throws -> VMDetailResponse {
         let user = try req.auth.require(User.self)
         let vm = try await fetchVMWithPermission(req: req, user: user, permission: "read")
 
         // The database row *is* the observed state: the owning agent's
         // periodic observed-state reports keep it fresh (issue #260), so no
         // agent round-trip happens here — which also makes this endpoint
-        // replica-independent (issue #261).
-        return vm
+        // replica-independent (issue #261). Returned as the DTO, not the
+        // model: the raw `VM` encoding would expose fields that must stay
+        // server-side (cloud-init user_data can carry secrets).
+        try await vm.$networkInterfaces.load(on: req.db)
+        for interface in vm.networkInterfaces {
+            try await interface.$addresses.load(on: req.db)
+        }
+        return VMDetailResponse(from: vm)
     }
 
     func start(req: Request) async throws -> Response {

@@ -119,6 +119,25 @@ struct VMSpecTests {
         #expect(decoded.cpus == 2)
     }
 
+    @Test func userDataRoundTrip() throws {
+        let payload = "#cloud-config\npackages:\n  - nginx\n"
+        let spec = VMSpec(
+            cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil), userData: payload)
+        let decoded = try roundTrip(spec)
+        #expect(decoded.userData == payload)
+    }
+
+    /// A spec from a control plane that predates `userData` has no such key; a
+    /// new agent must decode it to nil (rolling-upgrade skew).
+    @Test func specWithoutUserDataKeyDecodesToNil() throws {
+        let json = """
+            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"sharedMemory":false,"hugepages":false,
+             "boot":{"disk":{}},"volumes":[],"networks":[]}
+            """
+        let decoded = try decodeJSON(VMSpec.self, from: json)
+        #expect(decoded.userData == nil)
+    }
+
     @Test func dualStackNetworkSpecRoundTrip() throws {
         let spec = NetworkSpec(
             network: "default",
