@@ -51,7 +51,7 @@ struct HypervisorHangResilienceTests {
 
         var thrown: (any Error)?
         do {
-            _ = try await StageBudget.run(seconds: 1, stage: "qmp-status") {
+            _ = try await StageBudget.run(seconds: 1, stage: "qmp-status", onTimeout: .abandon) {
                 try await stuck.run()
             }
         } catch {
@@ -61,6 +61,39 @@ struct HypervisorHangResilienceTests {
         let budgetError = thrown as? StageBudgetError
         #expect(budgetError != nil, "the budget must return even though the stage ignores cancellation")
         stuck.finish()
+    }
+
+    @Test("The default policy waits for a cancelled stage to unwind")
+    func defaultPolicyWaitsForUnwind() async throws {
+        // Side-effecting stages (image materialization) must not be left
+        // running past their budget: a retry racing an abandoned attempt can
+        // publish a truncated disk. So the default cancels and *waits*, and
+        // the budget must not return before the stage has actually unwound.
+        let unwound = Flag()
+
+        var thrown: (any Error)?
+        do {
+            _ = try await StageBudget.run(seconds: 1, stage: "image materialization") {
+                do {
+                    // Cancellation-aware, like a well-behaved stage.
+                    try await Task.sleep(for: .seconds(60))
+                } catch {
+                    // Model the cleanup a real stage does on the way out
+                    // (removing its staging file). Deliberately immune to
+                    // cancellation: `try? await Task.sleep` returns instantly
+                    // in an already-cancelled task, which would let this flag
+                    // get set under either policy and make the test vacuous.
+                    await Self.uncancellableDelay(milliseconds: 50)
+                    unwound.set()
+                    throw error
+                }
+            }
+        } catch {
+            thrown = error
+        }
+
+        #expect(thrown != nil)
+        #expect(unwound.isSet, "the budget must not return before the stage unwound")
     }
 
     @Test("A responsive call passes its value straight through the budget")
@@ -139,6 +172,35 @@ struct HypervisorHangResilienceTests {
             while !released && !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(5))
             }
+        }
+    }
+
+    /// A delay that elapses even inside a cancelled task, by parking on a
+    /// non-throwing continuation that a detached timer resolves.
+    private static func uncancellableDelay(milliseconds: Int) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            Task.detached {
+                try? await Task.sleep(for: .milliseconds(milliseconds))
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Minimal thread-safe boolean for observing that cleanup ran.
+    private final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+
+        func set() {
+            lock.lock()
+            value = true
+            lock.unlock()
+        }
+
+        var isSet: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
         }
     }
 

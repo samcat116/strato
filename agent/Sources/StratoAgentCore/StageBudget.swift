@@ -38,20 +38,81 @@ public enum StageBudget {
     // not be hostage to hypervisor progress.
     public static let observationSeconds = 5
 
-    /// Run `operation`, failing with `StageBudgetError.exceeded` if it does
-    /// not complete within `seconds`. The operation is cancelled on timeout
-    /// (best effort), and — crucially — stages that ignore cancellation still
-    /// stop blocking the caller.
+    /// What a budget does with an operation that is still running when the
+    /// deadline passes. The right answer depends on whether the operation has
+    /// side effects, so each call site states it.
+    public enum TimeoutPolicy: Sendable {
+        /// Cancel the operation and wait for it to unwind before throwing.
+        ///
+        /// The safe default, and correct whenever the operation touches shared
+        /// state. Image materialization publishes through a deterministic
+        /// staging path (`<disk>.partial`) and deletes any partial it finds on
+        /// entry, so a retry racing an abandoned first attempt can delete that
+        /// attempt's output mid-write and publish a truncated disk — which the
+        /// `fileExists` idempotency check would then trust forever.
+        ///
+        /// The cost is that a stage ignoring cancellation holds the caller past
+        /// its budget. For side-effecting work that is the better failure.
+        case cancelAndWait
+
+        /// Stop waiting at the deadline and leave the operation running.
+        ///
+        /// Correct only when the operation is *inert*: an unanswered QMP
+        /// round-trip is parked on a continuation, holds no lock and writes no
+        /// file, so walking away leaks a task and costs nothing else. This is
+        /// the guarantee that keeps a wedged hypervisor from taking the agent
+        /// offline (issue #516), and the one `.cancelAndWait` cannot make.
+        case abandon
+    }
+
+    /// Run `operation`, failing with `StageBudgetError.exceeded` if it does not
+    /// complete within `seconds`.
     ///
-    /// That last guarantee is why this cannot be a task group. A group awaits
-    /// every child before it returns or rethrows, so cancelling a child parked
-    /// on a non-cancellation-aware continuation (an unanswered QMP round-trip,
-    /// say) leaves the group suspended forever: the budget itself hangs, in
-    /// exactly the case it exists to bound (issue #516). The operation
-    /// therefore runs in an *unstructured* task, which the caller can walk
-    /// away from. A wedged stage leaks that task — unavoidable, since it is
-    /// stuck — but the caller is freed on schedule.
+    /// See `TimeoutPolicy` for what happens to an operation that overruns; the
+    /// default cancels and waits, which is safe for side-effecting stages but
+    /// cannot bound a stage that ignores cancellation.
     public static func run<T: Sendable>(
+        seconds: Int,
+        stage: String,
+        onTimeout policy: TimeoutPolicy = .cancelAndWait,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        switch policy {
+        case .cancelAndWait:
+            return try await runStructured(seconds: seconds, stage: stage, operation: operation)
+        case .abandon:
+            return try await runAbandoning(seconds: seconds, stage: stage, operation: operation)
+        }
+    }
+
+    /// Structured: the task group cancels the operation and awaits its unwind,
+    /// so no abandoned work can race a retry.
+    private static func runStructured<T: Sendable>(
+        seconds: Int,
+        stage: String,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                throw StageBudgetError.exceeded(stage: stage, seconds: seconds)
+            }
+            guard let result = try await group.next() else {
+                throw StageBudgetError.exceeded(stage: stage, seconds: seconds)
+            }
+            group.cancelAll()
+            return result
+        }
+    }
+
+    /// Unstructured: the operation runs in a task the caller can walk away
+    /// from, which is the only way to bound a stage that ignores cancellation.
+    /// A task group would await such a child forever — the budget itself would
+    /// hang, in exactly the case it exists to bound.
+    private static func runAbandoning<T: Sendable>(
         seconds: Int,
         stage: String,
         operation: @escaping @Sendable () async throws -> T

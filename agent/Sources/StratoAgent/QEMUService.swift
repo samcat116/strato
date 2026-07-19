@@ -106,9 +106,14 @@ actor QEMUService: HypervisorService {
                 // to qcow2 when the source format differs. This stage gets its
                 // own generous budget — multi-GB downloads are legitimate and
                 // must not be squeezed into the process-spawn envelope.
+                // Explicitly `.cancelAndWait`: materialization writes through
+                // a deterministic staging path and clears any partial it finds,
+                // so abandoning a slow attempt would let a retry delete its
+                // output mid-write and publish a truncated disk.
                 let attachment = try await StageBudget.run(
                     seconds: StageBudget.imageMaterializationSeconds,
-                    stage: "image materialization"
+                    stage: "image materialization",
+                    onTimeout: .cancelAndWait
                 ) { [storage] in
                     try await storage.materializeDisk(
                         at: "\(self.vmStoragePath)/\(vmId)/disk.qcow2",
@@ -269,8 +274,16 @@ actor QEMUService: HypervisorService {
 
         // Start VM execution
         do {
-            try await vm.start()
+            try await controlled("qmp-start", vmId: vmId) {
+                try await vm.start()
+            }
         } catch {
+            // A budget timeout is ambiguous — the guest may be perfectly alive
+            // behind a wedged control channel — so it must not fall into the
+            // respawn below, which tears the process down. Respawn is for a
+            // channel that is *known* dead, which is what a real start error
+            // reports.
+            if case HypervisorServiceError.timeout = error { throw error }
             // A guest that powered off took its QEMU process with it, so the
             // control channel is dead and `cont` cannot revive it. Respawn the
             // process from the configuration the VM was created with (its disks
@@ -287,7 +300,9 @@ actor QEMUService: HypervisorService {
             try await manager.createVM(
                 config: config, timeout: TimeInterval(StageBudget.hypervisorSpawnSeconds))
             activeVMs[vmId] = manager
-            try await manager.start()
+            try await controlled("qmp-start-respawned", vmId: vmId) {
+                try await manager.start()
+            }
         }
 
         logger.info("QEMU VM booted successfully", metadata: ["vmId": .string(vmId)])
@@ -469,7 +484,7 @@ actor QEMUService: HypervisorService {
             // stalls the console too. On timeout report `.unknown` rather than
             // fabricating `.shutdown` for a VM that is likely still running.
             let qemuStatus = try await StageBudget.run(
-                seconds: StageBudget.statusQuerySeconds, stage: "qmp-status"
+                seconds: StageBudget.statusQuerySeconds, stage: "qmp-status", onTimeout: .abandon
             ) {
                 try await qemuManager.getStatus()
             }
@@ -515,7 +530,11 @@ actor QEMUService: HypervisorService {
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         do {
-            return try await StageBudget.run(seconds: seconds, stage: stage, operation: operation)
+            // `.abandon`: a wedged QMP round-trip is inert — it is parked on a
+            // continuation and touches nothing — so walking away from it is
+            // safe, and is the only way to free this actor for every other VM.
+            return try await StageBudget.run(
+                seconds: seconds, stage: stage, onTimeout: .abandon, operation: operation)
         } catch let error as StageBudgetError {
             logger.error(
                 "Hypervisor control call exceeded its budget",
@@ -567,7 +586,7 @@ actor QEMUService: HypervisorService {
             // which case the QMP greeting never arrives. Without a bound this
             // parks forever holding the reconcile lane (issue #516).
             qemuStatus = try await StageBudget.run(
-                seconds: StageBudget.adoptionSeconds, stage: "qmp-adopt"
+                seconds: StageBudget.adoptionSeconds, stage: "qmp-adopt", onTimeout: .abandon
             ) {
                 try await adopted.connect()
             }

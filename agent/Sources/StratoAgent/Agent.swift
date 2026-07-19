@@ -1504,7 +1504,9 @@ actor Agent {
             // beat. Skipping one is harmless — it is a periodic backstop and
             // the next round re-drives it (issue #516).
             do {
-                try await StageBudget.run(seconds: 15, stage: "observed-state-report") { [self] in
+                try await StageBudget.run(
+                    seconds: 15, stage: "observed-state-report", onTimeout: .abandon
+                ) { [self] in
                     await sendObservedStateReport()
                 }
             } catch {
@@ -1639,7 +1641,7 @@ actor Agent {
     ) async -> T? {
         do {
             return try await StageBudget.run(
-                seconds: StageBudget.observationSeconds, stage: stage
+                seconds: StageBudget.observationSeconds, stage: stage, onTimeout: .abandon
             ) {
                 await query()
             }
