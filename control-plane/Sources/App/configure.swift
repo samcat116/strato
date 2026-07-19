@@ -429,6 +429,11 @@ public func configure(_ app: Application) async throws {
     // Sandbox snapshots / checkpoint-resume (issue #426).
     app.migrations.add(CreateSandboxSnapshot())
 
+    // Give the seeded "default" network resolvers so guests can resolve names
+    // out of the box (issue #518). Runs late: it must follow the migration that
+    // adds `dns_servers`, and it only fills a network that still has none.
+    app.migrations.add(SeedDefaultNetworkDNS())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
