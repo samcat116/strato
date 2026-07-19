@@ -740,9 +740,17 @@ spire:
 
   # Node attestors
   attestors:
-    # Kubernetes Projected Service Account Token attestor
+    # Kubernetes Projected Service Account Token attestor.
+    #
+    # On by default, and effectively required in-cluster: the agent DaemonSet
+    # attests with the projected service-account token mounted at
+    # /var/run/secrets/tokens/spire-agent. Disabling this falls back to the
+    # join_token attestor, which has no token to consume here — the agent then
+    # cannot attest, the Envoy sidecar never receives an SVID, and every agent
+    # mTLS connection is refused. Only turn it off if you are supplying node
+    # attestation some other way.
     k8sPsat:
-      enabled: false
+      enabled: true
       # Entries are "namespace:serviceaccount". Leave empty to allow the
       # chart's own agent DaemonSet service account (the only identity that
       # presents the projected token in this deployment).

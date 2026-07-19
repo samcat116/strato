@@ -438,6 +438,10 @@ public func configure(_ app: Application) async throws {
     // retirement of the bearer-token table it replaces. Ordered after the
     // migrations that shaped that table so the drop lands on a known schema.
     app.migrations.add(CreateAgentEnrollment())
+    // Must sit between the two: it reads the token table and writes the
+    // enrollment table, so it needs the latter to exist and the former to
+    // still be there.
+    app.migrations.add(MigratePendingTokensToEnrollments())
     app.migrations.add(DropAgentRegistrationTokens())
 
     try await app.autoMigrate()
