@@ -1,0 +1,35 @@
+control-plane/Package.swift
+  s_55dbfcc7cf0fa2::t_922aebb3021644 55-57
+  s_55dbfcc7cf0fa2::t_756be05bd8b164 73-74
+control-plane/Sources/SPIREServerAPI/SPIREServerAPIClient.swift
+  s_55dbfcc7cf0fa2::t_4881e7062ebd85 732-751,762-766,771-814,817-829,831-843
+  s_55dbfcc7cf0fa2::t_2b7bf9e092522c 830
+  s_55dbfcc7cf0fa2::t_7c9648b27c24c0 6-7,9
+  s_55dbfcc7cf0fa2::t_0853ee6625f4c6 815-816
+  s_55dbfcc7cf0fa2::t_d1d592865e0852 844
+control-plane/Sources/SPIREServerAPI/WorkloadAPISVIDSource.swift
+  s_55dbfcc7cf0fa2::t_bf5df8d050c952 61-66
+  s_55dbfcc7cf0fa2::t_733768d1085b93 78,81
+  s_55dbfcc7cf0fa2::t_09736b9bee40fa 132-137,146
+control-plane/Tests/AppTests/SPIREServerAPIClientMTLSTests.swift
+  s_55dbfcc7cf0fa2::t_6863cde0faf6be 101-134
+  s_55dbfcc7cf0fa2::t_22b62e86c2a77a 303-313
+  s_55dbfcc7cf0fa2::t_93d2686889131a 193-194,197-198,201-202,211,214
+  s_55dbfcc7cf0fa2::t_009974c5ef0845 244-245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "7d393cb97f75bb1d2af3460d86dfd35665583e8d",
+  "prompts": {},
+  "sessions": {
+    "s_55dbfcc7cf0fa2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53a55717-7f12-4794-ad1b-dfd24f98dd70",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
