@@ -39,27 +39,91 @@ public enum StageBudget {
     public static let observationSeconds = 5
 
     /// Run `operation`, failing with `StageBudgetError.exceeded` if it does
-    /// not complete within `seconds`. The operation task is cancelled on
-    /// timeout (best effort — stages that ignore cancellation still stop
-    /// blocking the caller).
+    /// not complete within `seconds`. The operation is cancelled on timeout
+    /// (best effort), and — crucially — stages that ignore cancellation still
+    /// stop blocking the caller.
+    ///
+    /// That last guarantee is why this cannot be a task group. A group awaits
+    /// every child before it returns or rethrows, so cancelling a child parked
+    /// on a non-cancellation-aware continuation (an unanswered QMP round-trip,
+    /// say) leaves the group suspended forever: the budget itself hangs, in
+    /// exactly the case it exists to bound (issue #516). The operation
+    /// therefore runs in an *unstructured* task, which the caller can walk
+    /// away from. A wedged stage leaks that task — unavoidable, since it is
+    /// stuck — but the caller is freed on schedule.
     public static func run<T: Sendable>(
         seconds: Int,
         stage: String,
         operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                try await operation()
+        let outcome = FirstOutcome<T>()
+
+        // Inherits the caller's context (actor, priority, task locals) so the
+        // stage behaves as if it ran inline.
+        let work = Task {
+            do {
+                outcome.resolve(.success(try await operation()))
+            } catch {
+                outcome.resolve(.failure(error))
             }
-            group.addTask {
+        }
+        // Detached: the deadline must fire even if the caller's executor is
+        // the thing that is wedged.
+        let deadline = Task.detached {
+            do {
                 try await Task.sleep(for: .seconds(seconds))
-                throw StageBudgetError.exceeded(stage: stage, seconds: seconds)
+            } catch {
+                return
             }
-            guard let result = try await group.next() else {
-                throw StageBudgetError.exceeded(stage: stage, seconds: seconds)
+            outcome.resolve(.failure(StageBudgetError.exceeded(stage: stage, seconds: seconds)))
+        }
+        defer {
+            work.cancel()
+            deadline.cancel()
+        }
+
+        return try await withTaskCancellationHandler {
+            try await outcome.value()
+        } onCancel: {
+            outcome.resolve(.failure(CancellationError()))
+        }
+    }
+}
+
+/// A one-shot result slot: the first of the operation, the deadline, or
+/// cancellation to resolve it wins, and later resolutions are ignored.
+///
+/// Registration and resolution share one lock so a deadline that fires before
+/// the caller parks cannot slip through the gap — the caller then observes the
+/// stored result instead of waiting for a resolution that already happened.
+private final class FirstOutcome<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<T, any Error>?
+    private var continuation: CheckedContinuation<T, any Error>?
+
+    func resolve(_ value: Result<T, any Error>) {
+        lock.lock()
+        guard result == nil else {
+            lock.unlock()
+            return
+        }
+        result = value
+        let waiter = continuation
+        continuation = nil
+        lock.unlock()
+        waiter?.resume(with: value)
+    }
+
+    func value() async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            if let result {
+                lock.unlock()
+                continuation.resume(with: result)
+                return
             }
-            group.cancelAll()
-            return result
+            self.continuation = continuation
+            lock.unlock()
         }
     }
 }

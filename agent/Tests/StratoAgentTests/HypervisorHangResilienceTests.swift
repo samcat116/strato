@@ -40,6 +40,29 @@ struct HypervisorHangResilienceTests {
         }
     }
 
+    @Test("A stage that ignores cancellation still stops blocking the caller")
+    func budgetEscapesNonCancellableWork() async throws {
+        // The failure this guards is subtle: a task group awaits every child
+        // before it rethrows, so cancelling a child parked on a
+        // non-cancellation-aware continuation left the budget itself hung —
+        // in exactly the scenario it exists to bound. A QMP round-trip that
+        // never gets answered is precisely such a continuation.
+        let stuck = UncancellableWork()
+
+        var thrown: (any Error)?
+        do {
+            _ = try await StageBudget.run(seconds: 1, stage: "qmp-status") {
+                try await stuck.run()
+            }
+        } catch {
+            thrown = error
+        }
+
+        let budgetError = thrown as? StageBudgetError
+        #expect(budgetError != nil, "the budget must return even though the stage ignores cancellation")
+        stuck.finish()
+    }
+
     @Test("A responsive call passes its value straight through the budget")
     func budgetPassesThroughFastCalls() async throws {
         let value = try await StageBudget.run(seconds: 30, stage: "qmp-status") { "running" }
@@ -116,6 +139,36 @@ struct HypervisorHangResilienceTests {
             while !released && !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(5))
             }
+        }
+    }
+
+    /// Work parked on a continuation that cancellation cannot touch — the
+    /// shape of an unanswered QMP round-trip. Only `finish()` releases it.
+    private final class UncancellableWork: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, any Error>?
+        private var finished = false
+
+        func run() async throws {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                lock.lock()
+                if finished {
+                    lock.unlock()
+                    continuation.resume()
+                    return
+                }
+                self.continuation = continuation
+                lock.unlock()
+            }
+        }
+
+        func finish() {
+            lock.lock()
+            finished = true
+            let waiter = continuation
+            continuation = nil
+            lock.unlock()
+            waiter?.resume()
         }
     }
 
