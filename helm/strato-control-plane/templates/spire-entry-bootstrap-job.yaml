@@ -188,8 +188,14 @@ spec:
                       return 1
                   fi
                   echo "    entry already exists (${entry_id}); updating to converge DNS SANs"
-                  exec_spire entry update -socketPath "${SOCK}" -entryID "${entry_id}" "$@" \
-                      | sed 's/^/    /'
+                  # Capture before formatting: piping straight into sed would
+                  # make the pipeline's status sed's, masking a failed update.
+                  if out=$(exec_spire entry update -socketPath "${SOCK}" -entryID "${entry_id}" "$@" 2>&1); then
+                      printf '%s\n' "${out}" | sed 's/^/    /'
+                  else
+                      printf '%s\n' "${out}" | sed 's/^/    /' >&2
+                      return 1
+                  fi
               }
 
               ensure_envoy_entry \
