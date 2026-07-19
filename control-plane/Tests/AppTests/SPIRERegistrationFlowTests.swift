@@ -8,10 +8,11 @@ import VaporTesting
 
 @testable import App
 
-/// Tests for SPIRE join-token provisioning folded into the agent registration
-/// flow: creating a registration token also provisions the node in SPIRE
-/// (join token + workload entry), revocation deprovisions it and fails closed
-/// when the SPIRE server is unreachable.
+/// Tests for the agent enrollment flow, which *is* SPIRE provisioning: creating
+/// an enrollment provisions the node in SPIRE (join token + workload entry) and
+/// is refused outright when SPIRE is unconfigured, while revoking one
+/// deprovisions the grant it still owns and fails closed when the SPIRE server
+/// is unreachable.
 @Suite("SPIRE Registration Flow Tests")
 final class SPIRERegistrationFlowTests: BaseTestCase {
 
@@ -45,61 +46,77 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
         return fake
     }
 
-    private struct CreateTokenBody: Content {
+    private struct CreateEnrollmentBody: Content {
         let agentName: String
         var expirationHours: Int? = nil
         var organizationId: UUID? = nil
     }
 
-    /// Tokens must carry an owning organization; mint one per test app.
+    /// Enrollments must carry an owning organization; mint one per test app.
     private func makeOrg(on db: Database) async throws -> UUID {
         let org = Organization(name: "SPIRE Org", description: "org for SPIRE tests")
         try await org.save(on: db)
         return try org.requireID()
     }
 
-    // MARK: - Token creation
+    /// An enrollment row as `createEnrollment` would have left it, without
+    /// driving the endpoint (which would also call the fake SPIRE API and
+    /// pollute the call recordings these tests assert on).
+    private func makeEnrollment(agentName: String = "node-a") -> AgentEnrollment {
+        AgentEnrollment(
+            agentName: agentName,
+            spiffeID: "spiffe://strato.local/agent/\(agentName)",
+            expirationHours: 1)
+    }
 
-    @Test("Creating a registration token provisions SPIRE and returns the join token once")
-    func createTokenProvisionsSPIRE() async throws {
+    // MARK: - Enrollment creation
+
+    @Test("Creating an enrollment provisions SPIRE and returns the join token once")
+    func createEnrollmentProvisionsSPIRE() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let orgId = try await makeOrg(on: app.db)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+            try await app.test(.POST, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateTokenBody(agentName: "node-a", expirationHours: 2, organizationId: orgId))
+                try req.content.encode(
+                    CreateEnrollmentBody(agentName: "node-a", expirationHours: 2, organizationId: orgId))
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let response = try res.content.decode(AgentRegistrationTokenResponse.self)
+                let response = try res.content.decode(AgentEnrollmentResponse.self)
 
-                let spire = try #require(response.spire)
+                #expect(response.agentName == "node-a")
+                #expect(response.spiffeId == "spiffe://strato.local/agent/node-a")
+
+                // `spire` is no longer optional: enrollment *is* SPIRE
+                // provisioning, so a response without it cannot exist.
+                let spire = response.spire
                 #expect(spire.joinToken == "fake-join-token")
-                #expect(spire.spiffeID == "spiffe://strato.local/agent/node-a")
-                #expect(spire.nodeID == "spiffe://strato.local/node/node-a")
+                #expect(spire.spiffeId == "spiffe://strato.local/agent/node-a")
+                #expect(spire.nodeId == "spiffe://strato.local/node/node-a")
                 #expect(spire.trustDomain == "strato.local")
                 #expect(spire.serverAddress == "spire.example.com:8085")
 
-                // With SPIRE provisioning active, agents dial the Envoy mTLS
-                // listener, which is always TLS — the URL must be wss:// even
-                // though this test request arrived over plain HTTP.
-                #expect(response.registrationURL.hasPrefix("wss://"))
-
-                let command = try #require(response.bootstrapCommand)
+                let command = response.bootstrapCommand
                 // The curl-able installer (deploy/agent/install.sh) is the one
                 // node-onboarding entry point; the command must fetch it and
-                // pass through the registration and SPIRE parameters.
+                // pass through the control plane and SPIRE parameters.
                 #expect(command.hasPrefix("curl -fsSL"))
                 #expect(command.contains("deploy/agent/install.sh"))
                 #expect(command.contains("| sudo bash -s --"))
-                #expect(command.contains(response.registrationURL))
+                // Agents dial the Envoy mTLS listener, which is always TLS — the
+                // URL must be wss:// even though this request arrived over
+                // plain HTTP.
+                #expect(command.contains("--control-plane-url 'wss://"))
+                #expect(command.contains("/agent/ws'"))
+                #expect(command.contains("--agent-name 'node-a'"))
                 #expect(command.contains("fake-join-token"))
                 #expect(command.contains("spire.example.com:8085"))
                 #expect(command.contains("--trust-domain 'strato.local'"))
             }
 
-            // The join token lifetime matches the WS token's expirationHours
+            // The join token lifetime matches the enrollment's expirationHours
             let joinTokenRequests = await fake.joinTokenRequests
             #expect(joinTokenRequests.count == 1)
             #expect(joinTokenRequests.first?.ttlSeconds == 7200)
@@ -112,11 +129,17 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             #expect(entries.first?.parentID == "spiffe://strato.local/node/node-a")
             #expect(entries.first?.selectors == [SPIRESelector(type: "unix", value: "uid:0")])
             #expect(entries.first?.x509SVIDTTLSeconds == 1800)
+
+            // The persisted row carries the scope a registering agent inherits.
+            let row = try #require(
+                try await AgentEnrollment.query(on: app.db).filter(\.$agentName == "node-a").first())
+            #expect(row.organizationID == orgId)
+            #expect(row.isUsed == false)
         }
     }
 
     @Test("An existing identical SPIRE entry is reused, not an error")
-    func createTokenReusesExistingEntry() async throws {
+    func createEnrollmentReusesExistingEntry() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let orgId = try await makeOrg(on: app.db)
@@ -124,19 +147,19 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             await fake.setEntryResult(.alreadyExists(entryID: "existing-entry"))
             installFakeSPIRE(on: app, fake: fake)
 
-            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+            try await app.test(.POST, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateTokenBody(agentName: "node-a", organizationId: orgId))
+                try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let response = try res.content.decode(AgentRegistrationTokenResponse.self)
-                #expect(response.spire != nil)
+                let response = try res.content.decode(AgentEnrollmentResponse.self)
+                #expect(response.spire.joinToken == "fake-join-token")
             }
         }
     }
 
     @Test("SPIRE provisioning failure returns 502 and persists nothing")
-    func createTokenFailsClosedWhenSPIREUnreachable() async throws {
+    func createEnrollmentFailsClosedWhenSPIREUnreachable() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let orgId = try await makeOrg(on: app.db)
@@ -144,67 +167,101 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             await fake.setFailJoinToken(true)
             installFakeSPIRE(on: app, fake: fake)
 
-            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+            try await app.test(.POST, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateTokenBody(agentName: "node-a", organizationId: orgId))
+                try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
             } afterResponse: { res in
                 #expect(res.status == .badGateway)
             }
 
-            let tokenCount = try await AgentRegistrationToken.query(on: app.db).count()
-            #expect(tokenCount == 0)
+            let enrollmentCount = try await AgentEnrollment.query(on: app.db).count()
+            #expect(enrollmentCount == 0)
         }
     }
 
     @Test("Agent names unusable as SPIFFE path segments are rejected with 400")
-    func createTokenRejectsInvalidSPIFFEName() async throws {
+    func createEnrollmentRejectsInvalidSPIFFEName() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let orgId = try await makeOrg(on: app.db)
             installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+            try await app.test(.POST, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateTokenBody(agentName: "node/../evil", organizationId: orgId))
+                try req.content.encode(CreateEnrollmentBody(agentName: "node/../evil", organizationId: orgId))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
 
-            let tokenCount = try await AgentRegistrationToken.query(on: app.db).count()
-            #expect(tokenCount == 0)
+            let enrollmentCount = try await AgentEnrollment.query(on: app.db).count()
+            #expect(enrollmentCount == 0)
         }
     }
 
-    @Test("Without SPIRE registration configured the response is unchanged")
-    func createTokenWithoutSPIRE() async throws {
+    @Test("Without SPIRE configured, enrolling an agent is refused naming the missing settings")
+    func createEnrollmentRequiresSPIRE() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let orgId = try await makeOrg(on: app.db)
 
-            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+            // No `spireRegistrationService`: mTLS is the only agent auth path,
+            // so without SPIRE there is no way to enroll a node at all.
+            try await app.test(.POST, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-                try req.content.encode(CreateTokenBody(agentName: "node-a", organizationId: orgId))
+                try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
             } afterResponse: { res in
-                #expect(res.status == .ok)
-                let response = try res.content.decode(AgentRegistrationTokenResponse.self)
-                #expect(response.spire == nil)
-                #expect(response.bootstrapCommand == nil)
+                #expect(res.status == .serviceUnavailable)
+                let body = res.body.string
+                #expect(body.contains("SPIRE_ENABLED"))
+                #expect(body.contains("SPIRE_SERVER_API_ADDRESS"))
             }
+
+            let enrollmentCount = try await AgentEnrollment.query(on: app.db).count()
+            #expect(enrollmentCount == 0)
         }
     }
 
-    // MARK: - Token revocation
+    @Test("A second enrollment for a name that already has one is a 409")
+    func createEnrollmentRejectsDuplicateName() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let orgId = try await makeOrg(on: app.db)
+            installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-    @Test("Revoking an unused token deletes the SPIRE entry")
-    func revokeUnusedTokenDeprovisions() async throws {
+            try await app.test(.POST, "/api/agents/enrollments") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            // Re-enrolling means revoking the old enrollment first, so its SPIRE
+            // grant is withdrawn rather than orphaned beside a second grant for
+            // the same identity.
+            try await app.test(.POST, "/api/agents/enrollments") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(CreateEnrollmentBody(agentName: "node-a", organizationId: orgId))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            let enrollmentCount = try await AgentEnrollment.query(on: app.db).count()
+            #expect(enrollmentCount == 1)
+        }
+    }
+
+    // MARK: - Enrollment revocation
+
+    @Test("Revoking an enrollment for an unregistered node deletes the SPIRE entry")
+    func revokeEnrollmentDeprovisions() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
-            try await token.save(on: app.db)
+            let enrollment = makeEnrollment()
+            try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -220,25 +277,25 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let evicted = await fake.evictedAgentIDs
             #expect(evicted == ["spiffe://strato.local/node/node-a"])
 
-            let remaining = try await AgentRegistrationToken.query(on: app.db).count()
+            let remaining = try await AgentEnrollment.query(on: app.db).count()
             #expect(remaining == 0)
         }
     }
 
-    @Test("Revoking an expired token without a successor still deprovisions")
-    func revokeExpiredTokenWithoutSuccessorDeprovisions() async throws {
+    @Test("Revoking an expired enrollment still deprovisions")
+    func revokeExpiredEnrollmentDeprovisions() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            // Expired but never superseded: the join token may have been
-            // redeemed before expiry (spire-agent attests before strato-agent
-            // registers), so the grant can still be live and must be revoked.
-            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
-            token.expiresAt = Date().addingTimeInterval(-3600)
-            try await token.save(on: app.db)
+            // Expiry alone does not make the grant inert: the join token may
+            // have been redeemed before it expired (spire-agent attests before
+            // strato-agent registers), so the grant can still be live.
+            let enrollment = makeEnrollment()
+            enrollment.expiresAt = Date().addingTimeInterval(-3600)
+            try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -249,27 +306,27 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let evicted = await fake.evictedAgentIDs
             #expect(evicted == ["spiffe://strato.local/node/node-a"])
 
-            let remaining = try await AgentRegistrationToken.query(on: app.db).count()
+            let remaining = try await AgentEnrollment.query(on: app.db).count()
             #expect(remaining == 0)
         }
     }
 
-    @Test("Revoking a superseded expired token leaves the successor's grant alone")
-    func revokeSupersededTokenSkipsSPIRE() async throws {
+    @Test("Revoking an enrollment whose agent has registered leaves the live agent's entries alone")
+    func revokeEnrollmentForRegisteredAgentSkipsSPIRE() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            let stale = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
-            stale.expiresAt = Date().addingTimeInterval(-3600)
-            try await stale.save(on: app.db)
+            // Once an Agent row exists the node has attested and registered, so
+            // the entries belong to the live agent: they are withdrawn by
+            // deregistering it, not by revoking the enrollment it came from.
+            let enrollment = makeEnrollment()
+            enrollment.markAsUsed()
+            try await enrollment.save(on: app.db)
+            let agent = makeAgent(named: "node-a")
+            try await agent.save(on: app.db)
 
-            // A valid replacement now owns the SPIRE grant (and the node may
-            // already have attested with it against the same stable node ID).
-            let successor = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
-            try await successor.save(on: app.db)
-
-            try await app.test(.DELETE, "/api/agents/registration-tokens/\(stale.id!)") { req in
+            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -280,32 +337,32 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let evicted = await fake.evictedAgentIDs
             #expect(evicted.isEmpty)
 
-            let remaining = try await AgentRegistrationToken.query(on: app.db).count()
-            #expect(remaining == 1)
+            let remaining = try await AgentEnrollment.query(on: app.db).count()
+            #expect(remaining == 0)
         }
     }
 
-    @Test("Revoking an unused token for an mTLS-registered agent leaves its entries alone")
-    func revokeTokenForRegisteredAgentSkipsSPIRE() async throws {
+    @Test("A used enrollment with no agent row still owns — and revokes — its grant")
+    func revokeUsedEnrollmentWithoutAgentDeprovisions() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            // The mTLS path never redeems the WebSocket token, so the token
-            // stays "unused" even though the agent is registered and live.
-            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
-            try await token.save(on: app.db)
-            let agent = makeAgent(named: "node-a")
-            try await agent.save(on: app.db)
+            // `isUsed` is informational; grant ownership is decided by whether
+            // an Agent row exists. A node that attested and was later
+            // deregistered must not keep a live grant behind a "used" flag.
+            let enrollment = makeEnrollment()
+            enrollment.markAsUsed()
+            try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
 
             let deleted = await fake.deletedSPIFFEIDs
-            #expect(deleted.isEmpty)
+            #expect(deleted == ["spiffe://strato.local/agent/node-a", "spiffe://strato.local/node/node-a"])
         }
     }
 
@@ -317,36 +374,36 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             await fake.setFailDelete(true)
             installFakeSPIRE(on: app, fake: fake)
 
-            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
-            try await token.save(on: app.db)
+            let enrollment = makeEnrollment()
+            try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .badGateway)
             }
 
-            // The token must remain revocable after SPIRE recovers
-            let remaining = try await AgentRegistrationToken.query(on: app.db).count()
+            // The enrollment must remain revocable after SPIRE recovers
+            let remaining = try await AgentEnrollment.query(on: app.db).count()
             #expect(remaining == 1)
         }
     }
 
-    @Test("Revoking a token whose node never attested tolerates SPIRE invalidArgument on evict")
+    @Test("Revoking an enrollment whose node never attested tolerates SPIRE invalidArgument on evict")
     func revokeToleratesNeverAttestedEvict() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
             let fake = FakeSPIREServerAPI()
             // A never-redeemed join token means DeleteAgent hits "not an agent"
             // (invalidArgument). Cancelling the grant must still succeed — there
-            // is nothing to evict — rather than 502 and strand the token.
+            // is nothing to evict — rather than 502 and strand the enrollment.
             await fake.setEvictInvalidArgument(true)
             installFakeSPIRE(on: app, fake: fake)
 
-            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
-            try await token.save(on: app.db)
+            let enrollment = makeEnrollment()
+            try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -356,7 +413,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             // was a no-op.
             let deleted = await fake.deletedSPIFFEIDs
             #expect(deleted == ["spiffe://strato.local/agent/node-a", "spiffe://strato.local/node/node-a"])
-            let remaining = try await AgentRegistrationToken.query(on: app.db).count()
+            let remaining = try await AgentEnrollment.query(on: app.db).count()
             #expect(remaining == 0)
         }
     }
@@ -383,56 +440,6 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
             let remaining = try await Agent.query(on: app.db).count()
             #expect(remaining == 0)
-        }
-    }
-
-    @Test("Revoking a used token leaves the registered agent's entry alone")
-    func revokeUsedTokenKeepsEntry() async throws {
-        try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
-            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
-
-            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
-            token.markAsUsed()
-            try await token.save(on: app.db)
-
-            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-            } afterResponse: { res in
-                #expect(res.status == .noContent)
-            }
-
-            let deleted = await fake.deletedSPIFFEIDs
-            #expect(deleted.isEmpty)
-        }
-    }
-
-    @Test("A successor minted without a SPIRE grant does not take ownership")
-    func unprovisionedSuccessorDoesNotOwnGrant() async throws {
-        try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
-            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
-
-            // The original grant, expired but possibly redeemed.
-            let stale = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
-            stale.expiresAt = Date().addingTimeInterval(-3600)
-            try await stale.save(on: app.db)
-
-            // Replacement issued while the registration API was unconfigured:
-            // it carries no SPIRE grant, so it cannot absorb the old one.
-            let successor = AgentRegistrationToken(agentName: "node-a", spireProvisioned: false)
-            try await successor.save(on: app.db)
-
-            try await app.test(.DELETE, "/api/agents/registration-tokens/\(stale.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
-            } afterResponse: { res in
-                #expect(res.status == .noContent)
-            }
-
-            let deleted = await fake.deletedSPIFFEIDs
-            #expect(deleted == ["spiffe://strato.local/agent/node-a", "spiffe://strato.local/node/node-a"])
-            let evicted = await fake.evictedAgentIDs
-            #expect(evicted == ["spiffe://strato.local/node/node-a"])
         }
     }
 
@@ -485,31 +492,31 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let adminToken = try await makeAdmin(on: app.db)
             installSPIREAuthWithoutRegistrationAPI(on: app)
 
-            let token = AgentRegistrationToken(agentName: "node-a", spireProvisioned: true)
-            try await token.save(on: app.db)
+            let enrollment = makeEnrollment()
+            try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .serviceUnavailable)
             }
 
-            let remaining = try await AgentRegistrationToken.query(on: app.db).count()
+            let remaining = try await AgentEnrollment.query(on: app.db).count()
             #expect(remaining == 1)
 
             // Expiry doesn't unblock it — the join token may have been
             // redeemed before expiry. Only the explicit override does.
-            token.expiresAt = Date().addingTimeInterval(-3600)
-            try await token.save(on: app.db)
+            enrollment.expiresAt = Date().addingTimeInterval(-3600)
+            try await enrollment.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agents/registration-tokens/\(token.id!)") { req in
+            try await app.test(.DELETE, "/api/agents/enrollments/\(enrollment.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .serviceUnavailable)
             }
 
             try await app.test(
-                .DELETE, "/api/agents/registration-tokens/\(token.id!)?skipSpireDeprovision=true"
+                .DELETE, "/api/agents/enrollments/\(enrollment.id!)?skipSpireDeprovision=true"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in

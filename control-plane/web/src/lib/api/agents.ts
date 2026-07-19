@@ -3,10 +3,10 @@
 import { api } from "./client";
 import type {
   Agent,
-  AgentRegistrationToken,
-  AgentRegistrationTokenListItem,
+  AgentEnrollment,
+  AgentEnrollmentListItem,
   AgentUpdateResult,
-  CreateAgentRegistrationTokenRequest,
+  CreateAgentEnrollmentRequest,
 } from "@/types/api";
 
 export const agentsApi = {
@@ -39,19 +39,19 @@ export const agentsApi = {
     return api.patch<Agent>(`/api/agents/${id}`, data);
   },
 
-  // Registration tokens
-  listTokens(organizationId?: string): Promise<AgentRegistrationTokenListItem[]> {
-    return api.get<AgentRegistrationTokenListItem[]>(
-      "/api/agents/registration-tokens",
+  // SPIFFE/SPIRE enrollments — the only agent enrollment path.
+  listEnrollments(organizationId?: string): Promise<AgentEnrollmentListItem[]> {
+    return api.get<AgentEnrollmentListItem[]>(
+      "/api/agents/enrollments",
       organizationId ? { organization_id: organizationId } : undefined
     );
   },
 
-  createToken(data: CreateAgentRegistrationTokenRequest): Promise<AgentRegistrationToken> {
-    return api.post<AgentRegistrationToken>("/api/agents/registration-tokens", data);
+  createEnrollment(data: CreateAgentEnrollmentRequest): Promise<AgentEnrollment> {
+    return api.post<AgentEnrollment>("/api/agents/enrollments", data);
   },
 
-  revokeToken(tokenId: string): Promise<void> {
-    return api.delete(`/api/agents/registration-tokens/${tokenId}`);
+  revokeEnrollment(enrollmentId: string): Promise<void> {
+    return api.delete(`/api/agents/enrollments/${enrollmentId}`);
   },
 };

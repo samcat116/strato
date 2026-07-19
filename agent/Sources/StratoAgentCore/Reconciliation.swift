@@ -433,11 +433,18 @@ public actor Reconciler {
             var index = 0
             while index < steps.count {
                 let step = steps[index]
-                currentPhase[ref] = phaseDescription(step)
+                let phase = phaseDescription(step)
+                currentPhase[ref] = phase
                 if step == .adopt {
-                    steps = Array(steps[...index]) + (try await adoptAndReplan(item))
+                    steps =
+                        Array(steps[...index])
+                        + (try await watched(phase, item) {
+                            try await self.adoptAndReplan(item)
+                        })
                 } else {
-                    try await actuator.perform(step, item: item)
+                    try await watched(phase, item) {
+                        try await self.actuator.perform(step, item: item)
+                    }
                 }
                 index += 1
             }
@@ -517,6 +524,51 @@ public actor Reconciler {
             currentPhase.removeValue(forKey: ref)
         }
         await actuator.convergenceDidChange()
+    }
+
+    /// How long a single step may run before the agent starts saying so, and
+    /// how often it repeats afterwards. Set above the longest legitimate stage
+    /// (a multi-GB image materialization) so a healthy slow create stays quiet.
+    private static let watchdogIntervalSeconds = 300
+
+    /// Run one convergence step with a watchdog that logs while it is still
+    /// running.
+    ///
+    /// This does not cancel anything — a step that ignores cancellation would
+    /// not stop anyway. It exists so a step that never returns is *visible*.
+    /// In issue #516 a step hung indefinitely and the agent went silent: no
+    /// timeout, no error, no log line, and the only evidence was the absence of
+    /// later messages. A periodic "still running" line makes that self-evident
+    /// in the log instead of requiring a thread dump to infer.
+    private func watched<T: Sendable>(
+        _ phase: String,
+        _ item: ReconcileWorkItem,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        let logger = self.logger
+        let interval = Self.watchdogIntervalSeconds
+        // Detached on purpose: a `Task {}` here would inherit this actor's
+        // executor, so it could not report a step that wedges the actor —
+        // precisely the case it exists for.
+        let watchdog = Task.detached {
+            var elapsed = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(interval))
+                if Task.isCancelled { return }
+                elapsed += interval
+                logger.warning(
+                    "Reconcile step still running",
+                    metadata: [
+                        "kind": .string(item.kind.rawValue),
+                        "workloadId": .string(item.id),
+                        "generation": .stringConvertible(item.generation),
+                        "phase": .string(phase),
+                        "elapsedSeconds": .stringConvertible(elapsed),
+                    ])
+            }
+        }
+        defer { watchdog.cancel() }
+        return try await operation()
     }
 
     private func phaseDescription(_ step: ReconcileStep) -> String {

@@ -2,6 +2,7 @@ import Fluent
 import Foundation
 import NIOConcurrencyHelpers
 import NIOCore
+import NIOWebSocket
 import StratoShared
 import Testing
 import Vapor
@@ -12,179 +13,153 @@ import Vapor
 /// ``AgentWebSocketController``. These bind a real Vapor HTTP server on an
 /// ephemeral loopback port and drive it with a genuine WebSocket client so the
 /// full upgrade → authenticate → buffer → register path executes exactly as it
-/// does in production — the token/XFCC auth branches, the frame buffering that
-/// protects the register frame that arrives immediately after upgrade, the
-/// reconnect-token rotation, and the failed-registration token restore. None of
-/// this is reachable through Vapor's in-memory `test()` harness, which never
-/// performs a WebSocket upgrade.
+/// does in production — the XFCC/mTLS auth branch (the only one there is), the
+/// frame buffering that protects the register frame that arrives immediately
+/// after upgrade, and the refusals that apply when SPIRE is unconfigured or no
+/// client certificate is presented. None of this is reachable through Vapor's
+/// in-memory `test()` harness, which never performs a WebSocket upgrade.
 @Suite("Agent WebSocket Integration", .serialized)
 struct AgentWebSocketIntegrationTests {
 
-    /// New agents require an owning organization on their registration token.
-    private func makeOrg(app: Application) async throws -> OrganizationScope {
+    /// New agents take their owning organization from their enrollment row.
+    private func makeOrg(app: Application) async throws -> Organization {
         let org = Organization(name: "WS Org", description: "org for WS tests")
         try await org.save(on: app.db)
-        return .organization(try org.requireID())
+        return org
     }
 
-    // MARK: - (1) Token auth happy path
-
-    @Test("Token auth registers, rotates the reconnect token, and consumes the presented token")
-    func tokenAuthRotatesReconnectToken() async throws {
-        try await withRunningApp { app, port in
-            let agentName = "agent-happy"
-            let presented = AgentRegistrationToken(
-                agentName: agentName, expirationHours: 1,
-                organizationScope: try await self.makeOrg(app: app))
-            try await presented.save(on: app.db)
-            let presentedValue = presented.token
-
-            var headers = HTTPHeaders()
-            headers.bearerAuthorization = .init(token: presentedValue)
-
-            let client = try await AgentTestClient.connect(app: app, port: port, name: agentName, headers: headers)
-            let registerJSON = try encodeRegister(agentName: agentName)
-            client.send(registerJSON)
-
-            let envelope = try await client.nextEnvelope()
-            #expect(envelope.type == .agentRegisterResponse)
-
-            let response = try envelope.decode(as: AgentRegisterResponseMessage.self)
-            let reconnectToken = try #require(response.reconnectToken)
-            #expect(reconnectToken != presentedValue)
-
-            // A successful registration triggers an immediate desired-state sync;
-            // draining it here also confirms that background DB work has settled
-            // before teardown.
-            try await client.expectDesiredStateSync()
-
-            // The presented single-use token is now consumed.
-            let reloadedPresented = try await AgentRegistrationToken.query(on: app.db)
-                .filter(\.$token == presentedValue)
-                .first()
-            let presentedIsUsed = reloadedPresented?.isUsed
-            #expect(presentedIsUsed == true)
-
-            // A fresh, unused token was minted for the agent's next reconnect.
-            let rotated = try await AgentRegistrationToken.query(on: app.db)
-                .filter(\.$token == reconnectToken)
-                .first()
-            let rotatedRow = try #require(rotated)
-            #expect(rotatedRow.agentName == agentName)
-            #expect(rotatedRow.isUsed == false)
-            #expect(rotatedRow.isValid == true)
-
-            try await client.close()
-        }
+    /// Enable SPIRE mTLS auth without a trust bundle: with
+    /// `hasTrustBundle == false` the XFCC `URI=` alone establishes identity
+    /// (relying on Envoy's own verification), which is what these tests drive.
+    /// The client dials 127.0.0.1, so the controller's local-sidecar check —
+    /// the reason a spoofed XFCC from the pod network is refused — passes.
+    private func enableSPIRE(on app: Application) {
+        let config = SPIREServiceConfig(
+            enabled: true,
+            trustDomain: "strato.local"
+        )
+        app.spireService = SPIREService(config: config, logger: app.logger, httpClient: app.client)
     }
 
-    // MARK: - (2) mTLS auth never mints a reconnect token
+    private func xfccHeaders(agentName: String) -> HTTPHeaders {
+        var headers = HTTPHeaders()
+        headers.add(
+            name: "X-Forwarded-Client-Cert",
+            value: "URI=spiffe://strato.local/agent/\(agentName)")
+        return headers
+    }
 
-    @Test("mTLS (XFCC) auth mints no reconnect token even when a bearer header is present")
-    func mtlsAuthDoesNotMintReconnectToken() async throws {
+    // MARK: - (1) mTLS happy path: the enrollment supplies scope and site
+
+    @Test("An mTLS-authenticated agent registers and inherits its enrollment's org scope and site")
+    func mtlsRegistrationInheritsEnrollmentScopeAndSite() async throws {
         try await withRunningApp { app, port in
-            // Enable SPIRE but load no trust bundle: with `hasTrustBundle == false`
-            // the XFCC `URI=` alone establishes identity (relying on Envoy's own
-            // verification), which is all this path needs to exercise the gating.
-            let config = SPIREServiceConfig(
-                enabled: true,
-                trustDomain: "strato.local",
-                requireClientCert: true
-            )
-            app.spireService = SPIREService(config: config, logger: app.logger, httpClient: app.client)
+            self.enableSPIRE(on: app)
 
             let agentName = "mtls-agent"
-            // mTLS agents never redeem the WebSocket token, but their minting
-            // flow still creates a token row carrying the owning org — the
-            // registration path reads the scope from it.
-            let provisioning = AgentRegistrationToken(
-                agentName: agentName, expirationHours: 1,
-                organizationScope: try await self.makeOrg(app: app))
-            try await provisioning.save(on: app.db)
+            let org = try await self.makeOrg(app: app)
+            let site = Site(name: "ws-dc", organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
 
-            var headers = HTTPHeaders()
-            headers.add(
-                name: "X-Forwarded-Client-Cert",
-                value: "URI=spiffe://strato.local/agent/\(agentName)")
-            // A bearer header on an mTLS connection must be ignored: the connection
-            // did not authenticate via the token path, so no reconnect token is due.
-            headers.bearerAuthorization = .init(token: "unrelated-bearer-token")
+            // An SVID authenticates the node's identity but carries neither the
+            // owning org nor the site: both come from the enrollment an operator
+            // created for this name, resolved inside `registerAgent`.
+            let enrollment = AgentEnrollment(
+                agentName: agentName,
+                spiffeID: "spiffe://strato.local/agent/\(agentName)",
+                expirationHours: 1,
+                siteID: try site.requireID(),
+                organizationScope: .organization(try org.requireID()))
+            try await enrollment.save(on: app.db)
 
-            let client = try await AgentTestClient.connect(app: app, port: port, name: agentName, headers: headers)
+            let client = try await AgentTestClient.connect(
+                app: app, port: port, name: agentName, headers: self.xfccHeaders(agentName: agentName))
             let registerJSON = try encodeRegister(agentName: agentName)
             client.send(registerJSON)
-
-            let envelope = try await client.nextEnvelope()
-            #expect(envelope.type == .agentRegisterResponse)
-
-            let response = try envelope.decode(as: AgentRegisterResponseMessage.self)
-            #expect(response.reconnectToken == nil)
-
-            // Drain the post-registration desired-state sync before asserting on
-            // the store, so background DB work has settled.
-            try await client.expectDesiredStateSync()
-
-            // No stray reconnect token should have been written to the store
-            // either — only the pre-existing provisioning token remains.
-            let tokenCount = try await AgentRegistrationToken.query(on: app.db).count()
-            #expect(tokenCount == 1)
-
-            try await client.close()
-        }
-    }
-
-    // MARK: - (3) Frames arriving during authentication are buffered, not dropped
-
-    @Test("A register frame sent immediately after upgrade is buffered through auth and still processed")
-    func registerFrameSentImmediatelyAfterUpgradeIsProcessed() async throws {
-        try await withRunningApp { app, port in
-            let agentName = "agent-buffered"
-            let presented = AgentRegistrationToken(
-                agentName: agentName, expirationHours: 1,
-                organizationScope: try await self.makeOrg(app: app))
-            try await presented.save(on: app.db)
-
-            var headers = HTTPHeaders()
-            headers.bearerAuthorization = .init(token: presented.token)
-
-            // Send the register frame from inside the upgrade callback — the
-            // earliest possible moment, while the server's token validation (a DB
-            // round-trip) is still in flight. Without the controller's pre-auth
-            // frame buffer this frame would race ahead of `state.agentName` being
-            // set and be dropped, and registration would never complete.
-            let registerJSON = try encodeRegister(agentName: agentName)
-            let client = try await AgentTestClient.connect(
-                app: app, port: port, name: agentName, headers: headers, sendOnUpgrade: registerJSON)
 
             let envelope = try await client.nextEnvelope()
             #expect(envelope.type == .agentRegisterResponse)
 
             let response = try envelope.decode(as: AgentRegisterResponseMessage.self)
             #expect(response.name == agentName)
-            #expect(response.reconnectToken != nil)
+
+            // A successful registration triggers an immediate desired-state sync;
+            // draining it here also confirms that background DB work has settled
+            // before the assertions below read the store.
+            try await client.expectDesiredStateSync()
+
+            let agent = try #require(
+                try await Agent.query(on: app.db).filter(\.$name == agentName).first())
+            #expect(agent.$organization.id == org.id)
+            #expect(agent.$site.id == site.id)
+
+            // The enrollment is marked used, but survives: unlike a single-use
+            // token it is not consumed by being redeemed.
+            let reloaded = try #require(try await AgentEnrollment.find(enrollment.id, on: app.db))
+            #expect(reloaded.isUsed == true)
+            #expect(reloaded.usedAt != nil)
+
+            try await client.close()
+        }
+    }
+
+    // MARK: - (2) Frames arriving during authentication are buffered, not dropped
+
+    @Test("A register frame sent immediately after upgrade is buffered through auth and still processed")
+    func registerFrameSentImmediatelyAfterUpgradeIsProcessed() async throws {
+        try await withRunningApp { app, port in
+            self.enableSPIRE(on: app)
+
+            let agentName = "agent-buffered"
+            let org = try await self.makeOrg(app: app)
+            let enrollment = AgentEnrollment(
+                agentName: agentName,
+                spiffeID: "spiffe://strato.local/agent/\(agentName)",
+                expirationHours: 1,
+                organizationScope: .organization(try org.requireID()))
+            try await enrollment.save(on: app.db)
+
+            // Send the register frame from inside the upgrade callback — the
+            // earliest possible moment, while the server's SPIFFE identity
+            // validation is still in flight. Without the controller's pre-auth
+            // frame buffer this frame would race ahead of `state.agentName` being
+            // set and be dropped, and registration would never complete.
+            let registerJSON = try encodeRegister(agentName: agentName)
+            let client = try await AgentTestClient.connect(
+                app: app, port: port, name: agentName, headers: self.xfccHeaders(agentName: agentName),
+                sendOnUpgrade: registerJSON)
+
+            let envelope = try await client.nextEnvelope()
+            #expect(envelope.type == .agentRegisterResponse)
+
+            let response = try envelope.decode(as: AgentRegisterResponseMessage.self)
+            #expect(response.name == agentName)
 
             try await client.expectDesiredStateSync()
             try await client.close()
         }
     }
 
-    // MARK: - (4) Failed registration restores the presented token
+    // MARK: - (3) Registration still refuses agents that can't be reconciled
 
-    @Test("Failed registration restores the presented token so the agent is not locked out")
-    func failedRegistrationRestoresPresentedToken() async throws {
+    @Test("A register frame below the state-sync protocol floor is refused with an error frame")
+    func registrationRefusesUnsupportedProtocolVersion() async throws {
         try await withRunningApp { app, port in
-            let agentName = "agent-fail"
-            let presented = AgentRegistrationToken(agentName: agentName, expirationHours: 1)
-            try await presented.save(on: app.db)
-            let presentedValue = presented.token
+            self.enableSPIRE(on: app)
 
-            var headers = HTTPHeaders()
-            headers.bearerAuthorization = .init(token: presentedValue)
+            let agentName = "agent-old"
+            let org = try await self.makeOrg(app: app)
+            let enrollment = AgentEnrollment(
+                agentName: agentName,
+                spiffeID: "spiffe://strato.local/agent/\(agentName)",
+                expirationHours: 1,
+                organizationScope: .organization(try org.requireID()))
+            try await enrollment.save(on: app.db)
 
-            let client = try await AgentTestClient.connect(app: app, port: port, name: agentName, headers: headers)
-            // protocolVersion 0 is below `stateSyncMinimumVersion`, so registration
-            // fails with `unsupportedProtocolVersion` after the token was already
-            // consumed at connect — exercising the restore path.
+            let client = try await AgentTestClient.connect(
+                app: app, port: port, name: agentName, headers: self.xfccHeaders(agentName: agentName))
+            // protocolVersion 0 is below `stateSyncMinimumVersion`: such an agent
+            // would register and then never converge anything, so it is refused.
             let registerJSON = try encodeRegister(agentName: agentName, protocolVersion: 0)
             client.send(registerJSON)
 
@@ -194,17 +169,68 @@ struct AgentWebSocketIntegrationTests {
             let error = try envelope.decode(as: ErrorMessage.self)
             #expect(error.code == ErrorMessage.ErrorCode.unsupportedProtocolVersion)
 
-            // The restore runs before the error response is sent, so the token is
-            // already valid again by the time we observe the error.
-            let reloaded = try await AgentRegistrationToken.query(on: app.db)
-                .filter(\.$token == presentedValue)
-                .first()
-            let restored = try #require(reloaded)
-            #expect(restored.isUsed == false)
-            #expect(restored.usedAt == nil)
-            #expect(restored.isValid == true)
+            let agentCount = try await Agent.query(on: app.db).count()
+            #expect(agentCount == 0)
 
             try await client.close()
+        }
+    }
+
+    // MARK: - (4) Refusals: no SPIRE configured, and no client certificate
+
+    @Test("A control plane without SPIRE configured refuses the agent socket outright")
+    func socketRefusedWhenSPIREUnconfigured() async throws {
+        try await withRunningApp { app, port in
+            // No `app.spireService`: mTLS is the only agent auth path, so nothing
+            // the agent could present would ever authenticate here.
+            #expect(app.spireService == nil)
+
+            let agentName = "unconfigured-agent"
+            let client = try await AgentTestClient.connect(
+                app: app, port: port, name: agentName, headers: self.xfccHeaders(agentName: agentName))
+
+            let envelope = try await client.nextEnvelope()
+            #expect(envelope.type == .error)
+            let error = try envelope.decode(as: ErrorMessage.self)
+            let mentionsSPIRE = error.error.contains("SPIRE")
+            #expect(mentionsSPIRE)
+
+            let closeCode = try await client.waitForClose()
+            #expect(closeCode == .policyViolation)
+
+            // Nothing registered: the register frame never gets a chance to run.
+            let agentCount = try await Agent.query(on: app.db).count()
+            #expect(agentCount == 0)
+        }
+    }
+
+    @Test("With SPIRE enabled, a connection presenting no client certificate is closed")
+    func socketRefusedWithoutClientCertificate() async throws {
+        try await withRunningApp { app, port in
+            self.enableSPIRE(on: app)
+
+            let agentName = "certless-agent"
+            let org = try await self.makeOrg(app: app)
+            let enrollment = AgentEnrollment(
+                agentName: agentName,
+                spiffeID: "spiffe://strato.local/agent/\(agentName)",
+                expirationHours: 1,
+                organizationScope: .organization(try org.requireID()))
+            try await enrollment.save(on: app.db)
+
+            // No XFCC header at all. With token auth gone there is nothing to
+            // downgrade to, so this is fatal regardless of SPIRE_REQUIRE_CLIENT_CERT.
+            let client = try await AgentTestClient.connect(
+                app: app, port: port, name: agentName, headers: HTTPHeaders())
+
+            let envelope = try await client.nextEnvelope()
+            #expect(envelope.type == .error)
+
+            let closeCode = try await client.waitForClose()
+            #expect(closeCode == .unacceptableData)
+
+            let agentCount = try await Agent.query(on: app.db).count()
+            #expect(agentCount == 0)
         }
     }
 }
@@ -350,6 +376,18 @@ private final class AgentTestClient: Sendable {
 
     func close() async throws {
         try await ws.close().get()
+    }
+
+    /// Await the server closing the connection and report the close code it
+    /// sent. Refusal paths are only fully observable here: the controller sends
+    /// an error frame *and* closes with a code that tells the agent whether the
+    /// rejection was about policy (never retry as-is) or its credentials.
+    func waitForClose(timeout: Duration = .seconds(30)) async throws -> WebSocketErrorCode? {
+        let closed: Void? = try await withTimeout(timeout) { [ws] in
+            try? await ws.onClose.get()
+        }
+        guard closed != nil else { throw TimeoutError() }
+        return ws.closeCode
     }
 }
 

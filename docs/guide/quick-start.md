@@ -57,21 +57,24 @@ Visit `http://localhost:8080`. Credentials are auto-generated into the
 
 ## Add a hypervisor
 
-VMs run on agents — Linux hosts with KVM (or macOS hosts with HVF, for
-development).
+VMs run on agents — Linux hosts with KVM.
 
-1. In the web UI, go to **Agents → Create Registration Token** and enter a
-   name for the host.
-2. Copy the generated command and run it on the hypervisor host:
+1. In the web UI, go to **Agents → Enroll node** and enter a name for the
+   host.
+2. Copy the generated bootstrap command and run it on the hypervisor host:
 
    ```bash
-   strato-agent join 'ws://your-control-plane/agent/ws?token=...&name=...'
+   curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
+     | sudo bash -s -- --control-plane-url 'wss://your-control-plane/agent/ws' \
+     --agent-name 'hv-01' --spire-join-token '...' \
+     --spire-server-address '...' --trust-domain '...'
    ```
 
-The token is single-use and expires; the agent stores its rotated reconnect
-credential in a state file, so plain `strato-agent` restarts reconnect
-automatically. See [Deploying agents](/deployment/agents) for details,
-including running the agent in Docker.
+The command installs the agent, attests the host to SPIRE, and starts it
+under systemd. The agent then authenticates with a short-lived SVID that
+rotates on its own, so restarts reconnect without further setup. See
+[Deploying agents](/deployment/agents) for details, including running the
+agent in Docker.
 
 ## Create your first VM
 

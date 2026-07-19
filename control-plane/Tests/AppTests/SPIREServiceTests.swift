@@ -8,18 +8,17 @@ import X509
 /// Tests for the SPIFFE/SPIRE identity validation that underpins agent mTLS
 /// authentication in `AgentWebSocketController`. These lock in the trust-domain
 /// and agent-path checks a forged `X-Forwarded-Client-Cert` header must satisfy,
-/// and the `requireClientCert` gate that prevents silent downgrade to token auth.
+/// and the certificate-chain verification behind them. mTLS is the only agent
+/// authentication path, so these checks are the whole gate.
 @Suite("SPIRE Service Tests")
 struct SPIREServiceTests {
 
     private func makeService(
-        trustDomain: String = "strato.local",
-        requireClientCert: Bool = true
+        trustDomain: String = "strato.local"
     ) -> SPIREService {
         let config = SPIREServiceConfig(
             enabled: true,
-            trustDomain: trustDomain,
-            requireClientCert: requireClientCert
+            trustDomain: trustDomain
         )
         return SPIREService(
             config: config,
@@ -79,17 +78,6 @@ struct SPIREServiceTests {
         await #expect(throws: SPIREServiceError.self) {
             _ = try await service.validateAgentIdentity(id)
         }
-    }
-
-    // MARK: - requireClientCert gate
-
-    @Test("requireClientCert reflects configuration")
-    func requireClientCertReflectsConfig() async {
-        let strict = makeService(requireClientCert: true)
-        #expect(await strict.requireClientCert)
-
-        let lax = makeService(requireClientCert: false)
-        #expect(await !lax.requireClientCert)
     }
 
     // MARK: - Certificate chain validation (validateCertificate)

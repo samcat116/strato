@@ -3,7 +3,7 @@
 The supported way to run Strato on a single host without Kubernetes lives in
 [`deploy/compose/`](https://github.com/samcat116/strato/tree/main/deploy/compose).
 It is secure by default: `setup.sh` generates strong random secrets locally,
-nothing insecure ships in the config, and there is no development auth bypass.
+nothing insecure ships in the config, and authentication is always enforced.
 
 ::: warning
 The `docker-compose.yml` at the repository root is for local development

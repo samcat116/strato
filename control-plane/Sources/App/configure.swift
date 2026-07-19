@@ -434,6 +434,16 @@ public func configure(_ app: Application) async throws {
     // adds `dns_servers`, and it only fills a network that still has none.
     app.migrations.add(SeedDefaultNetworkDNS())
 
+    // SPIFFE-only agent enrollment: the new scope/identity record, and the
+    // retirement of the bearer-token table it replaces. Ordered after the
+    // migrations that shaped that table so the drop lands on a known schema.
+    app.migrations.add(CreateAgentEnrollment())
+    // Must sit between the two: it reads the token table and writes the
+    // enrollment table, so it needs the latter to exist and the former to
+    // still be there.
+    app.migrations.add(MigratePendingTokensToEnrollments())
+    app.migrations.add(DropAgentRegistrationTokens())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
@@ -448,8 +458,8 @@ public func configure(_ app: Application) async throws {
     try await secretsEncryption.encryptStoredSecrets(on: app.db, logger: app.logger)
 
     // Load the SpiceDB schema if SpiceDB doesn't have one yet. Must happen
-    // before anything writes relationships — the dev auth bypass below is the
-    // first writer on a fresh stack and crashes with a 400 without a schema.
+    // before anything writes relationships — the backfills below are the first
+    // writers on a fresh stack and crash with a 400 without a schema.
     if app.environment != .testing {
         try await ensureSpiceDBSchema(app)
         // Backfill SpiceDB tuples so existing data authorizes correctly after the
@@ -477,145 +487,6 @@ public func configure(_ app: Application) async throws {
 
     // Initialize the image download signing key (generates if not exists)
     _ = try await URLSigningService.getSigningKeyAsync(from: app)
-
-    // Dev auth bypass - create dev user for local development
-    if app.environment == .development, Environment.get("DEV_AUTH_BYPASS") == "true" {
-        app.logger.critical(
-            """
-            ============================================================
-            ⚠️  DEV_AUTH_BYPASS ENABLED — AUTHENTICATION IS DISABLED  ⚠️
-            Every request is served as a system-admin 'dev' user with no
-            credentials required. This is for LOCAL DEVELOPMENT ONLY.
-            Never enable DEV_AUTH_BYPASS on a host reachable by anyone else.
-            ============================================================
-            """)
-        let devUser: User
-        if let existingUser = try await User.query(on: app.db)
-            .filter(\.$username == "dev")
-            .first()
-        {
-            devUser = existingUser
-        } else {
-            devUser = User(
-                username: "dev",
-                email: "dev@localhost",
-                displayName: "Dev User",
-                isSystemAdmin: true
-            )
-            try await devUser.save(on: app.db)
-            app.logger.info("Created dev user for auth bypass")
-        }
-        // Ensure dev user has a default organization
-        let defaultOrg: Organization
-        if let existingOrg = try await Organization.query(on: app.db)
-            .filter(\.$name == "Default Organization")
-            .first()
-        {
-            defaultOrg = existingOrg
-        } else {
-            defaultOrg = Organization(
-                name: "Default Organization",
-                description: "Default organization for development"
-            )
-            try await defaultOrg.save(on: app.db)
-            app.logger.info("Created default organization for dev user")
-        }
-
-        // Ensure default project exists for the organization
-        let defaultProject: Project
-        if let existingProject = try await Project.query(on: app.db)
-            .filter(\.$organization.$id == defaultOrg.id!)
-            .filter(\.$name == "Default Project")
-            .first()
-        {
-            defaultProject = existingProject
-        } else {
-            defaultProject = Project(
-                name: "Default Project",
-                description: "Default project for Default Organization",
-                organizationID: defaultOrg.id,
-                path: "/\(defaultOrg.id!.uuidString)"
-            )
-            try await defaultProject.save(on: app.db)
-
-            // Update project path with its own ID
-            defaultProject.path = "/\(defaultOrg.id!.uuidString)/\(defaultProject.id!.uuidString)"
-            try await defaultProject.save(on: app.db)
-            app.logger.info("Created default project for dev organization")
-        }
-
-        // Always ensure SpiceDB relationships exist (idempotent)
-        // This handles cases where DB state exists but SpiceDB was reset
-        // Catch 409 conflicts since they just mean the relationship already exists
-        do {
-            try await app.spicedb.writeRelationship(
-                entity: "organization",
-                entityId: defaultOrg.id!.uuidString,
-                relation: "admin",
-                subject: "user",
-                subjectId: devUser.id!.uuidString
-            )
-        } catch SpiceDBError.relationshipWriteFailed(let status) where status == .conflict {
-            // Relationship already exists, which is fine
-        }
-
-        do {
-            try await app.spicedb.writeRelationship(
-                entity: "project",
-                entityId: defaultProject.id!.uuidString,
-                relation: "parent",
-                subject: "organization",
-                subjectId: defaultOrg.id!.uuidString
-            )
-        } catch SpiceDBError.relationshipWriteFailed(let status) where status == .conflict {
-            // Relationship already exists, which is fine
-        }
-
-        // IAM dual-write: the dev user's admin binding on the default org, and
-        // a creator binding on the default project (grant is an idempotent
-        // upsert, safe to repeat every boot).
-        try await RoleBindingService.grant(
-            principalType: .user,
-            principalID: devUser.id!,
-            role: .admin,
-            nodeType: .organization,
-            nodeID: defaultOrg.id!,
-            createdBy: devUser.id,
-            on: app.db
-        )
-        try await RoleBindingService.grant(
-            principalType: .user,
-            principalID: devUser.id!,
-            role: .admin,
-            nodeType: .project,
-            nodeID: defaultProject.id!,
-            createdBy: devUser.id,
-            on: app.db
-        )
-
-        // Link dev user to organization if not already linked
-        let existingMembership = try await UserOrganization.query(on: app.db)
-            .filter(\.$user.$id == devUser.id!)
-            .filter(\.$organization.$id == defaultOrg.id!)
-            .first()
-
-        if existingMembership == nil {
-            let membership = UserOrganization(
-                userID: devUser.id!,
-                organizationID: defaultOrg.id!,
-                role: "admin"
-            )
-            try await membership.save(on: app.db)
-        }
-
-        // Set current organization if not set
-        if devUser.currentOrganizationId == nil {
-            devUser.currentOrganizationId = defaultOrg.id
-            try await devUser.save(on: app.db)
-        }
-
-        app.storage[DevUserKey.self] = devUser
-    }
 
     // Configure scheduler service
     // Default strategy can be configured via environment variable

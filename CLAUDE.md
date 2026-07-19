@@ -48,8 +48,8 @@ running services), and full-stack runs go through `deploy/compose`. See
 
 - `cd control-plane && swift run` — control plane. Needs Postgres/SpiceDB/Valkey env vars pointed at reachable services; `deploy/compose` does **not** publish those ports, so this requires a `docker-compose.override.yml` that does.
 - `cd agent && swift run StratoAgent --config-file ./config.toml` — agent (TOML config; CLI args override config values; `control_plane_url` is required; key options: `qemu_socket_dir`, `log_level`, `network_mode` = `ovn`|`user`, `firecracker_binary_path`). Copy `config.toml.example` to start.
-- First-time agent registration uses a one-time token URL: `--registration-url 'ws://host:8080/agent/ws?token=...&name=...'`; the agent persists a rotated reconnect token afterwards.
-- `DEV_AUTH_BYPASS=true` disables authentication (development environment only) — never set it on a host reachable by anyone else.
+- Agents authenticate only by SPIFFE/SPIRE X.509 SVID over mTLS. Enroll a node with `POST /api/agents/enrollments` (or **Agents → Enroll node** in the UI), which provisions it in SPIRE and returns a one-liner `bootstrapCommand`; the agent then dials its configured `control_plane_url` with `?name=<agent-name>` and no bearer credential.
+- Authentication is always on: there is no development bypass. Local development registers a real WebAuthn passkey user (see `docs/development/local-development.md`).
 
 ### Deployment environments (the two supported paths)
 
@@ -126,7 +126,7 @@ A persisted VM manifest tracks which backend owns each VM (survives restarts, en
 - **SpiceDB** (schema in `spicedb/schema.zed`) enforces relationship-based access control; `SpiceDBAuthMiddleware` intercepts requests, `SpiceDBService` wraps the HTTP API. Ownership relationships are written automatically on resource creation.
 - **Authentication** is WebAuthn/Passkeys (swift-server/webauthn-swift) with Vapor sessions, plus API keys for programmatic access and optional OIDC providers. WebAuthn env vars: `WEBAUTHN_RELYING_PARTY_ID`, `WEBAUTHN_RELYING_PARTY_NAME`, `WEBAUTHN_RELYING_PARTY_ORIGIN` (origin must exactly match the browser URL).
 - Hierarchy: Organization → optional nested **Organizational Units** (materialized `path`/`depth`) → Projects (with environments). **Groups** (optionally SCIM-provisioned, see `SCIMToken`/`SCIMExternalID`) grant access; **ResourceQuotas** (vCPU/memory/storage/VM count/sandbox count, optionally per-environment) attach at org, OU, or project level and are enforced on VM and sandbox create/delete; sandboxes draw from the same vCPU/memory pools as VMs.
-- Agent transport security (optional): SPIFFE/SPIRE-issued mTLS terminated by Envoy in front of the control plane. Config lives in `deploy/compose/spiffe/` (SPIRE server, Envoy, bootstrap) and is wired into the compose stack by default.
+- Agent transport security: SPIFFE/SPIRE-issued mTLS terminated by Envoy in front of the control plane — the only agent authentication path. Config lives in `deploy/compose/spiffe/` (SPIRE server, Envoy, bootstrap) and is wired into the compose stack by default.
 
 ### Observability
 

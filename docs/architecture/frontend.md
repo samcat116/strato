@@ -112,9 +112,8 @@ response: OIDC-established sessions get a full navigation to the IdP's
 RP-initiated logout.
 
 Route guarding is client-side (the dashboard layout redirect); admin-only UI
-keys off `user.isSystemAdmin`. `DEV_AUTH_BYPASS` does not appear in the
-frontend at all — it is purely a backend concern, and the same session calls
-simply succeed when the backend enables it.
+keys off `user.isSystemAdmin`. There is no unauthenticated mode: every
+environment, development included, goes through the same passkey flows.
 
 ## Build and deployment
 

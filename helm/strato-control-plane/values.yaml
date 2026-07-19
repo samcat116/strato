@@ -660,9 +660,15 @@ externalValkey:
   password: ""
   database: 0
 
-# SPIRE configuration for agent mTLS authentication
+# SPIRE configuration for agent mTLS authentication.
+#
+# Required, not optional: agents authenticate to the control plane solely with
+# a SPIRE-issued X.509 SVID. With SPIRE disabled the agent WebSocket refuses
+# every connection, so a control plane deployed without it can serve the API
+# and UI but can never acquire a hypervisor node. The chart fails to render
+# rather than shipping that configuration silently.
 spire:
-  enabled: false
+  enabled: true
 
   # Trust domain for SPIFFE IDs (e.g., "strato.local")
   trustDomain: "strato.local"
@@ -739,9 +745,17 @@ spire:
 
   # Node attestors
   attestors:
-    # Kubernetes Projected Service Account Token attestor
+    # Kubernetes Projected Service Account Token attestor.
+    #
+    # On by default, and effectively required in-cluster: the agent DaemonSet
+    # attests with the projected service-account token mounted at
+    # /var/run/secrets/tokens/spire-agent. Disabling this falls back to the
+    # join_token attestor, which has no token to consume here — the agent then
+    # cannot attest, the Envoy sidecar never receives an SVID, and every agent
+    # mTLS connection is refused. Only turn it off if you are supplying node
+    # attestation some other way.
     k8sPsat:
-      enabled: false
+      enabled: true
       # Entries are "namespace:serviceaccount". Leave empty to allow the
       # chart's own agent DaemonSet service account (the only identity that
       # presents the projected token in this deployment).
@@ -754,12 +768,8 @@ spire:
 
   # Control plane integration
   controlPlane:
-    # Enable mTLS for agent connections
-    enableMTLS: false
     # Trust bundle refresh interval (seconds)
     bundleRefreshInterval: 300
-    # Require client certificates
-    requireClientCert: true
     # SPIRE server gRPC API address (host:port) for join-token provisioning
     # and entry revocation. Leave empty to use this chart's SPIRE server
     # Service; set only when the SPIRE server runs elsewhere.

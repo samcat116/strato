@@ -258,7 +258,6 @@ public struct AgentConfig: Codable {
     /// First uid/gid of the per-sandbox uid range (65536 ids). Default 100000.
     public let sandboxJailerUidBase: UInt32?
     public let hypervisorType: HypervisorType?
-    public let stateFilePath: String?
     /// Site uplink for OVN SNAT egress (issue #342). When nil, routers +
     /// east-west are realized but no SNAT/uplink.
     public let ovnUplink: OVNUplinkConfig?
@@ -297,7 +296,6 @@ public struct AgentConfig: Codable {
         case sandboxJailerChrootDir = "sandbox_jailer_chroot_dir"
         case sandboxJailerUidBase = "sandbox_jailer_uid_base"
         case hypervisorType = "hypervisor_type"
-        case stateFilePath = "state_file"
         case ovnUplink = "ovn_uplink"
         case simulation
     }
@@ -333,7 +331,6 @@ public struct AgentConfig: Codable {
         sandboxJailerChrootDir: String? = nil,
         sandboxJailerUidBase: UInt32? = nil,
         hypervisorType: HypervisorType? = nil,
-        stateFilePath: String? = nil,
         ovnUplink: OVNUplinkConfig? = nil,
         simulation: SimulationConfig? = nil
     ) {
@@ -367,7 +364,6 @@ public struct AgentConfig: Codable {
         self.sandboxJailerChrootDir = sandboxJailerChrootDir
         self.sandboxJailerUidBase = sandboxJailerUidBase
         self.hypervisorType = hypervisorType
-        self.stateFilePath = stateFilePath
         self.ovnUplink = ovnUplink
         self.simulation = simulation
     }
@@ -470,7 +466,6 @@ public struct AgentConfig: Codable {
         let firecrackerSocketDir = tomlData.string("firecracker_socket_dir")
         let sandboxGuestImagePath = tomlData.string("sandbox_guest_image_path")
         let hypervisorTypeString = tomlData.string("hypervisor_type")
-        let stateFilePath = tomlData.string("state_file")
 
         // Sandbox jailer settings (issue #425). The mode is strictly decoded —
         // a typo like "requierd" silently falling back to auto would quietly
@@ -560,13 +555,21 @@ public struct AgentConfig: Codable {
         // egress is off unless a dedicated external CIDR is configured.
         let ovnUplink: OVNUplinkConfig?
         if let uplinkTable = tomlData.table("ovn_uplink"), let externalCIDR = uplinkTable.string("external_cidr") {
+            let externalCIDR6 = uplinkTable.string("external_cidr6")
             ovnUplink = OVNUplinkConfig(
                 externalCIDR: externalCIDR,
                 gateway: uplinkTable.string("gateway"),
                 bridge: uplinkTable.string("bridge") ?? OVNUplinkConfig.defaultBridge,
-                physnet: uplinkTable.string("physnet") ?? OVNUplinkConfig.defaultPhysnet
+                physnet: uplinkTable.string("physnet") ?? OVNUplinkConfig.defaultPhysnet,
+                externalCIDR6: externalCIDR6,
+                gateway6: uplinkTable.string("gateway6")
             )
-            logger?.info("OVN SNAT uplink configured", metadata: ["externalCIDR": .string(externalCIDR)])
+            logger?.info(
+                "OVN SNAT uplink configured",
+                metadata: [
+                    "externalCIDR": .string(externalCIDR),
+                    "externalCIDR6": .string(externalCIDR6 ?? "none"),
+                ])
         } else {
             ovnUplink = nil
         }
@@ -639,7 +642,6 @@ public struct AgentConfig: Codable {
             sandboxJailerChrootDir: sandboxJailerChrootDir,
             sandboxJailerUidBase: sandboxJailerUidBase,
             hypervisorType: hypervisorType,
-            stateFilePath: stateFilePath,
             ovnUplink: ovnUplink,
             simulation: simulationConfig
         )
@@ -652,26 +654,6 @@ public struct AgentConfig: Codable {
             throw AgentConfigError.invalidConfiguration("\(key) must be a positive integer, got \(value)")
         }
         return value
-    }
-
-    /// Writes a minimal config file containing just the control plane URL,
-    /// used by `strato-agent join` so a joined host works on plain restarts
-    /// without any hand-written configuration. All other settings fall back
-    /// to platform defaults and can be added to the file later.
-    public static func writeMinimalConfig(controlPlaneURL: String, to path: String) throws {
-        let contents = """
-            # Written by `strato-agent join`. All other settings use platform
-            # defaults; see config.toml.example in the Strato repository for the
-            # full list of options.
-            control_plane_url = "\(controlPlaneURL)"
-            """
-
-        let fileManager = FileManager.default
-        let directory = (path as NSString).deletingLastPathComponent
-        if !fileManager.fileExists(atPath: directory) {
-            try fileManager.createDirectory(atPath: directory, withIntermediateDirectories: true)
-        }
-        try contents.write(toFile: path, atomically: true, encoding: .utf8)
     }
 
     /// Default config file path (platform-specific)

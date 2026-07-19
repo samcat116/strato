@@ -324,12 +324,14 @@ public enum NetworkReconciler {
                 // never drops it (v4 service must survive a bad v6 edit).
                 var cidrs = ["\(gateway)/\(prefix)"]
                 var raConfigs: [String: String]?
+                var snatSubnet6: String?
                 if let subnet6 = network.subnet6, let gateway6 = network.gateway6,
                     let cidr6 = IPv6CIDR(subnet6), let gw6 = IPv6Address(gateway6),
                     cidr6.contains(gw6)
                 {
                     cidrs.append("\(gw6)/\(cidr6.prefix)")
                     raConfigs = ipv6RAConfigs
+                    snatSubnet6 = cidr6.description
                 }
 
                 ports.append(
@@ -341,8 +343,16 @@ public enum NetworkReconciler {
                         cidrs: cidrs,
                         ipv6RAConfigs: raConfigs))
 
+                // Dual-stack egress: the v6 prefix gets its own SNAT rule beside
+                // the v4 one, so the default route the port's RAs advertise
+                // actually leads somewhere (issue #519). Planned whenever the
+                // port is dual-stack — the actuator skips it when the operator
+                // configured no IPv6 uplink, exactly as it skips v4 SNAT with no
+                // `[ovn_uplink]` at all. Canonical (RFC 5952, masked) form, so
+                // the key matches what OVN reports back and never churns.
                 if network.externalAccess {
                     snatSubnets.append(network.subnet)
+                    if let snatSubnet6 { snatSubnets.append(snatSubnet6) }
                 }
             }
 
@@ -379,6 +389,13 @@ public enum NetworkReconciler {
             protected.switchRouterPortNames.insert(
                 OVNNaming.externalSwitchRouterPortName(routerKey: network.routerKey))
             protected.snatRules.insert(SNATRuleKey(router: routerName, logicalIP: network.subnet))
+            // Protect the v6 SNAT rule on the same terms. Keyed off `subnet6`
+            // parsing alone — a superset of the condition that plans the rule —
+            // because over-protecting only defers a teardown, while
+            // under-protecting drops a stale network's live egress.
+            if let subnet6 = network.subnet6, let cidr6 = IPv6CIDR(subnet6) {
+                protected.snatRules.insert(SNATRuleKey(router: routerName, logicalIP: cidr6.description))
+            }
         }
         return protected
     }

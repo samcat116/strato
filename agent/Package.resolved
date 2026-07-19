@@ -1,5 +1,5 @@
 {
-  "originHash" : "49cc441d545683fd07d977d824432dec508258a10df3ad7eb28ebf55edf4fcf6",
+  "originHash" : "c0d9c7fe73900bfad1fa3f103721c0b07a55dfe39b46a27ca56a451e2808a5ae",
   "pins" : [
     {
       "identity" : "grpc-swift-2",
@@ -204,7 +204,7 @@
       "location" : "https://github.com/samcat116/swift-qemu",
       "state" : {
         "branch" : "main",
-        "revision" : "0e6fd6d0d2019767851b799b05ab95744e353690"
+        "revision" : "01ce3cd005d48c5396f38607f81ad31a6c1669ff"
       }
     },
     {

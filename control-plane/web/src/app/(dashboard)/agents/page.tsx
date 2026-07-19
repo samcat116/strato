@@ -4,11 +4,11 @@ import { useState } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AgentTable, CreateTokenDialog } from "@/components/agents";
+import { AgentTable, CreateEnrollmentDialog } from "@/components/agents";
 import { useAgents, useInvalidateAgents } from "@/lib/hooks";
 
 export default function AgentsPage() {
-  const [createTokenOpen, setCreateTokenOpen] = useState(false);
+  const [createEnrollmentOpen, setCreateEnrollmentOpen] = useState(false);
   const { data: agents = [], isLoading } = useAgents();
   const invalidateAgents = useInvalidateAgents();
 
@@ -27,7 +27,7 @@ export default function AgentsPage() {
         </div>
         <Button
           className="bg-primary hover:bg-primary/90"
-          onClick={() => setCreateTokenOpen(true)}
+          onClick={() => setCreateEnrollmentOpen(true)}
         >
           <Plus className="h-4 w-4 mr-2" />
           Add Agent
@@ -84,10 +84,10 @@ export default function AgentsPage() {
         </CardContent>
       </Card>
 
-      {/* Create Token Dialog */}
-      <CreateTokenDialog
-        open={createTokenOpen}
-        onOpenChange={setCreateTokenOpen}
+      {/* Create Enrollment Dialog */}
+      <CreateEnrollmentDialog
+        open={createEnrollmentOpen}
+        onOpenChange={setCreateEnrollmentOpen}
         onCreated={invalidateAgents}
       />
     </div>

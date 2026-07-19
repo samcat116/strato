@@ -1,28 +1,8 @@
 import Fluent
 import Vapor
 
-struct DevUserKey: StorageKey {
-    typealias Value = User
-}
-
 struct SpiceDBAuthMiddleware: AsyncMiddleware {
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
-        // Dev mode bypass - skip all auth
-        if request.application.environment == .development,
-            Environment.get("DEV_AUTH_BYPASS") == "true"
-        {
-            // Reload the dev user from the database to ensure proper context
-            // This is necessary because the stored user object may not be properly
-            // bound to this request's database context
-            if let devUser = try await User.query(on: request.db)
-                .filter(\.$username == "dev")
-                .first()
-            {
-                request.auth.login(devUser)
-            }
-            return try await next.respond(to: request)
-        }
-
         // Skip auth for health checks, public API routes, and auth endpoints.
         // Split into small sub-expressions: a single long `||` chain trips the
         // Swift type-checker ("unable to type-check in reasonable time").

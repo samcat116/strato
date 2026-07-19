@@ -1,89 +1,107 @@
 # Deploying Agents
 
-Agents run on hypervisor hosts and execute VMs via QEMU (KVM on Linux, HVF on
-macOS; Firecracker optionally on Linux). They connect out to the control
+Agents run on Linux hypervisor hosts and execute VMs via QEMU (KVM), with
+Firecracker as an optional second backend. They connect out to the control
 plane over WebSocket — no inbound ports needed on the hypervisor.
 
-## One-command install (recommended)
+Agents authenticate **only** by SPIFFE/SPIRE-issued X.509 SVID over mTLS.
+Every node is enrolled through the control plane, which provisions its
+identity in SPIRE; there is no token or password join, and an unattested
+host cannot connect at all. Enrolling requires the control plane to be
+configured for SPIRE (see [Enrolling a node](#enrolling-a-node)).
 
-On a fresh Linux host with nothing installed, the install script downloads the
-agent binary, installs the host dependencies (QEMU, and OVN/OVS for SDN
-networking), installs a systemd service, and joins the control plane — all from
-the registration URL you copy out of the UI (**Agents → Create Registration
-Token**):
+## Enrolling a node
+
+Enrollment is one API call — or **Agents → Enroll node** in the web UI:
+
+```bash
+curl -X POST https://strato.example.com/api/agents/enrollments \
+  -H 'Authorization: Bearer <api-key>' -H 'Content-Type: application/json' \
+  -d '{"agentName": "hv-01", "organizationId": "<uuid>"}'
+```
+
+The control plane provisions the node in SPIRE — a one-time **join token**
+for `spire-agent` node attestation and a **workload registration entry**
+entitling the node's `strato-agent` to its SPIFFE ID — and returns a
+`bootstrapCommand`: a single copy-paste line to run on the new host.
+
+- `GET /api/agents/enrollments` lists enrollments; `DELETE
+  /api/agents/enrollments/:id` revokes one, removing its SPIRE entries.
+- Every enrollment names the organization (or organizational unit) whose
+  dedicated capacity the agent becomes, via
+  `organizationId`/`organizationalUnitId`; an enrollment with no
+  organization is rejected. `siteId` pins the node to a
+  [site](../architecture/networking.md).
+- The join token is a one-time secret shown **once**, at creation time. It
+  is redeemed the first time `spire-agent` attests and is inert afterwards.
+- Enrollment fails if the control plane has no SPIRE server configured.
+  There is no fallback: see [mTLS (SPIFFE/SPIRE)](#mtls-spiffe-spire) for
+  the required settings.
+
+## One-command install
+
+The `bootstrapCommand` from the enrollment above is the install script,
+pre-filled:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
-  | sudo bash -s -- --registration-url 'wss://strato.example.com/agent/ws?token=...&name=hv-01'
+  | sudo bash -s -- \
+  --control-plane-url 'wss://strato.example.com/agent/ws' \
+  --agent-name 'hv-01' \
+  --spire-join-token '...' \
+  --spire-server-address 'strato.example.com:8085' \
+  --trust-domain 'strato.local'
 ```
 
-The script detects the host OS/arch, verifies the download checksum, runs a
-host preflight, enables `strato-agent.service`, and hands off to systemd so the
-node survives reboots. Useful flags (`--help` lists them all):
+All five flags are required. `--agent-name` must match the name the
+enrollment was created for — the control plane resolves the enrollment row
+by name, and names are restricted to ASCII letters, digits, `-`, `_`, and
+`.`. `--control-plane-url` is the agent WebSocket endpoint, always `wss://`
+in a SPIRE deployment since Envoy terminates mTLS in front of it.
+
+On a fresh Linux host with nothing installed, it downloads the `strato-agent`
+and `spire-agent` binaries, installs the host dependencies (QEMU, and OVN/OVS
+for SDN networking), attests the node to SPIRE with the join token, writes
+`/etc/strato/config.toml`, brings up host telemetry, and enables
+`strato-agent.service` so the node survives reboots. It detects the host
+OS/arch, verifies download checksums, and runs a host preflight first.
+
+Useful flags (`--help` lists them all):
 
 - `--network-mode user` — skip OVN/OVS packages (dev/test, no SDN)
 - `--version vX.Y.Z` — pin a release instead of `latest`
 - `--no-systemd` — install the binary + deps but don't manage a service
 - `--no-deps` — you manage host packages yourself
-- `--spire-join-token` / `--spire-server-address` — SPIRE mode: the node
-  attests to SPIRE and authenticates by SVID over mTLS (the UI emits these
-  for you, see [One-command node bootstrap](#one-command-node-bootstrap))
-- `--no-telemetry` — SPIRE mode only: skip the host telemetry stack
+- `--trust-bundle PATH` — pin the SPIRE trust bundle instead of
+  trust-on-first-use bootstrap
+- `--no-telemetry` — skip the host telemetry stack
 
-Run it **without** `--registration-url` to install the binary, dependencies,
-and service now and register later (or re-run with the URL when you have a
-token). No published binary exists for a given OS/arch? Use the Docker image
-below, or build from source.
+The installer is **Linux-only**: `spire-agent`, systemd, and KVM all are, so
+macOS is not a supported agent platform. No published binary for a given
+Linux arch? Use the Docker image below, or build from source.
 
-## Joining a control plane
+### State and configuration
 
-If the agent is already installed (via the script above, a package, or a
-manual binary drop), a single command registers it:
+The installer writes `/etc/strato/config.toml` (if absent) with the control
+plane URL, network mode, and the `[spiffe]` block pointing at the SPIRE
+Workload API socket, and pins the enrolled name on the service's command
+line with `--agent-id`. The agent keeps **no credential state on disk**: its
+identity is the short-lived SVID it fetches from SPIRE on every start.
 
-1. In the web UI, go to **Agents → Create Registration Token**, enter a name
-   for the host, and copy the generated command.
-2. Run it on the hypervisor host:
-
-```bash
-strato-agent join 'ws://strato.example.com/agent/ws?token=...&name=hv-01'
-```
-
-That single command registers the agent and keeps it running. On success the
-agent:
-
-- receives a rotated reconnect token from the control plane and persists it
-  to its **state file** (mode 0600):
-  - Linux: `/var/lib/strato/agent-state.json`
-  - macOS: `~/Library/Application Support/strato/agent-state.json`
-- writes a minimal `config.toml` (Linux: `/etc/strato/config.toml`) if none
-  exists, containing the control plane URL.
-
-After that, a plain `strato-agent` (no arguments) reconnects automatically —
-restarts, reboots, and control-plane restarts all just work. The reconnect
-token is single-use and rotates on every successful registration.
-
-### Tokens
-
-- Registration tokens are **single-use** and expire (default 24h from the
-  UI). Creating one requires an admin session; the API equivalent is
-  `POST /api/agents/registration-tokens`. Every token names the organization
-  (or organizational unit) whose dedicated capacity the agent becomes, via
-  `organizationId`/`organizationalUnitId` — a brand-new agent whose token
-  carries no organization is refused registration.
-- If an agent's stored token is rejected (expired, revoked, or the agent was
-  deleted server-side), the agent exits with instructions rather than
-  retrying forever. Create a new token and run `strato-agent join` again —
-  it overwrites the old state.
-- A corrupt state file is moved aside to `agent-state.json.corrupt` and
-  treated as absent.
+Restarts, reboots, and control-plane restarts therefore all just work with
+no bookkeeping. If the node's SPIRE identity is revoked (the enrollment was
+deleted, or the agent was deregistered), the connection is refused and the
+agent exits with instructions rather than retrying forever; enroll the node
+again to re-provision it.
 
 ### Privileges
 
-The default state and config paths (`/var/lib/strato`, `/etc/strato`) are
-root-owned, so run `strato-agent join` as root on Linux. The join checks that
-the state file is writable **before** consuming the token and exits with
-instructions if it isn't; to run unprivileged, pass `--state-file` (and
-`--config-file`) pointing at writable locations.
+The default storage, config, and SPIRE paths (`/var/lib/strato`,
+`/etc/strato`, `/etc/spire`) are root-owned, and the default workload
+selector is `unix:uid:0`, so run the agent as root. To run unprivileged,
+pass `--config-file` and `--vm-storage-dir` pointing at writable locations
+and set `SPIRE_AGENT_SELECTORS` on the control plane to match the uid you
+use.
 
 ## Release binaries and the agent manifest
 
@@ -153,41 +171,48 @@ linux/amd64 only — the same convention as the control-plane and frontend
 images used by the compose deployment. On other architectures, build the
 image from source (`docker build -f agent/Dockerfile .` at the repo root).
 
+The container needs a SPIFFE identity, which it gets from a `spire-agent`
+running on the **host**: mount its Workload API socket in and point the
+`[spiffe]` block of `/etc/strato/config.toml` at the mounted path. Enroll the
+node and run the install script with `--no-systemd --no-deps` first (or run
+`spire-agent` yourself) so the socket exists.
+
 ```bash
 docker run -d --name strato-agent --restart unless-stopped \
   --user root --device /dev/kvm \
   -v /var/lib/strato:/var/lib/strato \
   -v /etc/strato:/etc/strato \
+  -v /var/run/spire/sockets:/var/run/spire/sockets:ro \
   ghcr.io/samcat116/strato-agent:main \
-  join 'ws://strato.example.com/agent/ws?token=...&name=hv-01'
+  run --config-file /etc/strato/config.toml
 ```
 
 `--user root` is required: the image runs as the non-root `strato` user by
 default, but the root-owned `/var/lib/strato` and `/etc/strato` paths — and
-the join state-file write check — need root, matching the same-as-`strato-agent
-join`-on-Linux guidance below.
+the default `unix:uid:0` workload selector — need root.
 
-The `/var/lib/strato` mount persists both VM disks and the join state, so
-`docker restart strato-agent` reconnects without a new token. With
-`--restart unless-stopped`, a rejected token exits the container and Docker's
-backoff keeps it from hammering the control plane.
+The `/var/lib/strato` mount persists both VM disks and the agent's state, so
+`docker restart strato-agent` reconnects with no further setup. With
+`--restart unless-stopped`, a revoked identity exits the container and
+Docker's backoff keeps it from hammering the control plane.
 
 ## Running as a systemd service (Linux)
 
-The [install script](#one-command-install-recommended) writes and enables this
-unit for you. Write it by hand only if you installed the binary some other way.
-After a successful `strato-agent join`, the state and config files make plain
-restarts self-sufficient:
+The [install script](#one-command-install) writes and enables this unit for
+you. Write it by hand only if you installed the binary some other way. The
+agent must not start before `spire-agent`, since its mTLS credential comes
+from the Workload API:
 
 ```ini
 # /etc/systemd/system/strato-agent.service
 [Unit]
 Description=Strato Agent
-After=network-online.target
+After=network-online.target spire-agent.service
 Wants=network-online.target
+Requires=spire-agent.service
 
 [Service]
-ExecStart=/usr/local/bin/strato-agent
+ExecStart=/usr/local/bin/strato-agent run --config-file /etc/strato/config.toml
 Restart=on-failure
 RestartSec=10
 
@@ -276,21 +301,22 @@ for the full list (QEMU paths, storage directories, network mode, SPIFFE/mTLS,
 
 ## mTLS (SPIFFE/SPIRE)
 
-For production fleets, agents can authenticate with X.509 SVIDs instead of
-tokens via SPIRE — see the `[spiffe]` section of `config.toml.example` and
-the SPIRE options in the Helm chart. Token join remains the simplest path
-and is secure by default (single-use, expiring, rotating tokens).
+Agents authenticate with X.509 SVIDs issued by SPIRE, presented as the mTLS
+client certificate to the Envoy listener in front of the control plane — see
+the `[spiffe]` section of `config.toml.example` and the SPIRE options in the
+Helm chart. SVIDs are short-lived and rotate automatically, so there is no
+long-lived agent credential anywhere on the host.
 
-### One-command node bootstrap
+### What enrollment provisions
 
-When the control plane is configured with access to the SPIRE server
+Enrollment requires the control plane to have access to the SPIRE server
 registration API (`SPIRE_ENABLED=true` plus `SPIRE_SERVER_API_ADDRESS`,
-e.g. `unix:///run/spire/server/api.sock` on a shared socket volume),
-creating a registration token also provisions the node in SPIRE:
+e.g. `unix:///run/spire/server/api.sock` on a shared socket volume);
+without it, `POST /api/agents/enrollments` fails. Creating an enrollment
+provisions the node in SPIRE:
 
-- a one-time **join token** for `spire-agent` node attestation, valid for
-  the same window as the registration token, bound to the stable node
-  identity `spiffe://<trust-domain>/node/<name>`, and
+- a one-time **join token** for `spire-agent` node attestation, bound to
+  the stable node identity `spiffe://<trust-domain>/node/<name>`, and
 - a **workload registration entry** entitling the node's `strato-agent`
   to `spiffe://<trust-domain>/agent/<name>` (selectors configurable via
   `SPIRE_AGENT_SELECTORS`, default `unix:uid:0`).
@@ -300,14 +326,13 @@ bootstrap command that curls
 [`deploy/agent/install.sh`](https://github.com/samcat116/strato/blob/main/deploy/agent/install.sh)
 with the SPIRE flags: it downloads the `strato-agent` and `spire-agent`
 binaries, writes the spire-agent config, waits for the Workload API
-socket, joins the control plane, and brings up host telemetry — one
-command per new hypervisor node. Both secrets are shown exactly once, at
-creation time.
+socket, starts the agent, and brings up host telemetry — one command per
+new hypervisor node. The join token is shown exactly once, at creation
+time.
 
 ### Host telemetry (Alloy)
 
-In SPIRE mode the installer also sets up host telemetry (skip with
-`--no-telemetry`):
+The installer also sets up host telemetry (skip with `--no-telemetry`):
 
 - **Grafana Alloy** (`alloy.service`) collects node metrics
   (node_exporter set) and the `strato-agent`/`spire-agent` journals, and
@@ -322,10 +347,9 @@ In SPIRE mode the installer also sets up host telemetry (skip with
 The client credential is the node's own SPIFFE identity
 (`spiffe://<trust-domain>/agent/<name>`) — Envoy only accepts telemetry
 writes from `agent/` identities. `/etc/alloy/config.alloy` is written
-once and then left alone on re-runs, so local edits stick. Nodes joined
-with a plain token URL (no SPIRE) get no telemetry stack.
+once and then left alone on re-runs, so local edits stick.
 
-Revoking an unused registration token also removes the SPIRE entries, as
+Revoking an unredeemed enrollment also removes the SPIRE entries, as
 does deregistering an agent; both operations fail closed when the SPIRE
 server is unreachable — or when SPIRE authentication is enabled without
 `SPIRE_SERVER_API_ADDRESS` configured — so a removed node can never keep
@@ -356,15 +380,15 @@ is exposed depends on the deployment:
 
   | SNI host | Gateway route | Terminates where | Backend |
   | --- | --- | --- | --- |
-  | `<host>` | `HTTPRoute` | at the Gateway | control plane / frontend (token join at `wss://<host>/agent/ws`) |
+  | `<host>` | `HTTPRoute` | at the Gateway | control plane / frontend (web UI and JSON API) |
   | `agents.<host>` | `TLSRoute` passthrough | at the Envoy sidecar (sees the SVID) | control-plane `agent-mtls` `:8443` |
   | `spire.<host>` | `TLSRoute` passthrough | at the SPIRE server | SPIRE node API `:8081` |
 
   So an SVID node connects to `wss://agents.<host>/agent/ws` and attests against
   `spire.<host>:443` — outbound-443-only, the friendliest shape for nodes behind
-  home networks. When `spire.controlPlane.enableMTLS`, the chart points
-  `EXTERNAL_HOSTNAME` at `agents.<host>`, so the registration URL, bootstrap
-  command, and telemetry-ingest origin the UI hands you already target the
+  home networks. The chart points
+  `EXTERNAL_HOSTNAME` at `agents.<host>`, so the bootstrap command and
+  telemetry-ingest origin the UI hands you already target the
   passthrough listener — no manual rewrite needed. `TLSRoute` is an experimental
   Gateway API channel; the chart pins `gateway.networking.k8s.io/v1alpha2` for
   it, matching Envoy Gateway's experimental install. See the `gateway:` block in

@@ -208,27 +208,26 @@ struct AgentMessageTests {
             requestId: Fixtures.requestId,
             timestamp: Fixtures.timestamp,
             agentId: Fixtures.uuidA.uuidString,
-            name: "hv-01",
-            reconnectToken: "tok-secret"
+            name: "hv-01"
         )
         let decoded = try throughEnvelope(message)
         #expect(decoded.type == .agentRegisterResponse)
         #expect(decoded.requestId == message.requestId)
         #expect(decoded.agentId == Fixtures.uuidA.uuidString)
         #expect(decoded.name == "hv-01")
-        #expect(decoded.reconnectToken == "tok-secret")
+        #expect(decoded.protocolVersion == WireProtocol.currentVersion)
     }
 
-    /// `reconnectToken` is documented as optional so agents can talk to
-    /// control planes that predate token rotation — a payload without the key
-    /// must still decode.
-    @Test func agentRegisterResponseDecodesWithoutReconnectToken() throws {
+    /// `protocolVersion` is optional so responses from control planes that
+    /// predate protocol versioning still decode; the register response carries
+    /// no credential of its own since agents authenticate by SVID.
+    @Test func agentRegisterResponseDecodesWithoutProtocolVersion() throws {
         let json = """
             {"type":"agent_register_response","requestId":"r","timestamp":0,
              "agentId":"a","name":"n"}
             """
         let decoded = try decodeJSON(AgentRegisterResponseMessage.self, from: json)
-        #expect(decoded.reconnectToken == nil)
+        #expect(decoded.protocolVersion == nil)
         #expect(decoded.name == "n")
     }
 }
