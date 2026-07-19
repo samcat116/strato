@@ -22,6 +22,7 @@ function resolveGitSHA(): string {
 
 const nextConfig: NextConfig = {
   output: "standalone", // Creates minimal server bundle for Docker
+  poweredByHeader: false, // Don't advertise the framework in `X-Powered-By`
   images: {
     unoptimized: true,
   },
@@ -43,13 +44,35 @@ const nextConfig: NextConfig = {
   // TLS state. HSTS, which must only be sent over HTTPS, is emitted per request
   // in middleware.ts (keyed on X-Forwarded-Proto) instead.
   //
-  // No strict CSP: Next.js ships inline hydration scripts a `default-src 'self'`
-  // policy would block; X-Frame-Options still covers clickjacking.
+  // Content-Security-Policy as defense-in-depth over React's escaping.
+  // `script-src`/`style-src` keep `'unsafe-inline'` deliberately: Next.js ships
+  // inline hydration scripts and next-themes an inline theme script, neither
+  // nonce-tagged, so a nonce/`strict-dynamic` policy would block them and blank
+  // the app. The value comes from restricting everything else — `default-src`
+  // and `connect-src 'self'` confine fetch/XHR and the same-origin console
+  // WebSocket (the API and UI share an origin in every supported topology, via
+  // ingress routing or the middleware.ts rewrite); `frame-ancestors 'none'`
+  // mirrors X-Frame-Options; `object-src`/`base-uri`/`form-action` close
+  // plugin, base-tag, and form-hijack vectors. Tightening `script-src` to a
+  // nonce is a follow-up (needs next-themes + Next nonce plumbing).
   async headers() {
+    const csp = [
+      "default-src 'self'",
+      "base-uri 'self'",
+      "object-src 'none'",
+      "frame-ancestors 'none'",
+      "form-action 'self'",
+      "script-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https:",
+      "font-src 'self' data:",
+      "connect-src 'self'",
+    ].join("; ");
     return [
       {
         source: "/:path*",
         headers: [
+          { key: "Content-Security-Policy", value: csp },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

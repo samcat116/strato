@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 import Vapor
 import WebAuthn
@@ -106,29 +107,38 @@ struct WebAuthnService {
 
     func beginAuthentication(
         for username: String? = nil,
+        decoyKey: String,
         on database: Database
     ) async throws -> PublicKeyCredentialRequestOptions {
         var allowCredentials: [PublicKeyCredentialDescriptor] = []
 
         if let username = username {
-            // Get user's credentials
-            guard
-                let user = try await User.query(on: database)
-                    .filter(\.$username == username)
-                    .first()
-            else {
-                throw WebAuthnError.userNotFound
-            }
-
-            try await user.$credentials.load(on: database)
-            allowCredentials = user.credentials.map { credential in
-                PublicKeyCredentialDescriptor(
-                    type: .publicKey,
-                    id: Array(credential.credentialID),
-                    transports: credential.transports.compactMap { transport in
-                        PublicKeyCredentialDescriptor.AuthenticatorTransport(rawValue: transport)
-                    }
-                )
+            if let user = try await User.query(on: database)
+                .filter(\.$username == username)
+                .first()
+            {
+                try await user.$credentials.load(on: database)
+                allowCredentials = user.credentials.map { credential in
+                    PublicKeyCredentialDescriptor(
+                        type: .publicKey,
+                        id: Array(credential.credentialID),
+                        transports: credential.transports.compactMap { transport in
+                            PublicKeyCredentialDescriptor.AuthenticatorTransport(rawValue: transport)
+                        }
+                    )
+                }
+            } else {
+                // The username does not exist. Returning an error here (404)
+                // would make this endpoint a username-enumeration oracle — the
+                // same leak that was closed on the registration path. Instead
+                // return a single decoy credential so the response is shaped
+                // like a real (single-passkey) user's. The decoy id is
+                // HMAC(deployment key, username): stable per username (a value
+                // that changed between requests would itself reveal the account
+                // is fake) and unguessable without the key, so it cannot be
+                // told apart from a real credential. A later assertion against
+                // the decoy fails exactly like a wrong credential would.
+                allowCredentials = [Self.decoyCredential(for: username, key: decoyKey)]
             }
         }
 
@@ -137,6 +147,21 @@ struct WebAuthnService {
         )
 
         return options
+    }
+
+    /// A deterministic, unguessable placeholder credential returned for a
+    /// nonexistent username, so `beginAuthentication` can't be used to tell
+    /// whether an account exists. Keyed with a deployment-wide secret and
+    /// domain-separated so it can't be derived from, or collide with, anything
+    /// else. The 20-byte id is a typical credential-id length, so it looks
+    /// ordinary in the response.
+    private static func decoyCredential(for username: String, key: String)
+        -> PublicKeyCredentialDescriptor
+    {
+        let mac = HMAC<SHA256>.authenticationCode(
+            for: Data("webauthn-login-decoy:\(username)".utf8),
+            using: SymmetricKey(data: Data(key.utf8)))
+        return PublicKeyCredentialDescriptor(type: .publicKey, id: Array(mac.prefix(20)), transports: [])
     }
 
     func finishAuthentication(

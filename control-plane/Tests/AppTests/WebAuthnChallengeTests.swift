@@ -3,6 +3,7 @@ import Vapor
 import Fluent
 import FluentSQLiteDriver
 import VaporTesting
+import WebAuthn
 @testable import App
 
 /// Regression tests for issue #170: WebAuthn assertion replay.
@@ -99,6 +100,31 @@ struct WebAuthnChallengeTests {
             await #expect(throws: WebAuthnError.self) {
                 try await service.consumeAuthenticationChallenge(challenge, on: app.db)
             }
+        }
+    }
+
+    /// `beginAuthentication` for an unregistered username must NOT throw
+    /// `userNotFound` (a 404 would make login a username-enumeration oracle).
+    /// It returns a single decoy credential that is deterministic per
+    /// (username, deployment key) and unguessable without the key.
+    @Test("Unknown username yields a deterministic, keyed decoy (no enumeration oracle)")
+    func unknownUsernameYieldsDeterministicDecoy() async throws {
+        try await withTestApp { app in
+            let service = makeService()
+            let username = "definitely-not-registered-\(UUID().uuidString)"
+
+            let a = try await service.beginAuthentication(for: username, decoyKey: "deploy-key-A", on: app.db)
+            let b = try await service.beginAuthentication(for: username, decoyKey: "deploy-key-A", on: app.db)
+            let c = try await service.beginAuthentication(for: username, decoyKey: "deploy-key-B", on: app.db)
+
+            // Shaped like a real single-passkey user, not an error.
+            #expect(a.allowCredentials?.count == 1)
+            // Stable per (username, key): a value that changed between requests
+            // would itself reveal the account is fake.
+            #expect(a.allowCredentials?.first?.id == b.allowCredentials?.first?.id)
+            // Keyed: a different deployment key produces a different decoy, so
+            // the id cannot be recomputed without the server secret.
+            #expect(a.allowCredentials?.first?.id != c.allowCredentials?.first?.id)
         }
     }
 }
