@@ -258,6 +258,8 @@ private func launchAgent(options: AgentOptions) async throws {
         sandboxJailerBinaryPath: finalSandboxJailerBinaryPath,
         sandboxJailerChrootDir: finalSandboxJailerChrootDir,
         sandboxJailerUidBase: finalSandboxJailerUidBase,
+        sandboxWarmStart: config.sandboxWarmStart ?? true,
+        sandboxWarmCacheMaxSizeBytes: config.sandboxWarmCacheMaxSizeBytes,
         hypervisorType: finalHypervisorType,
         hardwareAccelerationEnabled: finalHardwareAcceleration,
         simulation: finalSimulation,

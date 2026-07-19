@@ -31,6 +31,15 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
     /// which the guest kernel enumerates as `/dev/vda`.
     public static let defaultRootfsDevice = "/dev/vda"
 
+    /// Fixed block-image size every config drive is padded to (issue #426
+    /// warm start). A snapshot bakes the config device's capacity into the
+    /// saved virtio state, and a warm restore stages a *different* sandbox's
+    /// config document at the same in-jail path — so all config drives share
+    /// one capacity, making template and restored-into drives interchangeable.
+    /// Documents that exceed this (pathologically large env/args) still work,
+    /// but the runtime must skip warm start for them.
+    public static let standardBlockImageBytes = 256 * 1024
+
     public let schemaVersion: UInt32
     public let sandboxId: String
     public let identityNonce: String
@@ -38,6 +47,11 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
     public let vsockPort: UInt32
     public let imageConfig: ImageConfig
     public let overrides: ProcessOverrides
+    /// Warm-start template mode (issue #426): the guest boots fully but
+    /// parks `held` instead of launching a workload, waiting to be
+    /// snapshotted. Encoded only when true so ordinary config documents are
+    /// byte-identical to pre-warm-start ones.
+    public let warmHold: Bool?
 
     public init(
         sandboxId: String,
@@ -45,7 +59,8 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
         rootfs: RootfsSpec = RootfsSpec(),
         vsockPort: UInt32 = SandboxConfigDrive.defaultVsockPort,
         imageConfig: ImageConfig,
-        overrides: ProcessOverrides
+        overrides: ProcessOverrides,
+        warmHold: Bool? = nil
     ) {
         self.schemaVersion = SandboxConfigDrive.schemaVersion
         self.sandboxId = sandboxId
@@ -54,6 +69,7 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
         self.vsockPort = vsockPort
         self.imageConfig = imageConfig
         self.overrides = overrides
+        self.warmHold = warmHold
     }
 
     /// Build the config-drive document for a sandbox from its spec and the
@@ -156,6 +172,7 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
         case vsockPort = "vsock_port"
         case imageConfig = "image_config"
         case overrides
+        case warmHold = "warm_hold"
     }
 
     /// Encode the document as compact JSON (the guest parses raw bytes, so no

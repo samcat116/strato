@@ -512,20 +512,99 @@ pool (#415): admission reserves the guest-memory size as an estimate, the
 agent's reported actual sizes replace it, and quota resync sums non-error
 snapshot rows.
 
+### Warm start (issue #426, folded in from #425)
+
+Warm start turns sandbox creation from "boot a guest" into "restore a
+snapshot": the agent boots one throwaway **template** microVM per
+(image, guest version, Firecracker build, machine shape) to the
+ready-to-launch point, snapshots it, and provisions subsequent sandboxes for
+that combination by restoring the template instead of cold-booting. Purely
+agent-internal — no control-plane API, no wire-protocol change — and every
+warm failure falls back to a cold boot, so the feature trades only latency,
+never correctness. `sandbox_warm_start` (default true) gates it;
+`sandbox_warm_cache_max_size_gb` (default 20) bounds the template cache at
+`<vm_storage_dir>/warm-snapshots/`, LRU-swept like the image caches.
+
+**Jailed-only.** Snapshot vmstate records drive/vsock backing files *by
+path*. Jailed, those paths are chroot-relative constants (`/rootfs.ext4`,
+`/snapshots/...`) identical in every jail, so a template snapshot loads
+cleanly under any new sandbox's chroot with different files staged at the
+same names. Unjailed, the recorded paths are the template's absolute host
+paths — gone after template teardown — so warm start silently deactivates
+on unjailed runtimes rather than restoring against deleted files. Template
+builds run in the background (one at a time — a template is an unaccounted,
+guest-memory-sized microVM), coalesced per key, with failures retried no
+sooner than 15 minutes; crash-leaked templates are swept on the first
+create of the next agent life (their self-describing `warm-template-` id
+prefix is what makes that safe without manifest bookkeeping).
+
+**The held point.** A template's config drive sets `warm_hold: true`: the
+guest boots fully — mounts the rootfs, switch_roots onto it, starts the
+vsock listener — but parks in the new `held` state instead of resolving and
+spawning a workload. That point is deliberately **before any per-sandbox
+identity is consumed**: no workload argv/env, no network identity (none
+exists yet — #524), nothing but the template's own throwaway nonce in
+memory. This is the "snapshot before identity" sidestep the issue calls out:
+it keeps most of the fork-identity problem (#427) off the table.
+
+**Template build**: cold-provision under a throwaway id with `warm_hold`
+set → boot → verify over vsock that the guest actually reports `held` with
+the template's identity (an older guest ignores the unknown field and execs
+the image's default command — that build is abandoned rather than
+snapshotted) → pause → snapshot → copy the template's rootfs **as of the
+snapshot** (the held guest has it mounted, so restores must clone exactly
+these bytes, not the pristine image) → publish into the cache with an
+atomic rename, alongside a meta sidecar recording the template's id +
+nonce → tear the template down.
+
+**Warm provision + launch.** Create stages the new sandbox's jail with
+reflink clones of the template's rootfs/memory/vmstate and the sandbox's
+*own* config drive, then `PUT /snapshot/load` without resuming — landing in
+`Paused`, exactly where a created-but-not-booted sandbox sits. Boot resumes
+it and requires the guest to answer in the `held` state with **exactly the
+template identity recorded in the cache meta** (so a workload can never be
+launched into some other process answering on the deterministic UDS); it
+then sends `sync_clock` and the new `launch` control request — carrying the
+sandbox id, nonce, image config + overrides (the guest resolves them with
+the identical cold-boot merge rules), and 32 bytes of host entropy the
+guest mixes into `/dev/urandom` (best-effort RNG divergence until #427's
+proper reseed) — and verifies the guest now echoes the new identity. The
+launch payload is reconstructed from the staged config drive, so the flow
+survives agent restarts between create and boot with no extra persisted
+state (identity delivery rides vsock rather than a guest re-read of the
+config device, whose pre-snapshot page cache could serve the template's
+stale bytes). The guest adopts the delivered identity only after the
+workload actually spawns, so an interrupted launch (an agent crash
+mid-flow) leaves it held under the template identity and the next boot
+simply retries; boot also re-launches a held guest that already echoes the
+sandbox identity, covering skewed guests that swapped early. A failed
+launch demotes the sandbox to a freshly cold-provisioned microVM —
+re-materialized with the create-time registry credential, provisioned
+before the held guest is destroyed — and boots it once with warm launch
+disallowed, so convergence can neither wedge nor loop.
+
+One more mechanical enabler: every config drive is padded to one fixed
+capacity (`SandboxConfigDrive.standardBlockImageBytes`, 256 KiB — part of
+the warm key) so the config device's size always matches what the template
+snapshot recorded, whatever document it carries; documents that exceed it
+are cold-only. Boot logs `bootPath=warm|cold` with `bootMillis`, which is
+the measurement hook for the cold-vs-warm latency comparison on strato-dev.
+
 ### Clone safety (deferred to #427)
 
-Restoring a snapshot **in place, once** — this phase — does not fork
-identity: same sandbox, same NIC/IP (none yet), same machine-id. Restoring
-one snapshot into *N* sandboxes does, and additionally requires RNG reseed
-(the `/entropy` virtio-rng device is wrapped in SwiftFirecracker but not yet
-attached — older Firecracker binaries reject it) plus the guest re-identify
-flow; both land with fork (#427). Warm start (boot-to-ready snapshot per
-base image, folded into #426's scope) is also deferred until the fork
-identity story settles, since a warm-start restore *is* a fork.
+Restoring a snapshot **in place, once** does not fork identity: same
+sandbox, same NIC/IP (none yet), same machine-id. Restoring one snapshot
+into *N* sandboxes does; warm start sidesteps most of it by snapshotting
+before any per-sandbox identity is applied and re-identifying via `launch`,
+plus best-effort entropy mixing. The remainder — the `/entropy` virtio-rng
+device (wrapped in SwiftFirecracker but not yet attached — older
+Firecracker binaries reject it), vmgenid-style reseed, and forking
+*checkpoints* (post-workload memory) into new sandboxes — lands with fork
+(#427).
 
 ## Later phases
-- **Phase 4 (remaining)**: warm start (boot-latency measurement on
-  strato-dev), fork into new sandboxes (#427), and snapshot mobility —
+- **Phase 4 (remaining)**: the warm-vs-cold boot-latency measurement on
+  strato-dev; fork into new sandboxes (#427); and snapshot mobility —
   off-node export, cross-agent restore, diff snapshots (#428). Cross-agent
   restore is why the CPU-template decision is forced at sandbox create time.
 

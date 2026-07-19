@@ -150,6 +150,19 @@ log_level = "info"
 # Optional - defaults to <vm_storage_dir>/jailer
 # sandbox_jailer_chroot_dir = "/var/lib/strato/vms/jailer"
 #
+# Warm start (issue #426): provision new sandboxes by restoring a
+# per-(image, machine shape) template snapshot — booted once to the
+# ready-to-launch point — instead of cold-booting the guest every time.
+# Every warm failure automatically falls back to a cold boot, so this only
+# trades boot latency, never correctness.
+# Optional - defaults to true
+# sandbox_warm_start = true
+
+# Size budget for the warm-start template snapshot cache, in GB. Entries are
+# roughly guest-memory sized and live under <vm_storage_dir>/warm-snapshots.
+# Optional - defaults to 20
+# sandbox_warm_cache_max_size_gb = 20
+
 # First uid/gid of the per-sandbox range (65536 ids; each sandbox gets a
 # deterministic uid derived from its id). Must not collide with real users.
 # Optional - defaults to 100000
