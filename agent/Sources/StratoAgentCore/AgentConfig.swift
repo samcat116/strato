@@ -218,6 +218,10 @@ public struct AgentConfig: Codable {
     public let enableHVF: Bool?
     public let enableKVM: Bool?
     public let vmStoragePath: String?
+    /// Where managed volume disks and their snapshots live. Nil means the
+    /// platform default (`/var/lib/strato/volumes` on Linux) — see
+    /// `FileSystemStorageBackend.defaultStoragePath`.
+    public let volumeStoragePath: String?
     /// Where downloaded VM images (disk images, kernels, rootfs artifacts)
     /// are cached between VM launches. Nil means the platform default
     /// (`/var/cache/strato/images` on Linux).
@@ -283,6 +287,7 @@ public struct AgentConfig: Codable {
         case enableHVF = "enable_hvf"
         case enableKVM = "enable_kvm"
         case vmStoragePath = "vm_storage_dir"
+        case volumeStoragePath = "volume_storage_dir"
         case imageCacheDir = "image_cache_dir"
         case imageCacheMaxSizeGB = "image_cache_max_size_gb"
         case sandboxImageCacheDir = "sandbox_image_cache_dir"
@@ -320,6 +325,7 @@ public struct AgentConfig: Codable {
         enableHVF: Bool? = nil,
         enableKVM: Bool? = nil,
         vmStoragePath: String? = nil,
+        volumeStoragePath: String? = nil,
         imageCacheDir: String? = nil,
         imageCacheMaxSizeGB: Int? = nil,
         sandboxImageCacheDir: String? = nil,
@@ -355,6 +361,7 @@ public struct AgentConfig: Codable {
         self.enableHVF = enableHVF
         self.enableKVM = enableKVM
         self.vmStoragePath = vmStoragePath
+        self.volumeStoragePath = volumeStoragePath
         self.imageCacheDir = imageCacheDir
         self.imageCacheMaxSizeGB = imageCacheMaxSizeGB
         self.sandboxImageCacheDir = sandboxImageCacheDir
@@ -467,6 +474,7 @@ public struct AgentConfig: Codable {
         let enableHVF = tomlData.bool("enable_hvf")
         let enableKVM = tomlData.bool("enable_kvm")
         let vmStoragePath = tomlData.string("vm_storage_dir")
+        let volumeStoragePath = tomlData.string("volume_storage_dir")
         let imageCacheDir = tomlData.string("image_cache_dir")
         let sandboxImageCacheDir = tomlData.string("sandbox_image_cache_dir")
         // Cache budgets must be positive: 0 would mean "evict everything, every
@@ -632,6 +640,7 @@ public struct AgentConfig: Codable {
             enableHVF: enableHVF,
             enableKVM: enableKVM,
             vmStoragePath: vmStoragePath,
+            volumeStoragePath: volumeStoragePath,
             imageCacheDir: imageCacheDir,
             imageCacheMaxSizeGB: imageCacheMaxSizeGB,
             sandboxImageCacheDir: sandboxImageCacheDir,

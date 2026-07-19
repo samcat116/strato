@@ -54,6 +54,39 @@ struct AgentConfigTests {
         #expect(config.enableKVM == nil)
     }
 
+    // MARK: - Storage paths
+
+    @Test("Load volume_storage_dir alongside vm_storage_dir")
+    func loadVolumeStorageDir() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                vm_storage_dir = "/srv/strato/vms"
+                volume_storage_dir = "/srv/strato/volumes"
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+
+            #expect(config.vmStoragePath == "/srv/strato/vms")
+            #expect(config.volumeStoragePath == "/srv/strato/volumes")
+        }
+    }
+
+    @Test("volume_storage_dir defaults to nil (platform default path) when absent")
+    func volumeStorageDirDefaultNil() throws {
+        try withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
+                toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+
+            #expect(config.volumeStoragePath == nil)
+        }
+    }
+
     // MARK: - Image cache settings
 
     @Test("Load image cache settings")

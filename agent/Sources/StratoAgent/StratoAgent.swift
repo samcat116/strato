@@ -243,6 +243,7 @@ private func launchAgent(
     let finalLogLevel = options.logLevel ?? config.logLevel ?? "info"
     let finalAgentID = options.agentID ?? ProcessInfo.processInfo.hostName
     let finalVMStoragePath = options.vmStorageDir ?? config.vmStoragePath ?? AgentConfig.defaultVMStoragePath
+    let finalVolumeStoragePath = config.volumeStoragePath ?? FileSystemStorageBackend.defaultStoragePath
     let finalQemuBinaryPath = options.qemuBinaryPath ?? config.qemuBinaryPath ?? AgentConfig.defaultQemuBinaryPath
 
     // Resolve firmware path from config (architecture-specific)
@@ -310,6 +311,7 @@ private func launchAgent(
             "webSocketURL": .string(finalWebSocketURL),
             "qemuSocketDir": .string(finalQemuSocketDir),
             "vmStoragePath": .string(finalVMStoragePath),
+            "volumeStoragePath": .string(finalVolumeStoragePath),
             "imageCacheDir": .string(config.imageCacheDir ?? ImageCacheService.defaultCachePath),
             "imageCacheMaxSize": .string(config.imageCacheMaxSizeGB.map { "\($0)GB" } ?? "unbounded"),
             "sandboxImageCacheMaxSize": .string(
@@ -365,6 +367,7 @@ private func launchAgent(
         sandboxImageCachePath: config.sandboxImageCacheDir,
         sandboxImageCacheMaxSizeBytes: config.sandboxImageCacheMaxSizeBytes,
         vmStoragePath: finalVMStoragePath,
+        volumeStoragePath: finalVolumeStoragePath,
         qemuBinaryPath: finalQemuBinaryPath,
         firmwarePath: finalFirmwarePath,
         firecrackerBinaryPath: finalFirecrackerBinaryPath,
