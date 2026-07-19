@@ -64,19 +64,27 @@ struct BootstrapCommand: AsyncCommand {
         let keyName = signature.keyName ?? "bootstrap"
 
         // Mirrors UserController.finishRegistration (first user ⇒ system admin)
-        // followed by OrganizationController.create: relational rows and IAM
-        // bindings in one transaction, SpiceDB tuples alongside. The boot-time
-        // backfills repair any partial state if a SpiceDB write fails midway.
+        // followed by OrganizationController.create — but as ONE transaction
+        // covering every relational row including the API key. A failure at any
+        // point (a transient SpiceDB error included: the tuple writes run inside
+        // the closure, so their throw aborts it) rolls everything back, keeping
+        // `isFirstUser` true so the command can simply be re-run. SpiceDB tuples
+        // written before such a rollback reference UUIDs that no longer exist
+        // anywhere — inert, and the idempotent boot-time backfills own repairing
+        // SpiceDB from relational state regardless.
         let user = User(username: username, email: email, displayName: username, isSystemAdmin: true)
-        try await user.save(on: app.db)
-        let userID = try user.requireID()
-
         let organization = Organization(name: orgName, description: "Created by `App bootstrap`")
-        try await organization.save(on: app.db)
-        let orgID = try organization.requireID()
+        let fullKey = APIKey.generateAPIKey()
+        let spicedb = try app.spicedb
 
-        let membership = UserOrganization(userID: userID, organizationID: orgID, role: "admin")
-        try await app.db.transaction { db in
+        let project = try await app.db.transaction { db -> Project in
+            try await user.save(on: db)
+            let userID = try user.requireID()
+
+            try await organization.save(on: db)
+            let orgID = try organization.requireID()
+
+            let membership = UserOrganization(userID: userID, organizationID: orgID, role: "admin")
             try await membership.save(on: db)
             try await RoleBindingService.grant(
                 principalType: .user,
@@ -87,56 +95,60 @@ struct BootstrapCommand: AsyncCommand {
                 createdBy: userID,
                 on: db
             )
+
+            user.currentOrganizationId = orgID
+            try await user.save(on: db)
+
+            try await spicedb.setOrganizationRole(
+                userID: userID.uuidString,
+                organizationID: orgID.uuidString,
+                oldRole: nil,
+                newRole: "admin"
+            )
+
+            let project = Project(
+                name: projectName,
+                description: "Created by `App bootstrap`",
+                organizationID: orgID,
+                path: "/\(orgID.uuidString)"
+            )
+            try await project.save(on: db)
+            let projectID = try project.requireID()
+            project.path = "/\(orgID.uuidString)/\(projectID.uuidString)"
+            try await project.save(on: db)
+
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: userID,
+                role: .admin,
+                nodeType: .project,
+                nodeID: projectID,
+                createdBy: userID,
+                on: db
+            )
+
+            try await spicedb.writeRelationship(
+                entity: "project",
+                entityId: projectID.uuidString,
+                relation: "parent",
+                subject: "organization",
+                subjectId: orgID.uuidString
+            )
+
+            let apiKey = APIKey(
+                userID: userID,
+                name: keyName,
+                keyHash: APIKey.hashAPIKey(fullKey),
+                keyPrefix: String(fullKey.prefix(12)) + "...",
+                scopes: [APIKeyScope.admin.rawValue]
+            )
+            try await apiKey.save(on: db)
+            return project
         }
 
-        user.currentOrganizationId = orgID
-        try await user.save(on: app.db)
-
-        try await app.spicedb.setOrganizationRole(
-            userID: userID.uuidString,
-            organizationID: orgID.uuidString,
-            oldRole: nil,
-            newRole: "admin"
-        )
-
-        let project = Project(
-            name: projectName,
-            description: "Created by `App bootstrap`",
-            organizationID: orgID,
-            path: "/\(orgID.uuidString)"
-        )
-        try await project.save(on: app.db)
+        let userID = try user.requireID()
+        let orgID = try organization.requireID()
         let projectID = try project.requireID()
-        project.path = "/\(orgID.uuidString)/\(projectID.uuidString)"
-        try await project.save(on: app.db)
-
-        try await RoleBindingService.grant(
-            principalType: .user,
-            principalID: userID,
-            role: .admin,
-            nodeType: .project,
-            nodeID: projectID,
-            createdBy: userID,
-            on: app.db
-        )
-
-        try await app.spicedb.writeRelationship(
-            entity: "project",
-            entityId: projectID.uuidString,
-            relation: "parent",
-            subject: "organization",
-            subjectId: orgID.uuidString
-        )
-
-        let fullKey = APIKey.generateAPIKey()
-        let apiKey = APIKey(
-            userID: userID,
-            name: keyName,
-            keyHash: APIKey.hashAPIKey(fullKey),
-            keyPrefix: String(fullKey.prefix(12)) + "...",
-            scopes: [APIKeyScope.admin.rawValue]
-        )
-        try await apiKey.save(on: app.db)
 
         if signature.quiet {
             console.print(fullKey)
