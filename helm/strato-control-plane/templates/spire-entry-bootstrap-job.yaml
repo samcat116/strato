@@ -1,0 +1,163 @@
+{{- /*
+Registration entries for the chart's own workloads, created idempotently on
+every install/upgrade. Without these, nothing in the trust domain entitles
+the control-plane pod to an SVID: the Envoy sidecar's SDS request for
+spiffe://<td>/control-plane never resolves (agent mTLS cannot terminate) and
+the control plane has no admin identity for the SPIRE server's TCP admin API
+(issue #507).
+
+Entries must be created through the server's private admin socket, which only
+exists inside the (distroless, shell-less) spire-server container — so this
+Job runs the spire-server CLI in place via `kubectl exec`, which needs no
+shell in the target container. The RBAC below is what that requires: get/watch
+on pods (readiness wait) and create on pods/exec, namespace-scoped.
+
+Three entries, all parented to a node alias that covers every k8s_psat-attested
+agent in the cluster (so they are served regardless of which node the pod
+lands on):
+  1. the node alias itself,
+  2. the control-plane container's admin entry (admin = true entitles the
+     ListEntries/BatchCreateEntry/... RPCs over mTLS), and
+  3. the Envoy sidecar's server SVID entry — same SPIFFE ID, but selected by
+     container name so the admin flag stays off Envoy's certificate, and
+     carrying the agents DNS SAN agents actually dial when the Gateway is on.
+
+`spire-server entry create` reports AlreadyExists for an identical entry;
+the script treats that as success, so re-runs converge.
+*/}}
+{{- if and .Values.spire.enabled .Values.spire.entryBootstrap.enabled .Values.spire.attestors.k8sPsat.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spire-entry-bootstrap
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-entry-bootstrap
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spire-entry-bootstrap
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-entry-bootstrap
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spire-entry-bootstrap
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-entry-bootstrap
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "strato-control-plane.fullname" . }}-spire-entry-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "strato-control-plane.fullname" . }}-spire-entry-bootstrap
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "strato-control-plane.fullname" . }}-spire-entry-bootstrap
+  labels:
+    {{- include "strato-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: spire-entry-bootstrap
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-3"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "strato-control-plane.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: spire-entry-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "strato-control-plane.fullname" . }}-spire-entry-bootstrap
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: bootstrap-entries
+          image: {{ .Values.spire.entryBootstrap.image | quote }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              POD="{{ include "strato-control-plane.fullname" . }}-spire-server-0"
+              BIN=/opt/spire/bin/spire-server
+              SOCK=/tmp/spire-server/private/api.sock
+              NODE_ALIAS="spiffe://{{ .Values.spire.trustDomain }}/cluster/{{ .Values.spire.clusterName }}"
+              CP_ID="spiffe://{{ .Values.spire.trustDomain }}/control-plane"
+
+              echo "==> Waiting for ${POD} to become ready"
+              kubectl wait --for=condition=ready "pod/${POD}" --timeout=600s
+
+              # Run `spire-server entry create` inside the server pod,
+              # treating AlreadyExists as success so re-runs converge.
+              ensure_entry() {
+                  desc="$1"; shift
+                  echo "==> Ensuring ${desc}"
+                  if out=$(kubectl exec "${POD}" -c spire-server -- \
+                      "${BIN}" entry create -socketPath "${SOCK}" "$@" 2>&1); then
+                      printf '%s\n' "${out}" | sed 's/^/    /'
+                  elif printf '%s' "${out}" | grep -qi "similar entry already exists"; then
+                      echo "    entry already exists"
+                  else
+                      printf '%s\n' "${out}" | sed 's/^/    /' >&2
+                      return 1
+                  fi
+              }
+
+              ensure_entry "node alias for k8s_psat-attested agents (${NODE_ALIAS})" \
+                  -node \
+                  -spiffeID "${NODE_ALIAS}" \
+                  -selector "k8s_psat:cluster:{{ .Values.spire.clusterName }}"
+
+              ensure_entry "control-plane admin entry (${CP_ID})" \
+                  -parentID "${NODE_ALIAS}" \
+                  -spiffeID "${CP_ID}" \
+                  -admin \
+                  -selector "k8s:ns:{{ .Release.Namespace }}" \
+                  -selector "k8s:sa:{{ include "strato-control-plane.serviceAccountName" . }}" \
+                  -selector "k8s:container-name:{{ .Chart.Name }}"
+
+              {{- if .Values.spire.envoy.enabled }}
+              ensure_entry "Envoy sidecar server SVID entry (${CP_ID})" \
+                  -parentID "${NODE_ALIAS}" \
+                  -spiffeID "${CP_ID}" \
+                  {{- if .Values.gateway.enabled }}
+                  -dns "{{ include "strato-control-plane.gateway.agentsHost" . }}" \
+                  {{- end }}
+                  -selector "k8s:ns:{{ .Release.Namespace }}" \
+                  -selector "k8s:sa:{{ include "strato-control-plane.serviceAccountName" . }}" \
+                  -selector "k8s:container-name:envoy-sidecar"
+              {{- end }}
+
+              echo "==> SPIRE entry bootstrap complete"
+{{- end }}

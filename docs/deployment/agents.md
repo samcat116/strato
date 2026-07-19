@@ -360,7 +360,8 @@ Control-plane environment reference:
 
 | Variable | Meaning | Default |
 | --- | --- | --- |
-| `SPIRE_SERVER_API_ADDRESS` | SPIRE server registration API (`unix:///path` or loopback `host:port` bridge) | unset (provisioning off) |
+| `SPIRE_SERVER_API_ADDRESS` | SPIRE server registration API (`unix:///path`, a loopback `host:port` bridge, or — with `SPIFFE_ENDPOINT_SOCKET` — the server's TLS `host:port` endpoint) | unset (provisioning off) |
+| `SPIFFE_ENDPOINT_SOCKET` | SPIFFE Workload API socket of a node-local SPIRE agent. When set and the API address is TCP, the control plane authenticates to the SPIRE server with mTLS using its own SVID (whose entry must carry `admin = true`) — the only way to reach the admin API across a network. The Helm chart sets this up automatically. | unset (plaintext) |
 | `SPIRE_SERVER_PUBLIC_ADDRESS` | Address nodes dial for attestation | `EXTERNAL_HOSTNAME:8085` (compose); the Helm chart sets `spire.<host>:443` when `gateway.enabled` |
 | `SPIRE_AGENT_SELECTORS` | Comma-separated workload selectors | `unix:uid:0` |
 | `SPIRE_SVID_TTL` | X.509 SVID TTL for agent entries (seconds) | `3600` |

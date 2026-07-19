@@ -12,7 +12,7 @@ let package = Package(
         // StratoShared for common models and protocols
         .package(path: "../shared"),
         // 💧 A server-side Swift web framework.
-    .package(url: "https://github.com/vapor/vapor.git", from: "4.122.0"),
+        .package(url: "https://github.com/vapor/vapor.git", from: "4.122.0"),
         // 🗄 An ORM for SQL and NoSQL databases.
         .package(url: "https://github.com/vapor/fluent.git", from: "4.13.0"),
         // 🐘 Fluent driver for Postgres.
@@ -20,7 +20,7 @@ let package = Package(
         // 🪶 Fluent driver for SQLite (for testing).
         .package(url: "https://github.com/vapor/fluent-sqlite-driver.git", from: "4.9.0"),
         // 🔵 Non-blocking, event-driven networking for Swift. Used for custom executors
-    .package(url: "https://github.com/apple/swift-nio.git", from: "2.101.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.101.0"),
         // 🔐 WebAuthn/Passkey authentication
         .package(url: "https://github.com/swift-server/webauthn-swift.git", branch: "main"),
         .package(url: "https://github.com/samcat116/swift-scim.git", branch: "main"),
@@ -51,7 +51,7 @@ let package = Package(
         .package(url: "https://github.com/grpc/grpc-swift-nio-transport.git", from: "2.0.0"),
         .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0")
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
     ],
     targets: [
         // SPIRE Server registration API client (join tokens + registration
@@ -66,6 +66,7 @@ let package = Package(
                 .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "X509", package: "swift-certificates"),
             ],
             exclude: ["Generated/README.md", "Generated/proto"],
             swiftSettings: swiftSettings
@@ -93,7 +94,7 @@ let package = Package(
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
                 .product(name: "OTel", package: "swift-otel"),
                 .product(name: "Metrics", package: "swift-metrics"),
-                .product(name: "Valkey", package: "valkey-swift")
+                .product(name: "Valkey", package: "valkey-swift"),
             ],
             swiftSettings: swiftSettings,
             plugins: [
@@ -111,10 +112,10 @@ let package = Package(
                 .product(name: "X509", package: "swift-certificates"),
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCNIOTransportHTTP2Posix", package: "grpc-swift-nio-transport"),
-                .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf")
+                .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
             ],
             swiftSettings: testSwiftSettings
-        )
+        ),
     ],
     swiftLanguageModes: [.v6]
 )
@@ -131,6 +132,6 @@ var swiftSettings: [SwiftSetting] {
 // non-behavioral feature.
 var testSwiftSettings: [SwiftSetting] {
     [
-        .enableUpcomingFeature("InferIsolatedConformances"),
+        .enableUpcomingFeature("InferIsolatedConformances")
     ]
 }
