@@ -124,6 +124,30 @@ struct SandboxProtocolTests {
         #expect(decoded.spec.restoreFrom == restore)
     }
 
+    @Test("Snapshot status advertises fork layout and decodes legacy omission")
+    func snapshotForkLayoutCompatibility() throws {
+        let response = SandboxSnapshotStatusResponse(
+            snapshotId: "snapshot-1",
+            sizeBytes: 10,
+            memorySizeBytes: 4,
+            vmstateSizeBytes: 2,
+            rootfsSizeBytes: 4,
+            storagePath: "/snapshots/1",
+            firecrackerVersion: "1.13.1",
+            architecture: .x86_64,
+            guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
+            forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion)
+        let decoded = try roundTrip(response)
+        #expect(decoded.forkLayoutVersion == SandboxSnapshotForkLayout.currentVersion)
+
+        let legacy = """
+            {"snapshotId":"snapshot-1","sizeBytes":10,"memorySizeBytes":4,
+             "vmstateSizeBytes":2,"rootfsSizeBytes":4,"storagePath":"/snapshots/1",
+             "firecrackerVersion":"1.13.1","architecture":"x86_64"}
+            """
+        #expect(try decodeJSON(SandboxSnapshotStatusResponse.self, from: legacy).forkLayoutVersion == nil)
+    }
+
     @Test("Sandbox fields actually reach the wire")
     func sandboxKeysEncoded() throws {
         let message = DesiredStateMessage(syncId: "s", vms: [])

@@ -20,6 +20,19 @@ public enum SandboxSnapshotMode: String, Codable, Sendable {
     case stop
 }
 
+/// Artifact-layout capability recorded with a checkpoint. Fork restore
+/// reuses Firecracker's chroot-relative device paths under a new jail root,
+/// so snapshots captured from an unjailed microVM are intentionally
+/// ineligible even when the agent and checkpointed guest are otherwise new.
+public enum SandboxSnapshotForkLayout {
+    public static let jailedV1 = 1
+    public static let currentVersion = jailedV1
+
+    public static func supportsFork(_ version: Int?) -> Bool {
+        version == currentVersion
+    }
+}
+
 /// Ask an agent to checkpoint a sandbox: drain host↔guest connections, pause
 /// the microVM, capture guest memory + vmstate, copy the rootfs, then resume
 /// or stay stopped per `mode`. The agent owns snapshot artifact layout and
@@ -119,6 +132,9 @@ public struct SandboxSnapshotStatusResponse: Codable, Sendable {
     /// legacy/unknown guest and must not be assumed to support fork identity
     /// rotation merely because its owning agent is current.
     public let guestControlProtocolVersion: Int?
+    /// Version of the fork-safe artifact layout, or nil for legacy/unjailed
+    /// checkpoints that remain eligible for in-place restore only.
+    public let forkLayoutVersion: Int?
 
     public init(
         snapshotId: String,
@@ -129,7 +145,8 @@ public struct SandboxSnapshotStatusResponse: Codable, Sendable {
         storagePath: String,
         firecrackerVersion: String,
         architecture: CPUArchitecture?,
-        guestControlProtocolVersion: Int? = nil
+        guestControlProtocolVersion: Int? = nil,
+        forkLayoutVersion: Int? = nil
     ) {
         self.snapshotId = snapshotId
         self.sizeBytes = sizeBytes
@@ -140,5 +157,6 @@ public struct SandboxSnapshotStatusResponse: Codable, Sendable {
         self.firecrackerVersion = firecrackerVersion
         self.architecture = architecture
         self.guestControlProtocolVersion = guestControlProtocolVersion
+        self.forkLayoutVersion = forkLayoutVersion
     }
 }

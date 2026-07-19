@@ -197,6 +197,26 @@ enum IPAMService {
             ipAddress: base.replacingInterfaceID(candidate).description, prefixLength: cidr.prefix)
     }
 
+    /// Allocates the lowest free floating address in `pool`'s CIDR (issue
+    /// #344). Same shape as NIC allocation: the used set is the pool's
+    /// existing `FloatingIP` rows, a per-pool advisory lock serializes
+    /// concurrent allocations, and the `(pool_id, address)` unique index
+    /// backstops same-table races. Callers run inside the transaction that
+    /// saves the new row.
+    static func allocateFloatingIP(for pool: FloatingIPPool, on db: Database) async throws -> String {
+        try await lockAllocations(network: "fip:\(pool.name)", on: db)
+        let used = try await FloatingIP.query(on: db)
+            .filter(\.$pool.$id == pool.requireID())
+            .all()
+            .compactMap { parseIPv4($0.address) }
+        return try allocateIP(
+            networkName: pool.name,
+            subnet: pool.cidr,
+            gateway: pool.gateway,
+            used: Set(used)
+        ).ipAddress
+    }
+
     /// The first host address of a subnet (conventionally the gateway), e.g.
     /// "192.168.1.0/24" → "192.168.1.1". Used when seeding networks without an
     /// explicit gateway.

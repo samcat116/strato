@@ -60,6 +60,26 @@ default) funnels into `launchAgent`.
   registration-rejected error is terminal (the node's SPIRE identity is no
   longer accepted — re-enroll it).
 
+## Shutdown
+
+**VMs outlive the agent.** A SIGINT/SIGTERM runs `Agent.stop()` —
+unregistering from the control plane, closing the socket and its event loop,
+closing console channels, disconnecting networking, stopping the SVID manager
+— but it deliberately does not touch running hypervisor processes. The
+manifest keeps them, and the next incarnation re-adopts them (see
+[Storage](#storage)). This is why the systemd unit must set
+`KillMode=process`: QEMU and Firecracker are children of the agent and share
+its cgroup, so systemd's default would kill every VM on the host on any
+restart.
+
+Shutdown is bounded on both ends. `launchAgent` exits the process explicitly
+once `stop()` returns rather than letting the runtime unwind, and a watchdog
+armed by the signal handler exits anyway if the process has not gone away
+within 20s of the signal.
+Before that, a completed shutdown could leave the process alive on some
+straggling thread until systemd's `TimeoutStopSec` SIGKILLed it — taking every
+VM in the cgroup with it (issue #522).
+
 ## Hypervisor driver registry
 
 `HypervisorProtocol.swift` defines `protocol HypervisorService: Actor` —
@@ -85,6 +105,36 @@ host cleanly rejects placements it can't serve.
 - **`MockHypervisorService`**: the no-op backend used as a build fallback
   and in simulation mode (one mock per hypervisor type). It tracks specs
   and status so reservations and reconciliation behave realistically.
+
+## Guest provisioning (cloud-init)
+
+`StratoAgentCore/CloudInitProvisioner.swift` generates the NoCloud seed ISO
+QEMU disk-boot VMs consume (`meta-data`, `user-data`, and — when the control
+plane allocated static addressing — a v2 `network-config`). Guest bootstrap
+is deliberately per-backend: Firecracker VMs inject configuration through
+kernel args instead and do not use this path.
+
+The `user-data` document has two shapes:
+
+- **No caller user data**: a single `#cloud-config` carrying Strato's
+  provisioning — a serial-console password (dev convenience for SLIRP
+  networks with no SSH route), GRUB/getty serial-console setup, and the
+  VM's authorized SSH keys.
+- **Caller user data present** (`VMSpec.userData`, any cloud-init format:
+  `#cloud-config`, `#!` script, `#include`, jinja template): a
+  `multipart/mixed` MIME document. The caller's payload is the **last**
+  part — cloud-init's `CloudConfigPartHandler` merges parts with the
+  default `dict(replace)+list()+str()` policy, replacing keys of prior
+  parts, so on conflicting keys the caller wins and Strato's config acts
+  as defaults (a caller's `ssh_pwauth: false` really disables password
+  SSH auth). Strato's console setup travels as a `text/x-shellscript`
+  part rather than `bootcmd`/`runcmd` keys, because those list keys in a
+  caller part would replace Strato's — script parts always compose. The
+  multipart boundary is extended until it appears in no part, so hostile
+  payloads can't truncate a part.
+- **Caller user data is itself a full MIME document**: used as the seed's
+  `user-data` verbatim — the escape hatch for callers who want complete
+  control (this skips Strato's console/password/SSH-key provisioning).
 
 ## The reconciler
 

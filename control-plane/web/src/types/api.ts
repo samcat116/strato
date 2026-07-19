@@ -594,6 +594,13 @@ export interface CreateVMRequest {
   networkId?: string;
   /** SSH public key authorized for the guest's default user (cloud-init). */
   sshPublicKey?: string;
+  /**
+   * Cloud-init user data, passed to the guest verbatim at first boot. Any
+   * format cloud-init dispatches on: `#cloud-config`, `#!` shell script,
+   * `#include`, `## template: jinja`, or a full MIME multipart document
+   * (which replaces Strato's built-in provisioning entirely).
+   */
+  userData?: string;
 }
 
 export interface UpdateVMRequest {
@@ -717,6 +724,7 @@ export interface SandboxSnapshot {
   firecrackerVersion?: string | null;
   architecture?: string | null;
   guestControlProtocolVersion?: number | null;
+  forkLayoutVersion?: number | null;
   errorMessage?: string | null;
   createdById?: string | null;
   createdAt?: string | null;

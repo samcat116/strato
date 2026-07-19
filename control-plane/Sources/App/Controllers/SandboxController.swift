@@ -316,6 +316,11 @@ struct SandboxController: RouteCollection {
                         "Agent '\(pinnedAgent.name)' is too old for sandbox forks (wire protocol \(pinnedAgent.wireProtocolVersion ?? 0), need >= \(WireProtocol.sandboxForkMinimumVersion))"
                 )
             }
+            guard SandboxSnapshotForkLayout.supportsFork(snapshot.forkLayoutVersion) else {
+                throw Abort(
+                    .conflict,
+                    reason: "Snapshot was not captured in a fork-compatible jailed layout")
+            }
             guard
                 SandboxGuestControlProtocol.supportsReidentify(
                     snapshot.guestControlProtocolVersion)

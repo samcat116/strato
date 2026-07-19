@@ -291,6 +291,9 @@ public func configure(_ app: Application) async throws {
     // loads VM models (e.g. MigrateVMDisksToVolumes) runs on a fresh database.
     app.migrations.add(AddSSHPublicKeyToVM())
 
+    // Cloud-init user data column. Same ordering constraint as above.
+    app.migrations.add(AddUserDataToVM())
+
     // App settings migration (for signing keys, etc.)
     app.migrations.add(CreateAppSetting())
 
@@ -426,12 +429,18 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateRoleBinding())
     app.migrations.add(CreateIAMRoleRegistry())
 
+    // IAM phase 2 (issue #479): the forbid-only guardrail store and the
+    // policy-set version log that drives compiled-policy-set invalidation.
+    app.migrations.add(CreateGuardrail())
+    app.migrations.add(CreatePolicySetVersion())
+
     // Sandbox snapshots / checkpoint-resume (issue #426).
     app.migrations.add(CreateSandboxSnapshot())
     // Sandbox fork lineage (issue #427). Must follow snapshots so deployments
     // see the source table before the feature starts accepting references.
     app.migrations.add(AddSandboxRestoreLineage())
     app.migrations.add(AddSandboxSnapshotGuestControlVersion())
+    app.migrations.add(AddSandboxSnapshotForkLayoutVersion())
 
     // Give the seeded "default" network resolvers so guests can resolve names
     // out of the box (issue #518). Runs late: it must follow the migration that
@@ -448,12 +457,26 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(MigratePendingTokensToEnrollments())
     app.migrations.add(DropAgentRegistrationTokens())
 
+    // Floating IPs (issue #344): external address pools + per-address
+    // allocations attached to VM NICs. Ordered after sites, projects, and
+    // vm_network_interfaces, which it references.
+    app.migrations.add(CreateFloatingIP())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
     // curated registry. Runs every startup so registry changes land with the
     // deploy that carries them.
     try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
+
+    // IAM phase 2: track the policy-set version. Runs after the registry sync
+    // so this replica starts from the version that sync may have just written,
+    // and before anything can change policy. Under `.testing` the periodic
+    // re-read would outlive the test's application, and the tests that care
+    // drive the cache directly.
+    if app.environment != .testing {
+        await app.startPolicySetVersionWatch()
+    }
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth
     // tokens) to encrypted form. Runs every startup (not a one-shot migration)

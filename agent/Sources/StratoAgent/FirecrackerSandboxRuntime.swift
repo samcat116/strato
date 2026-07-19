@@ -1404,7 +1404,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             rootfsSizeBytes: fileSize(archiveRootfs),
             storagePath: archiveDir,
             firecrackerVersion: info.vmlinuxVersion,
-            guestControlProtocolVersion: guestControlProtocolVersion)
+            guestControlProtocolVersion: guestControlProtocolVersion,
+            forkLayoutVersion: managed.jail == nil ? nil : SandboxSnapshotForkLayout.currentVersion)
         logger.info(
             "Sandbox checkpoint complete",
             metadata: [

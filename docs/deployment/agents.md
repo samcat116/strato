@@ -215,10 +215,26 @@ Requires=spire-agent.service
 ExecStart=/usr/local/bin/strato-agent run --config-file /etc/strato/config.toml
 Restart=on-failure
 RestartSec=10
+# Signal only the agent on stop, never the whole cgroup — see below.
+KillMode=process
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+`KillMode=process` is required, not optional. QEMU and Firecracker run as
+children of the agent, so they share its cgroup; with systemd's default
+`KillMode=control-group` every `systemctl stop`, `systemctl restart`, or
+automatic `Restart=on-failure` would kill every VM on the host. VMs are
+designed to outlive the agent — the agent persists a VM manifest and re-adopts
+the hypervisor processes it left running when it starts back up — so the unit
+must leave them alone.
+
+Agents installed before this directive existed have units without it. Re-run
+the install script, or add the two lines by hand and
+`systemctl daemon-reload`; the change takes effect on the next stop, so do it
+before the next restart rather than after losing a node's VMs to one.
 
 ## Updating agents
 
@@ -360,7 +376,8 @@ Control-plane environment reference:
 
 | Variable | Meaning | Default |
 | --- | --- | --- |
-| `SPIRE_SERVER_API_ADDRESS` | SPIRE server registration API (`unix:///path` or loopback `host:port` bridge) | unset (provisioning off) |
+| `SPIRE_SERVER_API_ADDRESS` | SPIRE server registration API (`unix:///path`, a loopback `host:port` bridge, or — with `SPIFFE_ENDPOINT_SOCKET` — the server's TLS `host:port` endpoint) | unset (provisioning off) |
+| `SPIFFE_ENDPOINT_SOCKET` | SPIFFE Workload API socket of a node-local SPIRE agent. When set and the API address is TCP, the control plane authenticates to the SPIRE server with mTLS using its own SVID (whose entry must carry `admin = true`) — the only way to reach the admin API across a network. The Helm chart sets this up automatically. | unset (plaintext) |
 | `SPIRE_SERVER_PUBLIC_ADDRESS` | Address nodes dial for attestation | `EXTERNAL_HOSTNAME:8085` (compose); the Helm chart sets `spire.<host>:443` when `gateway.enabled` |
 | `SPIRE_AGENT_SELECTORS` | Comma-separated workload selectors | `unix:uid:0` |
 | `SPIRE_SVID_TTL` | X.509 SVID TTL for agent entries (seconds) | `3600` |

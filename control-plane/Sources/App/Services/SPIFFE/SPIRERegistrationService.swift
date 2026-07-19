@@ -229,8 +229,16 @@ public struct SPIRERegistrationConfig: Sendable {
     public let trustDomain: String
 
     /// Where the control plane reaches the SPIRE server registration API
-    /// (`unix:///path/to/api.sock`, or `host:port` for a loopback dev bridge).
+    /// (`unix:///path/to/api.sock`, or `host:port` for a loopback dev bridge
+    /// or — with `workloadAPISocketPath` set — the server's TLS endpoint).
     public let serverAPIAddress: SPIREServerAPIAddress
+
+    /// Path to the SPIFFE Workload API socket of a local SPIRE agent. When
+    /// set and the server API address is TCP, the client authenticates with
+    /// mTLS using the control plane's own SVID — the only way to reach the
+    /// admin API when the SPIRE server is across a network (Kubernetes). Nil
+    /// keeps the plaintext unix-socket/loopback-bridge behavior (compose).
+    public let workloadAPISocketPath: String?
 
     /// The SPIRE server address handed to nodes for attestation (host:port).
     public let serverPublicAddress: String
@@ -244,12 +252,14 @@ public struct SPIRERegistrationConfig: Sendable {
     public init(
         trustDomain: String,
         serverAPIAddress: SPIREServerAPIAddress,
+        workloadAPISocketPath: String? = nil,
         serverPublicAddress: String,
         agentSelectors: [SPIRESelector],
         svidTTLSeconds: Int
     ) {
         self.trustDomain = trustDomain
         self.serverAPIAddress = serverAPIAddress
+        self.workloadAPISocketPath = workloadAPISocketPath
         self.serverPublicAddress = serverPublicAddress
         self.agentSelectors = agentSelectors
         self.svidTTLSeconds = svidTTLSeconds
@@ -267,6 +277,19 @@ public struct SPIRERegistrationConfig: Sendable {
 
         let apiAddress = try SPIREServerAPIAddress(parsing: apiAddressString)
         let trustDomain = Environment.get("SPIRE_TRUST_DOMAIN") ?? "strato.local"
+
+        // SPIFFE Workload API socket of a local SPIRE agent, enabling the
+        // mTLS admin path. Standard SPIFFE env var; both `unix:///path` and
+        // bare `/path` forms are accepted.
+        var workloadSocketPath: String?
+        if let raw = Environment.get("SPIFFE_ENDPOINT_SOCKET"), !raw.isEmpty {
+            let path = raw.hasPrefix("unix://") ? String(raw.dropFirst("unix://".count)) : raw
+            guard path.hasPrefix("/") else {
+                throw SPIRERegistrationError.invalidConfiguration(
+                    "SPIFFE_ENDPOINT_SOCKET must be an absolute unix socket path, got: \(raw)")
+            }
+            workloadSocketPath = path
+        }
 
         // The address nodes dial for attestation. Falls back to the
         // externally visible control-plane host with SPIRE's conventional
@@ -297,6 +320,7 @@ public struct SPIRERegistrationConfig: Sendable {
         return SPIRERegistrationConfig(
             trustDomain: trustDomain,
             serverAPIAddress: apiAddress,
+            workloadAPISocketPath: workloadSocketPath,
             serverPublicAddress: publicAddress,
             agentSelectors: selectors,
             svidTTLSeconds: Int(Environment.get("SPIRE_SVID_TTL") ?? "3600") ?? 3600
@@ -347,14 +371,26 @@ extension Application {
             return
         }
 
-        let client = SPIREServerAPIClient(address: config.serverAPIAddress, logger: logger)
+        let transportSecurity: SPIREServerAPITransportSecurity
+        if let socketPath = config.workloadAPISocketPath, case .tcp = config.serverAPIAddress {
+            transportSecurity = .mtls(
+                identityProvider: WorkloadAPISVIDSource(socketPath: socketPath, logger: logger))
+        } else {
+            transportSecurity = .plaintext
+        }
+
+        let client = SPIREServerAPIClient(
+            address: config.serverAPIAddress, transportSecurity: transportSecurity, logger: logger)
         spireRegistrationService = SPIRERegistrationService(api: client, config: config, logger: logger)
 
+        var adminTransport = "plaintext"
+        if case .mtls = transportSecurity { adminTransport = "mtls" }
         logger.info(
             "SPIRE registration provisioning configured",
             metadata: [
                 "trustDomain": .string(config.trustDomain),
                 "serverPublicAddress": .string(config.serverPublicAddress),
+                "adminTransport": .string(adminTransport),
             ])
     }
 }

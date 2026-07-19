@@ -193,6 +193,7 @@ extension SandboxController {
                     current.firecrackerVersion = report.firecrackerVersion
                     current.architecture = report.architecture?.rawValue
                     current.guestControlProtocolVersion = report.guestControlProtocolVersion
+                    current.forkLayoutVersion = report.forkLayoutVersion
                     try await current.save(on: app.db)
                 }
 
@@ -539,6 +540,11 @@ extension SandboxController {
         try await lockSnapshotLineage([snapshotID], on: db)
         guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: db), snapshot.isReady else {
             throw Abort(.conflict, reason: "Snapshot is no longer ready for fork")
+        }
+        guard SandboxSnapshotForkLayout.supportsFork(snapshot.forkLayoutVersion) else {
+            throw Abort(
+                .conflict,
+                reason: "Snapshot was not captured in a fork-compatible jailed layout")
         }
         let sourceID = snapshot.$sandbox.id
         guard let source = try await Sandbox.find(sourceID, on: db), source.desiredStatus != .absent else {

@@ -309,6 +309,7 @@ final class SandboxTests {
             snapshot.architecture = CPUArchitecture.current.rawValue
             snapshot.guestControlProtocolVersion =
                 SandboxGuestControlProtocol.currentVersion
+            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
             try await snapshot.save(on: app.db)
 
             var operation: OperationResponse?
@@ -425,6 +426,7 @@ final class SandboxTests {
             snapshot.status = .ready
             snapshot.guestControlProtocolVersion =
                 SandboxGuestControlProtocol.reidentifyMinimumVersion - 1
+            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
             try await snapshot.save(on: app.db)
 
             try await app.test(.POST, "/api/sandboxes") { req in
@@ -437,6 +439,39 @@ final class SandboxTests {
             } afterResponse: { res in
                 #expect(res.status == .conflict)
                 #expect(res.body.string.contains("checkpointed guest is too old"))
+            }
+        }
+    }
+
+    @Test("Fork refuses a checkpoint captured without the jailed layout")
+    func createFromSnapshotRejectsUnjailedLayout() async throws {
+        try await withSandboxTestApp { app, user, project, source, token in
+            let agentId = try await registerAgent(
+                app: app,
+                sandbox: source,
+                named: "current-agent-with-unjailed-snapshot",
+                sandboxCapable: true)
+            let snapshot = SandboxSnapshot(
+                name: "unjailed-checkpoint",
+                sandboxID: source.id!,
+                projectID: project.id!,
+                environment: source.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
+            try await snapshot.save(on: app.db)
+
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "unsafe-layout-fork",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("fork-compatible jailed layout"))
             }
         }
     }
@@ -459,6 +494,7 @@ final class SandboxTests {
             snapshot.status = .ready
             snapshot.guestControlProtocolVersion =
                 SandboxGuestControlProtocol.currentVersion
+            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
             try await snapshot.save(on: app.db)
 
             source.desiredStatus = .absent

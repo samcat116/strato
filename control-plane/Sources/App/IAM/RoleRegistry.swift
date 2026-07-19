@@ -23,6 +23,7 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     case sandbox
     case image
     case network
+    case floatingIP = "floating_ip"
     case volume
     case volumeSnapshot = "volume_snapshot"
     case sandboxSnapshot = "sandbox_snapshot"
@@ -67,6 +68,7 @@ enum IAMRoleRegistry {
             "volume:read", "volume:list",
             "image:read", "image:list", "image:download",
             "network:read", "network:list",
+            "floatingip:read", "floatingip:list",
             "project:read",
             "folder:read",
             "org:read",
@@ -89,6 +91,8 @@ enum IAMRoleRegistry {
             "volume:snapshot", "volume:clone", "volume:restore",
             "image:create", "image:update", "image:delete",
             "network:create", "network:update", "network:delete",
+            "floatingip:create", "floatingip:release",
+            "floatingip:attach", "floatingip:detach",
             "project:update",
         ],
         .admin: [
@@ -108,6 +112,20 @@ enum IAMRoleRegistry {
     /// grants `org:read` and `project:create` — nothing else"). Reverse
     /// lookups must add these, or they under-report every org member.
     static let membershipDerivedActions: Set<String> = ["org:read", "project:create"]
+
+    /// Every action the registry knows, including the membership-derived ones
+    /// that no role carries. This is the action *vocabulary*: guardrails
+    /// validate exact action names against it so a typo can't create a ceiling
+    /// that silently protects nothing.
+    static let allActions: Set<String> =
+        IAMRole.allCases.reduce(into: membershipDerivedActions) { $0.formUnion(actions(for: $1)) }
+
+    /// The service prefixes appearing in `allActions` (`vm`, `volume`, `iam`,
+    /// …) — the valid left-hand sides of a `service:*` guardrail pattern.
+    static let actionServices: Set<String> = Set(
+        allActions.compactMap { action in
+            action.split(separator: ":", maxSplits: 1).first.map(String.init)
+        })
 
     /// The roles whose expanded action group contains `action` — the set a
     /// binding must name to grant it. Empty for an action no role carries

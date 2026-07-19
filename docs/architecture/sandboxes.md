@@ -608,8 +608,11 @@ versioned `pong` and persists it on the snapshot. Fork admission and placement
 require guest control protocol v3; an upgraded v12 agent therefore cannot
 mistake an older guest frozen in memory for one that understands
 `reidentify`, and legacy/unknown snapshots remain usable for in-place restore
-only. The runtime repeats the guest capability check after loading the
-checkpoint as defense in depth. The agent
+only. Snapshot creation also persists a fork-layout version only for jailed
+sources; unjailed and legacy snapshots remain in-place-only because their
+Firecracker device paths cannot be reused under a new jail root. The runtime
+repeats the guest capability check after loading the checkpoint as defense in
+depth. The agent
 reflink-copies, or normally copies, `rootfs.ext4`, `memory.snap`,
 `vmstate.snap`, and `config.img` into a new jailed sandbox layout and loads
 the snapshot resumed. It first proves that the resumed guest has the source

@@ -160,6 +160,9 @@ actor Agent {
     // service bootstraps onto the local OVS at connect time.
     private let ovnChassisConfig: OVNChassisConfig
     private let ovnUplink: OVNUplinkConfig?
+    // OVN native dynamic routing (issue #344): BGP advertisement of floating
+    // IPs / connected routes via FRR on the egress host.
+    private let ovnDynamicRouting: OVNDynamicRoutingConfig?
     private let ovnNorthbound: String?
     // TLS material for an ssl: ovn_northbound endpoint (nil = tcp/unix).
     private let ovnNorthboundTLS: OVNNorthboundTLSConfig?
@@ -251,6 +254,7 @@ actor Agent {
         networkMode: NetworkMode?,
         ovnChassisConfig: OVNChassisConfig = OVNChassisConfig(),
         ovnUplink: OVNUplinkConfig? = nil,
+        ovnDynamicRouting: OVNDynamicRoutingConfig? = nil,
         ovnNorthbound: String? = nil,
         ovnNorthboundTLS: OVNNorthboundTLSConfig? = nil,
         logger: Logger,
@@ -282,6 +286,7 @@ actor Agent {
         self.networkMode = networkMode
         self.ovnChassisConfig = ovnChassisConfig
         self.ovnUplink = ovnUplink
+        self.ovnDynamicRouting = ovnDynamicRouting
         self.ovnNorthbound = ovnNorthbound
         self.ovnNorthboundTLS = ovnNorthboundTLS
         self.logger = logger
@@ -380,7 +385,7 @@ actor Agent {
                 logger.info("Network service initialized with SwiftOVN support")
                 networkService = NetworkServiceLinux(
                     nbConnection: ovnNorthbound, nbTLS: ovnNorthboundTLS, chassisConfig: ovnChassisConfig,
-                    uplink: ovnUplink, logger: logger)
+                    uplink: ovnUplink, dynamicRouting: ovnDynamicRouting, logger: logger)
                 effectiveNetworkMode = .ovn
                 #else
                 logger.warning("OVN mode requested but not supported on macOS, falling back to user mode")
@@ -738,9 +743,21 @@ actor Agent {
 
         if let client = websocketClient {
             await client.disconnect()
+            await client.shutdown()
         }
         websocketClient = nil
         hypervisorServices.removeAll()
+
+        // Close the console pty channels and release the event loops they run
+        // on. Neither used to be torn down here, so both outlived a "completed"
+        // shutdown (issue #522).
+        await consoleSocketManager?.disconnectAll()
+        consoleSocketManager = nil
+        do {
+            try await eventLoopGroup.shutdownGracefully()
+        } catch {
+            logger.debug("Error shutting down agent event loop group: \(error)")
+        }
 
         if let service = networkService {
             await service.disconnect()
@@ -2576,7 +2593,8 @@ extension Agent {
                 storagePath: result.storagePath,
                 firecrackerVersion: result.firecrackerVersion,
                 architecture: CPUArchitecture.current,
-                guestControlProtocolVersion: result.guestControlProtocolVersion)
+                guestControlProtocolVersion: result.guestControlProtocolVersion,
+                forkLayoutVersion: result.forkLayoutVersion)
             let data = try AnyCodableValue(response)
             await sendSuccess(for: message.requestId, message: "Sandbox snapshot created", data: data)
         } catch {

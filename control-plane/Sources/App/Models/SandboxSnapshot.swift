@@ -79,6 +79,11 @@ final class SandboxSnapshot: Model, @unchecked Sendable {
     @OptionalField(key: "guest_control_protocol_version")
     var guestControlProtocolVersion: Int?
 
+    /// Version of the jailed, chroot-relative artifact layout required for a
+    /// fork. Nil preserves legacy/unjailed checkpoints for in-place restore.
+    @OptionalField(key: "fork_layout_version")
+    var forkLayoutVersion: Int?
+
     @OptionalField(key: "error_message")
     var errorMessage: String?
 
@@ -145,6 +150,7 @@ struct SandboxSnapshotResponse: Content {
     let firecrackerVersion: String?
     let architecture: String?
     let guestControlProtocolVersion: Int?
+    let forkLayoutVersion: Int?
     let errorMessage: String?
     let createdById: UUID?
     let createdAt: Date?
@@ -160,6 +166,7 @@ struct SandboxSnapshotResponse: Content {
         self.firecrackerVersion = snapshot.firecrackerVersion
         self.architecture = snapshot.architecture
         self.guestControlProtocolVersion = snapshot.guestControlProtocolVersion
+        self.forkLayoutVersion = snapshot.forkLayoutVersion
         self.errorMessage = snapshot.errorMessage
         self.createdById = snapshot.$createdBy.id
         self.createdAt = snapshot.createdAt

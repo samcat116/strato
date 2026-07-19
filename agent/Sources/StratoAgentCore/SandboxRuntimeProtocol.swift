@@ -126,6 +126,9 @@ public struct SandboxSnapshotResult: Sendable {
     /// Guest init protocol captured with the checkpoint. Nil means the guest
     /// predates version advertisement or could not be queried while paused.
     public let guestControlProtocolVersion: Int?
+    /// Fork-safe artifact layout advertised by the runtime. Nil means the
+    /// snapshot was captured unjailed or by a runtime predating this signal.
+    public let forkLayoutVersion: Int?
 
     public var totalSizeBytes: Int64 { memorySizeBytes + vmstateSizeBytes + rootfsSizeBytes }
 
@@ -135,7 +138,8 @@ public struct SandboxSnapshotResult: Sendable {
         rootfsSizeBytes: Int64,
         storagePath: String,
         firecrackerVersion: String,
-        guestControlProtocolVersion: Int? = nil
+        guestControlProtocolVersion: Int? = nil,
+        forkLayoutVersion: Int? = nil
     ) {
         self.memorySizeBytes = memorySizeBytes
         self.vmstateSizeBytes = vmstateSizeBytes
@@ -143,6 +147,7 @@ public struct SandboxSnapshotResult: Sendable {
         self.storagePath = storagePath
         self.firecrackerVersion = firecrackerVersion
         self.guestControlProtocolVersion = guestControlProtocolVersion
+        self.forkLayoutVersion = forkLayoutVersion
     }
 }
 

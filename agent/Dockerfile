@@ -87,7 +87,11 @@ RUN chmod +x ./StratoAgent && \
 # ================================
 # Run image
 # ================================
-FROM ubuntu:noble
+# 26.04 LTS rather than noble: OVN native dynamic routing (issue #344, BGP
+# advertisement of floating IPs via FRR) needs OVN >= 25.03, and noble ships
+# 24.03. Resolute ships OVN 26.03. The Swift runtime .so files copied from the
+# noble build stage run unchanged on the newer glibc.
+FROM ubuntu:26.04
 
 # OCI image labels. `image.source` links the GHCR package to this repo (and
 # grants the publishing workflow its package permissions); description and
@@ -120,6 +124,11 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     ovn-common \
     openvswitch-switch \
     openvswitch-common \
+    # FRR for north-south BGP advertisement of floating IPs (issue #344):
+    # OVN's native dynamic routing fills a Linux VRF; FRR peers with the
+    # fabric and redistributes it. Inert until the operator configures it
+    # (see deploy/frr/) and enables [ovn_dynamic_routing] in the agent config.
+    frr \
     # If your app or its dependencies import FoundationNetworking, also install `libcurl4`.
     # libcurl4 \
     # If your app or its dependencies import FoundationXML, also install `libxml2`.

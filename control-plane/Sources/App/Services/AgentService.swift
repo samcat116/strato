@@ -1800,6 +1800,20 @@ actor AgentService {
         // (issue #343); see `networkAssemblyScope`.
         let scope = try await networkAssemblyScope(
             agentId: agentId, ownVMs: vms, ownSandboxes: sandboxes, on: db)
+        // Floating IPs attached to NICs of VMs the receiving agent's topology
+        // writes cover (issue #344): its own VMs for a site-less agent, every
+        // site VM for the site's controller. Keyed by network name, matching
+        // how the NAT rule lands on that network's router. Omitted entirely
+        // for pre-v12 agents — they would decode and silently ignore the
+        // field, so sending it only misstates what the sync achieved; the
+        // attach API refuses new attachments against such agents.
+        let floatingIPsByNetwork: [String: [DesiredFloatingIP]]
+        if try await agentSupportsFloatingIPs(agentId: agentId, on: db) {
+            floatingIPsByNetwork = try await desiredFloatingIPs(
+                forAgentIDs: scope.floatingIPAgentIDs, on: db)
+        } else {
+            floatingIPsByNetwork = [:]
+        }
         let networkStates =
             scope.networkNames
             .sorted()
@@ -1818,7 +1832,8 @@ actor AgentService {
                     dnsServers: network.dnsServers,
                     domainName: network.domainName,
                     leaseTime: network.leaseTime,
-                    generation: Int64(network.generation)
+                    generation: Int64(network.generation),
+                    floatingIPs: floatingIPsByNetwork[name]
                 )
             }
 
@@ -2078,7 +2093,7 @@ actor AgentService {
     ///   controller — two level-triggered writers would fight over teardown.
     private func networkAssemblyScope(
         agentId: String, ownVMs: [VM], ownSandboxes: [Sandbox], on db: any Database
-    ) async throws -> (networkNames: Set<String>, authoritative: Bool) {
+    ) async throws -> (networkNames: Set<String>, authoritative: Bool, floatingIPAgentIDs: Set<String>) {
         // A network referenced by either a VM or a sandbox on this host must be
         // realized here (issue #416).
         var ownReferences = Set(ownVMs.flatMap { $0.networkInterfaces.map(\.network) })
@@ -2089,7 +2104,7 @@ actor AgentService {
             let siteID = agent.$site.id,
             let site = try await Site.find(siteID, on: db)
         else {
-            return (ownReferences, true)
+            return (ownReferences, true, [agentId])
         }
 
         // A pre-v4 agent doesn't know `networksAuthoritative` and would read
@@ -2105,7 +2120,7 @@ actor AgentService {
                     "site": .string(site.name),
                     "protocolVersion": .stringConvertible(agent.wireProtocolVersion ?? 0),
                 ])
-            return (ownReferences, true)
+            return (ownReferences, true, [agentId])
         }
 
         guard let controllerID = site.$networkControllerAgent.id else {
@@ -2115,10 +2130,10 @@ actor AgentService {
             app.logger.warning(
                 "Site has no network controller; its networks will not be reconciled",
                 metadata: ["site": .string(site.name), "agentName": .string(agent.name)])
-            return ([], false)
+            return ([], false, [])
         }
         guard controllerID == agentUUID else {
-            return ([], false)
+            return ([], false, [])
         }
 
         let siteAgentIDs = try await Agent.query(on: db)
@@ -2141,7 +2156,74 @@ actor AgentService {
             .filter(\.$site.$id == siteID)
             .all()
         names.formUnion(pinned.map(\.name))
-        return (names, true)
+        return (names, true, Set(siteAgentIDs))
+    }
+
+    /// Whether the receiving agent's reconciler realizes floating IP NAT
+    /// (wire protocol >= 12). An unknown agent id defaults to supporting —
+    /// there is nothing to protect on a peer that has no registration row.
+    private func agentSupportsFloatingIPs(agentId: String, on db: any Database) async throws -> Bool {
+        guard let agentUUID = UUID(uuidString: agentId),
+            let agent = try await Agent.find(agentUUID, on: db)
+        else { return true }
+        return WireProtocol.supportsFloatingIPs(agent.wireProtocolVersion ?? 0)
+    }
+
+    /// Floating IPs (issue #344) the desired-state sync should carry, keyed by
+    /// the attached NIC's network name: each becomes a `dnat_and_snat` rule on
+    /// that network's router. Only attachments to VMs placed on `agentIDs` —
+    /// the hosts whose topology the receiving agent authors — so a site-less
+    /// agent never NATs for a VM on some other node's private NB.
+    private func desiredFloatingIPs(
+        forAgentIDs agentIDs: Set<String>, on db: any Database
+    ) async throws -> [String: [DesiredFloatingIP]] {
+        guard !agentIDs.isEmpty else { return [:] }
+        let attached = try await FloatingIP.query(on: db)
+            .with(\.$interface)
+            .all()
+            .filter { $0.$interface.id != nil }
+        guard !attached.isEmpty else { return [:] }
+
+        // Load the owning VMs (scoped to the covered agents) with their full
+        // NIC lists: the NAT rule's `nicIndex` is the NIC's position in the
+        // same (orderIndex, deviceName) order the spec builder uses, which
+        // takes the sibling interfaces to compute.
+        let vmIDs = Set(attached.compactMap { $0.interface?.$vm.id })
+        let vmsByID = try await Dictionary(
+            VM.query(on: db)
+                .filter(\.$id ~~ vmIDs)
+                .filter(\.$hypervisorId ~~ agentIDs)
+                .with(\.$networkInterfaces) { $0.with(\.$addresses) }
+                .all()
+                .compactMap { vm in vm.id.map { ($0, vm) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        var byNetwork: [String: [DesiredFloatingIP]] = [:]
+        for floatingIP in attached {
+            guard let interface = floatingIP.interface,
+                let vm = vmsByID[interface.$vm.id],
+                let vmId = vm.id
+            else { continue }
+            let ordered = vm.networkInterfaces.sorted {
+                ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName)
+            }
+            guard let nicIndex = ordered.firstIndex(where: { $0.id == interface.id }),
+                let logicalIP = ordered[nicIndex].ipv4Address?.address
+            else {
+                app.logger.warning(
+                    "Floating IP attached to a NIC without an IPv4 address; skipping its NAT rule",
+                    metadata: ["address": .string(floatingIP.address)])
+                continue
+            }
+            byNetwork[interface.network, default: []].append(
+                DesiredFloatingIP(
+                    externalIP: floatingIP.address,
+                    logicalIP: logicalIP,
+                    vmId: vmId,
+                    nicIndex: nicIndex))
+        }
+        return byNetwork.mapValues { $0.sorted { $0.externalIP < $1.externalIP } }
     }
 
     // MARK: - Observed-state reports (issue #260)

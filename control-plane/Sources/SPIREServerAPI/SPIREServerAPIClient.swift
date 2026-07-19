@@ -3,7 +3,10 @@ import GRPCCore
 import GRPCNIOTransportHTTP2Posix
 import GRPCProtobuf
 import Logging
+import NIOCore
+import NIOSSL
 import SwiftProtobuf
+import X509
 
 // MARK: - Protocol
 
@@ -246,6 +249,11 @@ public enum SPIREServerAPIError: Error, LocalizedError {
     case notFound(String)
     case invalidArgument(String)
     case invalidSPIFFEID(String)
+    /// The control plane could not obtain its own SVID from the SPIFFE
+    /// Workload API, so the mTLS admin connection cannot be established.
+    /// Distinct from `unreachable` so operators can tell "the SPIRE server is
+    /// down" from "this pod has no workload identity".
+    case workloadIdentityUnavailable(String)
 
     public var errorDescription: String? {
         switch self {
@@ -261,6 +269,8 @@ public enum SPIREServerAPIError: Error, LocalizedError {
             return "SPIRE server rejected the argument: \(details)"
         case .invalidSPIFFEID(let id):
             return "Invalid SPIFFE ID: \(id)"
+        case .workloadIdentityUnavailable(let details):
+            return "SPIFFE Workload API identity unavailable: \(details)"
         }
     }
 }
@@ -270,12 +280,17 @@ public enum SPIREServerAPIError: Error, LocalizedError {
 /// Where to reach the SPIRE server's registration API.
 ///
 /// SPIRE serves this API as gRPC on a local Unix socket (callers on that
-/// socket are implicitly admin). The canonical deployment shares the socket
-/// directory with the control plane container (`unix:///run/spire/server/
-/// api.sock`). For local development on macOS — where a Unix socket cannot
-/// cross the Docker VM boundary — a loopback TCP bridge (socat) in front of
-/// the socket is supported via plain `host:port`. TCP carries no
+/// socket are implicitly admin). The canonical single-host deployment shares
+/// the socket directory with the control plane container (`unix:///run/spire/
+/// server/api.sock`), or bridges it to loopback TCP (socat) where a Unix
+/// socket cannot cross the Docker VM boundary. Plaintext TCP carries no
 /// authentication, so it must never be exposed beyond loopback.
+///
+/// SPIRE also serves the same RPCs on its network-facing TCP endpoint, but
+/// only over TLS and only for clients whose registration entry carries
+/// `admin = true` — that is the Kubernetes path, where the control plane and
+/// SPIRE server are separate pods. Reaching it requires the mTLS transport
+/// security mode (`SPIREServerAPITransportSecurity.mtls`).
 public enum SPIREServerAPIAddress: Sendable, Equatable {
     case unixSocket(path: String)
     case tcp(host: String, port: Int)
@@ -307,6 +322,24 @@ public enum SPIREServerAPIAddress: Sendable, Equatable {
     }
 }
 
+// MARK: - Transport security
+
+/// How the client secures its connection to the SPIRE server API.
+public enum SPIREServerAPITransportSecurity: Sendable {
+    /// Plaintext gRPC: the admin Unix socket (callers are implicitly admin)
+    /// or a loopback TCP bridge in front of it. Must never cross a network.
+    case plaintext
+
+    /// Mutual TLS for the SPIRE server's network TCP endpoint: the client
+    /// presents its own SVID (whose registration entry must carry
+    /// `admin = true`) and verifies the server's certificate against the
+    /// trust bundle, both obtained from `identityProvider`. Hostname
+    /// verification is skipped — SPIRE server TLS certificates carry a SPIFFE
+    /// URI SAN, not the DNS name of a Kubernetes Service — so trust rests on
+    /// the chain to the trust domain's CA.
+    case mtls(identityProvider: any SPIREClientIdentityProvider)
+}
+
 // MARK: - gRPC client
 
 /// gRPC client for the SPIRE Server registration API using manual method
@@ -315,6 +348,7 @@ public enum SPIREServerAPIAddress: Sendable, Equatable {
 /// admin-driven operation, so holding a connection open buys nothing.
 public struct SPIREServerAPIClient: SPIREServerAPI {
     private let address: SPIREServerAPIAddress
+    private let transportSecurity: SPIREServerAPITransportSecurity
     private let logger: Logger
     private let timeout: Duration
 
@@ -359,8 +393,14 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
         static let alreadyExists: Int32 = 6
     }
 
-    public init(address: SPIREServerAPIAddress, logger: Logger, timeout: Duration = .seconds(10)) {
+    public init(
+        address: SPIREServerAPIAddress,
+        transportSecurity: SPIREServerAPITransportSecurity = .plaintext,
+        logger: Logger,
+        timeout: Duration = .seconds(10)
+    ) {
         self.address = address
+        self.transportSecurity = transportSecurity
         self.logger = logger
         self.timeout = timeout
     }
@@ -627,6 +667,8 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
                 guard FileManager.default.fileExists(atPath: path) else {
                     throw SPIREServerAPIError.unreachable("SPIRE server API socket not found: \(path)")
                 }
+                // The admin Unix socket is always plaintext; callers on it are
+                // implicitly admin, so an mTLS configuration is ignored here.
                 transport = try HTTP2ClientTransport.Posix(
                     target: .unixDomainSocket(path: path),
                     transportSecurity: .plaintext
@@ -634,7 +676,7 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
             case .tcp(let host, let port):
                 transport = try HTTP2ClientTransport.Posix(
                     target: .dns(host: host, port: port),
-                    transportSecurity: .plaintext
+                    transportSecurity: try await tcpTransportSecurity()
                 )
             }
         } catch let error as SPIREServerAPIError {
@@ -673,6 +715,130 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
             }
         } catch {
             throw SPIREServerAPIError.unreachable("\(descriptor.method): \(error)")
+        }
+    }
+
+    /// Resolve the gRPC transport security for a TCP target from the
+    /// configured mode: plaintext for the loopback-bridge path, or mTLS with
+    /// the current SVID from the identity provider. Fetching the identity per
+    /// call matches the per-call connection scope and picks up rotated SVIDs
+    /// without extra machinery (the provider caches between rotations).
+    private func tcpTransportSecurity() async throws -> HTTP2ClientTransport.Posix.TransportSecurity {
+        switch transportSecurity {
+        case .plaintext:
+            return .plaintext
+        case .mtls(let identityProvider):
+            let identity = try await identityProvider.currentIdentity()
+
+            // SPIRE server TLS certificates carry a SPIFFE URI SAN, not the
+            // Service DNS name, so hostname verification cannot apply. And
+            // chaining to the trust domain's CA alone is not enough either:
+            // every workload in the domain holds a bundle-signed SVID, so a
+            // DNS/Service-routing compromise could put one of them in front
+            // of the admin connection. Pin the server's well-known SPIFFE ID
+            // (spiffe://<td>/spire/server — fixed in SPIRE, not configurable)
+            // via a verification callback that chain-verifies against the
+            // bundle and then requires that exact URI SAN on the leaf.
+            let expectedServerID = try Self.spireServerSPIFFEID(fromMemberID: identity.spiffeID)
+            let roots: [Certificate]
+            do {
+                roots = try identity.trustBundlePEM.map { try Certificate(pemEncoded: $0) }
+            } catch {
+                throw SPIREServerAPIError.workloadIdentityUnavailable(
+                    "Failed to parse trust bundle certificate: \(error)")
+            }
+            let logger = self.logger
+
+            return .tls(
+                .mTLS(
+                    certificateChain: identity.certificateChainPEM.map {
+                        .bytes(Array($0.utf8), format: .pem)
+                    },
+                    privateKey: .bytes(Array(identity.privateKeyPEM.utf8), format: .pem)
+                ) { config in
+                    config.trustRoots = .certificates(
+                        identity.trustBundlePEM.map { .bytes(Array($0.utf8), format: .pem) })
+                    config.serverCertificateVerification = .noHostnameVerification
+                    config.customVerificationCallback = { presented, promise in
+                        Self.verifySPIREServerChain(
+                            presented, roots: roots, expectedSPIFFEID: expectedServerID,
+                            logger: logger, promise: promise)
+                    }
+                })
+        }
+    }
+
+    /// The SPIRE server's own SPIFFE ID in the trust domain of `memberID`
+    /// (any identity issued in that domain, e.g. the control plane's SVID).
+    static func spireServerSPIFFEID(fromMemberID memberID: String) throws -> String {
+        let payload = try spiffeIDPayload(memberID)
+        return "spiffe://\(payload.trustDomain)/spire/server"
+    }
+
+    /// Replacement server-certificate verification for the mTLS admin path:
+    /// chain-verify the presented certificates against the trust bundle and
+    /// require the leaf to carry exactly the pinned SPIRE server SPIFFE ID as
+    /// a URI SAN. Runs instead of BoringSSL's verification (NIOSSL custom
+    /// callbacks replace it entirely), which is why the chain walk is done
+    /// here with swift-certificates.
+    static func verifySPIREServerChain(
+        _ presented: [NIOSSLCertificate],
+        roots: [Certificate],
+        expectedSPIFFEID: String,
+        logger: Logger,
+        promise: EventLoopPromise<NIOSSLVerificationResultWithMetadata>
+    ) {
+        let fail: (String) -> Void = { reason in
+            logger.warning(
+                "Rejected SPIRE server certificate",
+                metadata: ["reason": .string(reason)])
+            promise.succeed(.failed)
+        }
+
+        let leaf: Certificate
+        let intermediates: [Certificate]
+        do {
+            let chain = try presented.map { try Certificate(derEncoded: $0.toDERBytes()) }
+            guard let first = chain.first else {
+                fail("server presented no certificate")
+                return
+            }
+            leaf = first
+            intermediates = Array(chain.dropFirst())
+        } catch {
+            fail("failed to parse presented certificate chain: \(error)")
+            return
+        }
+
+        // The identity check is what stops any other bundle-signed workload
+        // from impersonating the server.
+        let uriSANs =
+            (try? leaf.extensions.subjectAlternativeNames)?
+            .flatMap { names in
+                names.compactMap { name -> String? in
+                    if case .uniformResourceIdentifier(let uri) = name { return uri }
+                    return nil
+                }
+            } ?? []
+        guard uriSANs.contains(expectedSPIFFEID) else {
+            fail("leaf SPIFFE ID \(uriSANs) does not match pinned \(expectedSPIFFEID)")
+            return
+        }
+
+        // Chain verification is async (swift-certificates); bridge it onto
+        // the promise the TLS handshake is waiting on.
+        Task {
+            var verifier = Verifier(rootCertificates: CertificateStore(roots)) {
+                RFC5280Policy()
+            }
+            let result = await verifier.validate(
+                leaf: leaf, intermediates: CertificateStore(intermediates))
+            switch result {
+            case .validCertificate:
+                promise.succeed(.certificateVerified(VerificationMetadata(nil)))
+            case .couldNotValidate(let failures):
+                fail("certificate does not chain to the trust bundle: \(failures)")
+            }
         }
     }
 

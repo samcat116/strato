@@ -139,10 +139,21 @@ public enum WireProtocol {
     /// already refused at the socket — the control plane no longer has a token
     /// auth path to fall back to.
     ///
-    /// Version 12: sandbox forks (issue #427). `SandboxSpec` and
-    /// `DesiredSandboxState` carry an optional `restoreFrom` checkpoint
-    /// reference. A pre-v12 agent would silently ignore it and cold-create the
-    /// target, so fork placement is gated on `supportsSandboxFork(_:)`.
+    /// Version 12 adds sandbox forks (issue #427) and floating IPs (issue
+    /// #344). `SandboxSpec` and `DesiredSandboxState` carry an optional
+    /// `restoreFrom` checkpoint reference. A pre-v12 agent would silently
+    /// ignore it and cold-create the target, so fork placement is gated on
+    /// `supportsSandboxFork(_:)`.
+    ///
+    /// `DesiredNetworkState` also gains the
+    /// optional `floatingIPs` list, realized as `dnat_and_snat` rules by the
+    /// topology-authority agent. Additive and tolerant on the wire — a pre-v12
+    /// agent decodes the message and ignores the field — which is exactly the
+    /// hazard: the API would report an address as attached while its NAT rule
+    /// is never realized. The gate is load-bearing on the control-plane side:
+    /// attaches are refused when the realizing agent registered pre-v12, and
+    /// sync assembly omits the field for such agents (see
+    /// `supportsFloatingIPs(_:)`).
     public static let currentVersion = 12
 
     /// The lowest protocol version that speaks reconciliation state sync
@@ -254,6 +265,20 @@ public enum WireProtocol {
     /// must refuse the request up front rather than time out against silence.
     public static func supportsSandboxSnapshots(_ version: Int) -> Bool {
         version >= sandboxSnapshotMinimumVersion
+    }
+
+    /// The lowest protocol version whose network reconciler realizes
+    /// `DesiredNetworkState.floatingIPs` (see `currentVersion` version 12
+    /// notes).
+    public static let floatingIPMinimumVersion = 12
+
+    /// Whether an agent registered with `version` realizes floating IP NAT
+    /// rules. A pre-v12 agent decodes the sync and silently ignores the field,
+    /// so the control plane must refuse attaches whose realizing agent is too
+    /// old — otherwise the API reports an attached address that no NAT rule
+    /// ever backs.
+    public static func supportsFloatingIPs(_ version: Int) -> Bool {
+        version >= floatingIPMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

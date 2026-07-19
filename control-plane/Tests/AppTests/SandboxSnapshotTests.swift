@@ -305,6 +305,7 @@ final class SandboxSnapshotTests {
             snapshot.size = 42
             snapshot.guestControlProtocolVersion =
                 SandboxGuestControlProtocol.currentVersion
+            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
             try await snapshot.save(on: app.db)
 
             try await app.test(.GET, "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots") { req in
@@ -319,6 +320,7 @@ final class SandboxSnapshotTests {
                 #expect(
                     listed.first?.guestControlProtocolVersion
                         == SandboxGuestControlProtocol.currentVersion)
+                #expect(listed.first?.forkLayoutVersion == SandboxSnapshotForkLayout.currentVersion)
             }
         }
     }

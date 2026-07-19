@@ -22,6 +22,8 @@ final class VMNetworkSelectionTests {
         let disk: Int64?
         let networkId: UUID?
         let networkName: String?
+        var userData: String? = nil
+        var hypervisorType: String? = nil
     }
 
     private func gb(_ value: Double) -> Int64 { Int64(value * 1024 * 1024 * 1024) }
@@ -89,6 +91,111 @@ final class VMNetworkSelectionTests {
             #expect(address?.address.hasPrefix("10.100.0.") == true)
             #expect(address?.prefixLength == 24)
             #expect(address?.gateway == "10.100.0.1")
+        }
+    }
+
+    @Test("POST /api/vms persists cloud-init user data verbatim")
+    func createWithUserData() async throws {
+        try await withApp { app, _, _, project, image, token in
+            let payload = "#cloud-config\npackages:\n  - nginx\nruncmd:\n  - touch /root/provisioned\n"
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "userdata-vm", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: nil, userData: payload))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let vm = try await VM.query(on: app.db).filter(\.$name == "userdata-vm").first()
+            #expect(vm?.userData == payload)
+        }
+    }
+
+    @Test("POST /api/vms rejects user data without a cloud-init header (400)")
+    func createWithHeaderlessUserDataRejected() async throws {
+        try await withApp { app, _, _, project, image, token in
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "bad-userdata-vm", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: nil, userData: "echo missing shebang\n"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let vm = try await VM.query(on: app.db).filter(\.$name == "bad-userdata-vm").first()
+            #expect(vm == nil)
+        }
+    }
+
+    @Test("POST /api/vms rejects user data for firecracker VMs (400)")
+    func createFirecrackerWithUserDataRejected() async throws {
+        try await withApp { app, _, _, project, image, token in
+            // Cloud-init user data only reaches the guest on the QEMU
+            // disk-boot path; a firecracker create must fail loudly instead
+            // of accepting a payload the agent would silently ignore.
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "fc-userdata-vm", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: nil,
+                        userData: "#cloud-config\npackages: [nginx]\n",
+                        hypervisorType: "firecracker"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("firecracker"))
+            }
+
+            let vm = try await VM.query(on: app.db).filter(\.$name == "fc-userdata-vm").first()
+            #expect(vm == nil)
+        }
+    }
+
+    @Test("VM status and update responses do not expose cloud-init user data")
+    func statusAndUpdateRedactUserData() async throws {
+        try await withApp { app, _, _, project, image, token in
+            // The payload doubles as the leak marker: it must never appear in
+            // any read/update response body (user data can carry secrets).
+            let secret = "#cloud-config\nwrite_files:\n  - path: /etc/token\n    content: sup3rs3cret\n"
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "secret-vm", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: nil, userData: secret))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let vm = try await VM.query(on: app.db).filter(\.$name == "secret-vm").first()
+            #expect(vm?.userData == secret)
+            let vmId = try #require(vm?.id)
+
+            try await app.test(.GET, "/api/vms/\(vmId)/status") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                #expect(!res.body.string.contains("sup3rs3cret"))
+                #expect(!res.body.string.contains("userData"))
+                #expect(res.body.string.contains("\"status\""))
+            }
+
+            try await app.test(.PUT, "/api/vms/\(vmId)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["description": "updated"])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                #expect(!res.body.string.contains("sup3rs3cret"))
+                #expect(!res.body.string.contains("userData"))
+            }
         }
     }
 

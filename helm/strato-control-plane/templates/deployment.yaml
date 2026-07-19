@@ -245,6 +245,16 @@ spec:
             # server Service.
             - name: SPIRE_SERVER_API_ADDRESS
               value: "{{ .Values.spire.controlPlane.serverApiAddress | default (printf "%s-spire-server.%s.svc.cluster.local:%v" (include "strato-control-plane.fullname" .) .Release.Namespace .Values.spire.service.grpcPort) }}"
+            {{- if .Values.spire.controlPlane.workloadApi.enabled }}
+            # SPIFFE Workload API socket of the node-local SPIRE agent. With a
+            # TCP SPIRE_SERVER_API_ADDRESS the control plane fetches its own
+            # SVID here and dials the SPIRE server's admin API with mTLS — the
+            # TCP endpoint is TLS-only, so without this the connection dies at
+            # the HTTP/2 preface (issue #507). The admin flag on the
+            # control-plane entry comes from the entry bootstrap Job.
+            - name: SPIFFE_ENDPOINT_SOCKET
+              value: "unix://{{ .Values.spire.controlPlane.workloadApi.socketPath }}"
+            {{- end }}
             {{- if .Values.spire.controlPlane.serverPublicAddress }}
             # Public address remote nodes dial for attestation (explicit override).
             - name: SPIRE_SERVER_PUBLIC_ADDRESS
@@ -343,7 +353,8 @@ spec:
             failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
           {{- end }}
           {{- $spireBundle := and .Values.spire.enabled .Values.spire.notifier.k8sbundle.enabled }}
-          {{- if or .Values.strato.database.tlsCACert $spireBundle }}
+          {{- $workloadApi := and .Values.spire.enabled .Values.spire.controlPlane.workloadApi.enabled }}
+          {{- if or .Values.strato.database.tlsCACert $spireBundle $workloadApi }}
           volumeMounts:
             {{- if .Values.strato.database.tlsCACert }}
             - name: db-tls-ca
@@ -355,15 +366,26 @@ spec:
               mountPath: /run/spire/bundle
               readOnly: true
             {{- end }}
+            {{- if $workloadApi }}
+            # Workload API socket dir from the spire-agent DaemonSet hostPath;
+            # source of the control plane's own SVID for the mTLS admin path.
+            - name: spire-agent-socket
+              mountPath: {{ dir .Values.spire.controlPlane.workloadApi.socketPath }}
+              readOnly: true
+            {{- end }}
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      {{- if or (and .Values.spire.enabled .Values.spire.envoy.enabled) .Values.strato.database.tlsCACert $spireBundle }}
+      {{- if or (and .Values.spire.enabled .Values.spire.envoy.enabled) .Values.strato.database.tlsCACert $spireBundle $workloadApi }}
       volumes:
         {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
         - name: envoy-config
           configMap:
             name: {{ include "strato-control-plane.fullname" . }}-envoy-sidecar
+        {{- end }}
+        {{- if or (and .Values.spire.enabled .Values.spire.envoy.enabled) $workloadApi }}
+        # Shared by the Envoy sidecar (SDS) and the control-plane container
+        # (Workload API for the mTLS admin path).
         - name: spire-agent-socket
           hostPath:
             path: {{ .Values.spire.envoy.spireAgentSocketDir }}
