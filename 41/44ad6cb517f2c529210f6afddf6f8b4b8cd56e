@@ -1,0 +1,21 @@
+sandbox-guest/init/Cargo.toml
+  s_256b817512560e::t_9261bcd94303a7 10
+sandbox-guest/init/Cargo.lock
+  s_256b817512560e::t_fc9b2225bada44 122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "4144ad6cb517f2c529210f6afddf6f8b4b8cd56e",
+  "prompts": {},
+  "sessions": {
+    "s_256b817512560e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b4cc585-7b1b-4f68-b28b-4af0753f6ba2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
