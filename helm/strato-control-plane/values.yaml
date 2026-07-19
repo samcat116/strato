@@ -241,8 +241,9 @@ affinity: {}
 # Extra environment variables for the control-plane container (also applied to
 # the migration Job, which boots the same app). Standard container-env entries,
 # rendered through tpl. Use this for settings without a dedicated chart value,
-# e.g. SSF_*, AUDIT_*, RATE_LIMIT_*, SCHEDULING_STRATEGY, IMAGE_STORAGE_PATH,
-# STRATO_DEFAULT_NETWORK_*, REQUEST_LOGGING.
+# e.g. SSF_*, AUDIT_*, RATE_LIMIT_*, SCHEDULING_STRATEGY,
+# STRATO_DEFAULT_NETWORK_*, REQUEST_LOGGING. (Image storage has dedicated
+# values — see strato.imageStorage.)
 # extraEnv:
 #   - name: SCHEDULING_STRATEGY
 #     value: best_fit
@@ -261,6 +262,46 @@ strato:
   # Defaults to the image tag / chart appVersion when left empty; set to the full
   # commit SHA in CI for precise build identification.
   gitSHA: ""
+
+  # Where the control plane keeps VM image bytes (uploaded disks, kernels,
+  # rootfs artifacts).
+  #
+  # On Kubernetes this SHOULD be `s3`. The chart mounts no persistent volume for
+  # images, so the `filesystem` backend writes into the container's ephemeral
+  # filesystem: uploads are lost when a pod restarts, and replicas (see
+  # autoscaling below) each see a different, partial set — an agent can be handed
+  # a download URL that whichever replica answers has never heard of. The
+  # filesystem default is kept only so a single-replica install still starts.
+  #
+  # Any S3 API implementation works; none is bundled. Point `endpoint` at MinIO,
+  # Garage, Ceph RGW, R2, or leave it empty for AWS S3.
+  imageStorage:
+    backend: filesystem  # filesystem | s3
+
+    # Used only when backend is `filesystem`.
+    path: /app/images
+
+    s3:
+      bucket: ""
+      # Leave empty for AWS S3; set to e.g. http://minio.storage.svc:9000 for a
+      # self-hosted implementation.
+      endpoint: ""
+      # Still required for request signing even by implementations that ignore
+      # regions; us-east-1 is what MinIO and Garage conventionally accept.
+      region: us-east-1
+      # Self-hosted implementations expect path-style addressing, which is the
+      # default. Set true for providers that require virtual-host style.
+      virtualHostStyle: false
+
+      # Credentials. Leave both empty to use the pod's ambient credentials
+      # (IRSA / workload identity / instance role), which avoids long-lived keys
+      # in the cluster. Otherwise supply an existing Secret with the keys named
+      # below, or set accessKeyId/secretAccessKey to have the chart create one.
+      existingSecret: ""
+      existingSecretAccessKeyIdKey: accessKeyId
+      existingSecretSecretAccessKeyKey: secretAccessKey
+      accessKeyId: ""
+      secretAccessKey: ""
 
   database:
     host: ""  # Will be set from PostgreSQL subchart if enabled

@@ -55,6 +55,10 @@ let package = Package(
         // TLS primitives for the SPIRE server mTLS verification callback
         // (already in the graph transitively via grpc-swift-nio-transport)
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.29.0"),
+        // ☁️ S3-compatible object storage for images (IMAGE_STORAGE_BACKEND=s3).
+        // Any S3 API implementation works — AWS, MinIO, Garage, R2, Ceph RGW —
+        // via IMAGE_S3_ENDPOINT; we don't bundle a service.
+        .package(url: "https://github.com/soto-project/soto.git", from: "7.0.0"),
     ],
     targets: [
         // SPIRE Server registration API client (join tokens + registration
@@ -100,6 +104,7 @@ let package = Package(
                 .product(name: "OTel", package: "swift-otel"),
                 .product(name: "Metrics", package: "swift-metrics"),
                 .product(name: "Valkey", package: "valkey-swift"),
+                .product(name: "SotoS3", package: "soto"),
             ],
             swiftSettings: swiftSettings,
             plugins: [

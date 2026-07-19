@@ -427,3 +427,18 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
+
+{{/*
+Name of the Secret holding S3 credentials for image storage, or empty when the
+pod should use ambient credentials (IRSA / workload identity / instance role).
+An operator-supplied existingSecret wins; otherwise the chart creates one only
+when an access key is set in values.
+*/}}
+{{- define "strato-control-plane.imageStorageSecretName" -}}
+{{- if ne .Values.strato.imageStorage.backend "s3" }}
+{{- else if .Values.strato.imageStorage.s3.existingSecret }}
+{{- .Values.strato.imageStorage.s3.existingSecret }}
+{{- else if .Values.strato.imageStorage.s3.accessKeyId }}
+{{- printf "%s-image-storage" (include "strato-control-plane.fullname" .) }}
+{{- end }}
+{{- end }}

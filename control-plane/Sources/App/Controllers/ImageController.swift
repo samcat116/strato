@@ -5,12 +5,13 @@ import NIOCore
 import StratoShared
 
 struct ImageController: RouteCollection {
-    /// Upper bound on a single multipart upload. Both upload handlers buffer
-    /// the whole body in memory (`FormDataDecoder` needs it contiguous), so
-    /// this caps peak memory per request and returns 413 rather than letting a
-    /// huge image OOM the control plane. Keep it in sync with the compose
-    /// proxy's `client_max_body_size`. (A future streaming path could lift it.)
-    static let maxUploadBytes = 4 * 1024 * 1024 * 1024  // 4 GiB
+    /// Upper bound on a single multipart upload, enforced as bytes stream past
+    /// so an over-large upload gets a 413 instead of filling the image store.
+    /// Both handlers now stream into the store rather than buffering the body,
+    /// so this no longer bounds control-plane memory — it bounds what one
+    /// request may persist. Keep it in sync with the compose proxy's
+    /// `client_max_body_size` and with `ImageFetchService.maxDownloadBytes`.
+    static let maxUploadBytes: Int64 = 4 * 1024 * 1024 * 1024  // 4 GiB
 
     func boot(routes: any RoutesBuilder) throws {
         // Project-scoped image routes
@@ -142,18 +143,15 @@ struct ImageController: RouteCollection {
             throw Abort(.forbidden, reason: "Access denied to create images in project")
         }
 
-        // Get storage path
-        let storagePath = ImageStorageService.storagePath(from: req.application)
-
         // Check content type to determine if this is a file upload or JSON request
         let contentType = req.headers.contentType
 
         if contentType?.subType == "json" {
             // JSON request - URL fetch
-            return try await createFromURL(req: req, projectID: projectID, userID: userID, storagePath: storagePath)
+            return try await createFromURL(req: req, projectID: projectID, userID: userID)
         } else if contentType?.type == "multipart" {
             // Multipart upload
-            return try await createFromUpload(req: req, projectID: projectID, userID: userID, storagePath: storagePath)
+            return try await createFromUpload(req: req, projectID: projectID, userID: userID)
         } else {
             throw Abort(.badRequest, reason: "Expected multipart/form-data or application/json")
         }
@@ -164,8 +162,7 @@ struct ImageController: RouteCollection {
     private func createFromURL(
         req: Request,
         projectID: UUID,
-        userID: UUID,
-        storagePath: String
+        userID: UUID
     ) async throws -> ImageResponse {
         let createRequest = try req.content.decode(CreateImageRequest.self)
 
@@ -338,9 +335,10 @@ struct ImageController: RouteCollection {
     private func createFromUpload(
         req: Request,
         projectID: UUID,
-        userID: UUID,
-        storagePath: String
+        userID: UUID
     ) async throws -> ImageResponse {
+        let store = req.application.imageObjectStore
+
         // Create a temporary image record first to get an ID
         let tempImage = Image(
             name: "Uploading...",
@@ -356,61 +354,59 @@ struct ImageController: RouteCollection {
             throw Abort(.internalServerError, reason: "Failed to create image record")
         }
 
-        var name: String = "Unnamed Image"
-        var description: String = ""
-        var filename: String = "image.qcow2"
+        // Stream the multipart body straight into the object store rather than
+        // buffering it: a 4 GiB image used to cost 4 GiB of control-plane RAM
+        // before a single byte was persisted.
+        let upload: StreamingMultipartReceiver.Result
+        do {
+            upload = try await StreamingMultipartReceiver.receive(
+                req: req,
+                into: store,
+                fileFieldName: "file",
+                maxBytes: Self.maxUploadBytes
+            ) { uploadedFilename, _ in
+                let validated = try ImageValidationService.validateFilename(uploadedFilename)
+                return ImageObjectKey.image(
+                    projectId: projectID, imageId: imageID, filename: validated)
+            }
+        } catch {
+            try await tempImage.delete(on: req.db)
+            throw error
+        }
+
+        // Anything past here failing must not leave the image row behind
+        // pointing at bytes nobody will finish describing.
+        func failUpload(_ error: any Error) async -> any Error {
+            if let key = upload.key {
+                try? await store.delete(key: key)
+            }
+            try? await tempImage.delete(on: req.db)
+            return error
+        }
+
+        guard let relativePath = upload.key, let uploadedFilename = upload.filename else {
+            throw await failUpload(Abort(.badRequest, reason: "No file uploaded"))
+        }
+        let filename = try ImageValidationService.validateFilename(uploadedFilename)
+        let checksum = upload.checksum
+        let size = upload.size
+
+        let name = upload.field("name") ?? "Unnamed Image"
+        let description = upload.field("description") ?? ""
+
         var architecture: CPUArchitecture = .x86_64
-        var defaultCpu: Int?
-        var defaultMemory: Int64?
-        var defaultDisk: Int64?
-        var defaultCmdline: String?
-        var fileData: ByteBuffer?
-
-        // Parse multipart form data
-        let sequence = req.body.collect(max: Self.maxUploadBytes)
-
-        // For streaming, we need to handle the multipart form differently
-        // Collect the body first
-        guard let body = try await sequence.get() else {
-            try await tempImage.delete(on: req.db)
-            throw Abort(.badRequest, reason: "Empty request body")
-        }
-
-        // Verify multipart form data is present
-        guard req.headers.contentType?.parameters["boundary"] != nil else {
-            try await tempImage.delete(on: req.db)
-            throw Abort(.badRequest, reason: "Missing boundary in multipart form")
-        }
-
-        // Parse the multipart form using Vapor's built-in parser
-        let formData = try FormDataDecoder().decode(ImageUploadForm.self, from: body, headers: req.headers)
-
-        name = formData.name ?? "Unnamed Image"
-        description = formData.description ?? ""
-        if let file = formData.file {
-            filename = try ImageValidationService.validateFilename(file.filename)
-            fileData = file.data
-        }
-        if let archString = formData.architecture {
+        if let archString = upload.field("architecture") {
             guard let arch = CPUArchitecture(rawValue: archString) else {
-                try await tempImage.delete(on: req.db)
-                throw Abort(.badRequest, reason: "Unknown architecture '\(archString)'")
+                throw await failUpload(
+                    Abort(.badRequest, reason: "Unknown architecture '\(archString)'"))
             }
             architecture = arch
         }
-        defaultCpu = formData.defaultCpu
-        if let memory = formData.defaultMemory {
-            defaultMemory = Int64(memory)
-        }
-        if let disk = formData.defaultDisk {
-            defaultDisk = Int64(disk)
-        }
-        defaultCmdline = formData.defaultCmdline
 
-        guard let data = fileData else {
-            try await tempImage.delete(on: req.db)
-            throw Abort(.badRequest, reason: "No file uploaded")
-        }
+        let defaultCpu = upload.field("defaultCpu").flatMap(Int.init)
+        let defaultMemory = upload.field("defaultMemory").flatMap(Int64.init)
+        let defaultDisk = upload.field("defaultDisk").flatMap(Int64.init)
+        let defaultCmdline = upload.field("defaultCmdline")
 
         // Detect the format from the file header; an explicit claim overrides it,
         // but only where detection can't contradict it. Two ways it can:
@@ -418,44 +414,28 @@ struct ImageController: RouteCollection {
         // that must carry a signature and doesn't. `.raw` on its own means "no
         // signature matched", which disproves nothing by itself — a raw image
         // and a flat VMDK are equally headerless.
-        let detectedFormat = ImageValidationService.detectFormat(from: data)
+        let detectedFormat = ImageValidationService.detectFormat(fromHeader: upload.headerBytes)
         var format = detectedFormat
-        if let formatString = formData.format {
+        if let formatString = upload.field("format") {
             guard let claimed = ImageFormat(rawValue: formatString) else {
-                try await tempImage.delete(on: req.db)
-                throw Abort(.badRequest, reason: "Unknown disk format '\(formatString)'")
+                throw await failUpload(
+                    Abort(.badRequest, reason: "Unknown disk format '\(formatString)'"))
             }
             if detectedFormat != claimed {
                 let contradicted =
                     detectedFormat != .raw
                     || ImageValidationService.mustHaveHeaderSignature(claimed)
                 if contradicted {
-                    try await tempImage.delete(on: req.db)
-                    throw Abort(
-                        .badRequest,
-                        reason:
-                            "Disk format mismatch: file header is \(detectedFormat.rawValue), but '\(claimed.rawValue)' was specified"
-                    )
+                    throw await failUpload(
+                        Abort(
+                            .badRequest,
+                            reason:
+                                "Disk format mismatch: file header is \(detectedFormat.rawValue), but '\(claimed.rawValue)' was specified"
+                        ))
                 }
             }
             format = claimed
         }
-
-        // Save file to storage
-        let relativePath = try await ImageStorageService.saveFile(
-            data: data,
-            storagePath: storagePath,
-            projectId: projectID,
-            imageId: imageID,
-            filename: filename
-        )
-
-        // Compute checksum
-        let fullPath = ImageStorageService.getFilePath(storagePath: storagePath, relativePath: relativePath)
-        let checksum = try ImageValidationService.computeChecksum(filePath: fullPath)
-
-        // Get file size
-        let size = try ImageStorageService.getFileSize(storagePath: storagePath, relativePath: relativePath)
 
         // Update image record
         tempImage.name = name
@@ -542,49 +522,71 @@ struct ImageController: RouteCollection {
             throw Abort(.forbidden, reason: "Access denied to update image")
         }
 
-        // Collect and parse the multipart body (mirrors the create-upload path).
-        guard let body = try await req.body.collect(max: Self.maxUploadBytes).get() else {
-            throw Abort(.badRequest, reason: "Empty request body")
-        }
-        guard req.headers.contentType?.parameters["boundary"] != nil else {
-            throw Abort(.badRequest, reason: "Missing boundary in multipart form")
-        }
-        let form = try FormDataDecoder().decode(ArtifactUploadForm.self, from: body, headers: req.headers)
+        // The object key embeds the artifact kind, which is resolved before any
+        // bytes are written. `?kind=` wins so the caller can be order-independent;
+        // otherwise the `kind` form field must precede the file part.
+        let queryKind = try? req.query.get(String.self, at: "kind")
 
-        guard let kindString = form.kind, let kind = ArtifactKind(rawValue: kindString) else {
-            throw Abort(.badRequest, reason: "Missing or unknown artifact kind '\(form.kind ?? "")'")
+        let store = req.application.imageObjectStore
+        let upload = try await StreamingMultipartReceiver.receive(
+            req: req,
+            into: store,
+            fileFieldName: "file",
+            maxBytes: Self.maxUploadBytes
+        ) { uploadedFilename, fields in
+            guard let kindString = queryKind ?? fields["kind"] else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "Artifact kind is required before the file part — send it as a `kind` query parameter, or as a `kind` form field ordered ahead of `file`"
+                )
+            }
+            guard ArtifactKind(rawValue: kindString) != nil else {
+                throw Abort(.badRequest, reason: "Unknown artifact kind '\(kindString)'")
+            }
+            let validated = try ImageValidationService.validateArtifactFilename(uploadedFilename)
+            return ImageObjectKey.artifact(
+                projectId: projectID, imageId: imageID, kind: kindString, filename: validated)
         }
-        guard let file = form.file else {
+
+        func failUpload(_ error: any Error) async -> any Error {
+            if let key = upload.key {
+                try? await store.delete(key: key)
+            }
+            return error
+        }
+
+        // Read the same snapshot the key was built from, so the recorded kind
+        // can't disagree with where the bytes actually went.
+        guard let kindString = queryKind ?? upload.fieldsBeforeFile["kind"],
+            let kind = ArtifactKind(rawValue: kindString)
+        else {
+            throw await failUpload(
+                Abort(.badRequest, reason: "Missing or unknown artifact kind"))
+        }
+        guard let relativePath = upload.key, let uploadedFilename = upload.filename else {
             throw Abort(.badRequest, reason: "No file uploaded")
         }
-        let filename = try ImageValidationService.validateArtifactFilename(file.filename)
+        let filename = try ImageValidationService.validateArtifactFilename(uploadedFilename)
+        let checksum = upload.checksum
+        let size = upload.size
 
         // Disk-like artifacts carry a format (qcow2/raw); kernel/initramfs are opaque.
         let format: ImageFormat?
         switch kind {
         case .diskImage, .rootfs:
-            format = ImageValidationService.detectFormat(from: file.data)
+            format = ImageValidationService.detectFormat(fromHeader: upload.headerBytes)
         case .kernel, .initramfs:
             format = nil
         }
 
-        let storagePath = ImageStorageService.storagePath(from: req.application)
-        let relativePath = try await ImageStorageService.saveArtifactFile(
-            data: file.data,
-            storagePath: storagePath,
-            projectId: projectID,
-            imageId: imageID,
-            kind: kind.rawValue,
-            filename: filename
-        )
-        let fullPath = ImageStorageService.getFilePath(storagePath: storagePath, relativePath: relativePath)
-        let checksum = try ImageValidationService.computeChecksum(filePath: fullPath)
-        let size = try ImageStorageService.getFileSize(storagePath: storagePath, relativePath: relativePath)
-
         // Replace any existing artifact of this kind (unique on image_id, kind),
-        // removing its stored file first.
+        // removing its stored object first — unless the upload just overwrote it
+        // at the same key, in which case deleting would remove the new bytes.
         if let existing = try await image.$artifacts.query(on: req.db).filter(\.$kind == kind).first() {
-            try? ImageStorageService.deleteFileAt(storagePath: storagePath, relativePath: existing.storagePath)
+            if existing.storagePath != relativePath {
+                try? await store.delete(key: existing.storagePath)
+            }
             try await existing.delete(on: req.db)
         }
 
@@ -677,12 +679,14 @@ struct ImageController: RouteCollection {
             url.lastPathComponent.isEmpty ? kind.rawValue : url.lastPathComponent)
 
         // The storage layout mirrors uploaded artifacts: {project}/{image}/{kind}/{filename}.
-        let relativePath = "\(projectID)/\(imageID)/\(kind.rawValue)/\(filename)"
-        let storagePath = ImageStorageService.storagePath(from: req.application)
+        let relativePath = ImageObjectKey.artifact(
+            projectId: projectID, imageId: imageID, kind: kind.rawValue, filename: filename)
 
         // Replace any existing artifact of this kind (unique on image_id, kind).
         if let existing = try await image.$artifacts.query(on: req.db).filter(\.$kind == kind).first() {
-            try? ImageStorageService.deleteFileAt(storagePath: storagePath, relativePath: existing.storagePath)
+            if existing.storagePath != relativePath {
+                try? await req.application.imageObjectStore.delete(key: existing.storagePath)
+            }
             try await existing.delete(on: req.db)
         }
 
@@ -767,8 +771,7 @@ struct ImageController: RouteCollection {
             throw Abort(.notFound, reason: "Image has no \(kind.rawValue) artifact")
         }
 
-        let storagePath = ImageStorageService.storagePath(from: req.application)
-        try? ImageStorageService.deleteFileAt(storagePath: storagePath, relativePath: artifact.storagePath)
+        try? await req.application.imageObjectStore.delete(key: artifact.storagePath)
         try await artifact.delete(on: req.db)
 
         try await recomputeStatus(image: image, on: req.db)
@@ -897,14 +900,11 @@ struct ImageController: RouteCollection {
             throw Abort(.forbidden, reason: "Access denied to delete image")
         }
 
-        // Delete file from storage
-        let storagePath = ImageStorageService.storagePath(from: req.application)
+        // Delete every object belonging to this image (its disk and all typed
+        // artifacts) from storage.
         do {
-            try ImageStorageService.deleteFile(
-                storagePath: storagePath,
-                projectId: projectID,
-                imageId: imageID
-            )
+            try await req.application.imageObjectStore.deletePrefix(
+                ImageObjectKey.imagePrefix(projectId: projectID, imageId: imageID))
         } catch {
             req.logger.warning(
                 "Failed to delete image file: \(error)",
@@ -1034,7 +1034,7 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "Image is not ready for download. Status: \(image.status.rawValue)")
         }
 
-        let basePath = ImageStorageService.storagePath(from: req.application)
+        let store = req.application.imageObjectStore
 
         // Serve a specific typed artifact when requested.
         if let artifactKind {
@@ -1045,12 +1045,8 @@ struct ImageController: RouteCollection {
             else {
                 throw Abort(.notFound, reason: "Image has no \(artifactKind.rawValue) artifact")
             }
-            return try await ImageStorageService.streamFile(
-                req: req,
-                storagePath: basePath,
-                relativePath: artifact.storagePath,
-                filename: artifact.filename
-            )
+            return try await store.stream(
+                key: artifact.storagePath, filename: artifact.filename, on: req)
         }
 
         // Legacy whole-image disk download.
@@ -1058,12 +1054,7 @@ struct ImageController: RouteCollection {
             throw Abort(.internalServerError, reason: "Image storage path not set")
         }
 
-        return try await ImageStorageService.streamFile(
-            req: req,
-            storagePath: basePath,
-            relativePath: storagePath,
-            filename: image.filename
-        )
+        return try await store.stream(key: storagePath, filename: image.filename, on: req)
     }
 
     // MARK: - Get Image Status
