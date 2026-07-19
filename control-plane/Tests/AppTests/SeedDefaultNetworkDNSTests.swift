@@ -54,19 +54,20 @@ struct SeedDefaultNetworkDNSTests {
         }
     }
 
-    // The test app runs against a pre-migrated database clone, so the env-var
-    // cases clear the seeded value and re-run the migration by hand.
+    // The test app runs against a pre-migrated database clone, so the
+    // operator-override cases clear the seeded value and re-run the migration by
+    // hand. The list is injected rather than set with `setenv`: other suites run
+    // migrations in parallel, and process-wide env mutation would leak into them.
 
     @Test("STRATO_DEFAULT_NETWORK_DNS_SERVERS overrides the fallback")
-    func honorsEnvironmentOverride() async throws {
+    func honorsConfiguredResolvers() async throws {
         try await withTestApp { app in
             let network = try await defaultNetwork(on: app.db)
             network.dnsServersRaw = nil
             try await network.save(on: app.db)
 
-            setenv("STRATO_DEFAULT_NETWORK_DNS_SERVERS", "9.9.9.9, 149.112.112.112", 1)
-            defer { unsetenv("STRATO_DEFAULT_NETWORK_DNS_SERVERS") }
-            try await SeedDefaultNetworkDNS().prepare(on: app.db)
+            let migration = SeedDefaultNetworkDNS(configuredResolvers: "9.9.9.9, 149.112.112.112")
+            try await migration.prepare(on: app.db)
 
             let seeded = try await defaultNetwork(on: app.db)
             #expect(seeded.dnsServers == ["9.9.9.9", "149.112.112.112"])
@@ -74,15 +75,13 @@ struct SeedDefaultNetworkDNSTests {
     }
 
     @Test("An empty STRATO_DEFAULT_NETWORK_DNS_SERVERS opts out of seeding")
-    func emptyEnvironmentOptsOut() async throws {
+    func emptyConfigurationOptsOut() async throws {
         try await withTestApp { app in
             let network = try await defaultNetwork(on: app.db)
             network.dnsServersRaw = nil
             try await network.save(on: app.db)
 
-            setenv("STRATO_DEFAULT_NETWORK_DNS_SERVERS", "", 1)
-            defer { unsetenv("STRATO_DEFAULT_NETWORK_DNS_SERVERS") }
-            try await SeedDefaultNetworkDNS().prepare(on: app.db)
+            try await SeedDefaultNetworkDNS(configuredResolvers: "").prepare(on: app.db)
 
             let after = try await defaultNetwork(on: app.db)
             #expect(after.dnsServers.isEmpty)
@@ -90,13 +89,12 @@ struct SeedDefaultNetworkDNSTests {
     }
 
     @Test("A malformed STRATO_DEFAULT_NETWORK_DNS_SERVERS fails the migration")
-    func malformedEnvironmentThrows() async throws {
+    func malformedConfigurationThrows() async throws {
         try await withTestApp { app in
-            setenv("STRATO_DEFAULT_NETWORK_DNS_SERVERS", "1.1.1.1,not-an-ip", 1)
-            defer { unsetenv("STRATO_DEFAULT_NETWORK_DNS_SERVERS") }
+            let migration = SeedDefaultNetworkDNS(configuredResolvers: "1.1.1.1,not-an-ip")
 
             await #expect(throws: (any Error).self) {
-                try await SeedDefaultNetworkDNS().prepare(on: app.db)
+                try await migration.prepare(on: app.db)
             }
         }
     }

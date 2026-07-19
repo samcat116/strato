@@ -26,8 +26,18 @@ struct SeedDefaultNetworkDNS: AsyncMigration {
     /// outage doesn't take resolution down.
     static let fallbackResolvers = ["1.1.1.1", "8.8.8.8"]
 
+    /// Operator-supplied resolver list. Nil means "read the environment", which
+    /// is what production does; tests inject a value instead of calling
+    /// `setenv`, since migrations also run from suites executing in parallel and
+    /// process-wide env mutation would leak into them.
+    let configuredResolvers: String?
+
+    init(configuredResolvers: String? = nil) {
+        self.configuredResolvers = configuredResolvers
+    }
+
     func prepare(on database: Database) async throws {
-        let configured = Environment.get("STRATO_DEFAULT_NETWORK_DNS_SERVERS")
+        let configured = configuredResolvers ?? Environment.get("STRATO_DEFAULT_NETWORK_DNS_SERVERS")
         if configured?.isEmpty == true {
             return
         }
