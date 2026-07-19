@@ -1801,9 +1801,17 @@ actor AgentService {
         // Floating IPs attached to NICs of VMs the receiving agent's topology
         // writes cover (issue #344): its own VMs for a site-less agent, every
         // site VM for the site's controller. Keyed by network name, matching
-        // how the NAT rule lands on that network's router.
-        let floatingIPsByNetwork = try await desiredFloatingIPs(
-            forAgentIDs: scope.floatingIPAgentIDs, on: db)
+        // how the NAT rule lands on that network's router. Omitted entirely
+        // for pre-v12 agents — they would decode and silently ignore the
+        // field, so sending it only misstates what the sync achieved; the
+        // attach API refuses new attachments against such agents.
+        let floatingIPsByNetwork: [String: [DesiredFloatingIP]]
+        if try await agentSupportsFloatingIPs(agentId: agentId, on: db) {
+            floatingIPsByNetwork = try await desiredFloatingIPs(
+                forAgentIDs: scope.floatingIPAgentIDs, on: db)
+        } else {
+            floatingIPsByNetwork = [:]
+        }
         let networkStates =
             scope.networkNames
             .sorted()
@@ -2122,6 +2130,16 @@ actor AgentService {
             .all()
         names.formUnion(pinned.map(\.name))
         return (names, true, Set(siteAgentIDs))
+    }
+
+    /// Whether the receiving agent's reconciler realizes floating IP NAT
+    /// (wire protocol >= 12). An unknown agent id defaults to supporting —
+    /// there is nothing to protect on a peer that has no registration row.
+    private func agentSupportsFloatingIPs(agentId: String, on db: any Database) async throws -> Bool {
+        guard let agentUUID = UUID(uuidString: agentId),
+            let agent = try await Agent.find(agentUUID, on: db)
+        else { return true }
+        return WireProtocol.supportsFloatingIPs(agent.wireProtocolVersion ?? 0)
     }
 
     /// Floating IPs (issue #344) the desired-state sync should carry, keyed by

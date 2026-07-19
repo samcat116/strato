@@ -428,6 +428,22 @@ struct FloatingIPController: RouteCollection {
         guard vm.$project.id == floatingIP.$project.id else {
             throw Abort(.conflict, reason: "VM belongs to a different project than the floating IP")
         }
+        // Owning the floating IP is not enough: attaching changes the *VM's*
+        // inbound exposure and outbound SNAT, so the caller needs update on
+        // the VM too (the volume-attach rule). System admins bypass, matching
+        // volume attach.
+        let user = try req.auth.require(User.self)
+        if !user.isSystemAdmin {
+            let hasVMPermission = try await req.spicedb.checkPermission(
+                subject: user.id!.uuidString,
+                permission: "update",
+                resource: "virtual_machine",
+                resourceId: vm.id!.uuidString
+            )
+            guard hasVMPermission else {
+                throw Abort(.forbidden, reason: "You don't have permission to modify this VM")
+            }
+        }
 
         let interfaces = try await VMNetworkInterface.query(on: req.db)
             .filter(\.$vm.$id == request.vmId)
@@ -482,6 +498,18 @@ struct FloatingIPController: RouteCollection {
                     .conflict,
                     reason: "Pool '\(pool.name)' is pinned to a different site than network '\(network.name)'")
             }
+        }
+        // Rolling-upgrade gate: a pre-v12 realizing agent decodes the sync but
+        // silently ignores `floatingIPs`, so the API would report an attached
+        // address that no NAT rule ever backs. Refuse rather than strand.
+        if let realizer = try await Self.natRealizingAgent(for: vm, on: req.db),
+            !WireProtocol.supportsFloatingIPs(realizer.wireProtocolVersion ?? 0)
+        {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent '\(realizer.name)' registered with a protocol too old for floating IPs; upgrade it first"
+            )
         }
         // One floating IP per NIC: two rules would fight over the NIC's
         // outbound SNAT. This read is the friendly-error fast path; the
@@ -613,6 +641,24 @@ struct FloatingIPController: RouteCollection {
         return (canonical, gatewayIP.description)
     }
 
+    /// The agent whose network reconciler would realize NAT for the VM: the
+    /// site's network controller for a sited host, the hosting agent itself
+    /// for the legacy site-less model. Nil while the VM is unplaced or the
+    /// agent row is gone — nothing to gate against, and sync assembly omits
+    /// the field for unsupporting agents anyway.
+    static func natRealizingAgent(for vm: VM, on db: Database) async throws -> Agent? {
+        guard let hypervisorId = vm.hypervisorId,
+            let agentUUID = UUID(uuidString: hypervisorId),
+            let agent = try await Agent.find(agentUUID, on: db)
+        else { return nil }
+        guard let siteID = agent.$site.id,
+            let site = try await Site.find(siteID, on: db),
+            let controllerID = site.$networkControllerAgent.id,
+            let controller = try await Agent.find(controllerID, on: db)
+        else { return agent }
+        return controller
+    }
+
     private func fetchFloatingIPWithPermission(req: Request, permission: String) async throws -> FloatingIP {
         let user = try req.auth.require(User.self)
         guard let floatingIpId = req.parameters.get("floatingIpId", as: UUID.self) else {
@@ -621,6 +667,9 @@ struct FloatingIPController: RouteCollection {
         guard let floatingIP = try await FloatingIP.find(floatingIpId, on: req.db) else {
             throw Abort(.notFound, reason: "Floating IP not found")
         }
+        // System admins bypass, matching the pool helpers and volume/VM
+        // fetch paths — admins may lack per-project SpiceDB tuples entirely.
+        if user.isSystemAdmin { return floatingIP }
         let allowed = try await req.spicedb.checkPermission(
             subject: user.id!.uuidString,
             permission: permission,
