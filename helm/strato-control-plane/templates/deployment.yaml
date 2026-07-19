@@ -1,6 +1,9 @@
 {{- if not .Values.spire.enabled }}
 {{- fail "spire.enabled must be true: agents authenticate to the control plane only with a SPIRE-issued SVID, so disabling SPIRE yields a control plane that refuses every agent connection. Set spire.enabled=true, or point the chart at an external SPIRE server via spire.controlPlane.serverApiAddress." }}
 {{- end }}
+{{- if and .Values.ingress.enabled (not .Values.gateway.enabled) }}
+{{- fail "ingress.enabled requires gateway.enabled: the legacy Ingress routes /agent to the plain HTTP service port, so agent connections terminate TLS at the Ingress and never reach the Envoy mTLS sidecar. No client certificate arrives, and the control plane rejects every agent (it accepts X-Forwarded-Client-Cert only from the pod-local sidecar over loopback, so an Ingress cannot forward one either). Enable the Gateway, which routes agents.<host> as TLS passthrough to the sidecar, or expose the agent-mtls port yourself and leave the Ingress disabled." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

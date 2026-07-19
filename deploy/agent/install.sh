@@ -600,7 +600,13 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable --now spire-agent.service
+    # Restart, not `enable --now`: this function has just rewritten agent.conf
+    # with a new join token, server address, and trust domain, and an already
+    # running spire-agent would keep serving the previous SVID from its Workload
+    # API. strato-agent would then restart into the new control-plane URL while
+    # still presenting the old identity — re-enrollment would fail.
+    systemctl enable spire-agent.service
+    systemctl restart spire-agent.service
   else
     log "Starting spire-agent in the background (no systemd)"
     nohup "${BIN_DIR}/spire-agent" run -config "$SPIRE_CONF_DIR/agent.conf" \
