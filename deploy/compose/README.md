@@ -17,6 +17,54 @@ For a real hostname (WebAuthn then requires HTTPS in front of the proxy):
 ./setup.sh --hostname strato.example.com
 ```
 
+## Programmatic access (no browser)
+
+First-user registration is a browser WebAuthn flow. For deployments that must
+be driven entirely by scripts (CI, end-to-end tests), seed an admin user +
+organization + project and get an admin-scoped API key instead:
+
+```bash
+docker compose run --rm bootstrap
+# key only on stdout, for scripting:
+docker compose run --rm -e LOG_LEVEL=warning bootstrap bootstrap --quiet --env production
+```
+
+The command hard-refuses when any user already exists — it only works on a
+brand-new deployment. The key is printed once and never stored in plaintext.
+Note the seeded user consumes the first-user-becomes-admin slot: people who
+register in the browser afterwards get no special privileges (manage them via
+the API key).
+
+## Redeploying
+
+To pick up a new image (or after changing `STRATO_VERSION`), use the helper —
+not `docker compose up -d --no-deps control-plane`:
+
+```bash
+./redeploy.sh                # pull + redeploy control-plane (+ its sidecars)
+./redeploy.sh frontend       # just the frontend
+./redeploy.sh all
+```
+
+`envoy` and `spire-api-bridge` share the control-plane container's network
+namespace, so recreating the control plane alone orphans them into a dead
+namespace (symptom: agent enrollment fails with "SPIRE server unreachable:
+127.0.0.1:8081"). The helper always recreates the namespace owner and its
+tenants together.
+
+## Smoke test
+
+Verify the assembled stack through the proxy (health, auth rejection, image
+full + ranged downloads with strict header checks, the Envoy mTLS listener):
+
+```bash
+./smoke-test.sh --api-key sk_...     # or STRATO_API_KEY=... ./smoke-test.sh
+```
+
+Worth running after every deploy: some bugs (duplicate/forced Content-Length,
+issue #517) only manifest between the control plane and a strict proxy, and
+are invisible to unit tests and direct-to-container curl.
+
 ## What's included
 
 - **PostgreSQL** — control-plane database plus a separate `spicedb` database.

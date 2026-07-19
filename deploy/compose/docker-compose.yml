@@ -309,7 +309,7 @@ services:
     # build:
     #   context: ../..
     #   dockerfile: control-plane/Dockerfile
-    environment:
+    environment: &control-plane-env
       # Report the exact tag the operator pinned on /health/* (see
       # BuildInfo.swift), overriding the image's baked default so the running
       # process names what was actually deployed. STRATO_GIT_SHA is deliberately
@@ -410,6 +410,44 @@ services:
       spire-bootstrap:
         condition: service_completed_successfully
     restart: unless-stopped
+
+  # One-shot, manual: seed a first admin user + organization + project and
+  # print an admin-scoped API key once, so the deployment can be driven
+  # programmatically (CI, end-to-end tests) without the browser WebAuthn flow.
+  # Hard-refuses when any user already exists. Never started by
+  # `docker compose up` (profile-gated) — run it explicitly:
+  #
+  #   docker compose run --rm bootstrap
+  #   # key only on stdout (for scripting; startup logs go to stdout too,
+  #   # hence the lowered log level):
+  #   docker compose run --rm -e LOG_LEVEL=warning bootstrap bootstrap --quiet --env production
+  #
+  # (The second form overrides the command; the first `bootstrap` is the
+  # service, the rest is the container command.)
+  bootstrap:
+    image: ghcr.io/samcat116/strato-control-plane:${STRATO_VERSION:-main}
+    profiles: ["bootstrap"]
+    command: ["bootstrap", "--env", "production"]
+    environment:
+      <<: *control-plane-env
+      # This container is not in the control-plane's network namespace, so the
+      # SPIRE socat bridge (127.0.0.1:8081) and trust-bundle volume are out of
+      # reach — and seeding users needs neither.
+      SPIRE_ENABLED: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      spicedb:
+        condition: service_healthy
+      spicedb-schema:
+        condition: service_completed_successfully
+      # The command boots the full Vapor app, whose production startup requires
+      # Valkey (sessions + coordination, pinged at didBoot) — without this the
+      # standalone `docker compose run --rm bootstrap` on a fresh project would
+      # exit before seeding.
+      valkey:
+        condition: service_healthy
+    restart: "no"
 
   frontend:
     image: ghcr.io/samcat116/strato-frontend:${STRATO_VERSION:-main}
