@@ -52,6 +52,9 @@ let package = Package(
         .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
+        // TLS primitives for the SPIRE server mTLS verification callback
+        // (already in the graph transitively via grpc-swift-nio-transport)
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.29.0"),
     ],
     targets: [
         // SPIRE Server registration API client (join tokens + registration
@@ -67,6 +70,8 @@ let package = Package(
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "X509", package: "swift-certificates"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
             ],
             exclude: ["Generated/README.md", "Generated/proto"],
             swiftSettings: swiftSettings

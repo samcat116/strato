@@ -58,6 +58,12 @@ public actor WorkloadAPISVIDSource: SPIREClientIdentityProvider {
     private let socketPath: String
     private let logger: Logger
 
+    /// Deadline for one `FetchX509SVID` fetch. Bounds the wait for the first
+    /// stream message, so an agent that accepts the socket connection but
+    /// stalls fails the fetch (and lets a still-valid cached SVID take over)
+    /// instead of hanging the admin call indefinitely.
+    private let fetchTimeout: Duration
+
     private var cached: (identity: SPIREClientIdentity, refreshAfter: Date)?
 
     /// Every Workload API call must carry this metadata per the SPIFFE spec;
@@ -69,9 +75,10 @@ public actor WorkloadAPISVIDSource: SPIREClientIdentityProvider {
         method: "FetchX509SVID"
     )
 
-    public init(socketPath: String, logger: Logger) {
+    public init(socketPath: String, logger: Logger, fetchTimeout: Duration = .seconds(10)) {
         self.socketPath = socketPath
         self.logger = logger
+        self.fetchTimeout = fetchTimeout
     }
 
     public func currentIdentity() async throws -> SPIREClientIdentity {
@@ -122,6 +129,12 @@ public actor WorkloadAPISVIDSource: SPIREClientIdentityProvider {
                 "Failed to create Workload API transport: \(error)")
         }
 
+        // `FetchX509SVID` is a streaming RPC that normally stays open, but we
+        // only consume the first message — the deadline turns a stalled agent
+        // into a failed fetch rather than a hung admin call.
+        var options = CallOptions.defaults
+        options.timeout = fetchTimeout
+
         do {
             return try await withGRPCClient(transport: transport) { client in
                 try await client.serverStreaming(
@@ -130,7 +143,7 @@ public actor WorkloadAPISVIDSource: SPIREClientIdentityProvider {
                     descriptor: Self.fetchX509SVIDDescriptor,
                     serializer: ProtobufSerializer<Workload_X509SVIDRequest>(),
                     deserializer: ProtobufDeserializer<Workload_X509SVIDResponse>(),
-                    options: .defaults
+                    options: options
                 ) { response in
                     for try await message in response.messages {
                         return try Self.makeIdentity(from: message)

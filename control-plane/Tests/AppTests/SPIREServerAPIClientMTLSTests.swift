@@ -98,6 +98,40 @@ struct SPIREServerAPIClientMTLSTests {
         }
     }
 
+    @Test("Rejects a bundle-signed server that is not spiffe://<td>/spire/server", .timeLimit(.minutes(1)))
+    func rejectsImpersonatingServer() async throws {
+        // A rogue workload holds a perfectly valid bundle-signed SVID; only
+        // the pinned server SPIFFE ID stops it from impersonating the SPIRE
+        // server to the admin client.
+        let pki = try MTLSTestPKI()
+        let workloadState = FakeWorkloadAPIState(response: pki.workloadResponse())
+
+        try await withFakeWorkloadAPI(state: workloadState) { workloadSocketPath in
+            try await withTLSFakeSPIREServer(
+                pki: pki, serverCertDER: pki.rogueServerDER, serverKey: pki.rogueServerKey
+            ) { port in
+                let client = SPIREServerAPIClient(
+                    address: .tcp(host: "localhost", port: port),
+                    transportSecurity: .mtls(
+                        identityProvider: WorkloadAPISVIDSource(
+                            socketPath: workloadSocketPath, logger: Self.testLogger)),
+                    logger: Self.testLogger,
+                    timeout: .seconds(5)
+                )
+                await #expect(throws: SPIREServerAPIError.self) {
+                    _ = try await client.listEntries()
+                }
+            }
+        }
+    }
+
+    @Test("Derives the pinned server ID from the client's trust domain")
+    func derivesServerSPIFFEID() throws {
+        let serverID = try SPIREServerAPIClient.spireServerSPIFFEID(
+            fromMemberID: "spiffe://strato.local/control-plane")
+        #expect(serverID == "spiffe://strato.local/spire/server")
+    }
+
     @Test("Plaintext against the TLS endpoint fails as unreachable", .timeLimit(.minutes(1)))
     func plaintextAgainstTLSEndpointFails() async throws {
         // The exact misconfiguration from issue #507: a plaintext client
@@ -156,11 +190,16 @@ struct SPIREServerAPIClientMTLSTests {
 
     /// Run `body` with the loopback port of a fake SPIRE server that serves
     /// ListEntries over TLS and requires a client certificate chained to the
-    /// test CA — like a real SPIRE server's network endpoint.
+    /// test CA — like a real SPIRE server's network endpoint. Pass explicit
+    /// certificate material to impersonate the server with a non-server SVID.
     private func withTLSFakeSPIREServer(
         pki: MTLSTestPKI,
+        serverCertDER: [UInt8]? = nil,
+        serverKey: P256.Signing.PrivateKey? = nil,
         _ body: @Sendable @escaping (Int) async throws -> Void
     ) async throws {
+        let certDER = serverCertDER ?? pki.serverDER
+        let key = serverKey ?? pki.serverKey
         let transport = HTTP2ServerTransport.Posix(
             address: .ipv4(host: "127.0.0.1", port: 0),
             transportSecurity: .tls(
@@ -169,10 +208,10 @@ struct SPIREServerAPIClientMTLSTests {
                         .bytes(
                             Array(
                                 WorkloadAPISVIDSource.pemEncode(
-                                    der: Data(pki.serverDER), label: "CERTIFICATE"
+                                    der: Data(certDER), label: "CERTIFICATE"
                                 ).utf8), format: .pem)
                     ],
-                    privateKey: .bytes(Array(pki.serverKey.pemRepresentation.utf8), format: .pem)
+                    privateKey: .bytes(Array(key.pemRepresentation.utf8), format: .pem)
                 ) { config in
                     config.trustRoots = .certificates([
                         .bytes(
@@ -202,6 +241,8 @@ private struct MTLSTestPKI {
     let caDER: [UInt8]
     let serverDER: [UInt8]
     let serverKey: P256.Signing.PrivateKey
+    let rogueServerDER: [UInt8]
+    let rogueServerKey: P256.Signing.PrivateKey
     let leafDER: [UInt8]
     let leafKey: P256.Signing.PrivateKey
     let leafNotValidAfter: Date
@@ -258,6 +299,17 @@ private struct MTLSTestPKI {
             notValidAfter: Date().addingTimeInterval(3600)
         )
         serverDER = try server.serializeAsPEM().derBytes
+
+        // A bundle-signed workload SVID that is NOT the SPIRE server: chain
+        // verification alone would accept it as a TLS server certificate.
+        rogueServerKey = P256.Signing.PrivateKey()
+        let rogue = try issueLeaf(
+            commonName: "rogue-workload",
+            spiffeURI: "spiffe://strato.local/agent/rogue",
+            key: rogueServerKey,
+            notValidAfter: Date().addingTimeInterval(3600)
+        )
+        rogueServerDER = try rogue.serializeAsPEM().derBytes
 
         leafKey = P256.Signing.PrivateKey()
         leafNotValidAfter = Date().addingTimeInterval(3600)
