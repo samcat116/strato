@@ -10,7 +10,7 @@ import StratoShared
 struct BackfillImageArtifacts: AsyncMigration {
     func prepare(on database: Database) async throws {
         let images = try await ImageArtifactBackfillRow.query(on: database)
-            .filter(\.$status == .ready)
+            .filter(\.$status == ImageStatus.ready.rawValue)
             .all()
 
         for image in images {
@@ -23,7 +23,7 @@ struct BackfillImageArtifacts: AsyncMigration {
 
             let artifact = ImageArtifactBackfillArtifactRow()
             artifact.imageID = imageID
-            artifact.kind = .diskImage
+            artifact.kind = ArtifactKind.diskImage.rawValue
             artifact.format = image.format
             artifact.architecture = image.architecture
             artifact.filename = image.filename
@@ -38,7 +38,7 @@ struct BackfillImageArtifacts: AsyncMigration {
         // Drop the backfilled disk-image artifacts. Other kinds (kernel/rootfs)
         // are not created by this migration, so scope the delete to disk-image.
         try await ImageArtifactBackfillArtifactRow.query(on: database)
-            .filter(\.$kind == .diskImage)
+            .filter(\.$kind == ArtifactKind.diskImage.rawValue)
             .delete()
     }
 }
@@ -56,11 +56,15 @@ final class ImageArtifactBackfillRow: Model, @unchecked Sendable {
     @ID(key: .id) var id: UUID?
     @Field(key: "filename") var filename: String
     @Field(key: "size") var size: Int64
-    @Enum(key: "format") var format: ImageFormat
-    @Enum(key: "architecture") var architecture: CPUArchitecture
+    // Deliberately use raw strings here. This migration runs before the enum
+    // repair/enforcement migration, so decoding through `@Enum` could trap on
+    // a malformed historical value before startup has a chance to repair or
+    // diagnose it (issue #527).
+    @Field(key: "format") var format: String
+    @Field(key: "architecture") var architecture: String
     @OptionalField(key: "checksum") var checksum: String?
     @OptionalField(key: "storage_path") var storagePath: String?
-    @Enum(key: "status") var status: ImageStatus
+    @Field(key: "status") var status: String
 
     init() {}
 }
@@ -79,9 +83,12 @@ final class ImageArtifactBackfillArtifactRow: Model, @unchecked Sendable {
 
     @ID(key: .id) var id: UUID?
     @Field(key: "image_id") var imageID: UUID
-    @Enum(key: "kind") var kind: ArtifactKind
-    @OptionalEnum(key: "format") var format: ImageFormat?
-    @Enum(key: "architecture") var architecture: CPUArchitecture
+    // These stay raw for the same reason as the source snapshot above. The
+    // final enforcement migration validates both tables before live models
+    // can access them.
+    @Field(key: "kind") var kind: String
+    @OptionalField(key: "format") var format: String?
+    @Field(key: "architecture") var architecture: String
     @Field(key: "filename") var filename: String
     @Field(key: "size") var size: Int64
     @Field(key: "checksum") var checksum: String
