@@ -122,14 +122,16 @@ The `user-data` document has two shapes:
   VM's authorized SSH keys.
 - **Caller user data present** (`VMSpec.userData`, any cloud-init format:
   `#cloud-config`, `#!` script, `#include`, jinja template): a
-  `multipart/mixed` MIME document. The caller's payload is the **first**
-  part — cloud-init merges later cloud-config parts into earlier ones with
-  `dict(no_replace, allow_new)`, so on conflicting keys the caller wins and
-  Strato's config acts as defaults. Strato's console setup travels as a
-  `text/x-shellscript` part rather than `bootcmd`/`runcmd` keys, because
-  the default part merge *drops* colliding list keys rather than appending
-  — script parts always compose. The multipart boundary is extended until
-  it appears in no part, so hostile payloads can't truncate a part.
+  `multipart/mixed` MIME document. The caller's payload is the **last**
+  part — cloud-init's `CloudConfigPartHandler` merges parts with the
+  default `dict(replace)+list()+str()` policy, replacing keys of prior
+  parts, so on conflicting keys the caller wins and Strato's config acts
+  as defaults (a caller's `ssh_pwauth: false` really disables password
+  SSH auth). Strato's console setup travels as a `text/x-shellscript`
+  part rather than `bootcmd`/`runcmd` keys, because those list keys in a
+  caller part would replace Strato's — script parts always compose. The
+  multipart boundary is extended until it appears in no part, so hostile
+  payloads can't truncate a part.
 - **Caller user data is itself a full MIME document**: used as the seed's
   `user-data` verbatim — the escape hatch for callers who want complete
   control (this skips Strato's console/password/SSH-key provisioning).

@@ -29,7 +29,7 @@ struct CloudInitUserDataDocumentTests {
 
     // MARK: - Caller payload → multipart
 
-    @Test("cloud-config payload composes a multipart with the caller's part first")
+    @Test("cloud-config payload composes a multipart with the caller's part last")
     func multipartOrdering() {
         let payload = "#cloud-config\npackages:\n  - nginx\nruncmd:\n  - systemctl enable --now nginx\n"
         let doc = CloudInitProvisioner.userDataDocument(sshAuthorizedKeys: [], userData: payload)
@@ -37,15 +37,17 @@ struct CloudInitUserDataDocumentTests {
         #expect(doc.hasPrefix("Content-Type: multipart/mixed; boundary="))
         #expect(doc.contains("packages:\n  - nginx"))
 
-        // Caller part precedes Strato's parts: cloud-init's first-wins part
-        // merge is what lets the caller override provisioning defaults.
+        // Caller part FOLLOWS Strato's parts: cloud-init's default part merge
+        // (dict(replace)+list()+str()) replaces keys of prior parts, so the
+        // caller part must come later to override provisioning defaults
+        // (e.g. ssh_pwauth: false must actually disable password SSH auth).
         let userIndex = doc.range(of: "filename=\"user-data\"")?.lowerBound
         let systemIndex = doc.range(of: "filename=\"strato-provisioning.cfg\"")?.lowerBound
         let consoleIndex = doc.range(of: "filename=\"strato-console-setup.sh\"")?.lowerBound
         #expect(userIndex != nil && systemIndex != nil && consoleIndex != nil)
         if let userIndex, let systemIndex, let consoleIndex {
-            #expect(userIndex < systemIndex)
             #expect(systemIndex < consoleIndex)
+            #expect(consoleIndex < userIndex)
         }
     }
 
@@ -64,8 +66,8 @@ struct CloudInitUserDataDocumentTests {
     @Test("Strato's multipart cloud-config part avoids bootcmd/runcmd")
     func systemPartHasNoMergeConflictingKeys() {
         // Console setup must travel as a script part: cloud-init's default
-        // part merge drops colliding list keys instead of appending, so any
-        // bootcmd/runcmd in Strato's cloud-config would fight the caller's.
+        // part merge replaces colliding list keys instead of appending, so
+        // bootcmd/runcmd in a caller part would silently drop Strato's.
         let payload = "#cloud-config\nruncmd:\n  - echo caller\n"
         let doc = CloudInitProvisioner.userDataDocument(sshAuthorizedKeys: [], userData: payload)
 

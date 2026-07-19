@@ -145,12 +145,14 @@ public struct CloudInitProvisioner {
     ///   provisioning (console password, serial-console setup, SSH keys) —
     ///   byte-identical to what pre-user-data agents wrote.
     /// - Caller payload present: a MIME multipart document. The caller's part
-    ///   comes FIRST — cloud-init merges later cloud-config parts into earlier
-    ///   ones with `dict(no_replace, allow_new)`, so on key conflicts the
-    ///   caller's value wins and Strato's config acts as defaults. Strato's
-    ///   console setup travels as a shell-script part (not `bootcmd`/`runcmd`)
-    ///   so it can never collide with — and silently drop — those keys in
-    ///   caller-supplied cloud-config.
+    ///   comes LAST — cloud-init's `CloudConfigPartHandler` merges parts with
+    ///   the default `dict(replace)+list()+str()` policy, replacing keys of
+    ///   prior parts, so on key conflicts the caller's value wins and Strato's
+    ///   config acts as defaults (e.g. `ssh_pwauth: false` in caller config
+    ///   disables the console-password convenience). Strato's console setup
+    ///   travels as a shell-script part (not `bootcmd`/`runcmd`) so those keys
+    ///   in caller-supplied cloud-config can never replace — and silently
+    ///   drop — the console setup.
     /// - Caller payload is itself a complete MIME document: used verbatim
     ///   (a MIME message cannot be nested as a plain part), replacing Strato's
     ///   provisioning entirely. Documented escape hatch for full control.
@@ -170,6 +172,18 @@ public struct CloudInitProvisioner {
         }
 
         let parts: [MIMEPart] = [
+            MIMEPart(
+                mimeType: "text/cloud-config",
+                filename: "strato-provisioning.cfg",
+                content: systemCloudConfig(authorizedKeys: keys)
+            ),
+            // Ahead of the caller's part also by filename ("s…" < "u…"), so
+            // the console is usable before a long caller script finishes.
+            MIMEPart(
+                mimeType: "text/x-shellscript",
+                filename: "strato-console-setup.sh",
+                content: consoleSetupScript
+            ),
             // Unrecognized payloads (only reachable when something bypassed the
             // control plane's validation) travel as text/plain: cloud-init
             // ignores them with a logged warning instead of misinterpreting.
@@ -177,16 +191,6 @@ public struct CloudInitProvisioner {
                 mimeType: format?.mimeType ?? "text/plain",
                 filename: "user-data",
                 content: userData
-            ),
-            MIMEPart(
-                mimeType: "text/cloud-config",
-                filename: "strato-provisioning.cfg",
-                content: systemCloudConfig(authorizedKeys: keys)
-            ),
-            MIMEPart(
-                mimeType: "text/x-shellscript",
-                filename: "strato-console-setup.sh",
-                content: consoleSetupScript
             ),
         ]
         return multipartDocument(parts: parts)
@@ -265,16 +269,16 @@ public struct CloudInitProvisioner {
     }
 
     /// Strato's provisioning defaults as a standalone cloud-config, used as
-    /// the second part of a multipart document. Deliberately free of
-    /// `bootcmd`/`runcmd` (console setup travels as a script part instead):
-    /// cloud-init's default part merge drops colliding keys rather than
-    /// appending, so any key here would silently swallow — or be swallowed
-    /// by — the same key in caller-supplied cloud-config.
+    /// the FIRST part of a multipart document so the caller's later part
+    /// replaces any conflicting key (cloud-init's default part merge is
+    /// `dict(replace)+list()+str()`). Deliberately free of `bootcmd`/`runcmd`
+    /// (console setup travels as a script part instead): those list keys in
+    /// a caller part would replace — and silently drop — ours.
     static func systemCloudConfig(authorizedKeys keys: [String]) -> String {
         var document = """
             #cloud-config
-            # Strato guest-provisioning defaults. The caller's user data is the
-            # first part of this document and wins on conflicting keys.
+            # Strato guest-provisioning defaults. Caller-supplied user data is a
+            # later part of this document and wins on conflicting keys.
             password: \(Self.defaultConsolePassword)
             chpasswd:
               expire: false
