@@ -104,11 +104,15 @@ are invisible to unit tests and direct-to-container curl.
 mTLS is end-to-end: `:8443` and `:8085` must be reachable from your hypervisor
 nodes, and you must **not** terminate TLS in front of `:8443`. The browser
 origin (`:80`/`:443`) is independent and may sit behind a TLS terminator.
-- **Image storage** — downloaded base images are written to the
-  `image_storage` volume (`IMAGE_STORAGE_PATH`). A one-shot
-  `image-storage-init` service chowns the volume to the non-root control-plane
-  user on each `up` so imports can write to it. Agents fetch images via
-  `CONTROL_PLANE_URL`, which setup.sh points at the proxy origin.
+- **Image storage** — by default (`IMAGE_STORAGE_BACKEND=filesystem`) base
+  images are written to the `image_storage` volume (`IMAGE_STORAGE_PATH`). A
+  one-shot `image-storage-init` service chowns the volume to the non-root
+  control-plane user on each `up` so imports can write to it. Agents fetch
+  images via `CONTROL_PLANE_URL`, which setup.sh points at the proxy origin.
+  To keep images in an S3-compatible bucket instead, set
+  `IMAGE_STORAGE_BACKEND=s3` and the `IMAGE_S3_*` variables in your `.env` (no
+  object store is bundled — you supply the bucket). Agents still fetch through
+  the control plane either way. See `docs/architecture/storage.md`.
 
 ## Adding a hypervisor
 

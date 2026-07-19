@@ -134,6 +134,15 @@ public func configure(_ app: Application) async throws {
         ? NoopRegistryClient()
         : DistributionRegistryClient(app: app)
 
+    // Where image bytes live. Filesystem by default so existing deployments
+    // upgrade untouched; IMAGE_STORAGE_BACKEND=s3 moves them to object storage
+    // (required on Kubernetes, where the control plane has no persistent
+    // volume and replicas don't share one — see docs/architecture/storage.md).
+    // Tests install a store directly and must not read the environment here.
+    if app.environment != .testing {
+        try ImageObjectStoreFactory.configure(app)
+    }
+
     // Configure user authentication with sessions
     app.middleware.use(User.sessionAuthenticator())
 

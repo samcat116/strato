@@ -134,6 +134,42 @@ spec:
               value: "{{ .Values.strato.gitSHA | default (.Values.image.tag | default .Chart.AppVersion) }}"
             - name: LOG_LEVEL
               value: "{{ .Values.strato.logLevel }}"
+            # Image storage. `filesystem` writes to the pod's ephemeral disk —
+            # see the warning on strato.imageStorage in values.yaml.
+            - name: IMAGE_STORAGE_BACKEND
+              value: "{{ .Values.strato.imageStorage.backend }}"
+            {{- if eq .Values.strato.imageStorage.backend "filesystem" }}
+            - name: IMAGE_STORAGE_PATH
+              value: "{{ .Values.strato.imageStorage.path }}"
+            {{- else }}
+            {{- /* Fail at install time rather than crashlooping on the
+                   control plane's own IMAGE_S3_BUCKET guard. */}}
+            - name: IMAGE_S3_BUCKET
+              value: {{ required "strato.imageStorage.s3.bucket is required when strato.imageStorage.backend is 's3'" .Values.strato.imageStorage.s3.bucket | quote }}
+            {{- with .Values.strato.imageStorage.s3.endpoint }}
+            - name: IMAGE_S3_ENDPOINT
+              value: "{{ . }}"
+            {{- end }}
+            - name: IMAGE_S3_REGION
+              value: "{{ .Values.strato.imageStorage.s3.region }}"
+            {{- if .Values.strato.imageStorage.s3.virtualHostStyle }}
+            - name: IMAGE_S3_VIRTUAL_HOST_STYLE
+              value: "true"
+            {{- end }}
+            {{- $s3Secret := include "strato-control-plane.imageStorageSecretName" . }}
+            {{- if $s3Secret }}
+            - name: IMAGE_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3Secret }}
+                  key: "{{ .Values.strato.imageStorage.s3.existingSecretAccessKeyIdKey }}"
+            - name: IMAGE_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3Secret }}
+                  key: "{{ .Values.strato.imageStorage.s3.existingSecretSecretAccessKeyKey }}"
+            {{- end }}
+            {{- end }}
             - name: DATABASE_HOST
               value: "{{ include "strato-control-plane.databaseHost" . }}"
             - name: DATABASE_PORT

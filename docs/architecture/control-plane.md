@@ -86,10 +86,11 @@ The important ones to know when navigating `Services/`:
   and org at VM/sandbox create/delete.
 - **`VMSpecBuilder` / `SandboxSpecBuilder`** — assemble the
   hypervisor-neutral specs sent to agents.
-- **`VolumeService`**, **`ImageFetchService`/`ImageStorageService`/
-  `ImageValidationService`**, **`URLSigningService`** (HMAC-signed image
-  download URLs), **`RegistryClientService`** (OCI tag resolution + pull
-  tokens for sandboxes).
+- **`VolumeService`**, **`ImageFetchService`/`ImageValidationService`**,
+  **`ImageObjectStore`** (where image bytes live — filesystem or S3-compatible,
+  selected by `IMAGE_STORAGE_BACKEND`; see `storage.md`),
+  **`URLSigningService`** (HMAC-signed image download URLs),
+  **`RegistryClientService`** (OCI tag resolution + pull tokens for sandboxes).
 - **`ConsoleSessionManager` / `SandboxExecSessionManager`** — bridge frontend
   WebSockets to the agent socket for consoles and sandbox exec.
 - Identity/compliance: `WebAuthnService`, `OIDCIdentityService`,

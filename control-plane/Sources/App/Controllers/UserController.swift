@@ -604,8 +604,14 @@ struct UserController: RouteCollection {
     func beginAuthentication(req: Request) async throws -> AuthenticationBeginResponse {
         let beginRequest = try req.content.decode(AuthenticationBeginRequest.self)
 
+        // Keyed with the deployment signing key so an unknown username yields a
+        // stable, unguessable decoy credential instead of a 404, closing the
+        // username-enumeration oracle (see WebAuthnService.beginAuthentication).
+        let decoyKey = try await URLSigningService.getSigningKeyAsync(from: req.application)
+
         let options = try await req.webAuthn.beginAuthentication(
             for: beginRequest.username,
+            decoyKey: decoyKey,
             on: req.db
         )
 
