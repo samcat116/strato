@@ -60,6 +60,26 @@ default) funnels into `launchAgent`.
   registration-rejected error is terminal (the node's SPIRE identity is no
   longer accepted — re-enroll it).
 
+## Shutdown
+
+**VMs outlive the agent.** A SIGINT/SIGTERM runs `Agent.stop()` —
+unregistering from the control plane, closing the socket and its event loop,
+closing console channels, disconnecting networking, stopping the SVID manager
+— but it deliberately does not touch running hypervisor processes. The
+manifest keeps them, and the next incarnation re-adopts them (see
+[Storage](#storage)). This is why the systemd unit must set
+`KillMode=process`: QEMU and Firecracker are children of the agent and share
+its cgroup, so systemd's default would kill every VM on the host on any
+restart.
+
+Shutdown is bounded on both ends. `launchAgent` exits the process explicitly
+once `stop()` returns rather than letting the runtime unwind, and a watchdog
+armed by the signal handler exits anyway if the process has not gone away
+within 20s of the signal.
+Before that, a completed shutdown could leave the process alive on some
+straggling thread until systemd's `TimeoutStopSec` SIGKILLed it — taking every
+VM in the cgroup with it (issue #522).
+
 ## Hypervisor driver registry
 
 `HypervisorProtocol.swift` defines `protocol HypervisorService: Actor` —

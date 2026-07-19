@@ -416,6 +416,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      # Gravatar profile pictures. Enabled here sends a hash of each user's email
+      # to gravatar.com; set STRATO_GRAVATAR_ENABLED=false in .env to keep the UI
+      # free of third-party requests and show initials instead.
+      STRATO_GRAVATAR_ENABLED: ${STRATO_GRAVATAR_ENABLED:-true}
     depends_on:
       - control-plane
     restart: unless-stopped

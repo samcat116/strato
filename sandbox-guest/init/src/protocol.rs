@@ -38,6 +38,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
+use crate::config::{ImageConfig, ProcessOverrides};
+
 /// Well-known guest vsock port the agent listens on when the config drive does
 /// not override it. Ports below 1024 are conventionally reserved; 1024 is the
 /// first freely usable port and keeps us clear of them.
@@ -108,6 +110,33 @@ pub enum Request {
         /// Current host wall-clock time as nanoseconds since the Unix epoch.
         unix_nanos: i64,
     },
+    /// Launch the workload in a guest booted with `warm_hold` (v4, issue
+    /// #426 warm start). Sent by the host after restoring a warm-template
+    /// snapshot for a new sandbox: the guest mixes the host-supplied
+    /// entropy into the kernel RNG (the snapshot froze the entropy pool),
+    /// resolves the process exactly as a cold boot would, execs it, and —
+    /// only on success — adopts the delivered identity. Answered with
+    /// [`Response::Launched`] (or [`Response::Error`] if the guest is not
+    /// `held` or the spawn fails, in which case it stays `held` under the
+    /// template identity, recoverable by a retry or demotion).
+    Launch {
+        /// The restored-into sandbox's control-plane id.
+        sandbox_id: String,
+        /// The restored-into sandbox's boot nonce; echoed in every control
+        /// response from here on, replacing the template's.
+        identity_nonce: String,
+        /// The OCI image `config` subset, as on the config drive. Boxed to
+        /// keep the request enum small (serde is transparent to the Box).
+        #[serde(default)]
+        image_config: Box<ImageConfig>,
+        /// The sandbox spec's process overrides, as on the config drive.
+        #[serde(default)]
+        overrides: Box<ProcessOverrides>,
+        /// base64 random bytes to mix into `/dev/urandom`. Best-effort
+        /// clone-safety mitigation until #427's RNG reseed lands.
+        #[serde(default)]
+        entropy: Option<String>,
+    },
 }
 
 /// The workload's lifecycle state as observed by the guest agent.
@@ -120,6 +149,10 @@ pub enum WorkloadState {
     Running,
     /// The workload process has ended; see `exit_code`.
     Exited,
+    /// Warm-start template hold (issue #426): the guest is fully booted but
+    /// deliberately has no workload; it is waiting to be snapshotted, or —
+    /// after a restore — for a `launch` request.
+    Held,
 }
 
 /// A control response sent guest → host.
@@ -170,6 +203,10 @@ pub enum Response {
     LogEof,
     /// Reply to [`Request::SyncClock`]: the realtime clock was set.
     ClockSynced,
+    /// Reply to [`Request::Launch`]: the workload spawned under the new
+    /// identity. Subsequent `pong`/`status` responses echo the launched
+    /// sandbox's identity.
+    Launched,
     /// The request could not be decoded, is not valid for the connection's
     /// role, or the exec spawn failed.
     Error { message: String },
@@ -234,6 +271,69 @@ mod tests {
         );
         let decoded: Request = serde_json::from_str(encode_line(&req).trim()).expect("re-decode");
         assert_eq!(decoded, req);
+    }
+
+    #[test]
+    fn launch_round_trips() {
+        let line = r#"{"type":"launch","sandbox_id":"sb-2","identity_nonce":"n-2","image_config":{"Env":["PATH=/bin"],"Cmd":["/bin/sh"]},"overrides":{"env":{"DEBUG":"1"}},"entropy":"c2VlZA=="}"#;
+        let req = decode_request(line).expect("decode");
+        match &req {
+            Request::Launch {
+                sandbox_id,
+                identity_nonce,
+                image_config,
+                overrides,
+                entropy,
+            } => {
+                assert_eq!(sandbox_id, "sb-2");
+                assert_eq!(identity_nonce, "n-2");
+                assert_eq!(image_config.cmd, vec!["/bin/sh"]);
+                assert_eq!(overrides.env.get("DEBUG").map(String::as_str), Some("1"));
+                assert_eq!(entropy.as_deref(), Some("c2VlZA=="));
+            }
+            other => panic!("decoded wrong variant: {other:?}"),
+        }
+        let decoded: Request = serde_json::from_str(encode_line(&req).trim()).expect("re-decode");
+        assert_eq!(decoded, req);
+    }
+
+    #[test]
+    fn launch_minimal_defaults_config_and_entropy() {
+        let req = decode_request(r#"{"type":"launch","sandbox_id":"sb-3","identity_nonce":"n-3"}"#)
+            .expect("decode minimal");
+        assert_eq!(
+            req,
+            Request::Launch {
+                sandbox_id: "sb-3".into(),
+                identity_nonce: "n-3".into(),
+                image_config: Box::default(),
+                overrides: Box::default(),
+                entropy: None,
+            }
+        );
+    }
+
+    #[test]
+    fn launched_encodes_as_bare_tag() {
+        let line = encode_line(&Response::Launched);
+        assert_eq!(line.trim(), r#"{"type":"launched"}"#);
+        let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
+        assert_eq!(decoded, Response::Launched);
+    }
+
+    #[test]
+    fn held_state_serializes_snake_case() {
+        let resp = Response::Status {
+            sandbox_id: "sb-1".into(),
+            nonce: "n-1".into(),
+            state: WorkloadState::Held,
+            exit_code: None,
+        };
+        let line = encode_line(&resp);
+        assert!(
+            line.contains(r#""state":"held""#),
+            "held must serialize snake_case: {line}"
+        );
     }
 
     #[test]

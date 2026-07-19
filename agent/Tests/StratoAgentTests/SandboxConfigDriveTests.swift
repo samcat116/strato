@@ -137,4 +137,51 @@ struct SandboxConfigDriveTests {
         #expect(decoded.sandboxId == "sb-5")
         #expect(decoded.identityNonce == "boot-nonce-xyz")
     }
+
+    // MARK: - Warm start (issue #426)
+
+    /// Ordinary documents must not carry `warm_hold` at all — the field is
+    /// encoded only when set, keeping pre-warm-start guests byte-compatible.
+    @Test("warm_hold is omitted by default and encoded when set")
+    func warmHoldEncodesOnlyWhenSet() throws {
+        let ordinary = SandboxConfigDrive(
+            sandboxId: "sb-6", identityNonce: "n", guestConfig: guestConfig(), spec: spec())
+        let ordinaryObject = try #require(
+            try JSONSerialization.jsonObject(with: ordinary.encoded()) as? [String: Any])
+        #expect(ordinaryObject["warm_hold"] == nil)
+
+        let template = SandboxConfigDrive(
+            sandboxId: "warm-template-1", identityNonce: "n",
+            imageConfig: SandboxConfigDrive.ImageConfig(
+                env: [], entrypoint: [], cmd: ["/bin/true"], workingDir: "", user: ""),
+            overrides: SandboxConfigDrive.ProcessOverrides(
+                entrypoint: nil, cmd: nil, env: [:], workdir: nil, user: nil),
+            warmHold: true)
+        let templateObject = try #require(
+            try JSONSerialization.jsonObject(with: template.encoded()) as? [String: Any])
+        #expect(templateObject["warm_hold"] as? Bool == true)
+        let decoded = try SandboxConfigDrive.decode(fromBlockImage: try template.blockImage())
+        #expect(decoded.warmHold == true)
+    }
+
+    /// Warm restores stage a different sandbox's config document at the
+    /// device capacity the template snapshot recorded, so all warm-eligible
+    /// drives share `standardBlockImageBytes` regardless of document size.
+    @Test("the standard block-image capacity is stable across document sizes")
+    func standardCapacityIsStable() throws {
+        let small = SandboxConfigDrive(
+            sandboxId: "sb-7", identityNonce: "n", guestConfig: guestConfig(), spec: spec())
+        let big = SandboxConfigDrive(
+            sandboxId: "sb-8", identityNonce: "n", guestConfig: guestConfig(),
+            spec: spec(
+                env: Dictionary(
+                    uniqueKeysWithValues: (0..<200).map { ("KEY_\($0)", String(repeating: "v", count: 64)) })))
+        let smallImage = try small.blockImage(minimumBytes: SandboxConfigDrive.standardBlockImageBytes)
+        let bigImage = try big.blockImage(minimumBytes: SandboxConfigDrive.standardBlockImageBytes)
+        #expect(smallImage.count == SandboxConfigDrive.standardBlockImageBytes)
+        #expect(bigImage.count == SandboxConfigDrive.standardBlockImageBytes)
+        // And both still re-parse.
+        #expect(try SandboxConfigDrive.decode(fromBlockImage: smallImage).sandboxId == "sb-7")
+        #expect(try SandboxConfigDrive.decode(fromBlockImage: bigImage).sandboxId == "sb-8")
+    }
 }

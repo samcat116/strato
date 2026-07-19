@@ -59,6 +59,33 @@ public enum SandboxControlProtocol {
         }
     }
 
+    /// The parameters of a warm-start `launch` request (issue #426). The
+    /// `imageConfig`/`overrides` shapes are exactly the config drive's — the
+    /// guest merges them with the identical cold-boot rules.
+    public struct LaunchRequest: Equatable, Sendable {
+        public let sandboxId: String
+        public let identityNonce: String
+        public let imageConfig: SandboxConfigDrive.ImageConfig
+        public let overrides: SandboxConfigDrive.ProcessOverrides
+        /// Random bytes the guest mixes into `/dev/urandom` (base64 on the
+        /// wire); best-effort clone-safety until #427's RNG reseed.
+        public let entropy: Data?
+
+        public init(
+            sandboxId: String,
+            identityNonce: String,
+            imageConfig: SandboxConfigDrive.ImageConfig,
+            overrides: SandboxConfigDrive.ProcessOverrides,
+            entropy: Data?
+        ) {
+            self.sandboxId = sandboxId
+            self.identityNonce = identityNonce
+            self.imageConfig = imageConfig
+            self.overrides = overrides
+            self.entropy = entropy
+        }
+    }
+
     /// A control request sent host → guest. `type`-tagged snake_case to match
     /// the guest's serde contract.
     public enum Request: Equatable, Sendable {
@@ -82,6 +109,14 @@ public enum SandboxControlProtocol {
         /// that predate this request answer `error`, which the host treats as
         /// best-effort.
         case syncClock(unixNanos: Int64)
+        /// Launch the workload in a guest that booted with `warm_hold` (issue
+        /// #426 warm start). Sent after restoring a warm-template snapshot
+        /// for a new sandbox: delivers the sandbox's identity, the image
+        /// config + spec overrides (the guest resolves them with the same
+        /// rules as a cold boot), and random bytes to diverge the snapshot's
+        /// frozen RNG pool. The guest answers `launched`, after which every
+        /// control response echoes the new identity.
+        case launch(LaunchRequest)
 
         /// Flat encoding shape for the tagged request union. The synthesized
         /// `Encodable` conformance already does exactly what the guest's serde
@@ -114,10 +149,42 @@ public enum SandboxControlProtocol {
             }
         }
 
+        /// Nested encoding shape for `launch` — the only request whose
+        /// payload is not flat scalars. Optionals are omitted when absent,
+        /// matching the guest's serde defaults.
+        private struct RawLaunchRequest: Encodable {
+            let type: String
+            let sandboxId: String
+            let identityNonce: String
+            let imageConfig: SandboxConfigDrive.ImageConfig
+            let overrides: SandboxConfigDrive.ProcessOverrides
+            let entropy: String?
+
+            enum CodingKeys: String, CodingKey {
+                case type
+                case sandboxId = "sandbox_id"
+                case identityNonce = "identity_nonce"
+                case imageConfig = "image_config"
+                case overrides
+                case entropy
+            }
+        }
+
         /// Encode as a single newline-terminated JSON line.
         public func encodedLine() -> Data {
             var raw: RawRequest
             switch self {
+            case .launch(let request):
+                // The one request with nested payloads — encoded via its own
+                // raw shape instead of the flat RawRequest.
+                let rawLaunch = RawLaunchRequest(
+                    type: "launch",
+                    sandboxId: request.sandboxId,
+                    identityNonce: request.identityNonce,
+                    imageConfig: request.imageConfig,
+                    overrides: request.overrides,
+                    entropy: request.entropy?.base64EncodedString())
+                return Self.terminatedLine(encoding: rawLaunch)
             case .ping:
                 raw = RawRequest(type: "ping")
             case .getStatus:
@@ -146,9 +213,14 @@ public enum SandboxControlProtocol {
                 raw = RawRequest(type: "sync_clock")
                 raw.unixNanos = unixNanos
             }
-            // A flat struct of JSON scalars/arrays/string-maps cannot fail to
-            // encode; fall back to an empty line rather than crashing the host
-            // if that invariant is ever broken.
+            return Self.terminatedLine(encoding: raw)
+        }
+
+        /// Encode a raw request shape as one newline-terminated line. A flat
+        /// struct of JSON scalars/arrays/string-maps cannot fail to encode;
+        /// fall back to an empty line rather than crashing the host if that
+        /// invariant is ever broken.
+        private static func terminatedLine(encoding raw: some Encodable) -> Data {
             var line = (try? JSONEncoder().encode(raw)) ?? Data("{}".utf8)
             line.append(0x0A)
             return line
@@ -160,6 +232,10 @@ public enum SandboxControlProtocol {
         case starting
         case running
         case exited
+        /// Warm-start template hold (issue #426): fully booted, deliberately
+        /// no workload — waiting to be snapshotted or, post-restore, for a
+        /// `launch` request.
+        case held
     }
 
     /// A control response sent guest → host.
@@ -184,6 +260,9 @@ public enum SandboxControlProtocol {
         case logEof
         /// The guest applied a `sync_clock` request (issue #426).
         case clockSynced
+        /// The guest applied a warm-start `launch` request: the workload
+        /// spawned under the delivered identity (issue #426).
+        case launched
 
         /// Decode one response line (the trailing newline is optional).
         public static func decode(line: String) throws -> Response {
@@ -223,6 +302,8 @@ public enum SandboxControlProtocol {
                 return .logEof
             case "clock_synced":
                 return .clockSynced
+            case "launched":
+                return .launched
             default:
                 throw SandboxControlError.malformedResponse(line)
             }

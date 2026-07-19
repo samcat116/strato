@@ -17,6 +17,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { UserAvatar } from "@/components/ui/user-avatar";
 import { OrganizationSwitcher } from "./organization-switcher";
 import { isNavActive, isSectionActive, navTree, type NavItem } from "./nav";
 import { versionLabel, versionTitle } from "@/lib/version";
@@ -130,7 +131,7 @@ function UserCard() {
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button className="flex w-full items-center gap-2.5 rounded-[7px] px-2 py-2 text-left transition-colors hover:bg-muted">
-            <div className="h-7 w-7 shrink-0 rounded-full bg-gradient-to-br from-muted to-border" />
+            <UserAvatar email={user?.email} name={user?.displayName || user?.username} size={28} />
             <div className="min-w-0 leading-snug">
               <div className="truncate text-xs font-semibold">
                 {user?.displayName || user?.username || "—"}

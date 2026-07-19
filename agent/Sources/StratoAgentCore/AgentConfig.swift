@@ -257,6 +257,13 @@ public struct AgentConfig: Codable {
     public let sandboxJailerChrootDir: String?
     /// First uid/gid of the per-sandbox uid range (65536 ids). Default 100000.
     public let sandboxJailerUidBase: UInt32?
+    /// Warm start (issue #426): provision new sandboxes by restoring a
+    /// per-(image, machine shape) template snapshot instead of cold-booting.
+    /// Default true; every warm failure falls back to a cold boot.
+    public let sandboxWarmStart: Bool?
+    /// Size budget for the warm-snapshot template cache in GB (entries are
+    /// roughly guest-memory sized). Default 20.
+    public let sandboxWarmCacheMaxSizeGB: Int?
     public let hypervisorType: HypervisorType?
     /// Site uplink for OVN SNAT egress (issue #342). When nil, routers +
     /// east-west are realized but no SNAT/uplink.
@@ -300,6 +307,8 @@ public struct AgentConfig: Codable {
         case sandboxJailerBinaryPath = "sandbox_jailer_binary_path"
         case sandboxJailerChrootDir = "sandbox_jailer_chroot_dir"
         case sandboxJailerUidBase = "sandbox_jailer_uid_base"
+        case sandboxWarmStart = "sandbox_warm_start"
+        case sandboxWarmCacheMaxSizeGB = "sandbox_warm_cache_max_size_gb"
         case hypervisorType = "hypervisor_type"
         case ovnUplink = "ovn_uplink"
         case ovnDynamicRouting = "ovn_dynamic_routing"
@@ -336,6 +345,8 @@ public struct AgentConfig: Codable {
         sandboxJailerBinaryPath: String? = nil,
         sandboxJailerChrootDir: String? = nil,
         sandboxJailerUidBase: UInt32? = nil,
+        sandboxWarmStart: Bool? = nil,
+        sandboxWarmCacheMaxSizeGB: Int? = nil,
         hypervisorType: HypervisorType? = nil,
         ovnUplink: OVNUplinkConfig? = nil,
         ovnDynamicRouting: OVNDynamicRoutingConfig? = nil,
@@ -370,6 +381,8 @@ public struct AgentConfig: Codable {
         self.sandboxJailerBinaryPath = sandboxJailerBinaryPath
         self.sandboxJailerChrootDir = sandboxJailerChrootDir
         self.sandboxJailerUidBase = sandboxJailerUidBase
+        self.sandboxWarmStart = sandboxWarmStart
+        self.sandboxWarmCacheMaxSizeGB = sandboxWarmCacheMaxSizeGB
         self.hypervisorType = hypervisorType
         self.ovnUplink = ovnUplink
         self.ovnDynamicRouting = ovnDynamicRouting
@@ -384,6 +397,11 @@ public struct AgentConfig: Codable {
     /// The sandbox rootfs cache budget in bytes (config stores whole GB).
     public var sandboxImageCacheMaxSizeBytes: Int64? {
         sandboxImageCacheMaxSizeGB.map { Int64($0) * 1024 * 1024 * 1024 }
+    }
+
+    /// The warm-snapshot cache budget in bytes (config stores whole GB).
+    public var sandboxWarmCacheMaxSizeBytes: Int64? {
+        sandboxWarmCacheMaxSizeGB.map { Int64($0) * 1024 * 1024 * 1024 }
     }
 
     /// The OVN chassis bootstrap settings derived from this configuration.
@@ -501,6 +519,11 @@ public struct AgentConfig: Codable {
         } else {
             sandboxJailerUidBase = nil
         }
+
+        // Warm start (issue #426).
+        let sandboxWarmStart = tomlData.bool("sandbox_warm_start")
+        let sandboxWarmCacheMaxSizeGB = try Self.positiveInt(
+            tomlData, key: "sandbox_warm_cache_max_size_gb")
 
         // Validate and parse network mode
         let networkMode: NetworkMode?
@@ -686,6 +709,8 @@ public struct AgentConfig: Codable {
             sandboxJailerBinaryPath: sandboxJailerBinaryPath,
             sandboxJailerChrootDir: sandboxJailerChrootDir,
             sandboxJailerUidBase: sandboxJailerUidBase,
+            sandboxWarmStart: sandboxWarmStart,
+            sandboxWarmCacheMaxSizeGB: sandboxWarmCacheMaxSizeGB,
             hypervisorType: hypervisorType,
             ovnUplink: ovnUplink,
             ovnDynamicRouting: ovnDynamicRouting,

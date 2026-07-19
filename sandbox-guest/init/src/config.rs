@@ -44,6 +44,13 @@ pub struct GuestConfig {
     /// The sandbox spec's process overrides (from `SandboxSpec`).
     #[serde(default)]
     pub overrides: ProcessOverrides,
+    /// Warm-start template mode (issue #426): boot fully — mount the rootfs,
+    /// switch onto it, start the vsock agent — but park in the `held` state
+    /// instead of launching a workload. The host snapshots the microVM at
+    /// this point and later restores it for a *different* sandbox, delivering
+    /// that sandbox's identity and process via a `launch` control request.
+    #[serde(default)]
+    pub warm_hold: bool,
 }
 
 fn default_vsock_port() -> u32 {
@@ -195,70 +202,77 @@ impl GuestConfig {
         if self.schema_version != SCHEMA_VERSION {
             return Err(ConfigError::UnsupportedSchema(self.schema_version));
         }
-
-        let entrypoint = self
-            .overrides
-            .entrypoint
-            .clone()
-            .unwrap_or_else(|| self.image_config.entrypoint.clone());
-
-        let cmd = match &self.overrides.cmd {
-            Some(cmd) => cmd.clone(),
-            None => {
-                // A new entrypoint with no explicit cmd clears the image cmd.
-                if self.overrides.entrypoint.is_some() {
-                    Vec::new()
-                } else {
-                    self.image_config.cmd.clone()
-                }
-            }
-        };
-
-        let mut argv = entrypoint;
-        argv.extend(cmd);
-        if argv.is_empty() {
-            return Err(ConfigError::EmptyCommand);
-        }
-
-        let env = merge_env(&self.image_config.env, &self.overrides.env);
-
-        let cwd = self
-            .overrides
-            .workdir
-            .clone()
-            .filter(|w| !w.is_empty())
-            .or_else(|| {
-                if self.image_config.working_dir.is_empty() {
-                    None
-                } else {
-                    Some(self.image_config.working_dir.clone())
-                }
-            })
-            .unwrap_or_else(|| "/".to_string());
-
-        let user_spec = self
-            .overrides
-            .user
-            .clone()
-            .filter(|u| !u.is_empty())
-            .or_else(|| {
-                if self.image_config.user.is_empty() {
-                    None
-                } else {
-                    Some(self.image_config.user.clone())
-                }
-            })
-            .unwrap_or_else(|| "0:0".to_string());
-        let (uid, gid) = parse_user(&user_spec)?;
-
-        Ok(ResolvedProcess {
-            argv,
-            env,
-            cwd,
-            uid,
-            gid,
-        })
+        resolve_process(&self.image_config, &self.overrides)
     }
+}
+
+/// The image-config/overrides merge behind [`GuestConfig::resolve_process`],
+/// callable without a full config document — the warm-start `launch` request
+/// (issue #426) delivers exactly these two pieces over vsock and resolves
+/// them with the same rules as a cold boot.
+pub fn resolve_process(
+    image_config: &ImageConfig,
+    overrides: &ProcessOverrides,
+) -> Result<ResolvedProcess, ConfigError> {
+    let entrypoint = overrides
+        .entrypoint
+        .clone()
+        .unwrap_or_else(|| image_config.entrypoint.clone());
+
+    let cmd = match &overrides.cmd {
+        Some(cmd) => cmd.clone(),
+        None => {
+            // A new entrypoint with no explicit cmd clears the image cmd.
+            if overrides.entrypoint.is_some() {
+                Vec::new()
+            } else {
+                image_config.cmd.clone()
+            }
+        }
+    };
+
+    let mut argv = entrypoint;
+    argv.extend(cmd);
+    if argv.is_empty() {
+        return Err(ConfigError::EmptyCommand);
+    }
+
+    let env = merge_env(&image_config.env, &overrides.env);
+
+    let cwd = overrides
+        .workdir
+        .clone()
+        .filter(|w| !w.is_empty())
+        .or_else(|| {
+            if image_config.working_dir.is_empty() {
+                None
+            } else {
+                Some(image_config.working_dir.clone())
+            }
+        })
+        .unwrap_or_else(|| "/".to_string());
+
+    let user_spec = overrides
+        .user
+        .clone()
+        .filter(|u| !u.is_empty())
+        .or_else(|| {
+            if image_config.user.is_empty() {
+                None
+            } else {
+                Some(image_config.user.clone())
+            }
+        })
+        .unwrap_or_else(|| "0:0".to_string());
+    let (uid, gid) = parse_user(&user_spec)?;
+
+    Ok(ResolvedProcess {
+        argv,
+        env,
+        cwd,
+        uid,
+        gid,
+    })
 }
 
 /// Merge a base env (`KEY=VALUE` list) with an overrides map. Overrides
@@ -333,6 +347,7 @@ mod tests {
                 user: "1000:2000".into(),
             },
             overrides: ProcessOverrides::default(),
+            warm_hold: false,
         }
     }
 
@@ -438,6 +453,17 @@ mod tests {
         bytes.extend(std::iter::repeat(0u8).take(512)); // simulate a padded block device
         let cfg = GuestConfig::from_config_drive(&bytes).expect("parse padded drive");
         assert_eq!(cfg.sandbox_id, "s");
+    }
+
+    #[test]
+    fn warm_hold_defaults_to_false_and_parses() {
+        let json = br#"{"schema_version":1,"sandbox_id":"s","identity_nonce":"n","rootfs":{"device":"/dev/vda"}}"#;
+        let cfg = GuestConfig::from_slice(json).expect("parse");
+        assert!(!cfg.warm_hold, "absent warm_hold must default to false");
+
+        let json = br#"{"schema_version":1,"sandbox_id":"s","identity_nonce":"n","rootfs":{"device":"/dev/vda"},"warm_hold":true}"#;
+        let cfg = GuestConfig::from_slice(json).expect("parse");
+        assert!(cfg.warm_hold);
     }
 
     #[test]
