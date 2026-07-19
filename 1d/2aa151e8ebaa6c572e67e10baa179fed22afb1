@@ -1,0 +1,28 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_0b0c2b9bd67cb5::t_ab20fea34de7eb 1507-1509,1644
+agent/Sources/StratoAgent/QEMUService.swift
+  s_0b0c2b9bd67cb5::t_ab20fea34de7eb 109-112,115-116,277-279,281-286,303-305,487,533-537,589
+agent/Sources/StratoAgentCore/StageBudget.swift
+  s_0b0c2b9bd67cb5::t_cedb0d430bf84d 41-69,71-73,75-76,78-115
+  s_0b0c2b9bd67cb5::t_0054f8efb9f79c 77
+agent/Tests/StratoAgentTests/HypervisorHangResilienceTests.swift
+  s_0b0c2b9bd67cb5::t_8e53e62dafa99f 54,66-81,87-98,185-205
+  s_0b0c2b9bd67cb5::t_e2ed509bcf9ffe 82-86,178-184
+  s_0b0c2b9bd67cb5::t_20a74004fa63d1 206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "1d2aa151e8ebaa6c572e67e10baa179fed22afb1",
+  "prompts": {},
+  "sessions": {
+    "s_0b0c2b9bd67cb5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0567f44-f1ed-44e8-8ae6-5647dcc96e6a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
