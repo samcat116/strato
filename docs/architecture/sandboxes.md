@@ -573,11 +573,15 @@ launch payload is reconstructed from the staged config drive, so the flow
 survives agent restarts between create and boot with no extra persisted
 state (identity delivery rides vsock rather than a guest re-read of the
 config device, whose pre-snapshot page cache could serve the template's
-stale bytes). A failed launch demotes the sandbox to a freshly
-cold-provisioned microVM — re-materialized with the create-time registry
-credential, provisioned before the held guest is destroyed — and boots it
-once with warm launch disallowed, so convergence can neither wedge nor
-loop.
+stale bytes). The guest adopts the delivered identity only after the
+workload actually spawns, so an interrupted launch (an agent crash
+mid-flow) leaves it held under the template identity and the next boot
+simply retries; boot also re-launches a held guest that already echoes the
+sandbox identity, covering skewed guests that swapped early. A failed
+launch demotes the sandbox to a freshly cold-provisioned microVM —
+re-materialized with the create-time registry credential, provisioned
+before the held guest is destroyed — and boots it once with warm launch
+disallowed, so convergence can neither wedge nor loop.
 
 One more mechanical enabler: every config drive is padded to one fixed
 capacity (`SandboxConfigDrive.standardBlockImageBytes`, 256 KiB — part of

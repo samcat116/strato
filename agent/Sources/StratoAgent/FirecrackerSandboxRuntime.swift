@@ -680,39 +680,55 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
         // Wait for the guest control agent to answer, so "booted" means the
         // guest is actually up. A miss here is transient — the reconciler
-        // re-drives boot on the next sync.
-        let response = try await sendControl(.ping, udsPath: managed.vsockUdsPath, timeout: 20)
-        guard case .pong(let echoedId, let echoedNonce) = response else {
-            throw SandboxControlError.malformedResponse("expected pong, got \(response)")
+        // re-drives boot on the next sync. `get_status` rather than `ping`:
+        // the workload state matters too, because a guest can be `held`
+        // regardless of which identity it echoes (see below).
+        let response = try await sendControl(.getStatus, udsPath: managed.vsockUdsPath, timeout: 20)
+        guard case .status(let echoedId, let echoedNonce, let guestState, _) = response else {
+            throw SandboxControlError.malformedResponse("expected status, got \(response)")
         }
+        let identityOK = identityMatches(
+            response, sandboxId: sandboxId, expectedNonce: managed.identityNonce)
+        let mismatch = SandboxControlError.identityMismatch(
+            expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(echoedId)/\(echoedNonce)")
 
-        var bootPath = "cold"
-        if !identityMatches(response, sandboxId: sandboxId, expectedNonce: managed.identityNonce) {
+        var needsWarmLaunch = false
+        if identityOK {
+            // A held guest already echoing this sandbox's identity is an
+            // interrupted launch (delivered, never completed — e.g. an agent
+            // crash mid-flow with an older guest that swapped identity
+            // early). Without re-launching it here the sandbox would report
+            // `starting` forever while boot kept "succeeding".
+            needsWarmLaunch = guestState == .held
+        } else {
             // Not this sandbox's identity. One legitimate way that happens: a
             // warm-provisioned guest still holding the *template's* identity,
             // waiting for its launch (issue #426). Anything else is the
             // classic stale-generation problem and must fail the boot.
-            let mismatch = SandboxControlError.identityMismatch(
-                expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(echoedId)/\(echoedNonce)")
-            guard allowWarmLaunch else { throw mismatch }
-            let status = try? await sendControl(.getStatus, udsPath: managed.vsockUdsPath, timeout: 10)
-            guard let status, case .status(let heldId, let heldNonce, .held, _) = status else {
-                throw mismatch
-            }
+            guard allowWarmLaunch, guestState == .held else { throw mismatch }
             // Bind the held responder to the template this sandbox was
             // provisioned from, so a workload can never be launched into
             // some other process answering on the deterministic UDS. For an
             // adopted sandbox the binding did not survive the restart; the
             // template id shape is the remaining gate.
             if let expected = managed.warmHeldIdentity {
-                guard heldId == expected.templateId, heldNonce == expected.templateNonce else {
+                guard echoedId == expected.templateId, echoedNonce == expected.templateNonce else {
                     throw SandboxControlError.identityMismatch(
                         expected: "\(expected.templateId)/\(expected.templateNonce)",
-                        got: "\(heldId)/\(heldNonce)")
+                        got: "\(echoedId)/\(echoedNonce)")
                 }
             } else {
-                guard heldId.hasPrefix("warm-template-") else { throw mismatch }
+                guard echoedId.hasPrefix("warm-template-") else { throw mismatch }
             }
+            needsWarmLaunch = true
+        }
+
+        var bootPath = "cold"
+        if needsWarmLaunch {
+            // A demoted (freshly cold-provisioned) guest can never be held;
+            // reaching here without warm launch allowed means the demotion
+            // itself produced a held guest — fail rather than loop.
+            guard allowWarmLaunch else { throw mismatch }
             do {
                 try await launchWarmHeldGuest(sandboxId: sandboxId, managed: managed)
                 sandboxes[sandboxId]?.warmHeldIdentity = nil

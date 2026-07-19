@@ -112,12 +112,13 @@ pub enum Request {
     },
     /// Launch the workload in a guest booted with `warm_hold` (v4, issue
     /// #426 warm start). Sent by the host after restoring a warm-template
-    /// snapshot for a new sandbox: the guest adopts the delivered identity,
-    /// mixes the host-supplied entropy into the kernel RNG (the snapshot
-    /// froze the entropy pool), resolves the process exactly as a cold boot
-    /// would, and execs it. Answered with [`Response::Launched`] (or
-    /// [`Response::Error`] if the guest is not `held` or the spawn fails,
-    /// in which case it stays `held`).
+    /// snapshot for a new sandbox: the guest mixes the host-supplied
+    /// entropy into the kernel RNG (the snapshot froze the entropy pool),
+    /// resolves the process exactly as a cold boot would, execs it, and —
+    /// only on success — adopts the delivered identity. Answered with
+    /// [`Response::Launched`] (or [`Response::Error`] if the guest is not
+    /// `held` or the spawn fails, in which case it stays `held` under the
+    /// template identity, recoverable by a retry or demotion).
     Launch {
         /// The restored-into sandbox's control-plane id.
         sandbox_id: String,

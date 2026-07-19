@@ -287,12 +287,14 @@ fn control_response(request: Request, state: &GuestState) -> Response {
     }
 }
 
-/// Handle a warm-start `launch` (issue #426): adopt the restored-into
-/// sandbox's identity, mix host entropy into the frozen RNG, resolve the
-/// process with the cold-boot rules, and spawn the workload. Only valid in
-/// the `held` state; on any failure the guest returns to `held` (keeping the
-/// new identity — the host tears the microVM down on a failed launch, so
-/// what matters is that the response is an `error`).
+/// Handle a warm-start `launch` (issue #426): mix host entropy into the
+/// frozen RNG, resolve the process with the cold-boot rules, spawn the
+/// workload, and only then adopt the restored-into sandbox's identity.
+/// Only valid in the `held` state; on any failure the guest returns to
+/// `held` still carrying the *template* identity — deferring the identity
+/// swap to success is what keeps an interrupted launch recoverable (a host
+/// that reconnects later still sees template identity + `held` and can
+/// retry the launch or demote).
 fn handle_launch(
     state: &GuestState,
     sandbox_id: String,
@@ -312,8 +314,6 @@ fn handle_launch(
             };
         }
         s.state = WorkloadState::Starting;
-        s.sandbox_id = sandbox_id;
-        s.nonce = identity_nonce;
     }
 
     // Best-effort, like sync_clock: the workload should not fail to launch
@@ -334,7 +334,15 @@ fn handle_launch(
     };
 
     match super::launch_workload(state, process) {
-        Ok(()) => Response::Launched,
+        Ok(()) => {
+            // The workload is running as this sandbox: adopt its identity,
+            // so every control response from here on echoes it (the host
+            // verifies exactly this after `launched`).
+            let mut s = state.status.lock().expect("status poisoned");
+            s.sandbox_id = sandbox_id;
+            s.nonce = identity_nonce;
+            Response::Launched
+        }
         Err(message) => {
             let mut s = state.status.lock().expect("status poisoned");
             s.state = WorkloadState::Held;
