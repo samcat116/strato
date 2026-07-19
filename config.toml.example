@@ -40,7 +40,11 @@ log_level = "info"
 #   Linux: /var/lib/strato/vms
 # vm_storage_dir = "/var/lib/strato/vms"
 
-# Directory where managed volume disks and their snapshots are stored
+# Directory where managed volume disks and their snapshots are stored.
+# The agent derives every volume's location from this root, so when changing
+# it on a host that already has volumes, stop the agent and move the existing
+# per-volume directories to the new location first — volumes left under the
+# old root would be orphaned (deletes look only under the current root).
 # Optional - platform-specific defaults:
 #   macOS: ~/Library/Application Support/strato/volumes
 #   Linux: /var/lib/strato/volumes
