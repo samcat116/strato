@@ -759,8 +759,13 @@ EOF
 
 enable_telemetry() {
   [ "$INSTALL_TELEMETRY" -eq 1 ] || return 0
+  # Restart rather than `enable --now`, for the same reason as strato-agent
+  # below: write_telemetry_config may have just rewritten these units' config
+  # (trust domain, SPIRE socket, ingest endpoint), and an already-running
+  # spiffe-helper or alloy would otherwise keep the superseded values.
   log "Starting spiffe-helper and alloy"
-  systemctl enable --now spiffe-helper.service alloy.service
+  systemctl enable spiffe-helper.service alloy.service
+  systemctl restart spiffe-helper.service alloy.service
 }
 
 setup_spire
@@ -822,8 +827,14 @@ EOF
 write_config
 
 if [ "$USE_SYSTEMD" -eq 1 ]; then
+  # `enable --now` only *starts* a unit, so on a rerun an already-active agent
+  # keeps running the old binary against the previous control_plane_url — and
+  # re-running this installer to move a node to a new control plane is exactly
+  # when that matters. `restart` starts a stopped unit and restarts a running
+  # one, covering fresh installs and reinstalls alike.
   log "Starting strato-agent"
-  systemctl enable --now strato-agent.service
+  systemctl enable strato-agent.service
+  systemctl restart strato-agent.service
   # After the agent so the node is attested before the first pushes; harmless
   # either way — Alloy buffers and retries until its SVID files appear.
   enable_telemetry
