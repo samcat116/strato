@@ -56,13 +56,21 @@ const nextConfig: NextConfig = {
   // plugin, base-tag, and form-hijack vectors. Tightening `script-src` to a
   // nonce is a follow-up (needs next-themes + Next nonce plumbing).
   async headers() {
+    // `next dev` compiles with webpack HMR, which evaluates code, so the dev
+    // server needs 'unsafe-eval'; a production `next build` does not (and
+    // `headers()` is applied in both). Adding it only in development keeps the
+    // prod policy tighter without breaking the local inner loop.
+    const scriptSrc = ["'self'", "'unsafe-inline'"];
+    if (process.env.NODE_ENV !== "production") {
+      scriptSrc.push("'unsafe-eval'");
+    }
     const csp = [
       "default-src 'self'",
       "base-uri 'self'",
       "object-src 'none'",
       "frame-ancestors 'none'",
       "form-action 'self'",
-      "script-src 'self' 'unsafe-inline'",
+      `script-src ${scriptSrc.join(" ")}`,
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data:",
