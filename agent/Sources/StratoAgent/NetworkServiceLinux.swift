@@ -1432,7 +1432,15 @@ extension NetworkServiceLinux: NetworkActuator {
                 // desired-and-observed and never classified as extra. It would
                 // otherwise keep translating to an external address the port no
                 // longer claims — worse than having no IPv6 egress at all.
-                try await removeSNAT(router: routerName, logicalIP: logicalIP)
+                //
+                // Managed-only, unlike the teardown path's `removeSNAT`: that
+                // one is fed logical IPs `observeTopology` already filtered to
+                // managed rules, whereas this runs on every pass against a
+                // logical IP straight from the plan. A site that wires its own
+                // IPv6 egress — plausible precisely because Strato lacked it —
+                // would otherwise have its hand-authored rule deleted on every
+                // reconcile.
+                try await removeManagedSNAT(router: routerName, logicalIP: logicalIP)
                 return
             }
             externalIP = externalIP6
@@ -1461,6 +1469,21 @@ extension NetworkServiceLinux: NetworkActuator {
         guard let ovnManager else { return }
         for rule in try await snatRules(onRouter: routerName)
         where rule.natType == "snat" && rule.logical_ip == logicalIP {
+            if let uuid = rule.uuid { try await ovnManager.deleteNATRule(uuid: uuid) }
+        }
+        #endif
+    }
+
+    /// Remove only *this agent's* SNAT rule for `logicalIP`. The counterpart to
+    /// `removeSNAT` for callers that haven't already filtered to managed rules:
+    /// teardown acts on logical IPs `observeTopology` narrowed to the
+    /// `strato-managed` set, but a withdrawn-config cleanup works from the plan
+    /// and would otherwise delete an operator's own rule for the same subnet.
+    func removeManagedSNAT(router routerName: String, logicalIP: String) async throws {
+        #if os(Linux)
+        guard let ovnManager else { return }
+        for rule in try await snatRules(onRouter: routerName)
+        where rule.natType == "snat" && rule.logical_ip == logicalIP && Self.isManaged(rule.external_ids) {
             if let uuid = rule.uuid { try await ovnManager.deleteNATRule(uuid: uuid) }
         }
         #endif
