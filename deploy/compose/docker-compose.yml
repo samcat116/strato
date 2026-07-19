@@ -360,9 +360,20 @@ services:
       # in production. Set by setup.sh; defaults to CONTROL_PLANE_URL, which is
       # also the browser origin in this topology.
       BASE_URL: ${BASE_URL:-${CONTROL_PLANE_URL}}
-      # Where the control plane writes downloaded base images. Backed by the
-      # image_storage volume, made vapor-writable by image-storage-init.
+      # Where the control plane keeps image bytes. `filesystem` (the default)
+      # writes to IMAGE_STORAGE_PATH, backed by the image_storage volume and
+      # made vapor-writable by image-storage-init — right for this single-host
+      # topology. Set IMAGE_STORAGE_BACKEND=s3 in an override file to use an
+      # S3-compatible bucket instead (MinIO, Garage, Ceph RGW, R2, AWS); see
+      # docs/architecture/storage.md for the IMAGE_S3_* variables. No object
+      # store is bundled here — you supply the bucket.
+      IMAGE_STORAGE_BACKEND: ${IMAGE_STORAGE_BACKEND:-filesystem}
       IMAGE_STORAGE_PATH: /app/images
+      IMAGE_S3_ENDPOINT: ${IMAGE_S3_ENDPOINT:-}
+      IMAGE_S3_BUCKET: ${IMAGE_S3_BUCKET:-}
+      IMAGE_S3_REGION: ${IMAGE_S3_REGION:-us-east-1}
+      IMAGE_S3_ACCESS_KEY_ID: ${IMAGE_S3_ACCESS_KEY_ID:-}
+      IMAGE_S3_SECRET_ACCESS_KEY: ${IMAGE_S3_SECRET_ACCESS_KEY:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       OTEL_METRICS_ENABLED: "false"
       OTEL_LOGS_ENABLED: "false"

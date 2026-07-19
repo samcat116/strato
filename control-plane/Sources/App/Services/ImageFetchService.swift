@@ -98,33 +98,21 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         image.downloadProgress = 0
         try await image.save(on: db)
 
-        let storagePath = ImageStorageService.storagePath(from: app)
+        let store = app.imageObjectStore
         let projectId = image.$project.id
 
         do {
-            // Create directory structure
-            try ImageStorageService.createDirectoryStructure(
-                storagePath: storagePath,
-                projectId: projectId,
-                imageId: imageId
-            )
-
-            let filePath = ImageStorageService.buildFilePath(
-                storagePath: storagePath,
-                projectId: projectId,
-                imageId: imageId,
-                filename: image.filename
-            )
+            let relativePath = ImageObjectKey.image(
+                projectId: projectId, imageId: imageId, filename: image.filename)
 
             // Perform the download
             let (size, checksum, format) = try await downloadFile(
                 from: url,
-                to: filePath
+                to: relativePath,
+                in: store
             ) { [weak self] progress in
                 try await self?.updateProgress(imageId: imageId, progress: progress, db: db)
             }
-
-            let relativePath = "\(projectId)/\(imageId)/\(image.filename)"
 
             // Verify against the caller's expected digest before publishing. The
             // download already hashed every byte in-stream, so this costs nothing
@@ -135,8 +123,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
                 image.status = .validating
                 try await image.save(on: db)
 
-                try? ImageStorageService.deleteFileAt(
-                    storagePath: storagePath, relativePath: relativePath)
+                try? await store.delete(key: relativePath)
 
                 app.logger.warning(
                     "Image checksum mismatch",
@@ -243,18 +230,12 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         artifact.downloadProgress = 0
         try await artifact.save(on: db)
 
-        let storagePath = ImageStorageService.storagePath(from: app)
-        let fullPath = ImageStorageService.getFilePath(
-            storagePath: storagePath, relativePath: artifact.storagePath)
+        let store = app.imageObjectStore
 
         do {
-            // The artifact's relative path is {project}/{image}/{kind}/{filename};
-            // make sure its directory exists before writing.
-            try FileManager.default.createDirectory(
-                atPath: (fullPath as NSString).deletingLastPathComponent,
-                withIntermediateDirectories: true)
-
-            let (size, checksum, format) = try await downloadFile(from: url, to: fullPath) {
+            let (size, checksum, format) = try await downloadFile(
+                from: url, to: artifact.storagePath, in: store
+            ) {
                 [weak self] progress in
                 try await self?.updateArtifactProgress(artifactId: artifactId, progress: progress, db: db)
             }
@@ -346,7 +327,8 @@ actor ImageFetchService: ImageFetchServiceProtocol {
 
     private func downloadFile(
         from url: URL,
-        to filePath: String,
+        to key: String,
+        in store: any ImageObjectStore,
         onProgress: @escaping (Int) async throws -> Void
     ) async throws -> (size: Int64, checksum: String, format: ImageFormat) {
         let environment = app.environment
@@ -410,62 +392,64 @@ actor ImageFetchService: ImageFetchServiceProtocol {
                 "Download exceeds the maximum allowed size of \(Self.maxDownloadBytes) bytes")
         }
 
-        // Create output file
-        FileManager.default.createFile(atPath: filePath, contents: nil)
-        guard let fileHandle = FileHandle(forWritingAtPath: filePath) else {
-            throw ImageError.storageFailed("Failed to create output file")
-        }
-        defer { try? fileHandle.close() }
+        let writer = try await store.openWriter(key: key)
 
         var hasher = SHA256Hasher()
         var totalBytesWritten: Int64 = 0
         var lastProgressUpdate: Int64 = 0
         var formatDetected: ImageFormat?
 
-        // Stream the response body to file
-        for try await buffer in response.body {
-            try Task.checkCancellation()
+        do {
+            // Stream the response body into the store
+            for try await buffer in response.body {
+                try Task.checkCancellation()
 
-            var mutableBuffer = buffer
-            guard let bytes = mutableBuffer.readBytes(length: buffer.readableBytes) else {
-                continue
-            }
-
-            // Detect format from first chunk
-            if formatDetected == nil && !bytes.isEmpty {
-                formatDetected = ImageValidationService.detectFormat(from: buffer)
-            }
-
-            // Write to file
-            let data = Data(bytes)
-            try fileHandle.write(contentsOf: data)
-
-            // Update hasher
-            hasher.update(data: data)
-
-            totalBytesWritten += Int64(bytes.count)
-
-            // Enforce the ceiling for servers that under-declare or omit
-            // `content-length` (chunked/endless streams).
-            if totalBytesWritten > Self.maxDownloadBytes {
-                throw ImageError.downloadFailed(
-                    "Download exceeds the maximum allowed size of \(Self.maxDownloadBytes) bytes")
-            }
-
-            // Update progress periodically
-            if totalBytesWritten - lastProgressUpdate >= progressUpdateInterval {
-                lastProgressUpdate = totalBytesWritten
-
-                let progress: Int
-                if let expected = expectedLength, expected > 0 {
-                    progress = min(99, Int((Double(totalBytesWritten) / Double(expected)) * 100))
-                } else {
-                    // Unknown size, show bytes downloaded
-                    progress = min(99, Int(Double(totalBytesWritten) / Double(1024 * 1024 * 1024) * 100))
+                var mutableBuffer = buffer
+                guard let bytes = mutableBuffer.readBytes(length: buffer.readableBytes) else {
+                    continue
                 }
 
-                try await onProgress(progress)
+                // Detect format from first chunk
+                if formatDetected == nil && !bytes.isEmpty {
+                    formatDetected = ImageValidationService.detectFormat(from: buffer)
+                }
+
+                try await writer.write(buffer)
+
+                // Update hasher
+                hasher.update(data: Data(bytes))
+
+                totalBytesWritten += Int64(bytes.count)
+
+                // Enforce the ceiling for servers that under-declare or omit
+                // `content-length` (chunked/endless streams).
+                if totalBytesWritten > Self.maxDownloadBytes {
+                    throw ImageError.downloadFailed(
+                        "Download exceeds the maximum allowed size of \(Self.maxDownloadBytes) bytes")
+                }
+
+                // Update progress periodically
+                if totalBytesWritten - lastProgressUpdate >= progressUpdateInterval {
+                    lastProgressUpdate = totalBytesWritten
+
+                    let progress: Int
+                    if let expected = expectedLength, expected > 0 {
+                        progress = min(99, Int((Double(totalBytesWritten) / Double(expected)) * 100))
+                    } else {
+                        // Unknown size, show bytes downloaded
+                        progress = min(99, Int(Double(totalBytesWritten) / Double(1024 * 1024 * 1024) * 100))
+                    }
+
+                    try await onProgress(progress)
+                }
             }
+
+            try await writer.finish()
+        } catch {
+            // A partial object must never become visible at the real key: an
+            // agent fetching it would fail checksum verification at best.
+            await writer.abort()
+            throw error
         }
 
         let checksum = hasher.finalize()

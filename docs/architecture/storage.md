@@ -1,6 +1,92 @@
 # Storage Architecture
 
-## Overview
+There are two independent storage layers, and they are easy to confuse:
+
+- **Control-plane image storage** — where uploaded and imported image bytes
+  live, behind the `ImageObjectStore` protocol. Covered directly below.
+- **Agent-side disk storage** — how an agent turns a cached image into an
+  attachable disk, behind the `StorageBackend` protocol. Covered from
+  [Agent-side storage](#agent-side-storage) onward.
+
+## Control-plane image storage
+
+The control plane keeps image bytes behind `ImageObjectStore`
+(`control-plane/Sources/App/Services/ImageObjectStore.swift`), chosen at
+startup by `IMAGE_STORAGE_BACKEND`:
+
+| Backend | Value | Where bytes go |
+| --- | --- | --- |
+| Filesystem (default) | `filesystem` | A local directory, `IMAGE_STORAGE_PATH` |
+| S3-compatible | `s3` | Any S3 API implementation — AWS, MinIO, Garage, Ceph RGW, R2 |
+
+Object keys are exactly the relative paths already stored in
+`Image.storagePath` / `ImageArtifact.storagePath` —
+`{projectId}/{imageId}/{filename}`, or
+`{projectId}/{imageId}/{kind}/{filename}` for typed artifacts. Switching
+backends therefore needs no database migration, only a copy of the bytes.
+
+### Why agents still fetch through the control plane
+
+Agents do **not** talk to the object store. They fetch from
+`GET /api/projects/{p}/images/{i}/download`, and the control plane streams the
+object through. Presigned bucket URLs would be one round trip cheaper, but:
+
+- the download route is the single place artifact authentication lives, and it
+  is about to change — issue #493 replaces the HMAC-signed URL with the agent's
+  SPIFFE SVID over the Envoy mTLS listener. You cannot put SVID RBAC on a
+  presigned S3 URL.
+- bucket credentials never leave the control plane, and agents need no network
+  route to the object store.
+
+Per-node caching makes the extra hop cheap: `ImageCacheService` fetches a given
+image once per agent (see [the host image cache](#the-host-image-cache)).
+
+### Uploads stream
+
+Both upload handlers (`POST .../images` and `POST .../images/{id}/artifacts`)
+stream the multipart body into the store via `StreamingMultipartReceiver`
+rather than buffering it. A 4 GiB image used to cost 4 GiB of control-plane
+RAM before a byte was persisted. SHA-256 and size are computed over the bytes
+as they pass, and the disk format is sniffed from the first few bytes, so
+nothing has to re-read the finished object.
+
+Because the object key must be known before the first byte is written, an
+artifact upload has to name its `kind` up front: either as a `?kind=` query
+parameter, or as a `kind` form field ordered ahead of the `file` part. Fields
+that only affect the database row (`name`, `description`, `format`, …) may
+appear anywhere in the body.
+
+A write that fails part-way is never published — the filesystem backend stages
+to a sibling path and publishes with `rename(2)`, and the S3 backend abandons
+the multipart upload — so an agent can never fetch a truncated image.
+
+### Configuration
+
+`IMAGE_S3_BUCKET` is required when the backend is `s3`. Leave
+`IMAGE_S3_ENDPOINT` empty for AWS; set it to e.g. `http://minio:9000` for a
+self-hosted implementation, which is addressed path-style by default
+(`IMAGE_S3_VIRTUAL_HOST_STYLE=true` switches to virtual-host addressing).
+`IMAGE_S3_REGION` defaults to `us-east-1` and is still needed for request
+signing even by implementations that ignore regions. Setting
+`IMAGE_S3_ACCESS_KEY_ID` and `IMAGE_S3_SECRET_ACCESS_KEY` together uses static
+credentials; leaving both unset falls back to the ambient credential chain
+(IRSA, workload identity, instance role), which is preferable where available.
+
+No object store is bundled with either deployment path — you supply the bucket.
+
+### Which backend to run
+
+`deploy/compose` is single-host, so the filesystem backend on the
+`image_storage` volume is the right default there.
+
+**On Kubernetes, use `s3`.** The Helm chart mounts no persistent volume for
+images, so the filesystem backend writes into the pod's ephemeral filesystem:
+uploads are lost on restart, and with more than one replica (the chart ships an
+HPA) each replica sees a different partial set — an agent can be handed a
+download URL that whichever replica answers it has never heard of. The
+filesystem default survives only so a single-replica install still starts.
+
+## Agent-side storage
 
 Agent-side storage is abstracted behind the `StorageBackend` protocol
 (`agent/Sources/StratoAgentCore/StorageBackend.swift`) — the storage

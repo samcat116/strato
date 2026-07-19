@@ -199,10 +199,10 @@ final class ImageControllerTests {
         do {
             try await configure(app)
 
-            // Point image storage at the temp directory via the app-local
-            // override; mutating the process environment would race other
+            // Point image storage at the temp directory by installing a store
+            // directly; mutating the process environment would race other
             // parallel test suites reading it.
-            app.imageStoragePath = tempStoragePath
+            app.imageObjectStore = FilesystemImageObjectStore(rootPath: tempStoragePath)
 
             // Inject mock ImageFetchService to prevent real HTTP requests
             app.imageFetchService = MockImageFetchService()
@@ -1000,17 +1000,12 @@ final class ImageControllerTests {
             let imageId = image.id!
 
             // Create actual file in storage
-            try ImageStorageService.createDirectoryStructure(
-                storagePath: tempStoragePath,
-                projectId: project.id!,
-                imageId: imageId
-            )
-            let filePath = ImageStorageService.buildFilePath(
-                storagePath: tempStoragePath,
-                projectId: project.id!,
-                imageId: imageId,
-                filename: "test.qcow2"
-            )
+            let relativePath = ImageObjectKey.image(
+                projectId: project.id!, imageId: imageId, filename: "test.qcow2")
+            let filePath = "\(tempStoragePath)/\(relativePath)"
+            try FileManager.default.createDirectory(
+                atPath: (filePath as NSString).deletingLastPathComponent,
+                withIntermediateDirectories: true)
             try "test content".data(using: .utf8)!.write(to: URL(fileURLWithPath: filePath))
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)/images/\(imageId)") { req in
@@ -1517,6 +1512,238 @@ final class ImageControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
+        }
+    }
+
+    // MARK: - Streaming upload
+
+    /// The upload path streams the multipart body into the object store instead
+    /// of collecting it, so these pin the properties that used to fall out of
+    /// buffering the whole body and hashing the finished file.
+
+    @Test("Uploaded bytes land in the store byte-for-byte")
+    func testUploadStoresExactBytes() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, tempStoragePath in
+            // Larger than one parser chunk so the streaming path is exercised
+            // across multiple `execute` calls rather than a single buffer.
+            let content = String(repeating: "strato-image-payload-", count: 50_000)
+            var buffer = ByteBufferAllocator().buffer(capacity: content.utf8.count)
+            buffer.writeString(content)
+
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "Streamed", description: "d", filename: "disk.img", fileContent: buffer)
+
+            var imageId: UUID?
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                imageId = try res.content.decode(ImageResponse.self).id
+            }
+
+            let stored = try String(
+                contentsOfFile: "\(tempStoragePath)/\(project.id!)/\(imageId!)/disk.img",
+                encoding: .utf8)
+            #expect(stored == content)
+        }
+    }
+
+    @Test("Recorded size and checksum describe the stored bytes")
+    func testUploadRecordsSizeAndChecksumOfStoredBytes() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let content = "checksum me"
+            var buffer = ByteBufferAllocator().buffer(capacity: content.utf8.count)
+            buffer.writeString(content)
+
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "Sums", description: nil, filename: "disk.img", fileContent: buffer)
+
+            var image: ImageResponse?
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                image = try res.content.decode(ImageResponse.self)
+            }
+
+            #expect(image?.size == Int64(content.utf8.count))
+            // SHA-256 of "checksum me" — computed over the streamed bytes, never
+            // taken from the client.
+            #expect(image?.checksum == "820eb62b7660a216f711bd0df37ac8a176b662a159959870edc200b857262daf")
+        }
+    }
+
+    @Test("Form fields sent after the file part are still applied")
+    func testFieldsAfterFilePartAreApplied() async throws {
+        // The frontend appends `file` first and metadata afterwards
+        // (control-plane/web/src/lib/api/images.ts), so a streaming parser that
+        // only read fields seen before the file would silently drop the name.
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            var buffer = ByteBufferAllocator().buffer(capacity: 16)
+            buffer.writeString("payload")
+
+            let boundary = "----TestBoundary\(UUID().uuidString)"
+            var body = Data()
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append(
+                "Content-Disposition: form-data; name=\"file\"; filename=\"disk.img\"\r\n".data(
+                    using: .utf8)!)
+            body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+            body.append("payload".data(using: .utf8)!)
+            body.append("\r\n".data(using: .utf8)!)
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append(
+                "Content-Disposition: form-data; name=\"name\"\r\n\r\n".data(using: .utf8)!)
+            body.append("Named After File\r\n".data(using: .utf8)!)
+            body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let image = try res.content.decode(ImageResponse.self)
+                #expect(image.name == "Named After File")
+            }
+        }
+    }
+
+    @Test("A rejected upload leaves neither an image row nor stored bytes")
+    func testRejectedUploadCleansUp() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, tempStoragePath in
+            // A qcow2 header with an explicit `raw` claim is the contradiction
+            // case: detection wins and the upload is refused.
+            var buffer = ByteBufferAllocator().buffer(capacity: 16)
+            buffer.writeBytes(ImageValidationService.qcow2Magic)
+            buffer.writeBytes([0x00, 0x00, 0x00, 0x03])
+
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "Bad", description: nil, filename: "disk.img", fileContent: buffer,
+                format: "raw")
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let images = try await Image.query(on: app.db).all()
+            #expect(images.isEmpty)
+
+            // And no orphaned bytes under the project prefix.
+            let projectDir = "\(tempStoragePath)/\(project.id!)"
+            if FileManager.default.fileExists(atPath: projectDir) {
+                let leftovers = try FileManager.default.subpathsOfDirectory(atPath: projectDir)
+                    .filter { !$0.hasSuffix("/") }
+                #expect(leftovers.allSatisfy { $0.isEmpty || !$0.contains("disk.img") })
+            }
+        }
+    }
+
+    @Test("Artifact upload rejects a body whose kind follows the file part")
+    func testArtifactKindMustPrecedeFile() async throws {
+        // The object key embeds the kind, so it has to be known before the first
+        // byte is written. Our own client sends `kind` first; this pins the
+        // error a client that doesn't will get, rather than a mis-keyed object.
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageId = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken)
+
+            let boundary = "----TestBoundary\(UUID().uuidString)"
+            var body = Data()
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append(
+                "Content-Disposition: form-data; name=\"file\"; filename=\"vmlinuz\"\r\n".data(
+                    using: .utf8)!)
+            body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+            body.append("kernel bytes".data(using: .utf8)!)
+            body.append("\r\n".data(using: .utf8)!)
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append(
+                "Content-Disposition: form-data; name=\"kind\"\r\n\r\n".data(using: .utf8)!)
+            body.append("kernel\r\n".data(using: .utf8)!)
+            body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+            try await app.test(
+                .POST, "/api/projects/\(project.id!)/images/\(imageId)/artifacts"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("Artifact upload accepts the kind as a query parameter, order-independently")
+    func testArtifactKindFromQueryParameter() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, tempStoragePath in
+            let imageId = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken)
+
+            let boundary = "----TestBoundary\(UUID().uuidString)"
+            var body = Data()
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append(
+                "Content-Disposition: form-data; name=\"file\"; filename=\"vmlinuz\"\r\n".data(
+                    using: .utf8)!)
+            body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+            body.append("kernel bytes".data(using: .utf8)!)
+            body.append("\r\n".data(using: .utf8)!)
+            body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+            try await app.test(
+                .POST, "/api/projects/\(project.id!)/images/\(imageId)/artifacts?kind=kernel"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            let stored = try String(
+                contentsOfFile: "\(tempStoragePath)/\(project.id!)/\(imageId)/kernel/vmlinuz",
+                encoding: .utf8)
+            #expect(stored == "kernel bytes")
+        }
+    }
+
+    @Test("Re-uploading an artifact to the same key keeps the new bytes")
+    func testArtifactReuploadSameKeyKeepsNewBytes() async throws {
+        // Replacing an artifact deletes the old object first. When the new
+        // upload lands on the identical key, that delete would remove what was
+        // just written — so it has to be skipped.
+        try await withImageTestApp { app, _, _, project, authToken, tempStoragePath in
+            let imageId = try await Self.createEmptyImage(
+                app: app, project: project, authToken: authToken)
+
+            for content in ["first kernel", "second kernel"] {
+                var buffer = ByteBufferAllocator().buffer(capacity: content.utf8.count)
+                buffer.writeString(content)
+                _ = try await Self.uploadArtifact(
+                    app: app, project: project, imageID: imageId, authToken: authToken,
+                    kind: "kernel", filename: "vmlinuz", fileContent: buffer)
+            }
+
+            let stored = try String(
+                contentsOfFile: "\(tempStoragePath)/\(project.id!)/\(imageId)/kernel/vmlinuz",
+                encoding: .utf8)
+            #expect(stored == "second kernel")
         }
     }
 }
