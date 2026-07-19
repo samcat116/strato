@@ -105,7 +105,7 @@ public struct AgentUpdateOutcome: Sendable {
 /// Replaces the running agent's binary with a downloaded artifact (issue #432).
 ///
 /// The sequence mirrors the staging + atomic-publish pattern of
-/// `materializeDisk` and `FileAgentStateStore.save`: all work happens in a
+/// `materializeDisk`: all work happens in a
 /// hidden workspace inside the binary's own directory (same filesystem, so the
 /// final `rename(2)` is atomic), the artifact's SHA-256 is verified before
 /// anything is touched, the staged binary must prove it executes, and the old
@@ -260,8 +260,8 @@ public struct AgentUpdater: Sendable {
             }
         }
 
-        // Raw rename(2), like FileAgentStateStore.save: atomic replacement of
-        // an existing destination on both Linux and macOS.
+        // Raw rename(2): atomic replacement of an existing destination on
+        // both Linux and macOS.
         let renameResult = stagedBinary.withCString { staged in
             binaryPath.withCString { destination in
                 rename(staged, destination)

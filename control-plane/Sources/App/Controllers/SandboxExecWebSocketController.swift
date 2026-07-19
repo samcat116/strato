@@ -210,29 +210,14 @@ struct SandboxExecWebSocketController: RouteCollection {
     /// on the sandbox. Returns the user ID on success; on any failure it
     /// reports the error over the socket, closes it, and returns nil.
     /// Mirrors `ConsoleWebSocketController.validateConsoleAccess`: authorize
-    /// before loading the resource, with system-admin and dev-bypass parity.
+    /// before loading the resource, with system-admin parity.
     private func validateExecAccess(
         req: Request,
         ws: WebSocket,
         sandboxId: UUID
     ) async -> String? {
         do {
-            // First, get the user (either from auth or dev bypass)
-            let user: User?
-            if let authenticated = req.auth.get(User.self) {
-                user = authenticated
-            } else if req.application.environment == .development,
-                Environment.get("DEV_AUTH_BYPASS") == "true"
-            {
-                req.logger.debug("Sandbox exec WebSocket attempting dev auth bypass")
-                user = try await User.query(on: req.db)
-                    .filter(\.$username == "dev")
-                    .first()
-            } else {
-                user = nil
-            }
-
-            guard let user else {
+            guard let user = req.auth.get(User.self) else {
                 req.logger.warning("Sandbox exec WebSocket authentication failed - no user found")
                 try? await ws.send(#"{"type":"error","message":"Authentication required"}"#)
                 try? await ws.close(code: .policyViolation)
@@ -247,13 +232,10 @@ struct SandboxExecWebSocketController: RouteCollection {
 
             // Authorize before loading the sandbox, so unauthorized users
             // cannot probe arbitrary sandbox UUIDs via distinct errors.
-            // Consistent with SpiceDBAuthMiddleware: system admins and the
-            // dev-auth bypass skip the permission check.
-            let devBypass =
-                req.application.environment == .development
-                && Environment.get("DEV_AUTH_BYPASS") == "true"
+            // Consistent with SpiceDBAuthMiddleware: system admins skip the
+            // permission check.
             let hasPermission: Bool
-            if user.isSystemAdmin || devBypass {
+            if user.isSystemAdmin {
                 hasPermission = true
             } else {
                 hasPermission = try await req.spicedb.checkPermission(

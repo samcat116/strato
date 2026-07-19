@@ -321,7 +321,7 @@ The per-agent-local-NB (Unix socket) model cannot express this.
   creates switches: a VM port whose switch doesn't exist yet fails and retries
   after the controller's next sync realizes it.
 - **Site model:** `Site` rows group agents (`agents.site_id`, assigned via the
-  registration token's `siteId` or the sites API) and carry the
+  enrollment's `siteId` or the sites API) and carry the
   `network_controller_agent_id` designation. `logical_networks.site_id` pins a
   network to a site; the scheduler filters placement to that site's agents
   (`VMPlacementRequirements.siteID`, derived from the VM's NICs' networks —

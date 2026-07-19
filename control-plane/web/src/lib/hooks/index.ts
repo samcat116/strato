@@ -15,7 +15,8 @@ export {
 export {
   useAgents,
   useAgent,
-  useAgentTokens,
+  useAgentEnrollments,
+  useRevokeAgentEnrollment,
   useUpdateAgent,
   usePatchAgent,
   useInvalidateAgents,

@@ -31,20 +31,6 @@ struct AgentWebSocketController: RouteCollection {
         var bufferedBytes = 0
         /// Set exactly once, when authentication succeeds; nil means "buffer".
         var agentName: String?
-        /// Whether this connection authenticated by redeeming a registration
-        /// token — the only path that may mint a rotated bearer reconnect
-        /// credential. mTLS connections carry the join URL's bearer header
-        /// too, but presenting a header is not the same as being validated by
-        /// it: an mTLS-only node must never accrete token-auth credentials.
-        var tokenAuthenticated = false
-        /// Site carried by the redeemed registration token, applied to the
-        /// agent row when the register message arrives. Nil (no token site, or
-        /// mTLS auth) never clears an existing assignment.
-        var pendingSiteID: UUID?
-        /// Organization scope carried by the redeemed registration token,
-        /// applied like the site. Nil never clears — but a brand-new agent
-        /// with no pending scope is refused registration.
-        var pendingOrganizationScope: OrganizationScope?
     }
 
     /// Ceiling on bytes buffered for a connection whose authentication is
@@ -97,21 +83,36 @@ struct AgentWebSocketController: RouteCollection {
             }
         }
 
-        // Check for SPIFFE/mTLS authentication first
-        if let spireService = req.application.spireService {
-            Task {
-                let isEnabled = await spireService.isEnabled
-                if isEnabled {
-                    await self.handleMTLSAuthentication(req: req, ws: ws, spireService: spireService, state: state)
-                } else {
-                    self.handleTokenAuthentication(req: req, ws: ws, state: state)
-                }
-            }
+        // Agents authenticate solely by SPIFFE/mTLS. There is no token path to
+        // fall back to, so a control plane without SPIRE configured cannot
+        // accept an agent at all — refuse naming the missing configuration
+        // rather than holding the socket open against an auth path that can
+        // never complete.
+        guard let spireService = req.application.spireService else {
+            rejectUnconfigured(req: req, ws: ws)
             return
         }
 
-        // Fall back to token-based authentication
-        handleTokenAuthentication(req: req, ws: ws, state: state)
+        Task {
+            guard await spireService.isEnabled else {
+                self.rejectUnconfigured(req: req, ws: ws)
+                return
+            }
+            await self.handleMTLSAuthentication(req: req, ws: ws, spireService: spireService, state: state)
+        }
+    }
+
+    /// Refuses a connection on a control plane with no SPIRE configuration.
+    /// Distinct from a rejected identity: nothing the agent could present would
+    /// succeed here, so this is operator misconfiguration and is logged as such.
+    private func rejectUnconfigured(req: Request, ws: WebSocket) {
+        req.logger.error(
+            "Refusing agent WebSocket: agent authentication requires SPIRE, which is not configured")
+        sendErrorResponse(
+            ws: ws, requestId: "",
+            error: "Agent authentication requires SPIRE, which is not configured on this control plane",
+            logger: req.logger)
+        Task { try? await ws.close(code: .policyViolation) }
     }
 
     /// Switch a connection from buffering to routing: record the authenticated
@@ -137,8 +138,6 @@ struct AgentWebSocketController: RouteCollection {
     private func handleMTLSAuthentication(
         req: Request, ws: WebSocket, spireService: SPIREService, state: MessageState
     ) async {
-        let requireClientCert = await spireService.requireClientCert
-
         // The X-Forwarded-Client-Cert (XFCC) header is only trustworthy when the
         // request provably arrived through the pod-local Envoy sidecar. Envoy
         // terminates mTLS, applies SANITIZE_SET (stripping any client-supplied XFCC),
@@ -189,21 +188,15 @@ struct AgentWebSocketController: RouteCollection {
             return
         }
 
-        // No client certificate was presented. When SPIRE requires client certs,
-        // mTLS is mandatory — never silently downgrade to token auth, which would
-        // let any caller that can reach the port authenticate as an agent.
-        if requireClientCert {
-            req.logger.error("mTLS required but no client certificate (X-Forwarded-Client-Cert) was presented")
-            sendErrorResponse(
-                ws: ws, requestId: "", error: "Client certificate required for agent authentication", logger: req.logger
-            )
-            Task { try? await ws.close(code: .unacceptableData) }
-            return
-        }
-
-        // requireClientCert is explicitly disabled: permit legacy token authentication.
-        req.logger.warning("SPIRE enabled without requireClientCert; falling back to token authentication")
-        handleTokenAuthentication(req: req, ws: ws, state: state)
+        // No client certificate was presented, and there is no token path to
+        // downgrade to: mTLS is the only way an agent authenticates, so this is
+        // always fatal. SPIRE_REQUIRE_CLIENT_CERT no longer softens it — with
+        // token auth gone, a connection presenting no certificate carries no
+        // credential at all.
+        req.logger.error("mTLS required but no client certificate (X-Forwarded-Client-Cert) was presented")
+        sendErrorResponse(
+            ws: ws, requestId: "", error: "Client certificate required for agent authentication", logger: req.logger)
+        Task { try? await ws.close(code: .unacceptableData) }
     }
 
     /// Whether the request arrived over the pod-local loopback interface, i.e. from
@@ -273,191 +266,6 @@ struct AgentWebSocketController: RouteCollection {
         return claimedID
     }
 
-    // MARK: - Token Authentication (Legacy)
-
-    private func handleTokenAuthentication(req: Request, ws: WebSocket, state: MessageState) {
-        // Extract token from the Authorization header (Bearer) and agent name from the
-        // query. The token is kept out of the URL so it never lands in access logs.
-        guard let token = req.headers.bearerAuthorization?.token,
-            let agentName = req.query[String.self, at: "name"]
-        else {
-            sendErrorResponse(
-                ws: ws, requestId: "", error: "Registration token and agent name are required", logger: req.logger)
-            Task { try? await ws.close(code: .unacceptableData) }
-            return
-        }
-
-        ws.onClose.whenComplete { result in
-            switch result {
-            case .success:
-                req.logger.info(
-                    "Agent WebSocket connection closed normally",
-                    metadata: [
-                        "agentName": .string(agentName)
-                    ])
-            case .failure(let error):
-                req.logger.error(
-                    "Agent WebSocket connection closed with error: \(error)",
-                    metadata: [
-                        "agentName": .string(agentName)
-                    ])
-            }
-
-            // Only tear down agent state if this socket is still the agent's current
-            // connection — a delayed close from a connection the agent has already
-            // replaced (reconnect under the same name) must not remove its successor.
-            guard req.application.websocketManager.removeConnection(agentName: agentName, ifCurrent: ws) else {
-                req.logger.debug(
-                    "Closed WebSocket was already superseded; skipping agent cleanup",
-                    metadata: [
-                        "agentName": .string(agentName)
-                    ])
-                return
-            }
-
-            // Console and attached exec sessions cannot outlive the agent
-            // socket: close their browser sockets with an error frame instead
-            // of leaving frozen terminals behind.
-            req.application.consoleSessionManager.closeAllSessions(
-                forAgent: agentName, reason: "agent disconnected")
-            req.application.sandboxExecSessionManager.closeAllSessions(
-                forAgent: agentName, reason: "agent disconnected")
-
-            // Mark agent as offline asynchronously
-            Task {
-                await req.agentService.removeAgent(agentName)
-            }
-        }
-
-        // Validate the registration token, then activate the connection.
-        Task {
-            guard
-                await self.validateRegistrationToken(
-                    req: req, ws: ws, token: token, agentName: agentName, state: state)
-            else {
-                return
-            }
-
-            req.logger.info(
-                "Agent WebSocket connection established",
-                metadata: [
-                    "agentName": .string(agentName)
-                ])
-
-            // Store WebSocket for this agent (WebSocketManager is lock-protected).
-            // If this reconnect superseded a still-open prior socket, its
-            // console sessions are now stale (a fresh agent process holds no
-            // console pty) and the delayed close will skip them — tear them
-            // down here so their browsers don't sit on a frozen terminal.
-            if req.application.websocketManager.setConnection(agentName: agentName, websocket: ws) != nil {
-                req.application.consoleSessionManager.closeAllSessions(
-                    forAgent: agentName, reason: "agent reconnected")
-            }
-
-            // Advertise which replica holds this agent's socket so other
-            // replicas can route sync nudges here (issue #261). Refreshed
-            // by every heartbeat; a crashed replica's claim expires by TTL.
-            Task {
-                await req.application.coordination.recordAgentRoute(
-                    agentName: agentName, replicaId: req.application.replicaID)
-            }
-
-            // Mark as validated and process buffered messages. This is
-            // the only path where token auth actually validated the
-            // connection, so only here may registration rotate the token.
-            // Both hops run on the WebSocket's event loop (where all `state`
-            // access lives) and stay ordered because the loop is FIFO.
-            ws.eventLoop.execute {
-                state.tokenAuthenticated = true
-            }
-            self.activateMessageRouting(req: req, ws: ws, state: state, agentName: agentName)
-        }
-    }
-
-    private func validateRegistrationToken(
-        req: Request,
-        ws: WebSocket,
-        token: String,
-        agentName: String,
-        state: MessageState
-    ) async -> Bool {
-        let registrationToken: AgentRegistrationToken?
-        do {
-            registrationToken = try await AgentRegistrationToken.query(on: req.db)
-                .filter(\.$token == token)
-                .filter(\.$agentName == agentName)
-                .first()
-        } catch {
-            req.logger.error("Error validating registration token: \(error)")
-            self.sendErrorResponse(
-                ws: ws, requestId: "", error: "Internal server error during token validation", logger: req.logger)
-            try? await ws.close(code: .unexpectedServerError)
-            return false
-        }
-
-        guard let registrationToken else {
-            Telemetry.agentRegistrationFailed(reason: "invalid_token")
-            // The explicit code lets the agent tell a hopeless credential apart
-            // from a transient server error, so only the former stops its
-            // reconnect loop.
-            self.sendErrorResponse(
-                ws: ws, requestId: "", error: "Invalid registration token",
-                code: ErrorMessage.ErrorCode.invalidToken, logger: req.logger)
-            try? await ws.close(code: .unacceptableData)
-            return false
-        }
-
-        guard registrationToken.isValid else {
-            Telemetry.agentRegistrationFailed(reason: "expired_token")
-            self.sendErrorResponse(
-                ws: ws, requestId: "", error: "Registration token is invalid or expired",
-                code: ErrorMessage.ErrorCode.invalidToken, logger: req.logger)
-            try? await ws.close(code: .unacceptableData)
-            return false
-        }
-
-        // Mark the single-use token consumed and persist it *before* accepting
-        // the connection. Persisting is part of validation, not fire-and-forget:
-        // if the save were swallowed and we proceeded anyway, the token would
-        // stay unused in the store and remain replayable. On save failure we
-        // reject instead — the token is untouched and the agent can retry.
-        registrationToken.markAsUsed()
-        let tokenSiteID = registrationToken.siteID
-        let tokenOrganizationScope = registrationToken.organizationScope
-        do {
-            try await registrationToken.save(on: req.db)
-        } catch {
-            Telemetry.agentRegistrationFailed(reason: "token_save_failed")
-            req.logger.error(
-                "Failed to persist registration token as used; rejecting connection",
-                metadata: [
-                    "agentName": .string(agentName),
-                    "error": .string("\(error)"),
-                ])
-            self.sendErrorResponse(
-                ws: ws, requestId: "", error: "Internal server error persisting registration token",
-                logger: req.logger)
-            try? await ws.close(code: .unexpectedServerError)
-            return false
-        }
-
-        // Stash the token's site and org scope for the register message
-        // that follows; all `state` access happens on the WebSocket's
-        // event loop.
-        ws.eventLoop.execute {
-            state.pendingSiteID = tokenSiteID
-            state.pendingOrganizationScope = tokenOrganizationScope
-        }
-        // Never log the raw token value — logs are lower-trust than the token
-        // store and may be shipped off-host. The agent name is sufficient.
-        req.logger.info(
-            "Agent registration token validated",
-            metadata: [
-                "agentName": .string(agentName)
-            ])
-        return true
-    }
-
     private func handleWebSocketMessage(
         req: Request, ws: WebSocket, text: String, agentName: String, state: MessageState
     ) {
@@ -493,43 +301,19 @@ struct AgentWebSocketController: RouteCollection {
                             "controlPlaneProtocolVersion": .stringConvertible(WireProtocol.currentVersion),
                         ])
                 }
-                // Keyed on the auth *path*, not on bearer-header presence: an
-                // mTLS bootstrap still carries the join URL's token in the
-                // header, and rotating for it would mint a long-lived bearer
-                // credential for a node meant to authenticate by SVID only.
-                let isTokenAuthenticated = state.tokenAuthenticated
-                let pendingSiteID = state.pendingSiteID
-                let pendingOrganizationScope = state.pendingOrganizationScope
                 Task {
                     do {
+                        // Site and organization scope come from the agent's
+                        // enrollment row, resolved inside registerAgent: an SVID
+                        // authenticates the node's identity but carries neither.
                         let agentUUID = try await req.agentService.registerAgent(
-                            message, agentName: agentName, siteID: pendingSiteID,
-                            organizationScope: pendingOrganizationScope)
-
-                        // Rotate the single-use registration token: the one this
-                        // connection presented was consumed at validation, so without a
-                        // fresh token an automatic reconnect after an unexpected drop
-                        // would be rejected. Rotation failure is non-fatal — the agent
-                        // is registered either way, reconnect just needs a new token.
-                        var reconnectToken: String?
-                        if isTokenAuthenticated {
-                            do {
-                                // Generous expiry: the token sits unused until the
-                                // connection drops, which may be long after registration.
-                                let rotated = AgentRegistrationToken(agentName: agentName, expirationHours: 24 * 30)
-                                try await rotated.save(on: req.db)
-                                reconnectToken = rotated.token
-                            } catch {
-                                req.logger.error("Failed to rotate reconnect token for agent \(agentName): \(error)")
-                            }
-                        }
+                            message, agentName: agentName)
 
                         // Send registration response with the assigned UUID
                         let response = AgentRegisterResponseMessage(
                             requestId: message.requestId,
                             agentId: agentUUID.uuidString,
-                            name: agentName,
-                            reconnectToken: reconnectToken
+                            name: agentName
                         )
                         self.sendMessage(ws: ws, message: response, logger: req.logger)
 
@@ -542,45 +326,6 @@ struct AgentWebSocketController: RouteCollection {
                         Telemetry.agentRegistrationFailed(reason: "register_error")
                         req.logger.error("Failed to register agent: \(error)")
 
-                        // Restore the presented token: it was marked used at connect
-                        // validation, but registration failed before a rotated
-                        // replacement was minted. Without this, a transient failure
-                        // here (e.g. a DB blip) would permanently consume the agent's
-                        // only credential and lock it out until an operator mints a
-                        // new join token. NOT restored for a scopeless token: that
-                        // credential can never register this agent, and a restored
-                        // valid-unused token would block minting the scoped
-                        // replacement (the create endpoint's duplicate-token guard).
-                        let tokenIsPermanentlyUnusable: Bool
-                        if case AgentServiceError.missingOrganizationScope = error {
-                            tokenIsPermanentlyUnusable = true
-                        } else {
-                            tokenIsPermanentlyUnusable = false
-                        }
-                        if isTokenAuthenticated, !tokenIsPermanentlyUnusable,
-                            let bearer = req.headers.bearerAuthorization?.token
-                        {
-                            do {
-                                if let presented = try await AgentRegistrationToken.query(on: req.db)
-                                    .filter(\.$token == bearer)
-                                    .filter(\.$agentName == agentName)
-                                    .first()
-                                {
-                                    presented.isUsed = false
-                                    presented.usedAt = nil
-                                    try await presented.save(on: req.db)
-                                    req.logger.info(
-                                        "Restored registration token after failed registration",
-                                        metadata: [
-                                            "agentName": .string(agentName)
-                                        ])
-                                }
-                            } catch {
-                                req.logger.error(
-                                    "Failed to restore registration token for agent \(agentName): \(error)")
-                            }
-                        }
-
                         // A protocol-version rejection is permanent until the
                         // agent is upgraded — classify it so the agent can stop
                         // its reconnect loop. Everything else stays unclassified
@@ -590,12 +335,11 @@ struct AgentWebSocketController: RouteCollection {
                         case AgentServiceError.unsupportedProtocolVersion:
                             errorCode = ErrorMessage.ErrorCode.unsupportedProtocolVersion
                         case AgentServiceError.missingOrganizationScope:
-                            // Permanent for this credential: the presented
-                            // token carries no org and never will. Classified
-                            // as invalid_token — the operator action ("mint a
-                            // new token", which is org-scoped now) matches,
-                            // and agents already deployed exit with
-                            // instructions instead of reconnect-looping on an
+                            // Permanent until an operator acts: this node has no
+                            // enrollment carrying an org scope, and reconnecting
+                            // will not create one. Classified as invalid_token so
+                            // the agent stops its reconnect loop and exits with
+                            // instructions rather than looping on an
                             // unrecognized code.
                             errorCode = ErrorMessage.ErrorCode.invalidToken
                         default:

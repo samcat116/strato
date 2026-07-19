@@ -51,9 +51,9 @@ Tests are a single flat `Tests/AppTests/` target (~80 files, swift-testing).
 5. Post-migration convergence: secret re-encryption and the SpiceDB
    relationship backfills (project/org-member/infra parents), each of which
    runs every boot and no-ops when converged.
-6. `DEV_AUTH_BYPASS` seeding (development only), scheduler registration
-   (`app.useScheduler`), SPIRE configuration, OTel bootstrap, and lifecycle
-   handlers (agent heartbeat monitor, hourly audit retention, SSF polling).
+6. Scheduler registration (`app.useScheduler`), SPIRE configuration, OTel
+   bootstrap, and lifecycle handlers (agent heartbeat monitor, hourly audit
+   retention, SSF polling).
 
 Services are exposed via lazy accessors
 (`Extensions/Application+LazyService.swift`): `app.scheduler`,
@@ -137,12 +137,12 @@ the one imperative exception: it awaits a correlated agent response.
 - 16 MiB max frame size (desired-state syncs carry every placement on the
   agent); frames arriving before auth completes are buffered (capped at
   4 MiB) and replayed once the agent is identified.
-- **Two auth paths**: SPIFFE mTLS (XFCC header trusted only from the
-  pod-local Envoy sidecar, cert re-verified against the SPIRE trust bundle)
-  or a single-use registration token carrying site + org scope. On
-  successful registration the presented token is consumed and a 30-day
-  reconnect token is minted and returned; on failure the token is restored
-  unless permanently unusable.
+- **One auth path**: SPIFFE mTLS. The XFCC header is trusted only from the
+  pod-local Envoy sidecar and the certificate is re-verified against the
+  SPIRE trust bundle; the SVID's SPIFFE ID names the agent, and the `?name=`
+  query parameter must match it. Site and organization scope come from the
+  node's enrollment row rather than from any bearer credential — there is no
+  token join, so an unattested agent simply cannot connect.
 - Message dispatch switches on the envelope type: registration, heartbeats,
   correlated success/error responses, status updates, observed-state
   reports, console/exec/log frames (see [wire-protocol](./wire-protocol.md)

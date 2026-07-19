@@ -131,12 +131,11 @@ yourself in an override file.
 
 ### Adding an agent
 
-VMs need a hypervisor host. In the web UI go to **Agents → Create
-Registration Token**, then run the generated command on the host:
-
-```bash
-strato-agent join 'ws://your-control-plane/agent/ws?token=...&name=...'
-```
+VMs need a hypervisor host. In the web UI go to **Agents → Enroll node**,
+then run the generated bootstrap command on the host — it installs the
+agent, attests it to SPIRE, and starts it. Enrollment needs the control
+plane configured for SPIRE (`SPIRE_ENABLED=true` plus
+`SPIRE_SERVER_API_ADDRESS`); `deploy/compose` sets this up for you.
 
 To run an agent from source against a local control plane, copy
 `config.toml.example` and point `control_plane_url` at your stack:

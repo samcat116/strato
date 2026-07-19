@@ -327,34 +327,31 @@ export interface AgentUpdateResult {
   message?: string;
 }
 
-// Returned only from the create endpoint — the plaintext `token` and the
-// `registrationURL` that embeds it are shown exactly once.
-export interface AgentRegistrationToken {
+// Returned only from the create endpoint — the SPIRE join token embedded in
+// `bootstrapCommand` is shown exactly once and never re-exposed.
+export interface AgentEnrollment {
   id: string;
-  token: string;
   agentName: string;
+  spiffeId: string;
   expiresAt: string;
-  registrationURL: string;
-  isValid: boolean;
-  // Present only when the control plane provisions SPIRE during registration.
-  // Like the token itself, the join token is shown once and never re-exposed.
-  spire?: SPIREProvisioning;
-  bootstrapCommand?: string;
+  spire: SPIREProvisioning;
+  bootstrapCommand: string;
 }
 
 export interface SPIREProvisioning {
   joinToken: string;
   joinTokenExpiresAt: string;
-  spiffeID: string;
-  nodeID: string;
+  spiffeId: string;
+  nodeId: string;
   trustDomain: string;
   serverAddress: string;
 }
 
-// Returned when listing tokens — the secret is intentionally absent.
-export interface AgentRegistrationTokenListItem {
+// Returned when listing enrollments — the join token is intentionally absent.
+export interface AgentEnrollmentListItem {
   id: string;
   agentName: string;
+  spiffeId: string;
   expiresAt: string;
   isUsed: boolean;
   isValid: boolean;
@@ -763,9 +760,10 @@ export interface CreateAPIKeyRequest {
   expiresInDays?: number;
 }
 
-export interface CreateAgentRegistrationTokenRequest {
+export interface CreateAgentEnrollmentRequest {
   agentName: string;
   expirationHours?: number;
+  siteId?: string;
   // Owning scope the agent becomes dedicated to; exactly one is required.
   organizationId?: string;
   organizationalUnitId?: string;

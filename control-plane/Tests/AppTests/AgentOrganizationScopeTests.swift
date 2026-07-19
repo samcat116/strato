@@ -1,4 +1,6 @@
 import Fluent
+import Foundation
+import SPIREServerAPI
 import StratoShared
 import Testing
 import Vapor
@@ -7,10 +9,10 @@ import VaporTesting
 @testable import App
 
 /// Tests for organization-scoped infrastructure: agents, sites, and
-/// registration tokens carry a mandatory org-or-OU owner. Covers scope
-/// stamping at registration (and its refusal/durability rules), the SpiceDB
-/// `agent#parent`/`site#parent` tuple lifecycle, the org-delegated token API,
-/// and the system-admin reassignment endpoint.
+/// enrollments carry a mandatory org-or-OU owner. Covers scope stamping at
+/// registration (and its refusal/durability rules), the SpiceDB
+/// `agent#parent`/`site#parent` tuple lifecycle, the org-delegated enrollment
+/// API, and the system-admin reassignment endpoint.
 @Suite("Agent Organization Scope Tests", .serialized)
 final class AgentOrganizationScopeTests {
 
@@ -39,6 +41,37 @@ final class AgentOrganizationScopeTests {
         try await app.shutdownForTesting()
     }
 
+    /// Enrolling a node *is* SPIRE provisioning, so every test that drives the
+    /// enrollment API needs a SPIRE registration service — without one the
+    /// endpoint refuses with 503 before reaching the behavior under test.
+    private func installFakeSPIRE(on app: Application) {
+        app.spireRegistrationService = SPIRERegistrationService(
+            api: FakeSPIREServerAPI(),
+            config: SPIRERegistrationConfig(
+                trustDomain: "strato.local",
+                serverAPIAddress: .tcp(host: "127.0.0.1", port: 1),
+                serverPublicAddress: "spire.example.com:8085",
+                agentSelectors: [SPIRESelector(type: "unix", value: "uid:0")],
+                svidTTLSeconds: 1800
+            ),
+            logger: app.logger)
+    }
+
+    /// An enrollment row as the operator's `POST /api/agents/enrollments` would
+    /// have left it — the sole carrier of a new agent's scope and site.
+    private func makeEnrollment(
+        agentName: String,
+        siteID: UUID? = nil,
+        organizationScope: OrganizationScope? = nil
+    ) -> AgentEnrollment {
+        AgentEnrollment(
+            agentName: agentName,
+            spiffeID: "spiffe://strato.local/agent/\(agentName)",
+            expirationHours: 1,
+            siteID: siteID,
+            organizationScope: organizationScope)
+    }
+
     private func makeRegisterMessage(agentName: String) -> AgentRegisterMessage {
         AgentRegisterMessage(
             agentId: agentName,
@@ -56,7 +89,7 @@ final class AgentOrganizationScopeTests {
 
     // MARK: - Registration scope stamping
 
-    @Test("Registration stamps the token's org scope and writes the agent#parent tuple")
+    @Test("Registration stamps the caller-supplied org scope and writes the agent#parent tuple")
     func registrationStampsScope() async throws {
         try await withScopedApp { app, org, recorder in
             let agentUUID = try await app.agentService.registerAgent(
@@ -90,15 +123,19 @@ final class AgentOrganizationScopeTests {
         }
     }
 
-    @Test("A new agent without a redeemed scope falls back to its minted token row (mTLS path)")
-    func mtlsFallbackReadsTokenScope() async throws {
+    @Test("A brand-new agent takes its scope and site from its enrollment row")
+    func newAgentReadsEnrollmentScopeAndSite() async throws {
         try await withScopedApp { app, org, _ in
-            // The mTLS handshake never redeems the WS token, but minting the
-            // token created a row carrying the org.
-            let token = AgentRegistrationToken(
-                agentName: "mtls-node", expirationHours: 1,
+            // An SVID authenticates the node's identity but carries neither the
+            // owning org nor the site: the enrollment an operator created for
+            // this name is the only source of both, and the WebSocket controller
+            // passes neither parameter.
+            let site = Site(name: "enroll-dc", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
+            let enrollment = self.makeEnrollment(
+                agentName: "mtls-node", siteID: site.id,
                 organizationScope: .organization(org.id!))
-            try await token.save(on: app.db)
+            try await enrollment.save(on: app.db)
 
             let agentUUID = try await app.agentService.registerAgent(
                 self.makeRegisterMessage(agentName: "mtls-node"),
@@ -106,10 +143,16 @@ final class AgentOrganizationScopeTests {
 
             let agent = try #require(try await Agent.find(agentUUID, on: app.db))
             #expect(agent.$organization.id == org.id)
+            #expect(agent.$site.id == site.id)
+
+            // The enrollment is marked redeemed but survives: scope stays
+            // readable, and unlike a single-use token it is not consumed.
+            let reloaded = try #require(try await AgentEnrollment.find(enrollment.id, on: app.db))
+            #expect(reloaded.isUsed == true)
         }
     }
 
-    @Test("Reconnecting with a scopeless rotated token preserves the org assignment")
+    @Test("Reconnecting without a scope preserves the org assignment")
     func reconnectPreservesScope() async throws {
         try await withScopedApp { app, org, _ in
             let agentUUID = try await app.agentService.registerAgent(
@@ -117,7 +160,7 @@ final class AgentOrganizationScopeTests {
                 agentName: "sticky-agent",
                 organizationScope: .organization(org.id!))
 
-            // Rotated reconnect tokens carry no scope; nil must not clear.
+            // Every reconnect passes no scope; nil must not clear.
             _ = try await app.agentService.registerAgent(
                 self.makeRegisterMessage(agentName: "sticky-agent"),
                 agentName: "sticky-agent")
@@ -127,7 +170,41 @@ final class AgentOrganizationScopeTests {
         }
     }
 
-    @Test("A token-driven org change is refused while the agent hosts VMs")
+    @Test("An existing agent does not re-read its enrollment on reconnect")
+    func existingAgentIgnoresEnrollmentOnReconnect() async throws {
+        try await withScopedApp { app, org, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let otherOrg = try await builder.createOrganization(name: "Enrollment Drift Org")
+
+            let agentUUID = try await app.agentService.registerAgent(
+                self.makeRegisterMessage(agentName: "durable-agent"),
+                agentName: "durable-agent",
+                organizationScope: .organization(org.id!))
+            let site = Site(name: "drift-dc", organizationScope: .organization(org.id!))
+            try await site.save(on: app.db)
+            let agent = try #require(try await Agent.find(agentUUID, on: app.db))
+            agent.$site.id = site.id
+            try await agent.save(on: app.db)
+
+            // A stale enrollment naming a different org and no site. Both values
+            // are durable on the agent row, and re-reading the enrollment on
+            // every reconnect would fight an operator who has since moved the
+            // agent — so the enrollment is deliberately not consulted again.
+            let enrollment = self.makeEnrollment(
+                agentName: "durable-agent", organizationScope: .organization(otherOrg.id!))
+            try await enrollment.save(on: app.db)
+
+            _ = try await app.agentService.registerAgent(
+                self.makeRegisterMessage(agentName: "durable-agent"),
+                agentName: "durable-agent")
+
+            let reloaded = try #require(try await Agent.find(agentUUID, on: app.db))
+            #expect(reloaded.$organization.id == org.id)
+            #expect(reloaded.$site.id == site.id)
+        }
+    }
+
+    @Test("An org change is refused while the agent hosts VMs")
     func orgChangeRefusedWhileHostingVMs() async throws {
         try await withScopedApp { app, org, _ in
             let builder = TestDataBuilder(db: app.db)
@@ -155,7 +232,7 @@ final class AgentOrganizationScopeTests {
         }
     }
 
-    @Test("A token site assignment in a different org than the agent is ignored")
+    @Test("A site assignment in a different org than the agent is ignored")
     func crossOrgSiteAssignmentIgnored() async throws {
         try await withScopedApp { app, org, _ in
             let builder = TestDataBuilder(db: app.db)
@@ -196,11 +273,12 @@ final class AgentOrganizationScopeTests {
         }
     }
 
-    // MARK: - Token API
+    // MARK: - Enrollment API
 
-    @Test("Minting a token requires an organization scope")
-    func tokenCreationRequiresScope() async throws {
+    @Test("Creating an enrollment requires an organization scope")
+    func enrollmentCreationRequiresScope() async throws {
         try await withScopedApp { app, org, _ in
+            self.installFakeSPIRE(on: app)
             let builder = TestDataBuilder(db: app.db)
             let admin = try await builder.createUser(
                 username: "scope-admin", email: "scope-admin@example.com",
@@ -212,32 +290,33 @@ final class AgentOrganizationScopeTests {
                 var organizationId: UUID? = nil
             }
 
-            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+            try await app.test(.POST, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(Body(agentName: "node-x"))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
 
-            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+            try await app.test(.POST, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(Body(agentName: "node-x", organizationId: org.id))
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let created = try res.content.decode(AgentRegistrationTokenResponse.self)
+                let created = try res.content.decode(AgentEnrollmentResponse.self)
                 #expect(created.agentName == "node-x")
             }
 
             let row = try #require(
-                try await AgentRegistrationToken.query(on: app.db)
+                try await AgentEnrollment.query(on: app.db)
                     .filter(\.$agentName == "node-x").first())
             #expect(row.organizationID == org.id)
         }
     }
 
-    @Test("A non-admin without manage_agents cannot mint or list tokens")
-    func tokenCreationDeniedWithoutManageAgents() async throws {
+    @Test("A non-admin without manage_agents cannot create or list enrollments")
+    func enrollmentCreationDeniedWithoutManageAgents() async throws {
         try await withScopedApp { app, org, _ in
+            self.installFakeSPIRE(on: app)
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
                 username: "scope-pleb", email: "scope-pleb@example.com",
@@ -252,7 +331,7 @@ final class AgentOrganizationScopeTests {
             app.spicedbMockAllows = false
             defer { app.spicedbMockAllows = true }
 
-            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+            try await app.test(.POST, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(Body(agentName: "node-y", organizationId: org.id))
             } afterResponse: { res in
@@ -260,19 +339,20 @@ final class AgentOrganizationScopeTests {
             }
 
             // Listing succeeds but shows nothing the user can't manage.
-            try await app.test(.GET, "/api/agents/registration-tokens") { req in
+            try await app.test(.GET, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let items = try res.content.decode([AgentRegistrationTokenListItem].self)
+                let items = try res.content.decode([AgentEnrollmentListItem].self)
                 #expect(items.isEmpty)
             }
         }
     }
 
-    @Test("A token's site must belong to the token's organization")
-    func tokenSiteMustMatchOrg() async throws {
+    @Test("An enrollment's site must belong to the enrollment's organization")
+    func enrollmentSiteMustMatchOrg() async throws {
         try await withScopedApp { app, org, _ in
+            self.installFakeSPIRE(on: app)
             let builder = TestDataBuilder(db: app.db)
             let admin = try await builder.createUser(
                 username: "scope-admin2", email: "scope-admin2@example.com",
@@ -289,7 +369,7 @@ final class AgentOrganizationScopeTests {
                 let siteId: UUID?
             }
 
-            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+            try await app.test(.POST, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     Body(agentName: "node-z", organizationId: org.id, siteId: foreignSite.id))
@@ -491,22 +571,22 @@ final class AgentOrganizationScopeTests {
         }
     }
 
-    @Test("Deregistration deletes the agent's unused tokens so the name is reusable")
-    func deregistrationClearsUnusedTokens() async throws {
+    @Test("Deregistration deletes the agent's enrollment so the name is reusable")
+    func deregistrationClearsEnrollment() async throws {
         try await withScopedApp { app, org, _ in
+            self.installFakeSPIRE(on: app)
             let builder = TestDataBuilder(db: app.db)
             let admin = try await builder.createUser(
                 username: "dereg-admin", email: "dereg-admin@example.com",
                 displayName: "Dereg Admin", isSystemAdmin: true)
             let adminToken = try await admin.generateAPIKey(on: app.db)
 
+            let enrollment = self.makeEnrollment(
+                agentName: "retiring-agent", organizationScope: .organization(org.id!))
+            try await enrollment.save(on: app.db)
             let agentUUID = try await app.agentService.registerAgent(
                 self.makeRegisterMessage(agentName: "retiring-agent"),
-                agentName: "retiring-agent",
-                organizationScope: .organization(org.id!))
-            // The rotated reconnect credential a live token-auth agent holds.
-            let reconnect = AgentRegistrationToken(agentName: "retiring-agent", expirationHours: 24 * 30)
-            try await reconnect.save(on: app.db)
+                agentName: "retiring-agent")
 
             try await app.test(.DELETE, "/api/agents/\(agentUUID.uuidString)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -514,18 +594,18 @@ final class AgentOrganizationScopeTests {
                 #expect(res.status == .noContent)
             }
 
-            let leftover = try await AgentRegistrationToken.query(on: app.db)
+            let leftover = try await AgentEnrollment.query(on: app.db)
                 .filter(\.$agentName == "retiring-agent")
-                .filter(\.$isUsed == false)
                 .count()
             #expect(leftover == 0)
 
-            // The name is immediately reusable — no duplicate-token conflict.
+            // The name is immediately reusable — a leftover row would trip the
+            // one-enrollment-per-name guard and lock the name permanently.
             struct Body: Content {
                 let agentName: String
                 let organizationId: UUID?
             }
-            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+            try await app.test(.POST, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
                 try req.content.encode(Body(agentName: "retiring-agent", organizationId: org.id))
             } afterResponse: { res in
@@ -614,36 +694,10 @@ final class AgentOrganizationScopeTests {
         }
     }
 
-    @Test("The org backfill skips reconnect tokens of registered agents")
-    func backfillSkipsReconnectTokens() async throws {
+    @Test("Enrolling with a site pin requires manage on the site")
+    func enrollmentSitePinRequiresSiteManage() async throws {
         try await withScopedApp { app, org, _ in
-            _ = try await app.agentService.registerAgent(
-                self.makeRegisterMessage(agentName: "veteran-agent"),
-                agentName: "veteran-agent",
-                organizationScope: .organization(org.id!))
-
-            // A rotated reconnect credential (scopeless, for a live agent) and
-            // a pending join token (scopeless, agent not registered yet) — the
-            // pre-migration states the backfill must tell apart.
-            let reconnect = AgentRegistrationToken(agentName: "veteran-agent", expirationHours: 24 * 30)
-            try await reconnect.save(on: app.db)
-            let pending = AgentRegistrationToken(agentName: "future-agent", expirationHours: 1)
-            try await pending.save(on: app.db)
-
-            try await BackfillInfraOrganizationScope().prepare(on: app.db)
-
-            let reloadedReconnect = try #require(
-                try await AgentRegistrationToken.find(reconnect.id, on: app.db))
-            #expect(reloadedReconnect.organizationID == nil)
-            let reloadedPending = try #require(
-                try await AgentRegistrationToken.find(pending.id, on: app.db))
-            #expect(reloadedPending.organizationID == org.id)
-        }
-    }
-
-    @Test("Minting a token with a site pin requires manage on the site")
-    func tokenSitePinRequiresSiteManage() async throws {
-        try await withScopedApp { app, org, _ in
+            self.installFakeSPIRE(on: app)
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
                 username: "agents-only-admin", email: "agents-only-admin@example.com",
@@ -653,8 +707,8 @@ final class AgentOrganizationScopeTests {
             try await site.save(on: app.db)
 
             // The sibling-OU scenario: SpiceDB grants manage_agents on the
-            // token's scope but denies site#manage (same root org, different
-            // delegated subtree).
+            // enrollment's scope but denies site#manage (same root org,
+            // different delegated subtree).
             app.spicedbMockDeniedResources = ["site"]
             defer { app.spicedbMockDeniedResources = [] }
 
@@ -663,7 +717,7 @@ final class AgentOrganizationScopeTests {
                 let organizationId: UUID?
                 let siteId: UUID?
             }
-            try await app.test(.POST, "/api/agents/registration-tokens") { req in
+            try await app.test(.POST, "/api/agents/enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     Body(agentName: "pin-gated-agent", organizationId: org.id, siteId: site.id))

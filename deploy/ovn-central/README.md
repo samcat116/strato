@@ -51,7 +51,7 @@ agent uses the same `tcp:` endpoints (or the local unix sockets).
 ## Control-plane side
 
 1. Create a site and register the agents into it (`POST /api/sites`, then
-   registration tokens carrying `siteId`).
+   agent enrollments carrying `siteId`).
 2. Designate exactly one agent as the site's **network controller**
    (`PUT /api/sites/:id` with `networkControllerAgentId`) — the single writer
    of this NB's topology. Until one is designated, VMs place and their ports

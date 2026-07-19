@@ -11,18 +11,11 @@
 # WebSocket URL for connecting to the Control Plane
 # Required field - agent cannot start without this
 #
-# Tip: on a fresh host you usually don't write this file by hand. Run
-# `strato-agent join '<registration-url>'` with the URL from the Strato UI
-# (Agents -> Create Registration Token); the agent writes a minimal config
-# and persists its join state so plain restarts reconnect automatically.
-control_plane_url = "ws://localhost:8080/agent/ws"
-
-# Path of the join state file, which stores the rotated reconnect token the
-# control plane issues after each successful registration (written mode 0600)
-# Optional - platform-specific defaults:
-#   macOS: ~/Library/Application Support/strato/agent-state.json
-#   Linux: /var/lib/strato/agent-state.json
-# state_file = "/var/lib/strato/agent-state.json"
+# The agent authenticates with a SPIRE-issued X.509 SVID over mutual TLS, so
+# this is normally a wss:// URL and the [spiffe] section below is required.
+# The agent appends its own name (--agent-id, or the hostname) as the `name`
+# query parameter; no credential ever travels in the URL.
+control_plane_url = "wss://localhost:8080/agent/ws"
 
 # Directory where QEMU will create domain sockets for VM communication
 # Optional - platform-specific defaults:
@@ -237,32 +230,35 @@ log_level = "info"
 # heartbeat_interval = 30
 # max_vms = 10
 
-# SPIFFE/SPIRE Configuration
-# Enables mutual TLS authentication using SPIFFE identities
-# The agent will obtain an X.509 SVID from SPIRE and use it to
-# authenticate with the Control Plane over mTLS.
+# SPIFFE/SPIRE Configuration — REQUIRED
 #
-# [spiffe]
-# enabled = true
-#
-# # Trust domain for SPIFFE identities (e.g., "strato.local")
-# trust_domain = "strato.local"
-#
-# # Source for obtaining SVIDs:
-# #   "workload_api" - Connect to SPIRE Agent's Workload API (recommended)
-# #   "files" - Read certificates from files (works with spiffe-helper)
-# source_type = "workload_api"
-#
-# # For workload_api source:
-# # Path to the SPIRE Workload API Unix socket
-# workload_api_socket_path = "/var/run/spire/sockets/workload.sock"
-#
-# # For files source:
-# # Paths to certificate, key, and trust bundle files
-# # These are typically written by spiffe-helper
-# # certificate_path = "/var/run/spire/certs/svid.pem"
-# # private_key_path = "/var/run/spire/certs/svid_key.pem"
-# # trust_bundle_path = "/var/run/spire/certs/bundle.pem"
+# Mutual TLS with a SPIRE-issued X.509 SVID is the only way the agent
+# authenticates to the Control Plane. There is no token-based registration or
+# enrollment: without this section (with enabled = true) the agent exits at
+# startup. The agent's SPIFFE ID is derived from its name, as
+# spiffe://<trust_domain>/agent/<agent-name>, and must have a matching SPIRE
+# registration entry.
+[spiffe]
+enabled = true
+
+# Trust domain for SPIFFE identities (e.g., "strato.local")
+trust_domain = "strato.local"
+
+# Source for obtaining SVIDs:
+#   "workload_api" - Connect to SPIRE Agent's Workload API (recommended)
+#   "files" - Read certificates from files (works with spiffe-helper)
+source_type = "workload_api"
+
+# For workload_api source:
+# Path to the SPIRE Workload API Unix socket
+workload_api_socket_path = "/var/run/spire/sockets/workload.sock"
+
+# For files source:
+# Paths to certificate, key, and trust bundle files
+# These are typically written by spiffe-helper
+# certificate_path = "/var/run/spire/certs/svid.pem"
+# private_key_path = "/var/run/spire/certs/svid_key.pem"
+# trust_bundle_path = "/var/run/spire/certs/bundle.pem"
 
 # ---------------------------------------------------------------------------
 # Simulation ("dummy agent") mode — for scale-testing a control plane.

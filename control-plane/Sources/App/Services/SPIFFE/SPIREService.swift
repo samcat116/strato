@@ -143,23 +143,18 @@ public struct SPIREServiceConfig: Sendable {
     /// How often to refresh the trust bundle (seconds)
     public let bundleRefreshInterval: TimeInterval
 
-    /// Whether to require client certificates for agent connections
-    public let requireClientCert: Bool
-
     public init(
         enabled: Bool = false,
         trustDomain: String = "strato.local",
         bundleEndpointURL: String? = nil,
         trustBundlePath: String? = nil,
-        bundleRefreshInterval: TimeInterval = 300,
-        requireClientCert: Bool = true
+        bundleRefreshInterval: TimeInterval = 300
     ) {
         self.enabled = enabled
         self.trustDomain = trustDomain
         self.bundleEndpointURL = bundleEndpointURL
         self.trustBundlePath = trustBundlePath
         self.bundleRefreshInterval = bundleRefreshInterval
-        self.requireClientCert = requireClientCert
     }
 
     /// Load configuration from environment variables
@@ -169,15 +164,13 @@ public struct SPIREServiceConfig: Sendable {
         let bundleEndpointURL = Environment.get("SPIRE_BUNDLE_ENDPOINT_URL")
         let trustBundlePath = Environment.get("SPIRE_TRUST_BUNDLE_PATH")
         let bundleRefreshInterval = TimeInterval(Environment.get("SPIRE_BUNDLE_REFRESH_INTERVAL") ?? "300") ?? 300
-        let requireClientCert = Environment.get("SPIRE_REQUIRE_CLIENT_CERT")?.lowercased() != "false"
 
         return SPIREServiceConfig(
             enabled: enabled,
             trustDomain: trustDomain,
             bundleEndpointURL: bundleEndpointURL,
             trustBundlePath: trustBundlePath,
-            bundleRefreshInterval: bundleRefreshInterval,
-            requireClientCert: requireClientCert
+            bundleRefreshInterval: bundleRefreshInterval
         )
     }
 }
@@ -249,12 +242,6 @@ public actor SPIREService {
     /// The trust domain agents are expected to present identities from.
     public var trustDomain: String {
         config.trustDomain
-    }
-
-    /// Whether client certificates are mandatory for agent connections.
-    /// When true, the WebSocket handler must not fall back to token authentication.
-    public var requireClientCert: Bool {
-        config.requireClientCert
     }
 
     /// Get the current trust bundle

@@ -17,8 +17,8 @@ import Glibc
 
 enum AgentError: Error, LocalizedError {
     case registrationTimeout
-    /// The control plane explicitly rejected our credentials (`invalid_token`
-    /// code) — retrying with the same token can never succeed.
+    /// The control plane explicitly rejected our identity — retrying with the
+    /// same SVID can never succeed.
     case registrationRejected(String)
     /// Registration failed for an unclassified (potentially transient) reason,
     /// e.g. a control-plane database blip — safe to retry with backoff.
@@ -51,16 +51,10 @@ enum AgentError: Error, LocalizedError {
 actor Agent {
     private let initialAgentID: String  // ID used for registration (hostname or CLI arg)
     private var assignedAgentID: String?  // UUID assigned by control plane after registration
+    // The URL to dial. It carries no credential — the agent authenticates with
+    // its SPIFFE X.509 SVID over mTLS — only the agent's `name`.
     private let webSocketURL: String
-    // The token-free URL to dial. The registration token is carried separately (see
-    // `currentRegistrationToken`) so it never appears in the request URL.
-    private var currentWebSocketURL: String
-    // The single-use registration token to present in the Authorization header.
-    // Registration tokens are consumed on connect, so the control plane returns a fresh
-    // one on each successful registration and this tracks it for the reconnect loop.
-    private var currentRegistrationToken: String?
     private let qemuSocketDir: String
-    private let isRegistrationMode: Bool
     private let logger: Logger
 
     private var websocketClient: WebSocketClient?
@@ -216,9 +210,7 @@ actor Agent {
     private let spiffeConfig: SPIFFEConfig?
     private var svidManager: SVIDManager?
 
-    // Join state persistence (rotated reconnect token survives restarts)
-    private let stateStore: (any AgentStateStore)?
-    // Set when a failure is unrecoverable (e.g. the reconnect token was
+    // Set when a failure is unrecoverable (e.g. the agent's identity was
     // rejected); start() rethrows it so the process exits non-zero instead
     // of idling disconnected.
     private var terminalError: Error?
@@ -241,14 +233,12 @@ actor Agent {
     init(
         agentID: String,
         webSocketURL: String,
-        registrationToken: String? = nil,
         qemuSocketDir: String,
         networkMode: NetworkMode?,
         ovnChassisConfig: OVNChassisConfig = OVNChassisConfig(),
         ovnUplink: OVNUplinkConfig? = nil,
         ovnNorthbound: String? = nil,
         ovnNorthboundTLS: OVNNorthboundTLSConfig? = nil,
-        isRegistrationMode: Bool,
         logger: Logger,
         imageCachePath: String? = nil,
         imageCacheMaxSizeBytes: Int64? = nil,
@@ -268,20 +258,16 @@ actor Agent {
         hypervisorType: HypervisorType = .qemu,
         hardwareAccelerationEnabled: Bool = true,
         simulation: SimulationConfig? = nil,
-        spiffeConfig: SPIFFEConfig? = nil,
-        stateStore: (any AgentStateStore)? = nil
+        spiffeConfig: SPIFFEConfig? = nil
     ) {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
-        self.currentWebSocketURL = webSocketURL
-        self.currentRegistrationToken = registrationToken
         self.qemuSocketDir = qemuSocketDir
         self.networkMode = networkMode
         self.ovnChassisConfig = ovnChassisConfig
         self.ovnUplink = ovnUplink
         self.ovnNorthbound = ovnNorthbound
         self.ovnNorthboundTLS = ovnNorthboundTLS
-        self.isRegistrationMode = isRegistrationMode
         self.logger = logger
         self.imageCachePath = imageCachePath
         self.imageCacheMaxSizeBytes = imageCacheMaxSizeBytes
@@ -302,7 +288,6 @@ actor Agent {
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         self.simulation = simulation
         self.spiffeConfig = spiffeConfig
-        self.stateStore = stateStore
         self.manifestStore = VMManifestStore(
             path: (vmStoragePath as NSString).appendingPathComponent("vm-manifest.json"),
             legacyQEMUManifestPath: (vmStoragePath as NSString).appendingPathComponent("qemu-manifest.json"),
@@ -425,7 +410,11 @@ actor Agent {
             imageCacheService = ImageCacheService(
                 logger: logger,
                 cachePath: imageCachePath,
-                controlPlaneURL: webSocketURL.replacingOccurrences(of: "ws://", with: "http://")
+                // Derive the HTTP base from the dialed WebSocket URL. The query
+                // (the `name` parameter) must come off first, or it would trail
+                // the base URL every request is built on.
+                controlPlaneURL: (WebSocketURLs.removingQuery(from: webSocketURL) ?? webSocketURL)
+                    .replacingOccurrences(of: "ws://", with: "http://")
                     .replacingOccurrences(of: "wss://", with: "https://")
                     .replacingOccurrences(of: "/agent/ws", with: ""),
                 maxCacheSizeBytes: imageCacheMaxSizeBytes
@@ -595,53 +584,53 @@ actor Agent {
             await self?.sendConsoleData(vmId: vmId, sessionId: sessionId, data: data)
         }
 
-        // Initialize SPIFFE/mTLS if enabled
-        var tlsConfiguration: TLSConfiguration?
-        if let spiffe = spiffeConfig, spiffe.enabled {
-            logger.info(
-                "Initializing SPIFFE authentication",
-                metadata: [
-                    "trustDomain": .string(spiffe.trustDomain ?? SPIFFEConfig.defaultTrustDomain),
-                    "sourceType": .string(spiffe.sourceType ?? "workload_api"),
-                ])
+        // Initialize SPIFFE/mTLS. A SPIRE-issued X.509 SVID is the agent's only
+        // means of authenticating to the control plane, so it is mandatory:
+        // missing config or a failed issuance is fatal, never a fallback.
+        guard let spiffe = spiffeConfig, spiffe.enabled else {
+            throw AgentError.spiffeConfigurationError(
+                "SPIFFE authentication is not configured. The agent authenticates to the control plane with a "
+                    + "SPIRE-issued X.509 SVID; add a [spiffe] section with enabled = true to the agent config file."
+            )
+        }
 
-            do {
-                let spiffeClient = try createSPIFFEClient(config: spiffe)
-                svidManager = SVIDManager(client: spiffeClient, logger: logger)
-                try await svidManager?.start()
+        let tlsConfiguration: TLSConfiguration?
+        logger.info(
+            "Initializing SPIFFE authentication",
+            metadata: [
+                "trustDomain": .string(spiffe.trustDomain ?? SPIFFEConfig.defaultTrustDomain),
+                "sourceType": .string(spiffe.sourceType ?? "workload_api"),
+            ])
 
-                // Get TLS configuration from SVID
-                tlsConfiguration = try await svidManager?.getTLSConfiguration()
-                logger.info("SPIFFE authentication initialized successfully")
+        do {
+            let spiffeClient = try createSPIFFEClient(config: spiffe)
+            svidManager = SVIDManager(client: spiffeClient, logger: logger)
+            try await svidManager?.start()
 
-                // Register for SVID rotation
-                await svidManager?.onRotation { [weak self] _ in
-                    guard let self = self else { return }
-                    await self.handleSVIDRotation()
-                }
-            } catch {
-                logger.error("Failed to initialize SPIFFE: \(error)")
-                if webSocketURL.hasPrefix("wss://") {
-                    throw AgentError.spiffeConfigurationError(
-                        "SPIFFE is required for wss:// connections but failed to initialize: \(error)"
-                    )
-                }
-                logger.warning("Continuing without SPIFFE authentication")
+            // Get TLS configuration from SVID
+            tlsConfiguration = try await svidManager?.getTLSConfiguration()
+            logger.info("SPIFFE authentication initialized successfully")
+
+            // Register for SVID rotation
+            await svidManager?.onRotation { [weak self] _ in
+                guard let self = self else { return }
+                await self.handleSVIDRotation()
             }
+        } catch {
+            logger.error("Failed to initialize SPIFFE: \(error)")
+            throw AgentError.spiffeConfigurationError(
+                "SPIFFE is required to authenticate with the control plane but failed to initialize: \(error)"
+            )
         }
 
         // Begin draining inbound frames before the connection opens so the registration
         // response (and any early frames) are processed in order.
         startMessageConsumer()
 
-        if isRegistrationMode {
-            logger.info("Connecting for agent registration", metadata: ["url": .string(webSocketURL)])
-        } else {
-            logger.info("Connecting to control plane", metadata: ["url": .string(webSocketURL)])
-        }
+        logger.info("Connecting to control plane", metadata: ["url": .string(webSocketURL)])
         websocketClient = WebSocketClient(
-            url: currentWebSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration,
-            registrationToken: currentRegistrationToken, inboundContinuation: inboundContinuation)
+            url: webSocketURL, agent: self, logger: logger, tlsConfiguration: tlsConfiguration,
+            inboundContinuation: inboundContinuation)
 
         if let client = websocketClient {
             try await client.connect()
@@ -1014,18 +1003,6 @@ actor Agent {
         }
         controlPlaneSupportsStateSync = WireProtocol.supportsStateSync(controlPlaneProtocolVersion)
 
-        // Adopt the rotated reconnect token (if any) before resuming registration:
-        // the token this connection presented was consumed by the control plane, so
-        // the reconnect loop must dial with the fresh one to be accepted. The token
-        // travels in the Authorization header, so rotation is just a value swap — the
-        // dialed URL is unaffected.
-        if let rotatedToken = response.reconnectToken {
-            currentRegistrationToken = rotatedToken
-            await websocketClient?.updateToken(rotatedToken)
-            logger.info("Adopted rotated reconnect token from control plane")
-            persistJoinState(response: response, reconnectToken: rotatedToken)
-        }
-
         guard let continuation = takeRegistrationContinuation() else {
             logger.warning("Received registration response but no continuation waiting")
             return
@@ -1033,39 +1010,11 @@ actor Agent {
         continuation.resume(returning: response.agentId)
     }
 
-    /// Persists the join state so a restarted agent can reconnect: the token
-    /// this connection presented has just been consumed, so the rotated one is
-    /// the only credential that will be accepted next time. Failure to persist
-    /// is not fatal for the current run (the in-memory token still works), but
-    /// is loud because a restart would then need a fresh join token.
-    private func persistJoinState(response: AgentRegisterResponseMessage, reconnectToken: String) {
-        guard let store = stateStore else { return }
-        guard let bareURL = WebSocketURLs.removingQuery(from: currentWebSocketURL) else {
-            logger.warning("Cannot derive control plane URL from \(currentWebSocketURL); join state not persisted")
-            return
-        }
-
-        let state = AgentState(
-            agentName: response.name,
-            assignedAgentID: response.agentId,
-            controlPlaneURL: bareURL,
-            reconnectToken: reconnectToken
-        )
-        do {
-            try store.save(state)
-            logger.debug("Persisted join state", metadata: ["stateFile": .string(store.location)])
-        } catch {
-            logger.error(
-                "Failed to persist join state to \(store.location): \(error). The agent stays connected, but a restart will need a new join token."
-            )
-        }
-    }
-
     /// Handle an `error` envelope from the control plane.
     ///
     /// Previously these fell through to the `default` case and were logged as
-    /// "unknown message type: error", discarding the real reason (e.g. "Invalid
-    /// registration token"). Now the reason is surfaced.
+    /// "unknown message type: error", discarding the real reason (e.g. an
+    /// unrecognized agent identity). Now the reason is surfaced.
     ///
     /// If registration is still pending — we're waiting on `registrationContinuation`
     /// — the control plane has rejected this connection (it sends such errors with an
@@ -1425,15 +1374,12 @@ actor Agent {
                 logger.info("Successfully reconnected and re-registered with control plane")
                 return
             } catch AgentError.registrationRejected(let reason) {
-                // The control plane explicitly rejected our credentials —
-                // retrying with the same token can never succeed, so exit
-                // with instructions instead of hammering a dead token. Under
-                // systemd/docker restart policies this is also self-healing
-                // for transient rejections: the restart re-reads the state
-                // file and retries once with the same token.
+                // The control plane explicitly rejected this agent's identity —
+                // retrying with the same SVID can never succeed, so exit with
+                // instructions instead of hammering a rejected identity.
                 logger.error("Registration rejected by control plane: \(reason)")
                 logger.error(
-                    "If the token expired or was revoked, create a new registration token in the Strato UI (Agents → Create Registration Token) and run: strato-agent join '<registration-url>'"
+                    "Verify the SPIRE registration entry for this agent's SPIFFE ID, and that the control plane trusts the same trust domain."
                 )
                 await websocketClient?.disconnect()
                 terminalError = AgentError.registrationRejected(reason)

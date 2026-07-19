@@ -1,3 +1,9 @@
+{{- if not .Values.spire.enabled }}
+{{- fail "spire.enabled must be true: agents authenticate to the control plane only with a SPIRE-issued SVID, so disabling SPIRE yields a control plane that refuses every agent connection. Set spire.enabled=true, or point the chart at an external SPIRE server via spire.controlPlane.serverApiAddress." }}
+{{- end }}
+{{- if and .Values.ingress.enabled (not .Values.gateway.enabled) }}
+{{- fail "ingress.enabled requires gateway.enabled: the legacy Ingress routes /agent to the plain HTTP service port, so agent connections terminate TLS at the Ingress and never reach the Envoy mTLS sidecar. No client certificate arrives, and the control plane rejects every agent (it accepts X-Forwarded-Client-Cert only from the pod-local sidecar over loopback, so an Ingress cannot forward one either). Enable the Gateway, which routes agents.<host> as TLS passthrough to the sidecar, or expose the agent-mtls port yourself and leave the Ingress disabled." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -209,7 +215,7 @@ spec:
             - name: LOKI_ENDPOINT
               value: "{{ .Values.strato.lokiEndpoint }}"
             {{- end }}
-            {{- if and .Values.gateway.enabled .Values.spire.enabled .Values.spire.controlPlane.enableMTLS .Values.spire.envoy.enabled }}
+            {{- if and .Values.gateway.enabled .Values.spire.enabled .Values.spire.envoy.enabled }}
             # EXTERNAL_HOSTNAME seeds the generated agent WebSocket URL (and, via
             # the installer, the telemetry-ingest origin). With mTLS on, agents
             # must dial the agents SNI passthrough listener so the Envoy sidecar
@@ -222,18 +228,15 @@ spec:
             - name: EXTERNAL_HOSTNAME
               value: "{{ .Values.strato.externalHostname }}"
             {{- end }}
-            {{- if and .Values.spire.enabled .Values.spire.controlPlane.enableMTLS }}
-            # Enable SPIFFE/SPIRE authentication so the agent WebSocket handler
-            # enforces mTLS (via the Envoy sidecar) instead of legacy token auth.
-            # Gated on controlPlane.enableMTLS so the mTLS opt-out is honored:
-            # when disabled, SPIRE stays off in the control plane and token auth
-            # (which requireClientCert would otherwise reject) keeps working.
+            {{- if .Values.spire.enabled }}
+            # SPIFFE/SPIRE authentication: the agent WebSocket handler enforces
+            # mTLS via the Envoy sidecar, and there is no other way for an agent
+            # to authenticate. Always on — the chart refuses to render with
+            # spire.enabled=false.
             - name: SPIRE_ENABLED
               value: "true"
             - name: SPIRE_TRUST_DOMAIN
               value: "{{ .Values.spire.trustDomain }}"
-            - name: SPIRE_REQUIRE_CLIENT_CERT
-              value: "{{ .Values.spire.controlPlane.requireClientCert }}"
             - name: SPIRE_BUNDLE_REFRESH_INTERVAL
               value: "{{ .Values.spire.controlPlane.bundleRefreshInterval }}"
             # SPIRE server gRPC API, required for the control-plane-driven
@@ -339,7 +342,7 @@ spec:
             successThreshold: {{ .Values.readinessProbe.successThreshold | default 1 }}
             failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
           {{- end }}
-          {{- $spireBundle := and .Values.spire.enabled .Values.spire.controlPlane.enableMTLS .Values.spire.notifier.k8sbundle.enabled }}
+          {{- $spireBundle := and .Values.spire.enabled .Values.spire.notifier.k8sbundle.enabled }}
           {{- if or .Values.strato.database.tlsCACert $spireBundle }}
           volumeMounts:
             {{- if .Values.strato.database.tlsCACert }}

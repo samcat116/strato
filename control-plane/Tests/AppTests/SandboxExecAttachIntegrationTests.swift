@@ -22,17 +22,30 @@ struct SandboxExecAttachIntegrationTests {
     @Test("Browser attach relays exec start to the agent and ready/output/exit back to the browser")
     func attachRelaysExecStartAndFrames() async throws {
         try await withRunningExecApp { app, port in
-            // A real agent socket, registered through the production handshake.
+            // A real agent socket, registered through the production handshake:
+            // SPIFFE/mTLS, the only way an agent authenticates. SPIRE is enabled
+            // without a trust bundle, so the XFCC `URI=` alone establishes
+            // identity (as it does behind an Envoy that verified the cert), and
+            // the enrollment row supplies the org scope a new agent needs.
             let agentName = "exec-attach-agent"
+            app.spireService = SPIREService(
+                config: SPIREServiceConfig(enabled: true, trustDomain: "strato.local"),
+                logger: app.logger,
+                httpClient: app.client)
+
             let org = Organization(name: "Exec WS Org", description: "org for exec attach test")
             try await org.save(on: app.db)
-            let presented = AgentRegistrationToken(
-                agentName: agentName, expirationHours: 1,
+            let enrollment = AgentEnrollment(
+                agentName: agentName,
+                spiffeID: "spiffe://strato.local/agent/\(agentName)",
+                expirationHours: 1,
                 organizationScope: .organization(try org.requireID()))
-            try await presented.save(on: app.db)
+            try await enrollment.save(on: app.db)
 
             var agentHeaders = HTTPHeaders()
-            agentHeaders.bearerAuthorization = .init(token: presented.token)
+            agentHeaders.add(
+                name: "X-Forwarded-Client-Cert",
+                value: "URI=spiffe://strato.local/agent/\(agentName)")
             let agent = try await ExecWSClient.connect(
                 url: "ws://127.0.0.1:\(port)/agent/ws?name=\(agentName)",
                 headers: agentHeaders,
