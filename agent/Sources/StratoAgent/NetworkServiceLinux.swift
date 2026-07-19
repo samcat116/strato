@@ -1361,13 +1361,26 @@ extension NetworkServiceLinux: NetworkActuator {
         // The v6 sibling. Independent of the v4 route: each reconciles only its
         // own family's default prefix, so one family's absence never disturbs
         // the other. Only meaningful once the port carries a v6 address.
-        if uplinkCIDRs.count > 1, let nextHop6 = uplink.gateway6 {
-            try await ensureDefaultRoute(router: router.name, nextHop: nextHop6)
-        } else if uplinkCIDRs.count > 1 {
-            let message =
-                "OVN uplink has no gateway6; skipping the router IPv6 default route "
-                + "(IPv6 SNAT egress limited to the external subnet)"
-            logger.warning("\(message)", metadata: ["router": .string(router.name)])
+        if uplinkCIDRs.count > 1 {
+            if let nextHop6 = uplink.gateway6 {
+                // Validate here rather than letting ensureDefaultRoute throw: a
+                // throw escapes ensureUplink, reconcile records the uplink as
+                // not ready, and it then skips *every* SNAT rule on the router —
+                // so a typo in the optional v6 next hop would take IPv4 egress
+                // down with it. Degrade to a v4 uplink instead.
+                if IPv6Address(nextHop6) != nil {
+                    try await ensureDefaultRoute(router: router.name, nextHop: nextHop6)
+                } else {
+                    logger.error(
+                        "OVN uplink gateway6 is not a valid IPv6 address; skipping the IPv6 default route",
+                        metadata: ["router": .string(router.name), "gateway6": .string(nextHop6)])
+                }
+            } else {
+                let message =
+                    "OVN uplink has no gateway6; skipping the router IPv6 default route "
+                    + "(IPv6 SNAT egress limited to the external subnet)"
+                logger.warning("\(message)", metadata: ["router": .string(router.name)])
+            }
         }
 
         return true
@@ -1395,6 +1408,13 @@ extension NetworkServiceLinux: NetworkActuator {
                 logger.warning(
                     "IPv6 SNAT skipped: no external_cidr6 configured on the OVN uplink",
                     metadata: ["router": .string(routerName), "logicalIP": .string(logicalIP)])
+                // Drop any rule an earlier, since-removed v6 uplink left behind.
+                // Teardown can't: the plan still *wants* this rule (planning is
+                // pure and can't see the uplink config), so the stale rule is
+                // desired-and-observed and never classified as extra. It would
+                // otherwise keep translating to an external address the port no
+                // longer claims — worse than having no IPv6 egress at all.
+                try await removeSNAT(router: routerName, logicalIP: logicalIP)
                 return
             }
             externalIP = externalIP6

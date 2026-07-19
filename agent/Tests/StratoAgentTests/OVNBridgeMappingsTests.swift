@@ -74,6 +74,14 @@ struct OVNUplinkConfigTests {
 
         #expect(OVNUplinkConfig(externalCIDR: "203.0.113.2/24", externalCIDR6: "2001:db8::2").externalIP6 == nil)
         #expect(OVNUplinkConfig(externalCIDR: "203.0.113.2/24", externalCIDR6: "junk/64").externalIP6 == nil)
+        // An out-of-range prefix must be nil, not just a bad address half:
+        // ensureUplink validates the whole CIDR, so a laxer accessor here would
+        // leave the gateway port v4-only while SNAT still translated to an
+        // address the port never claimed.
+        #expect(
+            OVNUplinkConfig(externalCIDR: "203.0.113.2/24", externalCIDR6: "2001:db8::2/129").externalIP6 == nil)
+        #expect(
+            OVNUplinkConfig(externalCIDR: "203.0.113.2/24", externalCIDR6: "2001:db8::2/foo").externalIP6 == nil)
         // A v4 address in the v6 slot is not a valid v6 uplink.
         #expect(
             OVNUplinkConfig(externalCIDR: "203.0.113.2/24", externalCIDR6: "203.0.113.9/24").externalIP6 == nil)

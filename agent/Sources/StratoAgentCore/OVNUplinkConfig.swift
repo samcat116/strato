@@ -71,11 +71,14 @@ public struct OVNUplinkConfig: Sendable, Equatable, Codable {
     /// The dedicated external IPv6 address (host portion of `externalCIDR6`),
     /// used as the IPv6 SNAT `external_ip`. Canonicalized to RFC 5952 form so
     /// it compares equal to what OVN reports back and SNAT rules don't churn.
-    /// Nil when `externalCIDR6` is absent or isn't a valid `ip/prefix`.
+    /// Nil when `externalCIDR6` is absent or isn't a valid `ip/prefix` —
+    /// including an out-of-range prefix like `/129`. Parsed through `IPv6CIDR`,
+    /// the *same* validation `ensureUplink` uses to decide whether the gateway
+    /// router port gets a v6 address: were this laxer, a bad prefix would leave
+    /// the port v4-only while SNAT still translated to an address the port
+    /// never claimed.
     public var externalIP6: String? {
-        guard let externalCIDR6 else { return nil }
-        let parts = externalCIDR6.split(separator: "/", omittingEmptySubsequences: false)
-        guard parts.count == 2, let ip = parts.first, let address = IPv6Address(String(ip)) else { return nil }
-        return address.description
+        guard let externalCIDR6, let cidr6 = IPv6CIDR(externalCIDR6) else { return nil }
+        return cidr6.base.description
     }
 }
