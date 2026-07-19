@@ -106,9 +106,14 @@ actor QEMUService: HypervisorService {
                 // to qcow2 when the source format differs. This stage gets its
                 // own generous budget — multi-GB downloads are legitimate and
                 // must not be squeezed into the process-spawn envelope.
+                // Explicitly `.cancelAndWait`: materialization writes through
+                // a deterministic staging path and clears any partial it finds,
+                // so abandoning a slow attempt would let a retry delete its
+                // output mid-write and publish a truncated disk.
                 let attachment = try await StageBudget.run(
                     seconds: StageBudget.imageMaterializationSeconds,
-                    stage: "image materialization"
+                    stage: "image materialization",
+                    onTimeout: .cancelAndWait
                 ) { [storage] in
                     try await storage.materializeDisk(
                         at: "\(self.vmStoragePath)/\(vmId)/disk.qcow2",
@@ -269,8 +274,16 @@ actor QEMUService: HypervisorService {
 
         // Start VM execution
         do {
-            try await vm.start()
+            try await controlled("qmp-start", vmId: vmId) {
+                try await vm.start()
+            }
         } catch {
+            // A budget timeout is ambiguous — the guest may be perfectly alive
+            // behind a wedged control channel — so it must not fall into the
+            // respawn below, which tears the process down. Respawn is for a
+            // channel that is *known* dead, which is what a real start error
+            // reports.
+            if case HypervisorServiceError.timeout = error { throw error }
             // A guest that powered off took its QEMU process with it, so the
             // control channel is dead and `cont` cannot revive it. Respawn the
             // process from the configuration the VM was created with (its disks
@@ -287,7 +300,9 @@ actor QEMUService: HypervisorService {
             try await manager.createVM(
                 config: config, timeout: TimeInterval(StageBudget.hypervisorSpawnSeconds))
             activeVMs[vmId] = manager
-            try await manager.start()
+            try await controlled("qmp-start-respawned", vmId: vmId) {
+                try await manager.start()
+            }
         }
 
         logger.info("QEMU VM booted successfully", metadata: ["vmId": .string(vmId)])
@@ -300,8 +315,11 @@ actor QEMUService: HypervisorService {
 
         logger.info("Shutting down QEMU VM", metadata: ["vmId": .string(vmId)])
 
-        // Graceful shutdown
-        try await vm.shutdown()
+        // Graceful shutdown. Longer budget than the other control calls: the
+        // adopted-VM path polls for up to 30s before forcing termination.
+        try await controlled("qmp-shutdown", vmId: vmId, seconds: 60) {
+            try await vm.shutdown()
+        }
 
         logger.info("QEMU VM shutdown completed", metadata: ["vmId": .string(vmId)])
     }
@@ -314,7 +332,9 @@ actor QEMUService: HypervisorService {
         logger.info("Rebooting QEMU VM", metadata: ["vmId": .string(vmId)])
 
         // System reset
-        try await vm.reset()
+        try await controlled("qmp-reset", vmId: vmId) {
+            try await vm.reset()
+        }
 
         logger.info("QEMU VM reboot initiated", metadata: ["vmId": .string(vmId)])
     }
@@ -327,7 +347,9 @@ actor QEMUService: HypervisorService {
         logger.info("Pausing QEMU VM", metadata: ["vmId": .string(vmId)])
 
         // Pause VM
-        try await vm.pause()
+        try await controlled("qmp-pause", vmId: vmId) {
+            try await vm.pause()
+        }
 
         logger.info("QEMU VM paused", metadata: ["vmId": .string(vmId)])
     }
@@ -340,7 +362,9 @@ actor QEMUService: HypervisorService {
         logger.info("Resuming QEMU VM", metadata: ["vmId": .string(vmId)])
 
         // Resume VM
-        try await vm.start()
+        try await controlled("qmp-resume", vmId: vmId) {
+            try await vm.start()
+        }
 
         logger.info("QEMU VM resumed", metadata: ["vmId": .string(vmId)])
     }
@@ -354,7 +378,9 @@ actor QEMUService: HypervisorService {
 
         // Destroy VM (network attachments are torn down by the agent's
         // NetworkOrchestrator after this returns)
-        try await qemuManager.destroy()
+        try await controlled("qmp-destroy", vmId: vmId) {
+            try await qemuManager.destroy()
+        }
 
         // Clean up VM resources
         activeVMs.removeValue(forKey: vmId)
@@ -458,7 +484,7 @@ actor QEMUService: HypervisorService {
             // stalls the console too. On timeout report `.unknown` rather than
             // fabricating `.shutdown` for a VM that is likely still running.
             let qemuStatus = try await StageBudget.run(
-                seconds: StageBudget.statusQuerySeconds, stage: "qmp-status"
+                seconds: StageBudget.statusQuerySeconds, stage: "qmp-status", onTimeout: .abandon
             ) {
                 try await qemuManager.getStatus()
             }
@@ -489,6 +515,43 @@ actor QEMUService: HypervisorService {
 
     func listVMs() async -> [String] {
         return Array(activeVMs.keys)
+    }
+
+    /// Run a hypervisor control-channel *command* under a time budget.
+    ///
+    /// Deliberately `.cancelAndWait`, not `.abandon`. These are commands, not
+    /// reads: destroy, disk hot-plug, and the power-state transitions all
+    /// mutate guest or host state, and the command is already on the wire when
+    /// the budget expires. Abandoning one lets it land *after* the agent has
+    /// reported failure and a retry has run — a late `destroy` completing after
+    /// `deleteVM` threw leaves `activeVMs` pointing at a dead process, and a
+    /// late `attach`/`detach` mutates a guest the agent has already re-planned
+    /// around. Waiting for the unwind keeps "the agent gave up" and "the
+    /// command took effect" from both being true.
+    ///
+    /// This terminates because the command itself is bounded a layer down:
+    /// `QMPClient` gives every request its own deadline (samcat116/swift-qemu#8),
+    /// so the operation returns an error rather than parking forever. The
+    /// budget here is the outer belt-and-braces bound, and a stuck command is
+    /// contained to its own VM's serial lane rather than the whole agent.
+    private func controlled<T: Sendable>(
+        _ stage: String,
+        vmId: String,
+        seconds: Int = StageBudget.hypervisorControlSeconds,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        do {
+            return try await StageBudget.run(
+                seconds: seconds, stage: stage, onTimeout: .cancelAndWait, operation: operation)
+        } catch let error as StageBudgetError {
+            logger.error(
+                "Hypervisor control call exceeded its budget",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "stage": .string(stage),
+                ])
+            throw HypervisorServiceError.timeout("\(stage) for VM \(vmId): \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Orphan Re-adoption (issue #260)
@@ -527,7 +590,29 @@ actor QEMUService: HypervisorService {
         let adopted = AdoptedQEMUVM(socketPath: socketPath, logger: logger)
         let qemuStatus: QEMUVMStatus
         do {
-            qemuStatus = try await adopted.connect()
+            // A stale socket can accept a connection and then never speak, in
+            // which case the QMP greeting never arrives. Without a bound this
+            // parks forever holding the reconcile lane (issue #516).
+            qemuStatus = try await StageBudget.run(
+                seconds: StageBudget.adoptionSeconds, stage: "qmp-adopt", onTimeout: .abandon
+            ) {
+                try await adopted.connect()
+            }
+        } catch is StageBudgetError {
+            // Deliberately NOT `adoptionTargetGone`: that means "the process is
+            // gone" and makes the caller re-create the VM from its manifest
+            // spec. A timeout means the opposite — we could not tell either
+            // way — and re-creating a VM whose QEMU is alive would materialize
+            // over a running guest's disk. Report a transient timeout so the
+            // next level-triggered sync retries adoption instead.
+            logger.warning(
+                "Re-adoption timed out; leaving the VM orphaned for the next sync",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "socket": .string(socketPath),
+                ])
+            throw HypervisorServiceError.timeout(
+                "re-adopting VM \(vmId) over \(socketPath) exceeded \(StageBudget.adoptionSeconds)s")
         } catch {
             // A live QEMU always accepts connections on its QMP server socket,
             // so a refused/failed connect means the process is gone and the
@@ -578,7 +663,9 @@ actor QEMUService: HypervisorService {
             ])
 
         do {
-            try await manager.attachDisk(path: volumePath, deviceName: deviceName, readOnly: readonly)
+            try await controlled("qmp-attach-disk", vmId: vmId) {
+                try await manager.attachDisk(path: volumePath, deviceName: deviceName, readOnly: readonly)
+            }
             logger.info(
                 "Disk attached successfully",
                 metadata: [
@@ -614,7 +701,9 @@ actor QEMUService: HypervisorService {
             ])
 
         do {
-            try await manager.detachDisk(deviceName: deviceName)
+            try await controlled("qmp-detach-disk", vmId: vmId) {
+                try await manager.detachDisk(deviceName: deviceName)
+            }
             logger.info(
                 "Disk detached successfully",
                 metadata: [

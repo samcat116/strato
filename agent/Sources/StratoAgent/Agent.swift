@@ -144,6 +144,16 @@ actor Agent {
     // retried on every heartbeat until it succeeds, so a transient failure only
     // leaves the on-disk manifest stale for a bounded window.
     private var manifestPersistFailed = false
+    // Last successful observation of each hypervisor, reported when a live query
+    // exceeds its budget. Liveness must not depend on hypervisor progress: a
+    // stuck hypervisor call used to block the heartbeat, so the control plane
+    // read a busy agent as a dead one and failed its in-flight work (issue #516).
+    // Bumped when an observed-state report starts assembling. A report that
+    // overran its budget was abandoned mid-flight, so it must not transmit
+    // afterwards: reports carry full-list semantics and the control plane
+    // applies them in receive order, so a late one would overwrite a newer
+    // report's view with stale observations (issue #516).
+    private var observedReportEpoch: UInt64 = 0
 
     private let networkMode: NetworkMode?
     // Chassis-level OVN settings (ovn-remote/encap external_ids) the network
@@ -1439,7 +1449,26 @@ actor Agent {
         // control plane. The heartbeat keeps liveness/presence; the report is
         // the periodic correctness backstop for VM state (issue #260).
         if controlPlaneSupportsStateSync {
-            await sendObservedStateReport()
+            // Bounded as a whole: the report walks every VM, and it runs on the
+            // heartbeat's own task, so an overlong report delays the *next*
+            // beat. Skipping one is harmless — it is a periodic backstop and
+            // the next round re-drives it (issue #516).
+            //
+            // `.abandon` despite the report having an effect (it transmits):
+            // `sendObservedStateReport` stamps an epoch and re-checks it
+            // immediately before sending, so an abandoned report finds itself
+            // superseded and drops instead of applying a stale full-list view
+            // over a newer one. Remove that guard and this must become
+            // `.cancelAndWait`.
+            do {
+                try await StageBudget.run(
+                    seconds: 15, stage: "observed-state-report", onTimeout: .abandon
+                ) { [self] in
+                    await sendObservedStateReport()
+                }
+            } catch {
+                logger.warning("Observed-state report exceeded its budget; skipping this round")
+            }
         }
     }
 
@@ -1464,8 +1493,14 @@ actor Agent {
         var reservedCPU = 0
         var reservedMemory: Int64 = 0
 
-        for service in hypervisorServices.values {
-            let reserved = await service.reservedResources()
+        for (type, service) in hypervisorServices {
+            // Falls back to the manifest, never to nothing: under-reporting
+            // reservations advertises capacity this host does not have and
+            // invites the scheduler to over-place.
+            let reserved =
+                await observe(type, "reserved-resources") {
+                    await service.reservedResources()
+                } ?? manifestReservations(for: type)
             reservedCPU += reserved.vcpus
             reservedMemory += reserved.memoryBytes
         }
@@ -1536,12 +1571,69 @@ actor Agent {
     private func getRunningVMList() async -> [String] {
         var vmList: [String] = []
 
-        for service in hypervisorServices.values {
-            let vms = await service.listVMs()
+        for (type, service) in hypervisorServices {
+            // Falls back to the manifest rather than omitting the hypervisor.
+            // This list is not advisory: the control plane treats a VM absent
+            // from the heartbeat as lost and sets it to `.error`
+            // (`reconcileVMs`), so reporting a *short* list because a poll
+            // timed out would corrupt the state of healthy VMs.
+            let vms =
+                await observe(type, "list-vms") {
+                    await service.listVMs()
+                } ?? manifestVMIds(for: type)
             vmList.append(contentsOf: vms)
         }
 
         return vmList
+    }
+
+    /// VMs this agent manages on `type`, from the durable manifest. Matches
+    /// what a hypervisor's `listVMs()` reports (its managed set), so it stands
+    /// in faithfully when the live query does not answer.
+    private func manifestVMIds(for type: HypervisorType) -> [String] {
+        managedVMs.compactMap { $0.value.hypervisorType == type ? $0.key : nil }
+    }
+
+    /// Reservations for `type` from the durable manifest, which carries every
+    /// managed VM's sizing — authoritative, not a guess.
+    private func manifestReservations(for type: HypervisorType) -> (vcpus: Int, memoryBytes: Int64) {
+        var vcpus = 0
+        var memoryBytes: Int64 = 0
+        for entry in managedVMs.values where entry.hypervisorType == type {
+            vcpus += entry.spec.cpus
+            memoryBytes += entry.spec.memoryBytes
+        }
+        return (vcpus, memoryBytes)
+    }
+
+    /// Query a hypervisor for reporting purposes under a short budget,
+    /// returning nil if it does not answer in time.
+    ///
+    /// These calls exist only to describe the host, but they run on the
+    /// hypervisor's actor alongside real work. Before issue #516 the heartbeat
+    /// awaited them unbounded, so one stuck hypervisor call stopped every
+    /// subsequent heartbeat and the control plane marked a live agent offline.
+    /// A stale-but-recent answer is far better than no heartbeat at all.
+    private func observe<T: Sendable>(
+        _ type: HypervisorType,
+        _ stage: String,
+        _ query: @escaping @Sendable () async -> T
+    ) async -> T? {
+        do {
+            return try await StageBudget.run(
+                seconds: StageBudget.observationSeconds, stage: stage, onTimeout: .abandon
+            ) {
+                await query()
+            }
+        } catch {
+            logger.warning(
+                "Hypervisor did not answer an observation query in time; reporting last known state",
+                metadata: [
+                    "hypervisor": .string(type.rawValue),
+                    "stage": .string(stage),
+                ])
+            return nil
+        }
     }
 }
 
@@ -3433,6 +3525,9 @@ extension Agent: ReconcileActuator {
     func sendObservedStateReport() async {
         guard assignedAgentID != nil, let reconciler else { return }
 
+        observedReportEpoch += 1
+        let epoch = observedReportEpoch
+
         var observed: [ObservedVMState] = []
         var reported = Set<String>()
 
@@ -3516,6 +3611,20 @@ extension Agent: ReconcileActuator {
             resources: await getAgentResources(),
             agentUpdateStatus: autoUpdateStatus
         )
+        // A newer report started while this one was assembling — which is
+        // exactly what happens when this one overran its budget and was
+        // abandoned. Sending now would apply stale observations on top of
+        // fresher ones and could flip VM status backward.
+        guard epoch == observedReportEpoch else {
+            logger.debug(
+                "Discarding superseded observed-state report",
+                metadata: [
+                    "epoch": .stringConvertible(epoch),
+                    "current": .stringConvertible(observedReportEpoch),
+                ])
+            return
+        }
+
         do {
             try await websocketClient?.sendMessage(report)
         } catch {
