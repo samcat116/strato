@@ -11,7 +11,7 @@ import Fluent
 struct AddFetchStateToImageArtifact: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("image_artifacts")
-            .field("status", .string, .required, .sql(.default("'ready'")))
+            .field("status", .string, .required, .sql(.default("ready")))
             .update()
         try await database.schema("image_artifacts")
             .field("source_url", .string)

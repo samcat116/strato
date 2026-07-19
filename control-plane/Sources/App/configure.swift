@@ -457,6 +457,13 @@ public func configure(_ app: Application) async throws {
     // vm_network_interfaces, which it references.
     app.migrations.add(CreateFloatingIP())
 
+    // FluentKit force-unwraps persisted @Enum raw values on first property
+    // access. Normalize casing drift and put a database validation boundary in
+    // front of every persisted enum so malformed rows cannot trap the process
+    // (issue #527). This stays last because it covers tables added throughout
+    // the full migration history.
+    app.migrations.add(EnforcePersistedEnumValues())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

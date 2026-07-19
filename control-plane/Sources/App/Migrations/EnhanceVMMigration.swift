@@ -9,7 +9,7 @@ struct EnhanceVM: AsyncMigration {
 
         // VM status and hypervisor tracking
         try await database.schema("vms")
-            .field("status", .string, .required, .sql(.default("'created'")))
+            .field("status", .string, .required, .sql(.default("Created")))
             .update()
 
         try await database.schema("vms")
@@ -79,11 +79,11 @@ struct EnhanceVM: AsyncMigration {
 
         // Console configuration
         try await database.schema("vms")
-            .field("console_mode", .string, .required, .sql(.default("'Pty'")))
+            .field("console_mode", .string, .required, .sql(.default("Pty")))
             .update()
 
         try await database.schema("vms")
-            .field("serial_mode", .string, .required, .sql(.default("'Pty'")))
+            .field("serial_mode", .string, .required, .sql(.default("Pty")))
             .update()
 
         try await database.schema("vms")

@@ -16,7 +16,7 @@ import SQLKit
 struct AddDesiredStateToVM: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("vms")
-            .field("desired_status", .string, .required, .sql(.default("'Shutdown'")))
+            .field("desired_status", .string, .required, .sql(.default("Shutdown")))
             .update()
         try await database.schema("vms")
             .field("generation", .int64, .required, .sql(.default(0)))

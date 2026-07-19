@@ -7,7 +7,7 @@ import Fluent
 struct AddArchitectureToImage: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("images")
-            .field("architecture", .string, .required, .sql(.default("'x86_64'")))
+            .field("architecture", .string, .required, .sql(.default("x86_64")))
             .update()
     }
 

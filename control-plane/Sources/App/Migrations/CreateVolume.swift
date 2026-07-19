@@ -15,11 +15,11 @@ struct CreateVolume: AsyncMigration {
 
             // Volume specifications
             .field("size", .int64, .required)
-            .field("format", .string, .required, .sql(.default("'qcow2'")))
-            .field("type", .string, .required, .sql(.default("'data'")))
+            .field("format", .string, .required, .sql(.default("qcow2")))
+            .field("type", .string, .required, .sql(.default("data")))
 
             // Status tracking
-            .field("status", .string, .required, .sql(.default("'creating'")))
+            .field("status", .string, .required, .sql(.default("creating")))
             .field("error_message", .string)
 
             // Storage location
@@ -65,7 +65,7 @@ struct CreateVolume: AsyncMigration {
             .field("size", .int64, .required)
 
             // Status tracking
-            .field("status", .string, .required, .sql(.default("'creating'")))
+            .field("status", .string, .required, .sql(.default("creating")))
             .field("error_message", .string)
 
             // Storage location
