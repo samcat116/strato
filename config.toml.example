@@ -40,6 +40,12 @@ log_level = "info"
 #   Linux: /var/lib/strato/vms
 # vm_storage_dir = "/var/lib/strato/vms"
 
+# Directory where managed volume disks and their snapshots are stored
+# Optional - platform-specific defaults:
+#   macOS: ~/Library/Application Support/strato/volumes
+#   Linux: /var/lib/strato/volumes
+# volume_storage_dir = "/var/lib/strato/volumes"
+
 # Image caches. Downloaded VM images (disk images, kernels, rootfs artifacts)
 # and materialized sandbox rootfs images are kept on the host so repeat
 # launches of the same image skip the download entirely.
