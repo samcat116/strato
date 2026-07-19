@@ -1,0 +1,30 @@
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_32489a5bc16f1b::t_1456389626cced 337-349
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_32489a5bc16f1b::t_78ae424ce1b55e 1547,1555-1558
+control-plane/Tests/AppTests/FloatingIPControllerTests.swift
+  s_32489a5bc16f1b::t_a1d0bedebf53b3 460-461,463-468
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_32489a5bc16f1b::t_a6718c6bcfc2b5 642-652,661-663,677
+  s_32489a5bc16f1b::t_0fe10325e410d8 596-602
+agent/Tests/StratoAgentTests/NetworkReconcilerTests.swift
+  s_32489a5bc16f1b::t_8b137fd3e3551e 565-583
+  s_32489a5bc16f1b::t_40019338399d22 543
+  s_32489a5bc16f1b::t_ef6dcc731034b9 637-638
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "d47136bd53bc7e601a4032ef3efedf7f6983ef8f",
+  "prompts": {},
+  "sessions": {
+    "s_32489a5bc16f1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c39f58be-db1c-4959-a86f-f6419cb8470f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
