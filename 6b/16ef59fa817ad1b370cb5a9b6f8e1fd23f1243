@@ -1,0 +1,124 @@
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_32489a5bc16f1b::t_410d35418410a0 352,354-356
+  s_32489a5bc16f1b::t_2a0ee2efcfa36a 315-351,353,357-388
+control-plane/Sources/App/Models/FloatingIPPool.swift
+  s_32489a5bc16f1b::t_9173aa43f3a95c 1-136
+control-plane/Sources/App/configure.swift
+  s_32489a5bc16f1b::t_50278f29771f62 447-451
+deploy/frr/README.md
+  s_32489a5bc16f1b::t_c8ebec68205613 1-53
+agent/Sources/StratoAgentCore/OVNDynamicRoutingConfig.swift
+  s_32489a5bc16f1b::t_8bdefa78f1dce9 1-76
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_32489a5bc16f1b::t_2e05379ecbf0c5 1-600
+agent/Sources/StratoAgent/Agent.swift
+  s_32489a5bc16f1b::t_8666b84bbad853 380
+  s_32489a5bc16f1b::t_ab2b86b64b763b 163-165
+  s_32489a5bc16f1b::t_0a952f9f849dd4 283
+  s_32489a5bc16f1b::t_c913d2fba234a7 253
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_32489a5bc16f1b::t_72d2908214acee 305
+  s_32489a5bc16f1b::t_e2db62fdcf3351 341
+  s_32489a5bc16f1b::t_7b96a17c9a1542 375
+  s_32489a5bc16f1b::t_f8ea7f9a63693e 264-268
+  s_32489a5bc16f1b::t_eb4de123ab4641 691
+  s_32489a5bc16f1b::t_d2106ca7636c33 585-621
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_32489a5bc16f1b::t_53a14db665fa7c 243
+control-plane/Sources/App/routes.swift
+  s_32489a5bc16f1b::t_ff4d0cf64c2010 53-55
+agent/Tests/StratoAgentTests/NetworkReconcilerTests.swift
+  s_32489a5bc16f1b::t_8254e68788f904 417-582
+  s_32489a5bc16f1b::t_2d947c3f727b8f 613-621
+  s_32489a5bc16f1b::t_49696e15287c1e 20-21,32-33
+docs/architecture/wire-protocol.md
+  s_32489a5bc16f1b::t_11e3cd07bd2515 125-128
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_32489a5bc16f1b::t_32a730bf35903f 24-27
+  s_32489a5bc16f1b::t_8a844d46661365 59,67
+  s_32489a5bc16f1b::t_aefdb7e70e7204 96-98,100
+  s_32489a5bc16f1b::t_979b4ece59841f 1192,1195-1196,1198-1199,1212-1213
+  s_32489a5bc16f1b::t_f12b047860756b 1559-1560
+  s_32489a5bc16f1b::t_254ec9d26da92b 1578
+  s_32489a5bc16f1b::t_e94b8ddb8b1c03 1503-1558,1561-1577,1579-1612
+control-plane/Sources/App/Services/IPAMService.swift
+  s_32489a5bc16f1b::t_4211455bc28ff6 200-219
+deploy/frr/frr.conf.example
+  s_32489a5bc16f1b::t_5c0610bdd727c2 1-21
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_32489a5bc16f1b::t_50b4d5ea6d8f9b 285,292-293,300
+  s_32489a5bc16f1b::t_8bdb52189282d6 591-600
+  s_32489a5bc16f1b::t_0598e124398073 656-663,670-671
+  s_32489a5bc16f1b::t_88709e0a9c5495 330,337-338,345,350
+  s_32489a5bc16f1b::t_7cbeb075228cc8 493-497
+  s_32489a5bc16f1b::t_d01024788d6383 68-90
+  s_32489a5bc16f1b::t_aa5d492bbed8e5 143-162,170-171,173-176,181,184-186
+  s_32489a5bc16f1b::t_e2c7a92804b77c 216,231-233,242-243
+  s_32489a5bc16f1b::t_ccce726a53ff06 433-448,460-461
+  s_32489a5bc16f1b::t_df9f2bf023d2c5 308
+  s_32489a5bc16f1b::t_909b80c0d3ab72 515-518
+  s_32489a5bc16f1b::t_561d425b382542 566-569
+  s_32489a5bc16f1b::t_a99942d8f38f23 386
+  s_32489a5bc16f1b::t_f3e7537bdeec68 261-274
+docs/architecture/networking.md
+  s_32489a5bc16f1b::t_02d61d4b362094 353,362-407
+  s_32489a5bc16f1b::t_7e0a49a4d0b257 434-439
+  s_32489a5bc16f1b::t_a6424ddfeccd86 408
+control-plane/Sources/App/Services/AgentService.swift
+  s_32489a5bc16f1b::t_c97fc27fa8c08c 1801-1806,1825-1826
+  s_32489a5bc16f1b::t_7d0550e895c56c 2088
+  s_32489a5bc16f1b::t_5bfae3e4c4561b 2061,2072
+  s_32489a5bc16f1b::t_61080e32a2bdf7 2124-2181
+  s_32489a5bc16f1b::t_017bc66d4b4bd0 2098,2101
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_32489a5bc16f1b::t_7d32bb7c6de9af 111-114
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_32489a5bc16f1b::t_1c1c3625c64829 247-277
+  s_32489a5bc16f1b::t_8b86fd754298f9 340-345
+  s_32489a5bc16f1b::t_ca56de0e37aedf 360-361,376
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_32489a5bc16f1b::t_e5fc1d4c6a9150 220
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_32489a5bc16f1b::t_169b8891eb93ee 297-340
+control-plane/Sources/App/Migrations/CreateFloatingIP.swift
+  s_32489a5bc16f1b::t_9762df570d35b4 1-50
+spicedb/schema.zed
+  s_32489a5bc16f1b::t_456717a5d55dd9 131
+  s_32489a5bc16f1b::t_20a7b499421aff 297-320
+docs/architecture/control-plane.md
+  s_32489a5bc16f1b::t_aaa1d880767b54 76-77
+control-plane/Tests/AppTests/FloatingIPControllerTests.swift
+  s_32489a5bc16f1b::t_5ca69c5b2129a1 1-274
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_32489a5bc16f1b::t_d8ab42ce83e3f9 26
+  s_32489a5bc16f1b::t_279765c5324620 94-95
+  s_32489a5bc16f1b::t_f5b4b30ff7f540 71
+config.toml.example
+  s_32489a5bc16f1b::t_63da1e56dadf8f 228-241
+deploy/ovn-central/Dockerfile
+  s_32489a5bc16f1b::t_aec610f15cd505 1-3
+agent/Dockerfile
+  s_32489a5bc16f1b::t_eebb291e76c11b 127-131
+  s_32489a5bc16f1b::t_591d113f3974bb 90-94
+control-plane/Sources/App/Models/FloatingIP.swift
+  s_32489a5bc16f1b::t_609cdf9d58783e 1-105
+helm/strato-control-plane/files/spicedb-schema.zed
+  s_32489a5bc16f1b::t_ce7aa446e849ec 131,297-315,319
+  s_32489a5bc16f1b::t_95f4f8122f3fbb 316-318,320
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6b16ef59fa817ad1b370cb5a9b6f8e1fd23f1243",
+  "prompts": {},
+  "sessions": {
+    "s_32489a5bc16f1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c39f58be-db1c-4959-a86f-f6419cb8470f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
