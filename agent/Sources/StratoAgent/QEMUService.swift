@@ -300,8 +300,11 @@ actor QEMUService: HypervisorService {
 
         logger.info("Shutting down QEMU VM", metadata: ["vmId": .string(vmId)])
 
-        // Graceful shutdown
-        try await vm.shutdown()
+        // Graceful shutdown. Longer budget than the other control calls: the
+        // adopted-VM path polls for up to 30s before forcing termination.
+        try await controlled("qmp-shutdown", vmId: vmId, seconds: 60) {
+            try await vm.shutdown()
+        }
 
         logger.info("QEMU VM shutdown completed", metadata: ["vmId": .string(vmId)])
     }
@@ -314,7 +317,9 @@ actor QEMUService: HypervisorService {
         logger.info("Rebooting QEMU VM", metadata: ["vmId": .string(vmId)])
 
         // System reset
-        try await vm.reset()
+        try await controlled("qmp-reset", vmId: vmId) {
+            try await vm.reset()
+        }
 
         logger.info("QEMU VM reboot initiated", metadata: ["vmId": .string(vmId)])
     }
@@ -327,7 +332,9 @@ actor QEMUService: HypervisorService {
         logger.info("Pausing QEMU VM", metadata: ["vmId": .string(vmId)])
 
         // Pause VM
-        try await vm.pause()
+        try await controlled("qmp-pause", vmId: vmId) {
+            try await vm.pause()
+        }
 
         logger.info("QEMU VM paused", metadata: ["vmId": .string(vmId)])
     }
@@ -340,7 +347,9 @@ actor QEMUService: HypervisorService {
         logger.info("Resuming QEMU VM", metadata: ["vmId": .string(vmId)])
 
         // Resume VM
-        try await vm.start()
+        try await controlled("qmp-resume", vmId: vmId) {
+            try await vm.start()
+        }
 
         logger.info("QEMU VM resumed", metadata: ["vmId": .string(vmId)])
     }
@@ -354,7 +363,9 @@ actor QEMUService: HypervisorService {
 
         // Destroy VM (network attachments are torn down by the agent's
         // NetworkOrchestrator after this returns)
-        try await qemuManager.destroy()
+        try await controlled("qmp-destroy", vmId: vmId) {
+            try await qemuManager.destroy()
+        }
 
         // Clean up VM resources
         activeVMs.removeValue(forKey: vmId)
@@ -491,6 +502,31 @@ actor QEMUService: HypervisorService {
         return Array(activeVMs.keys)
     }
 
+    /// Run a hypervisor control-channel call under a time budget.
+    ///
+    /// Every one of these executes on this actor, so an unbounded call does not
+    /// merely fail its own operation — it occupies the backend for every VM on
+    /// the host, and (via the heartbeat's observation calls) can read as a dead
+    /// agent. Issue #516 was exactly that: one QMP call with no deadline.
+    private func controlled<T: Sendable>(
+        _ stage: String,
+        vmId: String,
+        seconds: Int = StageBudget.hypervisorControlSeconds,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        do {
+            return try await StageBudget.run(seconds: seconds, stage: stage, operation: operation)
+        } catch let error as StageBudgetError {
+            logger.error(
+                "Hypervisor control call exceeded its budget",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "stage": .string(stage),
+                ])
+            throw HypervisorServiceError.timeout("\(stage) for VM \(vmId): \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Orphan Re-adoption (issue #260)
 
     /// The deterministic QMP socket every VM exposes for re-adoption.
@@ -527,7 +563,29 @@ actor QEMUService: HypervisorService {
         let adopted = AdoptedQEMUVM(socketPath: socketPath, logger: logger)
         let qemuStatus: QEMUVMStatus
         do {
-            qemuStatus = try await adopted.connect()
+            // A stale socket can accept a connection and then never speak, in
+            // which case the QMP greeting never arrives. Without a bound this
+            // parks forever holding the reconcile lane (issue #516).
+            qemuStatus = try await StageBudget.run(
+                seconds: StageBudget.adoptionSeconds, stage: "qmp-adopt"
+            ) {
+                try await adopted.connect()
+            }
+        } catch is StageBudgetError {
+            // Deliberately NOT `adoptionTargetGone`: that means "the process is
+            // gone" and makes the caller re-create the VM from its manifest
+            // spec. A timeout means the opposite — we could not tell either
+            // way — and re-creating a VM whose QEMU is alive would materialize
+            // over a running guest's disk. Report a transient timeout so the
+            // next level-triggered sync retries adoption instead.
+            logger.warning(
+                "Re-adoption timed out; leaving the VM orphaned for the next sync",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "socket": .string(socketPath),
+                ])
+            throw HypervisorServiceError.timeout(
+                "re-adopting VM \(vmId) over \(socketPath) exceeded \(StageBudget.adoptionSeconds)s")
         } catch {
             // A live QEMU always accepts connections on its QMP server socket,
             // so a refused/failed connect means the process is gone and the
@@ -578,7 +636,9 @@ actor QEMUService: HypervisorService {
             ])
 
         do {
-            try await manager.attachDisk(path: volumePath, deviceName: deviceName, readOnly: readonly)
+            try await controlled("qmp-attach-disk", vmId: vmId) {
+                try await manager.attachDisk(path: volumePath, deviceName: deviceName, readOnly: readonly)
+            }
             logger.info(
                 "Disk attached successfully",
                 metadata: [
@@ -614,7 +674,9 @@ actor QEMUService: HypervisorService {
             ])
 
         do {
-            try await manager.detachDisk(deviceName: deviceName)
+            try await controlled("qmp-detach-disk", vmId: vmId) {
+                try await manager.detachDisk(deviceName: deviceName)
+            }
             logger.info(
                 "Disk detached successfully",
                 metadata: [

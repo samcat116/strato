@@ -24,6 +24,19 @@ public enum StageBudget {
     // blocking the reconcile — and, because status queries share the QEMU
     // service, from wedging every other operation behind them.
     public static let statusQuerySeconds = 10
+    // Lifecycle round-trips over the hypervisor's control channel (boot, pause,
+    // resume, shutdown, disk hot-plug). Healthy calls answer in milliseconds.
+    // The bound matters because these share the hypervisor actor with every
+    // other operation, so an unbounded one wedges the whole backend (issue #516).
+    public static let hypervisorControlSeconds = 30
+    // Re-adopting an orphan: connect to its control socket and read status.
+    // The reported hang was here — a connect that succeeded against a socket
+    // whose peer never spoke, with nothing to time it out.
+    public static let adoptionSeconds = 30
+    // How long the agent may go without observing a hypervisor before it stops
+    // waiting and reports its last known view instead. Liveness reporting must
+    // not be hostage to hypervisor progress.
+    public static let observationSeconds = 5
 
     /// Run `operation`, failing with `StageBudgetError.exceeded` if it does
     /// not complete within `seconds`. The operation task is cancelled on

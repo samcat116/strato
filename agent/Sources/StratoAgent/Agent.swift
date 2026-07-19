@@ -150,6 +150,12 @@ actor Agent {
     // retried on every heartbeat until it succeeds, so a transient failure only
     // leaves the on-disk manifest stale for a bounded window.
     private var manifestPersistFailed = false
+    // Last successful observation of each hypervisor, reported when a live query
+    // exceeds its budget. Liveness must not depend on hypervisor progress: a
+    // stuck hypervisor call used to block the heartbeat, so the control plane
+    // read a busy agent as a dead one and failed its in-flight work (issue #516).
+    private var lastKnownRunningVMs: [HypervisorType: [String]] = [:]
+    private var lastKnownReserved: [HypervisorType: (vcpus: Int, memoryBytes: Int64)] = [:]
 
     private let networkMode: NetworkMode?
     // Chassis-level OVN settings (ovn-remote/encap external_ids) the network
@@ -1487,7 +1493,17 @@ actor Agent {
         // control plane. The heartbeat keeps liveness/presence; the report is
         // the periodic correctness backstop for VM state (issue #260).
         if controlPlaneSupportsStateSync {
-            await sendObservedStateReport()
+            // Bounded as a whole: the report walks every VM, and it runs on the
+            // heartbeat's own task, so an overlong report delays the *next*
+            // beat. Skipping one is harmless — it is a periodic backstop and
+            // the next round re-drives it (issue #516).
+            do {
+                try await StageBudget.run(seconds: 15, stage: "observed-state-report") { [self] in
+                    await sendObservedStateReport()
+                }
+            } catch {
+                logger.warning("Observed-state report exceeded its budget; skipping this round")
+            }
         }
     }
 
@@ -1512,8 +1528,13 @@ actor Agent {
         var reservedCPU = 0
         var reservedMemory: Int64 = 0
 
-        for service in hypervisorServices.values {
-            let reserved = await service.reservedResources()
+        for (type, service) in hypervisorServices {
+            let reserved =
+                await observe(type, "reserved-resources") {
+                    await service.reservedResources()
+                } ?? lastKnownReserved[type]
+            guard let reserved else { continue }
+            lastKnownReserved[type] = reserved
             reservedCPU += reserved.vcpus
             reservedMemory += reserved.memoryBytes
         }
@@ -1584,12 +1605,47 @@ actor Agent {
     private func getRunningVMList() async -> [String] {
         var vmList: [String] = []
 
-        for service in hypervisorServices.values {
-            let vms = await service.listVMs()
+        for (type, service) in hypervisorServices {
+            let vms =
+                await observe(type, "list-vms") {
+                    await service.listVMs()
+                } ?? lastKnownRunningVMs[type]
+            guard let vms else { continue }
+            lastKnownRunningVMs[type] = vms
             vmList.append(contentsOf: vms)
         }
 
         return vmList
+    }
+
+    /// Query a hypervisor for reporting purposes under a short budget,
+    /// returning nil if it does not answer in time.
+    ///
+    /// These calls exist only to describe the host, but they run on the
+    /// hypervisor's actor alongside real work. Before issue #516 the heartbeat
+    /// awaited them unbounded, so one stuck hypervisor call stopped every
+    /// subsequent heartbeat and the control plane marked a live agent offline.
+    /// A stale-but-recent answer is far better than no heartbeat at all.
+    private func observe<T: Sendable>(
+        _ type: HypervisorType,
+        _ stage: String,
+        _ query: @escaping @Sendable () async -> T
+    ) async -> T? {
+        do {
+            return try await StageBudget.run(
+                seconds: StageBudget.observationSeconds, stage: stage
+            ) {
+                await query()
+            }
+        } catch {
+            logger.warning(
+                "Hypervisor did not answer an observation query in time; reporting last known state",
+                metadata: [
+                    "hypervisor": .string(type.rawValue),
+                    "stage": .string(stage),
+                ])
+            return nil
+        }
     }
 }
 
