@@ -560,13 +560,21 @@ public struct AgentConfig: Codable {
         // egress is off unless a dedicated external CIDR is configured.
         let ovnUplink: OVNUplinkConfig?
         if let uplinkTable = tomlData.table("ovn_uplink"), let externalCIDR = uplinkTable.string("external_cidr") {
+            let externalCIDR6 = uplinkTable.string("external_cidr6")
             ovnUplink = OVNUplinkConfig(
                 externalCIDR: externalCIDR,
                 gateway: uplinkTable.string("gateway"),
                 bridge: uplinkTable.string("bridge") ?? OVNUplinkConfig.defaultBridge,
-                physnet: uplinkTable.string("physnet") ?? OVNUplinkConfig.defaultPhysnet
+                physnet: uplinkTable.string("physnet") ?? OVNUplinkConfig.defaultPhysnet,
+                externalCIDR6: externalCIDR6,
+                gateway6: uplinkTable.string("gateway6")
             )
-            logger?.info("OVN SNAT uplink configured", metadata: ["externalCIDR": .string(externalCIDR)])
+            logger?.info(
+                "OVN SNAT uplink configured",
+                metadata: [
+                    "externalCIDR": .string(externalCIDR),
+                    "externalCIDR6": .string(externalCIDR6 ?? "none"),
+                ])
         } else {
             ovnUplink = nil
         }

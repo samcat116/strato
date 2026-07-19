@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 
 /// Operator-provided configuration for the site uplink OVN SNAT egress uses
 /// (issue #342). SNAT needs a **dedicated** external IP on the provider
@@ -19,6 +20,16 @@ public struct OVNUplinkConfig: Sendable, Equatable, Codable {
     public let bridge: String
     /// OVN physnet name mapped to `bridge`. Defaults to `physnet-strato`.
     public let physnet: String
+    /// Optional IPv6 counterpart of `externalCIDR` — the router gateway port's
+    /// address on the provider network, `ip/prefix` (e.g. `2001:db8::2/64`),
+    /// also used as the IPv6 SNAT `external_ip`. Additive to the v4 uplink, not
+    /// a replacement: `external_cidr` stays required (the gateway port's MAC is
+    /// derived from it). Absent means dual-stack networks get v4 egress only.
+    public let externalCIDR6: String?
+    /// Next hop on the provider network for the router's IPv6 default route.
+    /// Absent means no `::/0` route, so v6 egress is limited to the external
+    /// subnet even when `externalCIDR6` is set.
+    public let gateway6: String?
 
     public static let defaultBridge = "br-ex"
     public static let defaultPhysnet = "physnet-strato"
@@ -28,18 +39,24 @@ public struct OVNUplinkConfig: Sendable, Equatable, Codable {
         case gateway
         case bridge
         case physnet
+        case externalCIDR6 = "external_cidr6"
+        case gateway6 = "gateway6"
     }
 
     public init(
         externalCIDR: String,
         gateway: String? = nil,
         bridge: String = OVNUplinkConfig.defaultBridge,
-        physnet: String = OVNUplinkConfig.defaultPhysnet
+        physnet: String = OVNUplinkConfig.defaultPhysnet,
+        externalCIDR6: String? = nil,
+        gateway6: String? = nil
     ) {
         self.externalCIDR = externalCIDR
         self.gateway = gateway
         self.bridge = bridge
         self.physnet = physnet
+        self.externalCIDR6 = externalCIDR6
+        self.gateway6 = gateway6
     }
 
     /// The dedicated external IP (host portion of `externalCIDR`), used as the
@@ -49,5 +66,16 @@ public struct OVNUplinkConfig: Sendable, Equatable, Codable {
         let parts = externalCIDR.split(separator: "/", omittingEmptySubsequences: false)
         guard parts.count == 2, let ip = parts.first, IPv4Address(String(ip)) != nil else { return nil }
         return String(ip)
+    }
+
+    /// The dedicated external IPv6 address (host portion of `externalCIDR6`),
+    /// used as the IPv6 SNAT `external_ip`. Canonicalized to RFC 5952 form so
+    /// it compares equal to what OVN reports back and SNAT rules don't churn.
+    /// Nil when `externalCIDR6` is absent or isn't a valid `ip/prefix`.
+    public var externalIP6: String? {
+        guard let externalCIDR6 else { return nil }
+        let parts = externalCIDR6.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 2, let ip = parts.first, let address = IPv6Address(String(ip)) else { return nil }
+        return address.description
     }
 }

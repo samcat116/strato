@@ -1318,9 +1318,26 @@ extension NetworkServiceLinux: NetworkActuator {
         }
 
         // Gateway router port on the external switch, at the configured
-        // dedicated external address (v4-only: IPv6 has no uplink this phase).
+        // dedicated external address. Dual-stack when the operator supplied an
+        // `external_cidr6`: the same port then also claims the v6 external
+        // address that IPv6 SNAT translates to (issue #519). A malformed
+        // `external_cidr6` degrades the uplink to v4 rather than failing it —
+        // mirroring how a bad tenant v6 config degrades a tenant router port.
+        var uplinkCIDRs = [uplink.externalCIDR]
+        if let externalCIDR6 = uplink.externalCIDR6 {
+            // Canonical form, so a non-canonical operator spelling doesn't read
+            // as port drift on every reconcile. `base`, not `networkAddress`:
+            // this is the port's own host address, not the prefix.
+            if let cidr6 = IPv6CIDR(externalCIDR6) {
+                uplinkCIDRs.append("\(cidr6.base)/\(cidr6.prefix)")
+            } else {
+                logger.error(
+                    "OVN uplink external_cidr6 is not a valid ip/prefix; realizing a v4-only uplink",
+                    metadata: ["externalCIDR6": .string(externalCIDR6)])
+            }
+        }
         try await ensureRouterPort(
-            name: router.externalRouterPortName, mac: uplinkMAC, cidrs: [uplink.externalCIDR],
+            name: router.externalRouterPortName, mac: uplinkMAC, cidrs: uplinkCIDRs,
             switchName: router.externalSwitchName, switchPortName: router.externalSwitchRouterPortName,
             router: router.name)
 
@@ -1341,6 +1358,18 @@ extension NetworkServiceLinux: NetworkActuator {
             logger.warning("\(message)", metadata: ["router": .string(router.name)])
         }
 
+        // The v6 sibling. Independent of the v4 route: each reconciles only its
+        // own family's default prefix, so one family's absence never disturbs
+        // the other. Only meaningful once the port carries a v6 address.
+        if uplinkCIDRs.count > 1, let nextHop6 = uplink.gateway6 {
+            try await ensureDefaultRoute(router: router.name, nextHop: nextHop6)
+        } else if uplinkCIDRs.count > 1 {
+            let message =
+                "OVN uplink has no gateway6; skipping the router IPv6 default route "
+                + "(IPv6 SNAT egress limited to the external subnet)"
+            logger.warning("\(message)", metadata: ["router": .string(router.name)])
+        }
+
         return true
         #else
         return false
@@ -1352,11 +1381,29 @@ extension NetworkServiceLinux: NetworkActuator {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
-        // SNAT to the configured dedicated external IP (reconcile only calls this
-        // after ensureUplink returned true, so the uplink config is present/valid).
-        guard let externalIP = uplinkConfig?.externalIP else {
-            throw NetworkError.invalidConfiguration(
-                "SNAT for \(logicalIP) requested without a configured uplink external IP")
+        // SNAT to the configured dedicated external IP of the rule's own address
+        // family (reconcile only calls this after ensureUplink returned true, so
+        // the v4 uplink config is present/valid).
+        let externalIP: String
+        if IPv6CIDR(logicalIP) != nil {
+            // An IPv6 uplink is optional and additive, so a dual-stack tenant
+            // network on a v4-only uplink is a normal configuration, not an
+            // error. Skip the rule rather than throw: reconcile catches per
+            // subnet, so throwing wouldn't break v4 egress, but it would log an
+            // error every pass for a site that simply has no IPv6 uplink.
+            guard let externalIP6 = uplinkConfig?.externalIP6 else {
+                logger.warning(
+                    "IPv6 SNAT skipped: no external_cidr6 configured on the OVN uplink",
+                    metadata: ["router": .string(routerName), "logicalIP": .string(logicalIP)])
+                return
+            }
+            externalIP = externalIP6
+        } else {
+            guard let externalIP4 = uplinkConfig?.externalIP else {
+                throw NetworkError.invalidConfiguration(
+                    "SNAT for \(logicalIP) requested without a configured uplink external IP")
+            }
+            externalIP = externalIP4
         }
         // Idempotent: reuse a matching rule; re-point one whose external IP drifted.
         for rule in try await snatRules(onRouter: routerName)
@@ -1629,31 +1676,43 @@ extension NetworkServiceLinux {
         // ourselves — the old `ovn-nbctl lr-route-add` rejected a malformed one.
         // Throwing keeps this a failed uplink instead of committing a broken route
         // and then proceeding to install SNAT over silently dead egress.
-        guard IPv4Address(nextHop) != nil else {
+        // The next hop's family picks the default prefix; each family reconciles
+        // only its own, so a v4 and a v6 default coexist untouched. The v6 hop is
+        // canonicalized, so a non-canonical operator spelling (`2001:0db8::1`)
+        // doesn't read as drift on every reconcile.
+        let defaultPrefix: String
+        let hop: String
+        if IPv4Address(nextHop) != nil {
+            defaultPrefix = "0.0.0.0/0"
+            hop = nextHop
+        } else if let address6 = IPv6Address(nextHop) {
+            defaultPrefix = "::/0"
+            hop = address6.description
+        } else {
             throw NetworkError.invalidConfiguration(
-                "OVN uplink gateway '\(nextHop)' is not a valid IPv4 address; cannot install default route")
+                "OVN uplink gateway '\(nextHop)' is not a valid IP address; cannot install default route")
         }
         // The agent owns L3 on this router (deterministically named, created with
         // the managed external ID), so it owns the router's default route too.
         // Mirrors ensureSNAT's reconcile-in-place stance.
         let route = OVNLogicalRouterStaticRoute(
-            ip_prefix: "0.0.0.0/0", nexthop: nextHop,
+            ip_prefix: defaultPrefix, nexthop: hop,
             external_ids: [Self.managedKey: Self.managedValue])
         // Only the main-table dst-ip default is the one the agent owns and that the
         // old `ovn-nbctl lr-route-add` (no --policy/--route-table) reconciled. Leave
-        // src-ip or named-route-table 0.0.0.0/0 routes (operator policy routing)
+        // src-ip or named-route-table default routes (operator policy routing)
         // untouched. OVN defaults an unset policy to dst-ip and an unset route_table
         // to the main table, matching the route we create below.
         let defaults = try await staticRoutes(onRouter: routerName).filter {
-            $0.ip_prefix == "0.0.0.0/0"
+            $0.ip_prefix == defaultPrefix
                 && ($0.policy ?? "dst-ip") == "dst-ip"
                 && ($0.route_table ?? "").isEmpty
         }
         // Keep at most one route that already matches the desired tagged route;
         // every other default is stale, drifted, legacy-untagged, or a duplicate
         // from an earlier/concurrent reconcile. Delete them all so exactly one
-        // 0.0.0.0/0 remains and OVN can't fall back to a stale next hop.
-        let keep = defaults.first(where: { $0.nexthop == nextHop && Self.isManaged($0.external_ids) })
+        // default per family remains and OVN can't fall back to a stale next hop.
+        let keep = defaults.first(where: { $0.nexthop == hop && Self.isManaged($0.external_ids) })
         for existing in defaults where existing.uuid != keep?.uuid {
             if let uuid = existing.uuid { try await ovnManager.deleteStaticRoute(uuid: uuid) }
         }
@@ -1663,7 +1722,9 @@ extension NetworkServiceLinux {
         }
         logger.info(
             "Installed default route on logical router",
-            metadata: ["router": .string(routerName), "nextHop": .string(nextHop)])
+            metadata: [
+                "router": .string(routerName), "prefix": .string(defaultPrefix), "nextHop": .string(hop),
+            ])
     }
 
     /// The static routes attached to a router, resolved from its

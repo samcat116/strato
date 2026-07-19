@@ -53,4 +53,29 @@ struct OVNUplinkConfigTests {
         #expect(OVNUplinkConfig(externalCIDR: "203.0.113.2").externalIP == nil)
         #expect(OVNUplinkConfig(externalCIDR: "not-an-ip/24").externalIP == nil)
     }
+
+    @Test("externalIP6 extracts the address from a valid external_cidr6, canonicalized")
+    func externalIP6Valid() {
+        let uplink = OVNUplinkConfig(
+            externalCIDR: "203.0.113.2/24", gateway: "203.0.113.1",
+            externalCIDR6: "2001:0DB8:0000::2/64", gateway6: "2001:db8::1")
+        // Canonical RFC 5952 form, so it compares equal to what OVN reports
+        // back and the SNAT rule doesn't churn on every reconcile.
+        #expect(uplink.externalIP6 == "2001:db8::2")
+        #expect(uplink.gateway6 == "2001:db8::1")
+    }
+
+    @Test("externalIP6 is nil when external_cidr6 is absent or malformed")
+    func externalIP6Invalid() {
+        // Absent: the common v4-only uplink, which must stay valid.
+        let v4Only = OVNUplinkConfig(externalCIDR: "203.0.113.2/24")
+        #expect(v4Only.externalIP6 == nil)
+        #expect(v4Only.externalIP == "203.0.113.2")
+
+        #expect(OVNUplinkConfig(externalCIDR: "203.0.113.2/24", externalCIDR6: "2001:db8::2").externalIP6 == nil)
+        #expect(OVNUplinkConfig(externalCIDR: "203.0.113.2/24", externalCIDR6: "junk/64").externalIP6 == nil)
+        // A v4 address in the v6 slot is not a valid v6 uplink.
+        #expect(
+            OVNUplinkConfig(externalCIDR: "203.0.113.2/24", externalCIDR6: "203.0.113.9/24").externalIP6 == nil)
+    }
 }
