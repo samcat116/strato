@@ -1,0 +1,24 @@
+agent/Sources/StratoAgentCore/WarmSandboxSnapshotCache.swift
+  s_256b817512560e::t_6fd3d899a3681a 227-244
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_256b817512560e::t_f83c8f990ca85a 288-293
+  s_256b817512560e::t_95a1befa5e1095 1505-1507
+agent/Tests/StratoAgentTests/WarmSandboxSnapshotCacheTests.swift
+  s_256b817512560e::t_6925adb2c529a6 200-218
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "1ad5d2985395d49158845925b12edf77a0cb4370",
+  "prompts": {},
+  "sessions": {
+    "s_256b817512560e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b4cc585-7b1b-4f68-b28b-4af0753f6ba2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
