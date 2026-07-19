@@ -279,6 +279,19 @@ single network within a site** (Phase 2).
   uplink config, routers and east-west are realized but no SNAT
   (`externalAccess` has no effect). The operator connects the provider bridge to
   the external network out of band.
+- **Dual-stack egress:** networks are dual-stack by default, so a router port
+  with a v6 prefix sends RAs carrying an IPv6 default route. That route needs a
+  matching SNAT rule or it black-holes (issue #519), so an `externalAccess`
+  network contributes **two** SNAT subnets — its v4 subnet and its v6 prefix —
+  and the uplink takes an optional `external_cidr6`/`gateway6` pair: a second
+  address on the same gateway router port, the IPv6 SNAT `external_ip`, and a
+  `::/0` static route. The two families reconcile independently — each default
+  route and SNAT rule is keyed by its own prefix — so a v4-only uplink stays a
+  valid configuration. In that case the v6 SNAT rule is skipped with a warning
+  rather than failing the reconcile, and IPv6 egress simply doesn't work; v4
+  keeps working. `external_cidr` stays required either way, since the gateway
+  port's MAC is derived from it. NAT66 over a ULA prefix is a pragmatic
+  stopgap — GUA prefix delegation is the cleaner long-term answer.
 - **No-egress isolation:** a project's `externalAccess=false` networks are keyed
   onto a separate `-internal` logical router with no uplink, so their guests
   provably have no route to the internet. Tradeoff: an egress and a no-egress

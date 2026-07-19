@@ -129,8 +129,45 @@ struct NetworkReconcilerTests {
         #expect(port.mac == OVNNaming.routerPortMAC(gateway: "10.2.0.1"))
         #expect(port.ipv6RAConfigs?["address_mode"] == "dhcpv6_stateful")
         #expect(port.ipv6RAConfigs?["send_periodic"] == "true")
-        // v6 never reaches SNAT — internal-only this phase.
-        #expect(plan.routers[0].snatSubnets == ["10.2.0.0/24"])
+        // Both families get SNAT, so the default route the RAs advertise leads
+        // somewhere (issue #519).
+        #expect(plan.routers[0].snatSubnets == ["10.2.0.0/24", "fd12:3456:789a::/64"])
+    }
+
+    @Test("The planned v6 SNAT subnet is the canonical masked prefix, not the raw string")
+    func v6SNATSubnetIsCanonical() {
+        // A non-canonical, non-masked spelling of fd12:3456:789a::/64. Planning
+        // it verbatim would never match what OVN reports back, so every
+        // reconcile would tear the rule down and recreate it.
+        let plan = NetworkReconciler.plan(networks: [
+            network(
+                name: "dual", subnet: "10.2.0.0/24", gateway: "10.2.0.1",
+                subnet6: "fd12:3456:789A::5/64", gateway6: "fd12:3456:789a::1",
+                routerKey: "project-D")
+        ])
+        #expect(plan.routers[0].snatSubnets == ["10.2.0.0/24", "fd12:3456:789a::/64"])
+    }
+
+    @Test("A dual-stack network without external access gets no SNAT in either family")
+    func dualStackNoExternalAccessHasNoSNAT() {
+        let plan = NetworkReconciler.plan(networks: [
+            network(
+                name: "internal", subnet: "10.9.0.0/24", gateway: "10.9.0.1",
+                subnet6: "fd99::/64", gateway6: "fd99::1",
+                routerKey: "project-I", externalAccess: false)
+        ])
+        #expect(plan.routers[0].ports[0].cidrs.count == 2)
+        #expect(plan.routers[0].snatSubnets.isEmpty)
+    }
+
+    @Test("An unparsable v6 config contributes no v6 SNAT subnet")
+    func invalidIPv6ContributesNoSNAT() {
+        let plan = NetworkReconciler.plan(networks: [
+            network(
+                name: "broken6", subnet: "10.3.0.0/24", gateway: "10.3.0.1",
+                subnet6: "junk", gateway6: "fd00::1", routerKey: "project-B")
+        ])
+        #expect(plan.routers[0].snatSubnets == ["10.3.0.0/24"])
     }
 
     @Test("Unparsable IPv6 config degrades the port to v4-only, never drops it")
@@ -272,6 +309,36 @@ struct NetworkReconcilerTests {
             protected.switchRouterPortNames.contains(OVNNaming.switchRouterPortName(networkId: net.networkId)))
         #expect(protected.externalSwitchNames.contains("ls-ext-p"))
         #expect(protected.snatRules.contains(SNATRuleKey(router: "lr-p", logicalIP: "192.168.1.0/24")))
+    }
+
+    @Test("A stale dual-stack network protects its v6 SNAT rule too")
+    func protectedTopologyCoversV6SNAT() {
+        let net = network(
+            name: "dual", subnet: "192.168.1.0/24", gateway: "192.168.1.1",
+            subnet6: "fd12:3456:789a::/64", gateway6: "fd12:3456:789a::1", routerKey: "p")
+        let protected = NetworkReconciler.protectedTopology(forStale: [net])
+        #expect(protected.snatRules.contains(SNATRuleKey(router: "lr-p", logicalIP: "192.168.1.0/24")))
+        #expect(protected.snatRules.contains(SNATRuleKey(router: "lr-p", logicalIP: "fd12:3456:789a::/64")))
+    }
+
+    @Test("A stale dual-stack network's v6 SNAT survives teardown")
+    func staleV6SNATIsNotTornDown() {
+        // The v6 rule exists on the host but the network was skipped as stale,
+        // so the plan is empty. Without protection the reconciler would drop
+        // live IPv6 egress for a network that is still present in the sync.
+        let net = network(
+            name: "dual", subnet: "192.168.1.0/24", gateway: "192.168.1.1",
+            subnet6: "fd12:3456:789a::/64", gateway6: "fd12:3456:789a::1", routerKey: "p")
+        var observed = ObservedNetworkTopology()
+        observed.snatRules = [
+            SNATRuleKey(router: "lr-p", logicalIP: "192.168.1.0/24"),
+            SNATRuleKey(router: "lr-p", logicalIP: "fd12:3456:789a::/64"),
+        ]
+        let actions = NetworkReconciler.teardownActions(
+            desired: NetworkReconciler.plan(networks: []),
+            observed: observed,
+            protected: NetworkReconciler.protectedTopology(forStale: [net]))
+        #expect(actions.isEmpty)
     }
 
     @Test("Removing the last network in a project tears the router and uplink down")
