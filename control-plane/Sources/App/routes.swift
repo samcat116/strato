@@ -11,6 +11,8 @@ func routes(_ app: Application) throws {
     try app.register(collection: OperationController())
     try app.register(collection: OrganizationController())
     try app.register(collection: AuthorizationController())
+    // IAM tier-2 guardrails + policy-set versioning (issue #479)
+    try app.register(collection: GuardrailController())
     try app.register(collection: APIKeyController())
     try app.register(collection: APIDocumentationController())
     try app.register(collection: AgentWebSocketController())
