@@ -1361,6 +1361,7 @@ extension NetworkServiceLinux: NetworkActuator {
         // The v6 sibling. Independent of the v4 route: each reconciles only its
         // own family's default prefix, so one family's absence never disturbs
         // the other. Only meaningful once the port carries a v6 address.
+        var installedIPv6Default = false
         if uplinkCIDRs.count > 1 {
             if let nextHop6 = uplink.gateway6 {
                 // Validate here rather than letting ensureDefaultRoute throw: a
@@ -1370,6 +1371,7 @@ extension NetworkServiceLinux: NetworkActuator {
                 // down with it. Degrade to a v4 uplink instead.
                 if IPv6Address(nextHop6) != nil {
                     try await ensureDefaultRoute(router: router.name, nextHop: nextHop6)
+                    installedIPv6Default = true
                 } else {
                     logger.error(
                         "OVN uplink gateway6 is not a valid IPv6 address; skipping the IPv6 default route",
@@ -1380,6 +1382,22 @@ extension NetworkServiceLinux: NetworkActuator {
                     "OVN uplink has no gateway6; skipping the router IPv6 default route "
                     + "(IPv6 SNAT egress limited to the external subnet)"
                 logger.warning("\(message)", metadata: ["router": .string(router.name)])
+            }
+        }
+        // Every path that does NOT install a `::/0` must also drop one we
+        // installed earlier — a removed `external_cidr6`, a removed or now
+        // malformed `gateway6`. Topology teardown covers switches, ports,
+        // routers, and SNAT, never static routes, so nothing else would: the
+        // router would keep steering v6 traffic at a next hop the config no
+        // longer names. Never let this throw — it would escape ensureUplink and
+        // cost the router its IPv4 SNAT, the very coupling fixed above.
+        if !installedIPv6Default {
+            do {
+                try await removeManagedDefaultRoute(router: router.name, prefix: "::/0")
+            } catch {
+                logger.error(
+                    "Failed to remove the stale IPv6 default route",
+                    metadata: ["router": .string(router.name), "error": .string("\(error)")])
             }
         }
 
@@ -1745,6 +1763,34 @@ extension NetworkServiceLinux {
             metadata: [
                 "router": .string(routerName), "prefix": .string(defaultPrefix), "nextHop": .string(hop),
             ])
+    }
+
+    /// Delete this agent's own default route for `prefix` on `router`, if one is
+    /// there. The counterpart to `ensureDefaultRoute` for the case where the
+    /// operator withdrew the config that justified the route; topology teardown
+    /// never touches static routes, so without this a withdrawn uplink leaves a
+    /// live route behind.
+    ///
+    /// Only the managed main-table dst-ip route is removed. `ensureDefaultRoute`
+    /// also clears untagged duplicates, but that is safe only because it is
+    /// replacing them — here there is no replacement, so an operator's own
+    /// default (untagged, or policy/named-table) is left alone.
+    fileprivate func removeManagedDefaultRoute(router routerName: String, prefix: String) async throws {
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        for route in try await staticRoutes(onRouter: routerName)
+        where route.ip_prefix == prefix
+            && (route.policy ?? "dst-ip") == "dst-ip"
+            && (route.route_table ?? "").isEmpty
+            && Self.isManaged(route.external_ids)
+        {
+            guard let uuid = route.uuid else { continue }
+            try await ovnManager.deleteStaticRoute(uuid: uuid)
+            logger.info(
+                "Removed stale default route from logical router",
+                metadata: ["router": .string(routerName), "prefix": .string(prefix)])
+        }
     }
 
     /// The static routes attached to a router, resolved from its
