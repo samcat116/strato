@@ -546,7 +546,13 @@ struct VMController: RouteCollection {
         // invocation. Bound its length and reject control characters (newlines,
         // NULs, escapes) so a caller cannot smuggle extra directives or line
         // breaks into the boot arguments.
-        if let cmdline = cmdlineValue {
+        //
+        // Only the *request's* cmdline is rejected here: an image's
+        // `defaultCmdline` isn't the caller's to fix, so failing their create
+        // over it would be an unactionable 400. That path is sanitized at the
+        // sink instead (`VMSpecBuilder.ensureSerialConsole`), which every
+        // source funnels through.
+        if let cmdline = createRequest.cmdline {
             guard cmdline.utf8.count <= 4096 else {
                 throw Abort(.badRequest, reason: "'cmdline' exceeds the maximum length of 4096 bytes")
             }
