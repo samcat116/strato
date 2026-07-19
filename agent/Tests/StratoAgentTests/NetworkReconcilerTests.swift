@@ -17,7 +17,8 @@ struct NetworkReconcilerTests {
         routerKey: String,
         externalAccess: Bool = true,
         generation: Int64 = 1,
-        id: UUID = UUID()
+        id: UUID = UUID(),
+        floatingIPs: [DesiredFloatingIP]? = nil
     ) -> DesiredNetworkState {
         DesiredNetworkState(
             networkId: id,
@@ -28,7 +29,8 @@ struct NetworkReconcilerTests {
             gateway6: gateway6,
             routerKey: routerKey,
             externalAccess: externalAccess,
-            generation: generation)
+            generation: generation,
+            floatingIPs: floatingIPs)
     }
 
     // MARK: - Plan
@@ -412,6 +414,190 @@ struct NetworkReconcilerTests {
         #expect(calls.contains("ensureRouterPort(\(OVNNaming.routerPortName(networkId: web.networkId))@lr-p)"))
         #expect(!calls.contains(where: { $0.hasPrefix("ensureSNAT") }))
     }
+
+    // MARK: - Floating IPs (issue #344)
+
+    @Test("A floating IP plans a distributed dnat_and_snat rule on the network's router")
+    func floatingIPPlansDNAT() {
+        let vmId = UUID()
+        let plan = NetworkReconciler.plan(networks: [
+            network(
+                name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+                floatingIPs: [
+                    DesiredFloatingIP(
+                        externalIP: "203.0.113.10", logicalIP: "192.168.1.5", vmId: vmId, nicIndex: 0)
+                ])
+        ])
+
+        #expect(plan.routers.count == 1)
+        let rules = plan.routers[0].dnatRules
+        #expect(rules.count == 1)
+        #expect(rules[0].externalIP == "203.0.113.10")
+        #expect(rules[0].logicalIP == "192.168.1.5")
+        // Distributed NAT: the rule names the VM's LSP and a MAC derived from
+        // the floating address in the 02:01: namespace.
+        #expect(rules[0].logicalPort == "vm-\(vmId.uuidString)")
+        #expect(rules[0].externalMAC == "02:01:cb:00:71:0a")
+        #expect(
+            plan.expectedTopology.dnatRules == [DNATRuleKey(router: "lr-p", externalIP: "203.0.113.10")])
+    }
+
+    @Test("A secondary NIC's floating IP names the index-suffixed port")
+    func floatingIPSecondaryNICPort() {
+        let vmId = UUID()
+        let plan = NetworkReconciler.plan(networks: [
+            network(
+                name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+                floatingIPs: [
+                    DesiredFloatingIP(
+                        externalIP: "203.0.113.11", logicalIP: "192.168.1.6", vmId: vmId, nicIndex: 1)
+                ])
+        ])
+        #expect(plan.routers[0].dnatRules[0].logicalPort == "vm-\(vmId.uuidString)-1")
+    }
+
+    @Test("Floating IPs on a no-egress network are not planned (no uplink to NAT through)")
+    func floatingIPIgnoredWithoutExternalAccess() {
+        let plan = NetworkReconciler.plan(networks: [
+            network(
+                name: "internal", subnet: "10.1.0.0/24", gateway: "10.1.0.1",
+                routerKey: "p-internal", externalAccess: false,
+                floatingIPs: [
+                    DesiredFloatingIP(
+                        externalIP: "203.0.113.12", logicalIP: "10.1.0.5", vmId: UUID(), nicIndex: 0)
+                ])
+        ])
+        #expect(plan.routers.count == 1)
+        #expect(plan.routers[0].dnatRules.isEmpty)
+        #expect(!plan.routers[0].needsUplink)
+    }
+
+    @Test("A floating IP alone gives the router an uplink (DNAT needs it like SNAT does)")
+    func floatingIPAloneNeedsUplink() {
+        let net = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            floatingIPs: [
+                DesiredFloatingIP(
+                    externalIP: "203.0.113.13", logicalIP: "192.168.1.7", vmId: UUID(), nicIndex: 0)
+            ])
+        // No SNAT contribution — simulate by keying off the plan directly: the
+        // network has externalAccess so it also plans SNAT; the property under
+        // test is DesiredRouter's own uplink derivation.
+        let router = DesiredRouter(
+            name: "lr-p", routerKey: "p", ports: [], snatSubnets: [],
+            dnatRules: NetworkReconciler.plan(networks: [net]).routers[0].dnatRules)
+        #expect(router.needsUplink)
+    }
+
+    @Test("A stale dnat rule is torn down; a stale network's floating IPs are protected")
+    func floatingIPTeardownAndProtection() {
+        let current = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            floatingIPs: [
+                DesiredFloatingIP(
+                    externalIP: "203.0.113.20", logicalIP: "192.168.1.5", vmId: UUID(), nicIndex: 0)
+            ])
+        let plan = NetworkReconciler.plan(networks: [current])
+
+        let observed = ObservedNetworkTopology(
+            routerNames: ["lr-p"],
+            dnatRules: [
+                DNATRuleKey(router: "lr-p", externalIP: "203.0.113.20"),  // still wanted
+                DNATRuleKey(router: "lr-p", externalIP: "203.0.113.21"),  // detached → teardown
+                DNATRuleKey(router: "lr-p", externalIP: "203.0.113.22"),  // stale network's → protected
+            ])
+        let stale = network(
+            name: "old", subnet: "10.5.0.0/24", gateway: "10.5.0.1", routerKey: "p",
+            floatingIPs: [
+                DesiredFloatingIP(
+                    externalIP: "203.0.113.22", logicalIP: "10.5.0.9", vmId: UUID(), nicIndex: 0)
+            ])
+        let actions = NetworkReconciler.teardownActions(
+            desired: plan, observed: observed,
+            protected: NetworkReconciler.protectedTopology(forStale: [stale]))
+
+        #expect(actions.contains(.dnat(router: "lr-p", externalIP: "203.0.113.21")))
+        #expect(!actions.contains(.dnat(router: "lr-p", externalIP: "203.0.113.20")))
+        #expect(!actions.contains(.dnat(router: "lr-p", externalIP: "203.0.113.22")))
+    }
+
+    @Test("reconcile drives ensureDNAT after the uplink and removeDNAT for stale rules")
+    func reconcileDrivesDNAT() async throws {
+        let web = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            floatingIPs: [
+                DesiredFloatingIP(
+                    externalIP: "203.0.113.30", logicalIP: "192.168.1.5", vmId: UUID(), nicIndex: 0)
+            ])
+        let observed = ObservedNetworkTopology(
+            routerNames: ["lr-p"],
+            dnatRules: [DNATRuleKey(router: "lr-p", externalIP: "203.0.113.31")])
+        let actuator = RecordingNetworkActuator(observed: observed)
+
+        try await NetworkReconciler.reconcile(
+            networks: [web], actuator: actuator, logger: Logger(label: "test"))
+
+        let calls = await actuator.calls
+        #expect(calls.contains("ensureDNAT(lr-p,203.0.113.30->192.168.1.5)"))
+        #expect(calls.contains("removeDNAT(lr-p,203.0.113.31)"))
+        #expect(calls.contains("ensureDynamicRouting(lr-p,ready)"))
+        // NAT waits for the uplink.
+        let uplinkIndex = calls.firstIndex(of: "ensureUplink(lr-p)")
+        let dnatIndex = calls.firstIndex(of: "ensureDNAT(lr-p,203.0.113.30->192.168.1.5)")
+        #expect(uplinkIndex != nil && dnatIndex != nil && uplinkIndex! < dnatIndex!)
+    }
+
+    @Test("reconcile skips DNAT (like SNAT) when no uplink is available")
+    func reconcileSkipsDNATWithoutUplink() async throws {
+        let web = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            floatingIPs: [
+                DesiredFloatingIP(
+                    externalIP: "203.0.113.32", logicalIP: "192.168.1.5", vmId: UUID(), nicIndex: 0)
+            ])
+        let actuator = RecordingNetworkActuator(observed: ObservedNetworkTopology(), uplinkAvailable: false)
+
+        try await NetworkReconciler.reconcile(
+            networks: [web], actuator: actuator, logger: Logger(label: "test"))
+
+        let calls = await actuator.calls
+        #expect(!calls.contains(where: { $0.hasPrefix("ensureDNAT") }))
+        // Dynamic routing still converges — with the uplink flagged
+        // unavailable, so a previously enabled config is stripped rather
+        // than left stale (the actuator's strip path).
+        #expect(calls.contains("ensureDynamicRouting(lr-p,noUplink)"))
+    }
+
+    @Test("Routers without an uplink still converge (strip) dynamic routing")
+    func dynamicRoutingStripsOnUplinklessRouters() async throws {
+        let internal_ = network(
+            name: "internal", subnet: "10.1.0.0/24", gateway: "10.1.0.1",
+            routerKey: "p-internal", externalAccess: false)
+        let actuator = RecordingNetworkActuator(observed: ObservedNetworkTopology())
+
+        try await NetworkReconciler.reconcile(
+            networks: [internal_], actuator: actuator, logger: Logger(label: "test"))
+
+        let calls = await actuator.calls
+        #expect(!calls.contains(where: { $0.hasPrefix("ensureUplink") }))
+        #expect(calls.contains("ensureDynamicRouting(lr-p-internal,noUplink)"))
+    }
+
+    @Test("Floating IP MACs live in their own namespace and are deterministic")
+    func floatingIPMACNamespace() {
+        let mac = OVNNaming.floatingIPMAC(externalIP: "203.0.113.10")
+        #expect(mac == "02:01:cb:00:71:0a")
+        // Same address through the router-port derivation differs only in the
+        // second octet, so the two namespaces can never mint the same MAC.
+        #expect(OVNNaming.routerPortMAC(gateway: "203.0.113.10") == "02:00:cb:00:71:0a")
+        #expect(OVNNaming.floatingIPMAC(externalIP: "not-an-ip") == nil)
+    }
+
+    @Test("VM port naming matches the historical NIC-0 scheme")
+    func vmPortNaming() {
+        #expect(OVNNaming.vmPortName(vmId: "ABC", nicIndex: 0) == "vm-ABC")
+        #expect(OVNNaming.vmPortName(vmId: "ABC", nicIndex: 2) == "vm-ABC-2")
+    }
 }
 
 /// Records the calls the reconciler drives, for asserting orchestration order
@@ -441,6 +627,15 @@ private actor RecordingNetworkActuator: NetworkActuator {
     }
     func removeSNAT(router routerName: String, logicalIP: String) async throws {
         calls.append("removeSNAT(\(routerName),\(logicalIP))")
+    }
+    func ensureDNAT(router routerName: String, rule: DesiredDNATRule) async throws {
+        calls.append("ensureDNAT(\(routerName),\(rule.externalIP)->\(rule.logicalIP))")
+    }
+    func removeDNAT(router routerName: String, externalIP: String) async throws {
+        calls.append("removeDNAT(\(routerName),\(externalIP))")
+    }
+    func ensureDynamicRouting(for router: DesiredRouter, uplinkReady: Bool) async throws {
+        calls.append("ensureDynamicRouting(\(router.name),\(uplinkReady ? "ready" : "noUplink"))")
     }
     func removeSwitchRouterPort(name: String) async throws { calls.append("removeSwitchRouterPort(\(name))") }
     func removeRouterPort(name: String) async throws { calls.append("removeRouterPort(\(name))") }

@@ -87,6 +87,28 @@ Further hardening options (network policies, pod disruption budgets,
 resource limits, external database) are documented in the
 [chart README](https://github.com/samcat116/strato/blob/main/helm/strato-control-plane/README.md).
 
+## Workload identity (SPIRE)
+
+The chart always deploys a SPIRE server (StatefulSet), a spire-agent
+DaemonSet, and an Envoy mTLS sidecar next to the control plane — agents
+authenticate exclusively with SPIRE-issued SVIDs, so the chart refuses to
+render with `spire.enabled=false`.
+
+Two pieces make the control plane a first-class member of its own trust
+domain:
+
+- A post-install/post-upgrade **entry bootstrap Job** creates the
+  registration entries the chart's own pods need (via `kubectl exec` of the
+  `spire-server` CLI inside the server pod, since the SPIRE images are
+  distroless): a node alias covering every `k8s_psat`-attested agent, the
+  control-plane container's `admin = true` entry, and the Envoy sidecar's
+  server-certificate entry. Toggle with `spire.entryBootstrap.enabled`.
+- The control-plane container mounts the node's **SPIFFE Workload API
+  socket** (`spire.controlPlane.workloadApi`) and uses its own SVID to reach
+  the SPIRE server's admin API over mTLS — that is what powers agent
+  enrollment (join tokens, entry revocation) and the Workload Identity view.
+  The plaintext admin socket never crosses the network.
+
 ## Adding hypervisors
 
 Agents typically run on hypervisor hardware outside the cluster. Set

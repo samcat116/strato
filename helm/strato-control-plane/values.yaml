@@ -766,6 +766,21 @@ spire:
     k8sbundle:
       enabled: true
 
+  # Idempotent post-install/post-upgrade Job that creates the registration
+  # entries this chart's own workloads need, by `kubectl exec`-ing the
+  # spire-server CLI inside the server pod (the SPIRE images are distroless,
+  # so a sidecar script cannot do it): a node alias covering every
+  # k8s_psat-attested agent, the control-plane admin entry (entitles the mTLS
+  # admin API used for agent enrollment and the Workload Identity view), and
+  # the Envoy sidecar's server SVID entry. Without it, no registration
+  # entries exist for the chart's own pods: Envoy never receives its server
+  # certificate and the control plane cannot reach the admin API. Requires
+  # spire.attestors.k8sPsat.enabled.
+  entryBootstrap:
+    enabled: true
+    # Any image providing kubectl and a POSIX shell.
+    image: docker.io/alpine/kubectl:1.35.4
+
   # Control plane integration
   controlPlane:
     # Trust bundle refresh interval (seconds)
@@ -780,6 +795,18 @@ spire:
     # entry point), otherwise the control plane derives it from EXTERNAL_HOSTNAME
     # as <host>:8085 (the compose bridge port).
     serverPublicAddress: ""
+    # SPIFFE Workload API socket of the node-local SPIRE agent (published on
+    # every node by the agent DaemonSet's hostPath), mounted into the
+    # control-plane container. The control plane fetches its own SVID from it
+    # and reaches the SPIRE server's TCP endpoint with mTLS — the only
+    # authenticated path to the admin API (ListEntries, join-token minting)
+    # across the network; the entry bootstrap Job marks the control-plane
+    # entry admin=true, which is what entitles those RPCs. Disable only if
+    # you provide a local plaintext bridge to the server's admin socket and
+    # point serverApiAddress at it.
+    workloadApi:
+      enabled: true
+      socketPath: /var/run/spire/sockets/workload.sock
 
   # Envoy sidecar configuration for mTLS termination
   envoy:

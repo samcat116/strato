@@ -122,8 +122,10 @@ design; the short version:
   signed URLs are re-issued at every sync assembly.
 - `DesiredSandboxState` mirrors it for sandboxes (with an optional registry
   credential); `DesiredNetworkState` reconciles OVN logical networks
-  (switch/subnets/gateways, per-project `routerKey`, SNAT, DHCP);
-  `DesiredAgentUpdate` is the declarative agent-update target.
+  (switch/subnets/gateways, per-project `routerKey`, SNAT, DHCP, and an
+  optional `floatingIPs` list — external→fixed address mappings plus
+  `vmId`/`nicIndex` for the NIC's port, realized as `dnat_and_snat` rules,
+  issue #344); `DesiredAgentUpdate` is the declarative agent-update target.
 
 ### Generations
 
@@ -162,7 +164,12 @@ The rest of the package is vocabulary used on both sides:
 - **`VMSpec`** (`VMSpec.swift`) — the hypervisor-neutral machine description:
   CPU/memory/disk sizing, `BootSource` (`.disk(firmware:)` vs
   `.directKernel(kernel:initramfs:cmdline:)`), `VolumeSpec`, dual-stack
-  `NetworkSpec`, `ConsoleSpec`, SSH keys.
+  `NetworkSpec`, `ConsoleSpec`, SSH keys, and verbatim caller-supplied
+  cloud-init `userData` (tolerantly decoded to nil from older control
+  planes). `CloudInitUserDataFormat` (`CloudInitUserData.swift`) is the
+  shared header-detection table: the control plane validates user data
+  starts with a header cloud-init dispatches on, and the agent labels the
+  payload's MIME part with the matching content type.
 - **`HypervisorType`** (`HypervisorTypes.swift`) — `qemu` / `firecracker`,
   the driver-registry key. `HypervisorSupport` and `HypervisorCapabilities`
   describe what each agent probed at registration (acceleration, pause,

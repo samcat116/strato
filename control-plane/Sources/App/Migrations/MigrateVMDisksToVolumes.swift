@@ -2,6 +2,35 @@ import Fluent
 import Foundation
 import Vapor
 
+/// Snapshot of the `vms` columns used by this migration. In particular, this
+/// must not use the live `VM` model: enum repair runs later in the migration
+/// chain, and FluentKit traps while decoding a malformed `@Enum` raw value.
+/// Keeping the snapshot minimal also prevents later VM fields from breaking
+/// this historical migration.
+private final class VMVolumeBackfillRow: Model, @unchecked Sendable {
+    static let schema = "vms"
+
+    @ID(key: .id)
+    var id: UUID?
+
+    @Field(key: "name")
+    var name: String
+
+    @Field(key: "disk")
+    var disk: Int64
+
+    @OptionalField(key: "disk_path")
+    var diskPath: String?
+
+    @OptionalField(key: "hypervisor_id")
+    var hypervisorId: String?
+
+    @Field(key: "project_id")
+    var projectId: UUID
+
+    init() {}
+}
+
 /// Snapshot of the `volumes` columns as they exist at this migration's point
 /// in the order. The live `Volume` model has since grown fields (e.g.
 /// `pool_id`) whose columns don't exist yet when this migration runs — and no
@@ -68,7 +97,7 @@ struct MigrateVMDisksToVolumes: AsyncMigration {
         logger.info("Starting migration of existing VM disks to volumes")
 
         // Fetch all VMs that have a diskPath set
-        let vms = try await VM.query(on: database)
+        let vms = try await VMVolumeBackfillRow.query(on: database)
             .filter(\.$diskPath != nil)
             .all()
 
@@ -104,7 +133,7 @@ struct MigrateVMDisksToVolumes: AsyncMigration {
 
             // Get the first user in the project as the owner (best effort)
             // In practice, we don't know who created the VM originally
-            let projectId = vm.$project.id
+            let projectId = vm.projectId
 
             // Try to find a user with access to this project
             // Default to the first admin user if we can't find one

@@ -146,7 +146,8 @@ struct VMSpecBuilder {
             volumes: legacyVolumeSpecs(from: vm),
             networks: networkSpecs(from: networkInterfaces, networks: networks),
             console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),
-            sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? []
+            sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
+            userData: vm.userData
         )
     }
 
@@ -184,7 +185,8 @@ struct VMSpecBuilder {
             volumes: volumes,
             networks: networkSpecs(from: networkInterfaces, networks: networks),
             console: ConsoleSpec(console: vm.consoleMode, serial: vm.serialMode),
-            sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? []
+            sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
+            userData: vm.userData
         )
     }
 

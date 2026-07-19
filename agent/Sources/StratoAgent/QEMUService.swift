@@ -971,6 +971,7 @@ actor QEMUService: HypervisorService {
         let cloudInitISOPath = (vmDir as NSString).appendingPathComponent("cloud-init.iso")
         if await CloudInitProvisioner(logger: logger).makeNoCloudISO(
             at: cloudInitISOPath, vmId: vmId, sshAuthorizedKeys: spec.sshAuthorizedKeys,
+            userData: spec.userData,
             networkAttachments: networkAttachments)
         {
             qemuConfig.additionalArgs.append(contentsOf: [

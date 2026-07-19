@@ -107,6 +107,12 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "ssh_public_key")
     var sshPublicKey: String?
 
+    // Caller-supplied cloud-init user data (any format cloud-init dispatches
+    // on: #cloud-config, #! scripts, #include, MIME multipart, ...), stored
+    // verbatim and passed to the agent in the VM spec.
+    @OptionalField(key: "user_data")
+    var userData: String?
+
     @OptionalField(key: "firmware_path")
     var firmwarePath: String?
 

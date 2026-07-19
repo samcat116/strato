@@ -27,7 +27,12 @@ Two targets under `control-plane/Sources/`:
 
 - **`SPIREServerAPI`** — a small library holding the hand-written SPIRE
   gRPC client and its generated protobuf, kept separate so generated code
-  stays out of `App`.
+  stays out of `App`. It reaches the SPIRE server either in plaintext (the
+  local admin socket, or a loopback TCP bridge in front of it — the compose
+  topology) or over mTLS to the server's network TCP endpoint, presenting
+  the control plane's own SVID fetched from the SPIFFE Workload API
+  (`SPIFFE_ENDPOINT_SOCKET`; the Kubernetes topology, where the entry must
+  carry `admin = true`).
 
 Tests are a single flat `Tests/AppTests/` target (~80 files, swift-testing).
 
@@ -73,7 +78,8 @@ The important ones to know when navigating `Services/`:
 - **`SchedulerService`** (actor) — placement decisions; see
   [scheduler](./scheduler.md).
 - **`IPAMService`** — control-plane IP allocation (IPv4/IPv6) from a
-  `LogicalNetwork`'s subnets.
+  `LogicalNetwork`'s subnets, plus floating (external) IPv4 addresses from
+  `FloatingIPPool` ranges (issue #344).
 - **`SpiceDBService`** — authorization checks and relationship writes;
   mock-backed under `.testing`.
 - **`QuotaEnforcementService`** — reserve/release quota against project, OU,

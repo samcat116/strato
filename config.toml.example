@@ -238,6 +238,20 @@ log_level = "info"
 # external_cidr6 = "2001:db8::2/64"  # dedicated router IPv6 on the provider net
 # gateway6 = "2001:db8::1"           # next hop for the router's ::/0 route
 
+# OVN native dynamic routing (issue #344): advertise floating IPs and tenant
+# routes northbound over BGP. Requires OVN >= 25.03 on this host plus an
+# operator-configured FRR daemon (with `redistribute connected` in the VRF
+# below); OVN itself never speaks BGP. Applied by the site's network
+# controller agent to every uplinked router. Disabled (or absent) strips any
+# previously applied dynamic-routing options.
+#
+# [ovn_dynamic_routing]
+# enabled = true
+# redistribute = ["connected", "nat"] # connected|connected-as-host|static|nat|lb
+# vrf_name = "ovnvrf"                 # VRF the advertised routes land in
+# maintain_vrf = true                 # let ovn-controller create the VRF netdev
+# routing_protocols = ["BGP"]         # protocol traffic punted to host FRR
+
 # Additional configuration options can be added here as needed
 # Examples:
 # heartbeat_interval = 30

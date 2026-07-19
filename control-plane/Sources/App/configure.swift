@@ -301,6 +301,9 @@ public func configure(_ app: Application) async throws {
     // loads VM models (e.g. MigrateVMDisksToVolumes) runs on a fresh database.
     app.migrations.add(AddSSHPublicKeyToVM())
 
+    // Cloud-init user data column. Same ordering constraint as above.
+    app.migrations.add(AddUserDataToVM())
+
     // App settings migration (for signing keys, etc.)
     app.migrations.add(CreateAppSetting())
 
@@ -458,6 +461,18 @@ public func configure(_ app: Application) async throws {
     // still be there.
     app.migrations.add(MigratePendingTokensToEnrollments())
     app.migrations.add(DropAgentRegistrationTokens())
+
+    // Floating IPs (issue #344): external address pools + per-address
+    // allocations attached to VM NICs. Ordered after sites, projects, and
+    // vm_network_interfaces, which it references.
+    app.migrations.add(CreateFloatingIP())
+
+    // FluentKit force-unwraps persisted @Enum raw values on first property
+    // access. Normalize casing drift and put a database validation boundary in
+    // front of every persisted enum so malformed rows cannot trap the process
+    // (issue #527). This stays last because it covers tables added throughout
+    // the full migration history.
+    app.migrations.add(EnforcePersistedEnumValues())
 
     try await app.autoMigrate()
 

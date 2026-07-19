@@ -44,6 +44,7 @@ export function CreateVMDialog({
     disk: "50",
     networkId: "",
     sshPublicKey: "",
+    userData: "",
   });
 
   // The VM is created in the project selected in the header switcher.
@@ -108,6 +109,9 @@ export function CreateVMDialog({
         disk: (parseInt(formData.disk) || 50) * GB,
         ...(formData.networkId ? { networkId: formData.networkId } : {}),
         sshPublicKey: formData.sshPublicKey.trim() || undefined,
+        // Sent verbatim (no trim): the first bytes are the format header
+        // cloud-init dispatches on.
+        userData: formData.userData.trim() ? formData.userData : undefined,
       });
       watch(operation, formData.name);
       toast.success(`Creating VM "${formData.name}"`);
@@ -123,6 +127,7 @@ export function CreateVMDialog({
         disk: "50",
         networkId: "",
         sshPublicKey: "",
+        userData: "",
       });
       setQuotaError(null);
     } catch (error) {
@@ -337,6 +342,31 @@ export function CreateVMDialog({
               <p className="text-xs text-muted-foreground">
                 The VM&apos;s IP is allocated automatically from the selected
                 network.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="userData" className="text-foreground">
+                Cloud-init user data{" "}
+                <span className="text-muted-foreground">(optional)</span>
+              </Label>
+              <textarea
+                id="userData"
+                placeholder={"#cloud-config\npackages:\n  - nginx\nruncmd:\n  - systemctl enable --now nginx"}
+                value={formData.userData}
+                onChange={(e) =>
+                  setFormData({ ...formData, userData: e.target.value })
+                }
+                rows={5}
+                spellCheck={false}
+                disabled={isLoading}
+                className="w-full px-3 py-2 bg-background border border-border text-foreground rounded-md font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed resize-y"
+              />
+              <p className="text-xs text-muted-foreground">
+                Runs in the guest at first boot. Accepts any cloud-init format:{" "}
+                <code>#cloud-config</code>, a <code>#!</code> shell script,{" "}
+                <code>#include</code>, a Jinja template, or a full MIME
+                multipart document.
               </p>
             </div>
           </div>

@@ -294,6 +294,83 @@ final class DesiredStateReconciliationTests {
         }
     }
 
+    @Test("Sync assembly carries attached floating IPs on their network's desired state")
+    func syncAssemblyIncludesFloatingIPs() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            let agentId = try await self.registerAgent(
+                app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
+
+            let network = LogicalNetwork(
+                name: "fip-net", subnet: "10.30.0.0/24", gateway: "10.30.0.1",
+                projectID: vm.$project.id, externalAccess: true)
+            try await network.save(on: app.db)
+            let nic = VMNetworkInterface(
+                vmID: vm.id!, network: "fip-net", macAddress: VMNetworkInterface.generateMACAddress())
+            try await nic.save(on: app.db)
+            try await VMInterfaceAddress(
+                interfaceID: nic.id!, network: "fip-net", family: .ipv4,
+                address: "10.30.0.5", prefixLength: 24, gateway: "10.30.0.1"
+            ).save(on: app.db)
+
+            let pool = FloatingIPPool(name: "edge", cidr: "203.0.113.0/24", gateway: "203.0.113.1")
+            try await pool.save(on: app.db)
+            let attached = FloatingIP(
+                poolID: pool.id!, address: "203.0.113.10", projectID: vm.$project.id,
+                interfaceID: nic.id!, createdByID: user.id!)
+            try await attached.save(on: app.db)
+            // A reserved-but-unattached address must not produce a NAT rule.
+            try await FloatingIP(
+                poolID: pool.id!, address: "203.0.113.11", projectID: vm.$project.id,
+                createdByID: user.id!
+            ).save(on: app.db)
+
+            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let net = try #require(message.networks.first { $0.name == "fip-net" })
+            let fips = try #require(net.floatingIPs)
+            #expect(fips.count == 1)
+            #expect(fips[0].externalIP == "203.0.113.10")
+            #expect(fips[0].logicalIP == "10.30.0.5")
+            #expect(fips[0].vmId == vm.id)
+            #expect(fips[0].nicIndex == 0)
+
+            // Another agent's sync must not carry this VM's floating IP.
+            let other = try await app.agentService.assembleDesiredState(agentId: UUID().uuidString)
+            #expect(!other.networks.contains { ($0.floatingIPs ?? []).isEmpty == false })
+        }
+    }
+
+    @Test("Sync assembly omits floating IPs for pre-v12 agents")
+    func syncAssemblyOmitsFloatingIPsForOldAgents() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            // An agent from before the floating IP protocol: it would decode
+            // and silently ignore the field, so assembly must not claim the
+            // sync carries NAT intent it cannot realize.
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 11)
+
+            let network = LogicalNetwork(
+                name: "fip-old-net", subnet: "10.31.0.0/24", gateway: "10.31.0.1",
+                projectID: vm.$project.id, externalAccess: true)
+            try await network.save(on: app.db)
+            let nic = VMNetworkInterface(
+                vmID: vm.id!, network: "fip-old-net", macAddress: VMNetworkInterface.generateMACAddress())
+            try await nic.save(on: app.db)
+            try await VMInterfaceAddress(
+                interfaceID: nic.id!, network: "fip-old-net", family: .ipv4,
+                address: "10.31.0.5", prefixLength: 24, gateway: "10.31.0.1"
+            ).save(on: app.db)
+            let pool = FloatingIPPool(name: "edge-old", cidr: "198.51.100.0/24")
+            try await pool.save(on: app.db)
+            try await FloatingIP(
+                poolID: pool.id!, address: "198.51.100.10", projectID: vm.$project.id,
+                interfaceID: nic.id!, createdByID: user.id!
+            ).save(on: app.db)
+
+            let message = try await app.agentService.assembleDesiredState(agentId: agentId)
+            let net = try #require(message.networks.first { $0.name == "fip-old-net" })
+            #expect(net.floatingIPs == nil)
+        }
+    }
+
     // MARK: - Observed-state report application
 
     @Test("A converged report updates status, generation, and completes the operation")

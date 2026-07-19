@@ -15,14 +15,14 @@ struct CreateImage: AsyncMigration {
             // File information
             .field("filename", .string, .required)
             .field("size", .int64, .required, .sql(.default("0")))
-            .field("format", .string, .required, .sql(.default("'qcow2'")))
+            .field("format", .string, .required, .sql(.default("qcow2")))
             .field("checksum", .string)
 
             // Storage location
             .field("storage_path", .string)
 
             // Status tracking
-            .field("status", .string, .required, .sql(.default("'pending'")))
+            .field("status", .string, .required, .sql(.default("pending")))
             .field("source_url", .string)
             .field("download_progress", .int)
             .field("error_message", .string)
