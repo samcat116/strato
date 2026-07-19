@@ -224,6 +224,24 @@ public struct WarmSandboxSnapshotCache: Sendable {
         return names.filter { !$0.hasPrefix(".") }.map { rootPath + "/" + $0 }.sorted()
     }
 
+    /// Remove `.staging-*` directories older than `olderThan`. Staging
+    /// directories are excluded from the budget sweep by design, so one
+    /// abandoned by a crash mid-build (multi-GB memory/rootfs files) would
+    /// otherwise hold disk forever. The age gate keeps a live build's
+    /// staging safe; anything older than an hour cannot be in flight.
+    public func removeAbandonedStaging(
+        olderThan: TimeInterval = 3600, now: Date = Date(), fileManager: FileManager = .default
+    ) {
+        guard let names = try? fileManager.contentsOfDirectory(atPath: rootPath) else { return }
+        for name in names where name.hasPrefix(".staging-") {
+            let path = rootPath + "/" + name
+            let modified =
+                (try? fileManager.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+            guard let modified, now.timeIntervalSince(modified) > olderThan else { continue }
+            try? fileManager.removeItem(atPath: path)
+        }
+    }
+
     /// Evict least-recently-used entries until the cache fits `budgetBytes`,
     /// honoring ``DiskCacheLRU``'s recent-use grace window.
     @discardableResult

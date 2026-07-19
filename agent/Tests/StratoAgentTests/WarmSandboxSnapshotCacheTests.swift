@@ -197,6 +197,25 @@ struct WarmSandboxSnapshotCacheTests {
         #expect(!entries[0].contains(".staging-"))
     }
 
+    @Test("abandoned staging directories are removed once old, fresh ones kept")
+    func abandonedStagingCleanup() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = WarmSandboxSnapshotCache(rootPath: root)
+
+        let abandoned = try cache.makeStagingDirectory()
+        try Data(repeating: 0, count: 4096).write(
+            to: URL(fileURLWithPath: abandoned + "/" + WarmSandboxSnapshotCache.memoryFile))
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-7200)], ofItemAtPath: abandoned)
+        let live = try cache.makeStagingDirectory()
+
+        cache.removeAbandonedStaging()
+
+        #expect(!FileManager.default.fileExists(atPath: abandoned), "old staging must be removed")
+        #expect(FileManager.default.fileExists(atPath: live), "a live build's staging must survive")
+    }
+
     // MARK: - Eviction
 
     @Test("sweep evicts the least-recently-used entry past the budget")

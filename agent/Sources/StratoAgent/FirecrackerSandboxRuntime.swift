@@ -285,8 +285,12 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             metadata: ["sandboxId": .string(sandboxId), "image": .string(spec.image)])
 
         // Once per agent life: clear template debris a crash mid-build left
-        // behind (templates are invisible to manifest-driven orphan recovery).
-        if warmStartActive, !warmTemplateSweepDone {
+        // behind (templates are invisible to manifest-driven orphan
+        // recovery). Deliberately NOT gated on `warmStartActive`: a previous
+        // life may have built templates before the operator disabled warm
+        // start — often *because* of a problem — and disabling the feature
+        // must not strand its leftovers.
+        if !warmTemplateSweepDone {
             warmTemplateSweepDone = true
             await sweepLeakedWarmTemplates()
         }
@@ -1498,6 +1502,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// probed for live processes.
     private func sweepLeakedWarmTemplates() async {
         let fileManager = FileManager.default
+        // Staging directories abandoned by a crash mid-build are excluded
+        // from the budget sweep, so this is their only cleanup path.
+        warmCache.removeAbandonedStaging()
         var leaked: Set<String> = []
         if let names = try? fileManager.contentsOfDirectory(atPath: sandboxStoragePath) {
             leaked.formUnion(names.filter { $0.hasPrefix("warm-template-") })
