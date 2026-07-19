@@ -493,5 +493,56 @@ struct VMSpecBuilderTests {
         #expect(spec.memoryBytes == 2048)
         #expect(spec.volumes.isEmpty)
         #expect(spec.networks.isEmpty)
+        #expect(spec.userData == nil)
+    }
+
+    @Test("VMSpecBuilder carries cloud-init user data verbatim")
+    func testUserDataPassthrough() throws {
+        let image = createTestImage()
+        let vm = createTestVM()
+        let payload = "#cloud-config\npackages:\n  - nginx\nruncmd:\n  - systemctl enable --now nginx\n"
+        vm.userData = payload
+
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
+        #expect(spec.userData == payload)
+
+        let specWithVolumes = VMSpecBuilder.buildVMSpecWithVolumes(
+            from: vm, image: image, volumes: [], networkInterfaces: [])
+        #expect(specWithVolumes.userData == payload)
+    }
+}
+
+@Suite("VM create user-data validation")
+struct VMUserDataValidationTests {
+    @Test("nil and blank normalize to nil")
+    func blankNormalizesToNil() throws {
+        #expect(try VMController.validatedUserData(nil) == nil)
+        #expect(try VMController.validatedUserData("") == nil)
+        #expect(try VMController.validatedUserData("  \n\t ") == nil)
+    }
+
+    @Test("recognized formats pass through verbatim")
+    func recognizedFormatsPass() throws {
+        let cloudConfig = "#cloud-config\npackages: [nginx]\n"
+        #expect(try VMController.validatedUserData(cloudConfig) == cloudConfig)
+        let script = "#!/bin/bash\necho hello > /root/hello.txt\n"
+        #expect(try VMController.validatedUserData(script) == script)
+        let mime = "Content-Type: multipart/mixed; boundary=\"b\"\nMIME-Version: 1.0\n\n--b--\n"
+        #expect(try VMController.validatedUserData(mime) == mime)
+    }
+
+    @Test("payload without a cloud-init header is rejected")
+    func missingHeaderRejected() {
+        #expect(throws: Abort.self) {
+            _ = try VMController.validatedUserData("echo missing shebang\n")
+        }
+    }
+
+    @Test("oversized payload is rejected")
+    func oversizedRejected() {
+        let big = "#cloud-config\n" + String(repeating: "a", count: CloudInitUserDataFormat.maxBytes)
+        #expect(throws: Abort.self) {
+            _ = try VMController.validatedUserData(big)
+        }
     }
 }

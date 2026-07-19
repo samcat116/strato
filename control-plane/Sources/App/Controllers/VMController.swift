@@ -22,6 +22,32 @@ struct VMController: RouteCollection {
         return (vmDir as NSString).appendingPathComponent(filename)
     }
 
+    /// Validates caller-supplied cloud-init user data: bounded in size and
+    /// starting with a header cloud-init actually dispatches on — a payload
+    /// without one (say, a script missing its shebang) would be silently
+    /// ignored in the guest, so rejecting it here turns a hard-to-debug boot
+    /// no-op into an immediate 400. Empty/whitespace-only input normalizes to
+    /// nil; valid input is returned verbatim (the leading bytes ARE the format
+    /// header, so no trimming).
+    static func validatedUserData(_ userData: String?) throws -> String? {
+        guard let userData, !userData.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        guard userData.utf8.count <= CloudInitUserDataFormat.maxBytes else {
+            throw Abort(
+                .badRequest,
+                reason: "'userData' exceeds \(CloudInitUserDataFormat.maxBytes / 1024) KiB")
+        }
+        guard CloudInitUserDataFormat.detect(userData) != nil else {
+            throw Abort(
+                .badRequest,
+                reason: "'userData' must start with a cloud-init header: #cloud-config, #! (shell script), "
+                    + "#include, #cloud-boothook, #part-handler, '## template: jinja', or a MIME document"
+            )
+        }
+        return userData
+    }
+
     /// Runs `body` again (up to `attempts` total) when it fails with a
     /// database constraint violation. Used around the VM-create transaction:
     /// two concurrent creates can race IPAM to the same address, and the
@@ -354,6 +380,10 @@ struct VMController: RouteCollection {
             let networkName: String?
             // SSH public key authorized for the guest's default user (cloud-init).
             let sshPublicKey: String?
+            // Cloud-init user data, verbatim (#cloud-config, #! script, MIME
+            // multipart, ...). Combined with Strato's built-in provisioning
+            // config on the agent; a full MIME document replaces it.
+            let userData: String?
             // Target hypervisor. Optional: when omitted, it's inferred from the
             // image's artifact set if that set is compatible with exactly one
             // hypervisor, else falls back to the platform default (QEMU).
@@ -559,6 +589,11 @@ struct VMController: RouteCollection {
         vm.sshPublicKey = createRequest.sshPublicKey?.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
+
+        // Guest provisioning: caller-supplied cloud-init user data, stored
+        // verbatim (leading bytes are the format header cloud-init dispatches
+        // on, so no trimming).
+        vm.userData = try Self.validatedUserData(createRequest.userData)
 
         let userID = try user.requireID()
 

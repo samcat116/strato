@@ -80,8 +80,35 @@ agent in Docker.
 
 1. Click **Create VM**
 2. Enter a name, set CPU and memory, choose an OS image
-3. Click **Create**, then **Start**
-4. Use the web console to access your VM
+3. Optionally paste an SSH public key and **cloud-init user data**
+4. Click **Create**, then **Start**
+5. Use the web console to access your VM
+
+### Cloud-init user data
+
+The optional user-data field is passed to the guest verbatim and runs at
+first boot, so you can install packages, write files, create users, or run
+arbitrary scripts. Any format cloud-init understands is accepted — a
+`#cloud-config` document, a `#!` shell script, `#include` URL lists, a
+`## template: jinja` template, or a complete MIME multipart document you
+composed yourself:
+
+```yaml
+#cloud-config
+packages:
+  - nginx
+write_files:
+  - path: /etc/motd
+    content: "provisioned by strato\n"
+runcmd:
+  - systemctl enable --now nginx
+```
+
+Your user data is combined with Strato's own provisioning (serial-console
+setup, console password, the SSH key from the form); on conflicting
+cloud-config keys your values win. Supplying a full MIME multipart document
+instead replaces Strato's provisioning entirely — cloud-init then processes
+exactly what you wrote, and console/SSH setup is up to you.
 
 ## What's Next?
 

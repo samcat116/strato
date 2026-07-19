@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import StratoShared
 
 /// Generates guest-bootstrap media for VMs that boot from a disk image.
 ///
@@ -33,12 +34,18 @@ public struct CloudInitProvisioner {
     ///   - vmId: The VM identifier, used for the instance-id and hostname.
     ///   - sshAuthorizedKeys: SSH public keys to authorize for the guest's
     ///     default user via cloud-init. Empty leaves the guest key-less.
+    ///   - userData: Caller-supplied cloud-init user data, verbatim (any
+    ///     format cloud-init dispatches on). Combined with Strato's own
+    ///     provisioning config into a MIME multipart document; a caller
+    ///     payload that is itself a full MIME document is used as the seed's
+    ///     `user-data` unchanged, replacing Strato's config entirely.
     ///   - networkAttachments: The VM's resolved NICs; ones carrying a static
     ///     IP allocation are configured in the guest via a NoCloud
     ///     `network-config` (v2). User-mode NICs are left on DHCP.
     /// - Returns: true if the ISO was created successfully.
     public func makeNoCloudISO(
         at isoPath: String, vmId: String, sshAuthorizedKeys: [String] = [],
+        userData: String? = nil,
         networkAttachments: [ResolvedNetworkAttachment] = []
     ) async -> Bool {
         let fileManager = FileManager.default
@@ -59,48 +66,19 @@ public struct CloudInitProvisioner {
             let metaDataPath = (tempDir as NSString).appendingPathComponent("meta-data")
             try metaData.write(toFile: metaDataPath, atomically: true, encoding: .utf8)
 
-            // Create user-data file with serial console configuration
-            let userData = """
-                #cloud-config
-                # Console login: set a password on the image's default user so
-                # the serial console — the only reachable login path on user-mode
-                # (SLIRP) networking, which has no inbound route for SSH — is
-                # usable. `expire: false` avoids a forced reset on first login.
-                # Injected SSH keys (below) remain preferred once the VM is
-                # network-reachable (OVN / port-forward).
-                password: \(Self.defaultConsolePassword)
-                chpasswd:
-                  expire: false
-                ssh_pwauth: true
-                # Enable serial console output
-                bootcmd:
-                  # Update GRUB to output to serial console
-                  - 'sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\\"console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0\\"/" /etc/default/grub || true'
-                  - 'update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg 2>/dev/null || true'
-
-                # Enable getty on serial console
-                runcmd:
-                  - systemctl enable --now serial-getty@ttyS0.service || true
-                  - systemctl enable --now serial-getty@ttyAMA0.service || true
-                  - systemctl enable --now serial-getty@hvc0.service || true
-                  # Emit a marker so we can verify console output quickly
-                  - "sh -c 'echo [cloud-init] console marker > /dev/ttyS0 2>/dev/null || true'"
-                  - "sh -c 'echo [cloud-init] console marker > /dev/ttyAMA0 2>/dev/null || true'"
-                  - "sh -c 'echo [cloud-init] console marker > /dev/hvc0 2>/dev/null || true'"
-                """
-            // Authorize the caller's SSH public keys for the image's default
-            // user. `ssh_authorized_keys` at the cloud-config top level applies
-            // to the default user, so no `users:` block is needed.
-            var fullUserData = userData
-            let keys =
-                sshAuthorizedKeys
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            if !keys.isEmpty {
-                let keyLines = keys.map { "  - \"\($0.replacingOccurrences(of: "\"", with: ""))\"" }
-                    .joined(separator: "\n")
-                fullUserData += "\n\nssh_authorized_keys:\n\(keyLines)\n"
+            // Create the user-data file: Strato's provisioning config, combined
+            // with caller-supplied user data when the VM carries any.
+            if let userData, CloudInitUserDataFormat.detect(userData) == nil {
+                logger.warning(
+                    "VM user data has no recognizable cloud-init header; embedding as text/plain (the guest will ignore it)"
+                )
             }
+            if let userData, CloudInitUserDataFormat.detect(userData) == .mime {
+                logger.info(
+                    "VM user data is a caller-composed MIME document; using it verbatim (Strato console/SSH provisioning skipped)"
+                )
+            }
+            let fullUserData = Self.userDataDocument(sshAuthorizedKeys: sshAuthorizedKeys, userData: userData)
 
             let userDataPath = (tempDir as NSString).appendingPathComponent("user-data")
             try fullUserData.write(toFile: userDataPath, atomically: true, encoding: .utf8)
@@ -158,6 +136,185 @@ public struct CloudInitProvisioner {
             return false
         }
     }
+
+    // MARK: - User-data document assembly
+
+    /// Builds the NoCloud `user-data` document.
+    ///
+    /// - No caller payload: a single `#cloud-config` carrying Strato's
+    ///   provisioning (console password, serial-console setup, SSH keys) —
+    ///   byte-identical to what pre-user-data agents wrote.
+    /// - Caller payload present: a MIME multipart document. The caller's part
+    ///   comes FIRST — cloud-init merges later cloud-config parts into earlier
+    ///   ones with `dict(no_replace, allow_new)`, so on key conflicts the
+    ///   caller's value wins and Strato's config acts as defaults. Strato's
+    ///   console setup travels as a shell-script part (not `bootcmd`/`runcmd`)
+    ///   so it can never collide with — and silently drop — those keys in
+    ///   caller-supplied cloud-config.
+    /// - Caller payload is itself a complete MIME document: used verbatim
+    ///   (a MIME message cannot be nested as a plain part), replacing Strato's
+    ///   provisioning entirely. Documented escape hatch for full control.
+    public static func userDataDocument(sshAuthorizedKeys: [String], userData: String?) -> String {
+        let keys =
+            sshAuthorizedKeys
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard let userData, !userData.isEmpty else {
+            return legacyCloudConfig(authorizedKeys: keys)
+        }
+
+        let format = CloudInitUserDataFormat.detect(userData)
+        if format == .mime {
+            return userData
+        }
+
+        let parts: [MIMEPart] = [
+            // Unrecognized payloads (only reachable when something bypassed the
+            // control plane's validation) travel as text/plain: cloud-init
+            // ignores them with a logged warning instead of misinterpreting.
+            MIMEPart(
+                mimeType: format?.mimeType ?? "text/plain",
+                filename: "user-data",
+                content: userData
+            ),
+            MIMEPart(
+                mimeType: "text/cloud-config",
+                filename: "strato-provisioning.cfg",
+                content: systemCloudConfig(authorizedKeys: keys)
+            ),
+            MIMEPart(
+                mimeType: "text/x-shellscript",
+                filename: "strato-console-setup.sh",
+                content: consoleSetupScript
+            ),
+        ]
+        return multipartDocument(parts: parts)
+    }
+
+    /// A part of a multipart `user-data` document.
+    struct MIMEPart {
+        let mimeType: String
+        let filename: String
+        let content: String
+    }
+
+    /// Renders a `multipart/mixed` MIME document. The boundary is extended
+    /// until it collides with no part's content, so arbitrary caller payloads
+    /// can never terminate a part early.
+    static func multipartDocument(parts: [MIMEPart]) -> String {
+        var boundary = "strato-cloud-init-boundary"
+        while parts.contains(where: { $0.content.contains(boundary) }) {
+            boundary += "-x"
+        }
+
+        var lines: [String] = [
+            "Content-Type: multipart/mixed; boundary=\"\(boundary)\"",
+            "MIME-Version: 1.0",
+            "",
+        ]
+        for part in parts {
+            lines.append("--\(boundary)")
+            lines.append("Content-Type: \(part.mimeType); charset=\"utf-8\"")
+            lines.append("MIME-Version: 1.0")
+            lines.append("Content-Disposition: attachment; filename=\"\(part.filename)\"")
+            lines.append("")
+            // The newline before the next boundary belongs to the delimiter,
+            // so drop the content's own trailing one to avoid a stray blank
+            // line inside the part body.
+            lines.append(part.content.hasSuffix("\n") ? String(part.content.dropLast()) : part.content)
+        }
+        lines.append("--\(boundary)--")
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// The single-document `#cloud-config` used when the caller supplied no
+    /// user data. Byte-identical to the pre-user-data agent output so existing
+    /// VMs regenerate the same seed.
+    static func legacyCloudConfig(authorizedKeys keys: [String]) -> String {
+        var document = """
+            #cloud-config
+            # Console login: set a password on the image's default user so
+            # the serial console — the only reachable login path on user-mode
+            # (SLIRP) networking, which has no inbound route for SSH — is
+            # usable. `expire: false` avoids a forced reset on first login.
+            # Injected SSH keys (below) remain preferred once the VM is
+            # network-reachable (OVN / port-forward).
+            password: \(Self.defaultConsolePassword)
+            chpasswd:
+              expire: false
+            ssh_pwauth: true
+            # Enable serial console output
+            bootcmd:
+              # Update GRUB to output to serial console
+              - 'sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\\"console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0\\"/" /etc/default/grub || true'
+              - 'update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg 2>/dev/null || true'
+
+            # Enable getty on serial console
+            runcmd:
+              - systemctl enable --now serial-getty@ttyS0.service || true
+              - systemctl enable --now serial-getty@ttyAMA0.service || true
+              - systemctl enable --now serial-getty@hvc0.service || true
+              # Emit a marker so we can verify console output quickly
+              - "sh -c 'echo [cloud-init] console marker > /dev/ttyS0 2>/dev/null || true'"
+              - "sh -c 'echo [cloud-init] console marker > /dev/ttyAMA0 2>/dev/null || true'"
+              - "sh -c 'echo [cloud-init] console marker > /dev/hvc0 2>/dev/null || true'"
+            """
+        document += sshAuthorizedKeysBlock(keys)
+        return document
+    }
+
+    /// Strato's provisioning defaults as a standalone cloud-config, used as
+    /// the second part of a multipart document. Deliberately free of
+    /// `bootcmd`/`runcmd` (console setup travels as a script part instead):
+    /// cloud-init's default part merge drops colliding keys rather than
+    /// appending, so any key here would silently swallow — or be swallowed
+    /// by — the same key in caller-supplied cloud-config.
+    static func systemCloudConfig(authorizedKeys keys: [String]) -> String {
+        var document = """
+            #cloud-config
+            # Strato guest-provisioning defaults. The caller's user data is the
+            # first part of this document and wins on conflicting keys.
+            password: \(Self.defaultConsolePassword)
+            chpasswd:
+              expire: false
+            ssh_pwauth: true
+            """
+        document += sshAuthorizedKeysBlock(keys)
+        return document
+    }
+
+    /// Authorizes keys for the image's default user. `ssh_authorized_keys` at
+    /// the cloud-config top level applies to the default user, so no `users:`
+    /// block is needed. Empty keys render nothing.
+    private static func sshAuthorizedKeysBlock(_ keys: [String]) -> String {
+        guard !keys.isEmpty else { return "" }
+        let keyLines = keys.map { "  - \"\($0.replacingOccurrences(of: "\"", with: ""))\"" }
+            .joined(separator: "\n")
+        return "\n\nssh_authorized_keys:\n\(keyLines)\n"
+    }
+
+    /// Serial-console setup (GRUB output + getty) as a shell script, run by
+    /// cloud-init's scripts-user stage. Same commands as the legacy
+    /// `bootcmd`/`runcmd`, in script form so it composes with any
+    /// caller-supplied cloud-config (see `systemCloudConfig`). GRUB edits only
+    /// matter for subsequent boots, so running at scripts-user time (instead
+    /// of bootcmd's early hook) changes nothing observable.
+    static let consoleSetupScript = """
+        #!/bin/sh
+        # Strato serial-console setup: route GRUB/kernel output to the serial
+        # console and enable a login getty there, so console streaming works
+        # without modifying the disk image.
+        sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\\"console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0\\"/" /etc/default/grub || true
+        update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg 2>/dev/null || true
+        systemctl enable --now serial-getty@ttyS0.service || true
+        systemctl enable --now serial-getty@ttyAMA0.service || true
+        systemctl enable --now serial-getty@hvc0.service || true
+        # Emit a marker so we can verify console output quickly
+        echo '[cloud-init] console marker' > /dev/ttyS0 2>/dev/null || true
+        echo '[cloud-init] console marker' > /dev/ttyAMA0 2>/dev/null || true
+        echo '[cloud-init] console marker' > /dev/hvc0 2>/dev/null || true
+        """
 
     /// Renders a NoCloud `network-config` (version 2), matched by MAC address:
     /// DHCP-managed NICs are set to `dhcp4: true` (OVN's responder delivers

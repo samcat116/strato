@@ -106,6 +106,34 @@ host cleanly rejects placements it can't serve.
   and in simulation mode (one mock per hypervisor type). It tracks specs
   and status so reservations and reconciliation behave realistically.
 
+## Guest provisioning (cloud-init)
+
+`StratoAgentCore/CloudInitProvisioner.swift` generates the NoCloud seed ISO
+QEMU disk-boot VMs consume (`meta-data`, `user-data`, and — when the control
+plane allocated static addressing — a v2 `network-config`). Guest bootstrap
+is deliberately per-backend: Firecracker VMs inject configuration through
+kernel args instead and do not use this path.
+
+The `user-data` document has two shapes:
+
+- **No caller user data**: a single `#cloud-config` carrying Strato's
+  provisioning — a serial-console password (dev convenience for SLIRP
+  networks with no SSH route), GRUB/getty serial-console setup, and the
+  VM's authorized SSH keys.
+- **Caller user data present** (`VMSpec.userData`, any cloud-init format:
+  `#cloud-config`, `#!` script, `#include`, jinja template): a
+  `multipart/mixed` MIME document. The caller's payload is the **first**
+  part — cloud-init merges later cloud-config parts into earlier ones with
+  `dict(no_replace, allow_new)`, so on conflicting keys the caller wins and
+  Strato's config acts as defaults. Strato's console setup travels as a
+  `text/x-shellscript` part rather than `bootcmd`/`runcmd` keys, because
+  the default part merge *drops* colliding list keys rather than appending
+  — script parts always compose. The multipart boundary is extended until
+  it appears in no part, so hostile payloads can't truncate a part.
+- **Caller user data is itself a full MIME document**: used as the seed's
+  `user-data` verbatim — the escape hatch for callers who want complete
+  control (this skips Strato's console/password/SSH-key provisioning).
+
 ## The reconciler
 
 `StratoAgentCore/Reconciliation.swift` — two layers, generalized over
