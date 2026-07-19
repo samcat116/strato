@@ -18,7 +18,7 @@ struct GeneralizeVMOperations: AsyncMigration {
         }
 
         try await database.schema("resource_operations")
-            .field("resource_kind", .string, .required, .sql(.default("'virtual_machine'")))
+            .field("resource_kind", .string, .required, .sql(.default("virtual_machine")))
             .update()
 
         // Rebuild the indexes under the generalized names and shapes. The
