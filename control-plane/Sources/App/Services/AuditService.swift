@@ -446,25 +446,17 @@ extension Request {
 
     /// Best-effort client IP for the audit trail.
     ///
-    /// Trust only the *rightmost* `X-Forwarded-For` entry: our own proxy appends
-    /// the real peer on the right, while any hops further left are client-
-    /// supplied and spoofable. Taking the leftmost (or the raw header) let a
-    /// client forge the `sourceIP` of its own audit events — including failed-
-    /// auth and admin-bypass events — defeating attribution. Falls back to the
-    /// socket peer when no forwarding header is present. (`RateLimitMiddleware`
-    /// applies the same right-anchored logic for its buckets.)
+    /// Resolved through the shared `ProxyTrustConfig`, which counts in from the
+    /// *right* of `X-Forwarded-For`: hops further left are client-supplied, so
+    /// taking the raw (leftmost) value let a client forge the `sourceIP` of its
+    /// own audit events — including failed-auth and admin-bypass events —
+    /// defeating attribution. Using the shared resolver rather than a local
+    /// right-anchored read also keeps audit consistent with the rate limiter in
+    /// multi-hop topologies (the supported HTTPS compose stack runs two proxies,
+    /// where an unconditional rightmost read would record the inner proxy's
+    /// address for every request).
     var auditClientIP: String? {
-        if let forwarded = headers.first(name: "X-Forwarded-For") {
-            let hops =
-                forwarded
-                .split(separator: ",")
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
-            if let rightmost = hops.last {
-                return rightmost
-            }
-        }
-        return remoteAddress?.description
+        trustedClientIP
     }
 
     /// Record an authentication-flow audit event (login, logout, registration,
