@@ -43,12 +43,15 @@ reused.
 ### The host image cache
 
 Downloaded image artifacts are cached on the host by `ImageCacheService`
-(`agent/Sources/StratoAgent/ImageCacheService.swift`) under
+(`agent/Sources/StratoAgentCore/ImageCacheService.swift`) under
 `image_cache_dir` (default `/var/cache/strato/images`), laid out as
 `{projectId}/{imageId}/[{artifactKind}/]{filename}`. Repeat launches of the
 same image verify the cached file's SHA-256 against the control plane's
 checksum and skip the download entirely; downloads are staged and published
-by atomic rename, so the cache never holds partial bytes. Materialization
+by atomic rename, so the cache never holds partial bytes. Concurrent requests
+for the same entry are collapsed into one download by a `SingleFlight` lane
+keyed on the destination path, so two workloads placed together against a cold
+image share a download instead of racing to publish it. Materialization
 always copies/converts out of the cache — cached files are never used as
 qcow2 backing files — so evicting an entry can't break an existing VM.
 
@@ -69,6 +72,10 @@ Volume placement is decided by the storage backend:
 <volumeStoragePath>/<volumeId>/volume.<format>
 <volumeStoragePath>/<volumeId>/snapshots/<snapshotId>.qcow2
 ```
+
+The volume root is the agent's `volume_storage_dir` config key (default
+`/var/lib/strato/volumes` on Linux), so a non-root agent can point it at a
+directory it can write.
 
 The control plane never derives paths; it stores whatever path the agent
 reports in `VolumeStatusResponse` and passes it back verbatim on later

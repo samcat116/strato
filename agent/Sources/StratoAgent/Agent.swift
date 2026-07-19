@@ -186,6 +186,9 @@ actor Agent {
     private let sandboxImageCachePath: String?
     private let sandboxImageCacheMaxSizeBytes: Int64?
     private let vmStoragePath: String
+    // Root of the managed-volume tree for the filesystem storage backend and
+    // the host preflight's writability probe.
+    private let volumeStoragePath: String
     private let qemuBinaryPath: String
     private let firmwarePath: String?
     private let firecrackerBinaryPath: String
@@ -258,6 +261,7 @@ actor Agent {
         sandboxImageCachePath: String? = nil,
         sandboxImageCacheMaxSizeBytes: Int64? = nil,
         vmStoragePath: String,
+        volumeStoragePath: String = FileSystemStorageBackend.defaultStoragePath,
         qemuBinaryPath: String,
         firmwarePath: String? = nil,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
@@ -290,6 +294,7 @@ actor Agent {
         self.sandboxImageCachePath = sandboxImageCachePath
         self.sandboxImageCacheMaxSizeBytes = sandboxImageCacheMaxSizeBytes
         self.vmStoragePath = vmStoragePath
+        self.volumeStoragePath = volumeStoragePath
         self.qemuBinaryPath = qemuBinaryPath
         self.firmwarePath = firmwarePath
         self.firecrackerBinaryPath = firecrackerBinaryPath
@@ -435,6 +440,7 @@ actor Agent {
             logger.info("Initializing storage backend")
             storageBackend = FileSystemStorageBackend(
                 logger: logger,
+                volumeStoragePath: volumeStoragePath,
                 imageSource: imageCacheService
             )
         }
@@ -1250,7 +1256,7 @@ actor Agent {
         return HostPreflight.run(
             HostPreflight.Inputs(
                 vmStoragePath: vmStoragePath,
-                volumeStoragePath: FileSystemStorageBackend.defaultStoragePath,
+                volumeStoragePath: volumeStoragePath,
                 imageCachePath: imageCachePath ?? ImageCacheService.defaultCachePath,
                 qemuImgPath: FileSystemStorageBackend.defaultQemuImgPath,
                 firecrackerSocketDirectory: firecrackerSocketDirectory,
