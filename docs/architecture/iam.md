@@ -356,11 +356,15 @@ The schema, the static policies, the loader, and the compiled-set cache are in
   node becomes `resource in <node>` over the chain's parent edges;
   `external_to_organization` compiles against the attach node's resolved org.
   The compiler can emit forbids and nothing else.
-- **`CedarPolicySetCache`** holds the per-replica compiled set, rebuilt via
-  `PolicySetVersionCache.onVersionChange` — the Valkey broadcast and the 30s
+- **`CedarPolicySetCache`** holds the per-replica compiled set, reconciled on
+  every `PolicySetVersionCache` refresh — the Valkey broadcast and the 30s
   re-read both funnel through it, so the cache adds no invalidation machinery.
-  A failed rebuild keeps the previous set: stale converges on the next nudge,
-  empty would deny everything or drop ceilings.
+  The hook is **level-triggered** (rebuild whenever the cached set's version
+  differs from the observed one, an integer comparison when in sync): the
+  version cache advances before listeners run, so an edge-triggered listener
+  whose rebuild failed would wait for the *next* policy write. A failed
+  rebuild keeps the previous set — stale converges within one tick, empty
+  would deny everything or drop ceilings.
 - **The engine itself sits behind `CedarEngine`.** swift-cedar cannot be a
   package dependency yet (unpublished binary artifact, Apple-only packaging,
   while the control plane deploys on Linux), so the compiled artifact is

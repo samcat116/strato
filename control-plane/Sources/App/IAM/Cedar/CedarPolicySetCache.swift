@@ -70,10 +70,23 @@ actor CedarPolicySetCache {
         self.logger = logger
     }
 
+    /// Rebuild only when the cached set is not already at `version` — the
+    /// idempotent form the periodic refresh drives, cheap on the every-30s
+    /// tick where nothing changed.
+    ///
+    /// This is also the retry path: `PolicySetVersionCache` advances its
+    /// version *before* listeners run, so after a failed rebuild no further
+    /// version *change* is coming — the level-triggered refresh hook keeps
+    /// calling here until the build lands.
+    func reconcile(version: Int, on db: any Database) async {
+        guard current?.version != version else { return }
+        await rebuild(version: version, on: db)
+    }
+
     /// Rebuild for `version`. On failure the previous set stays: a stale
-    /// policy set converges on the next nudge or periodic re-read, whereas an
-    /// empty one would deny everything (or, with guardrails missing, allow
-    /// what a ceiling forbids).
+    /// policy set converges on the next nudge or periodic re-read (via
+    /// `reconcile`), whereas an empty one would deny everything (or, with
+    /// guardrails missing, allow what a ceiling forbids).
     func rebuild(version: Int, on db: any Database) async {
         do {
             let guardrails = try await Guardrail.query(on: db)
@@ -144,13 +157,6 @@ actor CedarPolicySetCache {
         }
     }
 
-    /// Build once if nothing is cached yet — the fresh-database boot path,
-    /// where the version is still 0 and no change event will ever fire.
-    func rebuildIfNeeded(on db: any Database) async {
-        guard current == nil else { return }
-        let version = (try? await PolicySetVersionService.current(on: db)) ?? 0
-        await rebuild(version: version, on: db)
-    }
 }
 
 extension Application {
@@ -165,10 +171,19 @@ extension Application {
 
     /// Hang the compiled-set rebuild off the policy-set version watch. Call
     /// *before* `startPolicySetVersionWatch()`, so the watch's initial refresh
-    /// already lands here.
+    /// already lands here — that first refresh is what builds the boot-time
+    /// set, fresh database included.
+    ///
+    /// Level-triggered on purpose (`onEveryRefresh`, not `onVersionChange`):
+    /// the version cache advances before listeners run, so an edge-triggered
+    /// listener whose rebuild failed would never be called again until the
+    /// next policy write. Reconciling against the cached set's own version on
+    /// every tick keeps the steady state to an integer comparison and turns a
+    /// failed rebuild into one interval of staleness instead of an unbounded
+    /// one.
     func startCedarPolicySetCache() async {
-        await policySetVersion.onVersionChange { [self] version in
-            await cedarPolicySet.rebuild(version: version, on: db)
+        await policySetVersion.onEveryRefresh { [self] version in
+            await cedarPolicySet.reconcile(version: version, on: db)
         }
     }
 }

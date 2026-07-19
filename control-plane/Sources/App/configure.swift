@@ -471,13 +471,12 @@ public func configure(_ app: Application) async throws {
     // drive the cache directly.
     //
     // IAM phase 3 (#480): the compiled Cedar policy set hangs off the version
-    // watch. The listener registers first so the watch's initial refresh lands
-    // in the cache; the explicit build afterwards covers a fresh database,
-    // where the version is 0 and no change event ever fires.
+    // watch, level-triggered so a failed rebuild retries on the periodic
+    // re-read. The listener registers first so the watch's initial refresh
+    // performs the boot-time build.
     if app.environment != .testing {
         await app.startCedarPolicySetCache()
         await app.startPolicySetVersionWatch()
-        await app.cedarPolicySet.rebuildIfNeeded(on: app.db)
     }
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth

@@ -28,11 +28,11 @@ final class CedarPolicySetCacheTests {
     func freshBuild() async throws {
         try await withApp { app in
             let cache = CedarPolicySetCache(logger: app.logger)
-            await cache.rebuildIfNeeded(on: app.db)
-
             // Not 0: the boot-time registry sync bumps the version when it
             // first seeds `iam_roles`, and the build must reflect that.
             let expectedVersion = try await PolicySetVersionService.current(on: app.db)
+            await cache.reconcile(version: expectedVersion, on: app.db)
+
             let built = await cache.current
             #expect(built != nil)
             #expect(built?.version == expectedVersion)
@@ -43,8 +43,9 @@ final class CedarPolicySetCacheTests {
             let artifact = built?.artifact as? TextOnlyCedarEngine.Artifact
             #expect(artifact?.policyText == built?.policyText)
 
-            // Idempotent: a second call keeps the build rather than redoing it.
-            await cache.rebuildIfNeeded(on: app.db)
+            // Idempotent: reconciling at the same version keeps the build
+            // rather than redoing it — this runs on every periodic tick.
+            await cache.reconcile(version: expectedVersion, on: app.db)
             let after = await cache.current
             #expect(after?.builtAt == built?.builtAt)
         }
@@ -107,9 +108,10 @@ final class CedarPolicySetCacheTests {
     func versionChangeRebuilds() async throws {
         try await withApp { app in
             // Wire the cache to the version watch the way boot does (the
-            // .testing environment skips the auto-start on purpose).
+            // .testing environment skips the auto-start on purpose). The
+            // watch's initial refresh is what performs the boot-time build.
             await app.startCedarPolicySetCache()
-            await app.cedarPolicySet.rebuildIfNeeded(on: app.db)
+            await app.policySetVersion.refresh(on: app.db)
             let initialVersion = try await PolicySetVersionService.current(on: app.db)
             let before = await app.cedarPolicySet.current
             #expect(before?.version == initialVersion)
@@ -163,6 +165,15 @@ final class CedarPolicySetCacheTests {
             // stale one converges on the next nudge or periodic re-read.
             #expect(second?.version == 1)
             #expect(second?.builtAt == first?.builtAt)
+
+            // The periodic reconcile is the retry path: the version cache
+            // already advanced, so no further change event is coming — the
+            // level-triggered tick has to keep re-driving the rebuild until
+            // it lands.
+            engine.failing = false
+            await cache.reconcile(version: 2, on: app.db)
+            let third = await cache.current
+            #expect(third?.version == 2)
         }
     }
 }
