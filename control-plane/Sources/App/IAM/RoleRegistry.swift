@@ -97,6 +97,19 @@ enum IAMRoleRegistry {
         ],
     ]
 
+    /// Actions that bare org membership grants on its own, with no role
+    /// binding behind them (docs/architecture/iam.md: "bare org membership
+    /// grants `org:read` and `project:create` — nothing else"). Reverse
+    /// lookups must add these, or they under-report every org member.
+    static let membershipDerivedActions: Set<String> = ["org:read", "project:create"]
+
+    /// The roles whose expanded action group contains `action` — the set a
+    /// binding must name to grant it. Empty for an action no role carries
+    /// (e.g. `project:create`, which comes from membership instead).
+    static func roles(granting action: String) -> Set<IAMRole> {
+        Set(IAMRole.allCases.filter { actions(for: $0).contains(action) })
+    }
+
     /// The full expanded action group for a role: its direct actions plus
     /// everything from the roles it implies.
     static func actions(for role: IAMRole) -> Set<String> {

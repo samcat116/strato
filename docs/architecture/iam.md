@@ -261,14 +261,38 @@ inverts the data flow:
 
 ### Required APIs (day one of the new system, not v2)
 
-1. **`can-i`** — hypothetical checks (exists today as
-   `POST /api/authorization/check`; extend to arbitrary principals).
-2. **`who-can`** — the reverse index, served from the bindings table + tree.
+1. **`can-i`** — hypothetical checks, `POST /api/authorization/check`. **Shipped.**
+2. **`who-can`** — the reverse index, `POST /api/authorization/who-can`. **Shipped.**
 3. **Policy simulator** — evaluate a proposed change against recorded
    historical decisions before applying.
 4. **Decision logs** — every authz decision with the reason, the policy
    version, and the tier that produced it. Distinct from the mutation audit
    log; this is what makes guardrail denials debuggable.
+
+`who-can` answers from `role_bindings` plus the resource tree — an ancestor
+walk (`IAMResourceTree`) and a group expansion — never from the policy engine.
+A reverse query against an evaluator means enumerating every principal and
+checking each; against tables we own it is a bounded set of indexed reads.
+This is what the one-parent invariant buys.
+
+Because not every grant is a binding, each answer carries the reason it was
+included — `binding` (with the role, the node it was granted on, and the group
+it was inherited through), `orgMembership` (the two membership-derived
+actions), or `systemAdmin`. A principal appears once per distinct grant, since
+revoking access means revoking all of them. Principals from other orgs are
+reported, not filtered: cross-org access is exactly what most needs to be
+visible.
+
+Reading who holds access is itself administrative — both endpoints require
+admin over the resource or a container above it.
+
+Until cutover the two forms of `can-i` answer from different stores, which is
+a deliberate consequence of SpiceDB still being authoritative: the
+caller-scoped form goes to SpiceDB (what actually gates requests, so
+`permission` is a SpiceDB permission name), while the arbitrary-principal form
+goes to the bindings table so it agrees with `who-can` (so `permission` is an
+IAM action name). Phase 5 collapses both onto the evaluator and the two
+vocabularies become one.
 
 ### Enforcement path
 
