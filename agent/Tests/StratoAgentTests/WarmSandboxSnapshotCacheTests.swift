@@ -214,6 +214,12 @@ struct WarmSandboxSnapshotCacheTests {
 
         #expect(!FileManager.default.fileExists(atPath: abandoned), "old staging must be removed")
         #expect(FileManager.default.fileExists(atPath: live), "a live build's staging must survive")
+
+        // The ungated startup sweep (no build can be in flight) collects
+        // everything, however fresh — a restart shortly after a crash must
+        // not strand young debris behind the age gate forever.
+        cache.removeAbandonedStaging(olderThan: 0)
+        #expect(!FileManager.default.fileExists(atPath: live))
     }
 
     // MARK: - Eviction

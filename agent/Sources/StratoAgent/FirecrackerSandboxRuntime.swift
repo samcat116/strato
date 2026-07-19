@@ -1069,6 +1069,16 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         guard info.state != .notStarted else {
             throw SandboxRuntimeError.notSnapshottable("the sandbox has never been booted")
         }
+        // A warm-provisioned sandbox that has not launched yet is the same
+        // lifecycle position as never-booted, even though its microVM sits
+        // paused: the guest memory still carries the *template's* identity,
+        // so a checkpoint taken now could never pass restore's identity
+        // check. (The instance-state guard above cannot see this — a
+        // pre-launch warm sandbox is `Paused`, exactly like a stopped one.)
+        guard managed.warmHeldIdentity == nil else {
+            throw SandboxRuntimeError.notSnapshottable(
+                "the sandbox has never been booted (warm-provisioned, awaiting launch)")
+        }
 
         logger.info(
             "Checkpointing sandbox",
@@ -1502,9 +1512,14 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// probed for live processes.
     private func sweepLeakedWarmTemplates() async {
         let fileManager = FileManager.default
-        // Staging directories abandoned by a crash mid-build are excluded
-        // from the budget sweep, so this is their only cleanup path.
-        warmCache.removeAbandonedStaging()
+        // Staging directories abandoned by a crash are excluded from the
+        // budget sweep, so this is their only cleanup path — and it must not
+        // age-gate: this call runs synchronously before this method's first
+        // suspension, and the sweep precedes any template build this process
+        // can start (first create, before maybeStartWarmTemplateBuild), so
+        // no staging directory can be live here regardless of age. A restart
+        // shortly after a crash would otherwise skip the debris forever.
+        warmCache.removeAbandonedStaging(olderThan: 0)
         var leaked: Set<String> = []
         if let names = try? fileManager.contentsOfDirectory(atPath: sandboxStoragePath) {
             leaked.formUnion(names.filter { $0.hasPrefix("warm-template-") })

@@ -227,17 +227,23 @@ public struct WarmSandboxSnapshotCache: Sendable {
     /// Remove `.staging-*` directories older than `olderThan`. Staging
     /// directories are excluded from the budget sweep by design, so one
     /// abandoned by a crash mid-build (multi-GB memory/rootfs files) would
-    /// otherwise hold disk forever. The age gate keeps a live build's
-    /// staging safe; anything older than an hour cannot be in flight.
+    /// otherwise hold disk forever. Callers that can prove no build is in
+    /// flight (e.g. a startup sweep that runs before any build can start)
+    /// pass 0 to collect everything regardless of age or mtime readability;
+    /// the default hour-long gate keeps a live build's staging safe
+    /// otherwise (and skips entries whose mtime cannot be read, since
+    /// liveness cannot be ruled out for them).
     public func removeAbandonedStaging(
         olderThan: TimeInterval = 3600, now: Date = Date(), fileManager: FileManager = .default
     ) {
         guard let names = try? fileManager.contentsOfDirectory(atPath: rootPath) else { return }
         for name in names where name.hasPrefix(".staging-") {
             let path = rootPath + "/" + name
-            let modified =
-                (try? fileManager.attributesOfItem(atPath: path))?[.modificationDate] as? Date
-            guard let modified, now.timeIntervalSince(modified) > olderThan else { continue }
+            if olderThan > 0 {
+                let modified =
+                    (try? fileManager.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+                guard let modified, now.timeIntervalSince(modified) > olderThan else { continue }
+            }
             try? fileManager.removeItem(atPath: path)
         }
     }
