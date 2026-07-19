@@ -57,11 +57,20 @@ public enum StageBudget {
 
         /// Stop waiting at the deadline and leave the operation running.
         ///
-        /// Correct only when the operation is *inert*: an unanswered QMP
-        /// round-trip is parked on a continuation, holds no lock and writes no
-        /// file, so walking away leaks a task and costs nothing else. This is
-        /// the guarantee that keeps a wedged hypervisor from taking the agent
-        /// offline (issue #516), and the one `.cancelAndWait` cannot make.
+        /// Correct only when the operation is inert *in its effects*, not
+        /// merely idle while it waits. The test is what happens if the
+        /// abandoned work completes a minute later, after the caller has
+        /// reported failure and something has retried:
+        ///
+        /// - A status query or an adoption handshake resolves a continuation
+        ///   nobody holds. Nothing observes it. Safe to abandon.
+        /// - A `destroy`, a disk hot-plug, or a report send lands anyway —
+        ///   mutating a guest, or transmitting a stale view — while the agent
+        ///   has moved on. Not safe, however long it merely sat waiting.
+        ///
+        /// "It was parked on a continuation" describes the wait, not the
+        /// command, and conflating the two is how side-effecting call sites
+        /// end up here by mistake.
         case abandon
     }
 

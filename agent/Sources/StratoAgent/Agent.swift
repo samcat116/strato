@@ -1507,6 +1507,13 @@ actor Agent {
             // heartbeat's own task, so an overlong report delays the *next*
             // beat. Skipping one is harmless — it is a periodic backstop and
             // the next round re-drives it (issue #516).
+            //
+            // `.abandon` despite the report having an effect (it transmits):
+            // `sendObservedStateReport` stamps an epoch and re-checks it
+            // immediately before sending, so an abandoned report finds itself
+            // superseded and drops instead of applying a stale full-list view
+            // over a newer one. Remove that guard and this must become
+            // `.cancelAndWait`.
             do {
                 try await StageBudget.run(
                     seconds: 15, stage: "observed-state-report", onTimeout: .abandon

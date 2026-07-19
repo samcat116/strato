@@ -517,12 +517,23 @@ actor QEMUService: HypervisorService {
         return Array(activeVMs.keys)
     }
 
-    /// Run a hypervisor control-channel call under a time budget.
+    /// Run a hypervisor control-channel *command* under a time budget.
     ///
-    /// Every one of these executes on this actor, so an unbounded call does not
-    /// merely fail its own operation — it occupies the backend for every VM on
-    /// the host, and (via the heartbeat's observation calls) can read as a dead
-    /// agent. Issue #516 was exactly that: one QMP call with no deadline.
+    /// Deliberately `.cancelAndWait`, not `.abandon`. These are commands, not
+    /// reads: destroy, disk hot-plug, and the power-state transitions all
+    /// mutate guest or host state, and the command is already on the wire when
+    /// the budget expires. Abandoning one lets it land *after* the agent has
+    /// reported failure and a retry has run — a late `destroy` completing after
+    /// `deleteVM` threw leaves `activeVMs` pointing at a dead process, and a
+    /// late `attach`/`detach` mutates a guest the agent has already re-planned
+    /// around. Waiting for the unwind keeps "the agent gave up" and "the
+    /// command took effect" from both being true.
+    ///
+    /// This terminates because the command itself is bounded a layer down:
+    /// `QMPClient` gives every request its own deadline (samcat116/swift-qemu#8),
+    /// so the operation returns an error rather than parking forever. The
+    /// budget here is the outer belt-and-braces bound, and a stuck command is
+    /// contained to its own VM's serial lane rather than the whole agent.
     private func controlled<T: Sendable>(
         _ stage: String,
         vmId: String,
@@ -530,11 +541,8 @@ actor QEMUService: HypervisorService {
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         do {
-            // `.abandon`: a wedged QMP round-trip is inert — it is parked on a
-            // continuation and touches nothing — so walking away from it is
-            // safe, and is the only way to free this actor for every other VM.
             return try await StageBudget.run(
-                seconds: seconds, stage: stage, onTimeout: .abandon, operation: operation)
+                seconds: seconds, stage: stage, onTimeout: .cancelAndWait, operation: operation)
         } catch let error as StageBudgetError {
             logger.error(
                 "Hypervisor control call exceeded its budget",
