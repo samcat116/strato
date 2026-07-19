@@ -215,10 +215,26 @@ Requires=spire-agent.service
 ExecStart=/usr/local/bin/strato-agent run --config-file /etc/strato/config.toml
 Restart=on-failure
 RestartSec=10
+# Signal only the agent on stop, never the whole cgroup — see below.
+KillMode=process
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+`KillMode=process` is required, not optional. QEMU and Firecracker run as
+children of the agent, so they share its cgroup; with systemd's default
+`KillMode=control-group` every `systemctl stop`, `systemctl restart`, or
+automatic `Restart=on-failure` would kill every VM on the host. VMs are
+designed to outlive the agent — the agent persists a VM manifest and re-adopts
+the hypervisor processes it left running when it starts back up — so the unit
+must leave them alone.
+
+Agents installed before this directive existed have units without it. Re-run
+the install script, or add the two lines by hand and
+`systemctl daemon-reload`; the change takes effect on the next stop, so do it
+before the next restart rather than after losing a node's VMs to one.
 
 ## Updating agents
 
