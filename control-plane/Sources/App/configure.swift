@@ -436,6 +436,11 @@ public func configure(_ app: Application) async throws {
 
     // Sandbox snapshots / checkpoint-resume (issue #426).
     app.migrations.add(CreateSandboxSnapshot())
+    // Sandbox fork lineage (issue #427). Must follow snapshots so deployments
+    // see the source table before the feature starts accepting references.
+    app.migrations.add(AddSandboxRestoreLineage())
+    app.migrations.add(AddSandboxSnapshotGuestControlVersion())
+    app.migrations.add(AddSandboxSnapshotForkLayoutVersion())
 
     // Give the seeded "default" network resolvers so guests can resolve names
     // out of the box (issue #518). Runs late: it must follow the migration that

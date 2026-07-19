@@ -3,6 +3,7 @@ export { useSites, useInvalidateSites } from "./use-sites";
 export {
   useSandboxes,
   useSandbox,
+  useSandboxSnapshots,
   useInvalidateSandboxes,
 } from "./use-sandboxes";
 export {

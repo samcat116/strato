@@ -45,6 +45,11 @@ use crate::config::{ImageConfig, ProcessOverrides};
 /// first freely usable port and keeps us clear of them.
 pub const DEFAULT_VSOCK_PORT: u32 = 1024;
 
+/// Version of the guest control surface. This is advertised in `pong` so an
+/// upgraded host can distinguish a new guest from an older init frozen inside
+/// a checkpoint.
+pub const CONTROL_PROTOCOL_VERSION: u32 = 3;
+
 /// Default for [`Request::Exec`]'s `tty` when the host omits it.
 pub const DEFAULT_EXEC_TTY: bool = false;
 /// Default PTY rows for [`Request::Exec`] when the host omits `rows`.
@@ -132,10 +137,25 @@ pub enum Request {
         /// The sandbox spec's process overrides, as on the config drive.
         #[serde(default)]
         overrides: Box<ProcessOverrides>,
-        /// base64 random bytes to mix into `/dev/urandom`. Best-effort
-        /// clone-safety mitigation until #427's RNG reseed lands.
+        /// base64 random bytes to mix into `/dev/urandom`. Warm launch keeps
+        /// this best-effort; user-checkpoint fork re-identification requires
+        /// the same reseed operation to succeed.
         #[serde(default)]
         entropy: Option<String>,
+    },
+    /// Rotate all guest identity material after restoring a user checkpoint as
+    /// a new sandbox (v5, issue #427). The source fields prevent a host from
+    /// mutating a guest whose checkpoint identity did not match its metadata.
+    Reidentify {
+        expected_sandbox_id: String,
+        expected_nonce: String,
+        sandbox_id: String,
+        identity_nonce: String,
+        hostname: String,
+        /// Fresh host randomness, base64 encoded; at least 32 bytes required.
+        entropy: String,
+        /// Current wall clock as nanoseconds since the Unix epoch.
+        unix_nanos: i64,
     },
 }
 
@@ -160,7 +180,11 @@ pub enum WorkloadState {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     /// Reply to [`Request::Ping`].
-    Pong { sandbox_id: String, nonce: String },
+    Pong {
+        sandbox_id: String,
+        nonce: String,
+        control_protocol_version: u32,
+    },
     /// Reply to [`Request::GetStatus`].
     Status {
         sandbox_id: String,
@@ -207,6 +231,9 @@ pub enum Response {
     /// identity. Subsequent `pong`/`status` responses echo the launched
     /// sandbox's identity.
     Launched,
+    /// Reply to [`Request::Reidentify`]. All later identity-bearing responses
+    /// echo the target sandbox id and nonce.
+    Reidentified,
     /// The request could not be decoded, is not valid for the connection's
     /// role, or the exec spawn failed.
     Error { message: String },
@@ -319,6 +346,18 @@ mod tests {
         assert_eq!(line.trim(), r#"{"type":"launched"}"#);
         let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
         assert_eq!(decoded, Response::Launched);
+    }
+
+    #[test]
+    fn reidentify_round_trips() {
+        let line = r#"{"type":"reidentify","expected_sandbox_id":"source","expected_nonce":"old","sandbox_id":"fork","identity_nonce":"new","hostname":"strato-fork","entropy":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=","unix_nanos":1752700000000000000}"#;
+        let req = decode_request(line).expect("decode");
+        let decoded: Request = serde_json::from_str(encode_line(&req).trim()).expect("re-decode");
+        assert_eq!(decoded, req);
+        assert_eq!(
+            encode_line(&Response::Reidentified).trim(),
+            r#"{"type":"reidentified"}"#
+        );
     }
 
     #[test]
@@ -447,12 +486,13 @@ mod tests {
         let resp = Response::Pong {
             sandbox_id: "sb-1".into(),
             nonce: "n-1".into(),
+            control_protocol_version: CONTROL_PROTOCOL_VERSION,
         };
         let line = encode_line(&resp);
         assert!(line.ends_with('\n'));
         assert_eq!(
             line.trim(),
-            "{\"type\":\"pong\",\"sandbox_id\":\"sb-1\",\"nonce\":\"n-1\"}"
+            "{\"type\":\"pong\",\"sandbox_id\":\"sb-1\",\"nonce\":\"n-1\",\"control_protocol_version\":3}"
         );
     }
 

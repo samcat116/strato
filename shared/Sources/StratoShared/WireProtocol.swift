@@ -139,7 +139,13 @@ public enum WireProtocol {
     /// already refused at the socket — the control plane no longer has a token
     /// auth path to fall back to.
     ///
-    /// Version 12: floating IPs (issue #344). `DesiredNetworkState` gains the
+    /// Version 12 adds sandbox forks (issue #427) and floating IPs (issue
+    /// #344). `SandboxSpec` and `DesiredSandboxState` carry an optional
+    /// `restoreFrom` checkpoint reference. A pre-v12 agent would silently
+    /// ignore it and cold-create the target, so fork placement is gated on
+    /// `supportsSandboxFork(_:)`.
+    ///
+    /// `DesiredNetworkState` also gains the
     /// optional `floatingIPs` list, realized as `dnat_and_snat` rules by the
     /// topology-authority agent. Additive and tolerant on the wire — a pre-v12
     /// agent decodes the message and ignores the field — which is exactly the
@@ -200,6 +206,14 @@ public enum WireProtocol {
     /// version 5 notes on `currentVersion`).
     public static func supportsSandboxSync(_ version: Int) -> Bool {
         version >= sandboxSyncMinimumVersion
+    }
+
+    /// The lowest protocol version that restores a sandbox checkpoint into a
+    /// new identity rather than treating the desired entry as a cold create.
+    public static let sandboxForkMinimumVersion = 12
+
+    public static func supportsSandboxFork(_ version: Int) -> Bool {
+        version >= sandboxForkMinimumVersion
     }
 
     /// The lowest protocol version that understands the `agentUpdate` command

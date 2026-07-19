@@ -20,11 +20,10 @@ enum SandboxSnapshotStatus: String, Codable, CaseIterable, Sendable {
 /// Firecracker version, host CPU, and device topology they were taken with,
 /// so the row records those compatibility constraints alongside placement.
 ///
-/// v1 scope (the volume-snapshot precedent): artifacts live in agent-owned
-/// storage beside the sandbox, so a snapshot restores only on its own agent
-/// (`agentId`) and only in place — into the sandbox it was taken from.
-/// Restoring into *new* sandboxes (fork) is issue #427; off-node export is
-/// issue #428.
+/// Artifacts live in agent-owned storage beside the sandbox, so restore and
+/// fork placement stay pinned to `agentId`. A snapshot can restore its source
+/// in place or seed a new sandbox identity (issue #427); off-node export and
+/// cross-agent restore remain issue #428.
 final class SandboxSnapshot: Model, @unchecked Sendable {
     static let schema = "sandbox_snapshots"
 
@@ -74,6 +73,16 @@ final class SandboxSnapshot: Model, @unchecked Sendable {
 
     @OptionalField(key: "architecture")
     var architecture: String?
+
+    /// Guest init version frozen into memory. Nil means legacy/unknown and is
+    /// intentionally ineligible for fork re-identification.
+    @OptionalField(key: "guest_control_protocol_version")
+    var guestControlProtocolVersion: Int?
+
+    /// Version of the jailed, chroot-relative artifact layout required for a
+    /// fork. Nil preserves legacy/unjailed checkpoints for in-place restore.
+    @OptionalField(key: "fork_layout_version")
+    var forkLayoutVersion: Int?
 
     @OptionalField(key: "error_message")
     var errorMessage: String?
@@ -140,6 +149,8 @@ struct SandboxSnapshotResponse: Content {
     let agentId: String?
     let firecrackerVersion: String?
     let architecture: String?
+    let guestControlProtocolVersion: Int?
+    let forkLayoutVersion: Int?
     let errorMessage: String?
     let createdById: UUID?
     let createdAt: Date?
@@ -154,6 +165,8 @@ struct SandboxSnapshotResponse: Content {
         self.agentId = snapshot.agentId
         self.firecrackerVersion = snapshot.firecrackerVersion
         self.architecture = snapshot.architecture
+        self.guestControlProtocolVersion = snapshot.guestControlProtocolVersion
+        self.forkLayoutVersion = snapshot.forkLayoutVersion
         self.errorMessage = snapshot.errorMessage
         self.createdById = snapshot.$createdBy.id
         self.createdAt = snapshot.createdAt

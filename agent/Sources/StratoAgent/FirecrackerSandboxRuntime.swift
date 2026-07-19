@@ -113,6 +113,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let vsockUdsPath: String
         /// The boot nonce stamped into the config drive, echoed by the guest.
         let identityNonce: String
+        /// Learned from a versioned `pong`. Nil is intentionally conservative:
+        /// it covers legacy guests and paused guests adopted before the host
+        /// could query them.
+        var guestControlProtocolVersion: Int? = nil
         /// The jail layout when this sandbox runs inside the jailer barrier
         /// (issue #425); nil for an unjailed sandbox (jailer disabled, or an
         /// orphan adopted from a pre-jailer life).
@@ -293,6 +297,16 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         if !warmTemplateSweepDone {
             warmTemplateSweepDone = true
             await sweepLeakedWarmTemplates()
+        }
+
+        // User checkpoint fork (issue #427): unlike a warm template this
+        // snapshot already contains a running workload, so restore, rotate its
+        // identity, and report it healthy as one create operation. No registry
+        // pull or cold/warm image provisioning belongs on this path.
+        if let restoreFrom = spec.restoreFrom {
+            try await provisionFromSandboxSnapshot(
+                sandboxId: sandboxId, spec: spec, restoreFrom: restoreFrom)
+            return
         }
 
         let guestImage = try SandboxGuestImage.resolve(atDirectory: guestImagePath)
@@ -544,6 +558,22 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             try await manager.configureDrive(
                 Drive.dataDrive(id: "config", path: apiPaths.config, readOnly: true))
 
+            // Firecracker's VMGenID already rotates on every snapshot load on
+            // supported kernels; virtio-rng supplies continuing host entropy as
+            // defense in depth. Older Firecracker binaries may reject the
+            // optional device, so explicit guest-side reseeding remains the
+            // load-bearing fork boundary.
+            do {
+                try await manager.configureEntropy()
+            } catch {
+                logger.warning(
+                    "Firecracker did not accept the optional entropy device",
+                    metadata: [
+                        "sandboxId": .string(vmId),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+
             // No network interface: networked specs are rejected above until the
             // guest image can configure one.
 
@@ -632,6 +662,168 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             await removeJailArtifacts(plan)
             throw error
         }
+    }
+
+    /// Restore a user checkpoint into a new jailed sandbox and establish a
+    /// hard identity boundary before exposing it as running (issue #427).
+    /// Firecracker vmstate stores drive/vsock paths; distinct jail roots make
+    /// its chroot-relative paths reusable without colliding with the source.
+    private func provisionFromSandboxSnapshot(
+        sandboxId: String,
+        spec: SandboxSpec,
+        restoreFrom: SandboxSnapshotRef
+    ) async throws {
+        guard jailNewSandboxes else {
+            throw SandboxRuntimeError.warmStartFailed(
+                "sandbox forks require the jailer because snapshot devices record their backing paths")
+        }
+
+        let sourceSandboxId = restoreFrom.sourceSandboxId.uuidString
+        let snapshotId = restoreFrom.snapshotId.uuidString
+        let archiveDir = snapshotDirectory(sourceSandboxId, snapshotId: snapshotId)
+        let archiveMemory = archiveDir + "/" + SnapshotFile.memory
+        let archiveVmstate = archiveDir + "/" + SnapshotFile.vmstate
+        let archiveRootfs = archiveDir + "/" + SnapshotFile.rootfs
+        let archiveConfig = archiveDir + "/" + SnapshotFile.configImage
+        for required in [archiveMemory, archiveVmstate, archiveRootfs, archiveConfig] {
+            guard FileManager.default.fileExists(atPath: required) else {
+                throw SandboxRuntimeError.snapshotNotFound(
+                    sandboxId: sourceSandboxId, snapshotId: snapshotId)
+            }
+        }
+
+        let sourceConfig = try SandboxConfigDrive.decode(
+            fromBlockImage: Data(contentsOf: URL(fileURLWithPath: archiveConfig)))
+        guard sourceConfig.sandboxId == sourceSandboxId else {
+            throw SandboxControlError.identityMismatch(
+                expected: sourceSandboxId, got: sourceConfig.sandboxId)
+        }
+
+        let plan = SandboxJailPlan(
+            sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+        do {
+            try? FileManager.default.removeItem(atPath: plan.jailDirectory)
+            try FileManager.default.createDirectory(
+                atPath: plan.jailRoot + "/run", withIntermediateDirectories: true)
+            let rootfsHost = plan.hostPath(forInJail: SandboxJailPlan.rootfsPathInJail)
+            let configHost = plan.hostPath(forInJail: SandboxJailPlan.configPathInJail)
+            let snapshotDirHost = plan.hostPath(forInJail: SandboxJailPlan.snapshotDirInJail)
+            try await reflinkCopy(from: archiveRootfs, to: rootfsHost)
+            try await reflinkCopy(from: archiveConfig, to: configHost)
+            try FileManager.default.createDirectory(
+                atPath: snapshotDirHost, withIntermediateDirectories: true)
+            try await reflinkCopy(
+                from: archiveMemory,
+                to: plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail))
+            try await reflinkCopy(
+                from: archiveVmstate,
+                to: plan.hostPath(forInJail: SandboxJailPlan.snapshotVmstatePathInJail))
+            for path in [
+                plan.jailRoot, plan.jailRoot + "/run", rootfsHost, configHost, snapshotDirHost,
+                plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail),
+                plan.hostPath(forInJail: SandboxJailPlan.snapshotVmstatePathInJail),
+            ] {
+                try chownPath(path, uid: plan.uid, gid: plan.gid)
+            }
+            try await createNetns(plan.netnsName)
+
+            let manager = try await client.restoreVM(
+                vmId: sandboxId,
+                jail: makeJailerOptions(plan: plan, guestMemoryBytes: spec.memoryBytes),
+                snapshot: SnapshotLoadConfig(
+                    snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
+                    memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
+                    resumeVM: true))
+
+            let sourceResponse = try await sendControl(
+                .ping, udsPath: plan.vsockUDSHostPath, timeout: 20)
+            guard
+                identityMatches(
+                    sourceResponse,
+                    sandboxId: sourceConfig.sandboxId,
+                    expectedNonce: sourceConfig.identityNonce)
+            else {
+                throw SandboxControlError.identityMismatch(
+                    expected: "\(sourceConfig.sandboxId)/\(sourceConfig.identityNonce)",
+                    got: "\(sourceResponse)")
+            }
+            guard
+                SandboxGuestControlProtocol.supportsReidentify(
+                    sourceResponse.controlProtocolVersion)
+            else {
+                throw SandboxControlError.malformedResponse(
+                    "checkpointed guest does not advertise re-identification support")
+            }
+
+            let nonce = UUID().uuidString
+            let entropy = Self.freshEntropy()
+            let hostname =
+                "strato-"
+                + String(sandboxId.replacingOccurrences(of: "-", with: "").prefix(12))
+            let response = try await sendControl(
+                .reidentify(
+                    SandboxControlProtocol.ReidentifyRequest(
+                        expectedSandboxId: sourceConfig.sandboxId,
+                        expectedNonce: sourceConfig.identityNonce,
+                        sandboxId: sandboxId,
+                        identityNonce: nonce,
+                        hostname: hostname,
+                        entropy: entropy,
+                        unixNanos: Int64(Date().timeIntervalSince1970 * 1_000_000_000))),
+                udsPath: plan.vsockUDSHostPath,
+                timeout: 20)
+            guard case .reidentified = response else {
+                throw SandboxControlError.malformedResponse(
+                    "expected reidentified, got \(response)")
+            }
+            let health = try await sendControl(
+                .ping, udsPath: plan.vsockUDSHostPath, timeout: 20)
+            guard identityMatches(health, sandboxId: sandboxId, expectedNonce: nonce) else {
+                throw SandboxControlError.identityMismatch(
+                    expected: "\(sandboxId)/\(nonce)", got: "\(health)")
+            }
+
+            // Persist the new identity for adoption and for snapshots taken
+            // from this fork. Firecracker retains the already-open source
+            // config inode; replacing the path is safe and intentionally only
+            // affects future host reads/copies.
+            let targetConfig = SandboxConfigDrive(
+                sandboxId: sandboxId,
+                identityNonce: nonce,
+                imageConfig: sourceConfig.imageConfig,
+                overrides: sourceConfig.overrides)
+            let originalConfigBytes = max(Int(fileSize(archiveConfig)), 512)
+            try targetConfig.blockImage(minimumBytes: originalConfigBytes)
+                .write(to: URL(fileURLWithPath: configHost), options: .atomic)
+            try chownPath(configHost, uid: plan.uid, gid: plan.gid)
+
+            sandboxes[sandboxId] = Managed(
+                spec: spec, rootfsPath: rootfsHost, configPath: configHost,
+                vsockUdsPath: plan.vsockUDSHostPath, identityNonce: nonce,
+                guestControlProtocolVersion: health.controlProtocolVersion,
+                jail: plan, manager: manager, lastExitCode: nil)
+            startLogFollow(sandboxId: sandboxId)
+            logger.info(
+                "Sandbox fork restored and re-identified",
+                metadata: [
+                    "sandboxId": .string(sandboxId),
+                    "sourceSandboxId": .string(sourceSandboxId),
+                    "snapshotId": .string(snapshotId),
+                ])
+        } catch {
+            try? await client.destroyVM(vmId: sandboxId)
+            await removeJailArtifacts(plan)
+            throw error
+        }
+    }
+
+    private static func freshEntropy() -> Data {
+        var generator = SystemRandomNumberGenerator()
+        var entropy = Data(capacity: 32)
+        while entropy.count < 32 {
+            withUnsafeBytes(of: generator.next()) { entropy.append(contentsOf: $0) }
+        }
+        return entropy
     }
 
     /// The jailer options for one microVM's jail plan — shared by cold
@@ -748,6 +940,24 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 return
             }
         }
+
+        // Agent wire compatibility says nothing about a guest already
+        // running inside this microVM. Capture the guest's own advertised
+        // protocol version so a later checkpoint can prove it supports fork
+        // re-identification. Legacy guests still answer ping, but omit the
+        // version and remain valid for ordinary lifecycle operations.
+        let capability = try await sendControl(
+            .ping, udsPath: managed.vsockUdsPath, timeout: 10)
+        guard
+            identityMatches(
+                capability, sandboxId: sandboxId, expectedNonce: managed.identityNonce)
+        else {
+            throw SandboxControlError.identityMismatch(
+                expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(capability)")
+        }
+        sandboxes[sandboxId]?.guestControlProtocolVersion =
+            capability.controlProtocolVersion
+
         logger.info(
             "Sandbox guest agent healthy",
             metadata: [
@@ -783,13 +993,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         await resyncGuestClock(sandboxId: sandboxId, udsPath: managed.vsockUdsPath)
 
         // Fresh randomness so N sandboxes launched from one template do not
-        // share the snapshot's frozen RNG pool (best-effort until #427's
-        // proper reseed).
-        var generator = SystemRandomNumberGenerator()
-        var entropy = Data(capacity: 32)
-        for _ in 0..<4 {
-            withUnsafeBytes(of: generator.next()) { entropy.append(contentsOf: $0) }
-        }
+        // share the snapshot's frozen RNG pool. Warm launch keeps this
+        // best-effort; user-checkpoint fork re-identification requires it.
+        let entropy = Self.freshEntropy()
         let launch = SandboxControlProtocol.LaunchRequest(
             sandboxId: sandboxId, identityNonce: drive.identityNonce,
             imageConfig: drive.imageConfig, overrides: drive.overrides, entropy: entropy)
@@ -1096,6 +1302,32 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 "the sandbox has never been booted (warm-provisioned, awaiting launch)")
         }
 
+        // A running guest can be queried immediately. A paused guest uses the
+        // version learned during its last boot; after an agent restart that
+        // value is unknown, deliberately making the snapshot ineligible for
+        // fork while preserving in-place checkpoint/restore support.
+        var guestControlProtocolVersion = managed.guestControlProtocolVersion
+        if info.state == .running {
+            do {
+                let response = try await sendControl(
+                    .ping, udsPath: managed.vsockUdsPath, timeout: 10)
+                if identityMatches(
+                    response, sandboxId: sandboxId, expectedNonce: managed.identityNonce)
+                {
+                    guestControlProtocolVersion = response.controlProtocolVersion
+                    sandboxes[sandboxId]?.guestControlProtocolVersion =
+                        guestControlProtocolVersion
+                }
+            } catch {
+                logger.warning(
+                    "Could not discover sandbox guest control version before checkpoint",
+                    metadata: [
+                        "sandboxId": .string(sandboxId),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+        }
+
         logger.info(
             "Checkpointing sandbox",
             metadata: [
@@ -1171,7 +1403,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             vmstateSizeBytes: fileSize(archiveVmstate),
             rootfsSizeBytes: fileSize(archiveRootfs),
             storagePath: archiveDir,
-            firecrackerVersion: info.vmlinuxVersion)
+            firecrackerVersion: info.vmlinuxVersion,
+            guestControlProtocolVersion: guestControlProtocolVersion,
+            forkLayoutVersion: managed.jail == nil ? nil : SandboxSnapshotForkLayout.currentVersion)
         logger.info(
             "Sandbox checkpoint complete",
             metadata: [
@@ -1289,6 +1523,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             throw SandboxControlError.identityMismatch(
                 expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(response)")
         }
+        sandboxes[sandboxId]?.guestControlProtocolVersion = response.controlProtocolVersion
 
         // Best-effort clock resync: the restored guest's wall clock froze at
         // checkpoint time.
@@ -2263,7 +2498,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let echoedId: String
         let echoedNonce: String
         switch response {
-        case .pong(let id, let nonce):
+        case .pong(let id, let nonce, _):
             (echoedId, echoedNonce) = (id, nonce)
         case .status(let id, let nonce, _, _):
             (echoedId, echoedNonce) = (id, nonce)

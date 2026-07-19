@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 
 /// The host side of the guest control protocol (issues #421/#423), mirroring
 /// `sandbox-guest/init/src/protocol.rs`.
@@ -68,7 +69,8 @@ public enum SandboxControlProtocol {
         public let imageConfig: SandboxConfigDrive.ImageConfig
         public let overrides: SandboxConfigDrive.ProcessOverrides
         /// Random bytes the guest mixes into `/dev/urandom` (base64 on the
-        /// wire); best-effort clone-safety until #427's RNG reseed.
+        /// wire). Warm launch treats this as best-effort; checkpoint fork
+        /// re-identification uses a separate strict request.
         public let entropy: Data?
 
         public init(
@@ -83,6 +85,38 @@ public enum SandboxControlProtocol {
             self.imageConfig = imageConfig
             self.overrides = overrides
             self.entropy = entropy
+        }
+    }
+
+    /// Identity rotation applied immediately after restoring a user checkpoint
+    /// into a different sandbox (issue #427). The expected source identity
+    /// binds the request to the checkpoint we verified before any mutation;
+    /// the target identity is echoed by all later health/status responses.
+    public struct ReidentifyRequest: Equatable, Sendable {
+        public let expectedSandboxId: String
+        public let expectedNonce: String
+        public let sandboxId: String
+        public let identityNonce: String
+        public let hostname: String
+        public let entropy: Data
+        public let unixNanos: Int64
+
+        public init(
+            expectedSandboxId: String,
+            expectedNonce: String,
+            sandboxId: String,
+            identityNonce: String,
+            hostname: String,
+            entropy: Data,
+            unixNanos: Int64
+        ) {
+            self.expectedSandboxId = expectedSandboxId
+            self.expectedNonce = expectedNonce
+            self.sandboxId = sandboxId
+            self.identityNonce = identityNonce
+            self.hostname = hostname
+            self.entropy = entropy
+            self.unixNanos = unixNanos
         }
     }
 
@@ -117,6 +151,9 @@ public enum SandboxControlProtocol {
         /// frozen RNG pool. The guest answers `launched`, after which every
         /// control response echoes the new identity.
         case launch(LaunchRequest)
+        /// Rotate identity, machine-id, hostname, RNG state, and wall clock for
+        /// a checkpoint restored as a new sandbox.
+        case reidentify(ReidentifyRequest)
 
         /// Flat encoding shape for the tagged request union. The synthesized
         /// `Encodable` conformance already does exactly what the guest's serde
@@ -170,10 +207,43 @@ public enum SandboxControlProtocol {
             }
         }
 
+        private struct RawReidentifyRequest: Encodable {
+            let type: String
+            let expectedSandboxId: String
+            let expectedNonce: String
+            let sandboxId: String
+            let identityNonce: String
+            let hostname: String
+            let entropy: String
+            let unixNanos: Int64
+
+            enum CodingKeys: String, CodingKey {
+                case type
+                case expectedSandboxId = "expected_sandbox_id"
+                case expectedNonce = "expected_nonce"
+                case sandboxId = "sandbox_id"
+                case identityNonce = "identity_nonce"
+                case hostname
+                case entropy
+                case unixNanos = "unix_nanos"
+            }
+        }
+
         /// Encode as a single newline-terminated JSON line.
         public func encodedLine() -> Data {
             var raw: RawRequest
             switch self {
+            case .reidentify(let request):
+                return Self.terminatedLine(
+                    encoding: RawReidentifyRequest(
+                        type: "reidentify",
+                        expectedSandboxId: request.expectedSandboxId,
+                        expectedNonce: request.expectedNonce,
+                        sandboxId: request.sandboxId,
+                        identityNonce: request.identityNonce,
+                        hostname: request.hostname,
+                        entropy: request.entropy.base64EncodedString(),
+                        unixNanos: request.unixNanos))
             case .launch(let request):
                 // The one request with nested payloads — encoded via its own
                 // raw shape instead of the flat RawRequest.
@@ -240,7 +310,10 @@ public enum SandboxControlProtocol {
 
     /// A control response sent guest → host.
     public enum Response: Equatable, Sendable {
-        case pong(sandboxId: String, nonce: String)
+        /// `controlProtocolVersion` is nil for guests predating explicit
+        /// capability advertisement. Callers must treat nil as legacy rather
+        /// than inferring support from the host agent's version.
+        case pong(sandboxId: String, nonce: String, controlProtocolVersion: Int?)
         case status(sandboxId: String, nonce: String, state: WorkloadState, exitCode: Int?)
         case error(message: String)
         /// The exec process spawned; output may follow on this connection.
@@ -263,6 +336,15 @@ public enum SandboxControlProtocol {
         /// The guest applied a warm-start `launch` request: the workload
         /// spawned under the delivered identity (issue #426).
         case launched
+        /// The guest completed fork identity rotation (issue #427).
+        case reidentified
+
+        /// Explicitly advertised only by versioned `pong` replies. A missing
+        /// value means the checkpointed guest predates capability discovery.
+        public var controlProtocolVersion: Int? {
+            guard case .pong(_, _, let version) = self else { return nil }
+            return version
+        }
 
         /// Decode one response line (the trailing newline is optional).
         public static func decode(line: String) throws -> Response {
@@ -272,7 +354,9 @@ public enum SandboxControlProtocol {
             let raw = try JSONDecoder().decode(RawResponse.self, from: data)
             switch raw.type {
             case "pong":
-                return .pong(sandboxId: raw.sandboxId ?? "", nonce: raw.nonce ?? "")
+                return .pong(
+                    sandboxId: raw.sandboxId ?? "", nonce: raw.nonce ?? "",
+                    controlProtocolVersion: raw.controlProtocolVersion)
             case "status":
                 guard let stateString = raw.state, let state = WorkloadState(rawValue: stateString) else {
                     throw SandboxControlError.malformedResponse(line)
@@ -304,6 +388,8 @@ public enum SandboxControlProtocol {
                 return .clockSynced
             case "launched":
                 return .launched
+            case "reidentified":
+                return .reidentified
             default:
                 throw SandboxControlError.malformedResponse(line)
             }
@@ -321,6 +407,7 @@ public enum SandboxControlProtocol {
         let stream: String?
         let data: String?
         let seq: UInt64?
+        let controlProtocolVersion: Int?
 
         /// The base64 `data` field decoded to bytes; nil when absent or not
         /// valid base64.
@@ -338,6 +425,7 @@ public enum SandboxControlProtocol {
             case stream
             case data
             case seq
+            case controlProtocolVersion = "control_protocol_version"
         }
     }
 }

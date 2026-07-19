@@ -270,7 +270,8 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
             vmstateSizeBytes: 8 * 1024 * 1024,
             rootfsSizeBytes: 256 * 1024 * 1024,
             storagePath: "/simulated/sandboxes/\(sandboxId)/snapshots/\(snapshotId)",
-            firecrackerVersion: "simulated")
+            firecrackerVersion: "simulated",
+            forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion)
     }
 
     public func restoreSandbox(sandboxId: String, snapshotId: String) async throws {

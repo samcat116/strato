@@ -13,5 +13,6 @@
 //!     exec sessions, and workload-log follow streams (backed by [`logbuf`]).
 
 pub mod config;
+pub mod identity;
 pub mod logbuf;
 pub mod protocol;

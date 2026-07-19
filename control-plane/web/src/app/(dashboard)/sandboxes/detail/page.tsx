@@ -10,6 +10,7 @@ import {
   Clock,
   Terminal,
   ScrollText,
+  GitFork,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,6 +21,7 @@ import {
   SandboxActions,
   SandboxLogViewer,
   SandboxTtlCard,
+  SandboxSnapshotsCard,
   formatMemory,
 } from "@/components/sandboxes";
 import { useSandbox, useInvalidateSandboxes } from "@/lib/hooks";
@@ -152,6 +154,13 @@ export default function SandboxDetailPage() {
             <ScrollText className="h-4 w-4 mr-2" />
             Logs
           </TabsTrigger>
+          <TabsTrigger
+            value="snapshots"
+            className="data-[state=active]:bg-muted"
+          >
+            <GitFork className="h-4 w-4 mr-2" />
+            Snapshots
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6 mt-6">
@@ -222,6 +231,16 @@ export default function SandboxDetailPage() {
                   <p className="text-muted-foreground">Environment</p>
                   <p className="text-foreground">{sandbox.environment}</p>
                 </div>
+                {sandbox.restoredFromSnapshotId && (
+                  <div className="col-span-2">
+                    <p className="text-muted-foreground">
+                      Restored from snapshot
+                    </p>
+                    <p className="text-foreground font-mono break-all">
+                      {sandbox.restoredFromSnapshotId}
+                    </p>
+                  </div>
+                )}
                 <div className="col-span-2">
                   <p className="text-muted-foreground">Image Digest</p>
                   <p className="text-foreground font-mono break-all">
@@ -350,6 +369,10 @@ export default function SandboxDetailPage() {
 
         <TabsContent value="logs" className="mt-6">
           <SandboxLogViewer sandboxId={id} />
+        </TabsContent>
+
+        <TabsContent value="snapshots" className="mt-6">
+          <SandboxSnapshotsCard sandbox={sandbox} />
         </TabsContent>
       </Tabs>
     </div>

@@ -185,6 +185,51 @@ final class SandboxExpiryTests {
         }
     }
 
+    @Test(
+        "TTL and retention expiry preserve snapshot sources with live forks",
+        arguments: [true, false])
+    func sweepPreservesSnapshotSourceWithLiveFork(useTTL: Bool) async throws {
+        try await withSandboxTestApp { app, user, project, sandbox in
+            let sandboxID = try sandbox.requireID()
+            let snapshot = SandboxSnapshot(
+                name: "expiry-lineage-source",
+                sandboxID: sandboxID,
+                projectID: try project.requireID(),
+                environment: sandbox.environment,
+                agentId: nil,
+                createdByID: try user.requireID())
+            snapshot.status = .ready
+            try await snapshot.save(on: app.db)
+
+            let fork = Sandbox(
+                name: "expiry-lineage-fork",
+                projectID: try project.requireID(),
+                environment: sandbox.environment,
+                image: sandbox.image,
+                cpus: sandbox.cpus,
+                memory: sandbox.memory,
+                restoredFromSnapshotId: try snapshot.requireID())
+            try await fork.save(on: app.db)
+
+            if useTTL {
+                sandbox.ttlSeconds = 60
+                try await backdateCreation(sandbox, bySeconds: 120, on: app.db)
+            } else {
+                let window = TimeInterval(AgentService.defaultSandboxRetentionHours) * 3600
+                sandbox.setStatus(.exited, at: Date().addingTimeInterval(-window - 60))
+                try await sandbox.save(on: app.db)
+            }
+
+            await app.agentService.sweepExpiredSandboxes()
+
+            let source = try #require(await Sandbox.find(sandboxID, on: app.db))
+            #expect(source.desiredStatus != .absent)
+            #expect(try await SandboxSnapshot.find(snapshot.requireID(), on: app.db) != nil)
+            #expect(try await Sandbox.find(fork.requireID(), on: app.db) != nil)
+            #expect(try await deleteOperation(for: sandboxID, on: app.db) == nil)
+        }
+    }
+
     // MARK: - Retention
 
     @Test("Terminal sandboxes are reaped once the retention window closes", arguments: [SandboxStatus.exited, .error])

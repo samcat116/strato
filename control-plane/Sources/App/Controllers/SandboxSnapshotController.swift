@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import SQLKit
 import StratoShared
 import Vapor
 
@@ -191,6 +192,8 @@ extension SandboxController {
                     current.storagePath = report.storagePath
                     current.firecrackerVersion = report.firecrackerVersion
                     current.architecture = report.architecture?.rawValue
+                    current.guestControlProtocolVersion = report.guestControlProtocolVersion
+                    current.forkLayoutVersion = report.forkLayoutVersion
                     try await current.save(on: app.db)
                 }
 
@@ -286,7 +289,6 @@ extension SandboxController {
                 .conflict,
                 reason: "Snapshot cannot be deleted in status '\(snapshot.status.rawValue)'")
         }
-
         let operation = try await ResourceOperation.begin(
             .snapshotDelete,
             resourceKind: .sandbox,
@@ -294,8 +296,17 @@ extension SandboxController {
             userID: try user.requireID(),
             on: req.db
         ) { db in
-            snapshot.status = .deleting
-            try await snapshot.save(on: db)
+            try await Self.lockSnapshotLineage([snapshotID], on: db)
+            guard let current = try await SandboxSnapshot.find(snapshotID, on: db), current.canDelete else {
+                throw Abort(.conflict, reason: "Snapshot is no longer deletable")
+            }
+            guard try await Self.liveForkCount(from: snapshotID, on: db) == 0 else {
+                throw Abort(
+                    .conflict,
+                    reason: "Snapshot cannot be deleted while sandboxes forked from it still exist")
+            }
+            current.status = .deleting
+            try await current.save(on: db)
         }
 
         Self.runSnapshotDeletion(operation, snapshot: snapshot, sandbox: sandbox, app: req.application)
@@ -390,6 +401,13 @@ extension SandboxController {
                 .conflict,
                 reason: "Snapshot cannot be restored in status '\(snapshot.status.rawValue)'")
         }
+        // Preserve the specific clone-safety error during request preflight;
+        // the locked transaction below repeats this check authoritatively.
+        guard try await Self.liveForkCount(from: snapshotID, on: req.db) == 0 else {
+            throw Abort(
+                .conflict,
+                reason: "Snapshot cannot be restored in place while live forks of it exist")
+        }
         guard let agentId = sandbox.hypervisorId else {
             throw Abort(.conflict, reason: "Sandbox is not placed on any agent")
         }
@@ -412,7 +430,22 @@ extension SandboxController {
         let operation = try await beginOperation(
             .restore, sandbox: sandbox, user: user,
             settingDesiredStatus: .running,
-            on: req.db)
+            on: req.db
+        ) { db in
+            try await Self.lockSnapshotLineage([snapshotID], on: db)
+            guard let current = try await SandboxSnapshot.find(snapshotID, on: db), current.canRestore
+            else {
+                throw Abort(.conflict, reason: "Snapshot is no longer restorable")
+            }
+            // Clone-safety policy (issue #427): do not rewind the source
+            // identity to the same memory/RNG/TCP state while live forks of
+            // that checkpoint exist.
+            guard try await Self.liveForkCount(from: snapshotID, on: db) == 0 else {
+                throw Abort(
+                    .conflict,
+                    reason: "Snapshot cannot be restored in place while live forks of it exist")
+            }
+        }
 
         Self.runSnapshotRestore(
             operation, snapshotID: snapshotID, agentId: agentId, app: req.application)
@@ -455,6 +488,78 @@ extension SandboxController {
     }
 
     // MARK: - Shared
+
+    static func liveForkCount(from snapshotID: UUID, on db: any Database) async throws -> Int {
+        try await Sandbox.query(on: db)
+            .filter(\.$restoredFromSnapshotId == snapshotID)
+            .count()
+    }
+
+    /// Serialize every fork admission and destructive lineage transition on
+    /// the snapshot IDs they touch. Postgres advisory locks span replicas and
+    /// live until the enclosing transaction commits; SQLite writes already
+    /// serialize in local tests, so it needs no separate primitive.
+    static func lockSnapshotLineage(_ snapshotIDs: [UUID], on db: any Database) async throws {
+        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
+        for snapshotID in Set(snapshotIDs).sorted(by: { $0.uuidString < $1.uuidString }) {
+            try await sql.raw(
+                "SELECT pg_advisory_xact_lock(hashtext(\(bind: "sandbox-snapshot-lineage:\(snapshotID.uuidString)")))"
+            ).run()
+        }
+    }
+
+    /// Shared guard for every source-sandbox deletion path, including API
+    /// requests and automated TTL/retention expiry. The caller must invoke it
+    /// in the same transaction that marks the source absent.
+    static func requireSnapshotLineageDeletable(
+        for sandboxID: UUID, on db: any Database
+    ) async throws {
+        let snapshotIDs = try await SandboxSnapshot.query(on: db)
+            .filter(\.$sandbox.$id == sandboxID)
+            .all()
+            .compactMap(\.id)
+        try await lockSnapshotLineage(snapshotIDs, on: db)
+        guard !snapshotIDs.isEmpty else { return }
+        let descendants = try await Sandbox.query(on: db)
+            .filter(\.$restoredFromSnapshotId ~~ snapshotIDs)
+            .count()
+        guard descendants == 0 else {
+            throw Abort(
+                .conflict,
+                reason: "Sandbox cannot be deleted while forks derived from its snapshots still exist")
+        }
+    }
+
+    /// Load-bearing fork recheck performed under the same lineage lock and
+    /// transaction as the target sandbox insert. The outer request preflight
+    /// gives specific authorization/compatibility errors; this closes races
+    /// with snapshot delete, source delete, and in-place restore.
+    static func requireSnapshotAvailableForFork(
+        _ snapshotID: UUID, on db: any Database
+    ) async throws {
+        try await lockSnapshotLineage([snapshotID], on: db)
+        guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: db), snapshot.isReady else {
+            throw Abort(.conflict, reason: "Snapshot is no longer ready for fork")
+        }
+        guard SandboxSnapshotForkLayout.supportsFork(snapshot.forkLayoutVersion) else {
+            throw Abort(
+                .conflict,
+                reason: "Snapshot was not captured in a fork-compatible jailed layout")
+        }
+        let sourceID = snapshot.$sandbox.id
+        guard let source = try await Sandbox.find(sourceID, on: db), source.desiredStatus != .absent else {
+            throw Abort(.conflict, reason: "Snapshot source sandbox is being deleted")
+        }
+        let pendingRestore = try await ResourceOperation.query(on: db)
+            .filter(\.$resourceKind == .sandbox)
+            .filter(\.$resourceID == sourceID)
+            .filter(\.$status == .pending)
+            .filter(\.$kind == .restore)
+            .first()
+        guard pendingRestore == nil else {
+            throw Abort(.conflict, reason: "Snapshot is being restored in place")
+        }
+    }
 
     /// Fetch the :snapshotID snapshot and confirm it belongs to `sandbox`
     /// (the route nests snapshots under their sandbox).
