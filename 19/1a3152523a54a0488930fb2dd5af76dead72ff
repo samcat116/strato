@@ -1,0 +1,80 @@
+control-plane/Tests/AppTests/GuardrailEndpointTests.swift
+  s_8dc4e170080759::t_96b154ea3e32a3 1-243
+control-plane/Sources/App/IAM/RoleRegistrySync.swift
+  s_8dc4e170080759::t_0562ea87aba23a 89-92
+  s_8dc4e170080759::t_96fec285123164 86-88
+  s_8dc4e170080759::t_f08ffc112b3322 93-95
+  s_8dc4e170080759::t_492e1798e6b878 18-20,26,31,41,77-85,96-98
+control-plane/Sources/App/Controllers/GuardrailController.swift
+  s_a3dae0ec5adbe5::t_e7ead45d9b767b 1-327
+control-plane/Sources/App/IAM/PolicySetVersionService.swift
+  s_32489a5bc16f1b::t_7bce26530eac68 1-171
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_55dbfcc7cf0fa2::t_d1ea931e3689bd 112-125
+control-plane/Tests/AppTests/IAMGuardrailTests.swift
+  s_32489a5bc16f1b::t_5ca70376c9ea33 1-446
+control-plane/Tests/AppTests/IAMPolicySetVersionTests.swift
+  s_a3dae0ec5adbe5::t_6ffd7015b04195 1-146
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_8dc4e170080759::t_6505383eef6981 188,192,194-199
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_8dc4e170080759::t_663139b88087e0 1-287
+control-plane/Sources/App/IAM/GuardrailVocabulary.swift
+  s_8dc4e170080759::t_5d92158211d750 1-213
+control-plane/Sources/App/IAM/IAMPolicyGate.swift
+  s_8dc4e170080759::t_e4c97f832b2697 1-79
+control-plane/Sources/App/Migrations/CreateGuardrail.swift
+  s_a3dae0ec5adbe5::t_a65d68c61b33fb 1-57
+control-plane/Sources/App/Migrations/CreatePolicySetVersion.swift
+  s_8dc4e170080759::t_0d9672e98120a2 1-33
+control-plane/Sources/App/Models/Guardrail.swift
+  s_a3dae0ec5adbe5::t_e7c44aedc8ef53 1-150
+control-plane/Sources/App/Models/PolicySetVersion.swift
+  s_55dbfcc7cf0fa2::t_0b56f9f3bbb341 1-62
+control-plane/Sources/App/configure.swift
+  s_a3dae0ec5adbe5::t_48803732b80b93 429-433,459-467
+control-plane/Sources/App/routes.swift
+  s_8dc4e170080759::t_5c4332837a80fe 14-15
+docs/architecture/iam.md
+  s_8dc4e170080759::t_7d9fc81f06a511 121-167,300-313,378-380
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "191a3152523a54a0488930fb2dd5af76dead72ff",
+  "prompts": {},
+  "sessions": {
+    "s_32489a5bc16f1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c39f58be-db1c-4959-a86f-f6419cb8470f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_55dbfcc7cf0fa2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53a55717-7f12-4794-ad1b-dfd24f98dd70",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_8dc4e170080759": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ef6b392-4537-49ca-8a57-3b0b16b99c50",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_a3dae0ec5adbe5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "60848ae5-9c44-4bdc-bf9c-c300df015134",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
