@@ -1,0 +1,21 @@
+! FRR configuration for advertising Strato floating IPs over BGP (issue #344).
+! Adapt the AS numbers, neighbor addresses, and VRF name to your fabric; the
+! VRF must match [ovn_dynamic_routing] vrf_name in the agent config.
+!
+frr defaults traditional
+hostname strato-egress
+log syslog informational
+!
+router bgp 64512 vrf ovnvrf
+ bgp router-id 203.0.113.2
+ ! Peer with the upstream fabric router(s).
+ neighbor 203.0.113.1 remote-as 64511
+ !
+ address-family ipv4 unicast
+  ! ovn-controller installs OVN's Advertised_Route entries (floating /32s,
+  ! tenant subnets) as kernel/connected routes in this VRF; redistribute them.
+  redistribute connected
+  redistribute kernel
+ exit-address-family
+!
+line vty

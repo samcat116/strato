@@ -444,6 +444,11 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(MigratePendingTokensToEnrollments())
     app.migrations.add(DropAgentRegistrationTokens())
 
+    // Floating IPs (issue #344): external address pools + per-address
+    // allocations attached to VM NICs. Ordered after sites, projects, and
+    // vm_network_interfaces, which it references.
+    app.migrations.add(CreateFloatingIP())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

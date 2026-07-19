@@ -122,8 +122,10 @@ design; the short version:
   signed URLs are re-issued at every sync assembly.
 - `DesiredSandboxState` mirrors it for sandboxes (with an optional registry
   credential); `DesiredNetworkState` reconciles OVN logical networks
-  (switch/subnets/gateways, per-project `routerKey`, SNAT, DHCP);
-  `DesiredAgentUpdate` is the declarative agent-update target.
+  (switch/subnets/gateways, per-project `routerKey`, SNAT, DHCP, and an
+  optional `floatingIPs` list — external→fixed address mappings plus
+  `vmId`/`nicIndex` for the NIC's port, realized as `dnat_and_snat` rules,
+  issue #344); `DesiredAgentUpdate` is the declarative agent-update target.
 
 ### Generations
 

@@ -65,6 +65,29 @@ public enum OVNNaming {
             format: "02:00:%02x:%02x:%02x:%02x",
             (ip.raw >> 24) & 0xff, (ip.raw >> 16) & 0xff, (ip.raw >> 8) & 0xff, ip.raw & 0xff)
     }
+
+    /// OVN logical switch port name for one NIC of a VM. NIC 0 keeps the
+    /// historical `vm-<vmId>` name so ports created by older agents are still
+    /// found and torn down; additional NICs are suffixed with their index.
+    /// `vmId` is the canonical (uppercase) UUID string, matching the manifest
+    /// keys and the ids the control plane sends in `DesiredVMState`.
+    public static func vmPortName(vmId: String, nicIndex: Int) -> String {
+        nicIndex == 0 ? "vm-\(vmId)" : "vm-\(vmId)-\(nicIndex)"
+    }
+
+    /// A stable, locally-administered unicast MAC for a floating IP, derived
+    /// from the floating address itself (floating IPs are unique per site, so
+    /// the MAC is too). Used as the `dnat_and_snat` rule's `external_mac`, the
+    /// address the VM's chassis answers external ARP with for distributed NAT.
+    /// The `02:01:` prefix keeps it disjoint from `routerPortMAC`'s `02:00:`
+    /// namespace so a floating IP can never mint a router port's MAC. Nil when
+    /// the address isn't IPv4.
+    public static func floatingIPMAC(externalIP: String) -> String? {
+        guard let ip = IPv4Address(externalIP) else { return nil }
+        return String(
+            format: "02:01:%02x:%02x:%02x:%02x",
+            (ip.raw >> 24) & 0xff, (ip.raw >> 16) & 0xff, (ip.raw >> 8) & 0xff, ip.raw & 0xff)
+    }
 }
 
 // MARK: - Desired topology plan
@@ -117,6 +140,26 @@ public struct DesiredRouterPort: Equatable, Sendable {
     }
 }
 
+/// One floating IP the plan wants realized as a `dnat_and_snat` rule on a
+/// router (issue #344). `externalIP` is the floating address, `logicalIP` the
+/// VM NIC's fixed address. `logicalPort`/`externalMAC` make the NAT
+/// *distributed* — OVN then handles the FIP on the chassis hosting the VM's
+/// port instead of the gateway chassis; when either is nil the rule stays
+/// centralized (still correct, just hairpinned through the gateway).
+public struct DesiredDNATRule: Hashable, Sendable {
+    public let externalIP: String
+    public let logicalIP: String
+    public let logicalPort: String?
+    public let externalMAC: String?
+
+    public init(externalIP: String, logicalIP: String, logicalPort: String?, externalMAC: String?) {
+        self.externalIP = externalIP
+        self.logicalIP = logicalIP
+        self.logicalPort = logicalPort
+        self.externalMAC = externalMAC
+    }
+}
+
 /// One per-project (or per-global-network) logical router the plan wants.
 public struct DesiredRouter: Equatable, Sendable {
     public let name: String
@@ -124,16 +167,23 @@ public struct DesiredRouter: Equatable, Sendable {
     public let ports: [DesiredRouterPort]
     /// Tenant subnets (CIDR) that should egress via SNAT to the site uplink.
     public let snatSubnets: [String]
+    /// Floating IPs to realize as `dnat_and_snat` rules on this router.
+    public let dnatRules: [DesiredDNATRule]
 
-    public init(name: String, routerKey: String, ports: [DesiredRouterPort], snatSubnets: [String]) {
+    public init(
+        name: String, routerKey: String, ports: [DesiredRouterPort], snatSubnets: [String],
+        dnatRules: [DesiredDNATRule] = []
+    ) {
         self.name = name
         self.routerKey = routerKey
         self.ports = ports
         self.snatSubnets = snatSubnets
+        self.dnatRules = dnatRules
     }
 
-    /// Whether this router needs an external uplink attachment (any SNAT).
-    public var needsUplink: Bool { !snatSubnets.isEmpty }
+    /// Whether this router needs an external uplink attachment (any NAT — a
+    /// floating IP needs the uplink exactly like subnet SNAT does).
+    public var needsUplink: Bool { !snatSubnets.isEmpty || !dnatRules.isEmpty }
     public var externalSwitchName: String { OVNNaming.externalSwitchName(routerKey: routerKey) }
     public var externalRouterPortName: String { OVNNaming.externalRouterPortName(routerKey: routerKey) }
     public var externalSwitchRouterPortName: String {
@@ -163,6 +213,7 @@ public struct NetworkTopologyPlan: Equatable, Sendable {
         var switchRouterPortNames = Set<String>()
         var externalSwitchNames = Set<String>()
         var snatRules = Set<SNATRuleKey>()
+        var dnatRules = Set<DNATRuleKey>()
 
         for router in routers {
             routerNames.insert(router.name)
@@ -177,6 +228,9 @@ public struct NetworkTopologyPlan: Equatable, Sendable {
                 for subnet in router.snatSubnets {
                     snatRules.insert(SNATRuleKey(router: router.name, logicalIP: subnet))
                 }
+                for rule in router.dnatRules {
+                    dnatRules.insert(DNATRuleKey(router: router.name, externalIP: rule.externalIP))
+                }
             }
         }
 
@@ -185,7 +239,8 @@ public struct NetworkTopologyPlan: Equatable, Sendable {
             routerPortNames: routerPortNames,
             switchRouterPortNames: switchRouterPortNames,
             externalSwitchNames: externalSwitchNames,
-            snatRules: snatRules)
+            snatRules: snatRules,
+            dnatRules: dnatRules)
     }
 }
 
@@ -203,6 +258,20 @@ public struct SNATRuleKey: Hashable, Sendable {
     }
 }
 
+/// Identity of one `dnat_and_snat` (floating IP) rule, keyed by the router it
+/// lives on and the floating (external) address. The logical IP is
+/// deliberately excluded: re-attaching a floating IP to another VM re-points
+/// the same rule in place (like SNAT's re-pointable external IP) rather than
+/// delete/recreate.
+public struct DNATRuleKey: Hashable, Sendable {
+    public let router: String
+    public let externalIP: String
+    public init(router: String, externalIP: String) {
+        self.router = router
+        self.externalIP = externalIP
+    }
+}
+
 /// A snapshot of the OVN L3 objects this reconciler owns, as observed on the
 /// host. Gathered by the actuator from OVSDB; diffed against a plan to find
 /// what to tear down. Tenant logical switches are intentionally absent — their
@@ -213,19 +282,22 @@ public struct ObservedNetworkTopology: Equatable, Sendable {
     public var switchRouterPortNames: Set<String>
     public var externalSwitchNames: Set<String>
     public var snatRules: Set<SNATRuleKey>
+    public var dnatRules: Set<DNATRuleKey>
 
     public init(
         routerNames: Set<String> = [],
         routerPortNames: Set<String> = [],
         switchRouterPortNames: Set<String> = [],
         externalSwitchNames: Set<String> = [],
-        snatRules: Set<SNATRuleKey> = []
+        snatRules: Set<SNATRuleKey> = [],
+        dnatRules: Set<DNATRuleKey> = []
     ) {
         self.routerNames = routerNames
         self.routerPortNames = routerPortNames
         self.switchRouterPortNames = switchRouterPortNames
         self.externalSwitchNames = externalSwitchNames
         self.snatRules = snatRules
+        self.dnatRules = dnatRules
     }
 }
 
@@ -233,6 +305,7 @@ public struct ObservedNetworkTopology: Equatable, Sendable {
 /// desired plan no longer wants. Ordered by the reconciler so dependents go
 /// before the objects they reference.
 public enum NetworkTeardownAction: Equatable, Sendable {
+    case dnat(router: String, externalIP: String)
     case snat(router: String, logicalIP: String)
     case switchRouterPort(name: String)
     case routerPort(name: String)
@@ -254,24 +327,27 @@ public struct ProtectedTopology: Equatable, Sendable {
     public var switchRouterPortNames: Set<String>
     public var externalSwitchNames: Set<String>
     public var snatRules: Set<SNATRuleKey>
+    public var dnatRules: Set<DNATRuleKey>
 
     public init(
         routerNames: Set<String> = [],
         routerPortNames: Set<String> = [],
         switchRouterPortNames: Set<String> = [],
         externalSwitchNames: Set<String> = [],
-        snatRules: Set<SNATRuleKey> = []
+        snatRules: Set<SNATRuleKey> = [],
+        dnatRules: Set<DNATRuleKey> = []
     ) {
         self.routerNames = routerNames
         self.routerPortNames = routerPortNames
         self.switchRouterPortNames = switchRouterPortNames
         self.externalSwitchNames = externalSwitchNames
         self.snatRules = snatRules
+        self.dnatRules = dnatRules
     }
 
     public var isEmpty: Bool {
         routerNames.isEmpty && routerPortNames.isEmpty && switchRouterPortNames.isEmpty
-            && externalSwitchNames.isEmpty && snatRules.isEmpty
+            && externalSwitchNames.isEmpty && snatRules.isEmpty && dnatRules.isEmpty
     }
 }
 
@@ -307,6 +383,7 @@ public enum NetworkReconciler {
             let members = groups[routerKey] ?? []
             var ports: [DesiredRouterPort] = []
             var snatSubnets: [String] = []
+            var dnatRules: [DesiredDNATRule] = []
 
             for network in members {
                 // L3 needs a gateway (the router-port IP) and a prefix from the
@@ -353,6 +430,22 @@ public enum NetworkReconciler {
                 if network.externalAccess {
                     snatSubnets.append(network.subnet)
                     if let snatSubnet6 { snatSubnets.append(snatSubnet6) }
+
+                    // Floating IPs (issue #344): each attachment becomes a
+                    // `dnat_and_snat` rule on this router, with the VM's LSP
+                    // name + a derived MAC so the NAT is distributed to the
+                    // VM's chassis. Gated on `externalAccess` — an isolated
+                    // (`-internal`) router must never grow an uplink, and the
+                    // control plane rejects attaching to no-egress networks.
+                    for fip in network.floatingIPs ?? [] {
+                        dnatRules.append(
+                            DesiredDNATRule(
+                                externalIP: fip.externalIP,
+                                logicalIP: fip.logicalIP,
+                                logicalPort: OVNNaming.vmPortName(
+                                    vmId: fip.vmId.uuidString, nicIndex: fip.nicIndex),
+                                externalMAC: OVNNaming.floatingIPMAC(externalIP: fip.externalIP)))
+                    }
                 }
             }
 
@@ -364,7 +457,8 @@ public enum NetworkReconciler {
                     name: OVNNaming.routerName(routerKey: routerKey),
                     routerKey: routerKey,
                     ports: ports,
-                    snatSubnets: snatSubnets))
+                    snatSubnets: snatSubnets,
+                    dnatRules: dnatRules.sorted { $0.externalIP < $1.externalIP }))
         }
 
         return NetworkTopologyPlan(switches: switches, routers: routers)
@@ -396,6 +490,11 @@ public enum NetworkReconciler {
             if let subnet6 = network.subnet6, let cidr6 = IPv6CIDR(subnet6) {
                 protected.snatRules.insert(SNATRuleKey(router: routerName, logicalIP: cidr6.description))
             }
+            // A stale network's floating IPs keep their live NAT rules, on the
+            // same over-protection-is-safe terms as SNAT.
+            for fip in network.floatingIPs ?? [] {
+                protected.dnatRules.insert(DNATRuleKey(router: routerName, externalIP: fip.externalIP))
+            }
         }
         return protected
     }
@@ -413,6 +512,10 @@ public enum NetworkReconciler {
         let want = desired.expectedTopology
         var actions: [NetworkTeardownAction] = []
 
+        for rule in observed.dnatRules.subtracting(want.dnatRules).sorted(by: dnatOrder)
+        where !protected.dnatRules.contains(rule) {
+            actions.append(.dnat(router: rule.router, externalIP: rule.externalIP))
+        }
         for rule in observed.snatRules.subtracting(want.snatRules).sorted(by: snatOrder)
         where !protected.snatRules.contains(rule) {
             actions.append(.snat(router: rule.router, logicalIP: rule.logicalIP))
@@ -460,6 +563,10 @@ public enum NetworkReconciler {
     private static func snatOrder(_ a: SNATRuleKey, _ b: SNATRuleKey) -> Bool {
         (a.router, a.logicalIP) < (b.router, b.logicalIP)
     }
+
+    private static func dnatOrder(_ a: DNATRuleKey, _ b: DNATRuleKey) -> Bool {
+        (a.router, a.externalIP) < (b.router, b.externalIP)
+    }
 }
 
 // MARK: - Actuator and apply orchestration
@@ -481,6 +588,16 @@ public protocol NetworkActuator: Sendable {
     func ensureUplink(for router: DesiredRouter) async throws -> Bool
     func ensureSNAT(router routerName: String, logicalIP: String) async throws
     func removeSNAT(router routerName: String, logicalIP: String) async throws
+    /// Ensure a floating IP's `dnat_and_snat` rule (issue #344), re-pointing
+    /// an existing rule for the same external IP in place when the attachment
+    /// moved to another VM.
+    func ensureDNAT(router routerName: String, rule: DesiredDNATRule) async throws
+    func removeDNAT(router routerName: String, externalIP: String) async throws
+    /// Converge OVN native dynamic routing (issue #344) on an uplinked router:
+    /// apply the operator's `[ovn_dynamic_routing]` options to the router and
+    /// its gateway port when enabled, and strip them when disabled. No-op on
+    /// platforms/configs without the feature.
+    func ensureDynamicRouting(for router: DesiredRouter) async throws
     func removeSwitchRouterPort(name: String) async throws
     func removeRouterPort(name: String) async throws
     func removeExternalSwitch(name: String) async throws
@@ -536,12 +653,22 @@ extension NetworkReconciler {
                     try await actuator.ensureSNAT(router: router.name, logicalIP: subnet)
                 }
             }
+            for rule in router.dnatRules {
+                await attempt(logger, "ensure floating IP \(rule.externalIP) on \(router.name)") {
+                    try await actuator.ensureDNAT(router: router.name, rule: rule)
+                }
+            }
+            await attempt(logger, "ensure dynamic routing on \(router.name)") {
+                try await actuator.ensureDynamicRouting(for: router)
+            }
         }
 
         let observed = try await actuator.observeTopology()
         for action in teardownActions(desired: topology, observed: observed, protected: protected) {
             await attempt(logger, "teardown \(action)") {
                 switch action {
+                case .dnat(let router, let externalIP):
+                    try await actuator.removeDNAT(router: router, externalIP: externalIP)
                 case .snat(let router, let logicalIP):
                     try await actuator.removeSNAT(router: router, logicalIP: logicalIP)
                 case .switchRouterPort(let name):

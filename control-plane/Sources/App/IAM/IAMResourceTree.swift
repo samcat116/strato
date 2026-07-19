@@ -108,6 +108,10 @@ enum IAMResourceTree {
             guard let siteID = network.$site.id else { return nil }
             return try await parent(of: IAMNode(type: .site, id: siteID), on: db)
 
+        case .floatingIP:
+            guard let floatingIP = try await FloatingIP.find(node.id, on: db) else { return nil }
+            return IAMNode(type: .project, id: floatingIP.$project.id)
+
         case .site:
             guard let site = try await Site.find(node.id, on: db) else { return nil }
             return scopeNode(ouID: site.$organizationalUnit.id, orgID: site.$organization.id)

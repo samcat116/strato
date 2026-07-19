@@ -23,6 +23,7 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     case sandbox
     case image
     case network
+    case floatingIP = "floating_ip"
     case volume
     case volumeSnapshot = "volume_snapshot"
     case sandboxSnapshot = "sandbox_snapshot"
@@ -67,6 +68,7 @@ enum IAMRoleRegistry {
             "volume:read", "volume:list",
             "image:read", "image:list", "image:download",
             "network:read", "network:list",
+            "floatingip:read", "floatingip:list",
             "project:read",
             "folder:read",
             "org:read",
@@ -89,6 +91,8 @@ enum IAMRoleRegistry {
             "volume:snapshot", "volume:clone", "volume:restore",
             "image:create", "image:update", "image:delete",
             "network:create", "network:update", "network:delete",
+            "floatingip:create", "floatingip:release",
+            "floatingip:attach", "floatingip:detach",
             "project:update",
         ],
         .admin: [

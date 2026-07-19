@@ -244,6 +244,37 @@ public struct DesiredStateMessage: WebSocketMessage {
 
 // MARK: - Desired Network State
 
+/// One floating IP the agent should realize as a `dnat_and_snat` NAT rule on
+/// the network's logical router (issue #344): traffic to `externalIP` is
+/// DNAT'd to the VM's fixed `logicalIP`, and the VM's outbound traffic is
+/// SNAT'd to `externalIP` (overriding the router's subnet-wide SNAT).
+///
+/// `vmId`/`nicIndex` identify the NIC's logical switch port so the agent can
+/// program *distributed* NAT (`logical_port` + `external_mac`): the FIP is
+/// then handled on the chassis hosting the VM rather than hairpinning through
+/// the gateway chassis. The port name is derived agent-side (`OVNNaming`), not
+/// carried on the wire, so naming stays a single-owner concern.
+public struct DesiredFloatingIP: Codable, Sendable, Equatable {
+    /// The floating (external) IPv4 address, from a control-plane floating IP
+    /// pool. Used as the NAT rule's `external_ip`.
+    public let externalIP: String
+    /// The attached NIC's fixed IPv4 address on the tenant network. Used as
+    /// the NAT rule's `logical_ip`.
+    public let logicalIP: String
+    /// The VM owning the attached NIC.
+    public let vmId: UUID
+    /// The NIC's position in the VM's interface list (orderIndex), matching
+    /// the index the agent used when naming the NIC's logical switch port.
+    public let nicIndex: Int
+
+    public init(externalIP: String, logicalIP: String, vmId: UUID, nicIndex: Int) {
+        self.externalIP = externalIP
+        self.logicalIP = logicalIP
+        self.vmId = vmId
+        self.nicIndex = nicIndex
+    }
+}
+
 /// The state the control plane wants a logical network to be in on an agent.
 ///
 /// Networking used to reach the agent only as a side effect of `VMSpec.networks`
@@ -306,6 +337,12 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// edits deliberately don't bump it — the network reconcile is
     /// level-triggered, so same-generation networks still converge DHCP.
     public let generation: Int64
+    /// Floating IPs attached to this network's NICs, realized as
+    /// `dnat_and_snat` rules on the network's router (issue #344). Nil from
+    /// control planes that predate the field — optional, so old payloads
+    /// decode and old agents ignore it. Only meaningful on `externalAccess`
+    /// networks (the NAT needs the router's uplink).
+    public let floatingIPs: [DesiredFloatingIP]?
 
     public init(
         networkId: UUID,
@@ -320,7 +357,8 @@ public struct DesiredNetworkState: Codable, Sendable {
         dnsServers: [String]? = nil,
         domainName: String? = nil,
         leaseTime: Int? = nil,
-        generation: Int64
+        generation: Int64,
+        floatingIPs: [DesiredFloatingIP]? = nil
     ) {
         self.networkId = networkId
         self.name = name
@@ -335,6 +373,7 @@ public struct DesiredNetworkState: Codable, Sendable {
         self.domainName = domainName
         self.leaseTime = leaseTime
         self.generation = generation
+        self.floatingIPs = floatingIPs
     }
 }
 

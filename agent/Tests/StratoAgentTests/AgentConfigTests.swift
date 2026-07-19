@@ -312,6 +312,80 @@ struct AgentConfigTests {
         }
     }
 
+    @Test("Load [ovn_dynamic_routing] settings")
+    func loadOVNDynamicRouting() throws {
+        try withTempDirectory { tempDirectory in
+            let tomlContent = """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                network_mode = "ovn"
+
+                [ovn_dynamic_routing]
+                enabled = true
+                redistribute = ["nat"]
+                vrf_name = "ovnvrf"
+                maintain_vrf = false
+                routing_protocols = ["BGP", "BFD"]
+                """
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try AgentConfig.load(from: configPath)
+            let routing = try #require(config.ovnDynamicRouting)
+            #expect(routing.enabled)
+            #expect(routing.redistribute == ["nat"])
+            #expect(routing.vrfName == "ovnvrf")
+            #expect(!routing.maintainVRF)
+            #expect(routing.routingProtocols == ["BGP", "BFD"])
+        }
+    }
+
+    @Test("[ovn_dynamic_routing] defaults: absent section is nil; bare section is disabled with defaults")
+    func ovnDynamicRoutingDefaults() throws {
+        try withTempDirectory { tempDirectory in
+            let absentPath = tempDirectory.appendingPathComponent("absent.toml").path
+            try "control_plane_url = \"ws://localhost:8080/agent/ws\"".write(
+                toFile: absentPath, atomically: true, encoding: .utf8)
+            #expect(try AgentConfig.load(from: absentPath).ovnDynamicRouting == nil)
+
+            let barePath = tempDirectory.appendingPathComponent("bare.toml").path
+            try """
+            control_plane_url = "ws://localhost:8080/agent/ws"
+
+            [ovn_dynamic_routing]
+            enabled = true
+            """.write(toFile: barePath, atomically: true, encoding: .utf8)
+            let routing = try #require(try AgentConfig.load(from: barePath).ovnDynamicRouting)
+            #expect(routing.enabled)
+            #expect(routing.redistribute == OVNDynamicRoutingConfig.defaultRedistribute)
+            #expect(routing.routingProtocols == OVNDynamicRoutingConfig.defaultRoutingProtocols)
+            #expect(routing.maintainVRF)
+            #expect(routing.vrfName == nil)
+        }
+    }
+
+    @Test("An unsupported redistribute or protocol value is rejected, never silently dropped")
+    func ovnDynamicRoutingRejectsInvalidValues() throws {
+        try withTempDirectory { tempDirectory in
+            for badLine in [
+                "redistribute = [\"connected\", \"nats\"]",
+                "routing_protocols = [\"OSPF\"]",
+            ] {
+                let tomlContent = """
+                    control_plane_url = "ws://localhost:8080/agent/ws"
+
+                    [ovn_dynamic_routing]
+                    enabled = true
+                    \(badLine)
+                    """
+                let configPath = tempDirectory.appendingPathComponent("config.toml").path
+                try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+                #expect(throws: AgentConfigError.self) {
+                    _ = try AgentConfig.load(from: configPath)
+                }
+            }
+        }
+    }
+
     @Test("Load [ovn_northbound_tls] with an ssl: endpoint")
     func loadOVNNorthboundTLS() throws {
         try withTempDirectory { tempDirectory in

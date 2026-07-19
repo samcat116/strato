@@ -217,7 +217,7 @@ struct AuthorizationController: RouteCollection {
         case .project: return "manage_project"
         case .site, .agent: return "manage"
         case .virtualMachine, .sandbox, .image, .volume, .network,
-            .volumeSnapshot, .sandboxSnapshot:
+            .floatingIP, .volumeSnapshot, .sandboxSnapshot:
             return "delete"
         }
     }

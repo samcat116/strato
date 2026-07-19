@@ -73,7 +73,8 @@ The important ones to know when navigating `Services/`:
 - **`SchedulerService`** (actor) — placement decisions; see
   [scheduler](./scheduler.md).
 - **`IPAMService`** — control-plane IP allocation (IPv4/IPv6) from a
-  `LogicalNetwork`'s subnets.
+  `LogicalNetwork`'s subnets, plus floating (external) IPv4 addresses from
+  `FloatingIPPool` ranges (issue #344).
 - **`SpiceDBService`** — authorization checks and relationship writes;
   mock-backed under `.testing`.
 - **`QuotaEnforcementService`** — reserve/release quota against project, OU,

@@ -261,6 +261,11 @@ public struct AgentConfig: Codable {
     /// Site uplink for OVN SNAT egress (issue #342). When nil, routers +
     /// east-west are realized but no SNAT/uplink.
     public let ovnUplink: OVNUplinkConfig?
+    /// OVN native dynamic routing for north-south advertisement of floating
+    /// IPs and tenant routes over BGP/FRR (issue #344). Requires OVN ≥ 25.03
+    /// and an operator-configured FRR on the egress host; nil or disabled
+    /// strips any previously applied `dynamic-routing*` options.
+    public let ovnDynamicRouting: OVNDynamicRoutingConfig?
     /// Simulation ("dummy agent") settings. Nil (or disabled) means a normal
     /// agent that drives real hypervisor/network/storage backends.
     public let simulation: SimulationConfig?
@@ -297,6 +302,7 @@ public struct AgentConfig: Codable {
         case sandboxJailerUidBase = "sandbox_jailer_uid_base"
         case hypervisorType = "hypervisor_type"
         case ovnUplink = "ovn_uplink"
+        case ovnDynamicRouting = "ovn_dynamic_routing"
         case simulation
     }
 
@@ -332,6 +338,7 @@ public struct AgentConfig: Codable {
         sandboxJailerUidBase: UInt32? = nil,
         hypervisorType: HypervisorType? = nil,
         ovnUplink: OVNUplinkConfig? = nil,
+        ovnDynamicRouting: OVNDynamicRoutingConfig? = nil,
         simulation: SimulationConfig? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
@@ -365,6 +372,7 @@ public struct AgentConfig: Codable {
         self.sandboxJailerUidBase = sandboxJailerUidBase
         self.hypervisorType = hypervisorType
         self.ovnUplink = ovnUplink
+        self.ovnDynamicRouting = ovnDynamicRouting
         self.simulation = simulation
     }
 
@@ -574,6 +582,43 @@ public struct AgentConfig: Codable {
             ovnUplink = nil
         }
 
+        // Parse OVN native dynamic routing from the [ovn_dynamic_routing]
+        // section (issue #344). Presence tested with `hasTable` (same gotcha
+        // as [simulation] below). Invalid redistribute/protocol values are
+        // rejected at load: OVN would silently ignore them, which reads as
+        // "BGP is on" while advertising nothing.
+        let ovnDynamicRouting: OVNDynamicRoutingConfig?
+        if tomlData.hasTable("ovn_dynamic_routing"), let routingTable = tomlData.table("ovn_dynamic_routing") {
+            let config = OVNDynamicRoutingConfig(
+                enabled: routingTable.bool("enabled") ?? false,
+                redistribute: routingTable.array("redistribute")
+                    ?? OVNDynamicRoutingConfig.defaultRedistribute,
+                vrfName: routingTable.string("vrf_name"),
+                maintainVRF: routingTable.bool("maintain_vrf") ?? true,
+                routingProtocols: routingTable.array("routing_protocols")
+                    ?? OVNDynamicRoutingConfig.defaultRoutingProtocols
+            )
+            let invalid = config.invalidValues
+            guard invalid.isEmpty else {
+                throw AgentConfigError.invalidConfiguration(
+                    "[ovn_dynamic_routing] has unsupported value(s): \(invalid.joined(separator: ", ")). "
+                        + "redistribute allows \(OVNDynamicRoutingConfig.allowedRedistributeValues.sorted().joined(separator: "/")); "
+                        + "routing_protocols allows \(OVNDynamicRoutingConfig.allowedRoutingProtocols.sorted().joined(separator: "/"))"
+                )
+            }
+            ovnDynamicRouting = config
+            if config.enabled {
+                logger?.info(
+                    "OVN dynamic routing enabled (requires OVN >= 25.03 and host FRR)",
+                    metadata: [
+                        "redistribute": .string(config.redistribute.joined(separator: ",")),
+                        "routingProtocols": .string(config.routingProtocols.joined(separator: ",")),
+                    ])
+            }
+        } else {
+            ovnDynamicRouting = nil
+        }
+
         // Parse simulation ("dummy agent") settings from the [simulation]
         // section. Absent section means a normal agent. `table(_:)` returns an
         // empty scoped view even for an absent section, so presence must be
@@ -643,6 +688,7 @@ public struct AgentConfig: Codable {
             sandboxJailerUidBase: sandboxJailerUidBase,
             hypervisorType: hypervisorType,
             ovnUplink: ovnUplink,
+            ovnDynamicRouting: ovnDynamicRouting,
             simulation: simulationConfig
         )
     }
