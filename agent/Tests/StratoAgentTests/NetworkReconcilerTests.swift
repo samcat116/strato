@@ -540,7 +540,7 @@ struct NetworkReconcilerTests {
         let calls = await actuator.calls
         #expect(calls.contains("ensureDNAT(lr-p,203.0.113.30->192.168.1.5)"))
         #expect(calls.contains("removeDNAT(lr-p,203.0.113.31)"))
-        #expect(calls.contains("ensureDynamicRouting(lr-p)"))
+        #expect(calls.contains("ensureDynamicRouting(lr-p,ready)"))
         // NAT waits for the uplink.
         let uplinkIndex = calls.firstIndex(of: "ensureUplink(lr-p)")
         let dnatIndex = calls.firstIndex(of: "ensureDNAT(lr-p,203.0.113.30->192.168.1.5)")
@@ -562,7 +562,25 @@ struct NetworkReconcilerTests {
 
         let calls = await actuator.calls
         #expect(!calls.contains(where: { $0.hasPrefix("ensureDNAT") }))
-        #expect(!calls.contains(where: { $0.hasPrefix("ensureDynamicRouting") }))
+        // Dynamic routing still converges — with the uplink flagged
+        // unavailable, so a previously enabled config is stripped rather
+        // than left stale (the actuator's strip path).
+        #expect(calls.contains("ensureDynamicRouting(lr-p,noUplink)"))
+    }
+
+    @Test("Routers without an uplink still converge (strip) dynamic routing")
+    func dynamicRoutingStripsOnUplinklessRouters() async throws {
+        let internal_ = network(
+            name: "internal", subnet: "10.1.0.0/24", gateway: "10.1.0.1",
+            routerKey: "p-internal", externalAccess: false)
+        let actuator = RecordingNetworkActuator(observed: ObservedNetworkTopology())
+
+        try await NetworkReconciler.reconcile(
+            networks: [internal_], actuator: actuator, logger: Logger(label: "test"))
+
+        let calls = await actuator.calls
+        #expect(!calls.contains(where: { $0.hasPrefix("ensureUplink") }))
+        #expect(calls.contains("ensureDynamicRouting(lr-p-internal,noUplink)"))
     }
 
     @Test("Floating IP MACs live in their own namespace and are deterministic")
@@ -616,8 +634,8 @@ private actor RecordingNetworkActuator: NetworkActuator {
     func removeDNAT(router routerName: String, externalIP: String) async throws {
         calls.append("removeDNAT(\(routerName),\(externalIP))")
     }
-    func ensureDynamicRouting(for router: DesiredRouter) async throws {
-        calls.append("ensureDynamicRouting(\(router.name))")
+    func ensureDynamicRouting(for router: DesiredRouter, uplinkReady: Bool) async throws {
+        calls.append("ensureDynamicRouting(\(router.name),\(uplinkReady ? "ready" : "noUplink"))")
     }
     func removeSwitchRouterPort(name: String) async throws { calls.append("removeSwitchRouterPort(\(name))") }
     func removeRouterPort(name: String) async throws { calls.append("removeRouterPort(\(name))") }

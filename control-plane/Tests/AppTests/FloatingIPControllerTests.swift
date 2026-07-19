@@ -457,8 +457,15 @@ final class FloatingIPControllerTests {
             }
 
             // Deny every project permission: the admin flag alone must be
-            // enough to list, with and without an explicit project filter.
+            // enough to allocate and to list, with and without an explicit
+            // project filter.
             app.spicedbMockDeniedResources = ["project"]
+            try await app.test(.POST, "/api/floating-ips") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["poolId": pool.id.uuidString, "projectId": project.id!.uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
             try await app.test(.GET, "/api/floating-ips") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in

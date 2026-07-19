@@ -1544,7 +1544,7 @@ extension NetworkServiceLinux: NetworkActuator {
         #endif
     }
 
-    func ensureDynamicRouting(for router: DesiredRouter) async throws {
+    func ensureDynamicRouting(for router: DesiredRouter, uplinkReady: Bool) async throws {
         #if os(Linux)
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
@@ -1552,7 +1552,10 @@ extension NetworkServiceLinux: NetworkActuator {
         guard let lr = try await ovnManager.getLogicalRouter(named: router.name), let lrUUID = lr.uuid
         else { return }
 
-        if let config = dynamicRoutingConfig, config.enabled {
+        // Enabling needs a realized uplink (the gateway port is what faces
+        // the fabric); everything else — disabled, absent, or an uplink that
+        // went away — converges to stripped options.
+        if let config = dynamicRoutingConfig, config.enabled, uplinkReady {
             // Router: enable + what to redistribute. `withoutDynamicRouting()`
             // first, so an option removed from the config (e.g. vrf_name) is
             // dropped rather than lingering.

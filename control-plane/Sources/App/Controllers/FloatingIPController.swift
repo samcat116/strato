@@ -334,14 +334,19 @@ struct FloatingIPController: RouteCollection {
             throw Abort(.badRequest, reason: "No project specified and user has no current organization")
         }
 
-        let hasPermission = try await req.spicedb.checkPermission(
-            subject: user.id!.uuidString,
-            permission: "create_floating_ip",
-            resource: "project",
-            resourceId: projectId.uuidString
-        )
-        guard hasPermission else {
-            throw Abort(.forbidden, reason: "You don't have permission to allocate floating IPs in this project")
+        // System admins bypass, matching the list/fetch paths — they may have
+        // no per-project SpiceDB tuples at all.
+        if !user.isSystemAdmin {
+            let hasPermission = try await req.spicedb.checkPermission(
+                subject: user.id!.uuidString,
+                permission: "create_floating_ip",
+                resource: "project",
+                resourceId: projectId.uuidString
+            )
+            guard hasPermission else {
+                throw Abort(
+                    .forbidden, reason: "You don't have permission to allocate floating IPs in this project")
+            }
         }
 
         guard let pool = try await FloatingIPPool.find(request.poolId, on: req.db) else {

@@ -593,11 +593,13 @@ public protocol NetworkActuator: Sendable {
     /// moved to another VM.
     func ensureDNAT(router routerName: String, rule: DesiredDNATRule) async throws
     func removeDNAT(router routerName: String, externalIP: String) async throws
-    /// Converge OVN native dynamic routing (issue #344) on an uplinked router:
-    /// apply the operator's `[ovn_dynamic_routing]` options to the router and
-    /// its gateway port when enabled, and strip them when disabled. No-op on
-    /// platforms/configs without the feature.
-    func ensureDynamicRouting(for router: DesiredRouter) async throws
+    /// Converge OVN native dynamic routing (issue #344): apply the operator's
+    /// `[ovn_dynamic_routing]` options to the router and its gateway port when
+    /// enabled *and* the uplink is realized, and strip them otherwise —
+    /// including `uplinkReady == false`, so a withdrawn/broken uplink still
+    /// clears previously applied options (there is no gateway to advertise
+    /// through anymore). No-op on platforms/configs without the feature.
+    func ensureDynamicRouting(for router: DesiredRouter, uplinkReady: Bool) async throws
     func removeSwitchRouterPort(name: String) async throws
     func removeRouterPort(name: String) async throws
     func removeExternalSwitch(name: String) async throws
@@ -637,7 +639,17 @@ extension NetworkReconciler {
                 }
             }
 
-            guard router.needsUplink else { continue }
+            // Dynamic routing converges on every router, every pass, with the
+            // uplink's realized state: enabling needs a live gateway port, but
+            // *stripping* must run even when the router lost (or never had) an
+            // uplink, or a withdrawn `[ovn_uplink]`/`[ovn_dynamic_routing]`
+            // would leave stale `dynamic-routing*` options in the NB forever.
+            guard router.needsUplink else {
+                await attempt(logger, "ensure dynamic routing on \(router.name)") {
+                    try await actuator.ensureDynamicRouting(for: router, uplinkReady: false)
+                }
+                continue
+            }
             var uplinkReady = false
             _ = await attempt(logger, "ensure uplink for \(router.name)") {
                 uplinkReady = try await actuator.ensureUplink(for: router)
@@ -646,6 +658,9 @@ extension NetworkReconciler {
                 logger.warning(
                     "No detectable host uplink; skipping SNAT this pass",
                     metadata: ["router": .string(router.name)])
+                await attempt(logger, "ensure dynamic routing on \(router.name)") {
+                    try await actuator.ensureDynamicRouting(for: router, uplinkReady: false)
+                }
                 continue
             }
             for subnet in router.snatSubnets {
@@ -659,7 +674,7 @@ extension NetworkReconciler {
                 }
             }
             await attempt(logger, "ensure dynamic routing on \(router.name)") {
-                try await actuator.ensureDynamicRouting(for: router)
+                try await actuator.ensureDynamicRouting(for: router, uplinkReady: true)
             }
         }
 
