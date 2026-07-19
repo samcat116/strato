@@ -507,6 +507,28 @@ extension SandboxController {
         }
     }
 
+    /// Shared guard for every source-sandbox deletion path, including API
+    /// requests and automated TTL/retention expiry. The caller must invoke it
+    /// in the same transaction that marks the source absent.
+    static func requireSnapshotLineageDeletable(
+        for sandboxID: UUID, on db: any Database
+    ) async throws {
+        let snapshotIDs = try await SandboxSnapshot.query(on: db)
+            .filter(\.$sandbox.$id == sandboxID)
+            .all()
+            .compactMap(\.id)
+        try await lockSnapshotLineage(snapshotIDs, on: db)
+        guard !snapshotIDs.isEmpty else { return }
+        let descendants = try await Sandbox.query(on: db)
+            .filter(\.$restoredFromSnapshotId ~~ snapshotIDs)
+            .count()
+        guard descendants == 0 else {
+            throw Abort(
+                .conflict,
+                reason: "Sandbox cannot be deleted while forks derived from its snapshots still exist")
+        }
+    }
+
     /// Load-bearing fork recheck performed under the same lineage lock and
     /// transaction as the target sandbox insert. The outer request preflight
     /// gives specific authorization/compatibility errors; this closes races

@@ -832,22 +832,8 @@ struct SandboxController: RouteCollection {
         let operation = try await beginOperation(
             .delete, sandbox: sandbox, user: user, settingDesiredStatus: .absent, on: req.db
         ) { db in
-            let snapshotIDs = try await SandboxSnapshot.query(on: db)
-                .filter(\.$sandbox.$id == sandbox.requireID())
-                .all()
-                .compactMap(\.id)
-            try await Self.lockSnapshotLineage(snapshotIDs, on: db)
-            guard !snapshotIDs.isEmpty else { return }
-            let descendants = try await Sandbox.query(on: db)
-                .filter(\.$restoredFromSnapshotId ~~ snapshotIDs)
-                .count()
-            guard descendants == 0 else {
-                throw Abort(
-                    .conflict,
-                    reason:
-                        "Sandbox cannot be deleted while forks derived from its snapshots still exist"
-                )
-            }
+            try await Self.requireSnapshotLineageDeletable(
+                for: sandbox.requireID(), on: db)
         }
 
         if agentOnline {

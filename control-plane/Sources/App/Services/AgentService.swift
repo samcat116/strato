@@ -1260,6 +1260,8 @@ actor AgentService {
                 userID: ResourceOperation.systemUserID,
                 on: db
             ) { db in
+                try await SandboxController.requireSnapshotLineageDeletable(
+                    for: sandboxID, on: db)
                 sandbox.setDesiredStatus(.absent)
                 try await sandbox.save(on: db)
             }
