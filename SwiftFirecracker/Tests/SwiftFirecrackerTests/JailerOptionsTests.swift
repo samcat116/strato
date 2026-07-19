@@ -50,6 +50,20 @@ struct JailerOptionsTests {
         #expect(!passThrough.contains("--id"))
     }
 
+    @Test("--new-pid-ns is opt-out, and its absence changes nothing else")
+    func newPidNamespaceOptOut() {
+        var shared = options
+        shared.newPidNamespace = false
+        let args = shared.arguments(vmId: "vm-1", firecrackerBinaryPath: "/usr/local/bin/firecracker")
+
+        #expect(!args.contains("--new-pid-ns"))
+        // Dropping the flag is the only difference from the default argv: a
+        // caller that cannot track the forked pid opts out without losing the
+        // rest of the barrier.
+        let defaults = options.arguments(vmId: "vm-1", firecrackerBinaryPath: "/usr/local/bin/firecracker")
+        #expect(defaults.filter { $0 != "--new-pid-ns" } == args)
+    }
+
     @Test("netns and cgroup flags are emitted before the pass-through section")
     func netnsAndCgroupArguments() {
         var full = options

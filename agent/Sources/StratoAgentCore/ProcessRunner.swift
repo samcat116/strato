@@ -140,10 +140,18 @@ public enum ProcessRunner {
         let limitMonitor: Task<Bool, Never>? = maxOutputBytes.map { limit in
             Task {
                 while process.isRunning {
-                    if let size = try? FileManager.default.attributesOfItem(atPath: outputPath)[.size]
-                        as? Int, size > limit
-                    {
+                    // stat(2) rather than FileManager attributes: this is the
+                    // enforcement point of a security control, and an NSNumber
+                    // bridging cast that returns nil would silently disable the
+                    // ceiling instead of failing loudly.
+                    if let size = fileSize(atPath: outputPath), size > Int64(limit) {
                         process.terminate()
+                        // A decompressor that ignores SIGTERM would keep
+                        // filling the disk, so give it a moment and escalate.
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        if process.isRunning {
+                            kill(process.processIdentifier, SIGKILL)
+                        }
                         return true
                     }
                     try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
@@ -168,6 +176,13 @@ public enum ProcessRunner {
             standardOutput: Data(),
             standardError: err
         )
+    }
+
+    /// Current size of `path` via `stat(2)`, or nil if it cannot be read.
+    static func fileSize(atPath path: String) -> Int64? {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        return Int64(info.st_size)
     }
 
     /// Reads a file descriptor to EOF on a background queue.

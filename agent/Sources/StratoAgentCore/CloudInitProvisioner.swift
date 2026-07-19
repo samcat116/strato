@@ -293,14 +293,17 @@ public struct CloudInitProvisioner {
     /// block is needed. Empty keys render nothing.
     private static func sshAuthorizedKeysBlock(_ keys: [String]) -> String {
         guard !keys.isEmpty else { return "" }
-        // An SSH public key is a single line. Strip control characters (an
-        // embedded newline would otherwise let a key value inject arbitrary
-        // cloud-config directives into the seed) as well as the quote used to
-        // delimit the YAML scalar.
+        // An SSH public key is a single line. Control characters are dropped,
+        // and the two characters YAML gives meaning inside a double-quoted
+        // scalar are escaped rather than deleted: `\` opens an escape sequence
+        // (so a literal `\n` in a key value would otherwise decode to a newline
+        // in the guest's authorized_keys) and `"` closes the scalar. Order
+        // matters — backslashes first, or the escapes we add get re-escaped.
         let keyLines =
             keys.map { key -> String in
                 let sanitized = String(key.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7f })
-                    .replacingOccurrences(of: "\"", with: "")
+                    .replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "\"", with: "\\\"")
                 return "  - \"\(sanitized)\""
             }
             .joined(separator: "\n")

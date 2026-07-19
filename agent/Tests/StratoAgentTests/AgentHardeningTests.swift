@@ -45,4 +45,72 @@ struct AgentHardeningTests {
         #expect(ImageCacheService.safeComponent("disk.qcow2") == "disk.qcow2")
         #expect(ImageCacheService.safeComponent("vmlinuz-6.1.0") == "vmlinuz-6.1.0")
     }
+
+    // MARK: - Output ceiling enforcement
+
+    /// The ceiling is only a security control if the runner actually stops a
+    /// runaway producer, so this exercises `runStreaming` itself rather than
+    /// the arithmetic: `cat /dev/zero` writes without end, and the run must
+    /// terminate it, delete the partial output, and throw.
+    @Test("runStreaming terminates a producer that blows past the ceiling")
+    func runStreamingEnforcesOutputCeiling() async throws {
+        let outputPath = NSTemporaryDirectory() + "/ceiling-\(UUID().uuidString).out"
+        defer { try? FileManager.default.removeItem(atPath: outputPath) }
+        let limit = 1 << 20  // 1 MiB
+
+        await #expect(throws: ProcessRunnerError.self) {
+            try await ProcessRunner.runStreaming(
+                executableURL: URL(fileURLWithPath: "/bin/cat"),
+                arguments: [],
+                inputFile: URL(fileURLWithPath: "/dev/zero"),
+                outputFile: URL(fileURLWithPath: outputPath),
+                maxOutputBytes: limit)
+        }
+        // The partial output is removed, so a caller that ignores the error
+        // cannot mistake a truncated file for a complete one.
+        #expect(!FileManager.default.fileExists(atPath: outputPath))
+    }
+
+    @Test("runStreaming leaves an under-ceiling run untouched")
+    func runStreamingAllowsOutputUnderCeiling() async throws {
+        let inputPath = NSTemporaryDirectory() + "/ceiling-in-\(UUID().uuidString)"
+        let outputPath = NSTemporaryDirectory() + "/ceiling-out-\(UUID().uuidString)"
+        defer {
+            try? FileManager.default.removeItem(atPath: inputPath)
+            try? FileManager.default.removeItem(atPath: outputPath)
+        }
+        let payload = Data(repeating: 0x41, count: 4096)
+        try payload.write(to: URL(fileURLWithPath: inputPath))
+
+        let result = try await ProcessRunner.runStreaming(
+            executableURL: URL(fileURLWithPath: "/bin/cat"),
+            arguments: [],
+            inputFile: URL(fileURLWithPath: inputPath),
+            outputFile: URL(fileURLWithPath: outputPath),
+            maxOutputBytes: 1 << 20)
+
+        #expect(result.terminationStatus == 0)
+        #expect(ProcessRunner.fileSize(atPath: outputPath) == Int64(payload.count))
+    }
+
+    // MARK: - Cloud-init key rendering
+
+    @Test("A key cannot escape its YAML scalar or smuggle an escape sequence")
+    func sshKeyRenderingIsInert() {
+        let hostile = "ssh-rsa AAAA\"\nruncmd:\n  - touch /tmp/pwned"
+        // systemCloudConfig carries no list keys of its own, so every `  - `
+        // line below belongs to the rendered authorized-keys block.
+        let document = CloudInitProvisioner.systemCloudConfig(
+            authorizedKeys: [hostile, #"ssh-ed25519 AAAA\nfoo"#])
+
+        // The raw newline is gone, so nothing lands at the document's top level.
+        #expect(!document.contains("\nruncmd:"))
+        // The quote is escaped rather than dropped, and a literal backslash in
+        // the key stays literal instead of decoding to a newline in the guest.
+        #expect(document.contains(#"\""#))
+        #expect(document.contains(#"\\n"#))
+        // One list entry per key, however hostile the input.
+        let entries = document.split(separator: "\n").filter { $0.hasPrefix("  - ") }
+        #expect(entries.count == 2)
+    }
 }
