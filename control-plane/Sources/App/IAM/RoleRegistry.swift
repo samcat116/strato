@@ -109,6 +109,20 @@ enum IAMRoleRegistry {
     /// lookups must add these, or they under-report every org member.
     static let membershipDerivedActions: Set<String> = ["org:read", "project:create"]
 
+    /// Every action the registry knows, including the membership-derived ones
+    /// that no role carries. This is the action *vocabulary*: guardrails
+    /// validate exact action names against it so a typo can't create a ceiling
+    /// that silently protects nothing.
+    static let allActions: Set<String> =
+        IAMRole.allCases.reduce(into: membershipDerivedActions) { $0.formUnion(actions(for: $1)) }
+
+    /// The service prefixes appearing in `allActions` (`vm`, `volume`, `iam`,
+    /// …) — the valid left-hand sides of a `service:*` guardrail pattern.
+    static let actionServices: Set<String> = Set(
+        allActions.compactMap { action in
+            action.split(separator: ":", maxSplits: 1).first.map(String.init)
+        })
+
     /// The roles whose expanded action group contains `action` — the set a
     /// binding must name to grant it. Empty for an action no role carries
     /// (e.g. `project:create`, which comes from membership instead).

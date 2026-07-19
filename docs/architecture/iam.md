@@ -118,6 +118,53 @@ language, one evaluator.
 - Both principal-side and resource-side ceilings are the same mechanism —
   which side of the `forbid` is constrained.
 
+### The store (shipped)
+
+`iam_guardrails` (`GuardrailStore`, `POST/GET/PATCH/DELETE /api/iam/guardrails`).
+As with bindings, customers assemble a guardrail from a fixed vocabulary rather
+than authoring policy text:
+
+| Field | Vocabulary |
+|---|---|
+| attach node | `organization`, `organizational_unit`, `project` — containers only |
+| actions | exact registry actions, `service:*`, or `*` (empty ⇒ `*`) |
+| principal match | `any`, `user`, `group`, `external_to_organization` |
+| resource match | `any`, `environment` |
+
+Notes on the shape, each of which is load-bearing:
+
+- **Forbid-only is enforced three times over**: `GuardrailEffect` has one case,
+  so a permit is not constructible in Swift; the store rejects a
+  `permit`-shaped request with `400` rather than ignoring the field; and the
+  table carries a `CHECK (effect = 'forbid')` on Postgres for anything reaching
+  it another way. The invariant is not re-checked downstream, so it has to hold
+  at the boundary.
+- **Wildcards exist because ceilings must cover actions we have not shipped.**
+  A `vm:*` ceiling written today still holds when `vm:migrate` lands. Exact
+  action names are validated against the role registry: a ceiling that silently
+  protects nothing because of a typo is this store's worst failure mode.
+- **`external_to_organization` is what makes cross-org access ceilable** —
+  bindings may name a principal from another org by design, and `forbid` is the
+  only thing that can take that back. This is why the resource-side shape ships
+  in v1.
+- **Attach points are containers only.** A ceiling exists to cover what is
+  beneath it; on a leaf it would be an ordinary per-resource rule wearing
+  tier 2's clothes.
+- **A guardrail forbidding every action for every principal on every resource
+  is refused**: it would deny the `iam:setPolicy` needed to remove it, on its
+  own subtree. Refusing is not a view about strict policy — it is refusing to
+  let one write lock an org out irrecoverably.
+- Guardrails can be **disabled** without being deleted. Ceilings get switched
+  off to unblock an incident far more often than they get removed, and the row
+  is the record of what was in force.
+
+Evaluation (`GuardrailStore.forbidding`) returns *every* ceiling in the way,
+not the first: otherwise removing one guardrail looks like it will unblock a
+request the next one still blocks. Guardrails are not yet wired into request
+gating — SpiceDB gates requests until cutover — so what ships in phase 2 is the
+store and the semantics the evaluator (#480) and the symcc write-time check
+(#484) build on.
+
 ### The write-time ceiling check
 
 Before accepting a tier-3 binding, run the symcc analysis: does the resulting
@@ -250,6 +297,20 @@ inverts the data flow:
   Valkey nudge pattern, backstopped by periodic re-read. Bindings themselves
   are read per-request from Postgres, so grant/revoke needs no invalidation —
   a revoke is effective on the next request on every replica.
+
+  **Versioning (shipped).** `iam_policy_set_versions` is an append-only log:
+  every change to the platform policy, the guardrails, or the role registry
+  appends a row carrying a monotonic `version`, the reason, and who made it.
+  Allocation is `max + 1` under a uniqueness constraint, so two replicas
+  bumping concurrently get two versions rather than one lost update. Version
+  and change commit in the same transaction — a change without its bump leaves
+  every replica serving a stale policy set with nothing to tell them
+  otherwise. `PolicySetVersionCache` holds each replica's view and is the seam
+  the compiled set hangs off (#480); it refreshes on the `policy-set:version`
+  broadcast (a broadcast, unlike the `replica:{id}:*` channels — a policy
+  change concerns every replica) and on a 30s re-read that bounds how long a
+  lost message can leave a replica stale. Role *bindings* deliberately bump
+  nothing, per the paragraph above.
 - **The entity-slice loader** is the security-critical component: one shared
   function that gathers, per check, the resource's ancestor chain, the
   principal's group memberships, the applicable bindings along the chain, and
@@ -314,7 +375,9 @@ Phases; each lands independently:
    `owner`/`viewer`/`editor` tuples exist **only** in SpiceDB and must be
    exported before any cutover. Ships `who-can` and `expires_at` early.
 2. **Guardrail store + policy versioning.** Forbid-only by construction;
-   versioned policy sets.
+   versioned policy sets. **Shipped** — see "The store" under Guardrails and
+   "Versioning" above. Guardrails are stored and evaluable but not yet on the
+   enforcement path, which arrives with the evaluator.
 3. **Cedar integration.** Swift binding (separate track), Cedar schema (entity
    types, action groups, binding templates), entity-slice loader, compiled
    policy-set cache with Valkey invalidation.
