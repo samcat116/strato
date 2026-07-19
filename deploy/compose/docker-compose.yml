@@ -5,10 +5,10 @@
 #   docker compose up -d       # builds the small SPIRE helper image, pulls the rest
 #   open http://localhost      # first registered user becomes system admin
 #
-# Agents authenticate with X.509 SVIDs over mTLS by default: a SPIRE server
-# issues identities, an Envoy front terminates agent mTLS on :8443, and the
-# control plane provisions SPIRE (join token + workload entry) whenever an admin
-# creates a registration token. The emitted bootstrap command brings up a
+# Agents authenticate only with X.509 SVIDs over mTLS: a SPIRE server issues
+# identities, an Envoy front terminates agent mTLS on :8443, and the control
+# plane provisions SPIRE (join token + workload entry) whenever an admin
+# enrolls a node. The emitted bootstrap command brings up a
 # hypervisor node's spire-agent + strato-agent (plus Alloy host telemetry). See
 # ./spiffe/ for the SPIRE and Envoy configuration and deploy/agent/install.sh
 # for the node side.

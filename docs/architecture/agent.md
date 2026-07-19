@@ -30,33 +30,35 @@ SwiftPM cannot unit-test an executable target:
 
 ## Startup, registration, reconnect
 
-`StratoAgent.swift` is an ArgumentParser `@main` with `run` (default) and
-`join` subcommands, both funneling into `launchAgent`.
+`StratoAgent.swift` is an ArgumentParser `@main` whose `run` subcommand (the
+default) funnels into `launchAgent`.
 
 - **Config**: TOML (`AgentConfig` in `StratoAgentCore/AgentConfig.swift`),
   resolved field-by-field with precedence **CLI flag > config file >
   platform default**. Default path is `/etc/strato/config.toml` on Linux,
   falling back to `./config.toml`. Enum-valued fields (network mode,
   hypervisor type, jailer mode) are validated at load.
-- **Which URL/token to dial** (helpers in
-  `StratoAgentCore/WebSocketURLs.swift`, persisted state in
-  `AgentState.swift`): an explicit registration URL wins; then persisted
-  join state (bare URL + reconnect token); then the configured
-  `control_plane_url` as-is (the SPIFFE/mTLS and dev paths). The token is
-  always stripped from the URL and sent as `Authorization: Bearer`, so it
-  never lands in proxy logs.
-- **Token rotation**: registration tokens are single-use. The registration
-  response carries a fresh reconnect token, persisted atomically with mode
-  0600 (`FileAgentStateStore`). Before a join dials, the store is checked
-  writable so a misconfigured host fails fast instead of burning its
-  single-use token.
+- **Which URL to dial** (helpers in `StratoAgentCore/WebSocketURLs.swift`):
+  the configured `control_plane_url`
+  with the agent's name appended as a `?name=` query parameter. There is no
+  bearer credential in the URL or in a header — every connection is
+  authenticated by the client certificate alone.
+- **Identity**: the agent's X.509 SVID, fetched from the SPIRE Workload API
+  (or from PEM files, per the `[spiffe]` config block) by
+  `StratoAgentSPIFFE` and presented as the mTLS client certificate. SVIDs
+  rotate underneath the agent, so a long-lived fleet needs no credential
+  bookkeeping; a node that loses its SPIRE registration simply stops being
+  able to connect. The agent persists no credential state at all — its name
+  comes from `--agent-id` (defaulting to the hostname) and its identity from
+  SPIRE, so there is nothing on disk to rotate, corrupt, or leak.
 - **`WebSocketClient`** (actor, executable target): WebSocketKit with a
   16 MiB max frame (the desired-state sync is one frame; must match the
   control plane), inbound frames decoded and yielded into an `AsyncStream`
   to preserve arrival order, and a connection-scoped 20s heartbeat.
   Connection loss triggers `Agent.runReconnectLoop`: exponential backoff
   (1s → 30s cap, with jitter), re-registering on success; a
-  registration-rejected error is terminal (the token is dead — re-join).
+  registration-rejected error is terminal (the node's SPIRE identity is no
+  longer accepted — re-enroll it).
 
 ## Hypervisor driver registry
 

@@ -1,28 +1,45 @@
 #!/usr/bin/env bash
 # strato-agent install.sh — one-command hypervisor node install.
 #
-# Downloads the strato-agent release binary for this host, installs the host
-# dependencies it needs (QEMU, and OVN/OVS for SDN networking), installs a
-# systemd unit, and — when given a registration URL — joins a control plane.
-# Designed to be curled and piped:
+# Downloads the strato-agent and spire-agent binaries, installs the host
+# dependencies the agent needs (QEMU, and OVN/OVS for SDN networking), attests
+# this node to SPIRE, writes the agent config, and starts everything under
+# systemd. Designed to be curled and piped:
 #
 #   curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
-#     | sudo bash -s -- --registration-url 'wss://cp.example.com/agent/ws?token=...&name=hv-01'
+#     | sudo bash -s -- \
+#     --control-plane-url 'wss://cp.example.com/agent/ws' \
+#     --agent-name 'hv-01' \
+#     --spire-join-token '...' \
+#     --spire-server-address 'cp.example.com:8085' \
+#     --trust-domain 'strato.local'
 #
-# The registration URL comes from the Strato UI (Agents -> Create Registration
-# Token). Without --registration-url the script installs the binary, deps, and
-# systemd unit but does not join — run `strato-agent join <url>` yourself, or
-# re-run this script with the URL, when you have a token.
+# That invocation is exactly what the Strato UI emits when you enroll a node
+# (Agents -> Enroll node, or POST /api/agents/enrollments): enrollment
+# provisions the node in SPIRE and hands back this command with the join token
+# filled in. Agents authenticate to the control plane ONLY by SPIFFE X.509 SVID
+# over mTLS, so all five flags above are required — there is no token join and
+# no unauthenticated path.
 #
-# When the control plane provisions SPIRE (the default compose deployment),
-# "Create Registration Token" emits this script's invocation with the SPIRE
-# flags below. They additionally install and configure spire-agent (the node's
-# SPIFFE identity, used for mTLS to the control plane) and — unless
-# --no-telemetry — Grafana Alloy + spiffe-helper, which push node metrics and
-# journal logs to the control plane's telemetry ingest with that identity.
+# Unless --no-telemetry, the script also installs Grafana Alloy +
+# spiffe-helper, which push node metrics and journal logs to the control
+# plane's telemetry ingest using the same SVID.
 #
-# Flags:
-#   --registration-url URL   Join the control plane after install (single-use token URL)
+# Linux only: spire-agent, systemd, and KVM all are.
+#
+# Flags (all five below are required):
+#   --control-plane-url URL  Agent WebSocket endpoint (ws:// or wss://; always
+#                            wss:// in a SPIRE deployment, since Envoy
+#                            terminates mTLS in front of the control plane)
+#   --agent-name NAME        The name this node was enrolled under. Must match
+#                            the enrollment exactly — the control plane resolves
+#                            the enrollment row by name. ASCII letters, digits,
+#                            '-', '_' and '.' only.
+#   --spire-join-token TOK   One-time SPIRE join token from the enrollment
+#   --spire-server-address H:P  SPIRE server this node attests to
+#   --trust-domain TD        SPIFFE trust domain (default: strato.local)
+#
+# Optional flags:
 #   --version VERSION        Release tag to install (default: latest)
 #   --repo OWNER/NAME        GitHub repository to fetch from (default: samcat116/strato)
 #   --bin-dir DIR            Where to install binaries (default: /usr/local/bin)
@@ -35,30 +52,21 @@
 #                            init) so this host can run sandboxes (Linux only)
 #   -h, --help               Show this help
 #
-# SPIRE / telemetry flags (Linux + systemd only):
-#   --spire-join-token TOK        One-time SPIRE join token (from the UI). Turns
-#                                 on SPIRE mode: spire-agent is installed and the
-#                                 agent authenticates to the control plane by SVID.
-#   --spire-server-address H:P    SPIRE server the node attests to (required with
-#                                 --spire-join-token)
-#   --trust-domain TD             SPIFFE trust domain (default: strato.local)
+# SPIRE / telemetry tuning:
 #   --trust-bundle PATH           SPIRE trust bundle PEM. Without it the agent
 #                                 uses insecure_bootstrap (TOFU) — fine for labs,
 #                                 not for hostile networks.
 #   --no-telemetry                Skip Alloy/spiffe-helper (host metrics + logs)
 #   --ingest-url URL              Telemetry ingest origin (default: derived from
-#                                 the registration URL, e.g. https://cp:8443)
+#                                 the control-plane URL, e.g. https://cp:8443)
 #   --spire-version V             spire-agent release (default: pinned below)
 #   --alloy-version V             Grafana Alloy release (default: pinned below)
 #   --spiffe-helper-version V     spiffe-helper release (default: pinned below)
-#
-# Everything but the binary download and systemd/apt steps also works on macOS
-# (dev/test only — user-mode networking, no systemd, no SPIRE); pass
-# --no-systemd there.
 
 set -euo pipefail
 
-REGISTRATION_URL=""
+CONTROL_PLANE_URL=""
+AGENT_NAME=""
 VERSION="latest"
 REPO="samcat116/strato"
 BIN_DIR="/usr/local/bin"
@@ -84,7 +92,6 @@ SPIFFE_HELPER_VERSION="v0.11.0"
 
 STRATO_CONF_DIR=/etc/strato
 STRATO_STATE_DIR=/var/lib/strato
-STATE_FILE="$STRATO_STATE_DIR/agent-state.json"
 CONFIG_FILE="$STRATO_CONF_DIR/config.toml"
 UNIT_FILE=/etc/systemd/system/strato-agent.service
 
@@ -103,7 +110,8 @@ die() { echo "error: $*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --registration-url) REGISTRATION_URL="$2"; shift 2 ;;
+    --control-plane-url) CONTROL_PLANE_URL="$2"; shift 2 ;;
+    --agent-name)       AGENT_NAME="$2"; shift 2 ;;
     --version)          VERSION="$2"; shift 2 ;;
     --repo)             REPO="$2"; shift 2 ;;
     --bin-dir)          BIN_DIR="$2"; shift 2 ;;
@@ -132,16 +140,28 @@ case "$NETWORK_MODE" in
   *) die "--network-mode must be 'ovn' or 'user' (got '$NETWORK_MODE')" ;;
 esac
 
-# SPIRE mode: the node attests to the SPIRE server and the agent authenticates
-# to the control plane with its SVID (mTLS). Telemetry rides that identity, so
-# it exists only in SPIRE mode.
-SPIRE_MODE=0
-if [ -n "$JOIN_TOKEN" ] || [ -n "$SPIRE_SERVER_ADDRESS" ]; then
-  [ -n "$JOIN_TOKEN" ] || die "--spire-server-address requires --spire-join-token"
-  [ -n "$SPIRE_SERVER_ADDRESS" ] || die "--spire-join-token requires --spire-server-address"
-  [ -n "$REGISTRATION_URL" ] || die "SPIRE mode requires --registration-url (the join token is single-use and pairs with one registration)"
-  SPIRE_MODE=1
-fi
+# Every install is a SPIFFE install: the node attests to the SPIRE server and
+# the agent authenticates to the control plane with its SVID (mTLS). There is
+# no other agent auth path, so all of these are required rather than optional.
+[ -n "$CONTROL_PLANE_URL" ] || die "--control-plane-url is required (from the enrollment's bootstrap command)"
+[ -n "$AGENT_NAME" ]        || die "--agent-name is required (must match the name the node was enrolled under)"
+[ -n "$JOIN_TOKEN" ]        || die "--spire-join-token is required (from the enrollment's bootstrap command)"
+[ -n "$SPIRE_SERVER_ADDRESS" ] || die "--spire-server-address is required (the SPIRE server this node attests to)"
+[ -n "$TRUST_DOMAIN" ]      || die "--trust-domain must not be empty"
+
+case "$CONTROL_PLANE_URL" in
+  ws://*|wss://*) ;;
+  *) die "--control-plane-url must start with ws:// or wss:// (got '$CONTROL_PLANE_URL')" ;;
+esac
+case "$CONTROL_PLANE_URL" in
+  ws://*) warn "--control-plane-url is ws:// (no TLS); mTLS agent auth needs wss://" ;;
+esac
+
+# Mirrors the control plane's own validation, so a bad name fails here rather
+# than after the whole install with an opaque registration rejection.
+case "$AGENT_NAME" in
+  *[!A-Za-z0-9._-]*|"") die "--agent-name must be ASCII letters, digits, '-', '_' or '.' (got '$AGENT_NAME')" ;;
+esac
 
 # --- platform detection ------------------------------------------------------
 
@@ -149,8 +169,10 @@ uname_s="$(uname -s)"
 uname_m="$(uname -m)"
 case "$uname_s" in
   Linux)  OS=linux ;;
-  Darwin) OS=macos ;;
-  *)      die "unsupported OS: $uname_s (Linux or macOS only)" ;;
+  Darwin)
+    die "macOS is not a supported agent platform: agents authenticate only by SPIFFE SVID, and spire-agent, systemd, and KVM are all Linux-only. Run agents on a Linux hypervisor host."
+    ;;
+  *)      die "unsupported OS: $uname_s (Linux only)" ;;
 esac
 case "$uname_m" in
   x86_64|amd64)  ARCH=x86_64 ;;
@@ -162,24 +184,12 @@ ASSET="strato-${OS}-${ARCH}.tar.gz"
 GOARCH=$([ "$ARCH" = "x86_64" ] && echo amd64 || echo arm64)
 log "Detected host: ${OS}/${ARCH}"
 
-if [ "$OS" = "macos" ]; then
-  # No apt, no systemd, no KVM/OVN. Keep going so the binary and (optional)
-  # foreground join still work for dev/test, but turn the Linux-only bits off.
-  [ "$INSTALL_DEPS" -eq 1 ] && log "macOS host: skipping package install (use 'brew install qemu')"
-  INSTALL_DEPS=0
-  USE_SYSTEMD=0
-  [ "$SPIRE_MODE" -eq 0 ] || die "SPIRE mode is Linux-only (spire-agent, systemd); use a token registration URL on macOS"
-fi
-
-# Telemetry needs SPIRE (the SVID is its client credential) and systemd (Alloy
-# reads journald and runs as a unit). Downgrade gracefully elsewhere.
-if [ "$INSTALL_TELEMETRY" -eq 1 ]; then
-  if [ "$SPIRE_MODE" -eq 0 ]; then
-    INSTALL_TELEMETRY=0
-  elif [ "$USE_SYSTEMD" -eq 0 ]; then
-    warn "telemetry (Alloy) requires systemd; skipping — re-run without --no-systemd to enable it"
-    INSTALL_TELEMETRY=0
-  fi
+# Telemetry runs as systemd units and reads journald, so it is the one piece
+# that --no-systemd cannot carry. The SVID it authenticates with is always
+# present now that every install is a SPIFFE install.
+if [ "$INSTALL_TELEMETRY" -eq 1 ] && [ "$USE_SYSTEMD" -eq 0 ]; then
+  warn "telemetry (Alloy) requires systemd; skipping — re-run without --no-systemd to enable it"
+  INSTALL_TELEMETRY=0
 fi
 
 # --- privilege check ---------------------------------------------------------
@@ -193,7 +203,7 @@ need_root() {
 if [ "$INSTALL_DEPS" -eq 1 ]; then need_root "installing host packages"; fi
 if [ "$USE_SYSTEMD" -eq 1 ]; then need_root "installing the systemd unit"; fi
 if [ -z "$STRATO_AGENT_BIN" ] && [ ! -w "$BIN_DIR" ]; then need_root "writing to $BIN_DIR"; fi
-if [ "$SPIRE_MODE" -eq 1 ]; then need_root "configuring spire-agent"; fi
+need_root "configuring spire-agent"
 
 # --- binary install ----------------------------------------------------------
 
@@ -423,7 +433,7 @@ install_deps() {
 
 install_deps
 
-if [ "$SPIRE_MODE" -eq 1 ]; then install_spire_agent; fi
+install_spire_agent
 if [ "$INSTALL_TELEMETRY" -eq 1 ]; then
   install_alloy
   install_spiffe_helper
@@ -482,16 +492,10 @@ install_unit() {
   fi
   install -d "$STRATO_CONF_DIR" "$STRATO_STATE_DIR"
   log "Installing $UNIT_FILE"
-  # In SPIRE mode the agent's mTLS credential comes from spire-agent's
-  # Workload API, so it must not start without it.
-  local unit_deps="network-online.target" unit_requires=""
-  if [ "$SPIRE_MODE" -eq 1 ]; then
-    unit_deps="network-online.target spire-agent.service"
-    unit_requires="Requires=spire-agent.service"
-  fi
-  # Runs in plain `run` mode: after the initial join the agent reconnects with
-  # its persisted rotated token (or its SVID in SPIRE mode), never the
-  # single-use registration token.
+  # The agent's mTLS credential comes from spire-agent's Workload API, so it
+  # must not start without it.
+  local unit_deps="network-online.target spire-agent.service"
+  local unit_requires="Requires=spire-agent.service"
   cat > "$UNIT_FILE" << EOF
 [Unit]
 Description=Strato Agent
@@ -501,7 +505,7 @@ Wants=network-online.target
 ${unit_requires}
 
 [Service]
-ExecStart=${STRATO_AGENT_BIN} run --config-file ${CONFIG_FILE}
+ExecStart=${STRATO_AGENT_BIN} run --config-file ${CONFIG_FILE} --agent-id ${AGENT_NAME}
 Restart=on-failure
 RestartSec=10
 # The agent manages VMs, TAP devices, and KVM, so it needs broad host access;
@@ -521,12 +525,11 @@ install_unit
 # the strato-agent (and spiffe-helper) draw SVIDs from.
 
 setup_spire() {
-  [ "$SPIRE_MODE" -eq 1 ] || return 0
-
   # Fail fast on a stale agent config. write_config below only writes
   # config.toml when it is absent, so a leftover file without a [spiffe]
-  # section (e.g. from an earlier token-join install) would silently leave the
-  # agent connecting with no client certificate — the mTLS handshake then
+  # section (e.g. from an install that predates SPIFFE-only auth) would
+  # silently leave the agent connecting with no client certificate — the
+  # mTLS handshake then
   # fails at the proxy with an opaque TLS error.
   if [ -f "$CONFIG_FILE" ] && ! grep -q '^\[spiffe\]' "$CONFIG_FILE"; then
     die "$CONFIG_FILE exists but has no [spiffe] section (it predates SPIFFE onboarding). Remove it (sudo rm $CONFIG_FILE) and re-run, or add a [spiffe] block manually."
@@ -623,28 +626,20 @@ EOF
 write_telemetry_config() {
   [ "$INSTALL_TELEMETRY" -eq 1 ] || return 0
 
-  # Agent name from the registration URL query: Basic identity label on every
-  # pushed series/stream. Percent-decode the UI's URL encoding.
-  local raw_name
-  raw_name=$(printf '%s' "$REGISTRATION_URL" | sed -n 's/.*[?&]name=\([^&]*\).*/\1/p')
-  local agent_name
-  agent_name=$(printf '%b' "${raw_name//%/\\x}")
-  if [ -z "$agent_name" ]; then
-    agent_name="$(hostname)"
-    warn "could not parse agent name from the registration URL; labeling telemetry as '$agent_name'"
-  fi
+  # Basic identity label on every pushed series/stream.
+  local agent_name="$AGENT_NAME"
 
   # Ingest origin: the same Envoy mTLS listener the agent WebSocket uses, over
-  # HTTPS. Derived from the registration URL unless --ingest-url overrides.
+  # HTTPS. Derived from the control-plane URL unless --ingest-url overrides.
   local ingest="$INGEST_URL"
   if [ -z "$ingest" ]; then
-    local cp_url="${REGISTRATION_URL%%\?*}"
+    local cp_url="${CONTROL_PLANE_URL%%\?*}"
     ingest="${cp_url%/agent/ws}"
     case "$ingest" in
       wss://*) ingest="https://${ingest#wss://}" ;;
       ws://*)
         ingest="http://${ingest#ws://}"
-        warn "registration URL is ws:// (no TLS); telemetry pushes will fail mTLS — pass --ingest-url if the ingest endpoint differs"
+        warn "control-plane URL is ws:// (no TLS); telemetry pushes will fail mTLS — pass --ingest-url if the ingest endpoint differs"
         ;;
     esac
   fi
@@ -771,110 +766,50 @@ enable_telemetry() {
 setup_spire
 write_telemetry_config
 
-# --- config + join (only with a registration URL) ----------------------------
+# --- agent config + start ----------------------------------------------------
 
-# Write the agent config before joining. `strato-agent join --config-file`
-# treats an explicit path as authoritative and fails if the file is missing (it
-# only auto-writes when using the default config path), so on a fresh host the
-# file must exist first. This is also the only place the selected network mode
-# is persisted — without it a Linux agent defaults to OVN even when installed
-# with --network-mode user. Linux only; macOS uses the agent's own default
-# config path (and always user-mode SLIRP), so join auto-writes it there.
+# Write the agent config before starting. The systemd unit passes an explicit
+# --config-file, and the agent treats an explicit path as authoritative, so on
+# a fresh host the file must exist first. This is also the only place the
+# selected network mode is persisted — without it the agent defaults to OVN
+# even when installed with --network-mode user.
 write_config() {
-  local url="$1"
   install -d "$STRATO_CONF_DIR"
   if [ -f "$CONFIG_FILE" ]; then
-    log "$CONFIG_FILE already exists; leaving it in place (ensure control_plane_url and network_mode are set)"
+    log "$CONFIG_FILE already exists; leaving it in place (ensure control_plane_url and the [spiffe] block are set)"
     return 0
   fi
-  local cp_url="${url%%\?*}"
+  local cp_url="${CONTROL_PLANE_URL%%\?*}"
   log "Writing $CONFIG_FILE (network_mode = ${NETWORK_MODE})"
+  # The agent's name is not a config-file field: it comes from --agent-id on
+  # the command line (defaulting to the hostname), which the systemd unit above
+  # pins to the enrolled name. The agent dials control_plane_url with it as the
+  # ?name= query parameter and the control plane resolves the enrollment by it.
   cat > "$CONFIG_FILE" << EOF
 control_plane_url = "$cp_url"
 network_mode = "$NETWORK_MODE"
-EOF
-  if [ "$SPIRE_MODE" -eq 1 ]; then
-    # The agent presents its SVID from the Workload API as the mTLS client
-    # certificate; the control plane maps it back to this node's identity.
-    cat >> "$CONFIG_FILE" << EOF
 
+# The agent presents its SVID from the Workload API as the mTLS client
+# certificate; the control plane maps it back to this node's identity.
 [spiffe]
 enabled = true
 trust_domain = "$TRUST_DOMAIN"
 workload_api_socket_path = "$SPIRE_SOCKET"
 source_type = "workload_api"
 EOF
-  fi
 }
 
-join_control_plane() {
-  local url="$1"
-  case "$url" in
-    ws://*|wss://*) ;;
-    *) die "--registration-url must start with ws:// or wss:// (got '$url')" ;;
-  esac
+write_config
 
-  if [ "$OS" = "linux" ]; then write_config "$url"; fi
-
-  if [ "$USE_SYSTEMD" -eq 1 ]; then
-    # A registration URL was supplied, so always register with it — that is the
-    # documented recovery path when the stored state is stale, revoked, or
-    # corrupt, and `join` overwrites the old state on success. Skipping join
-    # here would start the service on the dead state and it would just fail.
-    if [ -f "$STATE_FILE" ]; then
-      log "Existing join state at $STATE_FILE will be replaced by this registration"
-    fi
-    # `join` registers and then keeps running as the agent. Run it just long
-    # enough to confirm registration (the "Registration complete" log line),
-    # then hand off to the systemd unit which reconnects with the rotated token.
-    local join_log=/var/log/strato-agent-join.log
-    log "Joining the control plane"
-    : > "$join_log"
-    "$STRATO_AGENT_BIN" join --config-file "$CONFIG_FILE" "$url" >> "$join_log" 2>&1 &
-    local join_pid=$!
-    for _ in $(seq 1 60); do
-      if grep -q "Registration complete" "$join_log" 2>/dev/null; then break; fi
-      if ! kill -0 "$join_pid" 2>/dev/null; then
-        die "strato-agent join exited before registering; see $join_log"
-      fi
-      sleep 1
-    done
-    if ! grep -q "Registration complete" "$join_log" 2>/dev/null; then
-      kill "$join_pid" 2>/dev/null || true
-      die "registration did not complete within 60s; see $join_log"
-    fi
-    kill "$join_pid" 2>/dev/null || true
-    wait "$join_pid" 2>/dev/null || true
-    systemctl enable --now strato-agent.service
-    # After the join so the node is attested before the first pushes; harmless
-    # either way — Alloy buffers and retries until its SVID files appear.
-    enable_telemetry
-    log "Done. Follow along with: journalctl -fu strato-agent"
-  else
-    log "Joining the control plane (foreground; Ctrl-C stops the agent)"
-    if [ "$OS" = "linux" ]; then
-      exec "$STRATO_AGENT_BIN" join --config-file "$CONFIG_FILE" "$url"
-    else
-      # macOS: no config was written above; let join use its platform default
-      # config path and auto-write the minimal config there.
-      exec "$STRATO_AGENT_BIN" join "$url"
-    fi
-  fi
-}
-
-if [ -n "$REGISTRATION_URL" ]; then
-  join_control_plane "$REGISTRATION_URL"
+if [ "$USE_SYSTEMD" -eq 1 ]; then
+  log "Starting strato-agent"
+  systemctl enable --now strato-agent.service
+  # After the agent so the node is attested before the first pushes; harmless
+  # either way — Alloy buffers and retries until its SVID files appear.
+  enable_telemetry
+  log "Done. Follow along with: journalctl -fu strato-agent"
 else
-  log "Install complete. To register this host, create a token in the Strato UI"
-  log "(Agents -> Create Registration Token) and run:"
-  log "  ${STRATO_AGENT_BIN} join '<registration-url>'"
-  if [ "$USE_SYSTEMD" -eq 1 ]; then
-    log "Then start it on boot:  sudo systemctl enable --now strato-agent"
-    log "(or just re-run this installer with --registration-url to do both)."
-  fi
-  if [ "$OS" = "linux" ] && [ "$NETWORK_MODE" = "user" ]; then
-    log "Note: network_mode is only persisted during join. Re-run with"
-    log "--registration-url, or add 'network_mode = \"user\"' to $CONFIG_FILE yourself,"
-    log "otherwise the agent will default to OVN networking."
-  fi
+  log "Install complete (no systemd unit installed). Start the agent with:"
+  log "  ${STRATO_AGENT_BIN} run --config-file ${CONFIG_FILE} --agent-id ${AGENT_NAME}"
+  log "spire-agent must be running first — it supplies the agent's SVID."
 fi

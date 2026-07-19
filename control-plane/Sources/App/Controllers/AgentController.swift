@@ -6,11 +6,11 @@ struct AgentController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let agents = routes.grouped("api", "agents")
 
-        // Agent registration token endpoints
-        let tokenRoutes = agents.grouped("registration-tokens")
-        tokenRoutes.post(use: createRegistrationToken)
-        tokenRoutes.get(use: listRegistrationTokens)
-        tokenRoutes.delete(":tokenId", use: revokeRegistrationToken)
+        // Agent enrollment endpoints (SPIRE node provisioning)
+        let enrollmentRoutes = agents.grouped("enrollments")
+        enrollmentRoutes.post(use: createEnrollment)
+        enrollmentRoutes.get(use: listEnrollments)
+        enrollmentRoutes.delete(":enrollmentId", use: revokeEnrollment)
 
         // Agent management endpoints
         agents.get(use: listAgents)
@@ -27,8 +27,8 @@ struct AgentController: RouteCollection {
 
     // MARK: - Authorization
 
-    /// Agent management is delegated to the owning organization: minting a
-    /// registration token or force-offlining agents is scoped to the org/OU
+    /// Agent management is delegated to the owning organization: enrolling a
+    /// node or force-offlining agents is scoped to the org/OU
     /// whose capacity it is (`manage_agents`), and system admins retain
     /// unconditional access. Defense in depth — do not rely on route-level
     /// middleware.
@@ -154,7 +154,7 @@ struct AgentController: RouteCollection {
     }
 
     /// Pass `grantKnown: true` when a persisted record proves a SPIRE grant
-    /// exists (a `spireProvisioned` token): the guard then applies whenever
+    /// exists (an enrollment row): the guard then applies whenever
     /// the registration API is missing, regardless of how SPIRE auth happens
     /// to be configured right now. Without it, the guard falls back to
     /// inferring from SPIRE auth being enabled.
@@ -178,40 +178,31 @@ struct AgentController: RouteCollection {
             metadata: ["action": .string(action)])
     }
 
-    // MARK: - Registration Token Management
+    // MARK: - Enrollment Management
 
-    /// Base WebSocket URL agents should dial, embedded in registration URLs.
+    /// Base WebSocket URL agents should dial, embedded in bootstrap commands.
     ///
     /// The Host header only names whatever hop the request came in on — behind
     /// an ingress or port-forward that can be an address hypervisor hosts
-    /// cannot reach, so an explicitly configured EXTERNAL_HOSTNAME wins. The
-    /// scheme likewise can't come from req.url.scheme alone: behind a
-    /// TLS-terminating proxy the local hop is plain HTTP, so trust
-    /// X-Forwarded-Proto when present.
+    /// cannot reach, so an explicitly configured EXTERNAL_HOSTNAME wins.
+    ///
+    /// The scheme is always wss://: agents connect to the Envoy mTLS listener
+    /// (EXTERNAL_HOSTNAME), which terminates TLS regardless of the
+    /// browser-facing scheme, so this is wss:// even for an http://
+    /// (localhost) origin.
     private func webSocketBaseURL(req: Request) -> String {
-        // When SPIRE provisioning is active, agents connect to the Envoy mTLS
-        // listener (EXTERNAL_HOSTNAME), which is always TLS regardless of the
-        // browser-facing scheme — so the agent URL must be wss:// even for an
-        // http:// (localhost) origin. Otherwise trust X-Forwarded-Proto (the
-        // local hop behind a TLS terminator is plain HTTP).
-        let spireProvisioned = req.application.spireRegistrationService != nil
-        let forwardedProto = req.headers["x-forwarded-proto"].first?.lowercased()
-        let isHTTPS =
-            spireProvisioned || forwardedProto == "https" || (forwardedProto == nil && req.url.scheme == "https")
-        let scheme = isHTTPS ? "wss" : "ws"
-
         let host =
             Environment.get("EXTERNAL_HOSTNAME").map(Self.sanitizedHost)
             ?? req.headers["host"].first
             ?? "localhost:8080"
 
-        return "\(scheme)://\(host)"
+        return "wss://\(host)"
     }
 
     /// Reduces an EXTERNAL_HOSTNAME value to bare host[:port]. Operators
     /// naturally set a full URL ("https://cp.example.com/") here; prepending
-    /// a scheme to that verbatim would emit "ws://https://…", which the agent
-    /// then rejects as an invalid registration URL.
+    /// a scheme to that verbatim would emit "wss://https://…", which the agent
+    /// then rejects as an invalid control plane URL.
     static func sanitizedHost(_ raw: String) -> String {
         var host = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if let schemeRange = host.range(of: "://") {
@@ -223,12 +214,24 @@ struct AgentController: RouteCollection {
         return host
     }
 
-    func createRegistrationToken(req: Request) async throws -> AgentRegistrationTokenResponse {
-        let createRequest = try req.content.decode(CreateAgentRegistrationTokenRequest.self)
+    func createEnrollment(req: Request) async throws -> AgentEnrollmentResponse {
+        let createRequest = try req.content.decode(CreateAgentEnrollmentRequest.self)
         try createRequest.validate()
 
+        // Enrolling a node *is* provisioning it in SPIRE, so an unconfigured
+        // SPIRE server means there is no way to enroll an agent at all. Fail
+        // naming the missing configuration rather than with an opaque 502 out
+        // of the provisioning call below.
+        guard let spire = req.application.spireRegistrationService else {
+            throw Abort(
+                .serviceUnavailable,
+                reason:
+                    "Agent enrollment requires SPIRE. Set SPIRE_ENABLED=true and SPIRE_SERVER_API_ADDRESS on the control plane."
+            )
+        }
+
         // Resolve and authorize the owning scope before anything else: the
-        // token's org is what the redeeming agent becomes dedicated to.
+        // enrollment's org is what the registering agent becomes dedicated to.
         let scope = try createRequest.organizationScope()
         try await scope.validateExists(on: req.db)
         try await requireManageAgents(req, scope: scope)
@@ -242,28 +245,32 @@ struct AgentController: RouteCollection {
             throw Abort(.conflict, reason: "Agent name '\(createRequest.agentName)' is already registered")
         }
 
-        // Check if there's already an unused token for this agent name
-        let existingToken = try await AgentRegistrationToken.query(on: req.db)
+        // One enrollment per name (the column is unique). Re-enrolling a node
+        // means revoking the old one first, so its SPIRE grant is withdrawn
+        // rather than orphaned alongside a second grant for the same identity.
+        let existingEnrollment = try await AgentEnrollment.query(on: req.db)
             .filter(\.$agentName == createRequest.agentName)
-            .filter(\.$isUsed == false)
             .first()
 
-        if let existing = existingToken, existing.isValid {
+        if existingEnrollment != nil {
             throw Abort(
-                .conflict, reason: "A valid registration token already exists for agent '\(createRequest.agentName)'")
+                .conflict,
+                reason:
+                    "An enrollment already exists for agent '\(createRequest.agentName)'. Revoke it before enrolling again."
+            )
         }
 
         let expirationHours = createRequest.expirationHours ?? 1
 
         // Resolve the target site up front so a typo'd id fails the request
-        // instead of silently minting a site-less token — and require it to
-        // belong to the token's organization: a site is one OVN deployment
-        // owned by one org, so a foreign agent joining it would mix tenants
-        // on a shared SDN. The caller also needs manage on the site itself
-        // (not just manage_agents on the token's scope): with agents and
-        // sites delegated to different OUs of one org, a token-carried site
-        // pin must not admit an agent into a sibling OU's fabric that the
-        // site membership endpoint would refuse.
+        // instead of silently creating a site-less enrollment — and require it
+        // to belong to the enrollment's organization: a site is one OVN
+        // deployment owned by one org, so a foreign agent joining it would mix
+        // tenants on a shared SDN. The caller also needs manage on the site
+        // itself (not just manage_agents on the enrollment's scope): with
+        // agents and sites delegated to different OUs of one org, an
+        // enrollment-carried site pin must not admit an agent into a sibling
+        // OU's fabric that the site membership endpoint would refuse.
         if let siteId = createRequest.siteId {
             guard let site = try await Site.find(siteId, on: req.db) else {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
@@ -273,7 +280,7 @@ struct AgentController: RouteCollection {
             else {
                 throw Abort(
                     .badRequest,
-                    reason: "Site \(siteId)'s organization scope does not contain the token's")
+                    reason: "Site \(siteId)'s organization scope does not contain the enrollment's")
             }
             let user = try requireUser(req)
             if !user.isSystemAdmin {
@@ -293,75 +300,69 @@ struct AgentController: RouteCollection {
         // SPIRE is not transactional with our database, so order matters: if
         // provisioning fails nothing was persisted here, and if the save below
         // fails the provisioning is rolled back best-effort (a leftover entry
-        // is reused on retry; the unredeemed join token just expires). The
-        // join token shares the WS token's lifetime — one provisioning window.
-        var spireProvisioning: SPIREAgentProvisioning?
-        if let spire = req.application.spireRegistrationService {
-            do {
-                spireProvisioning = try await spire.provisionAgent(
-                    named: createRequest.agentName,
-                    joinTokenTTLSeconds: Int32(expirationHours * 3600)
-                )
-            } catch let error as SPIRERegistrationError {
-                throw Abort(.badRequest, reason: error.localizedDescription)
-            } catch {
-                req.logger.error(
-                    "SPIRE provisioning failed while creating registration token",
-                    metadata: [
-                        "agentName": .string(createRequest.agentName),
-                        "error": .string("\(error)"),
-                    ])
-                throw Abort(
-                    .badGateway,
-                    reason:
-                        "SPIRE provisioning failed; no registration token was created. \(error.localizedDescription)"
-                )
-            }
+        // is reused on retry; the unredeemed join token just expires). The join
+        // token shares the enrollment's expiry — one provisioning window.
+        let provisioning: SPIREAgentProvisioning
+        do {
+            provisioning = try await spire.provisionAgent(
+                named: createRequest.agentName,
+                joinTokenTTLSeconds: Int32(expirationHours * 3600)
+            )
+        } catch let error as SPIRERegistrationError {
+            throw Abort(.badRequest, reason: error.localizedDescription)
+        } catch {
+            req.logger.error(
+                "SPIRE provisioning failed while creating an agent enrollment",
+                metadata: [
+                    "agentName": .string(createRequest.agentName),
+                    "error": .string("\(error)"),
+                ])
+            throw Abort(
+                .badGateway,
+                reason: "SPIRE provisioning failed; no enrollment was created. \(error.localizedDescription)"
+            )
         }
 
-        // Create new registration token, recording whether it carries a SPIRE
-        // grant — revocation decides ownership from this fact, not from
-        // whatever the process configuration happens to be at revoke time.
-        let token = AgentRegistrationToken(
+        let enrollment = AgentEnrollment(
             agentName: createRequest.agentName,
+            spiffeID: provisioning.spiffeID,
             expirationHours: expirationHours,
-            spireProvisioned: spireProvisioning != nil,
             siteID: createRequest.siteId,
             organizationScope: scope
         )
 
         do {
-            try await token.save(on: req.db)
+            try await enrollment.save(on: req.db)
         } catch {
-            if let spire = req.application.spireRegistrationService, spireProvisioning != nil {
-                await spire.rollbackProvisioning(agentName: createRequest.agentName)
-            }
+            await spire.rollbackProvisioning(agentName: createRequest.agentName)
             throw error
         }
 
-        let baseURL = webSocketBaseURL(req: req)
-
         req.logger.info(
-            "Created agent registration token",
+            "Created agent enrollment",
             metadata: [
                 "agentName": .string(createRequest.agentName),
-                "tokenId": .string(token.id?.uuidString ?? "unknown"),
-                "expiresAt": .string(token.expiresAt?.description ?? "no expiration"),
-                "spireProvisioned": .string(spireProvisioning == nil ? "no" : "yes"),
+                "enrollmentId": .string(enrollment.id?.uuidString ?? "unknown"),
+                "spiffeId": .string(enrollment.spiffeID),
+                "expiresAt": .string(enrollment.expiresAt?.description ?? "no expiration"),
             ])
 
-        return try AgentRegistrationTokenResponse(from: token, baseURL: baseURL, spire: spireProvisioning)
+        return try AgentEnrollmentResponse(
+            from: enrollment,
+            webSocketBaseURL: webSocketBaseURL(req: req),
+            spire: provisioning
+        )
     }
 
-    /// GET /api/agents/registration-tokens
+    /// GET /api/agents/enrollments
     /// Query params: organization_id (optional) — narrows to one org's hierarchy.
-    func listRegistrationTokens(req: Request) async throws -> [AgentRegistrationTokenListItem] {
+    func listEnrollments(req: Request) async throws -> [AgentEnrollmentListItem] {
         let user = try requireUser(req)
         let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
 
-        // Unlike Site and Agent, a token stores its scope as plain columns rather
-        // than parent relations.
-        var query = AgentRegistrationToken.query(on: req.db).sort(\.$createdAt, .descending)
+        // Unlike Site and Agent, an enrollment stores its scope as plain columns
+        // rather than parent relations.
+        var query = AgentEnrollment.query(on: req.db).sort(\.$createdAt, .descending)
         if let orgFilter {
             query = query.group(.or) { group in
                 group.filter(\.$organizationID == orgFilter.organizationID)
@@ -370,119 +371,100 @@ struct AgentController: RouteCollection {
                 }
             }
         }
-        let tokens = try await query.all()
+        let enrollments = try await query.all()
 
-        // System admins see everything; org admins see the tokens scoped to
-        // orgs/OUs they hold manage_agents on. Scopeless tokens (rotated
-        // reconnect credentials, pre-scoping rows) stay system-admin only.
-        let visible: [AgentRegistrationToken]
+        // System admins see everything; org admins see the enrollments scoped to
+        // orgs/OUs they hold manage_agents on. Scopeless rows stay
+        // system-admin only.
+        let visible: [AgentEnrollment]
         if user.isSystemAdmin {
-            visible = tokens
+            visible = enrollments
         } else {
-            var allowed: [AgentRegistrationToken] = []
-            for token in tokens {
-                guard let ref = token.organizationScope?.spiceDBParentRef else { continue }
+            var allowed: [AgentEnrollment] = []
+            for enrollment in enrollments {
+                guard let ref = enrollment.organizationScope?.spiceDBParentRef else { continue }
                 let ok = try await req.spicedb.checkPermission(
                     subject: user.id!.uuidString,
                     permission: "manage_agents",
                     resource: ref.subjectType,
                     resourceId: ref.subjectId.uuidString
                 )
-                if ok { allowed.append(token) }
+                if ok { allowed.append(enrollment) }
             }
             visible = allowed
         }
 
-        // Never echo the raw token (or a registration URL containing it) in a list
-        // response — the plaintext value is shown exactly once, at creation time.
-        return try visible.map { try AgentRegistrationTokenListItem(from: $0) }
+        // Never echo the SPIRE join token in a list response — it is shown
+        // exactly once, at creation time.
+        return try visible.map { try AgentEnrollmentListItem(from: $0) }
     }
 
-    func revokeRegistrationToken(req: Request) async throws -> HTTPStatus {
-        guard let tokenId = req.parameters.get("tokenId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid token ID")
+    func revokeEnrollment(req: Request) async throws -> HTTPStatus {
+        guard let enrollmentId = req.parameters.get("enrollmentId", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid enrollment ID")
         }
 
-        guard let token = try await AgentRegistrationToken.find(tokenId, on: req.db) else {
-            throw Abort(.notFound, reason: "Registration token not found")
+        guard let enrollment = try await AgentEnrollment.find(enrollmentId, on: req.db) else {
+            throw Abort(.notFound, reason: "Agent enrollment not found")
         }
 
-        if let scope = token.organizationScope {
+        if let scope = enrollment.organizationScope {
             try await requireManageAgents(req, scope: scope)
         } else {
-            // Scopeless tokens (rotated reconnect credentials) have no org to
-            // delegate to; revoking one severs a live agent's reconnect path.
+            // Scopeless rows have no org to delegate revocation to.
             try requireSystemAdmin(req)
         }
 
-        // Revoking a token withdraws the whole provisioning grant — including
-        // the SPIRE entries created alongside it — but only when this token
-        // still *owns* that grant:
-        //
-        // - A *used* token belongs to an agent that registered via token auth;
-        //   its entries are removed by deregistering the agent instead.
-        // - An existing Agent row with this name means the node registered over
-        //   mTLS, which never redeems the WebSocket token: the token looks
-        //   unused, but the SPIRE entries now belong to a live agent.
-        // - A *valid unused SPIRE-provisioned successor* token for the same
-        //   name means the grant was reissued; the entries (and the stable
-        //   node identity a current bootstrap may already have attested with)
-        //   belong to the successor, so touching SPIRE here would sabotage it.
-        //   A successor minted while the registration API was unconfigured
-        //   carries no grant and does not take ownership.
+        // Revoking withdraws the SPIRE grant this enrollment created — but only
+        // while it still *owns* that grant. Once an Agent row exists for the
+        // name, the node has attested and registered, and the entries belong to
+        // that live agent: they are withdrawn by deregistering the agent
+        // instead, so deprovisioning here would sever a running node.
         //
         // Expiry alone does NOT make a grant inert: the join token may have
-        // been redeemed before it expired (spire-agent attests first; the
-        // Agent row only appears once strato-agent registers), leaving entries
-        // and an attested node that can still mint SVIDs. An expired token
-        // with no successor therefore still owns — and must revoke — its grant.
+        // been redeemed before it expired (spire-agent attests first; the Agent
+        // row only appears once strato-agent registers), leaving entries and an
+        // attested node that can still mint SVIDs. An expired enrollment with
+        // no registered agent therefore still owns — and must revoke — its grant.
         //
-        // Fail closed: if SPIRE is unreachable the token stays revocable later.
+        // Fail closed: if SPIRE is unreachable the enrollment stays revocable
+        // later.
         let agentIsRegistered =
             try await Agent.query(on: req.db)
-            .filter(\.$name == token.agentName)
+            .filter(\.$name == enrollment.agentName)
             .first() != nil
 
-        let provisionedSuccessorExists = try await AgentRegistrationToken.query(on: req.db)
-            .filter(\.$agentName == token.agentName)
-            .filter(\.$isUsed == false)
-            .filter(\.$spireProvisioned == true)
-            .filter(\.$id != token.requireID())
-            .all()
-            .contains { $0.isValid }
+        let enrollmentOwnsGrant = !agentIsRegistered
 
-        let tokenOwnsGrant =
-            token.spireProvisioned && !token.isUsed && !agentIsRegistered && !provisionedSuccessorExists
-
-        if tokenOwnsGrant {
-            try await requireSPIREDeprovisioningOrOverride(req, action: "registration token", grantKnown: true)
+        if enrollmentOwnsGrant {
+            try await requireSPIREDeprovisioningOrOverride(req, action: "agent enrollment", grantKnown: true)
         }
 
-        if tokenOwnsGrant, let spire = req.application.spireRegistrationService {
+        if enrollmentOwnsGrant, let spire = req.application.spireRegistrationService {
             do {
-                try await spire.deprovisionAgent(named: token.agentName)
+                try await spire.deprovisionAgent(named: enrollment.agentName)
             } catch {
                 req.logger.error(
-                    "SPIRE deprovisioning failed while revoking registration token",
+                    "SPIRE deprovisioning failed while revoking an agent enrollment",
                     metadata: [
-                        "agentName": .string(token.agentName),
+                        "agentName": .string(enrollment.agentName),
                         "error": .string("\(error)"),
                     ])
                 throw Abort(
                     .badGateway,
                     reason:
-                        "SPIRE deprovisioning failed; the registration token was not revoked. Retry when the SPIRE server is reachable."
+                        "SPIRE deprovisioning failed; the enrollment was not revoked. Retry when the SPIRE server is reachable."
                 )
             }
         }
 
-        try await token.delete(on: req.db)
+        try await enrollment.delete(on: req.db)
 
         req.logger.info(
-            "Revoked agent registration token",
+            "Revoked agent enrollment",
             metadata: [
-                "tokenId": .string(tokenId.uuidString),
-                "agentName": .string(token.agentName),
+                "enrollmentId": .string(enrollmentId.uuidString),
+                "agentName": .string(enrollment.agentName),
             ])
 
         return .noContent
@@ -628,16 +610,13 @@ struct AgentController: RouteCollection {
                 subject: ref.subjectType, subjectId: ref.subjectId.uuidString)
         }
 
-        // Deregistration severs the agent's credentials: delete its unused
-        // tokens (the rotated reconnect credential in particular). Left
-        // behind, the scopeless reconnect token would be revocable only by a
-        // system admin yet block minting a new token for this agent name via
-        // the duplicate-token guard — locking the name for up to 30 days.
-        // SPIRE entries for the name were already deprovisioned above, so
-        // these rows carry no external grant.
-        try await AgentRegistrationToken.query(on: req.db)
+        // Deregistration retires the node: delete its enrollment so the name can
+        // be enrolled again. Left behind, the row would block a fresh enrollment
+        // through the one-per-name guard and lock the name permanently. SPIRE
+        // entries for the name were already deprovisioned above, so the row
+        // carries no external grant.
+        try await AgentEnrollment.query(on: req.db)
             .filter(\.$agentName == agent.name)
-            .filter(\.$isUsed == false)
             .delete()
 
         req.logger.info(

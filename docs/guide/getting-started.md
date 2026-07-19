@@ -88,17 +88,21 @@ startup on both paths.
 
 ### 2. Add a hypervisor
 
-1. Go to **Agents → Create Registration Token** and name the host
-2. Run the generated command on the hypervisor host:
+1. Go to **Agents → Enroll node** and name the host
+2. Run the generated bootstrap command on the hypervisor host:
 
    ```bash
-   strato-agent join 'ws://your-control-plane/agent/ws?token=...&name=...'
+   curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
+     | sudo bash -s -- --control-plane-url 'wss://your-control-plane/agent/ws' \
+     --agent-name 'hv-01' --spire-join-token '...' \
+     --spire-server-address '...' --trust-domain '...'
    ```
 
-The token is single-use and expires. The agent stores its rotated reconnect
-credential in a state file, so plain `strato-agent` restarts reconnect
-automatically. See [Deploying agents](/deployment/agents) for details,
-including running the agent in Docker.
+That one command installs the agent, attests the host to SPIRE, and starts
+it under systemd. From then on the agent authenticates with its
+automatically rotating SVID, so restarts reconnect on their own. See
+[Deploying agents](/deployment/agents) for details, including running the
+agent in Docker.
 
 ### 3. Create a virtual machine
 

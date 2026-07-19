@@ -131,7 +131,14 @@ public enum WireProtocol {
     /// cases. This is intentionally breaking for version 0/1 peers: both sides
     /// gate registration on `supportsStateSync(_:)`, so an incompatible peer is
     /// rejected before it can emit a message type this build no longer decodes.
-    public static let currentVersion = 10
+    ///
+    /// Version 11: removes `AgentRegisterResponseMessage.reconnectToken` along
+    /// with token-based agent enrollment. Agents authenticate solely with a
+    /// SPIRE-issued X.509 SVID over mTLS, so there is no bearer credential left
+    /// to rotate. Breaking only for agents that dial with a token, and those are
+    /// already refused at the socket — the control plane no longer has a token
+    /// auth path to fall back to.
+    public static let currentVersion = 11
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).

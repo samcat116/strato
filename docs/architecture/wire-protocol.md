@@ -38,11 +38,11 @@ struct MessageEnvelope {
   `SandboxExecMessages.swift`).
 - Responses are the generic `SuccessMessage` (optional dynamic `data` via
   `AnyCodableValue`) and `ErrorMessage` (with machine-readable codes such as
-  `invalid_token` and `unsupported_protocol_version`).
+  `unsupported_protocol_version`).
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 8), stamped on
+`WireProtocol.swift` holds the protocol version (currently 11), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -60,6 +60,7 @@ ad-hoc checks scattered through the code:
 | `supportsAgentUpdate` | 6 | Imperative agent self-update |
 | `supportsDesiredAgentUpdate` | 7 | Declarative agent update in the sync |
 | `supportsSandboxExec` | 8 | Interactive sandbox exec streams |
+| `supportsSandboxSnapshots` | 9 | Sandbox snapshot/restore messages |
 
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
@@ -74,7 +75,7 @@ dual-mode rollout.
 
 | Message | Purpose |
 |---|---|
-| `agent_register_response` | Registration reply: assigns the agent's DB UUID and name, rotates the reconnect token, echoes the protocol version |
+| `agent_register_response` | Registration reply: assigns the agent's DB UUID and name, echoes the protocol version |
 | `desired_state` | The authoritative `DesiredStateMessage` sync (see below) |
 | `vm_reboot` | Reboot — still imperative because a reboot is an action, not a state |
 | `vm_create`, `vm_boot`, `vm_shutdown`, `vm_pause`, `vm_resume`, `vm_delete`, `vm_info`, `vm_status` | **Deprecated** imperative VM lifecycle (issue #261), superseded by desired-state sync; kept for older control planes |

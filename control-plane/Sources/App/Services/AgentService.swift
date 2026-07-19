@@ -266,12 +266,12 @@ actor AgentService {
 
     /// Registers an agent and returns its database UUID.
     ///
-    /// `siteID` and `organizationScope` are carried by the redeemed
-    /// registration token, if any. Non-nil assigns (or moves) the agent; nil
-    /// never clears — both assignments are durable on the agent row, and
-    /// rotated reconnect tokens don't carry them. A *new* agent must arrive
-    /// with an organization scope: agents are dedicated capacity, and an
-    /// unowned agent would be invisible to every org and schedulable by no one.
+    /// `siteID` and `organizationScope` override what the agent's enrollment
+    /// records; callers normally pass neither. Non-nil assigns (or moves) the
+    /// agent; nil never clears — both assignments are durable on the agent row.
+    /// A *new* agent must end up with an organization scope: agents are
+    /// dedicated capacity, and an unowned agent would be invisible to every org
+    /// and schedulable by no one.
     func registerAgent(
         _ message: AgentRegisterMessage,
         agentName: String,
@@ -290,6 +290,10 @@ actor AgentService {
 
         let db = app.db
         var organizationScope = organizationScope
+        var siteID = siteID
+        // Set when this registration creates the agent row, so the enrollment it
+        // drew its scope from can be marked used after a successful save.
+        var newAgentEnrollment: AgentEnrollment?
 
         // Find existing agent or create new one
         let agent: Agent
@@ -323,18 +327,19 @@ actor AgentService {
             agent.updateResources(message.resources)
             agent.status = .online
         } else {
-            if organizationScope == nil {
-                // mTLS-authenticated agents never redeem the WebSocket token
-                // (they authenticate by SVID), so their scope can't arrive via
-                // token redemption. Their minting flow still created a token
-                // row for the name — read the scope from the newest valid one.
-                organizationScope = try await AgentRegistrationToken.query(on: db)
-                    .filter(\.$agentName == agentName)
-                    .sort(\.$createdAt, .descending)
-                    .all()
-                    .first { $0.organizationScope != nil && ($0.isValid || $0.isUsed) }?
-                    .organizationScope
-            }
+            // A brand-new agent takes its scope and site placement from the
+            // enrollment an operator created for this name: agents authenticate
+            // by SVID and carry no credential that could convey either. Existing
+            // agents deliberately skip this — both are durable on the agent row,
+            // and re-reading the enrollment on every reconnect would fight an
+            // operator who has since moved the agent to another site.
+            let enrollment = try await AgentEnrollment.query(on: db)
+                .filter(\.$agentName == agentName)
+                .sort(\.$createdAt, .descending)
+                .first()
+            if organizationScope == nil { organizationScope = enrollment?.organizationScope }
+            if siteID == nil { siteID = enrollment?.siteID }
+
             guard organizationScope != nil else {
                 Telemetry.agentRegistrationFailed(reason: "missing_organization_scope")
                 throw AgentServiceError.missingOrganizationScope(agentName: agentName)
@@ -342,6 +347,7 @@ actor AgentService {
             // Create new agent
             agent = Agent.from(registration: message, name: agentName)
             agent.status = .online
+            newAgentEnrollment = enrollment
         }
 
         let previousScope = agent.organizationScope
@@ -373,7 +379,7 @@ actor AgentService {
             }
             if let refusalReason {
                 app.logger.error(
-                    "Ignoring registration-token organization assignment: \(refusalReason)",
+                    "Ignoring enrollment organization assignment: \(refusalReason)",
                     metadata: ["agentName": .string(agentName)])
             } else {
                 agent.organizationScope = organizationScope
@@ -436,7 +442,7 @@ actor AgentService {
             }
             if let refusalReason {
                 app.logger.error(
-                    "Ignoring registration-token site assignment: \(refusalReason)",
+                    "Ignoring enrollment site assignment: \(refusalReason)",
                     metadata: ["agentName": .string(agentName), "requestedSite": .string(siteID.uuidString)])
             } else {
                 agent.$site.id = siteID
@@ -444,6 +450,20 @@ actor AgentService {
         }
 
         try await agent.save(on: db)
+
+        // Record that the node completed its first registration. Informational
+        // only — an enrollment is not consumed by being redeemed — so a failure
+        // here must not fail a registration that has already persisted.
+        if let enrollment = newAgentEnrollment, !enrollment.isUsed {
+            enrollment.markAsUsed()
+            do {
+                try await enrollment.save(on: db)
+            } catch {
+                app.logger.warning(
+                    "Failed to mark agent enrollment as used",
+                    metadata: ["agentName": .string(agentName), "error": .string("\(error)")])
+            }
+        }
 
         guard let agentUUID = agent.id else {
             throw AgentServiceError.invalidResponse("Failed to get agent ID after save")

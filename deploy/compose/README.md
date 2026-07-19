@@ -64,9 +64,9 @@ origin (`:80`/`:443`) is independent and may sit behind a TLS terminator.
 
 ## Adding a hypervisor
 
-In the web UI, go to Agents → Create Registration Token. Because mTLS is on by
-default, the token also provisions the node in SPIRE and the dialog shows a
-one-line `curl … deploy/agent/install.sh | sudo bash …` command; run it on the
+In the web UI, go to Agents → Enroll node. Enrollment provisions the node in
+SPIRE — the only way agents authenticate — and the dialog shows a one-line
+`curl … deploy/agent/install.sh | sudo bash …` command; run it on the
 hypervisor host. It downloads the binaries, starts a `spire-agent` (attested
 with the one-time join token) and the `strato-agent` (which connects over
 mTLS), and brings up host telemetry (Grafana Alloy + spiffe-helper) pushing

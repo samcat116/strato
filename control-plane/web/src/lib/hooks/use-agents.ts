@@ -38,14 +38,25 @@ export function useAgent(id: string) {
   });
 }
 
-export function useAgentTokens() {
+export function useAgentEnrollments() {
   const { currentOrg, isLoading: orgLoading } = useOrganization();
   const organizationId = currentOrg?.id;
 
   return useQuery({
-    queryKey: ["agent-tokens", { orgId: organizationId ?? null }],
-    queryFn: () => agentsApi.listTokens(organizationId),
+    queryKey: ["agent-enrollments", { orgId: organizationId ?? null }],
+    queryFn: () => agentsApi.listEnrollments(organizationId),
     enabled: !orgLoading,
+  });
+}
+
+export function useRevokeAgentEnrollment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (enrollmentId: string) =>
+      agentsApi.revokeEnrollment(enrollmentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agent-enrollments"] });
+    },
   });
 }
 
@@ -81,6 +92,6 @@ export function useInvalidateAgents() {
   const queryClient = useQueryClient();
   return () => {
     queryClient.invalidateQueries({ queryKey: ["agents"] });
-    queryClient.invalidateQueries({ queryKey: ["agent-tokens"] });
+    queryClient.invalidateQueries({ queryKey: ["agent-enrollments"] });
   };
 }

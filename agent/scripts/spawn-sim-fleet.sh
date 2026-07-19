@@ -7,30 +7,58 @@
 # host capacity, so hundreds can run on one machine that could never host that
 # many real VMs or sandboxes.
 #
-# For each agent the script mints a single-use registration token via the
-# control-plane API, then launches `strato-agent run --simulate` with a distinct
-# name, state file, storage dir, and a host size drawn from a spread of profiles
-# (so the scheduler faces a realistic mix of small/medium/large hosts).
+# For each agent the script creates an enrollment via the control-plane API,
+# writes a per-agent config.toml, and launches `strato-agent run --simulate`
+# with a distinct name, state file, storage dir, and a host size drawn from a
+# spread of profiles (so the scheduler faces a realistic mix of small/medium/
+# large hosts).
+#
+# Agent identity is SPIFFE-only
+#   Agents authenticate to the control plane exclusively with an X.509 SVID over
+#   mTLS. A simulated fleet cannot attest itself: SPIRE workload attestation
+#   keys off unix uid/binary path, which cannot distinguish N copies of the same
+#   binary run by the same user, so one spire-agent would hand every dummy the
+#   same identity. The fleet therefore uses file-based SVIDs — one per agent,
+#   minted out of band against your SPIRE server — and the agent config points
+#   at them with `[spiffe] source_type = "files"`.
+#
+#   Pass --svid-dir DIR containing one subdirectory per agent name:
+#
+#     DIR/<name>/svid.pem  svid_key.pem  bundle.pem
+#
+#   Mint them on the SPIRE server, e.g. for each agent name:
+#
+#     spire-server x509 mint -spiffeID spiffe://<trust-domain>/agent/<name> \
+#       -write DIR/<name>
+#
+#   This needs SPIRE server access, so a simulated fleet is only practical
+#   against a control plane whose SPIRE server you administer.
 #
 # Usage:
-#   spawn-sim-fleet.sh --org-id <UUID> [options]        # start a fleet
+#   spawn-sim-fleet.sh --org-id <UUID> --svid-dir <DIR> [options]  # start
 #   spawn-sim-fleet.sh --stop                            # stop this fleet
 #   spawn-sim-fleet.sh --status                          # list running agents
 #
 # Options:
 #   --count N            Number of agents to launch (default: 10)
 #   --org-id UUID        Organization the agents join (required to start).
-#                        In `task dev`, list orgs with:
-#                          curl -s localhost:8080/api/organizations | jq .
+#                        List orgs with:
+#                          curl -s -H "Authorization: Bearer $STRATO_API_KEY" \
+#                            localhost:8080/api/organizations | jq .
+#   --svid-dir DIR       Per-agent SVID material (required to start); see
+#                        "Agent identity is SPIFFE-only" above
+#   --agent-ws-url URL   Agent WebSocket endpoint the dummies dial
+#                        (default: derived from --control-plane, /agent/ws)
+#   --trust-domain TD    SPIFFE trust domain (default: strato.local)
 #   --control-plane URL  Control-plane HTTP base URL (default: http://localhost:8080)
 #   --name-prefix STR    Agent name prefix (default: sim)
 #   --agent-bin PATH     Path to the built agent binary
 #                        (default: <repo>/agent/.build/debug/StratoAgent)
 #   --base-dir DIR       Where per-agent state/storage/logs live
 #                        (default: /tmp/strato-sim-fleet)
-#   --api-key KEY        Bearer token for the token API (or set STRATO_API_KEY).
-#                        Not needed when the control plane runs with
-#                        DEV_AUTH_BYPASS (the default in `task dev`).
+#   --api-key KEY        Bearer token for the control-plane API, required since
+#                        authentication is always enforced (or set
+#                        STRATO_API_KEY). Create one under your user's API keys.
 #   --profiles LIST      Comma-separated host profiles "cpus:memMB:diskGB"
 #                        cycled across the fleet
 #                        (default: 8:16384:256,16:65536:512,32:131072:1024)
@@ -60,20 +88,13 @@
 #   work across invocations. Starting is additive: agents already running are
 #   skipped, so raising --count grows an existing fleet.
 #
-#   Registration happens once per agent, not once per start, because the token
-#   API refuses to mint a second token for a name in two different ways: the
-#   name already has an agent row (unregister only marks it offline, it does not
-#   remove it), or the name already has an unused, still-valid token. So each
-#   agent keeps two files in its own directory:
-#
-#     state.json                 written once the agent registers; holds the
-#                                rotated reconnect token. Restarts resume from
-#                                it, exactly as a real agent does after a reboot.
-#     pending-registration.url   the minted registration URL, saved BEFORE the
-#                                agent launches. If the process dies before it
-#                                opens the socket, the token is never consumed —
-#                                and cannot be re-minted — so this file is the
-#                                only copy. Reused until state.json appears.
+#   Enrollment happens once per agent, not once per start: the API refuses a
+#   second enrollment for a name that already has an agent row (unregister only
+#   marks it offline, it does not remove it) or an open enrollment. Agents keep
+#   no local credential state — identity is the SVID and the --agent-id name —
+#   so each agent's directory holds only a generated config.toml (the
+#   control-plane URL and the [spiffe] block pointing at its SVID files),
+#   rewritten on every start so --svid-dir changes take effect.
 #
 #   --stop leaves both files in place and waits for the processes to actually
 #   exit before dropping their PID records, so a straggler's late unregister
@@ -82,11 +103,12 @@
 #   fleet.pids records outlive the processes they name, and PIDs get recycled,
 #   so a recorded PID is never trusted on liveness alone: a process counts as a
 #   fleet member only if its command line still carries this fleet's
-#   --state-file for that name. Stale records are reported and pruned, never
+#   --vm-storage-dir for that name. Stale records are reported and pruned, never
 #   signalled — the number may belong to someone else's process by then.
 #
 #   For a genuinely fresh fleet, deregister the agents in the UI (or via
-#   DELETE /api/agents/:id) and remove the base dir, or just pick a new
+#   DELETE /api/agents/:id), delete their enrollments (DELETE
+#   /api/agents/enrollments/:id) and remove the base dir, or just pick a new
 #   --name-prefix.
 
 set -euo pipefail
@@ -99,6 +121,9 @@ NAME_PREFIX="sim"
 AGENT_BIN=""
 BASE_DIR="/tmp/strato-sim-fleet"
 API_KEY="${STRATO_API_KEY:-}"
+SVID_DIR=""
+AGENT_WS_URL=""
+TRUST_DOMAIN="strato.local"
 PROFILES="8:16384:256,16:65536:512,32:131072:1024"
 ACTION="start"
 # Refuse to launch into an org that already has agents which are not part of
@@ -123,6 +148,9 @@ while [[ $# -gt 0 ]]; do
     --agent-bin) AGENT_BIN="$2"; shift 2 ;;
     --base-dir) BASE_DIR="$2"; shift 2 ;;
     --api-key) API_KEY="$2"; shift 2 ;;
+    --svid-dir) SVID_DIR="$2"; shift 2 ;;
+    --agent-ws-url) AGENT_WS_URL="$2"; shift 2 ;;
+    --trust-domain) TRUST_DOMAIN="$2"; shift 2 ;;
     --profiles) PROFILES="$2"; shift 2 ;;
     --allow-existing-agents) ALLOW_EXISTING_AGENTS=1; shift ;;
     --stop) ACTION="stop"; shift ;;
@@ -135,8 +163,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Normalize the base dir to a real absolute path before anything derives from
-# it. Each agent's identity check below matches the --state-file string recorded
-# in its command line, so that string has to come out identical whether the
+# it. Each agent's identity check below matches the --vm-storage-dir string
+# recorded in its command line, so that string has to come out identical whether the
 # caller passed a relative path, a trailing slash, or /tmp (a symlink to
 # /private/tmp on macOS).
 mkdir -p "$BASE_DIR" 2>/dev/null || true
@@ -154,15 +182,15 @@ PID_FILE="$BASE_DIR/fleet.pids"
 # processes it records, so `kill -0` alone proves only that *something* answers
 # to that number — not that it is ours. Trusting it would let --stop SIGTERM a
 # stranger's process, and let --status/start misjudge which agents are up. The
-# agent's own --state-file argument is unique to (base dir, name), so match on
-# that. Uses `ps -ww` for the untruncated command line, and a case glob rather
-# than grep so path metacharacters cannot be reinterpreted as a pattern.
+# agent's own --vm-storage-dir argument is unique to (base dir, name), so match
+# on that. Uses `ps -ww` for the untruncated command line, and a case glob
+# rather than grep so path metacharacters cannot be reinterpreted as a pattern.
 pid_is_fleet_agent() {
   local pid="$1" name="$2" cmd
   cmd="$(ps -ww -o command= -p "$pid" 2>/dev/null)" || return 1
   [[ -n "$cmd" ]] || return 1
   case "$cmd" in
-    *"--state-file $BASE_DIR/$name/state.json"*) return 0 ;;
+    *"--vm-storage-dir $BASE_DIR/$name/vms"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -291,8 +319,42 @@ command -v jq   >/dev/null || { echo "jq is required (brew install jq)" >&2; exi
 
 if [[ -z "$ORG_ID" ]]; then
   echo "error: --org-id is required to start a fleet." >&2
-  echo "In task dev, find one with: curl -s $CONTROL_PLANE/api/organizations | jq ." >&2
+  echo "Find one with: curl -s -H \"Authorization: Bearer \$STRATO_API_KEY\" \\" >&2
+  echo "  $CONTROL_PLANE/api/organizations | jq ." >&2
   exit 2
+fi
+
+if [[ -z "$API_KEY" ]]; then
+  echo "error: --api-key (or STRATO_API_KEY) is required — the control-plane API" >&2
+  echo "always enforces authentication. Create a key under your user's API keys." >&2
+  exit 2
+fi
+
+# Agents authenticate only by SVID, and a simulated fleet cannot attest itself
+# (see the header). One SVID per agent, minted out of band, is the only way in.
+if [[ -z "$SVID_DIR" ]]; then
+  echo "error: --svid-dir is required to start a fleet." >&2
+  echo "Agents authenticate only with a SPIFFE X.509 SVID over mTLS, and simulated" >&2
+  echo "agents cannot attest themselves: SPIRE workload attestation keys off unix" >&2
+  echo "uid/binary path, so every dummy on this host would get one shared identity." >&2
+  echo "Mint one SVID per agent on your SPIRE server instead:" >&2
+  echo "  spire-server x509 mint -spiffeID spiffe://$TRUST_DOMAIN/agent/<name> \\" >&2
+  echo "    -write <svid-dir>/<name>" >&2
+  exit 2
+fi
+if [[ ! -d "$SVID_DIR" ]]; then
+  echo "error: --svid-dir '$SVID_DIR' is not a directory" >&2; exit 2
+fi
+SVID_DIR="$(cd "$SVID_DIR" && pwd -P)"
+
+# The dummies dial this with ?name=<agent>; in a SPIRE deployment it is the
+# Envoy mTLS listener, not the plain HTTP origin.
+if [[ -z "$AGENT_WS_URL" ]]; then
+  case "$CONTROL_PLANE" in
+    https://*) AGENT_WS_URL="wss://${CONTROL_PLANE#https://}/agent/ws" ;;
+    http://*)  AGENT_WS_URL="ws://${CONTROL_PLANE#http://}/agent/ws" ;;
+    *) echo "error: --control-plane must start with http:// or https://" >&2; exit 2 ;;
+  esac
 fi
 
 if [[ -z "$AGENT_BIN" ]]; then
@@ -356,25 +418,24 @@ if [[ "$ALLOW_EXISTING_AGENTS" -eq 0 ]]; then
   fi
 fi
 
-# Registration tokens currently known to the control plane, fetched once so a
-# saved pending URL can be told from a dead one. Empty when the list is
+# Enrollments currently known to the control plane, fetched once so an agent
+# that is already enrolled is not enrolled again. Empty when the list is
 # unavailable (auth, or an older control plane).
-TOKENS_JSON="$(curl -sS "$CONTROL_PLANE/api/agents/registration-tokens" \
+ENROLLMENTS_JSON="$(curl -sS "$CONTROL_PLANE/api/agents/enrollments" \
   ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} 2>/dev/null || true)"
-if ! echo "$TOKENS_JSON" | jq -e 'type == "array"' >/dev/null 2>&1; then
-  TOKENS_JSON=""
+if ! echo "$ENROLLMENTS_JSON" | jq -e 'type == "array"' >/dev/null 2>&1; then
+  ENROLLMENTS_JSON=""
 fi
 
-# Whether the control plane still lists a valid, unused token for this name —
-# i.e. whether a saved pending URL is still redeemable. When the list is
-# unavailable, assume it is: wrongly discarding the URL strands the agent (the
-# API refuses to mint a second token while the first is unused and valid),
-# whereas wrongly keeping it just fails one launch that a retry fixes.
-has_valid_unused_token() {
+# Whether the control plane already has an enrollment for this name. When the
+# list is unavailable, assume it does not and let the POST below be the
+# authority — a duplicate is rejected server-side, which is a clear error,
+# whereas skipping a needed enrollment strands the agent silently.
+has_enrollment() {
   local want="$1"
-  [[ -z "$TOKENS_JSON" ]] && return 0
-  echo "$TOKENS_JSON" | jq -e --arg n "$want" \
-    'any(.[]; .agentName == $n and .isUsed == false and .isValid == true)' >/dev/null 2>&1
+  [[ -z "$ENROLLMENTS_JSON" ]] && return 1
+  echo "$ENROLLMENTS_JSON" | jq -e --arg n "$want" \
+    'any(.[]; .agentName == $n)' >/dev/null 2>&1
 }
 
 # Whether a live process for this agent name is already recorded. Identity, not
@@ -401,15 +462,14 @@ echo
 # later hand to unrelated processes.
 prune_pid_file
 
-launched=0 resumed=0 reused=0
+launched=0 reused=0
 for i in $(seq 1 "$COUNT"); do
   name="${NAME_PREFIX}-$(printf '%03d' "$i")"
   profile="${PROFILE_ARR[$(( (i - 1) % NUM_PROFILES ))]}"
   IFS=':' read -r cpus mem_mb disk_gb <<< "$profile"
 
   agent_dir="$BASE_DIR/$name"
-  state_file="$agent_dir/state.json"
-  pending_file="$agent_dir/pending-registration.url"
+  config_file="$agent_dir/config.toml"
   mkdir -p "$agent_dir"
   log_file="$agent_dir/agent.log"
 
@@ -420,65 +480,73 @@ for i in $(seq 1 "$COUNT"); do
     continue
   fi
 
-  # Registration happens once per agent, not once per start:
-  #
-  #  - state.json  => already joined. Resume from the rotated reconnect token,
-  #    exactly as a real agent does across a reboot. Minting again would 409
-  #    ("agent name is already registered") because unregister-on-shutdown only
-  #    marks the row offline rather than removing it.
-  #  - pending URL => a token was minted but never consumed (the agent died
-  #    before it opened the socket). The token is single-use but still UNUSED,
-  #    and the API also 409s on "a valid registration token already exists", so
-  #    re-minting is impossible until it expires. The minted URL is therefore
-  #    saved to disk before launch and reused until state.json appears.
-  #  - neither     => mint a fresh token.
-  REG_ARGS=()
-  if [[ -s "$state_file" ]]; then
-    mode="resumed"
-    resumed=$((resumed + 1))
-    rm -f "$pending_file"  # token was consumed; the record is spent
-  elif [[ -s "$pending_file" ]] && has_valid_unused_token "$name"; then
-    mode="pending"
-    reg_url="$(cat "$pending_file")"
-    REG_ARGS=(--registration-url "$reg_url")
+  # This agent's SVID, minted out of band against the SPIRE server (see the
+  # header). Without it the mTLS handshake fails at the proxy with an opaque
+  # TLS error, so check up front and say why.
+  svid_dir="$SVID_DIR/$name"
+  missing=""
+  for f in svid.pem svid_key.pem bundle.pem; do
+    [[ -s "$svid_dir/$f" ]] || missing="$missing $f"
+  done
+  if [[ -n "$missing" ]]; then
+    echo "  [$name] missing SVID material in $svid_dir:$missing" >&2
+    echo "    Mint it with: spire-server x509 mint \\" >&2
+    echo "      -spiffeID spiffe://$TRUST_DOMAIN/agent/$name -write $svid_dir" >&2
+    continue
+  fi
+
+  # Enrollment happens once per agent, not once per start. An agent that is
+  # already enrolled just starts; enrolling again would 409 ("agent name is
+  # already registered") because unregister-on-shutdown only marks the row
+  # offline rather than removing it. A new enrollment's SPIRE join token is
+  # ignored: the dummy uses the file-based SVID above rather than attesting.
+  if has_enrollment "$name"; then
+    mode="enrolled"
     reused=$((reused + 1))
   else
-    mode="joined"
-    # A saved URL whose token is gone (expired or somehow consumed) is dead
-    # weight; drop it so the mint below is the one source of truth.
-    rm -f "$pending_file"
-    resp="$(curl -sS -X POST "$CONTROL_PLANE/api/agents/registration-tokens" \
+    mode="new"
+    resp="$(curl -sS -X POST "$CONTROL_PLANE/api/agents/enrollments" \
       -H "Content-Type: application/json" \
       ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} \
       -d "{\"agentName\":\"$name\",\"organizationId\":\"$ORG_ID\"}")" || {
-        echo "  [$name] token request failed" >&2; continue; }
+        echo "  [$name] enrollment request failed" >&2; continue; }
 
-    reg_url="$(echo "$resp" | jq -r '.registrationURL // empty')"
-    if [[ -z "$reg_url" ]]; then
-      echo "  [$name] could not get registrationURL. Response:" >&2
+    if ! echo "$resp" | jq -e '.id // empty' >/dev/null 2>&1; then
+      echo "  [$name] enrollment failed. Response:" >&2
       echo "    $resp" >&2
       if echo "$resp" | grep -q 'already registered'; then
         echo "    Hint: this name exists in the control plane but has no local state file." >&2
         echo "    Deregister it in the UI, use --name-prefix, or restore the state file." >&2
-      elif echo "$resp" | grep -q 'token already exists'; then
-        echo "    Hint: an unused token for this name exists but its URL was not saved" >&2
-        echo "    locally. Wait for it to expire (1h by default), delete it with" >&2
-        echo "    DELETE $CONTROL_PLANE/api/agents/registration-tokens/<id>, or use --name-prefix." >&2
+      elif echo "$resp" | grep -qi 'spire'; then
+        echo "    Hint: enrollment requires the control plane to be configured for SPIRE" >&2
+        echo "    (SPIRE_ENABLED=true plus SPIRE_SERVER_API_ADDRESS)." >&2
       fi
       continue
     fi
-    # Persist BEFORE launching: the token is spent the moment the agent opens
-    # the socket, but if the process dies first this file is the only copy of a
-    # credential the API will not re-issue.
-    ( umask 077; printf '%s\n' "$reg_url" > "$pending_file" )
-    REG_ARGS=(--registration-url "$reg_url")
   fi
+
+  # Rewritten on every start so a changed --svid-dir or --agent-ws-url takes
+  # effect without hand-editing per-agent files.
+  ( umask 077; cat > "$config_file" << EOF
+# Generated by spawn-sim-fleet.sh — regenerated on every start.
+# The agent's name is not a config field: it comes from --agent-id below.
+control_plane_url = "$AGENT_WS_URL"
+network_mode = "user"
+
+[spiffe]
+enabled = true
+trust_domain = "$TRUST_DOMAIN"
+source_type = "files"
+certificate_path = "$svid_dir/svid.pem"
+private_key_path = "$svid_dir/svid_key.pem"
+trust_bundle_path = "$svid_dir/bundle.pem"
+EOF
+  )
 
   "$AGENT_BIN" run \
     --simulate \
+    --config-file "$config_file" \
     --agent-id "$name" \
-    ${REG_ARGS[@]+"${REG_ARGS[@]}"} \
-    --state-file "$state_file" \
     --vm-storage-dir "$agent_dir/vms" \
     --sim-cpus "$cpus" \
     --sim-memory-mb "$mem_mb" \
@@ -492,6 +560,6 @@ for i in $(seq 1 "$COUNT"); do
 done
 
 echo
-echo "Launched $launched/$COUNT agents ($resumed resumed from state, $reused reusing a pending token). Tracked in $PID_FILE"
+echo "Launched $launched/$COUNT agents ($reused already enrolled). Tracked in $PID_FILE"
 echo "  Status: $0 --status --base-dir $BASE_DIR"
 echo "  Stop:   $0 --stop   --base-dir $BASE_DIR"

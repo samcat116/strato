@@ -134,24 +134,7 @@ struct ConsoleWebSocketController: RouteCollection {
         vmId: UUID
     ) async -> (agentName: String, userId: String?)? {
         do {
-            // First, get the user (either from auth or dev bypass)
-            let user: User?
-            if let authenticated = req.auth.get(User.self) {
-                // User already authenticated via middleware
-                user = authenticated
-            } else if req.application.environment == .development,
-                Environment.get("DEV_AUTH_BYPASS") == "true"
-            {
-                // Dev mode bypass - look up dev user from database
-                req.logger.debug("Console WebSocket attempting dev auth bypass")
-                user = try await User.query(on: req.db)
-                    .filter(\.$username == "dev")
-                    .first()
-            } else {
-                user = nil
-            }
-
-            guard let user else {
+            guard let user = req.auth.get(User.self) else {
                 req.logger.warning("Console WebSocket authentication failed - no user found")
                 try? await ws.send("error: Authentication required")
                 try? await ws.close(code: .policyViolation)
@@ -168,13 +151,10 @@ struct ConsoleWebSocketController: RouteCollection {
 
             // Authorize before loading the VM, so unauthorized users cannot probe
             // arbitrary VM UUIDs via distinct "VM not found" / "not running" errors.
-            // Consistent with SpiceDBAuthMiddleware: system admins and the dev-auth
-            // bypass skip the permission check.
-            let devBypass =
-                req.application.environment == .development
-                && Environment.get("DEV_AUTH_BYPASS") == "true"
+            // Consistent with SpiceDBAuthMiddleware: system admins skip the
+            // permission check.
             let hasPermission: Bool
-            if user.isSystemAdmin || devBypass {
+            if user.isSystemAdmin {
                 hasPermission = true
             } else {
                 hasPermission = try await req.spicedb.checkPermission(
