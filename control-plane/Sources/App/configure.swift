@@ -590,5 +590,10 @@ public func configure(_ app: Application) async throws {
     // it at shutdown.
     app.lifecycle.use(SSFPollLifecycleHandler())
 
+    // `App bootstrap`: seed a first admin + org + project and print an API key
+    // once, for deployments that must be driven without a browser (CI, e2e).
+    // Registered unconditionally; the command itself refuses if any user exists.
+    app.asyncCommands.use(BootstrapCommand(), as: "bootstrap")
+
     try routes(app)
 }

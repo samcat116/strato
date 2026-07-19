@@ -23,6 +23,23 @@ docker compose up -d
 Open `http://localhost` and register — the first user becomes the system
 administrator.
 
+### Without a browser (CI / automation)
+
+First-user registration is a WebAuthn browser flow. To drive a fresh
+deployment entirely from scripts instead, seed an admin user, organization,
+and project and get an admin-scoped API key:
+
+```bash
+docker compose run --rm bootstrap        # human-readable
+# key only on stdout, for scripting:
+docker compose run --rm -e LOG_LEVEL=warning bootstrap bootstrap --quiet --env production
+```
+
+The command hard-refuses when any user already exists, and the key is printed
+exactly once. The seeded user has no passkey (it is an automation identity)
+and consumes the first-user-becomes-admin slot — later browser registrations
+get no special privileges.
+
 ### With a real hostname
 
 ```bash
