@@ -1,0 +1,49 @@
+control-plane/Tests/AppTests/CedarSchemaTests.swift
+  s_813aa373cc98ec::t_58667a9ecbff16 1-181
+docs/architecture/iam.md
+  s_813aa373cc98ec::t_6deda75dc1a482 432-434
+  s_813aa373cc98ec::t_adbf324dc79219 327-371
+control-plane/Tests/AppTests/CedarPolicySetCacheTests.swift
+  s_813aa373cc98ec::t_c5168e0013bcff 1-26,28-32,36-37,39-112,114,117-134,136-143,145,147-152,158,166-168
+  s_813aa373cc98ec::t_1dd5718af1b57d 27,33-35,38
+  s_813aa373cc98ec::t_401f11ba3eb9b5 113,115-116
+  s_813aa373cc98ec::t_3f0cb2ac2f2846 135
+  s_813aa373cc98ec::t_da4c6ffc844316 144,146,153-157,159-165
+control-plane/Sources/App/IAM/Cedar/CedarPolicySetCache.swift
+  s_813aa373cc98ec::t_c3afb0c999b4be 1-174
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_813aa373cc98ec::t_d9204b7aa730a0 291-295
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_813aa373cc98ec::t_daa8b1b9e8e222 1-204
+control-plane/Sources/App/IAM/Cedar/CedarSchemaBuilder.swift
+  s_813aa373cc98ec::t_18cd1bc4754e0e 166-169
+  s_813aa373cc98ec::t_ba2047c853c6dd 1-165,170-221
+control-plane/Sources/App/configure.swift
+  s_813aa373cc98ec::t_984c8a6c6d6991 467-471,473,475
+control-plane/Tests/AppTests/EntitySliceLoaderTests.swift
+  s_813aa373cc98ec::t_44726eb0eea800 1-352,356-473
+  s_813aa373cc98ec::t_18cd1bc4754e0e 353-355
+control-plane/Sources/App/IAM/Cedar/CedarModel.swift
+  s_813aa373cc98ec::t_d119bc4a89c07c 1-175
+control-plane/Sources/App/IAM/Cedar/CedarPolicyAssembler.swift
+  s_813aa373cc98ec::t_18cd1bc4754e0e 161-162
+  s_813aa373cc98ec::t_dba8c89831d6b5 1-160,163-215
+control-plane/Tests/AppTests/CedarPolicyAssemblyTests.swift
+  s_813aa373cc98ec::t_f8e7d35ea1a8af 1-175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "c318ce318811a79921bf59d1a7dcbb86ad37d647",
+  "prompts": {},
+  "sessions": {
+    "s_813aa373cc98ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2c5278dd-0125-4316-bde1-a16f5c49c6fc",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
