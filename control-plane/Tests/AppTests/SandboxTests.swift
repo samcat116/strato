@@ -441,6 +441,59 @@ final class SandboxTests {
         }
     }
 
+    @Test("Fork transaction rechecks destructive source transitions")
+    func createFromSnapshotRechecksLineage() async throws {
+        try await withSandboxTestApp { app, user, project, source, token in
+            let agentId = try await registerAgent(
+                app: app,
+                sandbox: source,
+                named: "lineage-lock-agent",
+                sandboxCapable: true)
+            let snapshot = SandboxSnapshot(
+                name: "lineage-lock-checkpoint",
+                sandboxID: source.id!,
+                projectID: project.id!,
+                environment: source.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            snapshot.guestControlProtocolVersion =
+                SandboxGuestControlProtocol.currentVersion
+            try await snapshot.save(on: app.db)
+
+            source.desiredStatus = .absent
+            try await source.save(on: app.db)
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "fork-during-source-delete",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("source sandbox is being deleted"))
+            }
+
+            source.desiredStatus = .running
+            try await source.save(on: app.db)
+            let restore = ResourceOperation(
+                sandboxID: source.id!, userID: user.id!, kind: .restore)
+            try await restore.save(on: app.db)
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "fork-during-source-restore",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("being restored in place"))
+            }
+        }
+    }
+
     @Test("POST /api/sandboxes rejects an empty image reference")
     func createRejectsEmptyImage() async throws {
         try await withSandboxTestApp { app, _, project, _, token in

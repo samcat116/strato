@@ -46,7 +46,8 @@ struct SandboxController: RouteCollection {
         sandbox: Sandbox,
         user: User,
         settingDesiredStatus desiredStatus: DesiredSandboxStatus? = nil,
-        on db: Database
+        on db: Database,
+        preparing mutation: @escaping @Sendable (any Database) async throws -> Void = { _ in }
     ) async throws -> ResourceOperation {
         try await ResourceOperation.begin(
             kind,
@@ -55,6 +56,7 @@ struct SandboxController: RouteCollection {
             userID: user.requireID(),
             on: db
         ) { db in
+            try await mutation(db)
             if let desiredStatus {
                 sandbox.setDesiredStatus(desiredStatus)
                 try await sandbox.save(on: db)
@@ -424,6 +426,7 @@ struct SandboxController: RouteCollection {
         sandbox.imageDigest = restoreSource?.imageDigest
 
         let userID = try user.requireID()
+        let restoreSnapshotID = restoreSnapshot?.id
         let initialDesiredStatus: DesiredSandboxStatus =
             restoreSnapshot == nil ? .stopped : .running
 
@@ -451,6 +454,10 @@ struct SandboxController: RouteCollection {
                 sandbox.$id.exists = false
                 sandbox.generation = initialGeneration
                 return try await req.db.transaction { db -> ResourceOperation in
+                    if let restoreSnapshotID {
+                        try await Self.requireSnapshotAvailableForFork(
+                            restoreSnapshotID, on: db)
+                    }
                     try await QuotaEnforcementService.reserveSandbox(
                         for: project,
                         environment: environment,
@@ -817,12 +824,21 @@ struct SandboxController: RouteCollection {
         let user = try req.auth.require(User.self)
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "delete")
 
-        let snapshotIDs = try await SandboxSnapshot.query(on: req.db)
-            .filter(\.$sandbox.$id == sandbox.requireID())
-            .all()
-            .compactMap(\.id)
-        if !snapshotIDs.isEmpty {
-            let descendants = try await Sandbox.query(on: req.db)
+        // Deletion via state sync, exactly like VMs: desired becomes
+        // `.absent`, the agent tears the sandbox down on its next sync, and
+        // the row is removed only once a report confirms absence. Unplaced
+        // sandboxes and offline agents keep a direct database path.
+        let agentOnline = await Self.agentIsOnline(sandbox: sandbox, app: req.application)
+        let operation = try await beginOperation(
+            .delete, sandbox: sandbox, user: user, settingDesiredStatus: .absent, on: req.db
+        ) { db in
+            let snapshotIDs = try await SandboxSnapshot.query(on: db)
+                .filter(\.$sandbox.$id == sandbox.requireID())
+                .all()
+                .compactMap(\.id)
+            try await Self.lockSnapshotLineage(snapshotIDs, on: db)
+            guard !snapshotIDs.isEmpty else { return }
+            let descendants = try await Sandbox.query(on: db)
                 .filter(\.$restoredFromSnapshotId ~~ snapshotIDs)
                 .count()
             guard descendants == 0 else {
@@ -833,14 +849,6 @@ struct SandboxController: RouteCollection {
                 )
             }
         }
-
-        // Deletion via state sync, exactly like VMs: desired becomes
-        // `.absent`, the agent tears the sandbox down on its next sync, and
-        // the row is removed only once a report confirms absence. Unplaced
-        // sandboxes and offline agents keep a direct database path.
-        let agentOnline = await Self.agentIsOnline(sandbox: sandbox, app: req.application)
-        let operation = try await beginOperation(
-            .delete, sandbox: sandbox, user: user, settingDesiredStatus: .absent, on: req.db)
 
         if agentOnline {
             Self.dispatchStateSync(operation, sandbox: sandbox, app: req.application)

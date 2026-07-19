@@ -649,7 +649,12 @@ snapshot with live descendants cannot be deleted or restored in place, and
 its source sandbox cannot be deleted. Desired-state reconciliation may need
 the original agent-local archive to recreate a fork after host/process loss,
 so the snapshot remains a conservative lifetime dependency: delete the forks
-first. The target retains the opaque lineage UUID for audit/display.
+first. Fork admission and all three destructive transitions take the same
+transaction-scoped Postgres advisory lock per snapshot, then re-read status,
+source deletion/restore state, and descendants in the transaction that writes
+their new state. Thus a racing fork either commits lineage before deletion
+checks descendants or observes the snapshot/source transition and is refused.
+The target retains the opaque lineage UUID for audit/display.
 
 ## Later phases
 - **Phase 4 (remaining)**: the warm-vs-cold boot-latency measurement on
