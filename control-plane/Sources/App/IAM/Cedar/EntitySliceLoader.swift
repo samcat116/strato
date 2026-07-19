@@ -55,6 +55,11 @@ struct CedarRoleGrants: Equatable, Sendable {
 struct CedarEntitySlice: Equatable, Sendable {
     let principal: CedarEntityUID
     let resource: CedarEntityUID
+    /// The resource's ancestor chain, leaf first — the same walk the entity
+    /// parent edges encode, kept in tree vocabulary so callers (the shadow
+    /// evaluator's decision log) can name the containing organization without
+    /// re-walking the tree.
+    let chain: [IAMNode]
     /// The entity store for this check, sorted by (type, id).
     let entities: [CedarEntity]
     let grants: CedarRoleGrants
@@ -196,6 +201,7 @@ enum EntitySliceLoader {
         return CedarEntitySlice(
             principal: principalUID,
             resource: node.cedarUID,
+            chain: chain,
             entities: entities,
             grants: grants,
             skippedConditionedBindings: skippedConditionedBindings

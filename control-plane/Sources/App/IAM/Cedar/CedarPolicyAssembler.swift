@@ -9,35 +9,58 @@ import Foundation
 // `context.grants`, which is why grant/revoke needs no cache invalidation
 // (docs/architecture/iam.md).
 
+/// One policy of the compiled set, with the id the engine registers it under.
+///
+/// The id travels *next to* the text, not only as the `@id` annotation inside
+/// it: Cedar's set parser assigns positional `policy0`-style ids and treats
+/// `@id` as an ordinary annotation, so a set parsed as one blob could never
+/// name `role-editor` or `guardrail-<id>` in a decision. The engine parses
+/// each policy individually with this id instead (the annotation stays in the
+/// text for human readers of the assembled set).
+struct CedarPolicySource: Equatable, Sendable {
+    let id: String
+    let text: String
+}
+
 enum CedarPolicyAssembler {
 
     // MARK: - Static policies (tier 1 + tier 3 role policies)
 
+    /// The joined static policy text, for display and for tests asserting on
+    /// the assembled set. The engine compiles from `staticPolicies()`.
+    static func staticPolicyText() -> String {
+        staticPolicies().map(\.text).joined(separator: "\n\n") + "\n"
+    }
+
     /// The policies that depend on nothing but the registry. Every policy
     /// carries an `@id` so decision logs (#481) can name what decided.
-    static func staticPolicyText() -> String {
-        var policies: [String] = []
+    static func staticPolicies() -> [CedarPolicySource] {
+        var policies: [CedarPolicySource] = []
 
         // The system-admin bypass as a tier-1 platform policy — the design's
         // replacement for today's middleware short-circuit, so it flows
         // through the evaluator and shows up in decision logs.
         policies.append(
-            """
-            @id("platform-system-admin")
-            permit (principal, action, resource)
-            when { principal.systemAdmin };
-            """)
+            CedarPolicySource(
+                id: "platform-system-admin",
+                text: """
+                    @id("platform-system-admin")
+                    permit (principal, action, resource)
+                    when { principal.systemAdmin };
+                    """))
 
         // A global network — one with no project — is readable by every
         // authenticated user, because it is the fallback every VM create can
         // land on. Today a special case in `NetworkController` and `who-can`;
         // here it is an ordinary tier-1 permit.
         policies.append(
-            """
-            @id("platform-open-network-read")
-            permit (principal, action == Action::"network:read", resource is Network)
-            when { resource.openToAllUsers };
-            """)
+            CedarPolicySource(
+                id: "platform-open-network-read",
+                text: """
+                    @id("platform-open-network-read")
+                    permit (principal, action == Action::"network:read", resource is Network)
+                    when { resource.openToAllUsers };
+                    """))
 
         // Bare org membership grants `org:read` + `project:create` — nothing
         // else. `resource in principal.memberOfOrgs` covers both the org
@@ -47,11 +70,13 @@ enum CedarPolicyAssembler {
             .map { "Action::\(CedarText.stringLiteral($0))" }
             .joined(separator: ", ")
         policies.append(
-            """
-            @id("org-membership")
-            permit (principal, action in [\(membershipActions)], resource)
-            when { resource in principal.memberOfOrgs };
-            """)
+            CedarPolicySource(
+                id: "org-membership",
+                text: """
+                    @id("org-membership")
+                    permit (principal, action in [\(membershipActions)], resource)
+                    when { resource in principal.memberOfOrgs };
+                    """))
 
         // One policy per role. The action side is the role's action group
         // (nested, so `role:admin` reaches everything); the principal side is
@@ -60,17 +85,19 @@ enum CedarPolicyAssembler {
         // principal's group parent edges, so a group grant covers its members.
         for role in IAMRole.allCases {
             policies.append(
-                """
-                @id("role-\(role.rawValue)")
-                permit (principal, action in Action::\(CedarText.stringLiteral(CedarSchemaBuilder.roleGroupName(role))), resource)
-                when {
-                    principal in context.grants[\(CedarText.stringLiteral(role.grantsUsersField))] ||
-                    principal in context.grants[\(CedarText.stringLiteral(role.grantsGroupsField))]
-                };
-                """)
+                CedarPolicySource(
+                    id: "role-\(role.rawValue)",
+                    text: """
+                        @id("role-\(role.rawValue)")
+                        permit (principal, action in Action::\(CedarText.stringLiteral(CedarSchemaBuilder.roleGroupName(role))), resource)
+                        when {
+                            principal in context.grants[\(CedarText.stringLiteral(role.grantsUsersField))] ||
+                            principal in context.grants[\(CedarText.stringLiteral(role.grantsGroupsField))]
+                        };
+                        """))
         }
 
-        return policies.joined(separator: "\n\n") + "\n"
+        return policies
     }
 
     // MARK: - Guardrail forbids (tier 2)
@@ -86,9 +113,14 @@ enum CedarPolicyAssembler {
     }
 
     struct GuardrailPolicySet: Sendable {
-        let policyText: String
+        let policies: [CedarPolicySource]
         let compiledGuardrailIDs: [UUID]
         let skipped: [SkippedGuardrail]
+
+        /// The joined guardrail policy text, for display and tests.
+        var policyText: String {
+            policies.isEmpty ? "" : policies.map(\.text).joined(separator: "\n\n") + "\n"
+        }
     }
 
     /// Compile guardrail rows into `forbid` policies.
@@ -107,7 +139,7 @@ enum CedarPolicyAssembler {
         _ guardrails: [Guardrail],
         organizationIDsByGuardrail: [UUID: UUID]
     ) -> GuardrailPolicySet {
-        var policies: [String] = []
+        var policies: [CedarPolicySource] = []
         var compiled: [UUID] = []
         var skipped: [SkippedGuardrail] = []
 
@@ -194,20 +226,21 @@ enum CedarPolicyAssembler {
                     "resource has environment && resource.environment == \(CedarText.stringLiteral(environment))")
             }
 
+            let policyID = "guardrail-\(id.uuidString.lowercased())"
             var policy = """
-                @id("guardrail-\(id.uuidString.lowercased())")
+                @id("\(policyID)")
                 forbid (\(principalClause), \(actionClause), resource in \(node.cedarUID.cedarLiteral))
                 """
             if !conditions.isEmpty {
                 policy += "\nwhen { \(conditions.joined(separator: " && ")) }"
             }
             policy += ";"
-            policies.append(policy)
+            policies.append(CedarPolicySource(id: policyID, text: policy))
             compiled.append(id)
         }
 
         return GuardrailPolicySet(
-            policyText: policies.isEmpty ? "" : policies.joined(separator: "\n\n") + "\n",
+            policies: policies,
             compiledGuardrailIDs: compiled,
             skipped: skipped
         )
