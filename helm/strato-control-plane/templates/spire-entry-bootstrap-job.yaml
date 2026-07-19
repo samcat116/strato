@@ -118,13 +118,16 @@ spec:
               echo "==> Waiting for ${POD} to become ready"
               kubectl wait --for=condition=ready "pod/${POD}" --timeout=600s
 
+              exec_spire() {
+                  kubectl exec "${POD}" -c spire-server -- "${BIN}" "$@"
+              }
+
               # Run `spire-server entry create` inside the server pod,
               # treating AlreadyExists as success so re-runs converge.
               ensure_entry() {
                   desc="$1"; shift
                   echo "==> Ensuring ${desc}"
-                  if out=$(kubectl exec "${POD}" -c spire-server -- \
-                      "${BIN}" entry create -socketPath "${SOCK}" "$@" 2>&1); then
+                  if out=$(exec_spire entry create -socketPath "${SOCK}" "$@" 2>&1); then
                       printf '%s\n' "${out}" | sed 's/^/    /'
                   elif printf '%s' "${out}" | grep -qi "similar entry already exists"; then
                       echo "    entry already exists"
@@ -148,7 +151,36 @@ spec:
                   -selector "k8s:container-name:{{ .Chart.Name }}"
 
               {{- if .Values.spire.envoy.enabled }}
-              ensure_entry "Envoy sidecar server SVID entry (${CP_ID})" \
+              # Envoy's entry carries the agents DNS SAN, and SPIRE's
+              # AlreadyExists similarity check keys on spiffe_id + parent_id +
+              # selectors only — a changed agents hostname would otherwise
+              # never converge. On AlreadyExists, look the entry up (it shares
+              # CP_ID with the admin entry, so match on the envoy container
+              # selector) and update it in place with the same spec, which
+              # also clears a stale DNS SAN when the Gateway is disabled.
+              ensure_envoy_entry() {
+                  echo "==> Ensuring Envoy sidecar server SVID entry (${CP_ID})"
+                  if out=$(exec_spire entry create -socketPath "${SOCK}" "$@" 2>&1); then
+                      printf '%s\n' "${out}" | sed 's/^/    /'
+                      return 0
+                  fi
+                  if ! printf '%s' "${out}" | grep -qi "similar entry already exists"; then
+                      printf '%s\n' "${out}" | sed 's/^/    /' >&2
+                      return 1
+                  fi
+                  entry_id=$(exec_spire entry show -socketPath "${SOCK}" -spiffeID "${CP_ID}" \
+                      | awk -v RS= 'index($0, "k8s:container-name:envoy-sidecar") { print; exit }' \
+                      | sed -n 's/^Entry ID *: *//p')
+                  if [ -z "${entry_id}" ]; then
+                      echo "    entry reported as existing but not found for update" >&2
+                      return 1
+                  fi
+                  echo "    entry already exists (${entry_id}); updating to converge DNS SANs"
+                  exec_spire entry update -socketPath "${SOCK}" -entryID "${entry_id}" "$@" \
+                      | sed 's/^/    /'
+              }
+
+              ensure_envoy_entry \
                   -parentID "${NODE_ALIAS}" \
                   -spiffeID "${CP_ID}" \
                   {{- if .Values.gateway.enabled }}
