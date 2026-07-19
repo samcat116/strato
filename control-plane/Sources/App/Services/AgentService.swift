@@ -3319,6 +3319,32 @@ actor AgentService {
         return request.continuation
     }
 
+    /// Like `removePendingRequest`, but only consumes the pending request when
+    /// it was actually dispatched to `agentId`. A correlated `success`/`error`
+    /// is the one agent→control-plane message that isn't otherwise validated
+    /// against the reporting connection, so without this check a compromised
+    /// agent that learned another agent's in-flight `requestId` could resolve
+    /// that exchange (e.g. spoof a volume-op or reboot result for a VM it does
+    /// not host). Mirrors the ownership guards on heartbeat/observed-state.
+    private func removePendingRequest(_ requestId: String, ifOwnedBy agentId: String)
+        -> CheckedContinuation<AgentServiceResponse, Error>?
+    {
+        guard let request = pendingRequests[requestId] else { return nil }
+        guard request.agentId == agentId else {
+            app.logger.warning(
+                "Dropping agent response whose requestId is owned by a different agent",
+                metadata: [
+                    "requestId": .string(requestId),
+                    "reportingAgentId": .string(agentId),
+                    "ownerAgentId": .string(request.agentId),
+                ])
+            return nil
+        }
+        pendingRequests.removeValue(forKey: requestId)
+        request.timeoutTask?.cancel()
+        return request.continuation
+    }
+
     private func timeoutRequest(_ requestId: String) {
         if let continuation = removePendingRequest(requestId) {
             continuation.resume(throwing: AgentServiceError.requestTimeout)
@@ -3346,7 +3372,7 @@ actor AgentService {
 
     // MARK: - Response Handling
 
-    func handleAgentResponse(_ envelope: MessageEnvelope) {
+    func handleAgentResponse(_ envelope: MessageEnvelope, fromAgentNamed agentName: String) {
         Task {
             // Extract the original request's ID from the typed payload so we can
             // correlate the response with the continuation that is waiting for it.
@@ -3366,7 +3392,16 @@ actor AgentService {
                 return
             }
 
-            guard let continuation = self.removePendingRequest(requestId) else {
+            // Resolve the reporting connection's agent id so the response can
+            // only resolve a request that was dispatched to *this* agent.
+            guard let senderAgentId = await self.agentId(forName: agentName) else {
+                app.logger.warning(
+                    "Dropping agent response from a connection with no resolvable agent id",
+                    metadata: ["agentName": .string(agentName), "requestId": .string(requestId)])
+                return
+            }
+
+            guard let continuation = self.removePendingRequest(requestId, ifOwnedBy: senderAgentId) else {
                 return
             }
 

@@ -444,12 +444,19 @@ extension Request {
         application.audit
     }
 
-    /// Best-effort client IP: proxy headers first, then the socket peer.
-    /// Matches the extraction `APIKeyAuthenticator` uses for `lastUsedIP`.
+    /// Best-effort client IP for the audit trail.
+    ///
+    /// Resolved through the shared `ProxyTrustConfig`, which counts in from the
+    /// *right* of `X-Forwarded-For`: hops further left are client-supplied, so
+    /// taking the raw (leftmost) value let a client forge the `sourceIP` of its
+    /// own audit events — including failed-auth and admin-bypass events —
+    /// defeating attribution. Using the shared resolver rather than a local
+    /// right-anchored read also keeps audit consistent with the rate limiter in
+    /// multi-hop topologies (the supported HTTPS compose stack runs two proxies,
+    /// where an unconditional rightmost read would record the inner proxy's
+    /// address for every request).
     var auditClientIP: String? {
-        headers.first(name: "X-Forwarded-For")
-            ?? headers.first(name: "X-Real-IP")
-            ?? remoteAddress?.description
+        trustedClientIP
     }
 
     /// Record an authentication-flow audit event (login, logout, registration,

@@ -29,10 +29,11 @@ struct APIKeyAuthenticator: AsyncBearerAuthenticator {
             return  // Key is expired
         }
 
-        // Update last used information (async, don't wait)
-        let clientIP =
-            request.headers.first(name: "X-Forwarded-For") ?? request.headers.first(name: "X-Real-IP")
-            ?? request.remoteAddress?.description
+        // Update last used information (async, don't wait). Resolved through the
+        // shared proxy-trust config: the raw `X-Forwarded-For` this used to read
+        // is client-supplied, so a key's recorded `lastUsedIP` was forgeable by
+        // whoever presented the key.
+        let clientIP = request.trustedClientIP
 
         Task {
             try? await apiKey.updateLastUsed(ip: clientIP)

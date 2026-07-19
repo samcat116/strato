@@ -337,6 +337,13 @@ actor ImageFetchService: ImageFetchServiceProtocol {
     /// `downloadFile`) so every hop can be SSRF-checked before it's connected.
     private static let maxRedirects = 5
 
+    /// Hard ceiling on a server-side URL/artifact download. The multipart
+    /// upload path is already bounded by `ImageController.maxUploadBytes`; the
+    /// URL-fetch path had no equivalent, so a `sourceURL` serving an arbitrarily
+    /// large or endless stream could fill the control plane's image-storage
+    /// volume. Kept in sync with `ImageController.maxUploadBytes` (4 GiB).
+    private static let maxDownloadBytes: Int64 = 4 * 1024 * 1024 * 1024
+
     private func downloadFile(
         from url: URL,
         to filePath: String,
@@ -396,6 +403,13 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         // Get expected content length if available
         let expectedLength = response.headers.first(name: "content-length").flatMap(Int64.init)
 
+        // Reject an over-large download up front when the server declares its
+        // size, before writing a single byte.
+        if let expectedLength, expectedLength > Self.maxDownloadBytes {
+            throw ImageError.downloadFailed(
+                "Download exceeds the maximum allowed size of \(Self.maxDownloadBytes) bytes")
+        }
+
         // Create output file
         FileManager.default.createFile(atPath: filePath, contents: nil)
         guard let fileHandle = FileHandle(forWritingAtPath: filePath) else {
@@ -430,6 +444,13 @@ actor ImageFetchService: ImageFetchServiceProtocol {
             hasher.update(data: data)
 
             totalBytesWritten += Int64(bytes.count)
+
+            // Enforce the ceiling for servers that under-declare or omit
+            // `content-length` (chunked/endless streams).
+            if totalBytesWritten > Self.maxDownloadBytes {
+                throw ImageError.downloadFailed(
+                    "Download exceeds the maximum allowed size of \(Self.maxDownloadBytes) bytes")
+            }
 
             // Update progress periodically
             if totalBytesWritten - lastProgressUpdate >= progressUpdateInterval {

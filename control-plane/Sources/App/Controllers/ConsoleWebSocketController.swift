@@ -149,6 +149,21 @@ struct ConsoleWebSocketController: RouteCollection {
 
             req.logger.debug("Console WebSocket authenticated as user: \(user.username)")
 
+            // The console is an interactive *write* surface: frames received on
+            // this socket are forwarded to the VM as console input (keystrokes).
+            // But it is reached over a GET WebSocket upgrade, which
+            // APIKeyScopeMiddleware treats as read-only — so a key minted with
+            // only the `read` scope would otherwise drive the console. Require
+            // `write` explicitly for API-key-authenticated console access.
+            if req.isAPIKeyAuthenticated, req.apiKey?.grants(.write) != true {
+                req.logger.warning(
+                    "Console access denied: API key lacks 'write' scope",
+                    metadata: ["userId": .string(userId)])
+                try? await ws.send("error: This API key lacks the required 'write' scope for the console")
+                try? await ws.close(code: .policyViolation)
+                return nil
+            }
+
             // Authorize before loading the VM, so unauthorized users cannot probe
             // arbitrary VM UUIDs via distinct "VM not found" / "not running" errors.
             // Consistent with SpiceDBAuthMiddleware: system admins skip the

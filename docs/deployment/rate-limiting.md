@@ -71,4 +71,15 @@ Defaults in parentheses.
 | `RATE_LIMIT_FAILURE_BASE_DELAY` | `2` | First lockout duration, seconds (doubles thereafter). |
 | `RATE_LIMIT_FAILURE_MAX_DELAY` | `300` | Cap on the lockout duration, seconds. |
 | `RATE_LIMIT_FAILURE_WINDOW` | `900` | How long a run of failures is remembered, seconds. |
-| `RATE_LIMIT_TRUST_FORWARDED_FOR` | `true` | Trust `X-Forwarded-For`/`X-Real-IP` for the client IP. Disable if clients can reach the control plane directly and could spoof it. |
+| `RATE_LIMIT_TRUST_FORWARDED_FOR` | `true` | Trust `X-Forwarded-For` for the client IP. Disable if clients can reach the control plane directly and could spoof it. |
+| `RATE_LIMIT_TRUSTED_PROXY_HOPS` | `1` | Number of trusted proxies in front of the control plane. The client is read that many entries in from the **right** of `X-Forwarded-For`. Use `2` when a TLS terminator sits in front of nginx (`setup.sh` sets this for HTTPS deployments). |
+
+::: warning These two variables describe the proxy chain, not just rate limiting
+Despite the `RATE_LIMIT_` prefix (kept so existing deployments keep working), they
+also govern the client address recorded in **audit events** (`sourceIP`) and on an
+API key's **`lastUsedIP`**. Setting the hop count too low attributes every request
+to your inner proxy; setting it too high lets a client forge its own address in the
+audit trail. `X-Real-IP` is deliberately never consulted — behind a TLS terminator
+nginx sets it to the terminator's address, which would collapse every client onto
+one value.
+:::

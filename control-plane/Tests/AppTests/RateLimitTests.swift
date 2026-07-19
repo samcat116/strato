@@ -60,8 +60,8 @@ struct RateLimitTests {
             failureBaseDelay: failureBaseDelay,
             failureMaxDelay: failureMaxDelay,
             failureWindow: failureWindow,
-            trustForwardedFor: true,
-            trustedProxyHops: trustedProxyHops
+            proxyTrust: ProxyTrustConfig(
+                trustForwardedFor: true, trustedProxyHops: trustedProxyHops)
         )
     }
 

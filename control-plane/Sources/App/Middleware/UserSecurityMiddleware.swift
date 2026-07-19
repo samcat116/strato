@@ -41,24 +41,23 @@ struct UserSecurityMiddleware: AsyncMiddleware {
             sessionUserID == user.id
         {
             let stampedEpoch = request.session.data[Self.sessionEpochKey].flatMap(Int.init) ?? 0
-            if stampedEpoch != user.sessionEpoch {
-                if request.isAPIKeyAuthenticated {
-                    // The bearer key is the credential that authenticated this
-                    // request; the session is just Vapor's mirror of it.
-                    // Re-stamp instead of churning through destroy/recreate.
-                    request.stampSessionEpoch(for: user)
-                } else {
-                    request.logger.info(
-                        "Rejecting revoked session",
-                        metadata: [
-                            "username": .string(user.username),
-                            "sessionEpoch": .stringConvertible(stampedEpoch),
-                            "userEpoch": .stringConvertible(user.sessionEpoch),
-                        ])
-                    destroySession(on: request)
-                    request.auth.logout(User.self)
-                    return errorResponse(.unauthorized, reason: "Session has been revoked", on: request)
-                }
+            // A stale stamp on an API-key-authenticated request is ignored, NOT
+            // re-stamped: the bearer key — not the cookie — is the credential
+            // here, and refreshing the epoch would silently resurrect a session
+            // that was explicitly revoked, letting that cookie pass later
+            // cookie-only requests. Leaving the stale stamp in place keeps the
+            // revoked cookie dead while the request proceeds on the key.
+            if stampedEpoch != user.sessionEpoch, !request.isAPIKeyAuthenticated {
+                request.logger.info(
+                    "Rejecting revoked session",
+                    metadata: [
+                        "username": .string(user.username),
+                        "sessionEpoch": .stringConvertible(stampedEpoch),
+                        "userEpoch": .stringConvertible(user.sessionEpoch),
+                    ])
+                destroySession(on: request)
+                request.auth.logout(User.self)
+                return errorResponse(.unauthorized, reason: "Session has been revoked", on: request)
             }
         }
 

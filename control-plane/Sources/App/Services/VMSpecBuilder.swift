@@ -7,8 +7,26 @@ import StratoShared
 /// tap names, queue sizing, machine types) — agents derive those when translating
 /// the spec into their driver-native configuration.
 struct VMSpecBuilder {
+    /// Upper bound on a guest kernel cmdline, in unicode scalars. The VM-create
+    /// API applies the same 4096 bound in UTF-8 bytes; the two agree for the
+    /// ASCII a cmdline is made of, and where they diverge this sink is the
+    /// stricter of the pair.
+    private static let maxCmdlineLength = 4096
+
     private static func ensureSerialConsole(_ cmdline: String?) -> String {
-        let trimmed = (cmdline ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Sanitize before use: the cmdline is resolved by callers as
+        // `vm.cmdline ?? image.defaultCmdline`, and an image's defaultCmdline is
+        // settable through the image API — so this is the single sink that must
+        // hold for every source. Strip control characters (NUL, escapes, stray
+        // newlines the whitespace split below wouldn't neutralize) and cap the
+        // length, so a stored cmdline can't smuggle extra directives or
+        // unbounded data into the boot arguments. VM create additionally
+        // rejects these at the API for immediate feedback.
+        let cleaned = (cmdline ?? "").unicodeScalars
+            .filter { $0.value >= 0x20 && $0.value != 0x7f }
+            .prefix(maxCmdlineLength)
+        let trimmed = String(String.UnicodeScalarView(cleaned))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             return "console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0"
         }

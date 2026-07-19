@@ -1,6 +1,10 @@
 import Foundation
+import NIOConcurrencyHelpers
+import NIOCore
+import NIOPosix
 import StratoShared
 import Testing
+import Vapor
 
 @testable import App
 
@@ -171,5 +175,161 @@ struct AgentUpdateArtifactsTests {
         // Too short (a sha1), and non-hex characters.
         #expect(AgentUpdateArtifacts.parseChecksum(String(repeating: "ab", count: 20)) == nil)
         #expect(AgentUpdateArtifacts.parseChecksum(String(repeating: "zz", count: 32)) == nil)
+    }
+
+    // MARK: - Redirect following
+
+    /// The shared HTTP client has redirect-following disabled so tenant-
+    /// influenced fetches can't be steered at internal addresses by a 3xx.
+    /// Release metadata lives behind a redirect by nature — GitHub answers every
+    /// release download with a 302 to its asset CDN — so these fetches follow
+    /// redirects explicitly. Without that, the manifest read sees a 302, silently
+    /// degrades to the pre-manifest convention path, and the sidecar fetch then
+    /// fails: agent updates stop resolving. These pin the follow.
+    private func withEventLoop(_ body: (any EventLoop) async throws -> Void) async throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        do {
+            try await body(group.next())
+        } catch {
+            try? await group.shutdownGracefully()
+            throw error
+        }
+        try await group.shutdownGracefully()
+    }
+
+    private func manifestJSON(assetURL: String, digest: String) -> String {
+        """
+        {"schemaVersion":1,"version":"v1.2.3","assets":[
+          {"os":"linux","arch":"x86_64","asset":"strato-linux-x86_64.tar.gz",
+           "url":"\(assetURL)","sha256":"\(digest)","size":1}
+        ]}
+        """
+    }
+
+    @Test("a redirected manifest is followed rather than degrading to the fallback path")
+    func followsManifestRedirect() async throws {
+        let digest = String(repeating: "ab", count: 32)
+        let manifestURL = try #require(AgentUpdateArtifacts.manifestURL(targetVersion: "1.2.3"))
+        let cdnURL = "https://objects.example-cdn.com/agent-manifest.json"
+
+        try await withEventLoop { eventLoop in
+            let client = RecordingClient(
+                eventLoop: eventLoop,
+                responses: [
+                    manifestURL: .redirect(to: cdnURL),
+                    cdnURL: .ok(
+                        body: manifestJSON(
+                            assetURL: "https://example.com/strato-linux-x86_64.tar.gz",
+                            digest: digest)),
+                ])
+
+            let resolved = try await AgentUpdateArtifacts.resolveArtifact(
+                targetVersion: "1.2.3",
+                operatingSystem: .linux,
+                architecture: .x86_64,
+                client: client,
+                logger: Logger(label: "test"))
+
+            #expect(resolved.url == "https://example.com/strato-linux-x86_64.tar.gz")
+            #expect(resolved.sha256 == digest)
+            // The CDN hop was actually taken, not just the original URL.
+            #expect(client.requestedURLs.contains(cdnURL))
+        }
+    }
+
+    /// The pre-manifest fallback path fetches a `.sha256` sidecar from the same
+    /// redirecting host, so it needs the same treatment.
+    @Test("a redirected checksum sidecar is followed")
+    func followsChecksumRedirect() async throws {
+        let digest = String(repeating: "cd", count: 32)
+        let assetURL = "https://github.example/v1.2.3/strato-linux-x86_64.tar.gz"
+        let cdnURL = "https://objects.example-cdn.com/sidecar"
+
+        try await withEventLoop { eventLoop in
+            let client = RecordingClient(
+                eventLoop: eventLoop,
+                responses: [
+                    assetURL + ".sha256": .redirect(to: cdnURL),
+                    cdnURL: .ok(body: "\(digest)  strato-linux-x86_64.tar.gz\n"),
+                ])
+
+            let resolved = try await AgentUpdateArtifacts.fetchChecksum(
+                forAssetAt: assetURL, client: client, logger: Logger(label: "test"))
+            #expect(resolved == digest)
+        }
+    }
+
+    /// A redirect loop must terminate rather than spin. Exercised against
+    /// `getFollowingRedirects` directly: routed through `fetchChecksum` a
+    /// non-following client would throw too, so the test would pass whether or
+    /// not redirects are followed at all.
+    @Test("a redirect loop is bounded")
+    func boundsRedirectLoops() async throws {
+        let looping = "https://github.example/loop"
+        try await withEventLoop { eventLoop in
+            let client = RecordingClient(
+                eventLoop: eventLoop, responses: [looping: .redirect(to: looping)])
+            await #expect(throws: (any Error).self) {
+                try await AgentUpdateArtifacts.getFollowingRedirects(
+                    looping, client: client, logger: Logger(label: "test"))
+            }
+            // Bounded: the hop cap, not an unbounded spin.
+            #expect(client.requestedURLs.count <= 6)
+        }
+    }
+
+    /// A redirect must not be able to pivot to another scheme — a `file://`
+    /// or `gopher://` hop is a classic SSRF escape.
+    @Test("a redirect to a non-http(s) scheme is refused")
+    func refusesSchemePivot() async throws {
+        let start = "https://github.example/asset"
+        try await withEventLoop { eventLoop in
+            let client = RecordingClient(
+                eventLoop: eventLoop, responses: [start: .redirect(to: "file:///etc/passwd")])
+            await #expect(throws: (any Error).self) {
+                try await AgentUpdateArtifacts.getFollowingRedirects(
+                    start, client: client, logger: Logger(label: "test"))
+            }
+            // Refused before the pivot was ever requested.
+            #expect(client.requestedURLs == [start])
+        }
+    }
+}
+
+/// Serves canned responses per URL and records what was actually requested, so
+/// a test can assert a redirect hop was taken rather than inferred.
+private final class RecordingClient: Client, @unchecked Sendable {
+    let eventLoop: any EventLoop
+    private let responses: [String: ClientResponse]
+    private let lock = NIOLock()
+    private var requested: [String] = []
+
+    init(eventLoop: any EventLoop, responses: [String: ClientResponse]) {
+        self.eventLoop = eventLoop
+        self.responses = responses
+    }
+
+    var requestedURLs: [String] {
+        lock.withLock { requested }
+    }
+
+    func delegating(to eventLoop: any EventLoop) -> any Client { self }
+
+    func send(_ request: ClientRequest) -> EventLoopFuture<ClientResponse> {
+        let url = request.url.string
+        lock.withLock { requested.append(url) }
+        return eventLoop.makeSucceededFuture(responses[url] ?? ClientResponse(status: .notFound))
+    }
+}
+
+extension ClientResponse {
+    fileprivate static func redirect(to location: String) -> ClientResponse {
+        var headers = HTTPHeaders()
+        headers.add(name: .location, value: location)
+        return ClientResponse(status: .found, headers: headers)
+    }
+
+    fileprivate static func ok(body: String) -> ClientResponse {
+        ClientResponse(status: .ok, body: ByteBuffer(string: body))
     }
 }
