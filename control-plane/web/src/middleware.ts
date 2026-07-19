@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { GRAVATAR_COOKIE, GRAVATAR_ENV_VAR, parseGravatarEnabled } from "@/lib/gravatar";
 
 const controlPlanePrefixes = [
   "/api",
@@ -44,6 +45,17 @@ export function middleware(request: NextRequest) {
       "max-age=31536000; includeSubDomains",
     );
   }
+
+  // Publish the Gravatar setting for the client, for the same build-time reason
+  // as the HSTS header above: statically prerendered pages can't read env at
+  // request time, but middleware can. Deliberately not httpOnly — this is a
+  // display preference the browser has to read, not a credential.
+  response.cookies.set(GRAVATAR_COOKIE, parseGravatarEnabled(process.env[GRAVATAR_ENV_VAR]) ? "1" : "0", {
+    httpOnly: false,
+    sameSite: "lax",
+    path: "/",
+  });
+
   return response;
 }
 
