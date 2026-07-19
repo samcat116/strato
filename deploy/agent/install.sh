@@ -510,6 +510,19 @@ Restart=on-failure
 RestartSec=10
 # The agent manages VMs, TAP devices, and KVM, so it needs broad host access;
 # avoid the aggressive sandbox directives that would break those.
+#
+# KillMode=process is load-bearing, not a tuning knob. Hypervisor processes
+# (QEMU, Firecracker) are spawned as children of the agent and therefore live
+# in this unit's cgroup; the default KillMode=control-group signals the whole
+# cgroup on stop, so every restart — including the automatic one from
+# Restart=on-failure — would SIGKILL every VM on the host. VMs are meant to
+# outlive the agent: the persisted VM manifest exists precisely so a restarted
+# agent re-adopts the hypervisor processes it left running. Signal only the
+# agent itself.
+KillMode=process
+# Graceful shutdown takes seconds. Don't sit in final-sigterm for the 90s
+# default if something in the process ever fails to exit.
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
