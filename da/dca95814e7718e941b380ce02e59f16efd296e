@@ -1,0 +1,29 @@
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_32489a5bc16f1b::t_f3828054e05b6e 148,151
+  s_32489a5bc16f1b::t_d50acaac05c34f 209-210,213
+  s_32489a5bc16f1b::t_1204499aedca9d 524-534
+  s_32489a5bc16f1b::t_5fac5c2ae094f1 51-68
+  s_32489a5bc16f1b::t_ee8aacdd1f0f6f 673-677
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_32489a5bc16f1b::t_1ab766b983b1a7 243-251
+control-plane/Tests/AppTests/FloatingIPControllerTests.swift
+  s_32489a5bc16f1b::t_3d1536fe342cb8 199,260,262,285,478,518,567,615
+  s_32489a5bc16f1b::t_97bc7297de8c74 369-468
+  s_32489a5bc16f1b::t_802c88a47e87e9 73-74,76,87-89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "dadca95814e7718e941b380ce02e59f16efd296e",
+  "prompts": {},
+  "sessions": {
+    "s_32489a5bc16f1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c39f58be-db1c-4959-a86f-f6419cb8470f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
