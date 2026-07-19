@@ -39,6 +39,7 @@ struct JailerOptionsTests {
                 "--uid", "123456",
                 "--gid", "123456",
                 "--chroot-base-dir", "/var/lib/strato/vms/jailer",
+                "--new-pid-ns",
                 "--",
                 "--api-sock", "/run/firecracker.socket",
                 "--level", "Info",

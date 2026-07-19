@@ -293,7 +293,16 @@ public struct CloudInitProvisioner {
     /// block is needed. Empty keys render nothing.
     private static func sshAuthorizedKeysBlock(_ keys: [String]) -> String {
         guard !keys.isEmpty else { return "" }
-        let keyLines = keys.map { "  - \"\($0.replacingOccurrences(of: "\"", with: ""))\"" }
+        // An SSH public key is a single line. Strip control characters (an
+        // embedded newline would otherwise let a key value inject arbitrary
+        // cloud-config directives into the seed) as well as the quote used to
+        // delimit the YAML scalar.
+        let keyLines =
+            keys.map { key -> String in
+                let sanitized = String(key.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7f })
+                    .replacingOccurrences(of: "\"", with: "")
+                return "  - \"\(sanitized)\""
+            }
             .joined(separator: "\n")
         return "\n\nssh_authorized_keys:\n\(keyLines)\n"
     }

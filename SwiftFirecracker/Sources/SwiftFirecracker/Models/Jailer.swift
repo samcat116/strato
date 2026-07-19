@@ -108,6 +108,12 @@ public struct JailerOptions: Sendable {
             "--uid", String(uid),
             "--gid", String(gid),
             "--chroot-base-dir", chrootBaseDir,
+            // Run the VMM in its own PID namespace (Firecracker production
+            // hardening): a VMM compromised after a guest breakout then cannot
+            // observe or signal host/peer processes, closing cross-sandbox
+            // signalling that the shared host PID namespace would otherwise allow
+            // (especially when two sandboxes hash to the same jail uid).
+            "--new-pid-ns",
         ]
         if let netnsPath {
             args += ["--netns", netnsPath]
